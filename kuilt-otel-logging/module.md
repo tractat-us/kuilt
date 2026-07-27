@@ -41,6 +41,25 @@ primitive can mirror it, and the restore is guarded so it can never corrupt anot
 scope's trace. `MutableTraceContextHolder` is a minimal escape hatch for code that
 can't express its tracing as coroutine scopes.
 
+## Stamping your own context onto every line
+
+Apps usually want to know *what was going on* when a line was logged — which game
+was in progress, which request was being served, which screen was open. Give
+`CaptureConfig` an `attributeMapper` and it folds that context into every captured
+record.
+
+The mapper runs **at the moment the line is logged**, on the thread that logged it —
+not later, when the record is written to the buffer. So a line logged during game A
+is stamped with game A even if game B has already started by the time the record
+lands. That matters most exactly where it is easiest to get wrong: the last few
+lines of one phase and the first few of the next, which are usually the ones you
+are reading the log to understand.
+
+Two things follow. Keep the mapper cheap, because it runs on your logging path once
+per captured line (it is skipped for lines below `minLevel`, and for kuilt's own
+exporter loggers). And it should not throw — a mapper that throws loses that one
+record rather than surfacing an error inside your `log` call.
+
 ## Where capture happens
 
 One uniform appender is installed in common code on every platform. It feeds each

@@ -24,7 +24,7 @@ public data class NormalizedLogEvent(
     /**
      * The distributed-trace context resolved at the **synchronous capture edge**,
      * on the caller that logged — never on the drain coroutine (#1034). The edge
-     * fills this by calling [LogCapture.resolveTrace] while it still sees the
+     * fills this by calling [LogCapture.resolveAtEdge] while it still sees the
      * caller's ambient context; [LogCapture.capture] then feeds the sampling gate
      * from this snapshot instead of re-consulting the provider off-thread.
      *
@@ -33,4 +33,19 @@ public data class NormalizedLogEvent(
      * [TraceContextProvider] was installed, which [LogCapture.capture] knows.
      */
     public val activeTrace: ActiveTrace? = null,
+    /**
+     * The `LogRecord` attributes produced by [CaptureConfig.attributeMapper],
+     * applied at the **synchronous capture edge** on the caller that logged —
+     * never on the drain coroutine (#1630). A queueing edge fills this by calling
+     * [LogCapture.resolveAtEdge] while the caller's ambient state is still the
+     * state the line was emitted under; [LogCapture.capture] then uses the
+     * snapshot instead of re-running the mapper off-thread.
+     *
+     * `null` means the event was never edge-resolved. [LogCapture.capture] then
+     * applies the mapper itself — correct for a caller that invokes `capture()`
+     * directly from its own log site, because that call *is* the synchronous edge.
+     * A **queueing** edge must always resolve: leaving this `null` there is
+     * exactly the #1630 bug.
+     */
+    public val resolvedAttributes: Map<String, String>? = null,
 )

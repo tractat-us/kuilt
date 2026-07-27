@@ -1,6 +1,7 @@
 package us.tractat.kuilt.otel.logging
 
 import kotlinx.io.bytestring.ByteString
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.otel.ExportResult
 import us.tractat.kuilt.otel.LogRecord
 import us.tractat.kuilt.otel.WarpLogRecordExporter
@@ -43,6 +44,16 @@ import kotlin.time.Clock
  * - [random] supplies the fresh 8-byte `recordId` per record. A test injects a
  *   seeded [Random]; a production install passes `Random.Default`.
  *
+ * ## Edge resolution (emit-time semantics)
+ *
+ * Anything that depends on *when and where the line was logged* is resolved at the
+ * **synchronous capture edge**, on the caller, and carried on the queued
+ * [NormalizedLogEvent] — never re-derived on the drain coroutine. That covers the
+ * ambient trace context (#1034) and the [CaptureConfig.attributeMapper] (#1630).
+ * A queueing edge calls [resolveAtEdge] once; [capture] then reads the snapshot.
+ * Resolving either on the drain stamps records with whatever the ambient state has
+ * become by then, which the consumer cannot detect or repair.
+ *
  * @param exporter the durable log buffer this capture writes into.
  * @param config which events to keep and how to shape their attributes.
  * @param clock source of the event timestamps (required — never the wall clock).
@@ -50,9 +61,9 @@ import kotlin.time.Clock
  *   default).
  * @param traceContextProvider optional trace/sampling gate. When `null` (the M1
  *   default) capture is always-on and records carry no trace ids. When set, the
- *   trace is resolved at the synchronous capture edge via [resolveTrace] and
+ *   trace is resolved at the synchronous capture edge via [resolveAtEdge] and
  *   carried on [NormalizedLogEvent.activeTrace]; [capture] then gates on that
- *   snapshot (see [resolveTrace] and [capture]).
+ *   snapshot (see [resolveAtEdge] and [capture]).
  */
 public class LogCapture(
     private val exporter: WarpLogRecordExporter,
@@ -62,15 +73,41 @@ public class LogCapture(
     private val traceContextProvider: TraceContextProvider? = null,
 ) {
     /**
-     * Resolve the trace active on the **current call**, for the capture edge to
-     * snapshot onto [NormalizedLogEvent.activeTrace] before handing the event off
-     * to the drain (#1034).
+     * Snapshot everything that must be sampled **at the moment the line was
+     * logged** onto [event], for a queueing capture edge to hand to the drain.
      *
-     * This MUST be invoked synchronously on the thread/coroutine that logged — an
-     * ambient [TraceContextProvider] (e.g. one backed by OTel's `Span.current()`)
-     * reads the caller's thread/coroutine-local context, which is gone by the time
-     * the drain coroutine runs [capture]. Resolving here, at the edge, is the whole
-     * fix: [capture] never consults the provider off-thread.
+     * This is the one call a capture edge makes, and it MUST run synchronously on
+     * the thread/coroutine that logged. It resolves both emit-time-sensitive
+     * inputs:
+     * - the ambient trace ([resolveTrace] → [NormalizedLogEvent.activeTrace], #1034)
+     *   — an ambient [TraceContextProvider] reads the caller's thread/coroutine-local
+     *   context, which is gone by the time the drain runs [capture];
+     * - the [CaptureConfig.attributeMapper] ([NormalizedLogEvent.resolvedAttributes],
+     *   #1630) — a mapper that folds ambient state (the session in progress, a request
+     *   id) into attributes must see the state the line was emitted under, not
+     *   whatever it has become by drain time.
+     *
+     * Returns `null` when the event carries nothing to export — the edge should
+     * then drop it rather than queue it. That is either because [capture] would
+     * drop it anyway (below [CaptureConfig.minLevel], or one of the exporter's own
+     * loggers — so the mapper is never paid for a line that produces no record), or
+     * because the configured [CaptureConfig.attributeMapper] threw. A throwing
+     * mapper drops just that record and never propagates into the application's
+     * logging call, exactly as it did when the mapper still ran on the drain behind
+     * the appender's best-effort guard.
+     */
+    public fun resolveAtEdge(event: NormalizedLogEvent): NormalizedLogEvent? {
+        if (droppedBeforeRecord(event)) return null
+        val attributes = runCatchingCancellable { config.attributeMapper(event) }.getOrNull() ?: return null
+        return event.copy(activeTrace = resolveTrace(), resolvedAttributes = attributes)
+    }
+
+    /**
+     * Resolve the trace active on the **current call**.
+     *
+     * Prefer [resolveAtEdge], which calls this and resolves the attribute mapper in
+     * the same step; a capture edge that only calls this leaves
+     * [NormalizedLogEvent.resolvedAttributes] unresolved and reintroduces #1630.
      *
      * Returns `null` when no provider is wired (the M1 always-on default) or when
      * the provider reports no active trace.
@@ -89,16 +126,21 @@ public class LogCapture(
      * [CaptureConfig.untracedPolicy] is [UntracedPolicy.DROP]. On a sampled
      * trace the record is stamped with the trace's `traceId`/`spanId`.
      *
-     * The gate reads [event]'s pre-resolved [NormalizedLogEvent.activeTrace]
-     * (snapshotted at the synchronous edge via [resolveTrace]) — it never calls the
-     * provider from this drain-side path, so an ambient context that only exists on
-     * the caller is honoured (#1034).
+     * The gate reads [event]'s pre-resolved [NormalizedLogEvent.activeTrace], and
+     * the record's attributes come from its pre-resolved
+     * [NormalizedLogEvent.resolvedAttributes] — both snapshotted at the synchronous
+     * edge via [resolveAtEdge]. Neither the trace provider nor the attribute mapper
+     * is consulted from this drain-side path, so ambient state that only exists on
+     * the caller is honoured (#1034, #1630).
+     *
+     * The one exception is a caller that invokes this directly from its own log
+     * site without going through an edge: `resolvedAttributes` is then `null` and
+     * the mapper is applied here, which for such a caller *is* emit time.
      */
     public suspend fun capture(event: NormalizedLogEvent): ExportResult? {
-        if (event.loggerName.startsWith(KUILT_INTERNAL_LOGGER_PREFIX)) return null
-        if (event.level.ordinal < config.minLevel.ordinal) return null
+        if (droppedBeforeRecord(event)) return null
         // Trace/sampling gate. A null provider is M1 always-on capture, no stamp.
-        // The trace was resolved at the edge (resolveTrace) and rides on the event;
+        // The trace was resolved at the edge (resolveAtEdge) and rides on the event;
         // this drain-side path never re-consults the provider (#1034).
         var traceId: ByteString? = null
         var spanId: ByteString? = null
@@ -120,7 +162,10 @@ public class LogCapture(
             severityNumber = event.level.severityNumber,
             severityText = event.level.severityText,
             body = event.message,
-            attributes = config.attributeMapper(event),
+            // Resolved at the synchronous edge (#1630). The fallback covers a caller
+            // that drives capture() straight from its log site — there this call IS
+            // the edge, so applying the mapper here is still emit time.
+            attributes = event.resolvedAttributes ?: config.attributeMapper(event),
             timestampEpochNanos = epochNanos,
             observedEpochNanos = epochNanos,
             traceId = traceId,
@@ -128,6 +173,16 @@ public class LogCapture(
         )
         return exporter.export(record)
     }
+
+    /**
+     * Whether [event] is dropped before any `LogRecord` is built — the exporter's
+     * own loggers (the self-capture exclusion invariant) or below
+     * [CaptureConfig.minLevel]. Shared by [capture] and [resolveAtEdge] so the edge
+     * never pays the attribute mapper for a line that produces no record.
+     */
+    private fun droppedBeforeRecord(event: NormalizedLogEvent): Boolean =
+        event.loggerName.startsWith(KUILT_INTERNAL_LOGGER_PREFIX) ||
+            event.level.ordinal < config.minLevel.ordinal
 
     private companion object {
         private const val RECORD_ID_BYTES = 8

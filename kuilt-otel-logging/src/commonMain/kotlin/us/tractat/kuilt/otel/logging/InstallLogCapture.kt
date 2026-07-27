@@ -56,7 +56,10 @@ public class LogCaptureInstallation internal constructor(
  * Cancelling [scope] alone is not enough — see [LogCaptureInstallation].
  *
  * @param exporter the durable log buffer captured records are written into.
- * @param config which events to keep and how to shape their attributes.
+ * @param config which events to keep and how to shape their attributes. Its
+ *   [CaptureConfig.attributeMapper] is applied at the **synchronous `log()` edge**
+ *   on the caller, so a mapper that folds ambient application state into attributes
+ *   sees the state the line was emitted under (#1630).
  * @param clock source of event timestamps (required — never the wall clock).
  * @param random source of the per-record id bytes (required — never an unseeded
  *   default).
@@ -65,7 +68,7 @@ public class LogCaptureInstallation internal constructor(
  * @param traceContextProvider optional trace/sampling gate — `null` (default) is
  *   always-on M1 capture; a provider gates and stamps per [CaptureConfig.untracedPolicy]
  *   and the trace's `sampled` flag. The provider is consulted at the **synchronous
- *   `log()` edge** on the caller (via [LogCapture.resolveTrace]), not on the drain
+ *   `log()` edge** on the caller (via [LogCapture.resolveAtEdge]), not on the drain
  *   coroutine — so an ambient provider that reads thread/coroutine-local context is
  *   honoured (#1034).
  * @return the [LogCaptureInstallation] handle — its [LogCaptureInstallation.capture]

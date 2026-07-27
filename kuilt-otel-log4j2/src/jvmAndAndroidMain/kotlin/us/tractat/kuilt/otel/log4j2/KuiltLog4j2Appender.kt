@@ -73,9 +73,11 @@ public class KuiltLog4j2Appender(
 
     override fun append(event: LogEvent) {
         val normalized = event.normalize() ?: return
-        // Snapshot the active trace HERE, on the synchronous logging thread — the ambient
-        // TraceContextProvider is gone by drain time (#1034). Mirrors KuiltLogbackAppender.
-        events.trySend(normalized.copy(activeTrace = capture.resolveTrace()))
+        // Snapshot HERE, on the synchronous logging thread — the ambient
+        // TraceContextProvider is gone by drain time (#1034) and the attribute mapper's
+        // ambient app state may have moved on (#1630). Mirrors KuiltLogbackAppender.
+        val resolved = capture.resolveAtEdge(normalized) ?: return
+        events.trySend(resolved)
     }
 
     /**

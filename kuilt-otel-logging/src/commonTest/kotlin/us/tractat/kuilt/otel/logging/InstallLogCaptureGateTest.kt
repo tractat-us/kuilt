@@ -8,6 +8,7 @@ import us.tractat.kuilt.otel.WarpLogRecordExporter
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.time.Clock
 import kotlin.time.Instant
 
@@ -23,11 +24,11 @@ class InstallLogCaptureGateTest {
         val installation =
             installLogCapture(exporter, CaptureConfig(), clock, Random(0), backgroundScope, provider)
         try {
-            // Drive the installed core through the capture edge: resolveTrace()
+            // Drive the installed core through the capture edge: resolveAtEdge()
             // consults the threaded provider (as the appender does at log() time),
             // then the gate stamps from the event-carried trace (#1034).
             val core = installation.capture
-            core.capture(NormalizedLogEvent(LogLevel.INFO, "com.app.Service", "hi").copy(activeTrace = core.resolveTrace()))
+            core.capture(assertNotNull(core.resolveAtEdge(NormalizedLogEvent(LogLevel.INFO, "com.app.Service", "hi"))))
             val rec = exporter.snapshot().toList().single()
             assertEquals(ByteString(ByteArray(16) { 1 }), rec.traceId)
             assertEquals(ByteString(ByteArray(8) { 2 }), rec.spanId)
