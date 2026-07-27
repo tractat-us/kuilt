@@ -410,7 +410,7 @@ internal class HeddleControlPlane(
      *
      * Tagging heddle entries so *"not a heddle entry"* becomes a positive determination, and failing
      * closed on a tagged-but-undecodable entry, are the louder options — deliberately **not** taken
-     * here and still open (#1717).
+     * here and still open (#1738). Settle them before any schema evolution of the wire types.
      */
     private fun applyEntry(entry: LogEntry) {
         val decoded = runCatchingCancellable {
