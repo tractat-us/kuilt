@@ -15,9 +15,10 @@ package us.tractat.kuilt.heddle
  * @property virtualOffset scheduler-local forward clamp applied on wake so an idle
  *   child cannot bank a backlog of virtual time (design §7.2). `ZERO` for a child
  *   that never slept; computed by [HeddlePolicy.wakeOffset] on an idle→demand edge —
- *   [HeddleNode] detects that edge and carries the offset here (issue #1695).
- *   Deliberately *not* replicated — divergent offsets reorder locally but never touch
- *   conservation.
+ *   [HeddleNode] detects that edge and carries the offset here (issue #1695), joining
+ *   each new value with the one already stored so a re-wake into a lower front can never
+ *   refund an earlier clamp (issue #1714). Deliberately *not* replicated — divergent
+ *   offsets reorder locally but never touch conservation.
  */
 public data class PolicyEdge(
     public val record: AttachmentRecord,
