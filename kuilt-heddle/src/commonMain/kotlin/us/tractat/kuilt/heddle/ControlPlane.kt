@@ -1,5 +1,6 @@
 package us.tractat.kuilt.heddle
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CompletableDeferred
@@ -208,6 +209,8 @@ internal fun interface ControlMembershipSink {
     fun enrolled(replica: ReplicaId)
 }
 
+private val logger = KotlinLogging.logger("us.tractat.kuilt.heddle.HeddleControlPlane")
+
 /**
  * The Raft-backed control plane of design §9. It proposes each act to the [raft] log and, on the
  * committed-log apply loop that runs on **every** peer, applies the act — in log order — against a
@@ -391,10 +394,36 @@ internal class HeddleControlPlane(
         }
     }
 
+    /**
+     * Apply one delivered committed entry, in log order.
+     *
+     * An entry that does not decode as a [ControlEnvelope] is **skipped** — the intended case is a
+     * genuine non-heddle entry sharing the log. The skip is unavoidable but not silent: it is logged
+     * at `warn` with the entry's **index** (the identity — it names the exact log position a reader
+     * can go re-fetch) plus the term and byte length as supporting detail, and the decode failure as
+     * the cause. Reason (#1717): the decode cannot distinguish *"not mine"* from *"mine, but no
+     * longer decodable"*, and governed nodes replay from index 1 on every boot — so a
+     * [ControlEnvelope]/[ControlCommand] **schema change** that stranded an older entry would make
+     * those acts vanish from the projection (a `Prepare` disappears, its edge is never known) while
+     * the roster index advance below makes the prefix look fully applied. The log line is what turns
+     * that hole into something greppable in the on-device store.
+     *
+     * Tagging heddle entries so *"not a heddle entry"* becomes a positive determination, and failing
+     * closed on a tagged-but-undecodable entry, are the louder options — deliberately **not** taken
+     * here and still open (#1738). Settle them before any schema evolution of the wire types.
+     */
     private fun applyEntry(entry: LogEntry) {
-        val envelope = runCatchingCancellable {
+        val decoded = runCatchingCancellable {
             Cbor.decodeFromByteArray(ControlEnvelope.serializer(), entry.command)
-        }.getOrNull()
+        }
+        val envelope = decoded.getOrNull()
+        if (envelope == null) {
+            logger.warn(decoded.exceptionOrNull()) {
+                "[heddle:${self.value}] skipping undecodable committed entry at index ${entry.index} " +
+                    "(term ${entry.term}, ${entry.command.size} bytes) — expected for a non-heddle entry; " +
+                    "if this was a heddle act, its effect is now missing from the projection (#1717)."
+            }
+        }
         lock.withLock {
             // Advance the roster's applied index for every DELIVERED entry, decodable or not — it is the
             // prefix marker `enrolledAt` answers against, so it must track the delivered log, not just
@@ -406,7 +435,8 @@ internal class HeddleControlPlane(
             // `readIndex()`. Any caller comparing the two must expect that gap — see
             // `GovernedHeddleNode.prepareNeutral`, which refuses conservatively because of it.
             roster = roster.advancedTo(entry.index)
-            if (envelope == null) return // a non-heddle entry — no outcome, no projection change
+            // Undecodable — no outcome, no projection change. Already logged at `warn` above.
+            if (envelope == null) return
             val prior = applied[envelope.requestKey]
             if (prior != null) {
                 // A retry that still committed a second entry — never apply twice; hand back the first outcome.
