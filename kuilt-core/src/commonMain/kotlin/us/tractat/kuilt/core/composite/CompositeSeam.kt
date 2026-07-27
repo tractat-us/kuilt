@@ -874,7 +874,7 @@ internal class CompositeSeam(
      * reaching `Woven` after its peers were mirrored would stay stale-*exclusive*, permanently). Taking it
      * safely means also requesting a peers recompute from the state pump, which is a behaviour change this
      * fold's tests do not cover. The durable fix is to put the obligation in [Seam]'s contract and assert it
-     * in the conformance suite; tracked separately rather than smuggled in here.
+     * in the conformance suite, tracked in #1816 rather than smuggled in here.
      *
      * ### Why [resolveSendTargets] still reads the live ply peers
      * Deliberate, not an oversight. The lost-trigger argument bites on a **published derived value with no
