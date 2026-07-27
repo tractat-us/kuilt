@@ -70,6 +70,16 @@ import kotlin.time.Instant
  * [StandardTestDispatcher] — no real threads, no probabilistic interleaving — and both tests below
  * fail on the pre-fix code and pass on the fixed code.
  *
+ * ### The writer's own survival
+ *
+ * Ordering through one writer is only worth having if the writer cannot die, so the last test covers
+ * the other half: a recipient whose `sendTo` hands back a `CancellationException` **it minted itself**
+ * (the `withTimeout(sendTimeout)` idiom a consumer-implemented [Seam] is entitled to use). Guarded with
+ * `runCatchingCancellable` that rethrow *cancelled* the writer — silently, since a cancellation neither
+ * runs a handler nor prints a trace — and every announcement for the rest of the room's life was
+ * enqueued and never sent. One writer makes that a room-wide failure where the per-call `scope.launch`
+ * it replaced lost a single fan-out, so it is a blast-radius regression, not a pre-existing wart.
+ *
  * ### What these tests do *not* cover
  *
  * They do not reproduce the *original* trigger, which needs genuine parallelism: two launches racing
@@ -85,6 +95,13 @@ import kotlin.time.Instant
  * [JoinerReconnectEvent.WindowOpened] for partition episode *N* landing after episode *N+1* opened.
  * That reordering happens before `refineWindow` is reached rather than on the wire after it, and
  * closing it needs episode identity on the event (a public-API change); see `refineWindow`'s KDoc.
+ *
+ * Nor can they pin the *enqueue* half of the guarantee — that `markPartitioned` enqueues its estimate
+ * before it calls `onPeerUnresponsive`, the head of the refinement's path. `markPartitioned` is
+ * non-suspending, so under any single-threaded dispatcher it runs to completion and the estimate wins
+ * either way; the inversion needs two threads reaching a blocking lock. That ordering is enforced
+ * structurally instead — by the statement order at the call site, documented there — which is precisely
+ * why it is a hoist rather than a test.
  */
 class AdmitFanOutOrderingTest {
 
@@ -235,7 +252,12 @@ class AdmitFanOutOrderingTest {
     @Test
     fun `a Farewell cannot overtake the Paused for the same peer`() =
         runTest(StandardTestDispatcher(), timeout = 5.seconds) {
-            val star = star(stall = 2.seconds, reconnectWindow = 500.milliseconds)
+            // The stall must span the 500 ms window (so the Farewell is raised while the Paused is
+            // still in flight — the property under test) yet stay inside the writer's per-send budget
+            // of `reconnectWindow + timeout` = 800 ms, or the Paused is dropped rather than ordered.
+            // That interval, (500 ms, 800 ms), is exactly the span the budget's floor is chosen to
+            // leave open: see `runAdmitFanOutWriter`.
+            val star = star(stall = 650.milliseconds, reconnectWindow = 500.milliseconds)
 
             star.droppedLink.partition()
             // Past detection (Paused, stalled) and past the 500 ms window (expiry → Farewell), then
@@ -488,18 +510,21 @@ class AdmitFanOutOrderingTest {
         val hostSeam = TimeoutMintingSeam(loom.host(Pattern("Host"))) { doomedId }
         val hostRoom = hostFactory.adopt(hostSeam, SessionRole.Host)
 
+        // `Room.roster` excludes self, so a fully-formed four-peer session reads 3 everywhere. Joins
+        // are awaited one at a time so `admittedById`'s insertion order — and therefore the fan-out's
+        // recipient order — is the order asserted on above, not whichever Hello happened to land first.
         val doomedRoom = joinerFactory.join(InMemoryTag("Doomed"))
-        hostRoom.roster.first { it.size == 2 }
         doomedId = doomedRoom.selfId
+        hostRoom.roster.first { it.size == 1 }
 
         val healthyRoom = joinerFactory.join(InMemoryTag("Healthy"))
-        hostRoom.roster.first { it.size == 3 }
+        hostRoom.roster.first { it.size == 2 }
 
         val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
         val droppedRoom = joinerFactory.adopt(droppedLink, SessionRole.Joiner)
-        hostRoom.roster.first { it.size == 4 }
-        healthyRoom.roster.first { it.size == 4 }
-        droppedRoom.roster.first { it.size == 4 }
+        hostRoom.roster.first { it.size == 3 }
+        healthyRoom.roster.first { it.size == 3 }
+        droppedRoom.roster.first { it.size == 3 }
 
         return DoomedStar(
             hostSeam = hostSeam,

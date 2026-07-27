@@ -2013,11 +2013,21 @@ internal class SeamRoom(
      * logged like any other undeliverable one. [withTimeoutOrNull] and never bare `withTimeout` —
      * that would hand-mint the very callee-minted cancellation the guard above exists to absorb.
      *
-     * The budget is [HeartbeatConfig.reconnectWindow], derived rather than configured. It must sit
-     * *above* [HeartbeatConfig.timeout]: at or below it, the budget becomes a second, cruder liveness
-     * detector, dropping frames on a slow-but-alive link the real detector still holds healthy.
-     * `reconnectWindow` is also the span over which a presence announcement is still meaningful — a
-     * `Paused` accepted after the seat it describes has already expired informs nobody.
+     * The budget is derived, not configured: [HeartbeatConfig.reconnectWindow] plus
+     * [HeartbeatConfig.timeout]. Both terms are load-bearing, and the floor is set by what the queue
+     * must be able to *carry*, not by what a healthy link needs:
+     *
+     * - `reconnectWindow`, because an announcement stays meaningful for the whole span of the hold it
+     *   describes. A `Paused` may legitimately still be in flight when the `Farewell` that expires the
+     *   very same seat is raised — that pair is one of the orderings this queue exists to keep — so a
+     *   budget at or below the window would drop the frame it is supposed to be ordering.
+     * - plus `timeout`, one detection interval of slack, because the announcement is raised *after*
+     *   detection has already elapsed and the window is measured from there.
+     *
+     * Anything shorter turns the budget into a second, cruder liveness detector that drops frames on a
+     * slow-but-alive link the real detector still holds healthy. Anything longer buys nothing: past
+     * that point every frame in flight has outlived its own subject. The budget is therefore
+     * deliberately **loose** — its job is to make the wedge *finite*, not to be tight.
      *
      * Bounding the send is what makes the growth analysis on [admitFanOuts] true: the queue drains at
      * no worse than one recipient per budget, so a wedged link costs a bounded delay rather than an
@@ -2063,7 +2073,8 @@ internal class SeamRoom(
      * Per-recipient deadline for one queued fan-out send — see [runAdmitFanOutWriter] for why the
      * send is bounded at all and why this is [HeartbeatConfig.reconnectWindow] rather than a knob.
      */
-    private val fanOutSendBudget: Duration get() = heartbeatConfig.reconnectWindow
+    private val fanOutSendBudget: Duration
+        get() = heartbeatConfig.reconnectWindow + heartbeatConfig.timeout
 
     /**
      * Member-side: the host says [paused]'s peer dropped its link and its seat is held open.
