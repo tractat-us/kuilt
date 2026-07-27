@@ -824,7 +824,15 @@ internal class SeamRoom(
     /**
      * Collects [JoinerReconnectController] events and maps them to [MembershipEvent]s.
      *
-     * - [JoinerReconnectEvent.WindowOpened] → [MembershipEvent.WindowOpened] (host events).
+     * - [JoinerReconnectEvent.WindowOpened] → [refineWindow], **not** an unconditional
+     *   [MembershipEvent.WindowOpened]. [markPartitioned] already announced the window inline, so
+     *   this is a refinement: it goes silent when the controller picked the same deadline — which
+     *   [DefaultJoinerReconnectController] always does — and moves the level, announces, *and*
+     *   re-fans the authoritative `Paused` when it did not. It used to be the *only* emitter, and
+     *   that was the bug: the controller opens the window from a `scope.launch`, so its event reached
+     *   this loop's `replay = 0` [kotlinx.coroutines.flow.SharedFlow] at an unpredictable later
+     *   instant — discarded outright when this loop had not yet subscribed (#1618 Drop B) — and a
+     *   joiner has no controller at all, so it never got a window (#1724).
      * - [JoinerReconnectEvent.Resumed] → [MembershipEvent.Resumed] (host events; liveness reset).
      * - [JoinerReconnectEvent.WindowExpired] → no extra *local* event here; the
      *   [HeartbeatPartitionDetector] drives [PartitionEvent.PeerLost] which produces
@@ -836,12 +844,7 @@ internal class SeamRoom(
         ctrl.events.collect { event ->
             when (event) {
                 is JoinerReconnectEvent.WindowOpened ->
-                    emitEvent(
-                        MembershipEvent.WindowOpened(
-                            event.peerId,
-                            Instant.fromEpochMilliseconds(event.expiresAt),
-                        ),
-                    )
+                    refineWindow(event.peerId, Instant.fromEpochMilliseconds(event.expiresAt))
                 is JoinerReconnectEvent.Resumed ->
                     handleReconnectResumed(event.peerId)
                 is JoinerReconnectEvent.WindowExpired -> {
@@ -1584,7 +1587,13 @@ internal class SeamRoom(
      * window); a non-host preserves the deadline it already holds rather than clobbering an
      * authoritative [AdmitMessage.Paused] with a fresh local estimate.
      *
-     * On the **host** the announcement is a [AdmitMessage.Paused] fan-out to the remaining
+     * [MembershipEvent.WindowOpened] is the exception to that idempotence: it is emitted on **every**
+     * call, from the same `expiresAt` that sets the level. This is the *locally-detected* window's
+     * emitter for both roles (#1724, #1618 Drop B) — see the comment at the emission site. A
+     * deadline that arrives from whoever actually enforces the hold goes through [refineWindow]
+     * instead, which announces too.
+     *
+     * On the **host** the announcement is also a [AdmitMessage.Paused] fan-out to the remaining
      * members — see [propagatePaused] for why local detection alone is not enough.
      */
     private fun markPartitioned(peerId: PeerId, at: Instant, reason: ReconnectReason) {
@@ -1593,12 +1602,12 @@ internal class SeamRoom(
         // Arithmetic in epoch-millis, converted once — same operands, same order, same truncation
         // as DefaultJoinerReconnectController.openWindow's `at + reconnectWindowMs`, so the
         // deadline on the level *is* the one the controller enforces.
-        val expiresAt = Instant.fromEpochMilliseconds(
+        val localEstimate = Instant.fromEpochMilliseconds(
             at.toEpochMilliseconds() + heartbeatConfig.reconnectWindow.inWholeMilliseconds,
         )
         // Read the role once: the level and the fan-out must agree on which side owns the window.
         val isHost = _role.value == SessionRole.Host
-        val (wasPartitioned, updated) = lock.withLock {
+        val (wasPartitioned, level) = lock.withLock {
             val current = admittedById[peerId] ?: return
             val existing = current.liveness as? Liveness.Partitioned
             // `since` is first-detection, so it agrees with the single MembershipEvent.Partitioned
@@ -1610,19 +1619,120 @@ internal class SeamRoom(
             // local estimate is no better than either (F4).
             val level = Liveness.Partitioned(
                 since = existing?.since ?: at,
-                windowExpiresAt = if (isHost || existing == null) expiresAt else existing.windowExpiresAt,
+                windowExpiresAt = if (isHost || existing == null) localEstimate else existing.windowExpiresAt,
             )
-            (existing != null) to (updateMemberLiveness(peerId, level) ?: return)
+            // Null only for a peer that is not admitted, already excluded above.
+            updateMemberLiveness(peerId, level) ?: return
+            (existing != null) to level
         }
         // localFabric read outside `lock` (which guards admittedById only) and off the zero-lag
         // projection, never a mirrored copy: this runs on the detector's coroutine, so a mirror
         // written by the capability collector could still read Available on a radio death (#1712).
         if (!wasPartitioned) {
-            emitEvent(MembershipEvent.Partitioned(updated.id, at, reason, localFabric = localFabric.value))
+            emitEvent(MembershipEvent.Partitioned(peerId, at, reason, localFabric = localFabric.value))
         }
+        // WindowOpened is emitted UNCONDITIONALLY — deliberately outside the !wasPartitioned gate,
+        // unlike Partitioned. `reconnectController.onPeerUnresponsive` below is also unconditional,
+        // and `openWindow` cancels the existing timer and re-arms. Gating this on !wasPartitioned
+        // would silently drop every re-announcement, leaving a consumer that missed (or was created
+        // after) the first one counting down to a deadline it never learned.
+        //
+        // The announced deadline is read back off `level`, NOT from `localEstimate`: on a non-host
+        // re-detection the level deliberately preserves the host's authoritative deadline, and
+        // announcing the fresh local estimate there would tell every consumer the seat expires
+        // EARLIER than it actually does.
+        //
+        // Inline, so no async hop can lose it. Previously the host's window crossed the controller's
+        // replay-0 SharedFlow behind a `scope.launch` (discarded when runReconnectEventLoop had not
+        // yet subscribed, #1618 Drop B) and the joiner got none at all (reconnectController is null
+        // on a joiner, #1724). markPartitioned is role-agnostic, so one emission serves both.
+        emitEvent(MembershipEvent.WindowOpened(peerId, level.windowExpiresAt))
         reconnectController?.onPeerUnresponsive(peerId, at.toEpochMilliseconds())
-        // The host always recomputes, so the level and this fan-out carry the same `expiresAt`.
+        // Same single source of truth for the fan-out. This carries the room's HeartbeatConfig
+        // estimate, which is right for the default controller and a placeholder for an injected one —
+        // refineWindow re-fans the enforced deadline when the two differ.
+        //
+        // Convergence is BEST-EFFORT, not guaranteed: this fan-out and refineWindow's each run in
+        // their own `scope.launch`, so under a multi-threaded dispatcher the estimate can reach a
+        // remote member AFTER the refinement and move its level backwards, with nothing to re-assert
+        // it (Paused carries no episode identity — #1781). The worst case is the deadline a remote
+        // held before refinement existed at all, so this is still strictly better than not re-fanning.
         if (!wasPartitioned && isHost) {
+            propagatePaused(peerId, expiresAtMs = level.windowExpiresAt.toEpochMilliseconds())
+        }
+    }
+
+    /**
+     * **Either role.** Replace [peerId]'s reconnect deadline with a more authoritative number and
+     * announce it — the single authority-hop for *"a better deadline arrived"*, from either source:
+     *
+     * - on the **host**, from its [JoinerReconnectController]'s [JoinerReconnectEvent.WindowOpened]
+     *   — the policy that actually enforces the hold ([runReconnectEventLoop]);
+     * - on a **non-host**, from the host's [AdmitMessage.Paused] ([handlePaused]) — the host is the
+     *   only holder of the enforced window, so its number supersedes a local estimate.
+     *
+     * One authority relationship, stated once: whoever enforces the window decides it, and a
+     * locally-computed value is a placeholder until they speak. (The role-widening is a
+     * documentation fix, not a behaviour change — the body was already role-agnostic; the fan-out
+     * line below is the one role-conditional part.)
+     *
+     * [markPartitioned] computes its deadline from [HeartbeatConfig.reconnectWindow], which is what
+     * the default [DefaultJoinerReconnectController] enforces — so for that controller this is a
+     * no-op and no duplicate [MembershipEvent.WindowOpened] is announced. But the controller is
+     * **injectable** (#1614) precisely so a host can implement a different hold policy — a
+     * predicate/unbounded hold that keeps a seat while a durable rejoin record exists. Such a
+     * controller is the *owner* of the window and its deadline can be arbitrarily far from
+     * `at + reconnectWindow`.
+     *
+     * **It moves the level *and* announces, always.** Announcing is the load-bearing half: a
+     * refinement that silently moved the roster deadline would leave the last
+     * [MembershipEvent.WindowOpened] a consumer heard permanently false, counting it down to a
+     * deadline the seat is no longer held to — the exact defect #1724 fixes on the other lanes, and
+     * it does not become acceptable just because the roster is right. Both surfaces must be true so
+     * that a consumer keying on *either* is right; the roster stays authoritative, the event stops
+     * lying. The symmetric alternative (never announce a refinement, and document
+     * `WindowOpened.expiresAt` as silently supersedable) would additionally cost #1614 its
+     * observability — an injected hold policy's deadline would be discoverable only by polling
+     * [Room.roster].
+     *
+     * On the **host** the refined deadline is also fanned out as an authoritative
+     * [AdmitMessage.Paused], for the same reason [markPartitioned]'s is: without it a remote
+     * member's roster keeps `at + reconnectWindow` forever while the host holds the seat to the
+     * injected policy's deadline, so the two rosters disagree with no way to converge. That
+     * convergence is **best-effort**: this fan-out and [markPartitioned]'s are separate
+     * `scope.launch`es with no ordering between them, so on a multi-threaded dispatcher the estimate
+     * can land after the refinement and a remote level can move backwards. `Paused` carries no
+     * episode identity to reject the stale one — see #1781. The residual worst case is the value the
+     * remote would have held anyway, so re-fanning is still an improvement, not a guarantee.
+     * **No fan-out loop is possible:** only a host propagates, and the inbound-`Paused` caller
+     * ([handlePaused]) is reached only when `role` is [SessionRole.Joiner] (see the dispatch gate in
+     * `handleAdmitFrame`), so a member reacting to a `Paused` can never re-send one.
+     *
+     * A no-op unless [peerId] is currently [Liveness.Partitioned] — a window announcement arriving
+     * after the member recovered or was evicted must not resurrect a stale deadline — and a no-op
+     * when the deadline did not move.
+     *
+     * That partition guard is **narrower than it reads**, deliberately: it rejects a deadline for a
+     * member that is not partitioned *now*, which covers "recovered, and still recovered" but not
+     * "recovered, then partitioned again". A controller's [JoinerReconnectEvent.WindowOpened] is
+     * emitted from its own `scope.launch`, so an event for episode *N* can in principle land after
+     * episode *N+1* opened and move that episode's level backwards. Theoretical — the
+     * recovery→re-detection gap is at least one [HeartbeatConfig.timeout], orders of magnitude above
+     * launch latency — and a cheap `expiresAt < since` test was considered and rejected as
+     * *misleadingly* incomplete: with a window longer than that gap (the controller's 60 s default
+     * is), the stale episode's deadline still lands after the new episode's
+     * [Liveness.Partitioned.since]. A sound fix needs the detection instant carried on
+     * [JoinerReconnectEvent.WindowOpened] so a mismatched episode can be dropped outright — a
+     * public-API change, tracked in #1781 rather than smuggled in here.
+     */
+    private fun refineWindow(peerId: PeerId, expiresAt: Instant) {
+        lock.withLock {
+            val current = admittedById[peerId]?.liveness as? Liveness.Partitioned ?: return
+            if (current.windowExpiresAt == expiresAt) return
+            updateMemberLiveness(peerId, current.copy(windowExpiresAt = expiresAt)) ?: return
+        }
+        emitEvent(MembershipEvent.WindowOpened(peerId, expiresAt))
+        if (_role.value == SessionRole.Host) {
             propagatePaused(peerId, expiresAtMs = expiresAt.toEpochMilliseconds())
         }
     }
@@ -1651,6 +1761,12 @@ internal class SeamRoom(
      * member, so the pause would be invisible to it and [MembershipEvent.Partitioned] would
      * silently mean different things on different topologies. Best-effort, like
      * [propagateFarewell]; roster snapshot under [lock], sends on a launched child.
+     *
+     * Two call sites, both host-side: [markPartitioned] on first detection (the room's
+     * [HeartbeatConfig] estimate) and [refineWindow] when the enforcing controller's deadline turns
+     * out to differ. A remote member treats a re-sent `Paused` for an already-paused peer as a
+     * refinement rather than a no-op (#1724), so the second send lands rather than being dropped —
+     * without it, an injected hold policy's deadline would never leave this host.
      */
     private fun propagatePaused(peerId: PeerId, expiresAtMs: Long) {
         fanOutToOtherMembers(peerId, AdmitMessage.Paused(peerId.value, expiresAtMs))
@@ -1668,7 +1784,17 @@ internal class SeamRoom(
         val bytes = AdmitMessage.encode(message)
         scope.launch {
             for (recipient in recipients) {
+                // Best-effort by design — a peer may tear between the roster snapshot and the send.
+                // Logged, not silent: a dropped `Paused` that carried a REFINED deadline leaves the
+                // recipient holding a wrong-but-plausible number with no anti-entropy behind it, so
+                // absence of the frame has to be diagnosable off-device (#1781).
                 runCatchingCancellable { seam.sendTo(recipient, bytes) }
+                    .onFailure {
+                        logger.debug {
+                            "room.fanout.drop self=${selfId.value} to=${recipient.value} " +
+                                "message=${message::class.simpleName} cause=${it::class.simpleName}: ${it.message}"
+                        }
+                    }
             }
         }
     }
@@ -1683,37 +1809,58 @@ internal class SeamRoom(
      * before the host is identified, is dropped. A Paused naming the host itself is ignored too;
      * host liveness is the [JoinerResumeMachine]'s business, not a roster pause.
      *
-     * **Idempotent**: a no-op when the member is already partitioned, so a mesh peer that
-     * detected the drop locally does not emit a second event on receiving this.
+     * **Idempotence is split by kind** (#1724): only [MembershipEvent.Partitioned] is idempotent —
+     * a mesh peer that already detected the drop locally does not re-announce the partition. The
+     * *level* is always refreshed (a local estimate is a guess; the host is authoritative, so
+     * returning early would pin the guess for the rest of the window) **and so is
+     * [MembershipEvent.WindowOpened]**: the refinement goes through [refineWindow], which moves the
+     * level and announces the new deadline together. An earlier revision returned before both
+     * emissions, which silently moved the roster deadline while leaving the last `WindowOpened` a
+     * consumer heard permanently false — see [refineWindow] for why announcing is the right side of
+     * that trade.
      */
     private fun handlePaused(sender: PeerId, paused: AdmitMessage.Paused) {
         val subject = PeerId(paused.peerId)
-        val updated = lock.withLock {
+        val hostDeadline = Instant.fromEpochMilliseconds(paused.expiresAt)
+        // One clock read for the whole partition, so the level's `since` and the emitted
+        // Partitioned's `at` are the same instant. Two reads would describe one partition with two
+        // timestamps — invisible under virtual time, real under a wall clock.
+        val now = clock()
+        // Null ⇒ already partitioned locally, so this Paused is a refinement, not a first
+        // detection. The level write for that case belongs to refineWindow, below: doing it here
+        // too would either duplicate the write or (worse) tempt a caller to skip the announcement
+        // that has to accompany it.
+        val firstDetection: Member? = lock.withLock {
             val host = hostPeerId
             if (host == null || sender != host || subject == host || subject == selfId) return
             val current = admittedById[subject] ?: return
-            if (current.liveness is Liveness.Partitioned) return
-            updateMemberLiveness(
-                subject,
-                Liveness.Partitioned(
-                    since = clock(),
-                    windowExpiresAt = Instant.fromEpochMilliseconds(paused.expiresAt),
-                ),
-            ) ?: return
+            if (current.liveness is Liveness.Partitioned) return@withLock null
+            updateMemberLiveness(subject, Liveness.Partitioned(since = now, windowExpiresAt = hostDeadline))
+                ?: return
+        }
+        if (firstDetection == null) {
+            // The single authority-hop for "a better deadline arrived": it preserves `since`
+            // (first-detection, so it must not drift forward), moves `windowExpiresAt` to the
+            // host's number, announces it, and no-ops when the host's number is the one already
+            // held. Role-agnostic by construction — its host-only fan-out branch is unreachable
+            // from here, since this handler runs only on a joiner.
+            refineWindow(subject, hostDeadline)
+            return
         }
         // The host told us the link dropped; TransportClosed is the honest reason here — we
         // observed no timeout or backpressure ourselves, only the authoritative Paused (#1556).
+        // `now` and `hostDeadline` are the single reads hoisted above the lock — not a second
+        // `clock()` call and not a re-derivation of `paused.expiresAt`, so one instant and one
+        // deadline describe this partition on both the level and the event.
         emitEvent(
             MembershipEvent.Partitioned(
-                updated.id,
-                clock(),
+                firstDetection.id,
+                now,
                 ReconnectReason.TransportClosed,
                 localFabric = localFabric.value,
             ),
         )
-        emitEvent(
-            MembershipEvent.WindowOpened(updated.id, Instant.fromEpochMilliseconds(paused.expiresAt)),
-        )
+        emitEvent(MembershipEvent.WindowOpened(firstDetection.id, hostDeadline))
     }
 
     /**

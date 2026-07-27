@@ -52,23 +52,22 @@ import kotlin.time.Instant
  *
  * ```text
  * sustained drop     host:    Partitioned(joiner) → WindowOpened(joiner) → Left(joiner)
- *                    joiner:  Partitioned(host)   →                        HostLost
+ *                    joiner:  Partitioned(host)   → WindowOpened(host)   → HostLost
  *
  * heals in-window    host:    Partitioned(joiner) → WindowOpened(joiner) → Recovered(joiner)
- *                    joiner:  Partitioned(host)   →                        Recovered(host)
+ *                    joiner:  Partitioned(host)   → WindowOpened(host)   → Recovered(host)
  * ```
  *
- * Two asymmetries fall out of the merged implementation and are pinned deliberately, because a
- * consumer that assumes symmetry gets them wrong:
+ * The arcs are now **symmetric in the window** (#1724): `WindowOpened` is emitted inline by
+ * `SeamRoom.markPartitioned`, which is role-agnostic, so a joiner is handed its host's grace
+ * deadline instead of having to derive one. It previously came only from the
+ * [us.tractat.kuilt.session.partition.JoinerReconnectController], which `SeamRoom` constructs
+ * **host-only**, so on this lane the joiner got nothing at all and a joiner-side UI had to compute
+ * `Partitioned.at + HeartbeatConfig.reconnectWindow` for itself.
  *
- * 1. **The joiner emits no [MembershipEvent.WindowOpened] on this lane.** `WindowOpened` is driven
- *    by the [us.tractat.kuilt.session.partition.JoinerReconnectController], which `SeamRoom`
- *    constructs **host-only**. A joiner sees `WindowOpened` for its host only via the
- *    [us.tractat.kuilt.session.partition.JoinerResumeMachine]'s `onReconnectStarted` — the
- *    *transport-close* lane, which a silent Wi-Fi drop does not take. A joiner-side UI must
- *    therefore derive its own grace deadline from `Partitioned.at + HeartbeatConfig.reconnectWindow`;
- *    it will not be handed one.
- * 2. **The healed peer emits [MembershipEvent.Recovered], never [MembershipEvent.Resumed].**
+ * One asymmetry remains, pinned deliberately because a consumer that assumes symmetry gets it wrong:
+ *
+ * 1. **The healed peer emits [MembershipEvent.Recovered], never [MembershipEvent.Resumed].**
  *    `Resumed` is the *resume-handshake* outcome (token presented, `ResumeAck` returned). Nothing
  *    tears on this lane, so nothing resumes — the seam simply starts carrying pongs again and both
  *    detectors report `PeerRecovered`. A reducer that waits for `Resumed` to clear a "reconnecting…"
@@ -155,8 +154,8 @@ class MembershipEventDropContractTest {
      * **Sustained drop.** The joiner never comes back; the host's held seat expires.
      *
      * Pins the host's `Partitioned → WindowOpened → Left` against the joiner's
-     * `Partitioned → HostLost` — and, mid-flight, that the joiner has **no** `WindowOpened`
-     * to pair with the host's.
+     * `Partitioned → WindowOpened → HostLost` — including, mid-flight, that the joiner's window
+     * pairs with the host's instead of being absent (#1724).
      */
     @Test
     fun `a sustained silent drop pins both sides of the presence arc`() =
@@ -190,11 +189,11 @@ class MembershipEventDropContractTest {
                 },
                 {
                     assertEquals(
-                        listOf("Partitioned(host)"),
+                        listOf("Partitioned(host)", "WindowOpened(host)"),
                         joinerAtDetection,
-                        "the joiner announces the drop but gets NO WindowOpened on the Timeout lane — " +
-                            "the reconnect controller is host-only, so a joiner UI must derive its own " +
-                            "deadline from Partitioned.at + reconnectWindow",
+                        "the joiner must announce the drop AND the grace window on the Timeout lane " +
+                            "too — markPartitioned is role-agnostic, so it no longer has to derive its " +
+                            "own deadline from Partitioned.at + reconnectWindow (#1724)",
                     )
                 },
                 {
@@ -206,10 +205,10 @@ class MembershipEventDropContractTest {
                 },
                 {
                     assertEquals(
-                        listOf("Partitioned(host)", "HostLost"),
+                        listOf("Partitioned(host)", "WindowOpened(host)", "HostLost"),
                         d.joinerArc,
-                        "sustained silence must terminate the joiner with HostLost — no WindowOpened, " +
-                            "no Left for the host peer",
+                        "sustained silence must terminate the joiner with HostLost — and no Left for " +
+                            "the host peer",
                     )
                 },
                 // ── Secondary: reasons. Documented, not the branch surface. ──────
@@ -313,9 +312,9 @@ class MembershipEventDropContractTest {
                 },
                 {
                     assertEquals(
-                        listOf("Partitioned(host)"),
+                        listOf("Partitioned(host)", "WindowOpened(host)"),
                         joinerAtDetection,
-                        "sanity: the joiner must first see the drop, with no WindowOpened",
+                        "sanity: the joiner must first see the drop and its grace window",
                     )
                 },
                 {
@@ -328,7 +327,7 @@ class MembershipEventDropContractTest {
                 },
                 {
                     assertEquals(
-                        listOf("Partitioned(host)", "Recovered(host)"),
+                        listOf("Partitioned(host)", "WindowOpened(host)", "Recovered(host)"),
                         joinerAfterHeal,
                         "an in-window heal clears the joiner's banner with Recovered — never Resumed",
                     )

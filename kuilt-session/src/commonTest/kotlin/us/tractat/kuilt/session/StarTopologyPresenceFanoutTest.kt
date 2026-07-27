@@ -2,6 +2,9 @@
 
 package us.tractat.kuilt.session
 
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -11,11 +14,16 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.partition.JoinerReconnectController
+import us.tractat.kuilt.session.partition.JoinerReconnectEvent
+import us.tractat.kuilt.session.partition.ResumeResult
+import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.test.FaultySeam
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
@@ -219,7 +227,103 @@ class StarTopologyPresenceFanoutTest {
             )
         }
 
+    /**
+     * An **injected** hold policy's deadline must reach remote members too, not just the host's own
+     * roster and events.
+     *
+     * `propagatePaused` used to have a single call site — `markPartitioned`, carrying the room's
+     * [HeartbeatConfig]-derived estimate. A host running a custom [JoinerReconnectController] (#1614)
+     * — the whole point of which is a deadline unrelated to `at + reconnectWindow` — therefore
+     * corrected its *own* level and events and sent nothing, so every other member's roster held
+     * `at + reconnectWindow` forever with no way to learn better. That is the same
+     * roster-contradicts-roster failure #1724 fixes locally, one hop out.
+     *
+     * The star makes the assertion clean: the bystander has no heartbeat edge to the dropped joiner
+     * (see the class KDoc), so **every** deadline it holds arrived from the host. Two announcements
+     * are expected and ordered — the host's inline estimate, then the policy's authoritative
+     * sentinel, which the default controller could never produce.
+     */
+    @Test
+    fun `an injected hold policy's deadline reaches a non-host member`() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val sentinel = Instant.fromEpochMilliseconds(SENTINEL_EXPIRES_AT)
+            val star = star(hostReconnectController = { SentinelHoldPolicy(SENTINEL_EXPIRES_AT) })
+            val windows = mutableListOf<MembershipEvent.WindowOpened>()
+            backgroundScope.launch {
+                star.bystander.events
+                    .filterIsInstance<MembershipEvent.WindowOpened>()
+                    .collect { if (it.peerId == star.droppedId) windows += it }
+            }
+            testScheduler.runCurrent()
+
+            star.droppedLink.partition()
+            // Past the host's detection timeout, well short of its 1 s reconnect window, so the
+            // dropped seat is still in every roster when we look.
+            testScheduler.advanceTimeBy(hostConfig.timeout + hostConfig.interval * 2)
+            testScheduler.runCurrent()
+
+            val level = assertIs<Liveness.Partitioned>(
+                star.bystander.roster.value.first { it.id == star.droppedId }.liveness,
+                "sanity: the bystander must hold the dropped peer as Partitioned",
+            )
+            assertAll(
+                {
+                    assertEquals(
+                        2,
+                        windows.size,
+                        "the bystander must hear the host's inline estimate and then the injected " +
+                            "policy's refined deadline — observed $windows",
+                    )
+                },
+                {
+                    assertEquals(
+                        sentinel,
+                        windows.lastOrNull()?.expiresAt,
+                        "refineWindow must re-fan the authoritative Paused; without it an injected " +
+                            "policy's deadline never leaves the host — observed $windows",
+                    )
+                },
+                {
+                    assertTrue(
+                        windows.firstOrNull()?.expiresAt?.let { it != sentinel } ?: false,
+                        "sanity: the first announcement is the host's HeartbeatConfig estimate, so " +
+                            "the second really is a refinement — observed $windows",
+                    )
+                },
+                {
+                    assertEquals(
+                        sentinel,
+                        level.windowExpiresAt,
+                        "…and the remote roster must agree with the remote announcement",
+                    )
+                },
+            )
+        }
+
     // ── Harness ───────────────────────────────────────────────────────────────
+
+    /**
+     * A [JoinerReconnectController] whose hold policy is "until [expiresAt], whatever the room's
+     * [HeartbeatConfig] says" — the shape of an unbounded/predicate hold (#1614), reduced to the one
+     * property under test: a deadline the default fixed-window controller could never compute.
+     *
+     * `replay` is deliberately non-zero: the room's reconnect-event loop is a separate coroutine, so
+     * a `replay = 0` emission from `onPeerUnresponsive` could be discarded before it subscribes
+     * (#1618 Drop B) and the test would pass or fail on scheduling luck.
+     */
+    private class SentinelHoldPolicy(private val expiresAt: Long) : JoinerReconnectController {
+        private val _events = MutableSharedFlow<JoinerReconnectEvent>(replay = 16, extraBufferCapacity = 16)
+        override val events: SharedFlow<JoinerReconnectEvent> = _events.asSharedFlow()
+
+        override fun onPeerUnresponsive(peerId: us.tractat.kuilt.core.PeerId, at: Long) {
+            _events.tryEmit(JoinerReconnectEvent.WindowOpened(peerId, expiresAt = expiresAt))
+        }
+
+        override suspend fun tryResume(token: ResumeToken, at: Long): ResumeResult =
+            ResumeResult.WindowNotYetOpen
+
+        override fun expire(peerId: us.tractat.kuilt.core.PeerId, at: Long) = Unit
+    }
 
     /**
      * A three-peer star: a host, a [droppedLink] joiner whose link is faulted mid-test, and a
@@ -232,10 +336,22 @@ class StarTopologyPresenceFanoutTest {
         val bystander: Room,
     )
 
-    private suspend fun kotlinx.coroutines.test.TestScope.star(): Star {
+    /**
+     * [hostReconnectController] overrides the **host's** hold policy (#1614); null keeps the default
+     * fixed-window controller, which is what every test but the injection one wants.
+     */
+    private suspend fun kotlinx.coroutines.test.TestScope.star(
+        hostReconnectController: (() -> JoinerReconnectController)? = null,
+    ): Star {
         val loom = InMemoryLoom()
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
-        val hostFactory = SeamRoomFactory(loom, backgroundScope, clock, hostConfig)
+        val hostFactory = SeamRoomFactory(
+            loom,
+            backgroundScope,
+            clock,
+            hostConfig,
+            reconnectControllerFactory = hostReconnectController?.let { build -> { _, _, _ -> build() } },
+        )
         val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, joinerConfig)
 
         val hostRoom = hostFactory.host(Pattern("Host"))
@@ -248,5 +364,13 @@ class StarTopologyPresenceFanoutTest {
         bystanderRoom.roster.first { it.size == 2 }
 
         return Star(hostRoom, droppedLink, droppedRoom.selfId, bystanderRoom)
+    }
+
+    private companion object {
+        /**
+         * A deadline no default controller could produce here: the host's window is 1 s from a
+         * virtual clock starting at 0, so 123456 ms can only have come from the injected policy.
+         */
+        const val SENTINEL_EXPIRES_AT = 123_456L
     }
 }
