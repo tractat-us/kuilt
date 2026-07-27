@@ -93,10 +93,38 @@ public interface Seam {
      */
     public val incoming: Flow<Swatch>
 
-    /** Send to all other peers. Suspends until accepted by the local transport. */
+    /**
+     * Send to all other peers. Suspends until accepted by the local transport.
+     *
+     * A send failure must **not** be reported as a cancellation — see [sendTo].
+     */
     public suspend fun broadcast(payload: ByteArray)
 
-    /** Send to one peer. Suspends until accepted by the local transport. */
+    /**
+     * Send to one peer. Suspends until accepted by the local transport.
+     *
+     * ## A send failure must NOT be reported as a cancellation
+     *
+     * Throw an ordinary exception when the frame cannot be handed to the transport. An implementation
+     * must **not** let a `CancellationException` out of this method (or out of [broadcast]) unless it
+     * is signalling the *caller's* own cancellation, because the caller cannot tell the two apart: the
+     * idiomatic guard ([runCatchingCancellable]) rethrows any `CancellationException`, and a rethrown
+     * one **cancels** the calling coroutine rather than failing it — no failure handler runs, and there
+     * is not even a stack trace to find it by.
+     *
+     * The trap is `withTimeout(sendTimeout) { … }`. `withTimeout` throws `TimeoutCancellationException`
+     * — which *is* a `CancellationException` — **to its caller**, without cancelling that caller's job.
+     * Convert it before it escapes: `withTimeoutOrNull` plus an explicit throw, or catch it and rethrow
+     * as a plain `Exception`.
+     *
+     * This is the same obligation [Loom.weave] carries, for the same reason, and it is stated on both
+     * because a contract only one method carries is what let a real bug through: a long-lived consumer
+     * loop that sends per recipient is cancelled — not failed — by one such throw, so it stops sending
+     * for the rest of the session in complete silence. A caller that cannot afford to trust this
+     * should guard with `try`/`catch` plus `currentCoroutineContext().ensureActive()` rather than
+     * [runCatchingCancellable]; `CompositeSeam.reconcile` and `SeamRoom`'s admit fan-out writer are the
+     * in-tree patterns.
+     */
     public suspend fun sendTo(
         peer: PeerId,
         payload: ByteArray,

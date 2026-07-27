@@ -2,7 +2,9 @@
 
 package us.tractat.kuilt.session
 
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -259,6 +261,71 @@ class AdmitFanOutOrderingTest {
             )
         }
 
+    /**
+     * The writer must survive a `CancellationException` the **callee** minted, not just an ordinary
+     * throw — otherwise the room's single sender is the room's single point of silent failure.
+     *
+     * [Seam] is consumer-implemented, and `withTimeout(sendTimeout) { … }` is the natural way to bound
+     * a fabric's own send. It throws `TimeoutCancellationException` — which *is* a
+     * `CancellationException` — **to its caller** without cancelling that caller's job.
+     * `runCatchingCancellable` rethrows every `CancellationException`, so guarding with it re-raised a
+     * callee-minted one straight out of the per-recipient guard, the recipient loop, the queue loop and
+     * the pump. And because the throwable *is* a cancellation, `scope.launch` **cancelled** the writer
+     * rather than failing it: no handler, no `state` change, no stack trace. [admitFanOuts] was never
+     * closed, so every later `trySend` still reported success while every `Paused`/`Unpaused`/
+     * `Farewell` for the room's life was enqueued and never sent — remote rosters diverging
+     * permanently, silently, with the queue growing behind them.
+     *
+     * That is why this asserts on a *later* fan-out reaching a *healthy* recipient: one dropped frame
+     * to the doomed peer was always acceptable (delivery is best-effort), a dead writer never was.
+     * It is also a strict blast-radius regression over the per-call `scope.launch` this queue replaced,
+     * where the same throw cost one fan-out's remaining recipients rather than every future one.
+     */
+    @Test
+    fun `a callee-minted cancellation from one recipient does not kill the fan-out writer`() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val star = starWithDoomedBystander()
+
+            star.droppedLink.partition()
+            // Past the host's detection timeout: Paused is raised and fanned to both bystanders — the
+            // doomed one mints its TimeoutCancellationException as the fabric would.
+            testScheduler.advanceTimeBy(hostConfig.timeout + hostConfig.interval * 2)
+            testScheduler.runCurrent()
+            // Heal, so a LATER fan-out (Unpaused) is raised on a writer the mint may have killed.
+            star.droppedLink.heal()
+            testScheduler.advanceTimeBy(2.seconds)
+            testScheduler.runCurrent()
+
+            assertAll(
+                {
+                    assertEquals(
+                        listOf("Paused", "Unpaused"),
+                        star.hostSeam.presenceFramesTo(star.healthyId),
+                        "a cancellation minted inside another recipient's sendTo must not stop the " +
+                            "writer: the healthy bystander must still receive the whole arc. Pre-fix " +
+                            "the writer was CANCELLED on the doomed recipient and this was " +
+                            "${star.hostSeam.presenceFramesTo(star.healthyId)}",
+                    )
+                },
+                {
+                    assertEquals(
+                        emptyList(),
+                        star.hostSeam.presenceFramesTo(star.doomedId),
+                        "sanity: the doomed recipient really did throw instead of delivering, so the " +
+                            "assertion above is about surviving it and not about a seam that worked",
+                    )
+                },
+                {
+                    assertEquals(
+                        Liveness.Connected,
+                        star.healthy.roster.value.first { it.id == star.droppedId }.liveness,
+                        "…so the healthy bystander's roster converges rather than being pinned at the " +
+                            "last frame it managed to receive",
+                    )
+                },
+            )
+        }
+
     // ── Harness ───────────────────────────────────────────────────────────────
 
     /**
@@ -338,6 +405,110 @@ class AdmitFanOutOrderingTest {
             ResumeResult.WindowNotYetOpen
 
         override fun expire(peerId: PeerId, at: Long) = Unit
+    }
+
+    /**
+     * A [Seam] decorator whose `sendTo` mints a `TimeoutCancellationException` for admit-presence
+     * frames addressed to one designated recipient — the fabric-authored `withTimeout(sendTimeout)`
+     * idiom [Seam.sendTo] now documents as forbidden, reproduced exactly.
+     *
+     * `withTimeout { awaitCancellation() }` rather than a bare `throw`: the point is that the throwable
+     * is a *genuine* `TimeoutCancellationException` produced the way a real fabric produces one, not a
+     * hand-rolled stand-in that might differ in the property under test. The 1 ms deadline is virtual
+     * time, so it fires deterministically under [StandardTestDispatcher].
+     *
+     * The recipient is supplied lazily because the doomed peer's [PeerId] is not known until it has
+     * joined, which happens after this decorator is constructed. Non-presence frames (the admit
+     * handshake, heartbeats) always pass through, so the mint cannot break session formation or
+     * liveness detection.
+     */
+    private class TimeoutMintingSeam(
+        private val delegate: Seam,
+        private val doomedRecipient: () -> PeerId?,
+    ) : Seam {
+        private val recorded = mutableListOf<Pair<PeerId, AdmitMessage>>()
+
+        /** Presence frames that reached the fabric for [peer], in wire order, by subclass name. */
+        fun presenceFramesTo(peer: PeerId): List<String> =
+            recorded.filter { it.first == peer }.map { it.second::class.simpleName ?: "?" }
+
+        override val selfId: PeerId get() = delegate.selfId
+        override val peers: StateFlow<Set<PeerId>> get() = delegate.peers
+        override val state: StateFlow<SeamState> get() = delegate.state
+        override val plies: StateFlow<Map<PlyId, SeamState>> get() = delegate.plies
+        override val capability: StateFlow<TransportCapability> get() = delegate.capability
+        override val incoming: Flow<Swatch> get() = delegate.incoming
+
+        override suspend fun broadcast(payload: ByteArray): Unit = delegate.broadcast(payload)
+
+        override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+            val presence = AdmitMessage.decode(payload)?.takeIf { it.isPresence() }
+            if (presence == null) {
+                delegate.sendTo(peer, payload)
+                return
+            }
+            if (peer == doomedRecipient()) {
+                // Escapes to our caller as a CancellationException without cancelling our own job —
+                // the whole trap. Nothing after this line runs for this recipient.
+                withTimeout(1.milliseconds) { awaitCancellation() }
+            }
+            recorded += peer to presence
+            delegate.sendTo(peer, payload)
+        }
+
+        override suspend fun close(reason: CloseReason): Unit = delegate.close(reason)
+
+        private fun AdmitMessage.isPresence(): Boolean =
+            this is AdmitMessage.Paused || this is AdmitMessage.Unpaused || this is AdmitMessage.Farewell
+    }
+
+    /** A four-peer star: one subject to drop, one recipient that throws, one that must still be served. */
+    private class DoomedStar(
+        val hostSeam: TimeoutMintingSeam,
+        val droppedLink: FaultySeam,
+        val droppedId: PeerId,
+        val doomedId: PeerId,
+        val healthy: Room,
+        val healthyId: PeerId,
+    )
+
+    /**
+     * Builds the four-peer star for the callee-minted-cancellation test. The doomed bystander joins
+     * **first** so it precedes the healthy one in the fan-out's recipient order (`admittedById` is
+     * insertion-ordered), i.e. the throw happens before the healthy recipient is reached — the
+     * interleaving in which a dead writer actually costs the healthy peer its frames.
+     */
+    private suspend fun TestScope.starWithDoomedBystander(): DoomedStar {
+        val loom = InMemoryLoom()
+        val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
+        val hostFactory = SeamRoomFactory(loom, backgroundScope, clock, hostConfig)
+        val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, joinerConfig)
+
+        var doomedId: PeerId? = null
+        val hostSeam = TimeoutMintingSeam(loom.host(Pattern("Host"))) { doomedId }
+        val hostRoom = hostFactory.adopt(hostSeam, SessionRole.Host)
+
+        val doomedRoom = joinerFactory.join(InMemoryTag("Doomed"))
+        hostRoom.roster.first { it.size == 2 }
+        doomedId = doomedRoom.selfId
+
+        val healthyRoom = joinerFactory.join(InMemoryTag("Healthy"))
+        hostRoom.roster.first { it.size == 3 }
+
+        val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
+        val droppedRoom = joinerFactory.adopt(droppedLink, SessionRole.Joiner)
+        hostRoom.roster.first { it.size == 4 }
+        healthyRoom.roster.first { it.size == 4 }
+        droppedRoom.roster.first { it.size == 4 }
+
+        return DoomedStar(
+            hostSeam = hostSeam,
+            droppedLink = droppedLink,
+            droppedId = droppedRoom.selfId,
+            doomedId = doomedRoom.selfId,
+            healthy = healthyRoom,
+            healthyId = healthyRoom.selfId,
+        )
     }
 
     /** A three-peer star whose host sends through [hostSeam], so its fan-out order is observable. */

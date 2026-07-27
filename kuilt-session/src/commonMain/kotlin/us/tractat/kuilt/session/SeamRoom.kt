@@ -7,6 +7,8 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
@@ -754,9 +756,10 @@ internal class SeamRoom(
         // that never sends is easier to reason about than one that buffers silently.)
         //
         // Deliberately NOT in `loopJobs`: [leave] closes [admitFanOuts] rather than cancelling this,
-        // so frames already enqueued are still attempted on the still-live seam — exactly what the
-        // per-call `scope.launch`es did, since [leave] never cancelled those either — and the loop
-        // then completes on its own when the queue drains. Otherwise it dies with [scope].
+        // so the loop completes on its own when the queue drains rather than dying mid-item, and
+        // frames already enqueued may still be attempted before the seam tears — exactly what the
+        // per-call `scope.launch`es did, since [leave] never cancelled those either. (Only *may*: see
+        // the close site in [leave].) Otherwise it dies with [scope].
         scope.launch { runAdmitFanOutWriter() }
         val jobs = mutableListOf(
             scope.launch { runMainLoop() },
@@ -1208,13 +1211,22 @@ internal class SeamRoom(
 
         // All sends below are outside the lock — they are suspend calls.
 
-        // Send welcome directly to the joiner
+        // Send welcome directly to the joiner. Stays INLINE — it addresses the joiner, not the
+        // bystanders, so it shares no recipient with any queued fan-out and has no order to keep
+        // against one. Same for the two joiner-directed loops below.
         runCatchingCancellable { seam.sendTo(joinerPeerId, welcomeBytes) }
 
-        // Broadcast welcome to all other admitted members (roster sync)
-        for (existing in existingMembers) {
-            runCatchingCancellable { seam.sendTo(existing.id, welcomeBytes) }
-        }
+        // Tell the existing members about the joiner (roster sync) — through the single fan-out queue
+        // (#1781), not a loop of direct sends. This is a host-authoritative membership announcement to
+        // bystanders, structurally identical to propagateFarewell, so it needs the same ordering: a
+        // slow bystander link could leave `Welcome(X)` in flight while X drops and its window expires,
+        // and the queued `Farewell(X)` would then arrive FIRST. handleFarewell removes a peer that
+        // bystander does not hold yet — a no-op — and the late Welcome then ADDS X to its roster. On a
+        // star that bystander has no heartbeat edge to X, so it holds a ghost member forever with no
+        // anti-entropy to correct it. `fanOutToOtherMembers` re-snapshots the same recipient set
+        // (`existingMembers` is `admittedById` minus the joiner, taken moments earlier under the same
+        // lock) and adds the terminal-room gate, so this is a strict improvement, not a trade.
+        fanOutToOtherMembers(joinerPeerId, welcome)
 
         // Bootstrap the joiner's view: send welcomes for all pre-existing members
         for (existing in existingMembers) {
@@ -1697,20 +1709,37 @@ internal class SeamRoom(
         // yet subscribed, #1618 Drop B) and the joiner got none at all (reconnectController is null
         // on a joiner, #1724). markPartitioned is role-agnostic, so one emission serves both.
         emitEvent(MembershipEvent.WindowOpened(peerId, level.windowExpiresAt))
-        reconnectController?.onPeerUnresponsive(peerId, at.toEpochMilliseconds())
         // Same single source of truth for the fan-out. This carries the room's HeartbeatConfig
         // estimate, which is right for the default controller and a placeholder for an injected one —
         // refineWindow re-fans the enforced deadline when the two differ.
         //
         // ORDER is guaranteed; DELIVERY is best-effort. Both fan-outs are enqueued on the single
         // admitFanOuts writer (#1781), so this estimate cannot arrive after refineWindow's refinement
-        // and move a remote level backwards, however many threads the dispatcher has. What is still
-        // best-effort is whether a given frame arrives at all: a recipient that tears loses it, and
-        // `Paused` carries no episode identity, so a LOST refinement leaves that member holding this
-        // estimate with no anti-entropy behind it (the drop is logged for exactly that reason).
+        // and move a remote level backwards. What is still best-effort is whether a given frame
+        // arrives at all: a recipient that tears loses it, and `Paused` carries no episode identity,
+        // so a LOST refinement leaves that member holding this estimate with no anti-entropy behind it
+        // (the drop is logged for exactly that reason).
+        //
+        // ENQUEUED **BEFORE** `onPeerUnresponsive` BELOW, and that order is the whole guarantee. The
+        // queue promises enqueue order == wire order; it cannot promise which of the two is enqueued
+        // first. `onPeerUnresponsive` is the head of the refinement's path — the default controller
+        // does `scope.launch { openWindow() }`, `openWindow` emits `WindowOpened`, and
+        // runReconnectEventLoop collects it on a DIFFERENT coroutine and calls refineWindow ->
+        // propagatePaused -> trySend. Called first, that path could win the race and the remote would
+        // latch the estimate: exactly the inversion this queue exists to prevent, reintroduced one
+        // line above the fix. Nor is the window nanoseconds wide — both paths contend on this same
+        // BLOCKING `lock` (refineWindow's, then fanOutToOtherMembers' own), so a collector that
+        // reaches it first blocks this coroutine's thread while the refinement encodes and enqueues
+        // ahead of it. With the enqueue hoisted, `trySend(estimate)` has returned before the
+        // refinement can be *conceived*, so the ordering is structural rather than probable.
+        //
+        // Nothing below depends on the old order: `propagatePaused` reads only `level` (already
+        // committed under the lock above) and the roster, `emitEvent` is a non-suspending `tryEmit`,
+        // and refineWindow's own gate reads the level this function already wrote.
         if (!wasPartitioned && isHost) {
             propagatePaused(peerId, expiresAtMs = level.windowExpiresAt.toEpochMilliseconds())
         }
+        reconnectController?.onPeerUnresponsive(peerId, at.toEpochMilliseconds())
     }
 
     /**
@@ -1754,7 +1783,11 @@ internal class SeamRoom(
      * **Order is guaranteed; delivery is not.** This fan-out and [markPartitioned]'s are enqueued on
      * the one [admitFanOuts] writer, so the estimate can no longer land *after* this refinement and
      * move a remote level backwards — that inversion was real on a multi-threaded dispatcher and is
-     * now structurally impossible (#1781). What remains best-effort is whether either frame arrives:
+     * now structurally impossible (#1781). It takes **two** properties, not one: the queue makes
+     * enqueue order the wire order, and [markPartitioned] enqueues its estimate *before* it calls
+     * `onPeerUnresponsive` — the head of this function's own call path. The queue alone would leave
+     * which one is enqueued first a race, because that path runs on a different coroutine; see the
+     * comment at that call site. What remains best-effort is whether either frame arrives:
      * a recipient that tears between the roster snapshot and the send loses it, and because `Paused`
      * carries no episode identity there is no anti-entropy to re-assert a *lost* refinement, so the
      * remote keeps the estimate. The drop is logged for that reason.
@@ -1855,11 +1888,15 @@ internal class SeamRoom(
      * Queued admit fan-outs, drained **in enqueue order** by the single [runAdmitFanOutWriter]
      * coroutine (#1781).
      *
-     * Every host-authoritative membership announcement — [AdmitMessage.Paused],
-     * [AdmitMessage.Unpaused], [AdmitMessage.Farewell] — is enqueued here instead of being sent from
-     * a fresh `scope.launch` per call, so **enqueue order is wire order**. Two fan-outs raised close
-     * together previously had *no ordering relationship at all*: on a multi-threaded dispatcher the
-     * second could reach [Seam.sendTo] first, and two of the resulting inversions are silent:
+     * Every host-authoritative membership announcement *to bystanders* — [AdmitMessage.Paused],
+     * [AdmitMessage.Unpaused], [AdmitMessage.Farewell], and the roster-sync [AdmitMessage.Welcome] —
+     * is enqueued here instead of being sent from a fresh `scope.launch` per call or an inline loop,
+     * so **enqueue order is wire order**. (Joiner-*directed* frames — the welcome, the roster
+     * bootstrap, the host's self-introduction, a `ResumeAck` — stay inline: they address the joiner,
+     * share no recipient with any fan-out, and so have no order to keep against one.) Two fan-outs
+     * raised close together previously had *no ordering relationship at all*: on a multi-threaded
+     * dispatcher the second could reach [Seam.sendTo] first, and three of the resulting inversions are
+     * silent:
      *
      * - `Paused(estimate)` from [markPartitioned] overtaken by `Paused(refined)` from [refineWindow]
      *   moves a remote member's deadline **backwards**, so it counts an indefinitely-held seat down
@@ -1868,6 +1905,10 @@ internal class SeamRoom(
      *   [Liveness.Partitioned] in every remote roster **forever** — [handleUnpaused] no-ops for a
      *   member that is not currently partitioned, and neither frame carries episode identity, so
      *   nothing ever re-asserts the truth. Unbounded, and strictly worse than the wrong deadline.
+     * - `Welcome(X)` overtaken by `Farewell(X)` leaves a **departed** member in a bystander's roster
+     *   forever: the `Farewell` removes a peer that bystander does not hold yet (a no-op) and the late
+     *   `Welcome` then adds it. On a star that bystander has no heartbeat edge to X, so nothing
+     *   evicts the ghost. This one is why the welcome fan-out is enqueued here too — see [admitPeer].
      *
      * This is the dedicated-writer-draining-a-[Channel] pattern (`:kuilt-core`'s
      * `CompositeSeam.capabilityWriter` is the sibling), **not** a `limitedParallelism(1)` confinement
@@ -1887,10 +1928,18 @@ internal class SeamRoom(
      *   launch — reintroducing precisely the unordered hop being removed. Blocking a detector
      *   callback on a slow link would also stall liveness detection itself.
      *
-     * Unbounded growth is bounded *in practice* by what enqueues: membership **transitions**
-     * (pause / refine / recover / evict), which occur on the heartbeat timescale rather than
-     * per-frame, and each item is one small recipient list plus one shared encoded frame. A wedged
-     * link accrues a queue proportional to roster churn for as long as it is wedged, not to traffic.
+     * Unbounded growth is bounded *in practice* by two things. First, by what enqueues: membership
+     * **transitions** (admit / pause / refine / recover / evict), which occur on the heartbeat
+     * timescale rather than per-frame, and each item is one small recipient list plus one shared
+     * encoded frame. Second, and load-bearing, by the fact that the writer's every send is
+     * **budgeted** — see [runAdmitFanOutWriter]. Without that budget a wedged link is not a memory
+     * question at all: `Seam.sendTo` can suspend forever (`LinkSeam`'s outbox is bounded and
+     * backpressured by design, so a black-holed link parks its caller indefinitely — the #1655 shape),
+     * and with a *single* writer that parks the room's only sender. Every subsequent announcement to
+     * every *healthy* peer would then buffer here and never be sent, which is both the real
+     * unbounded-growth driver and a worse failure than the queue growing. The budget caps the drain
+     * rate at one recipient per budget instead, so the backlog is bounded by roster churn over that
+     * span. A per-[PeerId] keying would remove the head-of-line delay too; see [runAdmitFanOutWriter].
      */
     private val admitFanOuts = Channel<AdmitFanOut>(Channel.UNLIMITED)
 
@@ -1935,30 +1984,86 @@ internal class SeamRoom(
      * recipient of one fan-out before it touches the next item. One coroutine, so no two fan-outs
      * can interleave and no later announcement can overtake an earlier one (#1781).
      *
-     * **Survives a throwing recipient.** [Seam.sendTo] is the only call in this loop that can throw
-     * (a peer may tear between the roster snapshot and the send), and it is guarded *per recipient*
-     * with [runCatchingCancellable] — never bare `runCatching`, so cancelling [scope] still ends the
-     * loop instead of being swallowed into a `Result`. A writer that died on one bad recipient would
-     * silently stop every later announcement for the room's whole life: the long-lived-pump-death
-     * class of bug (#1787, #1788) with a membership-corrupting payload rather than a lost frame.
+     * **Survives a throwing recipient — including a cancellation the callee minted itself.**
+     * [Seam.sendTo] is the only call in this loop that can throw (a peer may tear between the roster
+     * snapshot and the send), and it is guarded *per recipient*. The guard is a `try`/`catch` plus
+     * [ensureActive], **not** [runCatchingCancellable]: that helper rethrows *every*
+     * `CancellationException`, and a consumer-implemented [Seam] is entitled to hand us one it minted
+     * itself. `withTimeout(sendTimeout) { … }` inside a fabric's `sendTo` is the natural way to write
+     * one, and it throws `TimeoutCancellationException` — which *is* a `CancellationException` — **to
+     * its caller** without cancelling that caller's job. [Loom.weave] documents the obligation not to
+     * do that and [Seam.sendTo] now does too, but a contract only some methods carry is exactly what
+     * lets this through, so the guard does not rely on it.
      *
-     * Delivery remains **best-effort** — a torn recipient's frame is dropped and logged, exactly as
-     * before. What is now guaranteed is *order*: whatever arrives, arrives in the order this room
-     * raised it.
+     * A rethrow here would be maximally silent: because the throwable *is* a `CancellationException`,
+     * the `scope.launch` in [start] is **cancelled rather than failed** — no handler runs, nothing
+     * reaches `state`, and there is not even a stack trace. [admitFanOuts] is never closed, so every
+     * later `trySend` still reports success while every `Paused`/`Unpaused`/`Farewell` for the room's
+     * life is enqueued and never sent: remote rosters diverge permanently, with no announcement at
+     * all. That is strictly worse than the per-call `scope.launch` this queue replaced, where the same
+     * throw cost one fan-out's remaining recipients. [ensureActive] is the discriminator
+     * (`CompositeSeam.reconcile` in `:kuilt-core` is the sibling): our *own* cancellation still ends
+     * the loop, and anything else — cancellation-shaped or not — is that recipient's failure.
+     *
+     * **Each send is budgeted.** A single wedged recipient must not stall announcements to healthy
+     * ones. `sendTo` can suspend indefinitely: `LinkSeam`'s outbox is a *bounded*
+     * `BufferOverflow.SUSPEND` channel by design, so a black-holed link (one whose `conn.send` never
+     * returns and never tears — the #1655 shape) backpressures its caller forever. With one writer
+     * that parks the *only* sender, so [withTimeoutOrNull] bounds it and the frame is dropped and
+     * logged like any other undeliverable one. [withTimeoutOrNull] and never bare `withTimeout` —
+     * that would hand-mint the very callee-minted cancellation the guard above exists to absorb.
+     *
+     * The budget is [HeartbeatConfig.reconnectWindow], derived rather than configured. It must sit
+     * *above* [HeartbeatConfig.timeout]: at or below it, the budget becomes a second, cruder liveness
+     * detector, dropping frames on a slow-but-alive link the real detector still holds healthy.
+     * `reconnectWindow` is also the span over which a presence announcement is still meaningful — a
+     * `Paused` accepted after the seat it describes has already expired informs nobody.
+     *
+     * Bounding the send is what makes the growth analysis on [admitFanOuts] true: the queue drains at
+     * no worse than one recipient per budget, so a wedged link costs a bounded delay rather than an
+     * unbounded backlog. It is still **stronger than the invariant #1781 needs** — that invariant is
+     * *per-recipient* order, and this is a global FIFO, so a wedged peer delays healthy ones by up to
+     * one budget each. Keying the queue by [PeerId] removes even that; tracked as a follow-up rather
+     * than folded in here, because per-recipient writers need their own admit/evict/leave lifecycle.
+     *
+     * Delivery remains **best-effort** — a torn, wedged, or throwing recipient's frame is dropped and
+     * logged, exactly as before. What is now guaranteed is *order*: whatever arrives, arrives in the
+     * order this room raised it.
      */
     private suspend fun runAdmitFanOutWriter() {
         for (fanOut in admitFanOuts) {
             for (recipient in fanOut.recipients) {
-                runCatchingCancellable { seam.sendTo(recipient, fanOut.bytes) }
-                    .onFailure {
+                try {
+                    val accepted = withTimeoutOrNull(fanOutSendBudget) {
+                        seam.sendTo(recipient, fanOut.bytes)
+                    } != null
+                    if (!accepted) {
                         logger.debug {
                             "room.fanout.drop self=${selfId.value} to=${recipient.value} " +
-                                "message=${fanOut.label} cause=${it::class.simpleName}: ${it.message}"
+                                "message=${fanOut.label} reason=send-budget-exceeded " +
+                                "budget=$fanOutSendBudget"
                         }
                     }
+                } catch (failure: Throwable) {
+                    // Genuinely OUR cancellation → rethrow and end the loop; anything else (including
+                    // a CancellationException the consumer's `sendTo` minted itself) is this
+                    // recipient's failure and must not kill the room's only sender. See the KDoc.
+                    currentCoroutineContext().ensureActive()
+                    logger.debug {
+                        "room.fanout.drop self=${selfId.value} to=${recipient.value} " +
+                            "message=${fanOut.label} cause=${failure::class.simpleName}: " +
+                            "${failure.message}"
+                    }
+                }
             }
         }
     }
+
+    /**
+     * Per-recipient deadline for one queued fan-out send — see [runAdmitFanOutWriter] for why the
+     * send is bounded at all and why this is [HeartbeatConfig.reconnectWindow] rather than a knob.
+     */
+    private val fanOutSendBudget: Duration get() = heartbeatConfig.reconnectWindow
 
     /**
      * Member-side: the host says [paused]'s peer dropped its link and its seat is held open.
@@ -2251,11 +2356,15 @@ internal class SeamRoom(
         if (announce) {
             runCatchingCancellable { seam.broadcast(AdmitMessage.encode(AdmitMessage.Goodbye)) }
         }
-        // Close the fan-out queue rather than cancelling its writer (#1781): anything already
-        // enqueued is still attempted on the still-live seam — the pre-existing best-effort
-        // behaviour — and [runAdmitFanOutWriter] then completes when the queue drains. The `closed`
-        // flag set above already stops anything new being enqueued; a `trySend` that races that gate
-        // fails against this closed channel instead of throwing at its caller.
+        // Close the fan-out queue rather than cancelling its writer (#1781), so
+        // [runAdmitFanOutWriter] completes when the queue drains instead of dying mid-item. Anything
+        // already enqueued MAY still be attempted, best-effort, before the seam tears — but do not
+        // read that as a guarantee: the writer is a separate coroutine and `seam.close` below is
+        // reached without necessarily yielding to it, so in practice it typically does not resume
+        // until the seam is already `Torn` and its remaining sends fail fast. That matches the
+        // pre-existing behaviour, where [leave] never cancelled the per-call `scope.launch`es either.
+        // The `closed` flag set above already stops anything new being enqueued; a `trySend` that
+        // races that gate fails against this closed channel instead of throwing at its caller.
         admitFanOuts.close()
         jobsToCancel.forEach { it.cancel() }
         detectorJobsToCancel.forEach { it.cancel() }
