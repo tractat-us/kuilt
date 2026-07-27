@@ -634,18 +634,29 @@ reshapes don't corrupt the tree.
 plane as `heddleStatic`, but `mint`/`prepare`/`activate`/`close`/`retire` are serialized
 through `:kuilt-raft`; each returns a `ControlOutcome` (`Applied`, or `Conflict` with the
 structured reason when it loses a race). If a gossip-lagged peer's `retire` races a delegate
-and strands budget on a since-reparented child, `reconcile(child)` re-homes it onto the child's
-live lineage through the log (behind a §9 #3 `readIndex()` leader fence) — conservingly (mints
-nothing), clearing the resulting `PersistentNegativeHoldings`/`PerEdgeSafety`/`ClosureViolation`.
-It fails closed (leaving the conflicts standing, never a silent break) when the strand can't be
-cleared conservingly — service spent *through* the stranded edge, or a transfer-tangled strand
-(part of #1665). `enroll(replica)`/`depart()` keep an **agreed participant list** on the same
-log (`enrolledReplicas()` reads it back) — so "wait for every participant" is a defined
-question; only a peer may depart itself. The spend path (`schedule`/`reserve`/`complete`) never
-touches the log.
+and strands budget on a since-reparented child, `reconcile(child)` re-homes it — net inflow
+*and* any service already charged through it — onto the child's live lineage through the log,
+conservingly (mints nothing), clearing the resulting
+`PersistentNegativeHoldings`/`PerEdgeSafety`/`ClosureViolation`. **It sends no magnitudes:** it
+opens a `quiesce(edge)` barrier over each retired inbound edge, every peer promises never to
+write that edge again and acks its own final values, and the move is *derived at apply time*
+from those recorded promises — so a lagged or deposed proposer cannot commit a wrong amount.
+Expect to call it twice: the acks are separate committed acts, so the first call is usually
+refused naming the peers it waits on (`pendingAcks(edge)` reads that set). It fails closed on a
+transfer-tangled strand, and it **blocks while any enrolled peer is down** — that peer is
+exactly the one that may hold an unreplicated reservation, so the wait is the safety property,
+not a bug. `enroll(replica)`/`depart()` keep the **agreed participant list** the barrier
+quantifies over (`enrolledReplicas()` reads it back); only a peer may depart itself, and
+**`enroll(self)` is what opens a node's write gate** — until it applies, `reserve` returns
+`null` and `schedule` delegates nothing (`isWritable`). The spend path
+(`schedule`/`reserve`/`complete`) never touches the log.
 
 <!-- verbatim from kuilt-heddle/src/commonSamples/kotlin/us/tractat/kuilt/heddle/EntitlementLedgerSamples.kt#sampleHeddleGoverned -->
 ```kotlin
+    // Enrolling self is what opens this node's write gate: until it applies, `reserve` returns null
+    // and `schedule` delegates nothing, so an unenrolled peer can never author entitlement (#1693).
+    check(node.enroll(self) is ControlOutcome.Applied)
+
     // Mint and reshape are serialized through the Raft log — each returns a structured outcome.
     check(node.mint(self, 100L) is ControlOutcome.Applied)
     node.prepare(AttachmentRecord(edge, root, leaf, Weight.ONE, initialVirtualTime = 0L))

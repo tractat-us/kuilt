@@ -370,9 +370,9 @@ public class GovernedHeddleNode internal constructor(
      * fresh inbound edge, [holdings] at the child derive **persistently negative** — a permanent
      * [LedgerConflict.PersistentNegativeHoldings] / [LedgerConflict.PerEdgeSafety] with zero real overspend
      * (issue #1665). The strand does **not** self-heal. [reconcile] re-homes it onto the child's live lineage
-     * through the log, restoring conservation and clearing the conflicts — **when no service was spent
-     * *through* the stranded edge** (the through-service and transfer-tangled cases are carved out and remain
-     * open, part of #1665). Until reconciled it is the same safe stranding class as a crashed peer's holdings (§8.1).
+     * through the log — net inflow *and* any service already spent *through* the stranded edge — restoring
+     * conservation and clearing the conflicts. Only a **transfer-tangled** strand stays carved out. Until
+     * reconciled it is the same safe stranding class as a crashed peer's holdings (§8.1).
      */
     public suspend fun retire(edge: AttachmentId, timeout: Duration? = null): ControlOutcome {
         // Advisory local drain gate: refuse only a *clear* drain violation (outstanding > 0 in the

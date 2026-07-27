@@ -404,10 +404,13 @@ internal class HeddleControlPlane(
      * stale authority (the same deposed-leader-cannot-pass-the-fence mechanism the coordinated path
      * uses). Throws [us.tractat.kuilt.raft.NotLeaderException] on a non-leader/deposed proposer.
      *
-     * **Scope — authority, not magnitude.** This fences the *log-order authority* of the decision. It
-     * does **not** fence the freshness of the gossip-replicated data-plane counters the witness
-     * magnitude is computed from (those ride an independent transport and are not in the log). A
-     * causally-lagged leader can still commit a wrong magnitude — the issue #1665 residual (Wall A).
+     * **Scope — authority, not magnitude, and no longer load-bearing for relocation.** This fences the
+     * *log-order authority* of a decision; it cannot fence the freshness of the gossip-replicated
+     * data-plane counters, which ride an independent transport and are not in the log. Relocation used
+     * to depend on that freshness (the Wall-A residual) and no longer does: its magnitude is derived at
+     * apply time from log-recorded per-peer acks (§6.2 step 4), so a stale or deposed proposer's
+     * `Reconcile` is refused or correctly derived regardless. Keep this as a **cheap pre-propose
+     * courtesy** — it still keeps recovery driven from a node holding quorum — not as the fence.
      */
     suspend fun fenceReadIndex(): Long = raft.readIndex()
 

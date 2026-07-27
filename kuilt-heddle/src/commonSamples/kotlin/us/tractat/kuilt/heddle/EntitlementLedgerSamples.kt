@@ -117,6 +117,10 @@ internal suspend fun CoroutineScope.sampleHeddleGoverned(seam: Seam, raft: us.tr
         epoch = 1L,                                // numeric per-boot counter — bumped every restart
     )
 
+    // Enrolling self is what opens this node's write gate: until it applies, `reserve` returns null
+    // and `schedule` delegates nothing, so an unenrolled peer can never author entitlement (#1693).
+    check(node.enroll(self) is ControlOutcome.Applied)
+
     // Mint and reshape are serialized through the Raft log — each returns a structured outcome.
     check(node.mint(self, 100L) is ControlOutcome.Applied)
     node.prepare(AttachmentRecord(edge, root, leaf, Weight.ONE, initialVirtualTime = 0L))

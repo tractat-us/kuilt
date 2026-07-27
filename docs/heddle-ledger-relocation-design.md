@@ -779,3 +779,74 @@ first two are safety-relevant and **slice 3 must close the second one**.
    can silently answer the barrier quantifier from a log prefix it has not applied — a short
    fold that looks like an answer. `EnrolledRoster` carries `appliedIndex` and throws rather
    than answering beyond it.
+
+## 14. Implementation feedback from slice 3 (#1693)
+
+Slice 3 landed the fence, the apply-derived `Reconcile`, the boot gate, and the through-service
+un-gate. Six corrections. **Two are forks the implementation deliberately did not resolve** — they
+are marked ⚠ and were surfaced rather than invented around.
+
+1. **`QuiesceAck` must be self-service, and §6.2 never says so.** §6.2 step 2.3 says a peer
+   "proposes `QuiesceAck(s, r, finals)` with its own requestKey", which *implies* self-authorship
+   but does not gate it. It has to be gated, on exactly §6.1's argument and exactly §13.1's
+   `Depart` asymmetry: an ack **shrinks** what the barrier is still waiting for, so it asserts a
+   fact about the acking replica's own future writes, and only the promiser can assert that. A
+   third-party ack would let the survivors declare a peer done while it still holds an
+   unreplicated reservation — finding 2 through a side door, a second time. Shipped as a gate on
+   `ControlEnvelope.proposer == replica`, the same shape as `Depart`.
+
+2. **The boot fence does not need `readIndex()`, and is better without it.** §6.5.3 specifies "one
+   `readIndex()` + wait". `readIndex()` throws on a non-leader, so a follower could never open its
+   own gate, and §11's own note about entries Raft withholds from `committedFrom` means the
+   applied prefix can legitimately sit below the fenced index (the trap `prepareNeutral` already
+   documents). A strictly better fence with the same guarantee: **wait for this peer's own
+   post-boot `Enroll(self)` to apply here.** Raft applies in index order, so a peer that has
+   applied its own enroll has applied every entry before it — every barrier committed earlier is
+   restored, and every later one arrives in order. It works on a follower, it cannot be wedged by
+   a withheld entry, and it makes §13.2's enrollment precondition *the same act*, closing both
+   holes with one gate. `GovernedHeddleNode.isWritable`; `reserve`/`schedule` are the two entry
+   points that author a slot, and `complete` is transitively gated because a reservation can only
+   come from `reserve`.
+
+3. **⚠ FORK — §6.5.2(a) requires "one anti-entropy exchange" before acking, and nothing supports
+   it.** §6.5.2 narrows the cross-incarnation ack gap by having a restarted peer "replay the
+   control log *and complete one anti-entropy exchange* before acking". §6.5.3's normative text
+   mentions only the control-log half. The anti-entropy half needs a *Quilter* primitive that does
+   not exist — there is no "one full exchange has completed" signal to wait on — so shipping it
+   means designing that primitive. **Not implemented; the control-log half is.** The consequence
+   is that the §6.5.2 residual is exactly as wide as the design says it is when no anti-entropy
+   has run, rather than narrowed. Decide whether to add the Quilter signal before assuming the
+   narrowing.
+
+4. **⚠ FORK — §6.5.2's "not a conservation break" is wrong for a *leaf*-edge residue.** The text
+   says the residue is "not a conservation break (`rollupSpent` is outside the identity; a
+   leaf-edge residue keeps the identity true because the spend was real)". The parenthetical's
+   first clause holds and is now pinned by a test; **the second does not.** `holdings` subtracts
+   `effLeafSpent(f)` at the child's *live inbound* edge, so an under-acked leaf spend moves the
+   **credit** onto the live edge without moving the **charge** with it, and
+   `Σ holdings + Σ effLeafSpent` exceeds `minted` by exactly the under-acked amount. It is still
+   surfaced (`PerEdgeSafety` on the edge) and still machine-attributable (`base > ackedFinal`), so
+   it is diagnosed rather than silent — but it is a conservation break, and the refused-in-v1
+   residue sweep must therefore treat the leaf case as the one it exists for. Pinned by
+   `EntitlementLedgerReconcileTest.namedResidual_anUnderAckedLEAFSpendDoesBreakTheIdentityContraDesign652`;
+   §6.5.2's text should be corrected.
+
+5. **The published move must republish more than §6.4 says.** §6.4 says the delta carries "`s`'s
+   **final base spend slots** at their acked values". That is necessary but not sufficient: the
+   drain also writes `returned(s)[r] → effIssued(s)[r]`, so an observer holding the drain without
+   `issued(s)[r]` reads `returned > issued` and false-fires `PerEdgeSafety` — and an observer
+   holding `leafRelocOut(s)` without `leafRelocIn(s)` reads a negative effective spend. The
+   shipped delta republishes **every** slot the derivation read on the fenced edge — base `issued`
+   and both spend families, plus the three `relocIn` families — so no observer can hold the
+   conclusion without its premises at all. §6.4's list should be widened to match.
+
+6. **The refusal shape is "not fenced yet", not "malformed witness".** With the proposer sending
+   no magnitudes, `carriesOnlyRehomeSlots()` and the whole witness-shape gate disappear — there is
+   nothing to validate, because the patch is an output of the derivation rather than an input to
+   it. What replaces them is a fence-completeness refusal that **names the replicas it is waiting
+   on**, and the practical consequence for the caller is that `reconcile(child)` is a *two-call*
+   operation: it opens the barriers, and the acks are separate committed acts that land afterwards.
+   The design does not specify a driver for that wait, and one was deliberately not invented —
+   refusing with the pending set (`pendingAcks(edge)`) is fail-closed and observable; a caller that
+   blocked would be waiting, unbounded, inside a recovery path whose completion is by design as
+   available as the slowest enrolled peer.
