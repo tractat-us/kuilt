@@ -2,6 +2,7 @@
 
 package us.tractat.kuilt.session
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -10,14 +11,27 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
+import us.tractat.kuilt.core.Loom
+import us.tractat.kuilt.core.MuxClientLoom
+import us.tractat.kuilt.core.MuxServerLoom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Rendezvous
+import us.tractat.kuilt.core.RoomAuthorizer
+import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.FaultySeam
 import us.tractat.kuilt.test.assertAll
+import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
+import us.tractat.kuilt.test.fabric.connectionPair
+import kotlin.coroutines.ContinuationInterceptor
+import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -540,6 +554,205 @@ class WindowLevelTest {
             )
         }
 
+    // ── Joiner ↔ its own host: the transport-tear / resume lane (#1723) ────────
+
+    /**
+     * #1723: `roster` and `events` must not contradict each other. A joiner partitioned from its
+     * host must show that host [Liveness.Partitioned] **in the roster**, carrying the same deadline
+     * the announcement did.
+     *
+     * This is the transport-tear lane, not the heartbeat-`Timeout` lane
+     * [joinerHostTimeoutOpensAWindowWithADeadline] covers: a torn base routes to the resume machine,
+     * whose `onReconnectStarted` callback emitted [MembershipEvent.Partitioned] +
+     * [MembershipEvent.WindowOpened] and mutated **no roster state at all** — so `events` said the
+     * host was partitioned while `roster` still reported it [Liveness.Connected], and a subscriber
+     * arriving after the edge could not recover the state from either surface.
+     *
+     * The re-weave is gated so the reconnect is observed **in flight**: a successful resume clears
+     * the level again (see [aResumedJoinerShowsItsHostConnectedAgain]), so an ungated harness would
+     * race the assertion against the resume it is not testing.
+     */
+    @Test
+    fun joinerShowsItsHostPartitionedInTheRoster() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val h = resumableJoiner()
+            val windows = mutableListOf<MembershipEvent.WindowOpened>()
+            backgroundScope.launch {
+                h.joiner.events
+                    .filterIsInstance<MembershipEvent.WindowOpened>()
+                    .collect { if (it.peerId == h.hostId) windows += it }
+            }
+            testScheduler.runCurrent()
+
+            h.tearTransport()
+            testScheduler.runCurrent()
+            testScheduler.advanceTimeBy(fastConfig.interval)
+            testScheduler.runCurrent()
+
+            val level = assertIs<Liveness.Partitioned>(
+                h.hostLiveness(),
+                "#1723: onReconnectStarted announced the partition and mutated no roster state, so " +
+                    "the joiner's roster still reported its host Connected",
+            )
+            assertAll(
+                {
+                    assertEquals(
+                        listOf(level.windowExpiresAt),
+                        windows.map { it.expiresAt },
+                        "the joiner must have announced exactly one window for its host, and the " +
+                            "level must carry that same deadline — a consumer keying on the roster " +
+                            "and one keying on the event cannot count down to different instants — " +
+                            "observed $windows",
+                    )
+                },
+                {
+                    assertEquals(
+                        level.since + fastConfig.reconnectWindow,
+                        level.windowExpiresAt,
+                        "the level's deadline is the budget the resume machine actually enforces: " +
+                            "first detection plus the configured reconnect window",
+                    )
+                },
+            )
+        }
+
+    /**
+     * The clear side. Without it the level is worse than no level: a host pinned
+     * [Liveness.Partitioned] in the joiner's roster renders a permanent "reconnecting…" over a
+     * session that is in fact live again.
+     *
+     * Asserted on the **roster**, not on [MembershipEvent.Resumed] — a `Resumed` edge over a level
+     * that never cleared is the same #1723 contradiction, in the other direction.
+     *
+     * The mid-flight assertion is a vacuity guard, not decoration: without it a run in which the
+     * level was never set at all would pass for the wrong reason.
+     *
+     * The clearing path is [SeamRoom.handleResumeAck] and nothing else — the detector the resume
+     * restarts is fresh, so it never fires the `PeerRecovered` that [SeamRoom.markRecovered] needs.
+     * An episode that completes **without** a `ResumeAck` therefore leaves this level pinned; see
+     * #1637, whose no-op-resume path must clear it explicitly.
+     */
+    @Test
+    fun aResumedJoinerShowsItsHostConnectedAgain() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val h = resumableJoiner()
+
+            h.tearTransport()
+            testScheduler.runCurrent()
+            testScheduler.advanceTimeBy(fastConfig.interval)
+            testScheduler.runCurrent()
+            val midFlight = h.hostLiveness()
+
+            // Let the re-weave through; the resume completes well inside the 500 ms window.
+            h.releaseReweave()
+            repeat(3) {
+                testScheduler.advanceTimeBy(fastConfig.interval)
+                testScheduler.runCurrent()
+            }
+
+            assertAll(
+                {
+                    assertIs<Liveness.Partitioned>(
+                        midFlight,
+                        "sanity: the host must have been Partitioned mid-reconnect, else this test " +
+                            "never exercises the clear at all",
+                    )
+                },
+                {
+                    assertEquals(
+                        Liveness.Connected,
+                        h.hostLiveness(),
+                        "a resumed joiner must clear its host's level, or every consumer renders " +
+                            "\"reconnecting…\" forever over a live session",
+                    )
+                },
+            )
+        }
+
+    /**
+     * A tear that follows a heartbeat `Timeout` moves the **deadline** and must not move
+     * [Liveness.Partitioned.since].
+     *
+     * The reachable double-detection, and the real-hardware ordering: heartbeats stop while the seam
+     * is still `Woven`, so the detector reports `Timeout` and [SeamRoom.markPartitioned] writes
+     * `Partitioned(since = t1, windowExpiresAt = t1 + w)`; the socket then actually closes and the
+     * torn watcher hands the **already-partitioned** host to the resume machine, which reports
+     * `onReconnectStarted(host, t2, t2 + w)`.
+     *
+     * The two halves pull in opposite directions, which is the point:
+     * - `since` must stay `t1` — its documented contract is *first* detection, so it keeps agreeing
+     *   with the first [MembershipEvent.Partitioned] a consumer actually heard;
+     * - `windowExpiresAt` must become `t2 + w`, because that is the budget the resume machine now
+     *   enforces, and it must equal the deadline just announced or a consumer counts down to a
+     *   deadline nobody holds.
+     *
+     * Writing `Partitioned(since = at, windowExpiresAt = windowDeadline)` unconditionally satisfies
+     * the second half and breaks the first; leaving the level alone satisfies the first and breaks
+     * the second.
+     */
+    @Test
+    fun aTearAfterATimeoutMovesTheDeadlineButNotFirstDetection() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val h = faultedResumableJoiner()
+            val windows = mutableListOf<MembershipEvent.WindowOpened>()
+            backgroundScope.launch {
+                h.joiner.events
+                    .filterIsInstance<MembershipEvent.WindowOpened>()
+                    .collect { if (it.peerId == h.hostId) windows += it }
+            }
+            testScheduler.runCurrent()
+
+            // Silence the host WITHOUT tearing: the seam stays Woven and the host stays in `peers`,
+            // so the detector reports Timeout and the room routes it to markPartitioned.
+            assertNotNull(h.faultedLink, "this harness must expose a faultable link").partition()
+            testScheduler.advanceTimeBy(fastConfig.timeout + fastConfig.interval)
+            testScheduler.runCurrent()
+            val fromTimeout = assertIs<Liveness.Partitioned>(
+                h.hostLiveness(),
+                "sanity: the heartbeat Timeout must have partitioned the host first — this test is " +
+                    "about what a LATER tear does to an already-partitioned host",
+            )
+
+            // Now the socket really closes. The gate is never released: this asserts the state at
+            // onReconnectStarted, and a FaultySeam cannot carry a healed generation anyway (its
+            // inbound pump completes with the torn generation).
+            h.tearTransport()
+            testScheduler.runCurrent()
+            testScheduler.advanceTimeBy(fastConfig.interval)
+            testScheduler.runCurrent()
+            val fromTear = assertIs<Liveness.Partitioned>(
+                h.hostLiveness(),
+                "the host must still be Partitioned after the tear",
+            )
+
+            assertAll(
+                {
+                    assertEquals(
+                        fromTimeout.since,
+                        fromTear.since,
+                        "`since` is FIRST detection: a tear following a Timeout must not drift it " +
+                            "forward, or the level stops agreeing with the Partitioned event the " +
+                            "consumer already heard",
+                    )
+                },
+                {
+                    assertTrue(
+                        fromTear.windowExpiresAt > fromTimeout.windowExpiresAt,
+                        "the deadline DID move — the resume machine's budget runs from the tear, " +
+                            "not from first detection — observed $fromTimeout then $fromTear",
+                    )
+                },
+                {
+                    assertEquals(
+                        fromTear.windowExpiresAt,
+                        windows.lastOrNull()?.expiresAt,
+                        "…and the moved deadline must be the one just announced; a level that moves " +
+                            "silently leaves the last WindowOpened permanently false — observed $windows",
+                    )
+                },
+            )
+        }
+
     // ── Harnesses ─────────────────────────────────────────────────────────────
 
     private fun TestScope.virtualClock(): () -> Instant =
@@ -588,6 +801,109 @@ class WindowLevelTest {
             bystander.roster.value.first { it.id == droppedId }.liveness,
             "the bystander must hold the dropped peer as Partitioned at this point",
         )
+    }
+
+    /**
+     * A joiner over a **resumable** base, so a transport tear routes to the resume machine
+     * (`onReconnectStarted`) rather than to `markPartitioned` — the lane the [joinerFaultedPair]
+     * harness above cannot reach, because a `SeamRoomFactory` joiner over a plain
+     * [InMemoryLoom] has no re-weave target and goes straight to terminal.
+     */
+    private class ResumableJoiner(
+        val joiner: SeamRoom,
+        val hostId: PeerId,
+        /** Non-null only for [faultedResumableJoiner]; see that factory for why. */
+        val faultedLink: FaultySeam?,
+        private val muxClient: MuxClientLoom,
+        private val reweaveGate: CompletableDeferred<Unit>,
+    ) {
+        /** Drop the single shared socket out from under the joiner (a real socket close analog). */
+        suspend fun tearTransport(): Unit = muxClient.closeBase()
+
+        /** Let the gated re-weave proceed, so the reconnect can complete its resume. */
+        fun releaseReweave() {
+            reweaveGate.complete(Unit)
+        }
+
+        /** The joiner's current level for its host; fails if the host left the roster entirely. */
+        fun hostLiveness(): Liveness = joiner.roster.value.first { it.id == hostId }.liveness
+    }
+
+    private val nameOf: (Rendezvous) -> String = { rv ->
+        when (rv) {
+            is Rendezvous.New -> rv.pattern.sessionName
+            is Rendezvous.Existing -> rv.tag.sessionName
+        }
+    }
+
+    /**
+     * A resumable joiner whose re-weave is **gated**, so a test can observe the reconnect in flight
+     * and then release it to a successful resume.
+     */
+    private suspend fun TestScope.resumableJoiner(): ResumableJoiner = buildResumableJoiner(faulty = false)
+
+    /**
+     * The same, with the joiner's live seam additionally wrapped in a [FaultySeam] so heartbeats can
+     * be dropped **without** tearing — the only way to put an already-`Partitioned` host in front of
+     * `onReconnectStarted`.
+     *
+     * **The resume cannot succeed through this wrapper**, so a test using it must never release the
+     * gate: [FaultySeam] pumps its delegate's `incoming` into a one-shot spool, and a
+     * [MuxClientLoom] channel's `incoming` is per-generation — it completes at that generation's
+     * `Torn`, closing the spool for good, so a healed base never reaches the room again.
+     */
+    private suspend fun TestScope.faultedResumableJoiner(): ResumableJoiner = buildResumableJoiner(faulty = true)
+
+    private suspend fun TestScope.buildResumableJoiner(faulty: Boolean): ResumableJoiner {
+        val dispatcher = coroutineContext[ContinuationInterceptor]!!
+        val clock = virtualClock()
+        val source = InMemoryConnectionSource()
+        val serverLoom = MuxServerLoom(
+            source = source,
+            scope = backgroundScope,
+            selfId = PeerId("server"),
+            authorizer = RoomAuthorizer.AllowAll,
+            dispatcher = dispatcher,
+            random = Random(13L),
+        )
+        val hostRoom = SeamRoom(
+            seam = serverLoom.host(Pattern("table-7")),
+            role = SessionRole.Host,
+            memberName = "table-7",
+            scope = backgroundScope,
+            clock = clock,
+            heartbeatConfig = fastConfig,
+            roomId = RoomId("room-1"),
+        ).also { it.start() }
+
+        val clientId = PeerId("client")
+        var seed = 1
+        val base = object : Loom {
+            override suspend fun weave(rendezvous: Rendezvous): Seam {
+                val (serverConn, clientConn) = connectionPair()
+                source.offer(serverConn)
+                return hubMesh(clientId, listOf(clientConn), dispatcher, Random((seed++).toLong()))
+            }
+        }
+        val muxClient = MuxClientLoom(base, Rendezvous.New(Pattern("base")), backgroundScope, nameOf)
+        val tag = InMemoryTag("table-7")
+        val channel = muxClient.join(tag)
+        val faultedLink = if (faulty) FaultySeam(channel, backgroundScope) else null
+        val gate = CompletableDeferred<Unit>()
+        val joinerRoom = SeamRoom(
+            seam = faultedLink ?: channel,
+            role = SessionRole.Joiner,
+            memberName = "client",
+            scope = backgroundScope,
+            clock = clock,
+            heartbeatConfig = fastConfig,
+            roomId = null,
+            reweave = { gate.await(); muxClient.join(tag) },
+        ).also { it.start() }
+
+        hostRoom.roster.first { it.size == 1 }
+        joinerRoom.roster.first { it.isNotEmpty() }
+        return ResumableJoiner(joinerRoom, hostRoom.selfId, faultedLink, muxClient, gate)
     }
 
     private suspend fun TestScope.mesh(hostConfig: HeartbeatConfig, joinerConfig: HeartbeatConfig): Mesh {

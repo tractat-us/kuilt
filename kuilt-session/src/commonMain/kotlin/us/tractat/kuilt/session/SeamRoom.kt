@@ -673,6 +673,33 @@ internal class SeamRoom(
                         this@SeamRoom.restartIncomingCollect()
 
                     override fun onReconnectStarted(hostId: PeerId, at: Instant, windowDeadline: Instant) {
+                        // The level, not just the edge (#1723): without this the joiner's roster
+                        // reported its host Connected while these two events said Partitioned, and a
+                        // subscriber arriving after the edge could recover the state from neither
+                        // surface. [hostId] is in [admittedById] on an admitted joiner — the same
+                        // lookup [restoreHostDetector] does. Genuine lock acquisition, not a
+                        // re-entry: JoinerResumeMachine.runReconnect calls this outside its own
+                        // critical sections (the lock is reentrant either way).
+                        lock.withLock {
+                            val existing = admittedById[hostId]?.liveness as? Liveness.Partitioned
+                            updateMemberLiveness(
+                                hostId,
+                                Liveness.Partitioned(
+                                    // First detection, preserved — see the [Liveness.Partitioned.since]
+                                    // contract. Reachable double-detection, and the real-hardware
+                                    // ordering: the radio dies (heartbeat Timeout → markPartitioned)
+                                    // and only then does the socket notice (Torn → here). Overwriting
+                                    // would drift `since` past the single Partitioned event a consumer
+                                    // heard from the first detection.
+                                    since = existing?.since ?: at,
+                                    // The deadline, by contrast, genuinely MOVED: the resume machine's
+                                    // withTimeoutOrNull budget runs from `at`, so [windowDeadline] is
+                                    // the instant the seat is actually held to, and it is announced
+                                    // immediately below — level and event cannot disagree.
+                                    windowExpiresAt = windowDeadline,
+                                ),
+                            )
+                        }
                         emitEvent(
                             MembershipEvent.Partitioned(
                                 hostId,
