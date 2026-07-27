@@ -18,8 +18,9 @@ private val EMPTY_CONNECTION_STATES: StateFlow<Map<NwConnectionId, NwConnState>>
 /**
  * Shared default for [NwApi.pathState] — a single immutable, never-updated [StateFlow] holding `null`
  * ("path unknown") so the default getter allocates nothing per call. A binding that has not wired an
- * `NWPathMonitor` (e.g. the JVM dylib bridge) inherits "unknown", and the seam keeps its static
- * capability seed rather than guessing.
+ * `NWPathMonitor` (e.g. the JVM dylib bridge) inherits "unknown", and the seam reports
+ * [us.tractat.kuilt.core.FabricAvailability.Unknown] rather than guessing — the loom's static report
+ * supplies only the ROLES, never a path verdict (#1712).
  */
 private val EMPTY_PATH_STATE: StateFlow<NwPathState?> =
     MutableStateFlow<NwPathState?>(null).asStateFlow()

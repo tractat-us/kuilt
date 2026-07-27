@@ -521,21 +521,24 @@ public abstract class SeamConformanceSuite {
     internal suspend fun runWovenSeamCapabilityIsHonest(scope: TestScope): Unit =
         scope.connectedPair { host, _ ->
             if (capabilities().reportsLiveCapability) {
-                // A fabric claiming a live observer must REACH a real verdict — so AWAIT it rather than
-                // sample. A real OS path monitor (`NWPathMonitor`) reports asynchronously and starts from
-                // "nothing reported yet", so the value at this instant may legitimately still be the
-                // Unknown floor; what must not happen is that it stays there. An observer that never fires
-                // hangs here and `runTest`'s own timeout fails the suite — the same await-the-flow idiom
-                // `stateIsWovenAfterConnect` uses, and real-time-safe for a flow fed off an OS queue.
+                // A fabric claiming a live observer must REACH a real verdict, so AWAIT one rather than
+                // sample: a real OS path monitor (`NWPathMonitor`) reports asynchronously from a cold
+                // "nothing observed yet", so the value at this instant may legitimately still be the
+                // Unknown floor. What must not happen is that it stays there forever.
                 //
-                // Which non-Unknown value it settles on is the fabric's own business: a woven seam whose
-                // device path has dropped is legitimately Unavailable (the #1478 grace window), so this
-                // must NOT assert Available.
-                val observed = host.capability.first { it.availability !is FabricAvailability.Unknown }
-                assertFalse(
-                    observed.availability is FabricAvailability.Unknown,
-                    "a fabric declaring reportsLiveCapability=true must leave the Unknown floor, got $observed",
-                )
+                // **The await IS the assertion, and the timeout is how it fails.** There is deliberately no
+                // trailing assert: `first { }` already guarantees its predicate, so any assert after it
+                // would be unreachable. A fabric whose observer never fires hangs here until `runTest`'s
+                // own 60 s wall-clock timeout fails the test.
+                //
+                // That bound is implicit ON PURPOSE — an explicit `withTimeout` here would be WRONG. The
+                // suite body runs on `runTest`'s virtual clock, so a virtual-time timeout fast-forwards and
+                // fires without any real time passing, spuriously failing exactly the fabric this branch
+                // exists for (a real monitor delivering on an OS queue). Waiting unbounded is what lets real
+                // time elapse; `stateIsWovenAfterConnect` awaits the same way for the same reason. Only
+                // `NwLoopbackConformanceTest` reaches this against a real observer, so a stalled macOS
+                // runner is the worst case: one test, 60 s, then a hard failure — not a silent pass.
+                host.capability.first { it.availability !is FabricAvailability.Unknown }
             } else {
                 // No observer ⇒ the floor is the answer NOW; there is nothing to wait for, and a sample
                 // is what catches a fabric fabricating a verdict it cannot have.

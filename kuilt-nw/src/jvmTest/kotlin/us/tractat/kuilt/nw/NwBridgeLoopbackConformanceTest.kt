@@ -111,9 +111,10 @@ class NwBridgeLoopbackConformanceTest : SeamConformanceSuite() {
      * `reportsLiveCapability = false`, though, because the flag tracks the **binding under test**, not
      * the abstract fabric — the same rule that makes `securesTransport` `true` here and `false` on
      * `NwConformanceTest`'s plaintext fake. [BridgeNwApi] does not override [NwApi.pathState], so it
-     * inherits the shared never-updated `null` ("no monitor wired"), and [NwSeam] holds its static seed
-     * forever. The observer is real on [RealNwApi] and proven by `NwLoopbackConformanceTest` /
-     * `NwSeamCapabilityTest`; it is simply absent from this binding (#1712).
+     * inherits the shared never-updated `null` ("no monitor wired") and [NwSeam] therefore reports
+     * availability `Unknown` forever on this binding — which is exactly what the `false` branch asserts.
+     * The static loom report supplies only the ROLES. The observer is real on `RealNwApi` and proven by
+     * `NwLoopbackConformanceTest` / `NwSeamCapabilityTest`; it is simply absent here (#1712).
      */
     override fun capabilities(): SeamCapabilities =
         SeamCapabilities.FULL.copy(securesTransport = true, reportsLiveCapability = false)

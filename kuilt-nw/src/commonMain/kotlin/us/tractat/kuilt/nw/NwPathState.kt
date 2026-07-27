@@ -13,7 +13,8 @@ import us.tractat.kuilt.core.TransportRole
  * The real monitor lives in `RealNwApi` (appleMain); tests drive a controllable
  * `MutableStateFlow<NwPathState?>` through `FakeNwApi`, so no code under test touches the OS path
  * monitor. A `null` path state (the default on a binding that has not wired a monitor — e.g. the
- * JVM bridge) means "unknown": the seam keeps its static capability seed rather than guessing.
+ * JVM bridge) means "unknown": the seam reports [FabricAvailability.Unknown] rather than guessing,
+ * and the loom's static report supplies only the ROLES, never a path verdict (#1712).
  *
  * @param status the overall reachability [NwPathStatus].
  * @param interfaces which physical interface types the path currently uses (Wi-Fi / cellular / wired…).

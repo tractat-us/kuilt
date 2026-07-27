@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.FabricAvailability
@@ -123,6 +125,11 @@ internal class CompositeSeam(
     )
     override val capability: StateFlow<TransportCapability> = _capability.asStateFlow()
 
+    // Recompute requests, drained by the single [capabilityWriter] coroutine. CONFLATED because every
+    // recompute reads current state, so only the latest request matters and a burst may collapse.
+    // This is the single-writer serialisation that keeps snapshot→publish atomic — see [publishCapability].
+    private val capabilityRecomputes = Channel<Unit>(Channel.CONFLATED)
+
     // (plyId, transport id) -> composite id; built as Announce frames arrive. Guarded by [lock].
     private val idMap = mutableMapOf<Pair<PlyId, PeerId>, PeerId>()
 
@@ -137,6 +144,15 @@ internal class CompositeSeam(
     private val live = LinkedHashMap<PlyId, PlyHandle>()
 
     private class PlyHandle(val seam: Seam, val job: Job)
+
+    // The SINGLE capability writer. Every snapshot→publish pair runs here, so no two can interleave and
+    // no stale publish can land last (#1712). Started before any ply attaches so no request is missed;
+    // dies with [scope] on close. NOT a `limitedParallelism(1)` confinement crutch — this is the
+    // dedicated-writer-draining-a-Channel pattern, and it owns the whole read-modify-write, not just
+    // the write.
+    private val capabilityWriter: Job = scope.launch {
+        for (request in capabilityRecomputes) publishCapability()
+    }
 
     init {
         // Aggregate state is derived from the per-ply map: any ply Woven => Woven, else Weaving
@@ -185,8 +201,7 @@ internal class CompositeSeam(
         seam.state
             .onEach { s ->
                 _plies.update { it + (id to s) }
-                // A ply changing Woven state changes which Looms' roles union in — recompute
-                // OUTSIDE any lock (recomputeCapability re-takes the non-reentrant lock itself).
+                // A ply changing Woven state changes which Looms' roles union in — request a recompute.
                 recomputeCapability()
             }
             .launchIn(plyScope)
@@ -194,8 +209,8 @@ internal class CompositeSeam(
         // A ply's own capability is a LIVE value (an nw ply follows its path monitor), so the rollup
         // must SUBSCRIBE, not merely sample at attach/detach/state-change. Without this pump a ply whose
         // device path drops while its state stays Woven — exactly the #1478 grace window — would leave
-        // the composite publishing a stale, confident Available (#1712). Same shape as the state pump:
-        // launched outside the lock, and recomputeCapability re-takes the non-reentrant lock itself.
+        // the composite publishing a stale, confident Available (#1712). Same shape as the state pump; the
+        // request is serialised onto the single capabilityWriter, so concurrent pumps cannot interleave.
         seam.capability
             .onEach { recomputeCapability() }
             .launchIn(plyScope)
@@ -227,8 +242,8 @@ internal class CompositeSeam(
             }
             .launchIn(plyScope)
 
-        // Fold this ply's Loom roles in immediately (the state pump fires asynchronously). No lock
-        // is held here; recomputeCapability re-takes the non-reentrant lock itself.
+        // Request a fold of this ply's roles. Belt-and-braces: the two pumps above each fire on
+        // subscription with the ply's current value and request one too, and the requests conflate.
         recomputeCapability()
     }
 
@@ -245,8 +260,22 @@ internal class CompositeSeam(
         lock.withLock { idMap.keys.removeAll { it.first == id } }
         handle.seam.close(CloseReason.Normal)
         recomputePeers()
-        // This ply's roles no longer union in — recompute outside the lock.
+        // This ply's roles no longer union in — request a recompute.
         recomputeCapability()
+    }
+
+    /**
+     * Request a [capability] recompute. Non-blocking and safe to call from any pump or thread: the work
+     * itself runs on the single [capabilityWriter] coroutine (see [capabilityRecomputes]).
+     *
+     * Callers may hold no lock — [publishCapability] re-takes the non-reentrant [lock] — but note the
+     * request is **asynchronous**, so [capability] converges shortly after this returns rather than
+     * during it.
+     */
+    private fun recomputeCapability() {
+        // CONFLATED: a burst of triggers collapses to one recompute, which reads the LATEST state anyway.
+        // trySend never blocks and never fails on a conflated channel, so a pump can fire this freely.
+        capabilityRecomputes.trySend(Unit)
     }
 
     /**
@@ -256,13 +285,19 @@ internal class CompositeSeam(
      * value is the static pre-connect claim, and folding it here would launder an observer-less ply's
      * claim into a confident live verdict (#1712).
      *
-     * Because that source is live, [attachPly] **subscribes** to each ply's [Seam.capability] and calls
-     * this on every emission — sampling only at attach/detach/state-change would miss a path drop that
-     * leaves the ply [SeamState.Woven]. Reads of [live] / [desired] are non-suspending and happen under
-     * [lock]; the caller MUST hold NO lock — the non-reentrant [lock] is re-taken here, so calling this
-     * from inside a locked block deadlocks.
+     * Because that source is live, [attachPly] **subscribes** to each ply's [Seam.capability] — sampling
+     * only at attach/detach/state-change would miss a path drop that leaves the ply [SeamState.Woven].
+     *
+     * **Runs on the single [capabilityWriter] coroutine only.** Snapshot-then-publish is a read-modify-write
+     * and the [_capability] write happens *outside* [lock] (emitting to a StateFlow can resume an unconfined
+     * collector inline, and running arbitrary consumer code under [lock] risks a deadlock on a lock this
+     * class treats as non-reentrant). Two concurrent recomputes could therefore interleave and let a STALE
+     * publish land last — the composite would advertise a confident `Available` for a path that had already
+     * dropped, until some later emission happened to correct it. Serialising every snapshot→publish pair
+     * onto one coroutine removes the interleaving by construction, which is why this is private and only
+     * [capabilityWriter] calls it; everything else goes through [recomputeCapability].
      */
-    private fun recomputeCapability() {
+    private fun publishCapability() {
         val snapshot = lock.withLock {
             val wovenEntries = live.entries
                 .filter { it.value.seam.state.value is SeamState.Woven }
@@ -284,7 +319,11 @@ internal class CompositeSeam(
             snapshot.second.any { it is FabricAvailability.Available } -> FabricAvailability.Available
             snapshot.second.any { it is FabricAvailability.Unknown } ->
                 FabricAvailability.Unknown("no ply available; some unknown")
-            else -> FabricAvailability.Unavailable("no ply woven")
+            // "no ply woven" was accurate while the fold read the Looms' static claims — the only way to
+            // reach this branch was an empty woven set. Since the fold reads the plies' LIVE seams it is
+            // also reached with plies woven but every one of them reporting Unavailable, so the reason has
+            // to cover both (#1712).
+            else -> FabricAvailability.Unavailable("no woven ply reports an available path")
         }
         _capability.value = TransportCapability(roles = snapshot.first, availability = availability)
     }

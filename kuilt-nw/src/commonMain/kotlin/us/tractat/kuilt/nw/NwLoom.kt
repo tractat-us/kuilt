@@ -140,7 +140,9 @@ public class NwLoom(
         // Derive from the caller so background work runs on the test dispatcher; independent Job
         // so seam close() cancels only this session's coroutines.
         val seamScope = CoroutineScope(currentCoroutineContext() + SupervisorJob())
-        val seam = NwSeam(selfId, api, seamScope, random, policy, wovenPathGrace, capability())
+        // NW_ROLES, not capability(): the seam takes ROLES only. Its availability may come from the path
+        // monitor and nowhere else — `capability().availability` is a platform-support answer (#1712).
+        val seam = NwSeam(selfId, api, seamScope, random, policy, wovenPathGrace, NW_ROLES)
 
         val serviceName = when (rendezvous) {
             is Rendezvous.New -> rendezvous.pattern.sessionName
