@@ -50,7 +50,7 @@ jobs:
           docker-version: ${{ env.DOCKER_VERSION }}
 
       - name: Upload guide artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: guide
           path: artifacts/${{ env.ARTIFACT }}
@@ -94,7 +94,7 @@ jobs:
         run: ./gradlew dokkaGenerate --max-workers=2
 
       - name: Upload api artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: api
           path: build/dokka/html
@@ -109,13 +109,13 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Download guide artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: guide
           path: guide-zip
 
       - name: Download api artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: api
           path: site/api
