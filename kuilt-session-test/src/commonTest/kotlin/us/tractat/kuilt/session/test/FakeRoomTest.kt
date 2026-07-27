@@ -147,7 +147,17 @@ class FakeRoomTest {
                     "the level carries the deadline; windowExpiresAt defaults to one minute past `at`",
                 )
             },
-            { assertEquals(MembershipEvent.Partitioned(PeerId("alice"), at, ReconnectReason.LinkTimeout), event) },
+            {
+                assertEquals(
+                    MembershipEvent.Partitioned(
+                        PeerId("alice"),
+                        at,
+                        ReconnectReason.LinkTimeout,
+                        localFabric = FabricAvailability.Available,
+                    ),
+                    event,
+                )
+            },
         )
     }
 
@@ -205,7 +215,16 @@ class FakeRoomTest {
         room.broadcast(byteArrayOf(1))
         room.sendTo(PeerId("someone"), byteArrayOf(2))
         assertAll(
-            { assertEquals(MembershipEvent.HostLost(at, FailureReason.WindowExpired), event) },
+            {
+                assertEquals(
+                    MembershipEvent.HostLost(
+                        at,
+                        FailureReason.WindowExpired,
+                        localFabric = FabricAvailability.Available,
+                    ),
+                    event,
+                )
+            },
             { assertTrue(room.broadcasts.isEmpty()) },
             { assertTrue(room.directed.isEmpty()) },
         )
@@ -434,6 +453,38 @@ class FakeRoomTest {
         room.setLocalFabric(FabricAvailability.Available, AT)
         room.leave()
         assertEquals(emptyList(), room.events.toList())
+    }
+
+    /**
+     * The fake carries #1712's precedence tag with the same fidelity as the real room: a peer going
+     * quiet **while our own fabric is down** is tagged as not-evidence-about-that-peer, on both
+     * [FakeRoom.partition] and the terminal [FakeRoom.hostLost].
+     *
+     * Without this, a consumer's reducer could be tested against a fake that always claims a healthy
+     * local fabric and still ship the exact inversion the tag exists to prevent.
+     */
+    @Test
+    fun `partition and hostLost carry the fake's current localFabric`() = runTest {
+        val room = FakeRoom(initialRoster = setOf(member(PeerId("alice"))))
+        val seen = async { room.events.take(3).toList() }
+        room.setLocalFabric(FabricAvailability.Unavailable("radio off"), AT)
+        room.partition(PeerId("alice"), AT)
+        room.hostLost(AT)
+        val events = seen.await()
+        assertAll(
+            {
+                assertEquals(
+                    FabricAvailability.Unavailable("radio off"),
+                    events.filterIsInstance<MembershipEvent.Partitioned>().single().localFabric,
+                )
+            },
+            {
+                assertEquals(
+                    FabricAvailability.Unavailable("radio off"),
+                    events.filterIsInstance<MembershipEvent.HostLost>().single().localFabric,
+                )
+            },
+        )
     }
 
     // ── raw emit ─────────────────────────────────────────────────────────────

@@ -1,5 +1,6 @@
 package us.tractat.kuilt.session
 
+import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.session.admit.RejectCode
 import kotlin.time.Instant
@@ -51,7 +52,40 @@ public sealed interface MembershipEvent {
      * [reason] classifies why the link is down (silent timeout / backpressure / transport close),
      * so a consumer can tailor its "reconnecting…" surface — see [ReconnectReason].
      */
-    public data class Partitioned(val peerId: PeerId, val at: Instant, val reason: ReconnectReason) : MembershipEvent
+    public data class Partitioned(
+        val peerId: PeerId,
+        val at: Instant,
+        val reason: ReconnectReason,
+        /**
+         * This peer's own [Room.localFabric] at the instant this event was emitted.
+         *
+         * **Precedence.** When this is [FabricAvailability.Unavailable], this event is **not
+         * evidence about [peerId]** — our own end of the fabric was down, so their silence says
+         * nothing about them. Read it off the event rather than correlating two streams by
+         * timestamp (#1712).
+         *
+         * That inference holds where *we* observed the silence — our own detection or our own link
+         * tear. It does **not** hold for a host-relayed pause: that report is host-authoritative and
+         * arrived over a link working well enough to deliver it, so an `Unavailable` tag there says
+         * only that our own end was down when we processed the report, not that the report is
+         * unfounded. Either way [Room.roster]'s liveness stays authoritative.
+         *
+         * [FabricAvailability.Unknown] means the fabric has no path observer, so precedence cannot
+         * be determined — treat it as "no information", not as "we were fine". It is the **normal**
+         * value on every fabric without a live OS path observer (see
+         * `SeamCapabilities.reportsLiveCapability`), so a consumer must handle it as a first-class
+         * third answer rather than a gap.
+         *
+         * **Best-effort on a bonded multi-transport room** (#1778). Over a `CompositeSeam` the
+         * rolled-up availability is an eventually-consistent fold of what each transport last
+         * announced, so when *every* transport drops within one dispatch window this tag can capture
+         * a briefly-stale value. It converges immediately after — but an event is a snapshot, so the
+         * captured value does not. A single-transport room has no such fold and no such window.
+         * [Room.localFabric] and [Room.roster] are the authoritative surfaces: re-read
+         * [Room.localFabric] at handling time if a decision must be certain.
+         */
+        val localFabric: FabricAvailability,
+    ) : MembershipEvent
 
     /**
      * A partitioned peer's link recovered before the window expired.
@@ -94,7 +128,34 @@ public sealed interface MembershipEvent {
      * [reason] classifies the terminal failure (window expired / refused / unrecoverable) — see
      * [FailureReason], the post-admission analogue of [AdmissionFailure] on [AdmissionFailed].
      */
-    public data class HostLost(val at: Instant, val reason: FailureReason) : MembershipEvent
+    public data class HostLost(
+        val at: Instant,
+        val reason: FailureReason,
+        /**
+         * This peer's own [Room.localFabric] at the instant this event was emitted.
+         *
+         * **Precedence.** When this is [FabricAvailability.Unavailable], this event is **not
+         * evidence about the host** — our own end of the fabric was down, so its silence says
+         * nothing about it. This is the highest-value site for the distinction: a joiner whose own
+         * radio died would otherwise render "the host is gone" (#1712). Read it off the event
+         * rather than correlating two streams by timestamp.
+         *
+         * [FabricAvailability.Unknown] means the fabric has no path observer, so precedence cannot
+         * be determined — treat it as "no information", not as "we were fine". It is the **normal**
+         * value on every fabric without a live OS path observer (see
+         * `SeamCapabilities.reportsLiveCapability`), so a consumer must handle it as a first-class
+         * third answer rather than a gap.
+         *
+         * **Best-effort on a bonded multi-transport room** (#1778). Over a `CompositeSeam` the
+         * rolled-up availability is an eventually-consistent fold of what each transport last
+         * announced, so when *every* transport drops within one dispatch window this tag can capture
+         * a briefly-stale value. It converges immediately after — but an event is a snapshot, so the
+         * captured value does not. A single-transport room has no such fold and no such window.
+         * [Room.localFabric] and [Room.roster] are the authoritative surfaces: re-read
+         * [Room.localFabric] at handling time if a decision must be certain.
+         */
+        val localFabric: FabricAvailability,
+    ) : MembershipEvent
 
     /**
      * **This peer's own end** of the fabric carrying this room can no longer carry frames.

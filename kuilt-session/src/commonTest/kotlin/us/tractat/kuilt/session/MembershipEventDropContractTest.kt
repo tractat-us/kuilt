@@ -7,6 +7,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
@@ -16,6 +17,7 @@ import us.tractat.kuilt.test.FaultySeam
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
@@ -239,6 +241,22 @@ class MembershipEventDropContractTest {
                         FailureReason.WindowExpired,
                         d.joinerEvents.filterIsInstance<MembershipEvent.HostLost>().firstOrNull()?.reason,
                         "the joiner's terminal reason is the honest window elapse",
+                    )
+                },
+                // ── The #1712 precedence tag, on the lane a consumer actually meets ──
+                {
+                    assertIs<FabricAvailability.Unknown>(
+                        partitionedOnHost?.localFabric,
+                        "an in-memory fabric has no OS path observer, so it cannot say whether OUR " +
+                            "own end was up — the tag must read Unknown, never a fabricated Available",
+                    )
+                },
+                {
+                    assertIs<FabricAvailability.Unknown>(
+                        d.joinerEvents.filterIsInstance<MembershipEvent.HostLost>().firstOrNull()?.localFabric,
+                        "…and the same on the joiner's terminal HostLost: a consumer must branch on " +
+                            "Unknown as a first-class third answer, since it is what every fabric " +
+                            "without a live path observer reports today",
                     )
                 },
                 // ── The window deadline a host-side UI counts down to ────────────
