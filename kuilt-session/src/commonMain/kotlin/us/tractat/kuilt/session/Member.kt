@@ -62,15 +62,15 @@ public sealed interface Liveness {
      * this type can represent. That is deliberate: it was previously reachable only by replaying a
      * [MembershipEvent.WindowOpened] that some paths never emitted (#1723, #1724).
      *
-     * On a member watching *another* member, this deadline is **intended** to start as a local
-     * estimate and then be refined by the host's authoritative
-     * [AdmitMessage.Paused][us.tractat.kuilt.session.admit.AdmitMessage.Paused] — that refinement is
-     * not implemented yet (#1724 lands it; today `handlePaused` returns early on an already-
-     * partitioned member, so a local estimate stands). On a joiner watching its *host*, the joiner's
-     * own reconnect budget is the authority and no refinement occurs.
+     * On a member watching *another* member, this deadline **starts as a local estimate whenever
+     * that member's own detector fires first, and is then replaced by the host's authoritative**
+     * [AdmitMessage.Paused][us.tractat.kuilt.session.admit.AdmitMessage.Paused] — in either arrival
+     * order, and without re-announcing the partition. The host is the only holder of the enforced
+     * window, so its number always wins. On a joiner watching its *host*, the joiner's own reconnect
+     * budget is the authority and no refinement occurs.
      *
-     * Beware that the two fields can come from **different clocks**. `markPartitioned` derives both
-     * from the local clock, but the `Paused` path pairs a local [since] with the *host's*
+     * Beware that the two fields can then come from **different clocks**. `markPartitioned` derives
+     * both from the local clock, but the `Paused` path pairs a local [since] with the *host's*
      * [windowExpiresAt]. So treat [windowExpiresAt] as a deadline to compare the local clock
      * against — never as an interval to subtract from [since], which host↔member skew would distort.
      */
