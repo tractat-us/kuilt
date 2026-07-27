@@ -82,10 +82,16 @@ genuinely need C's task-descriptor envelope, so they come after.
 | **F — federated ML** | FedAvg on the substrate, end-to-end demo | F1 none; F2/F4 need a C3 wasm runtime | **PARTIAL** — F1/F2 landed (`:kuilt-warp-ml`); **F4 demo #957 unmerged**, F-polish + F3 (optional) remain; epic #856 OPEN |
 | **G — Draft → DAG** | reshape `Draft` into a dependency DAG; consolidate coordination rounds (min rounds = DAG depth) | E (done) | **LANDED** — epic #907 CLOSED |
 
-Every epic stays **experimental**: `:kuilt-warp` remains out of `:kuilt-bom` and
-out of `kuilt.publish` for the duration. Each of C–F carries an explicit
-**go/no-go** the team answers when the epic is reached — the call to build it is
-deferred, not made here.
+Every epic stays **experimental** in the sense that its API is still moving — but
+that is a statement about stability, **not** about packaging. All nine warp
+modules (`kuilt-warp{,-compiler,-heddle,-ksp,-ml,-otel,-planning,-runtime,-test}`)
+apply `kuilt.publish` — eight transitively via `kuilt.kmp-library`, and
+`:kuilt-warp-ksp` directly — so they are published like every other module and
+are constrained by `:kuilt-bom`, whose list derives from that same marker
+(`kuilt-bom/build.gradle.kts`, #1044). Consumers really can resolve them.
+
+Each of C–F carries an explicit **go/no-go** the team answers when the epic is
+reached — the call to build it is deferred, not made here.
 
 ## Universal per-epic discipline
 
