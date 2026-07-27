@@ -76,9 +76,42 @@ internal class ReadIndexRoundClampTest {
     }
 
     /**
-     * The other direction. A clamp that simply refused to credit acks, or that stored `round` instead of
-     * the echoed value, would also pass the test above — so pin that an honest ack in the current round
-     * still confirms the read.
+     * #1817 — the ordering the sibling test misses, and the one that separates *discard* from *clamp*.
+     *
+     * The forged echo arrives **after** the round is bumped rather than before. A clamp
+     * (`minOf(echoedRound, round)`) maps the forged value onto the round the leader has just broadcast
+     * and never heard an answer to — the most favourable value in range — so it is credited exactly as
+     * if v2 had honestly answered round 6. The exploit is not closed, merely re-armed per frame: echo
+     * `Long.MAX_VALUE` on every reply and the forger is fresh for every read for the rest of the term.
+     *
+     * `echoedRound > round` is *proof* the leader never sent that round, so there is no conservative
+     * in-range reading to fall back on the way there is for a quantity like `matchIndex`. Discarding is
+     * the only disposition that preserves what the nonce is for: §6.4 freshness means the leader
+     * exchanged heartbeats with a majority *after the read arrived*, and crediting an unanswered round
+     * severs exactly that request→response link.
+     */
+    @Test
+    fun forgedEchoArrivingAfterBumpMustNotConfirmRead() {
+        val tracker = ReadIndexTracker()
+        tracker.advanceRoundTo(5L)
+
+        val deferred = CompletableDeferred<Long>()
+        tracker.request(deferred, commitIndex = 7L, membership = threeVoters, selfId = leaderId) { }
+
+        tracker.bumpRound()                      // round = 6, broadcast goes out
+        tracker.recordAck(v2, Long.MAX_VALUE)    // v2 forges instead of answering round 6
+
+        assertEquals(
+            emptyList(),
+            tracker.resolve(threeVoters, leaderId).map { it.readIndex },
+            "a forged echoedRound must not count as an answer to round 6",
+        )
+    }
+
+    /**
+     * The other direction. A disposition that simply refused to credit acks, or that stored `round`
+     * instead of the echoed value, would also pass the tests above — so pin that an honest ack in the
+     * current round still confirms the read.
      */
     @Test
     fun honestEchoedRoundStillConfirmsRead() {
