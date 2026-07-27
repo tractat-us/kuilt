@@ -159,8 +159,10 @@ class WindowLevelTest {
                         late.filterIsInstance<MembershipEvent.WindowOpened>()
                             .filter { it.peerId == pair.hostId }
                             .map { it.expiresAt },
-                        "#1724: a joiner announced no window at all, so a late subscriber had " +
-                            "nothing to replay — observed $late",
+                        "the joiner must have announced its window exactly once, and the replayed " +
+                            "announcement must carry the same deadline the level does — a late " +
+                            "subscriber keying on the event and one keying on the roster cannot be " +
+                            "allowed to count down to different instants — observed $late",
                     )
                 },
             )

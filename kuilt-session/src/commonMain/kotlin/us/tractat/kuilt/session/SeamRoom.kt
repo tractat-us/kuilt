@@ -1713,7 +1713,7 @@ internal class SeamRoom(
      * is), the stale episode's deadline still lands after the new episode's
      * [Liveness.Partitioned.since]. A sound fix needs the detection instant carried on
      * [JoinerReconnectEvent.WindowOpened] so a mismatched episode can be dropped outright — a
-     * public-API change, tracked in #1778 rather than smuggled in here.
+     * public-API change, tracked in #1781 rather than smuggled in here.
      */
     private fun refineWindow(peerId: PeerId, expiresAt: Instant) {
         lock.withLock {
