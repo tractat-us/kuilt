@@ -377,21 +377,20 @@ internal class CompositeSeam(
         // every sender behind an arbitrarily slow callee) for no benefit, since the result is a constant.
         val roles = desired.value.filter { (id, _) -> id in wovenIds }
             .flatMap { (_, loom) -> loom.capability().roles }.toSet()
-        val snapshot = roles to availabilities
-        // Three-way lattice fold over the woven plies' Seam availabilities (mirrors
+        // Three-way lattice fold over the woven plies' announced availabilities (mirrors
         // CompositeLoom.capability): any Available ⇒ Available; else any Unknown ⇒ Unknown
         // (best-effort — don't collapse an unproven ply to Unavailable); else Unavailable.
         val availability = when {
-            snapshot.second.any { it is FabricAvailability.Available } -> FabricAvailability.Available
-            snapshot.second.any { it is FabricAvailability.Unknown } ->
+            availabilities.any { it is FabricAvailability.Available } -> FabricAvailability.Available
+            availabilities.any { it is FabricAvailability.Unknown } ->
                 FabricAvailability.Unknown("no ply available; some unknown")
             // "no ply woven" was accurate while the fold read the Looms' static claims — the only way to
-            // reach this branch was an empty woven set. Since the fold reads the plies' LIVE seams it is
-            // also reached with plies woven but every one of them reporting Unavailable, so the reason has
-            // to cover both (#1712).
+            // reach this branch was an empty woven set. Since the fold reads what the plies THEMSELVES
+            // reported it is also reached with plies woven but every one of them Unavailable, so the reason
+            // has to cover both (#1712).
             else -> FabricAvailability.Unavailable("no woven ply reports an available path")
         }
-        _capability.value = TransportCapability(roles = snapshot.first, availability = availability)
+        _capability.value = TransportCapability(roles = roles, availability = availability)
     }
 
     // Any-live ⇒ Woven; otherwise Weaving. A fully-degraded composite — empty OR every ply currently
