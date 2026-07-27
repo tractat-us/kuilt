@@ -58,21 +58,26 @@ class ChicoryWasmRuntimeTest {
      * attempt — every attempt is a complete observation of the concurrent property, nothing is
      * downgraded to a weaker assertion — and **only** a budget overrun is retried, so a trap, a
      * poisoned worker, wrong bytes, or a runaway that escapes its bound all still fail on the first
-     * attempt. See [retryingOnlyBudgetOverruns]. The 60 s `runTest` ceiling is a wedge backstop
-     * covering all attempts, not a timed assertion.
+     * attempt — see [retryingOnlyBudgetOverruns] for the ordered safety argument (type, then
+     * message, then persistence) and the one class it deliberately absorbs (#1802). The 60 s
+     * `runTest` ceiling is a wedge backstop covering all attempts, not a timed assertion; the
+     * reference invocation gets a *strictly smaller* 5 s budget so it can still report inside that
+     * ceiling after the attempts have spent part of it.
      */
     @Test
     fun concurrentOpsOverSharedRuntimeAllSucceed() = runTest(timeout = 60.seconds) {
+        // One literal for both the runtime's budget and the budget the failure message names.
+        val budget = 200.milliseconds
         retryingOnlyBudgetOverruns(
             what = "an innocent op running concurrently with a runaway over one shared runtime",
-            budget = 200.milliseconds,
+            budget = budget,
             referenceInvoke = {
-                ChicoryWasmRuntime(WasmSandboxConfig(executionTimeout = 60.seconds)).use {
+                ChicoryWasmRuntime(WasmSandboxConfig(executionTimeout = 5.seconds)).use {
                     it.load(WasmKernelFixtures.REVERSE).invoke(byteArrayOf(1, 2, 3, 4))
                 }
             },
         ) {
-            ChicoryWasmRuntime(WasmSandboxConfig(executionTimeout = 200.milliseconds)).use { rt ->
+            ChicoryWasmRuntime(WasmSandboxConfig(executionTimeout = budget)).use { rt ->
                 val loop = rt.load(WasmKernelFixtures.CPU_BOMB)
                 val reverse = rt.load(WasmKernelFixtures.REVERSE)
                 coroutineScope {

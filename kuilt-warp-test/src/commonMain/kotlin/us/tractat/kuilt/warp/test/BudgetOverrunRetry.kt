@@ -1,5 +1,6 @@
 package us.tractat.kuilt.warp.test
 
+import us.tractat.kuilt.warp.WasmException
 import us.tractat.kuilt.warp.WasmExecutionException
 import us.tractat.kuilt.warp.WasmSandboxConfig
 import kotlin.time.Duration
@@ -14,14 +15,23 @@ import kotlin.time.TimeSource
 private const val DEFAULT_ATTEMPTS: Int = 4
 
 /**
- * The substring every conforming [us.tractat.kuilt.warp.WasmRuntime] puts in the message when an
- * invocation exceeds [WasmSandboxConfig.executionTimeout] — `"WASM execution exceeded 250ms"`, and
- * identical wording in the JVM, native and browser impls — and which
- * [WasmRuntimeConformanceSuite.cpuBombIsBoundedByExecutionTimeout] already pins as part of the
- * contract. It is what separates "the budget ran out" from every other execution failure: a trap, a
- * stale interrupt, an out-of-bounds ABI word, a dead worker. None of those contain it.
+ * The **full uniform phrasing** every shipped [us.tractat.kuilt.warp.WasmRuntime] emits when an
+ * invocation exceeds [WasmSandboxConfig.executionTimeout] — byte-identical in all three impls
+ * (`ChicoryWasmRuntime`, `Wasm3WasmRuntime`, `BrowserWasmRuntime`).
+ *
+ * It is deliberately the whole phrase and **not** the bare word `"exceeded"`, which is what
+ * [WasmRuntimeConformanceSuite.cpuBombIsBoundedByExecutionTimeout] pins and which is too loose to
+ * key a retry on: guest *trap* text is interpolated raw into `"… trapped: <engine message>"` by
+ * both non-JVM impls, and two real engine strings contain "exceeded" —
+ * `"linear memory limitation exceeded"` from the vendored wasm3 interpreter (a **sandbox
+ * memory-ceiling guard** firing, i.e. exactly a defect that must never be retried) and V8's
+ * `"Maximum call stack size exceeded"`. Both read `"<phase> trapped: …"`, so the full phrase
+ * excludes them while staying exactly as permissive for the intended case.
+ *
+ * A third-party impl whose overrun message omits this phrasing is not broken — it simply forfeits
+ * contention tolerance and fails on its first overrun, which is the safe direction.
  */
-private const val BUDGET_OVERRUN_MARKER: String = "exceeded"
+private const val BUDGET_OVERRUN_MARKER: String = "WASM execution exceeded"
 
 /**
  * Runs [scenario], retrying up to [attempts] times — but **only** when it fails by overrunning a
@@ -47,17 +57,26 @@ private const val BUDGET_OVERRUN_MARKER: String = "exceeded"
  *
  * ## Why this does not weaken what the caller proves
  *
- * Only a *budget overrun* is retried, recognised by [BUDGET_OVERRUN_MARKER] — the message every
- * conforming runtime emits for that one failure and for nothing else. Every other way the scenario
- * can fail stays fatal on the first attempt:
- * - a stale interrupt, an unreset deadline or a dead worker surfaces as a trap or a host error, not
- *   as an overrun;
- * - corrupted shared memory returns the wrong bytes, so the caller's own assertion fires;
- * - an [AssertionError] — from any `assertFailsWith` inside the scenario — propagates untouched.
+ * Three independent filters, in the order they apply. Note that the *type* filter is the strongest
+ * and the *message* filter is narrower than it looks; the KDoc used to lead with a claim about trap
+ * text that is false for `Wasm3WasmRuntime` (its unreset-deadline trap is mapped to an overrun
+ * message, not a trap message), so the safety argument is stated here in dependency order instead.
  *
- * And a *persistent* overrun still fails: a runtime whose timeout no longer actually stops the guest
- * leaves its worker spinning, so every attempt overruns and [attempts] of them are not enough. Only
- * the transient overrun — the signature of a contended host, and of nothing else — is absorbed.
+ * 1. **Type.** Only [WasmExecutionException] enters the `catch` at all. A [AssertionError] — a
+ *    wrong-bytes `assertContentEquals`, an `assertFailsWith` that did not fire, anything `assertAll`
+ *    re-raises — and a [us.tractat.kuilt.warp.WasmLoadException] both propagate untouched. That
+ *    covers every corrupted-state and missing-failure outcome without inspecting a single string.
+ * 2. **Message.** Within [WasmExecutionException], only [BUDGET_OVERRUN_MARKER]'s full uniform
+ *    phrasing is retried. A trap, an out-of-bounds ABI word, a rejected task on a dead worker and a
+ *    stale JVM interrupt all read `"<phase> trapped: …"` or `"WASM kernel failed: …"`.
+ * 3. **Persistence.** The filters above are not relied on to catch a runtime whose timeout no longer
+ *    actually *stops* the guest, nor `Wasm3WasmRuntime`'s unreset deadline — both of those do
+ *    present as overruns. They are caught because they are **persistent**: the worker stays busy or
+ *    the deadline stays armed, so *every* attempt overruns and [attempts] of them are not enough.
+ *
+ * The one defect class this deliberately absorbs is #1802's transient residual-drain skew — a
+ * post-timeout op charged for the dying runaway's queue wait — whose deterministic guard ships with
+ * #1802's fix. Absent that, only the transient overrun of a contended host is absorbed.
  *
  * ## The failure is self-describing
  *
@@ -104,13 +123,20 @@ public suspend fun <T> retryingOnlyBudgetOverruns(
     )
 }
 
-/** Prices one well-behaved guest invocation on this host, for [retryingOnlyBudgetOverruns]'s message. */
+/**
+ * Prices one well-behaved guest invocation on this host, for [retryingOnlyBudgetOverruns]'s message.
+ *
+ * Catches the whole sealed [WasmException] hierarchy, not just [WasmExecutionException]: this runs
+ * *inside* the `throw AssertionError(...)` expression, so a [us.tractat.kuilt.warp.WasmLoadException]
+ * escaping here would replace the four-attempt report — the actual deliverable — with an unrelated
+ * stack trace, on precisely the path that produces the report.
+ */
 private suspend fun referenceCost(referenceInvoke: suspend () -> Unit): String {
     val started = TimeSource.Monotonic.markNow()
     return try {
         referenceInvoke()
         "took ${started.elapsedNow()}"
-    } catch (e: WasmExecutionException) {
+    } catch (e: WasmException) {
         "also failed after ${started.elapsedNow()} (${e.message})"
     }
 }

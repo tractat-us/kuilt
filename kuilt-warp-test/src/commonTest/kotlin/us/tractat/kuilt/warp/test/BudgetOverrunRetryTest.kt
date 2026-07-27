@@ -101,6 +101,38 @@ class BudgetOverrunRetryTest {
     }
 
     /**
+     * The marker is the **full** phrasing, not the bare word "exceeded" — because guest trap text is
+     * interpolated raw into `"<phase> trapped: …"` by both non-JVM impls, and the vendored wasm3
+     * interpreter throws `"linear memory limitation exceeded"` when a `memory.grow` passes its page
+     * cap. That is the **sandbox memory ceiling firing**: a defect, and one no fixture reaches today,
+     * so nothing but this test stops a looser marker from retrying it four times.
+     */
+    @Test
+    fun aTrapWhoseEngineTextContainsExceededIsNotRetried(): TestResult = runTest {
+        var attempts = 0
+        val thrown = assertFailsWith<WasmExecutionException> {
+            retryingOnlyBudgetOverruns(
+                what = "a scenario whose guest breaches the memory ceiling",
+                budget = 200.milliseconds,
+                referenceInvoke = { },
+            ) {
+                attempts++
+                throw WasmExecutionException("warp_run trapped: linear memory limitation exceeded")
+            }
+        }
+        assertAll(
+            { assertEquals(1, attempts, "a sandbox-guard trap is fatal immediately") },
+            {
+                assertEquals(
+                    "warp_run trapped: linear memory limitation exceeded",
+                    thrown.message,
+                    "reaches the reader unwrapped",
+                )
+            },
+        )
+    }
+
+    /**
      * The other half: a wrong-bytes or missing-throw assertion inside the scenario is the caller's
      * own verdict and must never be retried into a pass.
      */

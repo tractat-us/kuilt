@@ -207,10 +207,14 @@ public abstract class WasmRuntimeConformanceSuite {
      * "this host is not busy", not "the runtime recovered".
      *
      * Since one config cannot be both tight and generous, the scenario is retried instead —
-     * and **only** on a budget overrun, so nothing this test protects is weakened: a stale
-     * interrupt or unreset deadline surfaces as a trap rather than an overrun, corrupted memory
-     * returns wrong bytes, and an impl whose timeout no longer actually stops the guest
-     * overruns on *every* attempt and still fails. See [retryingOnlyBudgetOverruns].
+     * and **only** on a budget overrun. Nothing this test protects is weakened, but the reason
+     * is *not* that a poisoned runtime reads differently: an unreset deadline is mapped to an
+     * overrun message by at least one impl. It is that (i) wrong bytes and a non-firing
+     * `assertFailsWith` never reach the retry (they are [AssertionError]s, not
+     * [WasmExecutionException]s), (ii) a trap, an interrupt or a dead worker carries different
+     * message text, and (iii) any real recovery failure is **persistent**, so every attempt
+     * overruns and the bounded retry still fails. See [retryingOnlyBudgetOverruns] for the
+     * ordered argument and the one class it deliberately absorbs (#1802).
      *
      * One runtime is reused across attempts deliberately: each extra attempt puts two more
      * timeouts in front of the well-behaved invoke, which strengthens the recovery assertion,
@@ -218,14 +222,17 @@ public abstract class WasmRuntimeConformanceSuite {
      */
     @Test
     public fun timeoutDoesNotPoisonSubsequentInvokes(): TestResult = runTest(timeout = WEDGE_BACKSTOP) {
-        val bounded = newRuntime(WasmSandboxConfig(executionTimeout = 250.milliseconds))
+        // One literal, used both to configure the runtime and to name the budget in the failure
+        // message — editing them apart would make the diagnosis lie about what it diagnosed.
+        val budget = 250.milliseconds
+        val bounded = newRuntime(WasmSandboxConfig(executionTimeout = budget))
         val runaway = bounded.load(WasmKernelFixtures.CPU_BOMB)
         val reverse = bounded.load(WasmKernelFixtures.REVERSE)
         retryingOnlyBudgetOverruns(
             what = "a well-behaved op on a runtime that has just recovered from a timeout",
-            budget = 250.milliseconds,
+            budget = budget,
             referenceInvoke = {
-                newRuntime(WasmSandboxConfig(executionTimeout = WEDGE_BACKSTOP))
+                newRuntime(WasmSandboxConfig(executionTimeout = REFERENCE_BUDGET))
                     .load(WasmKernelFixtures.REVERSE)
                     .invoke(byteArrayOf(1, 2, 3))
             },
@@ -273,12 +280,20 @@ public abstract class WasmRuntimeConformanceSuite {
 
     private companion object {
         /**
-         * The `runTest` ceiling for [timeoutDoesNotPoisonSubsequentInvokes], and the generous
-         * budget its reference invocation runs under. A wedge backstop only: it catches an impl
-         * that hangs where its own [WasmSandboxConfig.executionTimeout] should have fired, and it
-         * has to cover several retried attempts on a contended host, so it is deliberately far
-         * larger than the work it bounds (#1739).
+         * The `runTest` ceiling for [timeoutDoesNotPoisonSubsequentInvokes]. A wedge backstop only:
+         * it catches an impl that hangs where its own [WasmSandboxConfig.executionTimeout] should
+         * have fired, and it has to cover several retried attempts on a contended host, so it is
+         * deliberately far larger than the work it bounds (#1739).
          */
         val WEDGE_BACKSTOP: Duration = 60.seconds
+
+        /**
+         * The generous budget the exhaustion-path reference invocation runs under. Strictly smaller
+         * than [WEDGE_BACKSTOP], and by a wide margin: the retried attempts have already spent part
+         * of that ceiling by the time the reference runs, so a reference sharing the ceiling's value
+         * could never complete before `runTest` fired — yielding an opaque timeout in place of the
+         * diagnostic report. Five seconds is ~1400x the measured reference cost on an idle host.
+         */
+        val REFERENCE_BUDGET: Duration = 5.seconds
     }
 }
