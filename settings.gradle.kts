@@ -27,7 +27,7 @@ plugins {
     // Build Scan® publishing — free scans.gradle.com tier (NOT paid Develocity).
     // Publishes only on CI (the CI env var) so local builds never upload data.
     // The per-task timeline is how you diagnose where a build/publish spends time.
-    id("com.gradle.develocity") version "4.4.1"
+    id("com.gradle.develocity") version "4.5.0"
     // Remote build-cache backend — S3-compatible (Fly Tigris), shared org-wide.
     // No-op when the S3 creds are absent (see the buildCache block below).
     id("com.github.burrunan.s3-build-cache") version "1.9.7"
