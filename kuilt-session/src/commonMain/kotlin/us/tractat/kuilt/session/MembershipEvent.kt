@@ -75,6 +75,14 @@ public sealed interface MembershipEvent {
          * value on every fabric without a live OS path observer (see
          * `SeamCapabilities.reportsLiveCapability`), so a consumer must handle it as a first-class
          * third answer rather than a gap.
+         *
+         * **Best-effort on a bonded multi-transport room** (#1778). Over a `CompositeSeam` the
+         * rolled-up availability is an eventually-consistent fold of what each transport last
+         * announced, so when *every* transport drops within one dispatch window this tag can capture
+         * a briefly-stale value. It converges immediately after — but an event is a snapshot, so the
+         * captured value does not. A single-transport room has no such fold and no such window.
+         * [Room.localFabric] and [Room.roster] are the authoritative surfaces: re-read
+         * [Room.localFabric] at handling time if a decision must be certain.
          */
         val localFabric: FabricAvailability,
     ) : MembershipEvent
@@ -137,6 +145,14 @@ public sealed interface MembershipEvent {
          * value on every fabric without a live OS path observer (see
          * `SeamCapabilities.reportsLiveCapability`), so a consumer must handle it as a first-class
          * third answer rather than a gap.
+         *
+         * **Best-effort on a bonded multi-transport room** (#1778). Over a `CompositeSeam` the
+         * rolled-up availability is an eventually-consistent fold of what each transport last
+         * announced, so when *every* transport drops within one dispatch window this tag can capture
+         * a briefly-stale value. It converges immediately after — but an event is a snapshot, so the
+         * captured value does not. A single-transport room has no such fold and no such window.
+         * [Room.localFabric] and [Room.roster] are the authoritative surfaces: re-read
+         * [Room.localFabric] at handling time if a decision must be certain.
          */
         val localFabric: FabricAvailability,
     ) : MembershipEvent
