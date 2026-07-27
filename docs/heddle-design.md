@@ -648,9 +648,17 @@ Per allocation round at one parent, on one peer:
    seating front over a deliberately different set: the front drops the
    quantum trims, this step keeps them, so the two values coincide only when
    no trim binds.
-3. **Eligibility:** `effectiveVirtualService(e) ≤ V`. (If rounding ever
-   yields no eligible candidate: take the minimum, emit a diagnostic, carry
-   on.)
+3. **Eligibility:** `effectiveVirtualService(e) ≤ V`. This set is never
+   empty, and that is a **theorem, not an expectation** (#1737): `V` is the
+   weighted mean of the *same* candidate set over strictly positive weights,
+   so it is never below that set's minimum, and no rounding can eat the
+   margin — the comparison is exact integer cross-multiplication that
+   *throws* on overflow rather than returning a wrong order (§7.1). An empty
+   eligible set could therefore only mean the implementation took step 2's
+   mean over a different set than this filter, or admitted a non-positive
+   weight; either makes the round's whole ordering untrustworthy, so the
+   implementation **asserts and fails loudly** rather than substituting the
+   minimum and scheduling against an ordering it has just disproved.
 4. **Deadline:** among eligible candidates pick minimum
    `(effectiveVirtualService(e) + q/w(e), attachmentId)` — the stable id is
    the deterministic tie-break.

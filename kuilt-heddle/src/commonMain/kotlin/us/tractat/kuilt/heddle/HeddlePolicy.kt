@@ -97,14 +97,21 @@ public object HeddlePolicy {
      *    a zero quantum drops the edge.
      * 2. **Parent virtual time** — the weighted mean `V = Σ w·ev / Σ w` over the fixed
      *    candidate set, where `ev` is [effectiveVirtualService].
-     * 3. **Eligibility** — keep candidates with `ev ≤ V` (the min `ev` always qualifies,
-     *    so with candidates present this set is non-empty).
+     * 3. **Eligibility** — keep candidates with `ev ≤ V`. Non-empty *by construction*: `V`
+     *    is the weighted mean of these same candidates' `ev` over strictly positive weights,
+     *    so `min(ev) ≤ V` always holds, and no rounding can lose the margin — the arithmetic
+     *    is exact and an overflow throws rather than returning a wrong order. An empty set
+     *    would mean step 2 averaged a *different* set than this filter, or admitted a
+     *    non-positive weight; either makes the round's whole ordering untrustworthy, so it
+     *    fails loudly instead of scheduling against it (design §7.3 step 3).
      * 4. **Deadline** — among the eligible, the minimum `(ev + q/w, attachmentId)`; the
      *    stable id is the deterministic tie-break.
      *
      * @param edges the parent's immediate children.
      * @param config the round's quantum and caps.
      * @param localHoldings service this peer may itself delegate right now; caps the quantum.
+     * @throws IllegalStateException if step 3's eligible set is empty — a policy bug, not an
+     *   input the caller can provoke (issue #1737).
      */
     public fun pick(edges: List<PolicyEdge>, config: PolicyConfig, localHoldings: Long): Grant? {
         require(localHoldings >= 0L) { "localHoldings must be non-negative, was $localHoldings" }
@@ -123,10 +130,20 @@ public object HeddlePolicy {
         //    values coincide only when no quantum trim binds — they are not one number.
         val v = weightedMeanVirtualTime(candidates.map { it.edge })
 
-        // 3. Eligible candidates: ev ≤ V. The minimum ev is always ≤ the mean, so the
-        //    eligible set is non-empty; the min-ev fallback is defensive only.
+        // 3. Eligible candidates: ev ≤ V. Non-empty is a theorem, not a hope: [v] is the
+        //    weighted mean of *these* candidates over strictly positive weights, so it is never
+        //    below their minimum, and the comparison is exact (an overflow throws rather than
+        //    rounding an order away). Substituting the minimum and carrying on — what design
+        //    §7.3 step 3 used to prescribe — would schedule against an ordering just proved
+        //    untrustworthy, and do it silently; the assertion names the state instead (#1737).
         val eligible = candidates.filter { it.virtualService <= v }
-            .ifEmpty { listOf(candidates.minBy { it.virtualService }) }
+        check(eligible.isNotEmpty()) {
+            val listed = candidates.joinToString { c ->
+                "${c.edge.record.id.value} ev=${c.virtualService} w=${c.edge.record.weight}"
+            }
+            "no eligible candidate at V=$v: min(ev) ≤ V is a theorem of step 2's weighted mean, " +
+                "so this is a policy bug (was the mean taken over a different set?). Candidates: $listed"
+        }
 
         // 4. Earliest virtual deadline first, stable id tie-break.
         val winner = eligible.minWith(deadlineThenId)
