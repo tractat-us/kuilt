@@ -40,6 +40,37 @@ import kotlinx.serialization.Serializable
  * deeper transfer chains are the accepted transient. **Consumers must not hard-gate on
  * `validate().isEmpty()`** while rebalancing is in flight — gate on the mutator's `null`.
  *
+ * ## One root per ledger (a standing invariant)
+ *
+ * A ledger describes **one** tree, with exactly one root: the group [bootstrap] was called
+ * with. [holdings] credits a group's `creditIn` from the minted supply whenever that group
+ * has no inbound edge, and [MintRecord] carries only a holder and an amount — it is not bound
+ * to a root. So if two independently-[bootstrap]ped ledgers are [piece]d together, the merged
+ * state has two rootless groups and **each of them is credited the full `mintedTotal`**,
+ * double-counting every mint in the Σ-holdings conservation identity.
+ *
+ * Nothing in the representation prevents this, so it is a **caller invariant**: never merge
+ * ledgers from different bootstraps. Binding a [MintRecord] to its root would make it
+ * structural, but that is a wire-format change and is deliberately not taken here.
+ *
+ * ## Delta-state idiom: two patches from one base lose the first
+ *
+ * Every mutator reads the receiver and returns a patch carrying **absolute** slot values, and
+ * the join is max. Two patches computed from the *same* base therefore do not compose — the
+ * merge keeps the larger and silently drops the other:
+ *
+ * ```
+ * val a = ledger.delegate(r, e, 10)!!   // issued(e)[r] = 10
+ * val b = ledger.delegate(r, e, 5)!!    // issued(e)[r] = 5   ← also read from `ledger`
+ * ledger.piece(a).piece(b)              // issued(e)[r] = 10, NOT 15
+ * ```
+ *
+ * That is the price of absolute-value deltas, and it is what buys duplicate-delivery
+ * idempotence — but it means a caller must **thread the state**: call each mutator on a
+ * ledger that has already absorbed the previous patch, never fan several out from one
+ * snapshot. `HeddleNode` does this by running each op inside its `Quilter.mutate` block, so
+ * the op always sees fresh state.
+ *
  * ## Lifecycle (H2)
  *
  * Each edge carries a [Lifecycle] in a per-edge **max-register**
@@ -274,25 +305,45 @@ public class EntitlementLedger private constructor(
      *    topology fork, now reported (§5.2, §10.11) — so delegation across either is refused;
      *  - a group whose only inbound edges are all prepared/retired (no live path to the
      *    root — e.g. mid-reparent, before the new generation activates);
-     *  - a cycle.
+     *  - a cycle ([LedgerConflict.LineageCycle]).
+     *
+     * Of those four, three are reported by [validate]; the **no-live-path** case deliberately
+     * is not. It is the one quarantine that is a *normal* step of an honest reshape — the
+     * window after the old generation retires and before the new one activates — so reporting
+     * it would flag healthy traffic. It is the standing exception to §10.11's
+     * quarantine ⟺ report correspondence, and it clears as soon as the new generation
+     * activates.
      */
-    private fun lineageEdges(group: GroupId): List<AttachmentId>? {
+    private fun lineageEdges(group: GroupId): List<AttachmentId>? = walkLineage(group).edges
+
+    /**
+     * One root-ward walk of [group]'s live lineage — the shared implementation behind
+     * [lineageEdges] and [validate]'s cycle report, so the two can never disagree about what
+     * "quarantined" means.
+     *
+     * [LineageWalk.onCycle] is `true` only when the walk re-entered **[group] itself**, i.e.
+     * [group] lies *on* a cycle rather than merely below one. A group below a cycle is
+     * quarantined too, but listing it would flood the report with the entire subtree; each
+     * loop member re-enters at its own starting point, so every cycle is reported exactly
+     * once per member and never for a descendant.
+     */
+    private fun walkLineage(group: GroupId): LineageWalk {
         val edges = ArrayDeque<AttachmentId>()
         val seen = HashSet<GroupId>()
         var cur = group
         while (true) {
-            if (!seen.add(cur)) return null // cycle
+            if (!seen.add(cur)) return LineageWalk(edges = null, onCycle = cur == group) // cycle
             val inboundIds = records.filter { (_, recs) -> recs.any { it.child == cur } }.keys
             if (inboundIds.isEmpty()) break // reached the root
             val liveInbound = inboundIds.filter { isLiveEdge(it) }
-            if (liveInbound.isEmpty()) return null // no live path to the root → quarantine
-            if (liveInbound.size > 1) return null // dual live inbound → quarantine
+            if (liveInbound.isEmpty()) return LineageWalk.QUARANTINED // no live path to the root
+            if (liveInbound.size > 1) return LineageWalk.QUARANTINED // dual live inbound
             val id = liveInbound.single()
-            val rec = recordOf(id) ?: return null // divergent record on the lineage → quarantine
+            val rec = recordOf(id) ?: return LineageWalk.QUARANTINED // divergent record on the lineage
             edges.addFirst(id)
             cur = rec.parent
         }
-        return edges.toList()
+        return LineageWalk(edges = edges.toList(), onCycle = false)
     }
 
     /**
@@ -354,7 +405,10 @@ public class EntitlementLedger private constructor(
     private fun netInflow(edge: AttachmentId, r: ReplicaId): Long =
         checkedSub(effIssuedSlot(edge, r), slot(returned, edge, r))
 
-    /** Σ minted amounts credited to [r] (the root's `creditIn`). */
+    /**
+     * Σ minted amounts credited to [r] (the root's `creditIn`). Every mint counts, whatever
+     * root it was bootstrapped for — see the class KDoc's one-root-per-ledger invariant.
+     */
     private fun mintedHeldBy(r: ReplicaId): Long =
         minted.values.fold(0L) { acc, m -> if (m.holder == r) checkedAdd(acc, m.amount) else acc }
 
@@ -363,7 +417,7 @@ public class EntitlementLedger private constructor(
         val rows = transfers[pathKey] ?: return 0L
         var inflow = 0L
         for ((_, row) in rows) inflow = checkedAdd(inflow, row.count(r))
-        val outflow = rows[r]?.value ?: 0L
+        val outflow = rows[r]?.let(::checkedCounterValue) ?: 0L
         return checkedSub(inflow, outflow)
     }
 
@@ -846,6 +900,21 @@ public class EntitlementLedger private constructor(
      *  - [LedgerConflict.ClosureViolation] — a [Lifecycle.RETIRED] edge with non-zero
      *    outstanding entitlement: a late delegation crossed a generation the cluster had
      *    already retired (closure dominance, §10.10).
+     *  - [LedgerConflict.LineageCycle] — a group whose live inbound edges loop back to it
+     *    instead of reaching a root (§5.2, §10.11). Reported once per loop member, never for
+     *    a mere descendant; records are grow-only, so a loop seen on any state is real.
+     *  - [LedgerConflict.ConservationViolation] — the **global** backstop:
+     *    `Σ effLeafSpent > mintedTotal`, i.e. more service charged than supply ever minted
+     *    (§10.1). Exact on a converged state; it never fires alone on honest partially-
+     *    delivered traffic (a state missing a charge's root mint already strands a
+     *    [LedgerConflict.PersistentNegativeHoldings] at the delegator). Its value is that it
+     *    is derived from the raw totals, so it still catches manufactured authority when the
+     *    per-lineage derivation of [holdings] is itself the thing that regressed.
+     *
+     * **What is deliberately not reported:** a group whose only inbound edges are all
+     * prepared/retired is quarantined (holdings `0`) but *silent* — that is the normal window
+     * of an honest reshape, and flagging it would fire on healthy traffic. It is the standing
+     * exception to §10.11's quarantine ⟺ report correspondence (see [lineageEdges]).
      */
     public fun validate(): List<LedgerConflict> {
         val conflicts = ArrayList<LedgerConflict>()
@@ -867,9 +936,17 @@ public class EntitlementLedger private constructor(
         }
         for (g in allGroups()) {
             if (liveInboundCount(g) >= 2) conflicts += LedgerConflict.DualActiveInbound(g)
+            if (walkLineage(g).onCycle) conflicts += LedgerConflict.LineageCycle(g)
             for (r in allReplicas()) {
                 if (holdings(g, r) < 0L) conflicts += LedgerConflict.PersistentNegativeHoldings(g, r)
             }
+        }
+        // The global backstop, last: totals read straight off the components, so it survives a
+        // regression in the per-lineage derivation the checks above all depend on.
+        val spentTotal = leafSpentTotal()
+        val supplyTotal = mintedTotal()
+        if (spentTotal > supplyTotal) {
+            conflicts += LedgerConflict.ConservationViolation(spentTotal, supplyTotal)
         }
         return conflicts.sorted()
     }
@@ -1076,6 +1153,12 @@ public class EntitlementLedger private constructor(
          * two peers carries the same [nonce], so it converges to one entry. No edges
          * yet — the topology is grown by the mutators (a later phase). Every amount
          * must be non-negative.
+         *
+         * [root] names the tree this supply belongs to, but it reaches the state only inside
+         * the generated [MintId] — a [MintRecord] is *not* structurally bound to a root. So a
+         * ledger must have **exactly one bootstrap**: merging two independently-bootstrapped
+         * ledgers leaves two rootless groups, each credited the whole minted supply. See the
+         * "One root per ledger" section of the class KDoc.
          */
         public fun bootstrap(root: GroupId, mint: Map<ReplicaId, Long>, nonce: String): EntitlementLedger {
             val minted = mint.entries.associate { (holder, amount) ->
@@ -1125,6 +1208,17 @@ public class EntitlementLedger private constructor(
  * Names one family for [EntitlementLedger.storedSlot], whose contract is that **every** family is
  * grow-only: no `piece` on any state may lower a stored slot. `internal` — test support.
  */
+/**
+ * The outcome of one [EntitlementLedger] lineage walk: the root→group edge list, or `null`
+ * when the lineage is quarantined, plus whether the walked group lies **on** a topology cycle.
+ */
+private class LineageWalk(val edges: List<AttachmentId>?, val onCycle: Boolean) {
+    companion object {
+        /** Quarantined for a non-cycle reason (divergent record, dual live inbound, no live path). */
+        val QUARANTINED: LineageWalk = LineageWalk(edges = null, onCycle = false)
+    }
+}
+
 internal enum class CounterFamily {
     ISSUED,
     RETURNED,
@@ -1137,8 +1231,24 @@ internal enum class CounterFamily {
     ROLLUP_RELOC_OUT,
 }
 
+/**
+ * The overflow-checked aggregate of one [GCounter]: `Σ_r counter[r]`, but folded through
+ * [checkedAdd] instead of [GCounter.value]'s plain `sum()`.
+ *
+ * [GCounter.value] is a bare `Long` sum and **wraps** — the zoo's counters are unconstrained
+ * by design and their `inc` is unchecked (see [CheckedMath]). Every *honest* state reaching
+ * this module is mint-bounded, so no sum of real slots can approach [Long.MAX_VALUE]; but an
+ * adversarial or corrupted **deserialized** state carries whatever slot values the wire said,
+ * and a silent wrap there would hand [EntitlementLedger.validate] and [EntitlementLedger.edge]
+ * a negative aggregate that reads as *less* charged than nothing. §10.12 says arithmetic that
+ * would exceed `Long` fails deterministically and never wraps; routing every aggregate read
+ * through here is what makes that true of a state this module did not itself construct.
+ */
+private fun checkedCounterValue(counter: GCounter): Long =
+    counter.replicas().fold(0L) { acc, r -> checkedAdd(acc, counter.count(r)) }
+
 private fun counterValue(counters: Map<AttachmentId, GCounter>, id: AttachmentId): Long =
-    counters[id]?.value ?: 0L
+    counters[id]?.let(::checkedCounterValue) ?: 0L
 
 /** The single `(id, r)` slot value, or 0. */
 private fun slot(counters: Map<AttachmentId, GCounter>, id: AttachmentId, r: ReplicaId): Long =
