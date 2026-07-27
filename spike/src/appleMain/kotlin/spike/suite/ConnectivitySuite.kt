@@ -679,6 +679,17 @@ public class ConnectivitySuite {
      * for the peer from a pre-baseline flap satisfies its wait and its roster check passes trivially), and
      * the level check reads correctly there too — that side asserts its *own* fabric stayed `Available`, so
      * a phase starting from anything else is unmeasurable rather than a library defect.
+     *
+     * **The exact strength of the invariant**, so a later reader does not over-trust it: the pair narrows
+     * the stale window from ~125s of operator-driven wall time (weave + admit + baseline) to the gap
+     * between the collector's `trySend` and this drain's `tryReceive`. It does not close it mathematically.
+     * An event whose outage is *unresolved* cannot slip through — that is what the level check rules out —
+     * but a flap that **completed** in that sub-dispatch sliver would leave `Available` reading true while
+     * a stale `Lost`/`Restored` pair was still undelivered. Two things make even that legible rather than
+     * silent: `at` is rendered on all four outage-bearing events (an edge stamped before the prompt is
+     * visibly stale in the shared report), and this hop names whatever it did discard. Closing it outright
+     * would mean filtering each selector on `at >= ` the prompt instant — every one of those events carries
+     * one — which needs a clock threaded through the suite; worth doing if this ever proves reachable.
      */
     private fun OutageCtx.armOutage(phase: String): Boolean {
         val discarded = mutableListOf<MembershipEvent>()
