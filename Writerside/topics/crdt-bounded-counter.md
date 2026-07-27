@@ -59,7 +59,7 @@ A donor that receives the request checks its own surplus and, if positive, calls
 
 **End-to-end example** — a low replica obtains quota from a targeted peer and can spend again:
 
-<!-- verbatim from kuilt-quilter/src/commonTest/kotlin/us/tractat/kuilt/quilter/BoundedCounterTransferCoordinatorTest.kt#spendSucceedsAfterTransferArrivesFromPeer -->
+<!-- condensed from kuilt-quilter/src/commonTest/kotlin/us/tractat/kuilt/quilter/BoundedCounterTransferCoordinatorTest.kt#spendSucceedsAfterTransferArrivesFromPeer -->
 ```kotlin
 // A has plenty; B starts with only 1 quota
 val initial = BoundedCounter.init(mapOf(replicaA to 20L, replicaB to 1L))

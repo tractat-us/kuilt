@@ -242,11 +242,424 @@ val forbidSourcelessKmpTarget by tasks.registering {
     }
 }
 
+// Guard: keep `<!-- verbatim from <path>#<symbol> -->` doc citations true (#1792).
+//
+// Every fenced code block in `docs/` and `Writerside/` that claims to be copied out of a
+// compiled source carries an HTML citation comment naming that source. Dokka `@sample`
+// blocks cannot rot — `src/commonSamples/` is compiled as part of `commonTest` — but a
+// block that *quotes* a sample can, and did: an audit of the first 23 found 3 drifted
+// (#1791, #1792). The failure is quiet and asymmetric: a block that says "verbatim" and
+// isn't is worse than no citation at all, because a reader stops checking. This closes the
+// asymmetry — a drifted or dangling citation now fails `check` the way a broken sample does.
+//
+// Two markers, two strengths:
+//   <!-- verbatim  from … -->  the block must appear in the cited source, character for
+//                             character, modulo indentation (the four modes below).
+//   <!-- condensed from … -->  the block is deliberately abridged or reworded; only the
+//                             cited path and symbol have to resolve.
+// Both are checked for a dangling reference, so a renamed or deleted symbol fails the build
+// instead of quietly becoming a lie — the second, smaller win here.
+//
+// Match modes, tried in order, each after dropping blank edges and de-indenting:
+//   full       the whole cited declaration, including its leading @annotations
+//   body       the declaration's body, braces stripped
+//   bodySlice  a contiguous run of body lines
+//   fullSlice  a contiguous run of declaration lines — also the whole-file mode, used by
+//              the citations that name no #symbol
+// The slice modes are what let one long E2E test back three separate walkthrough blocks;
+// the de-indent is what lets a chunk lifted from inside a nested scope sit flush in a doc;
+// the annotation mode is what lets a doc quote `@Test fun …` as written. Anything looser —
+// dropping the source's own comments, trimming an assertion message, rewording a line — is
+// a condensation, not a quote. Relabel such a block `condensed from` rather than widening
+// this list: a check loose enough to pass a paraphrase is not checking anything.
+//
+// `docs/superpowers/` is excluded. Those are frozen, dated planning artifacts whose
+// citations are deliberately unresolved templates (`<!-- verbatim from <cited path>#… -->`).
+val verifyDocCitations by tasks.registering {
+    group = "verification"
+    description = "Fails if a <!-- verbatim from … --> doc citation has drifted from, or dangles off, its source (#1792)."
+    val docRoots = listOf(rootDir.resolve("docs"), rootDir.resolve("Writerside"))
+        .filter(java.io.File::isDirectory)
+    val srcRoots = subprojects.mapNotNull { it.projectDir.resolve("src").takeIf(java.io.File::isDirectory) }
+    // Every root whose contents invalidate this task. A citation pointing outside these is
+    // rejected at execution time (see the check in doLast) rather than being silently exempt
+    // from re-running — so this list and the enforcement can never drift apart.
+    val inputRoots = docRoots + srcRoots
+    inputRoots.forEach { inputs.dir(it).withPathSensitivity(PathSensitivity.RELATIVE) }
+    val rootPath = rootDir
+    // A stamp file so the task can be UP-TO-DATE: with inputs but no outputs Gradle has to
+    // re-run it on every build, which is how a verification task earns a reputation for
+    // slowing the build down and then gets deleted.
+    val stampFile = layout.buildDirectory.file("doc-citations/verified.txt").get().asFile
+    outputs.file(stampFile)
+    outputs.cacheIf { true }
+    doLast {
+        val cite = Regex("""^<!--\s*(verbatim|condensed) from\s+(.+?)\s*-->$""")
+        val symRefs = Regex("""#(`[^`]+`|[^\s#]+)""")
+
+        fun trimBlankEdges(ls: List<String>): List<String> =
+            ls.map(String::trimEnd).dropWhile(String::isEmpty).dropLastWhile(String::isEmpty)
+
+        fun dedent(ls: List<String>): List<String> {
+            val pad = ls.filter(String::isNotBlank)
+                .minOfOrNull { it.takeWhile(Char::isWhitespace).length } ?: 0
+            return ls.map { if (it.isBlank()) "" else it.drop(pad) }
+        }
+
+        // The canonical form both sides are compared in: no blank edges, no common indent.
+        fun canon(ls: List<String>): List<String> = dedent(trimBlankEdges(ls))
+
+        // A "code-only" projection of a whole file: one output line per input line, with the
+        // contents of comments and literals blanked out but the line count preserved (so an
+        // index into this list is the same index into the raw lines). Locating a declaration
+        // and balancing its braces run over THIS list; the content comparison always runs
+        // over the raw lines.
+        //
+        // Blanking comments is not a nicety. KDoc prose in this repo routinely carries braces
+        // in inline code spans — e.g. `while (true) { delay(); ping() }` in
+        // kuilt-liveness/.../AgentCookbookSamples.kt — and those sit *inside* cited regions.
+        // Counting them would let an ordinary comment edit truncate a region (reporting drift
+        // in a block nobody touched) or unbalance it outright.
+        //
+        // Handled: line comments, block comments/KDoc (multi-line, and nested, which Kotlin
+        // permits), "…" strings, """…""" raw strings, '…' char literals, and `…` quoted
+        // identifiers (a test named `fun \`closes the } group\`()` would otherwise miscount).
+        // Known limits, none of which occurs in any cited file today: a `$`-template whose
+        // braces span lines, and a declaration whose braces genuinely do not balance — the
+        // latter is reported honestly, with relabelling as the way forward.
+        fun codeOnly(rawLines: List<String>): List<String> {
+            var blockDepth = 0
+            var inRaw = false
+            return rawLines.map { line ->
+                val sb = StringBuilder()
+                var i = 0
+                var inString = false
+                var inChar = false
+                var inTick = false
+                var escaped = false
+                while (i < line.length) {
+                    val c = line[i]
+                    val two = if (i + 1 < line.length) line.substring(i, i + 2) else ""
+                    when {
+                        inRaw -> {
+                            if (line.startsWith("\"\"\"", i)) {
+                                inRaw = false
+                                i += 3
+                                continue
+                            }
+                        }
+                        blockDepth > 0 -> when {
+                            two == "/*" -> { blockDepth++; i += 2; continue }
+                            two == "*/" -> { blockDepth--; i += 2; continue }
+                            else -> {}
+                        }
+                        inString -> when {
+                            escaped -> escaped = false
+                            c == '\\' -> escaped = true
+                            c == '"' -> inString = false
+                        }
+                        inChar -> when {
+                            escaped -> escaped = false
+                            c == '\\' -> escaped = true
+                            c == '\'' -> inChar = false
+                        }
+                        // A quoted identifier's text is preserved so declStart can still match
+                        // it; only braces within are neutralised, so they cannot skew the count.
+                        inTick -> {
+                            if (c == '`') inTick = false
+                            sb.append(if (c == '{' || c == '}') '_' else c)
+                        }
+                        line.startsWith("\"\"\"", i) -> { inRaw = true; i += 3; continue }
+                        two == "//" -> return@map sb.toString()
+                        two == "/*" -> { blockDepth++; i += 2; continue }
+                        c == '"' -> inString = true
+                        c == '\'' -> inChar = true
+                        c == '`' -> { inTick = true; sb.append(c) }
+                        else -> sb.append(c)
+                    }
+                    i++
+                }
+                sb.toString()
+            }
+        }
+
+        // `codeLines` is always the codeOnly() projection — never the raw lines.
+        fun declStart(codeLines: List<String>, symbol: String): Int {
+            // Tolerates a type-parameter list and an extension receiver, and the backticks
+            // a test-function name carries (`fun \`leader wins\`()`).
+            val pat = Regex(
+                """(?:^|\s)(?:fun|class|object|interface|val|var)\s+""" +
+                    """(?:<[^>]*>\s*)?(?:[\w.<>?, ]*\.)?`?""" +
+                    Regex.escape(symbol.trim('`')) + """`?\s*[(<:={]""",
+            )
+            return codeLines.indexOfFirst { pat.containsMatchIn(it) }
+        }
+
+        // Last line of the declaration; -1 if a brace opened and never closed.
+        fun declEnd(codeLines: List<String>, start: Int): Int {
+            var depth = 0
+            var opened = false
+            for (i in start until codeLines.size) {
+                for (c in codeLines[i]) {
+                    if (c == '{') {
+                        depth++
+                        opened = true
+                    } else if (c == '}') {
+                        depth--
+                    }
+                }
+                if (opened && depth <= 0) return i
+            }
+            return if (opened) -1 else start
+        }
+
+        fun annotationStart(codeLines: List<String>, start: Int): Int {
+            var i = start
+            while (i > 0 && codeLines[i - 1].trimStart().startsWith("@")) i--
+            return i
+        }
+
+        // First line index of the body (exclusive of the opening-brace line), or -1 if the
+        // declaration has no body.
+        fun bodyStart(codeLines: List<String>, start: Int, end: Int): Int {
+            val open = (start..end).firstOrNull { codeLines[it].contains('{') } ?: return -1
+            return if (open < end) open + 1 else -1
+        }
+
+        // Is `block` a contiguous run of `haystack`? Each candidate window is canonicalised
+        // in its own right, so a chunk lifted from a nested scope matches when de-indented.
+        fun isSliceOf(block: List<String>, haystack: List<String>): Boolean {
+            if (block.isEmpty() || block.size > haystack.size) return false
+            return (0..haystack.size - block.size).any { s ->
+                canon(haystack.subList(s, s + block.size)) == block
+            }
+        }
+
+        // Length-preserving normalisation, used only for the failure diff: the same de-indent
+        // as `canon` but WITHOUT dropping blank edges, so a window's index maps 1:1 onto a raw
+        // source line and the two sides never slip out of step (which is what produced
+        // spurious "(past end of source)" rows).
+        fun align(ls: List<String>): List<String> = dedent(ls.map(String::trimEnd))
+
+        // Name the lines that moved, with context. Someone fixing a citation should not have
+        // to re-derive what changed.
+        fun showDiff(source: List<String>, doc: List<String>, atLine: Int): String {
+            val span = maxOf(source.size, doc.size)
+            val differing = (0 until span).filter { source.getOrNull(it) != doc.getOrNull(it) }
+            if (differing.isEmpty()) return ""
+            val show = (differing.first() - 2)..(differing.last() + 2)
+            val sb = StringBuilder(
+                "      closest match starts at source line $atLine; " +
+                    "${differing.size} of $span lines differ:\n",
+            )
+            var elided = 0
+            for (i in show.first.coerceAtLeast(0) until minOf(span, show.last + 1)) {
+                val s = source.getOrNull(i)
+                val d = doc.getOrNull(i)
+                if (s == d) {
+                    // Keep the report to one screen; long runs of agreement carry no signal.
+                    if (differing.none { kotlin.math.abs(it - i) <= 2 }) {
+                        elided++
+                        continue
+                    }
+                    sb.append("          |  $s\n")
+                } else {
+                    if (elided > 0) {
+                        sb.append("          … $elided identical line(s) …\n")
+                        elided = 0
+                    }
+                    sb.append("        - source: ${s ?: "(past end of source)"}\n")
+                    sb.append("        + doc:    ${d ?: "(past end of block)"}\n")
+                }
+            }
+            return sb.toString()
+        }
+
+        // Diff the block against whichever stretch of source it most nearly matches, searching
+        // EVERY candidate — each region's whole declaration and its body. Searching only one
+        // shape is what made this useless for `full`/`fullSlice` citations: a block that quotes
+        // the declaration (`@Test fun … { … }`) diffed against the body is offset by the
+        // signature, so every line reads as changed and the one line that actually moved never
+        // appears. `candidates` are (raw lines, 0-based absolute start line) pairs.
+        fun bestDiff(block: List<String>, candidates: List<Pair<List<String>, Int>>): String {
+            var bestScore = Int.MAX_VALUE
+            var bestWindow: List<String> = emptyList()
+            var bestLine = 0
+            candidates.forEach { (raw, base) ->
+                val hay = align(raw)
+                val starts = if (block.size >= hay.size) listOf(0) else (0..hay.size - block.size).toList()
+                starts.forEach { s ->
+                    val window = hay.subList(s, minOf(s + block.size, hay.size))
+                    val score = (0 until maxOf(window.size, block.size))
+                        .count { window.getOrNull(it) != block.getOrNull(it) }
+                    if (score < bestScore) {
+                        bestScore = score
+                        bestWindow = window
+                        bestLine = base + s + 1
+                    }
+                }
+            }
+            return showDiff(bestWindow, block, bestLine)
+        }
+
+        val mdFiles = docRoots.flatMap { root ->
+            root.walkTopDown().filter { f ->
+                f.isFile && f.extension == "md" &&
+                    !f.relativeTo(rootPath).invariantSeparatorsPath.startsWith("docs/superpowers/")
+            }
+        }.sortedBy { it.invariantSeparatorsPath }
+
+        // Cited source files, parsed once each — several citations share one file.
+        val codeCache = mutableMapOf<java.io.File, Pair<List<String>, List<String>>>()
+        fun loadSource(f: java.io.File): Pair<List<String>, List<String>> =
+            codeCache.getOrPut(f) { f.readLines().let { raw -> raw to codeOnly(raw) } }
+
+        val failures = mutableListOf<String>()
+        var checked = 0
+
+        mdFiles.forEach { md ->
+            val lines = md.readLines()
+            var i = 0
+            while (i < lines.size) {
+                val m = cite.matchEntire(lines[i].trim())
+                if (m == null) {
+                    i++
+                    continue
+                }
+                val kind = m.groupValues[1]
+                val payload = m.groupValues[2]
+                val where = "${md.relativeTo(rootPath).invariantSeparatorsPath}:${i + 1}"
+                val label = "<!-- $kind from $payload -->"
+                val path = payload.substringBefore('#').trim()
+                val symbols = symRefs.findAll(payload).map { it.groupValues[1] }.toList()
+
+                // The block this citation is attached to: the next fenced region.
+                var open = i + 1
+                while (open < lines.size && lines[open].isBlank()) open++
+                val fenced = open < lines.size && lines[open].trimStart().startsWith("```")
+                var blockRaw = emptyList<String>()
+                if (fenced) {
+                    var close = open + 1
+                    while (close < lines.size && lines[close].trim() != "```") close++
+                    blockRaw = lines.subList(open + 1, minOf(close, lines.size))
+                    i = close + 1
+                } else {
+                    i++
+                }
+                checked++
+
+                if (!fenced) {
+                    failures += "$where\n      $label\n      citation is not followed by a fenced code " +
+                        "block, so it cites nothing. Attach it to the block it describes, or delete it."
+                    continue
+                }
+                val srcFile = rootPath.resolve(path)
+                if (!srcFile.isFile) {
+                    failures += "$where\n      $label\n      cited file does not exist: $path"
+                    continue
+                }
+                // A cited file outside every declared input root would resolve here at execution
+                // time but never invalidate the task — leaving a REQUIRED gate green over a
+                // drifted citation. That silent pass is the worst failure this task could have,
+                // so it is a loud failure instead. `build-logic/` is the live example: an
+                // included build, not a subproject, so its sources are not an input.
+                if (inputRoots.none { srcFile.startsWith(it) }) {
+                    failures += "$where\n      $label\n      cited file is outside every declared task " +
+                        "input root, so editing it would NOT re-run this check — a drifted citation " +
+                        "would stay green: $path\n      Add its root to verifyDocCitations' inputs " +
+                        "(see build.gradle.kts) before citing it."
+                    continue
+                }
+                val (srcLines, srcCode) = loadSource(srcFile)
+                val dangling = symbols.filter { declStart(srcCode, it) < 0 }
+                if (dangling.isNotEmpty()) {
+                    failures += "$where\n      $label\n      cited symbol not found in $path: " +
+                        dangling.joinToString(", ") +
+                        "\n      Renamed or deleted? Point the citation at the new name, or restore the symbol."
+                    continue
+                }
+                // A condensed block is checked for existence only — the whole point of the
+                // weaker marker is that its content is deliberately not a quote. Placed BEFORE
+                // brace balancing so that relabelling is always an available way forward: if the
+                // region cannot be delimited, `condensed from` still gets the author unstuck.
+                if (kind == "condensed") continue
+
+                val block = canon(blockRaw)
+                if (block.isEmpty()) {
+                    failures += "$where\n      $label\n      the fenced block is empty"
+                    continue
+                }
+
+                // Per cited symbol: the declaration region and (if any) its body, each with the
+                // 0-based absolute line where it starts, so the failure diff can name a real line.
+                var unbalanced: String? = null
+                val declRegions = mutableListOf<Pair<List<String>, Int>>()
+                val bodyRegions = mutableListOf<Pair<List<String>, Int>>()
+                if (symbols.isEmpty()) {
+                    declRegions += srcLines to 0
+                } else {
+                    for (symbol in symbols) {
+                        val s = declStart(srcCode, symbol)
+                        val e = declEnd(srcCode, s)
+                        if (e < 0) {
+                            unbalanced = symbol
+                            break
+                        }
+                        val a = annotationStart(srcCode, s)
+                        declRegions += srcLines.subList(a, e + 1) to a
+                        val b = bodyStart(srcCode, s, e)
+                        if (b >= 0) bodyRegions += srcLines.subList(b, e) to b
+                    }
+                }
+                if (unbalanced != null) {
+                    failures += "$where\n      $label\n      could not delimit `$unbalanced` in $path: " +
+                        "its braces do not balance, so the citation cannot be verified. This is a limit " +
+                        "of the checker, not necessarily a defect in the source.\n      Relabel the " +
+                        "citation `<!-- condensed from $payload -->` to record it as unverified, and " +
+                        "please report the declaration that broke it."
+                    continue
+                }
+
+                val matched = declRegions.indices.any { r ->
+                    val decl = declRegions[r].first
+                    val body = bodyRegions.getOrNull(r)?.first ?: emptyList()
+                    canon(decl) == block ||
+                        (body.isNotEmpty() && canon(body) == block) ||
+                        (body.isNotEmpty() && isSliceOf(block, body)) ||
+                        isSliceOf(block, decl)
+                }
+                if (!matched) {
+                    val candidates = declRegions + bodyRegions
+                    val widest = candidates.maxOf { canon(it.first).size }
+                    failures += "$where\n      $label\n      the block (${block.size} lines) does not " +
+                        "appear in the cited source (up to $widest lines) in any accepted form.\n" +
+                        bestDiff(block, candidates) +
+                        "      Re-copy the block from $path. Relabel the citation " +
+                        "`<!-- condensed from $payload -->` only if the block cannot be a literal " +
+                        "quote — that exempts it from content checking for good."
+                }
+            }
+        }
+
+        if (failures.isNotEmpty()) {
+            error(
+                "Doc citation(s) out of sync with the source they name (#1792). A block labelled " +
+                    "`verbatim from` must still appear in that source:\n\n" +
+                    failures.joinToString("\n\n") + "\n",
+            )
+        }
+        stampFile.parentFile.mkdirs()
+        stampFile.writeText("verified $checked citations across ${mdFiles.size} markdown files\n")
+        logger.info("verifyDocCitations: $checked citations across ${mdFiles.size} markdown files")
+    }
+}
+
 // Run the guards as part of `check` (hence `build`, hence CI) in every module.
 allprojects {
     tasks.matching { it.name == "check" }.configureEach {
         dependsOn(rootProject.tasks.named("forbidUnboundedSwatchDelivery"))
         dependsOn(rootProject.tasks.named("forbidSourcelessKmpTarget"))
         dependsOn(rootProject.tasks.named("forbidPortProbeRebind"))
+        dependsOn(rootProject.tasks.named("verifyDocCitations"))
     }
 }

@@ -55,6 +55,7 @@ val node = heddleStatic(
     topology = listOf(e),              // root → leaf, prepared and active at bootstrap
     clock = { Instant.fromEpochMilliseconds(0L) },
     config = HeddleConfig(policy = PolicyConfig(quantum = 10L), maxHoldingsPerPeer = 1_000L),
+    epoch = 1L,                        // a persisted monotonic boot counter — bumped every restart
 )
 
 // The leaf wants work; one scheduling round delegates entitlement down toward it.

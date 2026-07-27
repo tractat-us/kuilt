@@ -182,7 +182,7 @@ offline. So pull the logs **stamped** — each line keeps a small ordering tag f
 the device that produced it (who produced it, and where it sits relative to every
 other device's lines) — and let a collector sort by that tag:
 
-<!-- verbatim from kuilt-otel-tap-test/src/commonTest/kotlin/us/tractat/kuilt/otel/tap/test/LogArtifactTest.kt#stampedArtifactsFromTwoDevicesMergeByRgaId -->
+<!-- condensed from kuilt-otel-tap-test/src/commonTest/kotlin/us/tractat/kuilt/otel/tap/test/LogArtifactTest.kt#stampedArtifactsFromTwoDevicesMergeByRgaId -->
 
 ```kotlin
 val stamped = client.pullStamped()                     // each record + its ordering tag

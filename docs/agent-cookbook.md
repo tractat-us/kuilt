@@ -673,7 +673,7 @@ rides the root lane and is admitted for free — warp's fast path stays exactly 
     // 1. Build the adapter — warp's opaque AdmissionControl, backed by the fair-share ledger.
     val admission = HeddleAdmissionControl(heddle)
     // Pass it to a node:  WarpNode(selfId, seam, roster, scope, clock = …, registry = …,
-    //                              admissionControl = admission)
+    //                              admissionControl = admission, epoch = <per-boot counter>)
 
     // 2. Tag a task into a lane on the producer side.
     val interactive: TaskDescriptor =
