@@ -673,14 +673,54 @@ internal class SeamRoom(
                         this@SeamRoom.restartIncomingCollect()
 
                     override fun onReconnectStarted(hostId: PeerId, at: Instant, windowDeadline: Instant) {
-                        emitEvent(
-                            MembershipEvent.Partitioned(
+                        // The level, not just the edge (#1723): without this the joiner's roster
+                        // reported its host Connected while these two events said Partitioned, and a
+                        // subscriber arriving after the edge could recover the state from neither
+                        // surface. [hostId] is in [admittedById] on an admitted joiner — the same
+                        // lookup [restoreHostDetector] does. Genuine lock acquisition, not a
+                        // re-entry: JoinerResumeMachine.runReconnect calls this outside its own
+                        // critical sections (the lock is reentrant either way).
+                        val wasPartitioned = lock.withLock {
+                            val existing = admittedById[hostId]?.liveness as? Liveness.Partitioned
+                            updateMemberLiveness(
                                 hostId,
-                                at,
-                                ReconnectReason.TransportClosed,
-                                localFabric = localFabric.value,
-                            ),
-                        )
+                                Liveness.Partitioned(
+                                    // First detection, preserved — see the [Liveness.Partitioned.since]
+                                    // contract. Reachable double-detection, and the real-hardware
+                                    // ordering: the radio dies (heartbeat Timeout → markPartitioned)
+                                    // and only then does the socket notice (Torn → here). Overwriting
+                                    // would drift `since` past the single Partitioned event a consumer
+                                    // heard from the first detection.
+                                    since = existing?.since ?: at,
+                                    // The deadline, by contrast, genuinely MOVED: the resume machine's
+                                    // withTimeoutOrNull budget runs from `at`, so [windowDeadline] is
+                                    // the instant the seat is actually held to, and it is announced
+                                    // immediately below — level and event cannot disagree.
+                                    windowExpiresAt = windowDeadline,
+                                ),
+                            )
+                            existing != null
+                        }
+                        // Idempotent like [markPartitioned]'s: the PARTITION is announced once, on the
+                        // first detection. Without this gate the real-hardware Timeout-then-tear
+                        // ordering emits Partitioned twice for one outage, so a consumer treating it as
+                        // an edge — start a countdown, log a disconnect, bump a metric — double-counts.
+                        // It is also what keeps [Liveness.Partitioned.since]'s contract literally true:
+                        // `since` agrees with the single Partitioned event because there is only one.
+                        if (!wasPartitioned) {
+                            emitEvent(
+                                MembershipEvent.Partitioned(
+                                    hostId,
+                                    at,
+                                    ReconnectReason.TransportClosed,
+                                    localFabric = localFabric.value,
+                                ),
+                            )
+                        }
+                        // WindowOpened stays UNCONDITIONAL — the deadline really did move on the tear,
+                        // and a moved deadline must always be announced or a consumer counts down to a
+                        // number it can no longer see is stale (the #1777 lesson, same reason as
+                        // markPartitioned's).
                         emitEvent(MembershipEvent.WindowOpened(hostId, windowDeadline))
                     }
 
