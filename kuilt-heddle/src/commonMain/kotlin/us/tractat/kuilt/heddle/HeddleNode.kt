@@ -185,6 +185,29 @@ public class HeddleNode internal constructor(
      */
     private val lostPeers = HashSet<ReplicaId>()
 
+    /**
+     * Edges this peer has been told, through the committed control log, that it must never author a
+     * slot on again — the §6.2 step-2 barrier mark ([quiesceLocally]). **Local, in-memory, and
+     * deliberately not replicated:** it is a promise this incarnation made, and a restart replays the
+     * log to restore it before the boot gate lets any mutator run
+     * (`GovernedHeddleNode.isWritable`, relocation design §6.5 residual 3).
+     *
+     * Written and read only under [lock], which is what makes the mark atomic with respect to
+     * [complete] — the whole defeat of the barrier-vs-completion race.
+     */
+    private val quiescedEdges = HashSet<AttachmentId>()
+
+    /**
+     * Completions whose captured path crosses a quiesced edge that had **no live inbound generation**
+     * to re-home onto at charge time — the window between a `Close` and the next `Activate`. They are
+     * held here and retried on every subsequent control-plane publish and completion
+     * ([flushBufferedCharges]): never dropped, and never charged to the dead edge (§6.2 step 2.1).
+     *
+     * Local state on the same terms as a reservation (`heddle-design.md` §4.4): a crash strands them
+     * exactly as it strands an uncompleted reservation, which is the pre-existing, accepted class.
+     */
+    private val bufferedCharges = ArrayList<BufferedCharge>()
+
     private val selfPeer = PeerId(self.value)
     private val scopeRef = scope
 
@@ -250,7 +273,40 @@ public class HeddleNode internal constructor(
      * [schedule]/[applyIfPresent]. `internal` — only [heddleGoverned] wires it.
      */
     internal fun asControlSink(): ControlLedgerSink = ControlLedgerSink { patch ->
-        lock.withLock { ledgerQuilter.mutate { patch } }
+        lock.withLock {
+            ledgerQuilter.mutate { patch }
+            // An Activate published here may be exactly the live inbound generation a buffered
+            // charge was waiting for (§6.2 step 2.1), so retry them while the lock is already held.
+            flushBufferedCharges()
+        }
+    }
+
+    /**
+     * The seam the H5 [HeddleControlPlane] runs the **§6.2 step-2 barrier** on: mark [edge] locally
+     * unwritable and read back this peer's own final base slots there ([ControlBarrierSink]).
+     *
+     * **Both halves happen under the one mutator [lock], and that is the load-bearing part.** The
+     * relocation drains [edge] to zero headroom, so a charge that lands after the read but before the
+     * mark would be invisible to the move and would leave a *permanently unclearable*
+     * [LedgerConflict.PerEdgeSafety] on a retired edge — the adversarial review's finding 2. Holding
+     * the lock across mark-then-read makes that interleaving not exist: a [complete] either finishes
+     * first (and its charge is inside the finals this returns) or runs after (and re-homes off the
+     * quiesced edge entirely). There is no third case.
+     *
+     * Idempotent — a replayed `Quiesce` re-marks and re-reads, which is precisely what a restarted
+     * peer needs in order to re-ack (relocation design §6.5 residual 2).
+     *
+     * `internal` — only [heddleGoverned] wires it.
+     */
+    internal fun asBarrierSink(): ControlBarrierSink = ControlBarrierSink { edge -> quiesceLocally(edge) }
+
+    /** [asBarrierSink]'s body: mark, then read, atomically with respect to every local mutator. */
+    private fun quiesceLocally(edge: AttachmentId): SlotFinals = lock.withLock {
+        quiescedEdges += edge
+        // Any charge already buffered may now re-home differently; retry before declaring finals so
+        // the declaration covers everything this peer has actually written.
+        flushBufferedCharges()
+        ledger.value.baseFinalsOn(edge, self)
     }
 
     /**
@@ -394,6 +450,15 @@ public class HeddleNode internal constructor(
      * reparented, quarantined, or gained a child; a swallowed positive charge would silently
      * lose service, so a null result **fails loud** rather than being dropped.
      *
+     * **The one exception to "charge the captured path": a quiesced edge** (issue #1693;
+     * `heddle-design.md` §10 invariant 4 as weakened by §4.4). If the captured path names an edge
+     * this peer has applied a `Quiesce` for, the charge re-homes to that edge's child's **live**
+     * inbound generation. That is not a rewrite of history — a quiesced edge is drained by
+     * construction, so re-homing the completion is the same conserving move the recovery performs,
+     * taken at charge time. Charging the dead edge instead is exactly the straggler that would leave
+     * a permanently unclearable per-edge-safety violation on it. If no live inbound exists yet, the
+     * charge is **buffered** and flushed when one activates ([bufferedCharges]).
+     *
      * @throws IllegalArgumentException if [actualCost] is out of range (state untouched).
      */
     override fun complete(id: ReservationId, actualCost: Long) {
@@ -402,24 +467,66 @@ public class HeddleNode internal constructor(
             require(actualCost in 0L..reservation.maximumCost) {
                 "actualCost $actualCost must be in 0..${reservation.maximumCost}"
             }
-            if (actualCost > 0L) {
-                var charged = false
-                ledgerQuilter.mutate { s ->
-                    val patch = s.spendCaptured(self, reservation.capturedPath, actualCost)
-                    if (patch != null) {
-                        charged = true
-                        patch
-                    } else {
-                        Patch(EntitlementLedger.ZERO)
-                    }
-                }
-                check(charged) {
-                    "spendCaptured returned null for captured path ${reservation.capturedPath} — charge lost"
-                }
-            }
+            if (actualCost > 0L) charge(reservation.capturedPath, actualCost)
             reservations.remove(id)
             earmarks[reservation.leaf] = (earmarks[reservation.leaf] ?: 0L) - reservation.maximumCost
+            flushBufferedCharges()
         }
+    }
+
+    /**
+     * Charge [amount] against [capturedPath], re-homed off any quiesced edge — or buffered when the
+     * re-home has nowhere to land yet. Always called under [lock].
+     */
+    private fun charge(capturedPath: List<AttachmentId>, amount: Long) {
+        val path = rehomedPath(ledger.value, capturedPath)
+        if (path == null) {
+            bufferedCharges += BufferedCharge(capturedPath, amount)
+            return
+        }
+        var charged = false
+        ledgerQuilter.mutate { s ->
+            val patch = s.spendCaptured(self, path, amount)
+            if (patch != null) {
+                charged = true
+                patch
+            } else {
+                Patch(EntitlementLedger.ZERO)
+            }
+        }
+        check(charged) { "spendCaptured returned null for captured path $path — charge lost" }
+    }
+
+    /**
+     * [capturedPath] with every **quiesced** edge replaced by its child's single live inbound
+     * generation, or `null` when some quiesced edge has no unique live inbound to re-home onto — the
+     * `Close`-to-`Activate` window, and the quarantined-lineage case. A path with no quiesced edge is
+     * returned unchanged, so the ordinary completion path is untouched.
+     */
+    private fun rehomedPath(s: EntitlementLedger, capturedPath: List<AttachmentId>): List<AttachmentId>? {
+        if (capturedPath.none { it in quiescedEdges }) return capturedPath
+        val out = ArrayList<AttachmentId>(capturedPath.size)
+        for (e in capturedPath) {
+            if (e !in quiescedEdges) {
+                out += e
+                continue
+            }
+            val child = s.record(e)?.child ?: return null
+            out += s.liveInboundEdges(child).singleOrNull() ?: return null
+        }
+        return out
+    }
+
+    /**
+     * Retry every buffered charge, keeping the ones that still have nowhere to re-home to. Always
+     * called under [lock], from [complete], [quiesceLocally], and the control sink's publish — the
+     * three moments at which a live inbound generation can newly exist for a buffered charge.
+     */
+    private fun flushBufferedCharges() {
+        if (bufferedCharges.isEmpty()) return
+        val retry = bufferedCharges.toList()
+        bufferedCharges.clear()
+        for (pending in retry) charge(pending.capturedPath, pending.amount)
     }
 
     /** Cancel reservation [id] — a completion charging zero service (design §4.4). */
@@ -732,6 +839,13 @@ public class HeddleNode internal constructor(
         val maximumCost: Long,
         val capturedPath: List<AttachmentId>,
     )
+
+    /**
+     * A completed charge held back because its captured path crosses a quiesced edge whose child has
+     * no live inbound generation yet (§6.2 step 2.1). Retried by [flushBufferedCharges]; the original
+     * [capturedPath] is kept, not the failed rewrite, so each retry re-resolves against fresh topology.
+     */
+    private data class BufferedCharge(val capturedPath: List<AttachmentId>, val amount: Long)
 
     public companion object {
         /** NamedMux channel carrying [Quilter] ledger-replication traffic. */

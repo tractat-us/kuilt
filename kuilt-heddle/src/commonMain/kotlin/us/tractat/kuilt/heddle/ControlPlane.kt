@@ -62,23 +62,68 @@ internal sealed interface ControlCommand {
     data class Retire(val edge: AttachmentId, val witness: EntitlementLedger? = null) : ControlCommand
 
     /**
-     * Reconcile the budget stranded on RETIRED inbound edges of [child] onto [liveEdge] — the conserving
-     * recovery for the advisory-retire race (design §9 #3, §5.4; issue #1665). [witness] is the proposer's
-     * conserving re-home patch computed on its data-plane view ([EntitlementLedger.reconcileStranded]): it
-     * carries **only** `returned` slots (releasing the strand up each retired edge) and `issuedRelocIn` slots
-     * on [liveEdge] (re-delegating it down), at absolute values. Applied deterministically on every peer — the
-     * decision gates on the log-pure projection's topology ([child]'s sole live inbound is [liveEdge], the
-     * witness touches only that edge's `issuedRelocIn` and RETIRED-inbound `returned` slots), never the
-     * gossip-merged data plane, so the witness is republished identically everywhere and no new supply can be
-     * smuggled past. The re-delegation rides the control-plane-owned relocation family rather than the live
-     * edge's base `issued` slot, which the data plane writes concurrently (#1691 — see
-     * [EntitlementLedger.reconcileStranded]).
+     * Reconcile the budget stranded on RETIRED inbound edges of [child] onto its single live inbound
+     * edge — the conserving recovery for the advisory-retire race (design §9 #3, §5.4; issue #1665).
+     *
+     * **It carries a child and nothing else.** The proposer sends **no magnitudes at all**: the patch
+     * is *derived at apply time* from the per-peer finals the §6.2 fence recorded in the log
+     * ([QuiesceAck]) and from the control plane's own accumulated relocation state
+     * ([FenceState.relocations]). Both inputs are functions of the committed log prefix, so every peer
+     * derives the identical patch and the magnitude is itself a consensus fact — which is exactly what
+     * retires #1669's "not a safety fence — magnitudes are read from this possibly stale view" caveat
+     * (`docs/heddle-ledger-relocation-design.md` §6.2 step 4). Consensus here confers *correctness*,
+     * not merely agreement.
+     *
+     * Refused, deterministically, when: [child] has no unique live inbound edge; any of its RETIRED
+     * inbound edges is not under a committed [Quiesce]; any quiesced edge is missing an ack from the
+     * set enrolled at that barrier's commit index; nothing is left to move (already reconciled); or a
+     * replica's acked finals leave it net-negative on a stranded edge (the transfer-tangle carve-out).
      */
     @Serializable
-    data class Reconcile(
-        val child: GroupId,
-        val liveEdge: AttachmentId,
-        val witness: EntitlementLedger,
+    data class Reconcile(val child: GroupId) : ControlCommand
+
+    /**
+     * Open the §6.2 barrier over [edge]: from the moment a peer applies this, [edge] is locally
+     * unwritable there, and the peer answers with its own [QuiesceAck]
+     * (`docs/heddle-ledger-relocation-design.md` §6.2 step 1–2).
+     *
+     * Gated — like [Retire] — on the **log-order** lifecycle: [edge] must be RETIRED. Idempotent, and
+     * a re-applied `Quiesce` deliberately re-fires the barrier, because that is what a restarted peer
+     * replaying the log needs in order to re-ack (§6.5 residual 2).
+     *
+     * ## Why a barrier and not a causal-stability wait
+     *
+     * `Quilter`'s stable cut proves every write *that existed when the frontier was taken* has been
+     * delivered. It says nothing about a write that does not exist yet — and log apply is per-peer
+     * asynchronous, so at the instant such a wait passes, a peer that has not yet applied the barrier
+     * can still create a *new* charge against the dead edge from an uncompleted local reservation
+     * (reservations are local, unreplicated state). "This edge is final" is a promise about the
+     * **future**, and only the promiser can make it. So the fence collects a per-peer acknowledgment,
+     * not a frontier (§6.1).
+     */
+    @Serializable
+    data class Quiesce(val edge: AttachmentId) : ControlCommand
+
+    /**
+     * [replica]'s promise that it will never author another slot on [edge], carrying the [finals] it
+     * authored there (§6.2 step 2–3). Recorded in log-pure fence state; re-acks join by per-slot max,
+     * so a late anti-entropy recovery can only ever *raise* a final.
+     *
+     * **Self-service only**, applied iff the act's [ControlEnvelope.proposer] *is* [replica] — the same
+     * asymmetry [Depart] carries, and for the same reason (§6.1): an ack shrinks what the barrier is
+     * still waiting for, which asserts a fact about the acking replica's own future writes. Letting a
+     * third party assert it would let the survivors declare a peer done while it still holds an
+     * unreplicated reservation crossing [edge] — completing a fence without a promise it needed, which
+     * is finding 2 through a side door.
+     *
+     * Refused when [edge] is not under a committed [Quiesce]: an ack for an unbarriered edge promises
+     * nothing, because the acking peer never marked the edge unwritable.
+     */
+    @Serializable
+    data class QuiesceAck(
+        val edge: AttachmentId,
+        val replica: ReplicaId,
+        val finals: SlotFinals,
     ) : ControlCommand
 
     /**
@@ -209,6 +254,30 @@ internal fun interface ControlMembershipSink {
     fun enrolled(replica: ReplicaId)
 }
 
+/**
+ * The seam the control plane uses to run the **§6.2 step-2 peer-local barrier** — the load-bearing
+ * half of the relocation fence (`docs/heddle-ledger-relocation-design.md` §6.2).
+ *
+ * On applying a committed [ControlCommand.Quiesce], the peer must, **atomically with respect to its
+ * own mutator execution** (one lock — this is a stated implementation obligation, not an
+ * optimisation):
+ *
+ *  1. mark the edge locally unwritable, so a later captured-path completion re-homes its charge to
+ *     the child's live inbound generation instead of charging the dead edge; and
+ *  2. read its own authored base slots there and return them as [SlotFinals].
+ *
+ * The atomicity is what defeats the barrier-vs-completion race the adversarial review found (§11
+ * finding 2). If the two steps could interleave with a completion, a charge could land *after* the
+ * read and *before* the mark — authored on a slot the peer has just declared final, and therefore
+ * invisible to the relocation that drains the edge to zero headroom. The result is a permanently
+ * unclearable [LedgerConflict.PerEdgeSafety]. The node backs this with `HeddleNode.quiesceLocally`,
+ * which does both under its single mutator lock; tests back it with a recorder.
+ */
+internal fun interface ControlBarrierSink {
+    /** Mark [edge] locally unwritable and return this peer's own final base slots on it. */
+    fun quiesce(edge: AttachmentId): SlotFinals
+}
+
 private val logger = KotlinLogging.logger("us.tractat.kuilt.heddle.HeddleControlPlane")
 
 /**
@@ -250,6 +319,9 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.heddle.HeddleControl
  * — a boot id, a persisted monotonic epoch, or a UUID. Never derive it from a test-seedable `Random`.
  *
  * @param membership the seam the node's local enrollment effects ride ([ControlMembershipSink]).
+ * @param barrier the seam the §6.2 step-2 peer-local quiesce barrier runs on ([ControlBarrierSink]).
+ *   Required, never defaulted: it gates a functional code path (the fence's whole safety argument),
+ *   and a silent no-op default would have a peer answer a barrier it never actually applied.
  * @param initial the projection's initial state — the same ledger the data-plane node bootstraps from.
  * @param nextIndex the first log index to replay from — `1` for a fresh node ([RaftNode.committedFrom]
  *   replays from the start with no gap; replay-0 `committed` would miss an act committed before subscription).
@@ -258,9 +330,10 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.heddle.HeddleControl
 internal class HeddleControlPlane(
     private val raft: RaftNode,
     private val self: ReplicaId,
-    scope: CoroutineScope,
+    private val scope: CoroutineScope,
     private val sink: ControlLedgerSink,
     private val membership: ControlMembershipSink,
+    private val barrier: ControlBarrierSink,
     initial: EntitlementLedger,
     private val incarnation: String,
     nextIndex: Long = 1L,
@@ -276,6 +349,12 @@ internal class HeddleControlPlane(
      * working. Mutated ONLY by [applyEntry], in index order, so it is log-pure by the same argument.
      */
     private var roster: EnrolledRoster = EnrolledRoster.before(nextIndex)
+
+    /**
+     * The relocation fence (§6.2 step 3) — held beside the projection for the same reason the
+     * [roster] is, and log-pure by the same argument: mutated ONLY by [applyEntry], in index order.
+     */
+    private var fence: FenceState = FenceState.EMPTY
 
     /** In-flight local submits awaiting their committed outcome, keyed by requestKey. */
     private val pending = HashMap<String, CompletableDeferred<ControlOutcome>>()
@@ -338,6 +417,22 @@ internal class HeddleControlPlane(
      * for the set as of any index in that prefix.
      */
     fun rosterSnapshot(): EnrolledRoster = lock.withLock { roster }
+
+    /**
+     * The replicas a `Reconcile` is still waiting on before it can drain [edge] — the enrolled set at
+     * the barrier's commit index, minus those that have acked. `null` when [edge] is not under a
+     * committed [ControlCommand.Quiesce] at all; empty when the fence over [edge] is complete.
+     *
+     * **Deliberately hostage to every enrolled peer.** A down peer is exactly the peer that may hold
+     * an unreplicated reservation crossing [edge], so it is the one whose promise the barrier cannot
+     * do without (§6.5 residual 1). Answering "close enough" for a slow peer reintroduces finding 2
+     * directly — this read exists so an operator can *see* whom the fence is waiting on, never so a
+     * caller can decide to proceed without them.
+     */
+    fun pendingAcks(edge: AttachmentId): Set<ReplicaId>? = lock.withLock {
+        val at = fence.quiesceIndex(edge) ?: return@withLock null
+        fence.pendingAcks(edge, roster.enrolledAt(at))
+    }
 
     /**
      * Propose [command], suspend until it commits (or is deduped), and return the outcome the apply
@@ -549,32 +644,70 @@ internal class HeddleControlPlane(
                 }
             }
 
-            is ControlCommand.Reconcile -> {
-                // Gate on the LOG-PURE projection's topology (never the gossip-merged data plane, per
-                // BLOCKER-1): the child must have exactly one live inbound — the [liveEdge] to re-home onto —
-                // and the witness must touch ONLY that edge's `issuedRelocIn` and the child's RETIRED-inbound
-                // `returned` slots. This makes the accept/refuse decision a deterministic function of the log
-                // prefix (identical on every peer) and structurally forbids the witness from minting supply,
-                // from writing the live edge's contended base `issued` slot (#1691), and from relocating
-                // already-charged spend (which stays gated until the per-peer quiesce fence ships).
-                val live = projection.liveInboundEdges(command.child)
-                val retiredInbound = projection.retiredInboundEdges(command.child).toSet()
-                val w = command.witness
-                val wellFormed = live.size == 1 &&
-                    live.single() == command.liveEdge &&
-                    w.carriesOnlyRehomeSlots() &&
-                    w.issuedRelocInEdges().all { it == command.liveEdge } &&
-                    w.returnedEdges().all { it in retiredInbound }
-                if (!wellFormed) {
+            is ControlCommand.Reconcile -> reconcile(command.child, index)
+
+            // ── the relocation fence (§6.2) ─────────────────────────────────────────────
+            // Neither barrier act touches the entitlement projection: the fence lives beside it,
+            // and quiescing or acking moves no entitlement. Only `Reconcile` publishes counters.
+
+            is ControlCommand.Quiesce -> {
+                // Gated on the LOG-ORDER lifecycle, exactly as Retire is: only a RETIRED edge may be
+                // fenced. A live edge still has legitimate data-plane writers, so a promise never to
+                // write it again would be a promise the peer cannot keep.
+                if (projection.lifecycle(command.edge) != Lifecycle.RETIRED) {
                     ControlOutcome.Conflict(
                         index,
-                        ControlConflict.Refused("reconcile refused (no unique live inbound or malformed witness) for ${command.child.value}"),
+                        ControlConflict.Refused(
+                            "quiesce refused: ${command.edge.value} is not RETIRED in log order " +
+                                "(${projection.lifecycle(command.edge)})",
+                        ),
                     )
                 } else {
-                    // The projection stays topology/lifecycle-only (its counters are empty by design, so
-                    // future retire gates keep working); only the data-plane sink receives the counter re-home.
-                    sink.publish(Patch(w))
+                    fence = fence.quiesced(command.edge, index)
+                    // Step 2, on EVERY applied Quiesce — idempotent ones included. A restarted peer
+                    // replays the log, re-runs the barrier, and re-acks; that re-ack is what raises a
+                    // final recovered by anti-entropy after the crash (§6.5 residual 2). Same lock
+                    // order as `sink.publish`: control lock, then node lock, never the reverse.
+                    val finals = barrier.quiesce(command.edge)
+                    // Proposing suspends, so it cannot happen inside the apply loop. The ack rides its
+                    // own act; a peer that fails to get it committed simply leaves the fence open,
+                    // which refuses the Reconcile — the safe direction.
+                    scope.launch {
+                        val outcome = runCatchingCancellable {
+                            submit(ControlCommand.QuiesceAck(command.edge, self, finals))
+                        }
+                        outcome.onFailure { e ->
+                            logger.warn(e) {
+                                "[heddle:${self.value}] failed to submit QuiesceAck for ${command.edge.value} — " +
+                                    "the fence stays open and any Reconcile for that edge is refused until it lands"
+                            }
+                        }
+                    }
                     ControlOutcome.Applied(index)
+                }
+            }
+
+            is ControlCommand.QuiesceAck -> {
+                // Self-service, on the Depart argument (§6.1): an ack shrinks what the barrier waits
+                // for, so only the acking replica may assert it will never author another slot there.
+                when {
+                    envelope.proposer != command.replica -> ControlOutcome.Conflict(
+                        index,
+                        ControlConflict.Refused(
+                            "quiesce-ack refused: only ${command.replica.value} may ack for itself " +
+                                "(proposed by ${envelope.proposer.value})",
+                        ),
+                    )
+                    !fence.isQuiesced(command.edge) -> ControlOutcome.Conflict(
+                        index,
+                        ControlConflict.Refused(
+                            "quiesce-ack refused: ${command.edge.value} is not under a committed barrier",
+                        ),
+                    )
+                    else -> {
+                        fence = fence.acked(command.edge, command.replica, command.finals)
+                        ControlOutcome.Applied(index)
+                    }
                 }
             }
             // ── the log-known roster (§6.2 prerequisite) ────────────────────────────────
@@ -614,6 +747,64 @@ internal class HeddleControlPlane(
                 }
             }
         }
+
+    /**
+     * The §6.2 step-4 **apply-derived** reconciliation: check the fence over [child]'s retired inbound
+     * edges, then *derive* the generation-move patch from the log-recorded acked finals and publish it.
+     *
+     * Every input is a function of the committed log prefix — the projection's topology, the roster's
+     * enrolled-at-commit-index quantifier, the recorded acks, and the control plane's own accumulated
+     * relocation state — so every peer runs this to the identical outcome and the identical bytes
+     * (Raft §5.4.3 State Machine Safety). Nothing is read from the gossip-merged data plane, which is
+     * precisely what makes the *magnitude* a consensus fact rather than one proposer's guess.
+     *
+     * Called under [lock] from [decideAndApply].
+     */
+    private fun reconcile(child: GroupId, index: Long): ControlOutcome {
+        fun refuse(reason: String) = ControlOutcome.Conflict(index, ControlConflict.Refused(reason))
+
+        val live = projection.liveInboundEdges(child)
+        if (live.size != 1) {
+            return refuse("reconcile refused: ${child.value} has ${live.size} live inbound edges, needs exactly 1")
+        }
+        val liveEdge = live.single()
+        val retired = projection.retiredInboundEdges(child)
+        if (retired.isEmpty()) return refuse("reconcile refused: ${child.value} has no RETIRED inbound edge")
+
+        // The fence, quantified over the enrolled set AT EACH BARRIER'S COMMIT INDEX. A peer that
+        // enrolled after the barrier committed is excluded (it cannot have written the edge before
+        // the barrier it was not yet a member for, and the boot gate stops it writing afterwards);
+        // a peer that has not acked BLOCKS — it is exactly the peer that may hold an unreplicated
+        // reservation crossing the edge (§6.5 residual 1).
+        val finals = HashMap<AttachmentId, Map<ReplicaId, SlotFinals>>()
+        for (s in retired) {
+            val at = fence.quiesceIndex(s)
+                ?: return refuse("reconcile refused: ${s.value} is not quiesced — open the barrier first")
+            val pending = fence.pendingAcks(s, roster.enrolledAt(at))
+            if (pending.isNotEmpty()) {
+                return refuse(
+                    "reconcile refused: the fence over ${s.value} is incomplete — waiting on " +
+                        pending.map { it.value }.sorted(),
+                )
+            }
+            finals[s] = fence.acksOn(s)
+        }
+
+        return when (val move = fence.relocations.relocationPatch(liveEdge, finals)) {
+            is Relocation.Refused -> refuse(move.reason)
+            // Deterministic idempotence (§5.4 iii): every fenced edge already reads drained, so a
+            // second Reconcile for one child moves nothing — on every peer, from the same log prefix.
+            is Relocation.Nothing -> refuse("reconcile refused: nothing stranded on ${child.value}'s retired inbound edges")
+            is Relocation.Moved -> {
+                // The projection stays topology/lifecycle-only (its counters are empty by design, so
+                // future retire gates keep working); the derived counters go to the data-plane sink,
+                // and to the fence's own relocation accumulator so the NEXT move sees them.
+                fence = fence.relocated(move.patch)
+                sink.publish(Patch(move.patch))
+                ControlOutcome.Applied(index)
+            }
+        }
+    }
 
     /** Apply an approved patch to the log-pure projection and publish it for data-plane replication. */
     private fun apply(patch: Patch<EntitlementLedger>) {

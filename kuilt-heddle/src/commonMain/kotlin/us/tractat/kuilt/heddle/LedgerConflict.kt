@@ -44,6 +44,7 @@ public sealed interface LedgerConflict : Comparable<LedgerConflict> {
                 leafSpentTotal.compareTo(other.leafSpentTotal).let { if (it != 0) return it }
                 mintedTotal.compareTo(other.mintedTotal)
             }
+            is NegativeEffectiveSpend -> edge.compareTo((other as NegativeEffectiveSpend).edge)
         }
     }
 
@@ -204,5 +205,29 @@ public sealed interface LedgerConflict : Comparable<LedgerConflict> {
         public val mintedTotal: Long,
     ) : LedgerConflict {
         override val order: Int get() = 6
+    }
+
+    /**
+     * An edge whose **effective** spend has gone negative — `leafSpent + relocIn − relocOut < 0`
+     * on either the leaf or the roll-up family (issue #1693; relocation design §5.3's lower bound,
+     * §12.5).
+     *
+     * A relocation moves already-charged service off a retired edge by adding a *second* monotone
+     * counter that cancels the first. The cancellation is only meaningful **alongside the base it
+     * cancels**, so the published move republishes that base in the same delta (the drain-witness
+     * idiom `retire` already uses). This report exists for the state where that pairing has
+     * nonetheless come apart:
+     *
+     *  - **On an honest observer it is unreachable**, and that is the point — the observer-completeness
+     *    rule of §6.4 is precisely what makes it so. Seeing it means the rule has been broken
+     *    somewhere: a hand-built patch, a partial replay, or a regression in the derivation.
+     *  - It is reported **separately from [PerEdgeSafety]** rather than folded into it because a
+     *    negative effective spend *lowers* the charged total, so the upper-bound check alone would
+     *    let it pass silently — the fault would be invisible in exactly the direction that matters.
+     *
+     * Like every report here it is a diagnostic, not a safety gate.
+     */
+    public data class NegativeEffectiveSpend(public val edge: AttachmentId) : LedgerConflict {
+        override val order: Int get() = 7
     }
 }
