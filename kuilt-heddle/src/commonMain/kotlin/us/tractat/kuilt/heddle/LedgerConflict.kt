@@ -38,6 +38,12 @@ public sealed interface LedgerConflict : Comparable<LedgerConflict> {
             }
             is DualActiveInbound -> group.compareTo((other as DualActiveInbound).group)
             is ClosureViolation -> edge.compareTo((other as ClosureViolation).edge)
+            is LineageCycle -> group.compareTo((other as LineageCycle).group)
+            is ConservationViolation -> {
+                other as ConservationViolation
+                leafSpentTotal.compareTo(other.leafSpentTotal).let { if (it != 0) return it }
+                mintedTotal.compareTo(other.mintedTotal)
+            }
         }
     }
 
@@ -125,5 +131,72 @@ public sealed interface LedgerConflict : Comparable<LedgerConflict> {
      */
     public data class ClosureViolation(public val edge: AttachmentId) : LedgerConflict {
         override val order: Int get() = 4
+    }
+
+    /**
+     * A group that lies **on a topology cycle** — walking its live inbound edges root-ward
+     * returns to the group itself instead of reaching a root. Like [DualActiveInbound] this
+     * is a fork the merge deliberately retains rather than resolving by arrival order
+     * (§5.2): two replicas each attached an inbound edge, and together the records close a
+     * loop. The whole cycle is quarantined — [EntitlementLedger.holdings] is zero at every
+     * group on it and at every group below it — so this report is what makes that quarantine
+     * visible (§10.11: quarantine ⟺ explicit report).
+     *
+     * **Reported once per cycle member, not per descendant.** A group merely *below* a cycle
+     * is quarantined too, but it is not itself a loop member and would only flood the report
+     * with the whole subtree; only groups the walk re-enters at their own starting point are
+     * listed.
+     *
+     * **Not a delivery artifact.** Records are grow-only, so a cycle observed on any state is
+     * a cycle in the merged topology — a partially-delivered replica can only ever see
+     * *fewer* edges, never a loop that is not really there. It can nonetheless be **transient
+     * in the honest control plane**: an inverting reparent (attaching `G` under `H` while
+     * `H` is still live under `G`) closes a real loop for the window between the new edge
+     * activating and the old one retiring. That window is a real quarantine, so reporting it
+     * is the point; it clears when one of the loop's edges reaches [Lifecycle.RETIRED].
+     *
+     * **Resolution is a control-plane concern**, exactly as for [DualActiveInbound]: a
+     * quarantined generation has zero holdings and so cannot be drained, and the loop is
+     * broken by retiring-and-abandoning one of its edges.
+     */
+    public data class LineageCycle(public val group: GroupId) : LedgerConflict {
+        override val order: Int get() = 5
+    }
+
+    /**
+     * The **global supply backstop**: total service charged has exceeded total supply ever
+     * minted — `Σ_e effLeafSpent(e) > Σ mintedTotal` (design §10.1 conservation, §10.12).
+     *
+     * Every other check here is per-edge or per-`(group, replica)`. This one is the whole
+     * ledger's books in a single line, and it exists precisely so a regression in the
+     * *derivation* of [EntitlementLedger.holdings] cannot hide: the H1b divergent-child
+     * re-spend (a forked child edge dropping out of the parent's delegated-out subtraction,
+     * inflating spendable authority) manufactures authority that the per-lineage checks
+     * would then read as legitimate — but the units it charges were never minted, and that
+     * shows up here regardless.
+     *
+     * ## Which states this is valid on
+     *
+     * **Exact on a converged (causally-complete) state.** There, conservation is an identity
+     * — `mintedTotal = Σ holdings + Σ leafSpent` — so this fires only when `Σ holdings` has
+     * gone negative for a real reason, or when the identity itself has been broken by a bug.
+     *
+     * Under **partial delivery** it inherits exactly the accepted transient the other checks
+     * have and adds none of its own. Charged service travels with the witness the mutator
+     * attached (see [EntitlementLedger]), so a direct or single-hop-transfer-funded charge
+     * always arrives alongside the supply that justified it. What can transiently trip it is
+     * a state that observes a charge whose *root* mint has not yet been delivered — and by
+     * the conservation identity that same state already strands a negative
+     * [PersistentNegativeHoldings] at the delegator. It never fires alone on honest traffic,
+     * and it self-heals on anti-entropy like every other report here.
+     *
+     * @property leafSpentTotal the effective leaf spend summed over every edge
+     * @property mintedTotal total supply ever minted on this state
+     */
+    public data class ConservationViolation(
+        public val leafSpentTotal: Long,
+        public val mintedTotal: Long,
+    ) : LedgerConflict {
+        override val order: Int get() = 6
     }
 }
