@@ -16,7 +16,7 @@ readings ever leave the device they were recorded on.
 This is the classic **federated averaging** recipe, and on kuilt it is small: the merge is
 a CRDT, the training step is a content-addressed program, and neither one needs a server.
 
-## The three pieces
+## The pieces
 
 | Piece | What it is |
 |---|---|
