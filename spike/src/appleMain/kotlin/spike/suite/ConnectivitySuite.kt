@@ -468,9 +468,6 @@ public class ConnectivitySuite {
     ) {
         /** Non-null ⇒ nothing was observed because the operator never toggled; the run is a SKIP, not a FAIL. */
         var skip: String? = null
-
-        /** The remote peer, once admission names it. */
-        var peer: PeerId? = null
     }
 
     /**
@@ -580,8 +577,11 @@ public class ConnectivitySuite {
             val rosterJob = launch {
                 room.roster.collect { r -> journal.trySend("t=${ms()}ms roster=${r.render()}") }
             }
-            if (establish(ctx, amHost)) {
-                if (amHost) survivingSide(ctx) else droppedSide(ctx)
+            // The peer id is *returned*, not stashed on `ctx`: a nullable field would need a null check in
+            // each phase, and a phase that bailed on it would fall through to a PASS having asserted
+            // nothing. Threading it as a non-null parameter deletes that failure mode outright.
+            establish(ctx, amHost)?.let { peer ->
+                if (amHost) survivingSide(ctx, peer) else droppedSide(ctx, peer)
             }
             eventJob.cancel()
             fabricJob.cancel()
@@ -611,10 +611,11 @@ public class ConnectivitySuite {
 
     /**
      * Get both phones into one live room and confirm this side's own fabric is reporting **Available**
-     * before either outage — otherwise the asymmetry has no baseline to move away from. Returns false
-     * (with [OutageCtx.skip] or [OutageCtx.failures] set) when the run cannot proceed.
+     * before either outage — otherwise the asymmetry has no baseline to move away from. Returns the
+     * admitted remote peer, or null (with [OutageCtx.skip] or [OutageCtx.failures] set) when the run
+     * cannot proceed.
      */
-    private suspend fun establish(ctx: OutageCtx, amHost: Boolean): Boolean {
+    private suspend fun establish(ctx: OutageCtx, amHost: Boolean): PeerId? {
         val room = ctx.room
         // Admission is its own round-trip proof: the joiner's Hello reached the host and the host's
         // Welcome came back. No extra handshake frame needed, and none that could be lost to `incoming`'s
@@ -627,10 +628,9 @@ public class ConnectivitySuite {
                     "phones found each other; an empty roster means the admit handshake never completed. " +
                     "Did BOTH phones tap the same button? Exactly one must be Host and one Join",
             )
-            return false
+            return null
         }
         val peer = roster.first { it.liveness is Liveness.Connected }.id
-        ctx.peer = peer
         ctx.hop("admitted peer=${peer.value.take(8)} role=${room.role.value} t=${ctx.ms()}ms")
 
         // `Unknown` here is not a bug in the room — it is what every fabric without a live path observer
@@ -641,9 +641,60 @@ public class ConnectivitySuite {
             ctx.skip = "baseline: my localFabric never reported Available in $BASELINE_WAIT " +
                 "(observed ${room.localFabric.value.short()}) — nw's path monitor gave no usable path, " +
                 "so neither side of the asymmetry can be read here"
-            return false
+            return null
         }
         ctx.hop("baseline mine=${mine.short()} side=${if (amHost) "SURVIVING" else "DROPPED"} t=${ctx.ms()}ms")
+        return peer
+    }
+
+    /**
+     * Reset [OutageCtx.queue] to **now**, immediately after the operator has been asked to cause an
+     * outage and before any wait that must be satisfied by *that* outage. Returns false (with
+     * [OutageCtx.skip] set) when the outage cannot be measured from here.
+     *
+     * Without this the phase waits are satisfiable by a **pre-outage backlog**, and the failure mode is a
+     * false PASS — the worst defect this scenario can have. Nothing drains [OutageCtx.queue] between the
+     * collector subscribing and the first prompt, and that window is long: `ADMIT_WAIT` (60s) plus
+     * `BASELINE_WAIT` (20s) on top of a 45s weave, all of it waited out on `StateFlow`s that never touch
+     * the channel. `Room.events` also replays its most recent 64 events to a late subscriber, so the
+     * backlog reaches back past `adopt` itself. One `Available → Unavailable → Available` path flap in
+     * that window — Wi-Fi association churn, an SSID handoff, walking out of range, i.e. precisely the
+     * adverse network the operator is sent to find — leaves a stale `LocalFabricLost` **and** a stale
+     * `LocalFabricRestored` queued. Both of this phase's edge waits would then match instantly, the drain
+     * point would still be parked *before* the real outage, and the negative tag checks
+     * ([blameMyself], [theirOutage]) would inspect an empty list and pass by vacuity. The verdict: PASS,
+     * having asserted only that a level moved.
+     *
+     * Nothing is lost from the report — the `journal` collector records every event with its `t=…ms` and
+     * is drained into the hop trace independently — and the discarded events are named here rather than
+     * counted, so a backlog is legible in the shared report instead of silently swallowed.
+     *
+     * The discard opens one narrow hazard of its own: an operator who kills the radio *before* being
+     * asked would have the real edges thrown away. That is what the level check closes.
+     * [Room.localFabric] is a zero-lag projection of `Seam.capability` (it stores no copy, so no collector
+     * lag can leave it stale), so if the radio is already off it reads `Unavailable` *here*, and the run
+     * SKIPs with that value quoted instead of measuring the wrong interval.
+     *
+     * Both roles arm: the surviving side's stale-backlog exposure is the same shape (a queued `Partitioned`
+     * for the peer from a pre-baseline flap satisfies its wait and its roster check passes trivially), and
+     * the level check reads correctly there too — that side asserts its *own* fabric stayed `Available`, so
+     * a phase starting from anything else is unmeasurable rather than a library defect.
+     */
+    private fun OutageCtx.armOutage(phase: String): Boolean {
+        val discarded = mutableListOf<MembershipEvent>()
+        while (true) {
+            val r = queue.tryReceive()
+            if (!r.isSuccess) break
+            r.getOrNull()?.let { discarded.add(it) }
+        }
+        val mine = room.localFabric.value
+        if (mine !is FabricAvailability.Available) {
+            skip = "$phase: my localFabric read ${mine.short()} at the start of this phase, not Available " +
+                "— this side cannot measure an outage it did not start from a live path. Was the radio " +
+                "already off before the prompt? (discarded ${discarded.render()})"
+            return false
+        }
+        hop("$phase: armed mine=${mine.short()} discarded=${discarded.render()} t=${ms()}ms")
         return true
     }
 
@@ -653,12 +704,12 @@ public class ConnectivitySuite {
      * [MembershipEvent.Partitioned] / [MembershipEvent.HostLost] it emits tagged `Unavailable` — i.e.
      * *"my network died"*, never *"the host went away"*.
      */
-    private suspend fun droppedSide(ctx: OutageCtx) {
+    private suspend fun droppedSide(ctx: OutageCtx, host: PeerId) {
         val room = ctx.room
-        val host = ctx.peer ?: return
 
         // ── outage A: short — inside the reconnect window, the seat must survive ──
         ctx.say("AIRPLANE MODE **ON** now, on THIS phone. Hold it ~${SHORT_DROP.inWholeSeconds}s; I'll tell you when to turn it off.")
+        if (!ctx.armOutage("short")) return
         val downA = awaitFabric(room, TOGGLE_WAIT) { it is FabricAvailability.Unavailable }
         if (downA == null) {
             ctx.skip = "short: my localFabric never left ${room.localFabric.value.short()} in $TOGGLE_WAIT " +
@@ -695,24 +746,56 @@ public class ConnectivitySuite {
         if (awaitEvent(ctx.queue, seenA, EDGE_WAIT) { it as? MembershipEvent.LocalFabricRestored } == null) {
             ctx.failures.add("short: mine returned to Available but NO LocalFabricRestored in $EDGE_WAIT (saw ${seenA.render()})")
         }
-        // Roster level, not Recovered-vs-Resumed: the two differ by recovery path and role, and the
-        // level clears on either — that is the documented way to answer "is the seat back?".
-        if (awaitRoster(room, RECOVER_WAIT) { r -> r.any { it.id == host && it.liveness is Liveness.Connected } } == null) {
-            ctx.failures.add(
-                "short: host ${host.value.take(8)} never returned to Connected in $RECOVER_WAIT after a " +
-                    "${fmtMs(outageA)} outage inside a ${S6_HEARTBEAT.reconnectWindow} window " +
-                    "(roster=${room.roster.value.render()})",
+        // Whether the seat was ENTITLED to survive this outage — gate for both seat assertions below.
+        //
+        // The reconnect window opens at DETECTION, not at outage start, so the seat is held until
+        // ≈`timeout + reconnectWindow` (5s + 60s = 65s) after the radio died. An operator who held the
+        // radio down for 60s therefore SHOULD lose the seat; asserting otherwise would print a confident
+        // accusation ("inside a 1m window") against a library behaving exactly as specified — and a
+        // plausible-sounding wrong FAIL on the release gate is nearly as damaging as a wrong PASS. Require
+        // at least `2 × timeout` (≈10s) of the budget left for path-return → redial → TLS-PSK handshake →
+        // first heartbeat; past that, assert nothing about the seat and say so in the trace.
+        val seatShouldSurvive = outageA.milliseconds + S6_HEARTBEAT.timeout < S6_HEARTBEAT.reconnectWindow
+        if (seatShouldSurvive) {
+            // Roster level, not Recovered-vs-Resumed: the two differ by recovery path and role, and the
+            // level clears on either — that is the documented way to answer "is the seat back?".
+            if (awaitRoster(room, RECOVER_WAIT) { r -> r.any { it.id == host && it.liveness is Liveness.Connected } } == null) {
+                ctx.failures.add(
+                    "short: host ${host.value.take(8)} never returned to Connected in $RECOVER_WAIT after a " +
+                        "${fmtMs(outageA)} outage with ${S6_HEARTBEAT.timeout + S6_HEARTBEAT.reconnectWindow} " +
+                        "(detect + window) to recover (roster=${room.roster.value.render()})",
+                )
+            }
+            // The whole point of the short outage: the seat is held, not lost.
+            //
+            // Unlike the surviving side's deleted `Left` check, this one is NOT vacuous — but only just,
+            // and for a reason worth writing down before someone "tidies" the two into consistency: a
+            // HostLost this phase must catch fires while the radio is still down, so it lands inside the
+            // drain window of the `LocalFabricRestored` wait above and reaches `seenA`. One arriving
+            // *after* Restored is out of this phase's reach, and correctly so — by then the outage is over.
+            seenA.filterIsInstance<MembershipEvent.HostLost>().forEach {
+                ctx.failures.add(
+                    "short: HostLost fired on a ${fmtMs(outageA)} outage that had " +
+                        "${S6_HEARTBEAT.timeout + S6_HEARTBEAT.reconnectWindow} (detect + window) to recover " +
+                        "(${it.short()})",
+                )
+            }
+        } else {
+            ctx.hop(
+                "short: held ${fmtMs(outageA)} — too close to detect+window " +
+                    "(${S6_HEARTBEAT.timeout} + ${S6_HEARTBEAT.reconnectWindow}) to require the seat " +
+                    "survived, so losing it is CORRECT here; seat NOT asserted (the tag checks below still are)",
             )
-        }
-        // The whole point of the short outage: the seat is held, not lost.
-        seenA.filterIsInstance<MembershipEvent.HostLost>().forEach {
-            ctx.failures.add("short: HostLost fired on a ${fmtMs(outageA)} outage inside a ${S6_HEARTBEAT.reconnectWindow} window (${it.short()})")
         }
         ctx.blameMyself("short", seenA)
         ctx.hop("short: DONE outage=${fmtMs(outageA)} events=${seenA.render()} t=${ctx.ms()}ms")
 
         // ── outage B: long — past the window, the seat expires and I still blame myself ──
         ctx.say("AIRPLANE MODE **ON** again — and LEAVE IT ON until this phone tells you otherwise (about a minute).")
+        // Redundant here — phase A's waits already drained past their own events — and deliberately kept:
+        // it makes "this phase's waits can only be satisfied by this phase's outage" a LOCAL property of
+        // every phase rather than something the reader has to re-derive from the phase above.
+        if (!ctx.armOutage("long")) return
         val downB = awaitFabric(room, TOGGLE_WAIT) { it is FabricAvailability.Unavailable }
         if (downB == null) {
             ctx.skip = "long: my localFabric never left ${room.localFabric.value.short()} in $TOGGLE_WAIT " +
@@ -752,12 +835,12 @@ public class ConnectivitySuite {
      * and the [MembershipEvent.Partitioned] it emits for the vanished peer must carry that `Available`
      * tag — i.e. *"they went away"*, which is the opposite reading of the same outage.
      */
-    private suspend fun survivingSide(ctx: OutageCtx) {
+    private suspend fun survivingSide(ctx: OutageCtx, peer: PeerId) {
         val room = ctx.room
-        val peer = ctx.peer ?: return
 
         // ── outage A: short ──
         ctx.say("Hold still. The other phone is going offline for a few seconds. Do NOT touch this one.")
+        if (!ctx.armOutage("short")) return
         val seenA = mutableListOf<MembershipEvent>()
         val partA = awaitEvent(ctx.queue, seenA, TOGGLE_WAIT + RECOVER_WAIT) { e ->
             (e as? MembershipEvent.Partitioned)?.takeIf { it.peerId == peer }
@@ -774,20 +857,32 @@ public class ConnectivitySuite {
             return
         }
         ctx.theirOutage("short", partA)
+        // This side cannot measure how long the other phone's radio was off — it only knows when it noticed
+        // — so unlike the dropped side's seat check this one cannot self-gate on the outage length. The
+        // message is therefore worded to be ADJUDICATED against the paired report rather than to accuse the
+        // library outright: an overheld radio makes seat expiry correct, and only the other phone's measured
+        // outage can tell the two apart. (The field guide's "up to about thirty seconds" is what keeps the
+        // operator inside the band where this really is a failure.)
         if (awaitRoster(room, RECOVER_WAIT) { r -> r.any { it.id == peer && it.liveness is Liveness.Connected } } == null) {
             ctx.failures.add(
                 "short: ${peer.value.take(8)} never returned to Connected in $RECOVER_WAIT " +
-                    "(roster=${room.roster.value.render()}) — a short outage inside the " +
-                    "${S6_HEARTBEAT.reconnectWindow} window must not cost the seat",
+                    "(roster=${room.roster.value.render()}) — the seat was held to " +
+                    "${S6_HEARTBEAT.timeout + S6_HEARTBEAT.reconnectWindow} (detect + window) from the drop. " +
+                    "Cross-check the DROPPED phone's measured outage: under that, this is a real failure to " +
+                    "hold the seat; over it, the radio was overheld and expiry was correct",
             )
         }
-        seenA.filterIsInstance<MembershipEvent.Left>().filter { it.peerId == peer }.forEach {
-            ctx.failures.add("short: seat LOST (${it.short()}) on an outage that should have fit the ${S6_HEARTBEAT.reconnectWindow} window")
-        }
+        // No `Left`-in-seenA check here, deliberately: `seenA` is filled only by the wait above, which stops
+        // draining the instant it matches the peer's `Partitioned` — and a `Left` for that peer NECESSARILY
+        // post-dates it (it comes from the roster removal on window expiry). Such a check reads as coverage
+        // while inspecting an always-empty list, so the seat-survived guarantee rests on the roster wait
+        // above, which is authoritative and actually observes the recovery. The dropped side's HostLost
+        // check is the same shape but is genuinely reachable — see the note there before making them match.
         ctx.hop("short: DONE events=${seenA.render()} t=${ctx.ms()}ms")
 
         // ── outage B: long — the seat must expire, and my own fabric must stay Available throughout ──
         ctx.say("Hold still again. The other phone is going offline for good this time — about a minute. Do NOT touch this one.")
+        if (!ctx.armOutage("long")) return
         val seenB = mutableListOf<MembershipEvent>()
         val partB = awaitEvent(ctx.queue, seenB, TOGGLE_WAIT + EXPIRY_WAIT) { e ->
             (e as? MembershipEvent.Partitioned)?.takeIf { it.peerId == peer }
@@ -917,14 +1012,17 @@ public class ConnectivitySuite {
     private fun MembershipEvent.short(): String = when (this) {
         is MembershipEvent.Joined -> "Joined(${member.id.value.take(8)},${member.liveness.short()})"
         is MembershipEvent.Left -> "Left(${peerId.value.take(8)},${reason::class.simpleName})"
+        // `at` on the four outage-bearing events, not just their tag: it is the only thing in the shared
+        // report that distinguishes an event from THIS outage from a stale one carried over from an earlier
+        // path flap. Free to print, and the operator's report is the only artifact a debugger gets.
         is MembershipEvent.Partitioned ->
-            "Partitioned(${peerId.value.take(8)},${reason::class.simpleName},mine=${localFabric.short()})"
+            "Partitioned(${peerId.value.take(8)},${reason::class.simpleName},mine=${localFabric.short()},at=$at)"
         is MembershipEvent.Recovered -> "Recovered(${peerId.value.take(8)})"
         is MembershipEvent.WindowOpened -> "WindowOpened(${peerId.value.take(8)},expires=$expiresAt)"
         is MembershipEvent.Resumed -> "Resumed(${peerId.value.take(8)})"
-        is MembershipEvent.HostLost -> "HostLost(${reason::class.simpleName},mine=${localFabric.short()})"
-        is MembershipEvent.LocalFabricLost -> "LocalFabricLost($reason)"
-        is MembershipEvent.LocalFabricRestored -> "LocalFabricRestored"
+        is MembershipEvent.HostLost -> "HostLost(${reason::class.simpleName},mine=${localFabric.short()},at=$at)"
+        is MembershipEvent.LocalFabricLost -> "LocalFabricLost($reason,at=$at)"
+        is MembershipEvent.LocalFabricRestored -> "LocalFabricRestored(at=$at)"
         is MembershipEvent.AdmissionFailed -> "AdmissionFailed(${reason::class.simpleName})"
     }
 
@@ -979,11 +1077,14 @@ public class ConnectivitySuite {
         //
         // The two numbers that matter, and why they are not the defaults (5s/15s/60s):
         //
-        //  * `timeout` 5s (not 15s) — the short outage is ~8s, so the default 15s detect would let the
-        //    radio come back before the SURVIVING phone ever noticed, and the "they went away" half of
-        //    the asymmetry would go unexercised. 5s leaves a comfortable margin under 8s while staying
-        //    well clear of a healthy AWDL link (the scenario-5 soak measures p95 ≈ 30ms with zero
-        //    stalls), and `interval` 1.5s means three missed pings, not one.
+        //  * `timeout` 5s (not 15s) — and the binding reason is `NwSeam.DEFAULT_WOVEN_PATH_GRACE` (10s),
+        //    not operator perception. A path-lost connection gets that 10s grace before the seam tears it,
+        //    so an ~8s outage NEVER evicts the peer from `seam.peers` and the detector's eviction branch
+        //    cannot fire — only its timeout branch can. At the stock 15s that leaves `15 > 10 > 8`: the
+        //    timeout branch never fires either and NEITHER side detects anything at all, so both halves of
+        //    the asymmetry go unexercised and the scenario would SKIP forever. 5s puts detection safely
+        //    inside both bounds while staying well clear of a healthy AWDL link (the scenario-5 soak
+        //    measures p95 ≈ 30ms with zero stalls), and `interval` 1.5s means three missed pings, not one.
         //  * `reconnectWindow` 60s (the default, deliberately kept) — it is what makes ~8s "short" and
         //    the second outage "long". It also sets the long outage's LENGTH: the dropped phone waits
         //    for its own window to expire (~65s: detect + window) before telling the operator to turn

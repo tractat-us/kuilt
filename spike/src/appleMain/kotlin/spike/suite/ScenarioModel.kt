@@ -41,7 +41,6 @@ public data class SuiteReport(
     public val device: String,
     public val results: List<ScenarioResult>,
 ) {
-    public val allRan: Boolean get() = results.size >= TOTAL_SCENARIOS
     public val passed: Int get() = results.count { it.verdict == Verdict.PASS }
 
     /** The shareable plaintext report. Fixed-width so it reads in a Messages bubble. */
@@ -64,15 +63,6 @@ public data class SuiteReport(
                 }
             }
         }.trimEnd()
-
-    public companion object {
-        /**
-         * How many scenarios the **automatic battery** runs. Stays 5 now that scenario 6 exists (#1712):
-         * that one is operator-driven and only ever runs alone behind its own buttons, so a run that
-         * contains it is not a battery run and this is not the number to compare it against.
-         */
-        public const val TOTAL_SCENARIOS: Int = 5
-    }
 }
 
 internal fun fmtMs(ms: Long): String = if (ms >= 1000) "${(ms / 100) / 10.0}s" else "${ms}ms"

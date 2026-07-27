@@ -85,7 +85,8 @@ You need two phones and about three minutes. Decide up front which phone is goin
 4. The offline phone will say **"AIRPLANE MODE ON now"**. Swipe into Control Centre and turn it on.
 5. It will then say **"AIRPLANE MODE OFF now"** after about eight seconds. Turn it back off.
    *Being slow is fine* — the phone measures how long the outage actually lasted and tells you. Anything
-   up to about a minute still counts as the "short" outage.
+   up to about thirty seconds still counts as the "short" outage. Past that the seat is genuinely
+   allowed to expire, and the phone says so in the trace rather than blaming the library for it.
 6. It will say **"AIRPLANE MODE ON again — and LEAVE IT ON until this phone tells you otherwise."**
    Turn it on and **wait**. It will take about a minute. Don't turn it back off early; the phone is
    waiting for its own seat in the room to expire, and it will tell you the moment it has.
@@ -146,9 +147,10 @@ Under the matrix, the hop trace carries the whole timeline — every event with 
     admitted peer=a91f2c04 role=Joiner t=1840ms
     baseline mine=Available side=DROPPED t=1851ms
     SAY t=1852ms | AIRPLANE MODE **ON** now, on THIS phone. Hold it ~8s; …
+    short: armed mine=Available discarded=[] t=1853ms
     short: mine→Unavailable(path unsatisfied) t=6420ms
     short: mine→Available after 14.7s (window 1m)
-    short: DONE outage=14.7s events=[LocalFabricLost(path unsatisfied),Partitioned(a91f2c04,TransportClosed,mine=Unavailable(path unsatisfied)),…]
+    short: DONE outage=14.7s events=[LocalFabricLost(path unsatisfied,at=…),Partitioned(a91f2c04,LinkTimeout,mine=Unavailable(path unsatisfied),at=…),…]
       t=6420ms mine=Unavailable(path unsatisfied)
       t=21150ms roster=[a91f2c04:Connected]
 ```
@@ -159,6 +161,10 @@ Three verdicts, not two:
 - **FAIL** — an outage happened and this phone read it wrong. A real defect.
 - **SKIP** — nothing was observed, so nothing was tested. Almost always "Airplane Mode never actually
   went on". The SKIP text says which wait ran out, how long it waited, and what the value was instead.
+  The other SKIP you can cause yourself: turning the radio off *before* the phone asks. Each phase
+  starts by throwing away everything that happened before the prompt — otherwise an earlier Wi-Fi
+  hiccup could be mistaken for the outage under test — so a phone that is already offline when asked
+  says "my localFabric read … at the start of this phase" and measures nothing. Wait for the prompt.
   One SKIP is worth knowing about: on the **online** phone, "no Partitioned … cross-check the DROPPED
   phone's report". That phone has no information about the other one, so it genuinely cannot tell "they
   never went offline" from "I failed to notice" — which is why you send back both reports. If the
@@ -170,10 +176,12 @@ Three verdicts, not two:
 The scenario runs with a tighter heartbeat than the default (`interval` 1.5 s, `timeout` 5 s,
 `reconnectWindow` 60 s):
 
-- **5 s to notice** instead of the default 15 s, because the short outage is only ~8 s. At 15 s the
-  radio would be back before the online phone ever noticed, and the "they went away" half of the
-  asymmetry would go untested. 5 s is still three missed pings, and the scenario-5 soak measures a
-  healthy link at p95 ≈ 30 ms, so it will not trip on a good day.
+- **5 s to notice** instead of the default 15 s. A connection whose path drops is given 10 s to get it
+  back before the link is torn down, so an ~8 s outage never gets far enough to look like a lost peer —
+  the only way either phone notices is the missed heartbeats. At the default 15 s it would not notice
+  even those (15 > 10 > 8), so *neither* half of the asymmetry would be tested and the scenario would
+  skip forever. 5 s is still three missed pings, and the scenario-5 soak measures a healthy link at
+  p95 ≈ 30 ms, so it will not trip on a good day.
 - **60 s of grace** (the default, kept deliberately) is what makes ~8 s "short" and the second outage
   "long". It also sets how long the long outage lasts: the offline phone waits for its own window to
   expire — about 65 s — before asking for the radio back, so **the one interval that has to overrun is
