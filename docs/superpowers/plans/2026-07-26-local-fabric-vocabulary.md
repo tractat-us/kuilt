@@ -30,6 +30,12 @@
 - **`kuiltVersionLine` stays `0.7`.** Do not touch it. This ships on the patch cadence even though it is source-incompatible.
 - Commits say `part of #1712` (and `part of #1723` / `part of #1724` where applicable). **Never `closes`** — hardware validation is owed first (Task 8).
 - Final gate is the **full** `./gradlew build detektAll --rerun-tasks`. A module-scoped `jvmTest` is a false green: it does not compile the Android or Kotlin/Native variants, and does not run the `:examples` / `:kuilt-cluster` E2E tests.
+- **Quote the actionable-task count with every green claim.** A correct full gate here reports
+  **~5480 actionable tasks, all `EXECUTED`** (measured on `a9a5207d`, JDK 21). This is the audit
+  handle on the gate itself: the Task 1+2 implementer reported "883 tasks EXECUTED" for builds it
+  described as full, and 883 is a task graph six times too small — whatever it ran, it was not this
+  gate. A number, unlike the word "full", cannot be misreported by accident. An order-of-magnitude
+  discrepancy invalidates the green regardless of how the command was written down.
 
 ---
 
@@ -134,7 +140,7 @@ Check `Seam.kt`'s `sendTo` signature before writing — if it takes named parame
 - [ ] **Step 2: Run the test and verify it fails**
 
 ```bash
-source ~/.sdkman/bin/sdkman-init.sh && sdk env
+source ~/.sdkman/bin/sdkman-init.sh && sdk use java 21.0.5-tem   # NOT `sdk env` — no .sdkmanrc in this repo
 ./gradlew :kuilt-core:jvmTest --tests "*SeamCapabilityFloorTest*"
 ```
 
@@ -1260,7 +1266,7 @@ Re-read the whole section top-to-bottom afterwards and confirm it still flows ac
 - [ ] **Step 3: Full verification, cache disabled**
 
 ```bash
-source ~/.sdkman/bin/sdkman-init.sh && sdk env
+source ~/.sdkman/bin/sdkman-init.sh && sdk use java 21.0.5-tem   # NOT `sdk env` — no .sdkmanrc in this repo
 ./gradlew build detektAll --rerun-tasks
 ```
 
