@@ -61,6 +61,12 @@ import kotlin.test.assertTrue
  * *after* the fold that must be interrupted, which is precisely the interleaving under test. The driver
  * asserts the body completed rather than suspending, so a change that made a pump suspend cannot turn this
  * into a silent no-op.
+ *
+ * One consequence worth naming: driving a pump from inside a fold re-enters `CompositeSeam`'s lock on the
+ * same thread, which the underlying `reentrantLock` permits on every target (a no-op on wasmJs). That is a
+ * property of the *harness*, standing in for two real threads; production still never re-enters, and the
+ * class's "treat the lock as non-reentrant" rule — no `StateFlow` emission and no foreign call under it — is
+ * unchanged.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class CompositePeersWriterTest {
