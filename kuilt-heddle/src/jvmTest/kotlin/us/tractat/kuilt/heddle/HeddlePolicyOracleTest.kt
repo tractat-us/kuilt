@@ -4,6 +4,7 @@ import java.math.BigInteger
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
  * Model-check the production policy against an **independent exact-rational oracle**
@@ -23,11 +24,16 @@ import kotlin.test.assertEquals
  */
 class HeddlePolicyOracleTest {
 
+    /** Rounds in which the oracle reached step 3 with a non-empty candidate set (see [oraclePick]). */
+    private var eligibilityRounds = 0
+
     @Test
     fun agreesWithBigIntegerOracleOverRandomizedSchedules() {
         for (seed in 0L until 40L) {
             runOneSchedule(seed)
         }
+        // Non-vacuity: the eligibility assertion inside the oracle must have actually run.
+        assertTrue(eligibilityRounds > 1_000, "the sweep barely reached step 3: only $eligibilityRounds rounds")
     }
 
     private fun runOneSchedule(seed: Long) {
@@ -125,7 +131,13 @@ class HeddlePolicyOracleTest {
         }
         val v = Rat(wev.n * wsum.d, wev.d * wsum.n) // wev / wsum
 
-        val eligible = cands.filter { it.ev <= v }.ifEmpty { listOf(cands.minBy { it.ev }) }
+        // §7.3 step 3's eligible set is never empty, confirmed here in **unbounded** arithmetic:
+        // `v` is the weighted mean of these same candidates over strictly positive weights, so it
+        // is never below their minimum. The production policy asserts the same thing; mirroring
+        // its old `ifEmpty { minBy }` fallback here would have made this oracle blind to it (#1737).
+        eligibilityRounds++
+        val eligible = cands.filter { it.ev <= v }
+        assertTrue(eligible.isNotEmpty(), "empty eligible set at v=$v over $cands")
 
         // deadline = ev + q * den / num ; tie-break by id
         val winner = eligible.minWith(

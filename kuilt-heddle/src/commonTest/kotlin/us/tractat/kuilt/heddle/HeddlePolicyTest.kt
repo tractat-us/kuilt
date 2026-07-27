@@ -1,6 +1,7 @@
 package us.tractat.kuilt.heddle
 
 import us.tractat.kuilt.test.assertAll
+import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -33,6 +34,9 @@ class HeddlePolicyTest {
         val summary get() = EdgeSummary(AttachmentId(id), issued, returned, spent)
         fun edge() = PolicyEdge(record, summary, demand, offset)
         fun virtualService() = HeddlePolicy.virtualService(record, summary)
+
+        /** `ev` as the policy sees it — the raw virtual service plus the wake clamp. */
+        fun effectiveVirtualService() = virtualService() + offset
     }
 
     private fun pick(children: List<Sim>, config: PolicyConfig, holdings: Long = 1_000_000L): Grant? =
@@ -49,6 +53,21 @@ class HeddlePolicyTest {
         for (c in children) {
             val w = Rational.of(c.weight.numerator, c.weight.denominator)
             weighted += w * c.virtualService()
+            total += w
+        }
+        return weighted / total
+    }
+
+    /**
+     * `V` over [children]'s **effective** virtual service — [parentVirtualTime] with each child's
+     * wake clamp folded in, which is what [HeddlePolicy.pick]'s step 2 actually averages.
+     */
+    private fun effectiveParentVirtualTime(children: List<Sim>): Rational {
+        var weighted = Rational.ZERO
+        var total = Rational.ZERO
+        for (c in children) {
+            val w = Rational.of(c.weight.numerator, c.weight.denominator)
+            weighted += w * c.effectiveVirtualService()
             total += w
         }
         return weighted / total
@@ -78,6 +97,91 @@ class HeddlePolicyTest {
         // configured 100, demand target 30 (need 30), maxUseful 20, holdings 15 -> 15 wins.
         val a = Sim("a", Weight.ONE, demand = Demand(targetOutstanding = 30L, maximumUsefulGrant = 20L))
         assertEquals(Grant(AttachmentId("a"), 15L), pick(listOf(a), PolicyConfig(quantum = 100L), holdings = 15L))
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Step 3's eligible set is never empty (design §7.3 step 3; issue #1737)
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * The tightest boundary for step 3: with a single candidate, `V` is *exactly* that
+     * candidate's effective virtual service, so `ev ≤ V` holds only by equality — and holds,
+     * because `V` is an exact [Rational] rather than a float. Nothing rounds, which is why
+     * §7.3 step 3's old "if rounding ever yields no eligible candidate" fallback describes a
+     * state this policy cannot enter (#1737).
+     */
+    @Test
+    fun theLoneCandidateIsEligibleByExactEquality() {
+        // ev = 5 + 11/(3/7) = 92/3 — deliberately non-integral, so equality is not free.
+        val only = Sim("o", Weight.of(3L, 7L), initialVirtualTime = 5L, issued = 11L, spent = 11L)
+        assertAll(
+            { assertEquals(Rational.of(92L, 3L), only.virtualService()) },
+            { assertEquals(only.virtualService(), front(listOf(only))) },
+            { assertEquals(Grant(AttachmentId("o"), 4L), pick(listOf(only), PolicyConfig(quantum = 4L))) },
+        )
+    }
+
+    /**
+     * Step 3's eligible set is never empty, so [HeddlePolicy.pick] never reaches the assertion
+     * that replaced §7.3's old minimum fallback (#1737). Two things are checked per round, in
+     * the test's own exact arithmetic:
+     *
+     *  - **the theorem** — `min(ev) ≤ V`, which is what makes the empty set unreachable: `V` is
+     *    the weighted mean of the *same* candidate set over strictly positive weights;
+     *  - **the winner is eligible** — step 4 never selects from outside `ev ≤ V`.
+     *
+     * If the invariant ever broke, `pick` itself would throw and fail this sweep — that is what
+     * the assertion buys over the old silent fallback, which would have absorbed it.
+     *
+     * Driven over a seeded random walk through adversarial states — skewed weights, non-zero
+     * baselines, children parked ahead by wake clamps — with every quantum trim left slack, so
+     * the candidate set is the whole edge set and `V` here is the same `V` the policy computes.
+     */
+    @Test
+    fun stepThreeAlwaysHasAnEligibleCandidate() {
+        val rng = Random(1737L)
+        var rounds = 0
+        var roundsWhereEligibilityBound = 0
+        repeat(30) {
+            val children = List(2 + rng.nextInt(4)) { i ->
+                Sim(
+                    id = ('a' + i).toString(),
+                    weight = Weight.of(1L + rng.nextInt(9), 1L + rng.nextInt(4)),
+                    initialVirtualTime = rng.nextInt(40).toLong(),
+                    offset = Rational.of(rng.nextInt(30).toLong()),
+                )
+            }
+            val config = PolicyConfig(quantum = 1L + rng.nextInt(7))
+            repeat(60) {
+                val v = effectiveParentVirtualTime(children)
+                val evs = children.map { it.effectiveVirtualService() }
+                assertTrue(evs.min() <= v, "min(ev)=${evs.min()} above V=$v — the eligible set is empty")
+                // The pick itself throws if its own eligible set came out empty.
+                val grant = assertNotNull(pick(children, config), "no trim binds here, so a grant is always due")
+                val winner = children.first { it.id == grant.attachment.value }
+                assertTrue(
+                    winner.effectiveVirtualService() <= v,
+                    "winner ${winner.id} at ev=${winner.effectiveVirtualService()} is above V=$v",
+                )
+                rounds++
+                if (evs.any { it > v }) roundsWhereEligibilityBound++
+                winner.issued += grant.amount
+                winner.spent += grant.amount
+            }
+        }
+        assertAll(
+            // Non-vacuity: the sweep must actually reach step 3, and the filter must actually
+            // discard someone — a sweep in which every candidate is trivially eligible would say
+            // nothing about the branch that fires when one is not.
+            { assertEquals(30 * 60, rounds, "every round must produce a grant") },
+            {
+                assertTrue(
+                    roundsWhereEligibilityBound > rounds / 2,
+                    "eligibility must genuinely exclude siblings; it bound in only " +
+                        "$roundsWhereEligibilityBound of $rounds rounds",
+                )
+            },
+        )
     }
 
     /**
