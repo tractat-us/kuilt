@@ -537,8 +537,9 @@ rounding.
 ### 7.2 Neutral creation and no idle credit
 
 - **Neutral creation:** a new generation's `initialVirtualTime` is the
-  parent's current virtual time, recorded immutably in the record. A newborn
-  starts level with its siblings — no credit for the parent's whole past.
+  parent's current virtual time — its **front**, defined below — recorded
+  immutably in the record. A newborn starts level with its siblings — no
+  credit for the parent's whole past.
 
   The parent's virtual time `V = Σ w·ev / Σ w` is a rational and almost never
   integral, while `initialVirtualTime` is a `Long`, so creation must round.
@@ -561,9 +562,77 @@ rounding.
   effectiveVirtualService(e) = v_raw(e) + virtualOffset
   ```
 
-  Default `sleeperCredit = 0`. The offset is scheduler-local policy state —
-  deliberately *not* replicated, so divergent offsets can reorder locally but
-  can never touch conservation.
+  Default `sleeperCredit = 0`. `parentVirtualTime` here is the front defined
+  just below, taken with the waker itself — and every sibling waking in the
+  same round — excluded. The clamp fires only on a transition this peer has
+  actually *observed*: an edge seen for the first time is recorded as it
+  stands, never clamped on arrival, because a first sighting is not evidence
+  that anyone slept. The offset is scheduler-local policy state — deliberately
+  *not* replicated, so divergent offsets can reorder locally but can never
+  touch conservation.
+- **Which children define the front.** Both bullets above turn on one phrase,
+  "the parent's current virtual time", and it means one thing: the front of
+  the set the joiner is about to compete in. Concretely, the weighted mean of
+  `effectiveVirtualService` over the children that are **demanding right
+  now** — `additionalNeed = targetOutstanding − outstanding > 0` — and *not*
+  over every ACTIVE child. One rule serves both kinds of joiner: a newborn
+  being seated, and a sleeper being clamped forward.
+
+  Taking the mean over every ACTIVE child instead is wrong in **both**
+  directions, which is why the set is normative rather than a detail (#1688).
+  Measured at equal weights and quantum 1: with one sibling idle at the origin
+  and a runner at virtual service 20, the all-ACTIVE mean seats a newborn at
+  10, from where it takes 15 of the next 20 grants against a fair share of 10
+  — the lifetime credit §10.5 forbids, and precisely the idle credit the clamp
+  above denies the idler itself. Mirror the fixture — a satisfied sibling
+  parked *ahead* at 40, the runner at 10 — and the same mean seats the newborn
+  at 25, where it takes 7 of 30 against a fair 15. Seating at the mean over
+  the demanding set lands on the fair share in both.
+
+  The demanding predicate is §7.3 step 1's, with the quantum trims (holdings,
+  `maximumUsefulGrant`, the caps) dropped. The trims decide who can be
+  *served this round on this peer*, which is a different question from who is
+  competing — and a peer with nothing left to delegate must still be able to
+  answer the second, because it may be the one creating the generation. So
+  §7.3 step 2 and the seating front share one arithmetic over two deliberately
+  different sets, and agree only when no trim binds — two sets, not one
+  number.
+
+  **The joiner, and any co-joiner, is excluded from the front by name.** A
+  newborn is excluded for free — it is not an edge yet — but a waker is
+  already ACTIVE and already demanding by the time its clamp is computed, so
+  unless it is named it drags the front back toward its own stale position and
+  banks the credit anyway. Two siblings waking in the same round would average
+  each other's staleness into the front and both keep it, so all of a round's
+  wakers are excluded together, not each merely from its own.
+
+  **When nothing in the surviving set is demanding, the front is the
+  *maximum* effective virtual service in that set, not their mean.** There is
+  no competing set to come level with, so the fallback takes the bound that
+  can only ever give up: §10.5 is one-directional — credit is forbidden, a
+  sliver of penalty is merely undesirable — and the maximum is never below the
+  mean of the same set, so it can penalise a joiner but never credit one. The
+  consequence is worth stating plainly rather than discovering: an idle child
+  sitting *ahead* of everyone pins the front at its own position for every
+  newborn seated while nothing competes.
+
+  **An empty surviving set has no front at all, and the answer is not zero.**
+  When no active child survives the exclusion the front is undefined and must
+  be reported as such — `null`, never quietly the origin. Two different
+  situations wear that one face: the legitimate **first** generation under a
+  parent, whose origin seat is genuinely correct, and a peer whose view has
+  simply not applied the siblings yet, for which the origin seat is
+  permanently wrong — the seat is frozen into the committed record, and every
+  peer then applies the same lifetime credit forever. A caller must therefore
+  fence before treating an undefined front as the origin: confirm leader
+  authority (§9 #3 `readIndex()`), confirm this peer's applied prefix has
+  caught up to the fenced index, and fail closed — nothing written, retryable
+  — if either check fails. `GovernedHeddleNode.prepareNeutral` is that fenced
+  compute-and-record; a node with no control plane cannot tell the two apart
+  at all, and must not seat at the origin unless it *knows* the generation is
+  the first. The fence closes the stale-*records* case only: a view that has
+  merged some siblings but not all computes a plausible front over those and
+  freezes it, with nothing anomalous to see (#1713).
 
 ### 7.3 Selection
 
@@ -575,7 +644,10 @@ Per allocation round at one parent, on one peer:
    localHoldings, perChildOutstandingCap)`, dropping `q == 0`.
 2. **Parent virtual time:** the weighted mean
    `V = Σ w(e)·effectiveVirtualService(e) / Σ w(e)` over the fixed candidate
-   set.
+   set — the *trimmed* one from step 1. This is the same arithmetic as §7.2's
+   seating front over a deliberately different set: the front drops the
+   quantum trims, this step keeps them, so the two values coincide only when
+   no trim binds.
 3. **Eligibility:** `effectiveVirtualService(e) ≤ V`. (If rounding ever
    yields no eligible candidate: take the minimum, emit a diagnostic, carry
    on.)
@@ -720,9 +792,10 @@ Carried over from the source intact; each is a named property test (§13).
 4. **Path-relative accounting.** A completion charges every edge of the path
    captured at reservation; history never moves to a newer generation.
 5. **Neutral attachment initialization.** A new generation starts at the
-   parent's current virtual time — never with lifetime credit. Where that
-   virtual time is fractional, the record takes its **exact ceiling** (§7.2):
-   rounding away from credit, never toward it.
+   parent's current virtual time — the front over its *demanding* children,
+   not over all its active ones (§7.2) — never with lifetime credit. Where
+   that virtual time is fractional, the record takes its **exact ceiling**
+   (§7.2): rounding away from credit, never toward it.
 6. **No unlimited idle credit.** Default sleeper credit is zero; waking
    clamps forward.
 7. **Partition safety.** No peer ever spends beyond `holdings(P, self)`;
