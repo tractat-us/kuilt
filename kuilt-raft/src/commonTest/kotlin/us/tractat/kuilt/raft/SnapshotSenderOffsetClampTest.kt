@@ -5,6 +5,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 import kotlin.test.fail
 
 /**
@@ -83,15 +84,13 @@ internal class SnapshotSenderOffsetClampTest {
                     val chunk = assertNotNull(sender.nextChunk(peer), "forged=$forged: a transfer is in flight")
                     assertAll(
                         {
-                            assertEquals(
-                                true,
+                            assertTrue(
                                 chunk.offset in 0L..snapshotBytes.size.toLong(),
                                 "forged=$forged: offset ${chunk.offset} escaped 0..${snapshotBytes.size}",
                             )
                         },
                         {
-                            assertEquals(
-                                true,
+                            assertTrue(
                                 chunk.data.size in 0..snapshotBytes.size,
                                 "forged=$forged: slice of ${chunk.data.size} bytes escaped the snapshot",
                             )
