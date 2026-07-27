@@ -4,9 +4,9 @@ import us.tractat.kuilt.crdt.Quilted
 import us.tractat.kuilt.crdt.ReplicaId
 
 /**
- * A federated-averaging (FedAvg) CRDT: each peer trains locally on [sampleCount] examples
- * and contributes a weight vector [localWeights], and the merged read is the count-weighted
- * mean across all peers.
+ * A federated-averaging (FedAvg) CRDT: each peer trains locally on some number of examples
+ * and contributes a weight vector (see [contribution]), and the merged read is the
+ * count-weighted mean across all peers.
  *
  * ## Lattice design — per-peer slots with a total order
  *

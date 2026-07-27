@@ -5,8 +5,8 @@ package us.tractat.kuilt.warp
  * (`y ≈ w·x + b`) over a batch, mean-squared-error loss. This is the **oracle** the wasm kernel
  * (`fedavg_train.wasm`) is proven bit-for-bit equal to (see `FedAvgKernelEquivalenceTest`).
  *
- * Dimension is fixed at D = 2 (one feature + bias) to match the v1 kernel; [weights] is
- * `[featureWeight, bias]`.
+ * Dimension is fixed at D = 2 (one feature + bias) to match the v1 kernel; [step]'s weight
+ * vector is `[featureWeight, bias]`.
  */
 public object ReferenceTrainer {
     /**
