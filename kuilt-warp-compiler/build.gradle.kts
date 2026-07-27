@@ -74,7 +74,9 @@ private val binaryenReleases = listOf(
     BinaryenRelease(
         classifier = "macos-x86_64",
         taskSuffix = "MacosX64",
-        archive = "binaryen-version_130-x86_64-macos-14.tar.gz",
+        // NB: upstream's `.sha256` file names this `…-x86_64-macos-14.tar.gz` (their
+        // pre-rename build artifact); the published release asset drops the `-14`.
+        archive = "binaryen-version_130-x86_64-macos.tar.gz",
         sha256 = "d3e2d1235b70c93c54b52eabc1625ea960965152218754f1f4eeb0f873c48e03",
     ),
     BinaryenRelease(
@@ -164,8 +166,12 @@ abstract class ResolveWasmOpt : DefaultTask() {
         val releaseRoot = extractDir.resolve("binaryen-version_${version.get()}")
         val wasmOpt = releaseRoot.resolve("bin/wasm-opt")
         check(wasmOpt.exists()) { "extracted archive is missing bin/wasm-opt at $wasmOpt" }
+        // Shared libraries only. macOS ships `libbinaryen.dylib`, which `wasm-opt` loads via
+        // its `@loader_path/../lib` rpath — that one must travel with the binary. Linux ships
+        // a 14 MB `libbinaryen.a` static archive instead, and its `wasm-opt` is `static-pie`
+        // linked, so the archive is link-time-only dead weight in a published jar.
         val libFiles = releaseRoot.resolve("lib").listFiles()
-            ?.filter { it.isFile && it.name.startsWith("libbinaryen") }
+            ?.filter { it.isFile && it.name.startsWith("libbinaryen") && it.isSharedLibrary() }
             ?: error("extracted archive has no lib/ directory at ${releaseRoot.resolve("lib")}")
 
         // Package under the BinaryenWasmOptimizer package so getResource("binaryen/…") resolves.
@@ -188,6 +194,10 @@ abstract class ResolveWasmOpt : DefaultTask() {
         )
         logger.lifecycle("Resolved Binaryen ${version.get()} for $platformKey (${relPaths.size} files).")
     }
+
+    /** `.dylib` / `.so` / `.so.<n>` — a library the runtime loader can actually use. */
+    private fun File.isSharedLibrary(): Boolean =
+        name.endsWith(".dylib") || name.contains(".so")
 
     private fun downloadTo(url: String, target: File) {
         target.parentFile.mkdirs()

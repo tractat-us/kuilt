@@ -104,10 +104,7 @@ public class BinaryenWasmOptimizer(
                 OptLevel.Oz -> "-Oz"
             }
 
-        private const val RESOURCE_ROOT = "binaryen"
-
-        /** Fallback when the generated coordinates resource is somehow absent. */
-        private const val UNKNOWN_COORDINATES = "us.tractat.kuilt:kuilt-warp-compiler-jvm:<version>"
+        private val RESOURCE_ROOT = BinaryenArtifacts.RESOURCE_ROOT
 
         /**
          * JVM-wide, thread-safe one-time extraction of the classified `wasm-opt` +
@@ -150,34 +147,27 @@ public class BinaryenWasmOptimizer(
             BinaryenWasmOptimizer::class.java.getResourceAsStream("$RESOURCE_ROOT/$relative")
 
         private fun loadManifest(host: String?): Properties {
-            val stream = resource("manifest.properties") ?: throw IOException(missingArtifactMessage(host))
+            val stream = resource("manifest.properties") ?: throw IOException(
+                BinaryenArtifacts.missingArtifact(
+                    host = host,
+                    osName = System.getProperty("os.name"),
+                    osArch = System.getProperty("os.arch"),
+                    coordinates = coordinates(),
+                    published = publishedPlatforms(),
+                ),
+            )
             return Properties().apply { stream.use { load(it) } }
         }
 
-        /**
-         * This JVM's platform in published-classifier form (`<os>-<arch>`), or `null` when
-         * no `wasm-opt` is published for it. A compiler node is a JVM/server peer on
-         * macOS or Linux; every other host is a pure consumer of the optimized variant.
-         */
-        private fun hostPlatform(): String? {
-            val os = System.getProperty("os.name").orEmpty().lowercase()
-            val arch = System.getProperty("os.arch").orEmpty().lowercase()
-            val osKey = when {
-                os.contains("mac") || os.contains("darwin") -> "macos"
-                os.contains("linux") -> "linux"
-                else -> return null
-            }
-            val archKey = when (arch) {
-                "aarch64", "arm64" -> if (osKey == "macos") "arm64" else "aarch64"
-                "x86_64", "amd64" -> "x86_64"
-                else -> return null
-            }
-            return "$osKey-$archKey"
-        }
+        private fun hostPlatform(): String? =
+            BinaryenArtifacts.hostPlatform(System.getProperty("os.name"), System.getProperty("os.arch"))
+
+        private fun wrongPlatformMessage(bundled: String, host: String?): String =
+            BinaryenArtifacts.wrongPlatform(bundled, host, coordinates())
 
         /** `<group>:<artifactId>:<version>` of the jvm publication, generated into this jar. */
         private fun coordinates(): String =
-            metadata()?.getProperty("binaryen.coordinates") ?: UNKNOWN_COORDINATES
+            metadata()?.getProperty("binaryen.coordinates") ?: BinaryenArtifacts.UNKNOWN_COORDINATES
 
         /** Every classifier this build publishes, for the "published:" line of a failure. */
         private fun publishedPlatforms(): List<String> =
@@ -189,30 +179,6 @@ public class BinaryenWasmOptimizer(
             val stream = resource("coordinates.properties") ?: return null
             return Properties().apply { stream.use { load(it) } }
         }
-
-        private fun missingArtifactMessage(host: String?): String {
-            val published = publishedPlatforms()
-            val header = "no Binaryen `wasm-opt` on the runtime classpath. :kuilt-warp-compiler " +
-                "publishes the native binary as one classified companion jar per OS, so the main " +
-                "artifact stays lean"
-            if (host == null || (published.isNotEmpty() && host !in published)) {
-                return "$header. This JVM (os.name=${System.getProperty("os.name")}, " +
-                    "os.arch=${System.getProperty("os.arch")}) has no published `wasm-opt`" +
-                    publishedSuffix(published) + ". A warp compiler node is a JVM/server peer on " +
-                    "macOS or Linux; other peers consume the optimized variant without running wasm-opt."
-            }
-            return "$header. Add the one for this host:\n" +
-                "    runtimeOnly(\"${coordinates()}:$host\")" +
-                publishedSuffix(published)
-        }
-
-        private fun wrongPlatformMessage(bundled: String, host: String?): String =
-            "the Binaryen `wasm-opt` on the runtime classpath is the '$bundled' build, but this JVM " +
-                "is '${host ?: "an unsupported platform"}'. Replace the classified dependency with " +
-                "the matching one:\n    runtimeOnly(\"${coordinates()}:${host ?: "<platform>"}\")"
-
-        private fun publishedSuffix(published: List<String>): String =
-            if (published.isEmpty()) "" else " (published: ${published.joinToString(", ")})"
     }
 }
 

@@ -32,8 +32,9 @@ it. Those were the five epics below.
 > CLOSED.** The genuine remainder is small: **F4** (the end-to-end federated-ML
 > demo, #957, still unmerged), the **C-polish** and **F-polish** passes (Epics C
 > #853 and F #856 stay OPEN until those land), F3 secure-aggregation (optional),
-> and a handful of explicitly-parked toolchains (D4·kwasm #968, D4·graal #967) and
-> a portability ceiling (#1335, `wasm-opt` bundled build-host-only). The per-epic
+> and a handful of explicitly-parked toolchains (D4·kwasm #968, D4·graal #967).
+> The `wasm-opt` portability ceiling (#1335) is **closed**: the compiler node
+> publishes one classified companion jar per host OS. The per-epic
 > tables below have been updated to reflect landed state; the spine narrative that
 > follows is preserved as the original plan-of-record.
 
@@ -78,7 +79,7 @@ genuinely need C's task-descriptor envelope, so they come after.
 | **B — coordination seam** | finish the exactly-once / coordinated path | none | **LANDED** — epic #852 CLOSED |
 | **E — query planning** | `Draft → Draft`, coordination-cost model | B1 types (done) | **LANDED** — epic #854 CLOSED (`:kuilt-warp-planning` shipped) |
 | **C — code mobility** | named ops → wasm kernels + bobbin/creel cache | spike (done) | **core LANDED** (C1–C5 merged; runtimes in `:kuilt-warp-runtime`) — **C-polish open**, epic #853 still OPEN |
-| **D — compiler nodes** | distributed tiered compilation | C (via C2) | **core LANDED** (D1–D3, D4·binaryen; `:kuilt-warp-compiler`) — **parked** D4·kwasm #968 / D4·graal #967, and #1335 open; epic #855 still OPEN |
+| **D — compiler nodes** | distributed tiered compilation | C (via C2) | **core LANDED** (D1–D3, D4·binaryen; `:kuilt-warp-compiler`, per-OS classified artifacts #1335) — **parked** D4·kwasm #968 / D4·graal #967; epic #855 still OPEN |
 | **F — federated ML** | FedAvg on the substrate, end-to-end demo | F1 none; F2/F4 need a C3 wasm runtime | **PARTIAL** — F1/F2 landed (`:kuilt-warp-ml`); **F4 demo #957 unmerged**, F-polish + F3 (optional) remain; epic #856 OPEN |
 | **G — Draft → DAG** | reshape `Draft` into a dependency DAG; consolidate coordination rounds (min rounds = DAG depth) | E (done) | **LANDED** — epic #907 CLOSED |
 
