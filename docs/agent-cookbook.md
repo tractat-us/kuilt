@@ -117,19 +117,38 @@ public suspend fun retryWithBackoffSample(random: Random, dial: suspend () -> Bo
 **Primitive:** `MembershipEvent.Partitioned.reason` (`ReconnectReason`) and `HostLost.reason` (`FailureReason`) — don't re-derive your own transient/unrecoverable classification.
 
 Check the `localFabric` tag **before** the reason. Both events carry this peer's own
-`Room.localFabric` as it stood when they were emitted, and when that reads `Unavailable` the event
-is **not evidence about the peer it names** — your own end of the fabric was down, so their silence
-says nothing about them. Skip that branch and a joiner whose own radio died renders "lost the host",
-which is the bug this pattern used to ship. Precedence is readable straight off the event; you never
-have to correlate two streams by timestamp. See
-[the "you are offline" entry](#liveness--presence) for the level behind the tag.
+`Room.localFabric` as it stood when they were emitted, and when that reads `Unavailable` for silence
+**you observed yourself**, the event is not evidence about the peer it names — your own end was down,
+so their quiet says nothing about them. Skip that check and a joiner whose own radio died renders
+"lost the host", which is the bug this pattern used to ship.
+
+One boundary worth knowing before you apply it broadly. `HostLost` is always something you observed,
+so the tag always inverts attribution there. `Partitioned` is not always yours: on a joiner in a room
+of three or more, the host relays "peer C paused", and that report is authoritative — it reached you
+over a link that was working, so an `Unavailable` tag means only that your end was down when you
+processed it, not that the report is wrong. Suppress it and C stays shown as present while the host
+holds its seat open. The event carries no provenance field and `Room` exposes no host id, so you
+cannot tell the two apart from the event alone; in a two-peer session it makes no difference, and in
+a larger room scope the check to peers you watch yourself.
+
+Precedence is otherwise readable straight off the event — you never have to correlate two streams by
+timestamp. See [the "you are offline" entry](#liveness--presence) for the level behind the tag.
 
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#reconnectBannerSample -->
 ```kotlin
 public suspend fun reconnectBannerSample(room: Room) {
     room.events.collect { event ->
+        // The tag inverts attribution only for silence *we* observed — our own detector, or our own
+        // link tearing. `HostLost` is always that. `Partitioned` is not: on a joiner in a 3+-peer
+        // room the host relays "peer C paused", and that report is host-authoritative — it arrived
+        // over a link working well enough to deliver it, so an `Unavailable` tag there says our end
+        // was down when we *processed* the report, not that the report is unfounded. Suppressing it
+        // would leave C shown as present while the host holds its seat open.
+        //
+        // The event carries no provenance field, and `Room` exposes no host id, so a consumer cannot
+        // tell the two apart from the event alone. In a two-peer session it does not matter (the only
+        // peer you watch *is* the host). In a larger room, scope this to peers you observe yourself.
         val ourOwnEndWasDown = when (event) {
-            is MembershipEvent.Partitioned -> event.localFabric is FabricAvailability.Unavailable
             is MembershipEvent.HostLost -> event.localFabric is FabricAvailability.Unavailable
             else -> false
         }
@@ -387,8 +406,10 @@ public suspend fun holdTheSeatOpenSample(
 The roster entry reads `Liveness.Partitioned(since, windowExpiresAt)` for as long as the seat is
 held, so the countdown you display needs no event replay, and a late subscriber reads the current
 state rather than missing the `Partitioned` that announced it. It reads the same way on **both**
-roles — a joiner watching its host, and a host watching a joiner — so `roster` and `events` never
-contradict each other about who is currently away. Two corollaries worth spelling out:
+roles — a joiner watching its host, and a host watching a joiner — so you do not need a different
+strategy per role. Where the two surfaces can differ, the level is the one to trust: it is never
+*staler* than an event, though during a rapid flap it can already be **ahead** of the one you are
+handling. Two corollaries worth spelling out:
 
 - **Don't key the un-grey on `Recovered` vs `Resumed`.** They differ by role and by recovery path,
   so either one alone leaves a real case hanging. The level clears on both.
@@ -431,18 +452,25 @@ public suspend fun observePausedPeersSample(room: Room) {
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#localFabricBannerSample -->
 ```kotlin
 public suspend fun localFabricBannerSample(room: Room) {
-    // Pull-style: the authoritative answer, readable at any instant.
-    when (room.localFabric.value) {
-        FabricAvailability.Available -> Unit // no banner
-        is FabricAvailability.Unavailable -> Unit // "You're offline" — this room's fabric, not the device
-        is FabricAvailability.Unknown -> Unit // kuilt cannot tell on this fabric — say nothing
+    // Bind the banner to the LEVEL, not to the edges. A StateFlow replays its current value to a late
+    // collector, so this cannot miss a drop that happened before you subscribed, and it keeps the UI
+    // reading the authoritative surface rather than a notification that may already be superseded.
+    room.localFabric.collect { availability ->
+        when (availability) {
+            FabricAvailability.Available -> Unit // no banner
+            is FabricAvailability.Unavailable -> Unit // "You're offline" — this room's fabric, not the device
+            is FabricAvailability.Unknown -> Unit // kuilt cannot tell on this fabric — say nothing
+        }
     }
-    // Push-style: only transitions into Unavailable and into Available emit. A move into Unknown
-    // emits nothing — "we stopped being able to tell" is not a loss.
+    // The edges are for things a level cannot express — logging the transport's own words, or firing a
+    // one-shot. Only transitions into Unavailable and into Available emit; a move into Unknown emits
+    // nothing, because "we stopped being able to tell" is not a loss. Re-read the level when handling
+    // one: under a rapid flap the level may already be ahead of the edge in your hand.
     room.events.collect { event ->
         when (event) {
-            is MembershipEvent.LocalFabricLost -> Unit // show it; event.reason is the transport's own words
-            is MembershipEvent.LocalFabricRestored -> Unit // clear it — may arrive with no preceding Lost
+            is MembershipEvent.LocalFabricLost ->
+                Unit // event.reason is the transport's own words; room.localFabric.value is the truth now
+            is MembershipEvent.LocalFabricRestored -> Unit // may arrive with no preceding Lost
             else -> Unit
         }
     }
@@ -462,9 +490,11 @@ Four things to know before you bind this to a UI:
   than an error. The per-fabric flag is `reportsLiveCapability`; see
   [architecture.md](architecture.md#reportslivecapability--fabrics-without-a-path-observer).
 - **`Partitioned` and `HostLost` carry the same value as a tag**, captured at the instant they were
-  emitted, which is what makes precedence readable from the stream. When the tag is `Unavailable`, that
-  event is *not* evidence about the peer it names — see
-  [the reconnect-banner entry](#rejoin--reconnect).
+  emitted, which is what makes precedence readable from the stream. When the tag is `Unavailable` for
+  silence *you* observed, that event is not evidence about the peer it names. `HostLost` always is
+  yours; a `Partitioned` relayed by the host about a third peer is **not**, and stays authoritative —
+  see [the reconnect-banner entry](#rejoin--reconnect) for where that boundary falls and why the event
+  alone cannot tell you which side of it you are on.
 - **The level is authoritative; the edges are notifications.** `Room.localFabric` is a `StateFlow`, so
   a late collector cannot miss a drop, while the events only announce transitions *into* `Unavailable`
   and *into* `Available` — a move into `Unknown` emits nothing. A `LocalFabricRestored` can therefore

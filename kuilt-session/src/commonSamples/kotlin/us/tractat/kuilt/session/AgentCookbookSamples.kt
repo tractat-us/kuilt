@@ -120,8 +120,17 @@ public suspend fun retryWithBackoffSample(random: Random, dial: suspend () -> Bo
  */
 public suspend fun reconnectBannerSample(room: Room) {
     room.events.collect { event ->
+        // The tag inverts attribution only for silence *we* observed — our own detector, or our own
+        // link tearing. `HostLost` is always that. `Partitioned` is not: on a joiner in a 3+-peer
+        // room the host relays "peer C paused", and that report is host-authoritative — it arrived
+        // over a link working well enough to deliver it, so an `Unavailable` tag there says our end
+        // was down when we *processed* the report, not that the report is unfounded. Suppressing it
+        // would leave C shown as present while the host holds its seat open.
+        //
+        // The event carries no provenance field, and `Room` exposes no host id, so a consumer cannot
+        // tell the two apart from the event alone. In a two-peer session it does not matter (the only
+        // peer you watch *is* the host). In a larger room, scope this to peers you observe yourself.
         val ourOwnEndWasDown = when (event) {
-            is MembershipEvent.Partitioned -> event.localFabric is FabricAvailability.Unavailable
             is MembershipEvent.HostLost -> event.localFabric is FabricAvailability.Unavailable
             else -> false
         }
@@ -150,18 +159,25 @@ public suspend fun reconnectBannerSample(room: Room) {
  * that it moved. Don't reach past [Room] into a transport-specific path monitor.
  */
 public suspend fun localFabricBannerSample(room: Room) {
-    // Pull-style: the authoritative answer, readable at any instant.
-    when (room.localFabric.value) {
-        FabricAvailability.Available -> Unit // no banner
-        is FabricAvailability.Unavailable -> Unit // "You're offline" — this room's fabric, not the device
-        is FabricAvailability.Unknown -> Unit // kuilt cannot tell on this fabric — say nothing
+    // Bind the banner to the LEVEL, not to the edges. A StateFlow replays its current value to a late
+    // collector, so this cannot miss a drop that happened before you subscribed, and it keeps the UI
+    // reading the authoritative surface rather than a notification that may already be superseded.
+    room.localFabric.collect { availability ->
+        when (availability) {
+            FabricAvailability.Available -> Unit // no banner
+            is FabricAvailability.Unavailable -> Unit // "You're offline" — this room's fabric, not the device
+            is FabricAvailability.Unknown -> Unit // kuilt cannot tell on this fabric — say nothing
+        }
     }
-    // Push-style: only transitions into Unavailable and into Available emit. A move into Unknown
-    // emits nothing — "we stopped being able to tell" is not a loss.
+    // The edges are for things a level cannot express — logging the transport's own words, or firing a
+    // one-shot. Only transitions into Unavailable and into Available emit; a move into Unknown emits
+    // nothing, because "we stopped being able to tell" is not a loss. Re-read the level when handling
+    // one: under a rapid flap the level may already be ahead of the edge in your hand.
     room.events.collect { event ->
         when (event) {
-            is MembershipEvent.LocalFabricLost -> Unit // show it; event.reason is the transport's own words
-            is MembershipEvent.LocalFabricRestored -> Unit // clear it — may arrive with no preceding Lost
+            is MembershipEvent.LocalFabricLost ->
+                Unit // event.reason is the transport's own words; room.localFabric.value is the truth now
+            is MembershipEvent.LocalFabricRestored -> Unit // may arrive with no preceding Lost
             else -> Unit
         }
     }
