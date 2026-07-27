@@ -90,7 +90,9 @@ only place this surfaces.
 Starting the session is stricter: if any connection in the *first* list can't be
 made, `weave()` itself fails and you get no session at all — so `onPlyFailure`
 never sees it, and with the fixed-list constructor there is no later list to
-retry from. Put only connections you expect to work in the list you start with,
+retry from. It is still tidy about it: the connections that *did* come up before
+the failure are closed on the way out, so a failed start leaves nothing open
+behind it. Put only connections you expect to work in the list you start with,
 and add the opportunistic ones by publishing a new list afterwards.
 
 ## Feeding the layers above

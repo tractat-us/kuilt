@@ -1,8 +1,11 @@
 package us.tractat.kuilt.core.composite
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.withContext
+import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
@@ -10,6 +13,7 @@ import us.tractat.kuilt.core.PlyId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.TransportCapability
+import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.coroutines.CoroutineContext
 
 /**
@@ -53,6 +57,17 @@ public class CompositeLoom(
         onPlyFailure: (PlyReconcileException) -> Unit = {},
     ) : this(MutableStateFlow(plies), dispatcher, policy, onPlyFailure)
 
+    /**
+     * Weave every ply in the current desired set and bond them into one [Seam].
+     *
+     * **All-or-nothing, and it leaks nothing (#1784).** Unlike a live reconciliation — where one ply
+     * failing is absorbed and retried — a ply that cannot be woven *here* fails the whole `weave`: the
+     * caller gets no [Seam] at all, so `onPlyFailure` never sees it and, with the fixed-list constructor,
+     * there is no later list to retry from. Which is why the plies that *did* come up must not simply be
+     * dropped: this method is their only holder, and `weave` throwing leaves the caller no handle to close
+     * them with. So a failure closes them on the way out before rethrowing. The composite is precisely the
+     * type that must not leak a transport across a failed attach.
+     */
     override suspend fun weave(rendezvous: Rendezvous): Seam {
         val current = plies.value
         require(current.isNotEmpty()) { "CompositeLoom desired set must be non-empty at weave()" }
@@ -61,10 +76,27 @@ public class CompositeLoom(
         // woven from it. Deliberately not looked up from `plies` later: `loom.weave` suspends and `plies`
         // is caller-mutable, so by the time the seam exists the desired set may no longer contain this
         // ply. Pairing them here makes the initial plies' roles total by construction (#1712).
-        val initial = current.map { (id, loom) ->
-            InitialPly(id = id, seam = loom.weave(rendezvous), roles = loom.capability().roles)
+        val woven = mutableListOf<InitialPly>()
+        try {
+            for ((id, loom) in current) {
+                // Roles BEFORE the weave, as in `CompositeSeam.attachDesiredPly` and for the same reason:
+                // a throwing `capability()` then has no already-woven transport to orphan.
+                val roles = loom.capability().roles
+                woven += InitialPly(id = id, seam = loom.weave(rendezvous), roles = roles)
+            }
+            // Inside the try as well: the constructor starts this composite's pumps, and anything it throws
+            // (a consumer seam's `selfId`/flow accessor) would otherwise orphan every transport above.
+            return CompositeSeam(woven, rendezvous, plies, dispatcher, policy, onPlyFailure)
+        } catch (failure: Throwable) {
+            // NonCancellable and per-ply best-effort: the failure may itself BE this coroutine's
+            // cancellation, and `Seam.close` suspends on any real transport — so an unshielded close would
+            // throw at its first suspension point and leak the very transports being reclaimed. One ply
+            // refusing to close must not stop its siblings being closed either.
+            withContext(NonCancellable) {
+                woven.forEach { runCatchingCancellable { it.seam.close(CloseReason.Normal) } }
+            }
+            throw failure
         }
-        return CompositeSeam(initial, rendezvous, plies, dispatcher, policy, onPlyFailure)
     }
 
     override fun capability(): TransportCapability {
