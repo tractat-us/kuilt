@@ -739,9 +739,110 @@ class HeddleNodeTest {
         )
     }
 
+    /**
+     * A **second** wake can never hand back credit an earlier one forfeited (issue #1714). The
+     * clamp is documented as a *forward* offset — it "can never advance a child's turn, only give
+     * one up" — but the front it is measured against is the weighted mean over whoever is
+     * competing *now*, and that mean is not monotone across wake cycles. Storing the offset by
+     * replacement therefore lets a later, lower front refund the earlier clamp; the offset has to
+     * be joined with `max`.
+     *
+     * The scenario, exactly: e2 sleeps through e1's run and wakes into a front of `100`, so it
+     * carries a `+100` clamp; it then runs `20` of its own, reaching an effective virtual service
+     * of `120`, and sleeps again. When it re-wakes the only child still competing is e3 — parked
+     * at `0` and permanently unservable — so the freshly computed offset is `max(0, 0 − 20) = 0`.
+     * Replacement drops e2 from `120` back to `20`, level with a starved sibling despite 120 units
+     * of effective history; a monotone join holds it at `120`.
+     *
+     * e1 and e3 are held **competing but unservable** via `maximumUsefulGrant = 0`, which trims
+     * every quantum to nothing while leaving [HeddlePolicy.isDemanding] true — that is exactly the
+     * starved sibling of #1714, and it is what pins the front where the test needs it without
+     * letting a grant move anyone's raw virtual service.
+     */
+    @Test
+    fun aRewakeCannotLowerAnEffectiveVirtualService() = runTest(
+        StandardTestDispatcher(),
+        timeout = 5.seconds,
+    ) {
+        // 220 = e1's 200 plus e2's 20; holdings are exhausted from phase 2 on, so no later grant
+        // can move a raw virtual service and mask the clamp.
+        val h = harness(peers = 1, mint = mapOf(0 to 220L), topology = flatTopology())
+        h.pump()
+        val node = h.peers[0].node
+
+        // A third child that competes from its first observation — so it is never a waker and
+        // never carries a clamp — but can never absorb a grant, so it stays parked at 0.
+        val starved = AttachmentRecord(AttachmentId("e3"), root, GroupId("g3"), Weight.ONE, 0L)
+        assertTrue(node.prepare(starved) && node.activate(starved.id))
+        val competingUnservable = Demand(targetOutstanding = 10_000L, maximumUsefulGrant = 0L)
+
+        // Phase 1 — e1 runs alone to 200. e2 is observed idle; e3 competes but is never served.
+        node.advertise(e1, Demand(targetOutstanding = 200L, maximumUsefulGrant = 10L))
+        node.advertise(starved.id, competingUnservable)
+        node.schedule(root)
+        h.pump()
+        assertEquals(200L, node.ledger.value.edge(e1)!!.issued, "e1 runs alone to its target")
+
+        // Phase 2 — e2 wakes into a front of mean(e1 at 200, e3 at 0) = 100, then runs its 20.
+        node.advertise(e1, competingUnservable)
+        node.advertise(e2, Demand(targetOutstanding = 20L, maximumUsefulGrant = 10L))
+        node.advertise(starved.id, competingUnservable)
+        node.schedule(root)
+        h.pump()
+        assertAll(
+            { assertEquals(20L, node.ledger.value.edge(e2)!!.issued, "the waker takes the last 20") },
+            {
+                assertEquals(
+                    Rational.of(120L),
+                    node.probeEffectiveVirtualService(e2, others = listOf(e1, starved.id)),
+                    "clamped forward by 100, then ran 20",
+                )
+            },
+        )
+
+        // Phase 3 — e2 sleeps again. Nothing is servable, so nobody's virtual service moves.
+        node.advertise(e1, competingUnservable)
+        node.advertise(e2, Demand.NONE)
+        node.advertise(starved.id, competingUnservable)
+        node.schedule(root)
+        h.pump()
+
+        // Phase 4 — e1 stops competing too, so e2 re-wakes into a front of just e3, at 0 —
+        // 100 units *behind* the clamp e2 is already carrying.
+        node.advertise(e1, Demand.NONE)
+        node.advertise(e2, Demand(targetOutstanding = 10_000L, maximumUsefulGrant = 10L))
+        node.advertise(starved.id, competingUnservable)
+        node.schedule(root)
+        h.pump()
+
+        assertEquals(
+            Rational.of(120L),
+            node.probeEffectiveVirtualService(e2, others = listOf(e1, starved.id)),
+            "a re-wake into a lower front must not refund the earlier clamp (replacement gives 20)",
+        )
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────
     // harness
     // ─────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * One edge's **effective** virtual service (raw plus its wake clamp), read without reaching
+     * into the node's internals: with [edge] the only child competing, [HeddleNode.parentVirtualTime]
+     * — the weighted mean over the demanding set — *is* that edge's effective virtual service.
+     *
+     * The probe is invisible to the clamp state machine: demand is advisory, and only
+     * [HeddleNode.schedule] samples demanding-state. It does leave [edge] demanding and [others]
+     * idle, so re-advertise before the next `schedule()`.
+     */
+    private fun HeddleNode.probeEffectiveVirtualService(
+        edge: AttachmentId,
+        others: List<AttachmentId>,
+    ): Rational {
+        for (other in others) advertise(other, Demand.NONE)
+        advertise(edge, Demand(targetOutstanding = 10_000L, maximumUsefulGrant = 10L))
+        return assertNotNull(parentVirtualTime(root), "root has active children, so it has a front")
+    }
 
     private class Peer(val id: ReplicaId, val node: HeddleNode, val gate: GatedSeam)
 
