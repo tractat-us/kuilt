@@ -25,7 +25,6 @@ import us.tractat.kuilt.core.runConcurrencyStress
 import us.tractat.kuilt.test.FakeSeam
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertIs
 
 /**
  * Real-threaded stress probe for [CompositeSeam]'s capability rollup (#1712).
@@ -122,22 +121,33 @@ class CompositeCapabilityConcurrencyTest {
             //    one of them may already be superseded by fold time.
             // A pump preempted between StateFlow's read and its delivery therefore lands a genuine but
             // briefly-stale announcement after a sibling's drop, and the composite correctly publishes its
-            // current knowledge before correcting itself microseconds later. Re-reading `.value` here
-            // demanded monotonicity the architecture cannot provide, and every alternative design that
-            // restores it either strands or spins waiting on a preempted pump.
+            // current knowledge, correcting itself on the preempted pump's next dispatch. That correction is
+            // GUARANTEED — StateFlow's eventual delivery drives every mirror to its ply's true value at
+            // quiescence — but it is NOT time-bounded: the window is "until that pump is next dispatched",
+            // which under CPU starvation is nothing like microseconds, and CPU starvation is precisely when
+            // the transient occurs at all. Measured on a 16-core box: 0 transients in 4000 rounds at load
+            // 2.42, 1 in 4000 at load 5.13.
             //
-            // Asserting the REASON instead keeps this check non-vacuous where a bare type assert on the
-            // awaited value would be tautological: it proves the value came from the composite's own fold
-            // (which normalises the reason) rather than a ply's `Unavailable("path lost")` leaking through.
+            // Re-reading `.value` here demanded monotonicity the architecture cannot provide. The strongest
+            // counter-candidate was implemented and rejected: withhold the publish while a mirror differs
+            // from its ply's live value, using the live read only to detect supersession. Its failure is
+            // worse than spinning — a single starved pump freezes the WHOLE rollup indefinitely, in BOTH
+            // directions, so a peer would also fail to notice its network came BACK. It went red on
+            // CompositeCapabilityLostTriggerTest's up-path precondition, with the composite frozen at
+            // Unavailable. And supersession detection provably requires a live read: a generation/version
+            // stamp is only bumped when a pump DELIVERS, so no stamp can reveal an undelivered newer value —
+            // the live read is the only signal, and the live read is what strands.
+            //
+            // ONE assertion, and it is not vacuous: the `first {}` above is what guards convergence, so
+            // re-asserting the awaited value's type would be tautological. Comparing it against the
+            // composite's own normalised rollup verdict proves the value came from the fold rather than a
+            // ply's `Unavailable("path lost")` leaking through.
             val settled = composite.capability.first { it.availability is FabricAvailability.Unavailable }
-            val availability = assertIs<FabricAvailability.Unavailable>(
-                settled.availability,
-                "round=$round: the composite must converge on Unavailable with both paths down",
-            )
             assertEquals(
-                "no woven ply reports an available path",
-                availability.reason,
-                "round=$round: the composite must publish its OWN rollup verdict, not a ply's",
+                FabricAvailability.Unavailable("no woven ply reports an available path"),
+                settled.availability,
+                "round=$round: the composite must publish its OWN rollup verdict with both paths down, " +
+                    "not a ply's",
             )
         }
         composite.close(CloseReason.Normal)
