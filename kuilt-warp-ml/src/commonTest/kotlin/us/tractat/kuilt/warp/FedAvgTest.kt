@@ -139,6 +139,59 @@ class FedAvgTest {
         assertEquals(left, right, "same-peer same-epoch collision: (a⊔b)⊔c must equal a⊔(b⊔c)")
     }
 
+    // ── Multi-round supersession: epoch dominates the total order ────────────────
+    //
+    // `epoch` is the documented way a peer supersedes its own prior contribution, and the
+    // multi-round demo relies on it (each round contributes at `epoch = round + 1`). Two
+    // properties matter and neither is implied by the lattice laws alone:
+    //   1. the later epoch wins even when it carries FEWER samples — otherwise a round that
+    //      trained on a smaller batch could never supersede an earlier, larger one; and
+    //   2. a late-delivered earlier epoch must not claw the slot back.
+
+    @Test
+    fun `a later epoch supersedes an earlier one even with a smaller sampleCount`() {
+        val peer = ReplicaId("p")
+        val round1 = FedAvg.contribution(peer, sampleCount = 100L, localWeights = listOf(1.0), epoch = 1L)
+        val round2 = FedAvg.contribution(peer, sampleCount = 5L, localWeights = listOf(9.0), epoch = 2L)
+
+        val merged = FedAvg.ZERO.piece(round1).piece(round2)
+
+        assertAll(
+            { assertEquals(round2, merged, "epoch 2 must supersede epoch 1 regardless of sampleCount") },
+            { assertEquals(9.0, merged.weights[0], absoluteTolerance = 1e-9) },
+        )
+    }
+
+    @Test
+    fun `a late-delivered earlier epoch does not claw back the slot`() {
+        val peer = ReplicaId("p")
+        val round1 = FedAvg.contribution(peer, sampleCount = 100L, localWeights = listOf(1.0), epoch = 1L)
+        val round2 = FedAvg.contribution(peer, sampleCount = 5L, localWeights = listOf(9.0), epoch = 2L)
+
+        // Delivered newest-first, then the stale frame arrives.
+        val stalest = FedAvg.ZERO.piece(round2).piece(round1)
+
+        assertAll(
+            { assertEquals(round2, stalest, "a late epoch-1 frame must not overwrite epoch 2") },
+            // Order-independence across the supersession, restated as the lattice law.
+            { assertEquals(FedAvg.ZERO.piece(round1).piece(round2), stalest) },
+        )
+    }
+
+    @Test
+    fun `superseding one peer leaves the other peers' rounds untouched`() {
+        val alice = ReplicaId("alice")
+        val bob = ReplicaId("bob")
+        val merged = FedAvg.ZERO
+            .piece(FedAvg.contribution(alice, sampleCount = 1L, localWeights = listOf(0.0), epoch = 1L))
+            .piece(FedAvg.contribution(bob, sampleCount = 1L, localWeights = listOf(4.0), epoch = 1L))
+            // Alice moves to round 2; bob stays at round 1.
+            .piece(FedAvg.contribution(alice, sampleCount = 1L, localWeights = listOf(2.0), epoch = 2L))
+
+        // (1·2 + 1·4) / 2 = 3.0 — alice's round-2 value, bob's round-1 value, nothing dropped.
+        assertEquals(3.0, merged.weights[0], absoluteTolerance = 1e-9)
+    }
+
     // ── Convergence under adversarial delivery ───────────────────────────────────
 
     @Test

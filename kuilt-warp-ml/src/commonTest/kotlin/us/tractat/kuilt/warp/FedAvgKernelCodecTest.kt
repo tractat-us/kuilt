@@ -30,7 +30,7 @@ class FedAvgKernelCodecTest {
 
     @Test
     fun `decodeOutput round-trips an encoded output`() {
-        val out = FedAvgKernelCodec.encodeOutputForTest(sampleCount = 7L, weights = listOf(1.3, 0.2))
+        val out = kernelOutput(sampleCount = 7L, weights = listOf(1.3, 0.2))
         val update = FedAvgKernelCodec.decodeOutput(out)
         assertAll(
             { assertEquals(7L, update.sampleCount) },
@@ -41,7 +41,7 @@ class FedAvgKernelCodecTest {
 
     @Test
     fun `decodeOutput rejects a bad magic`() {
-        val out = FedAvgKernelCodec.encodeOutputForTest(1L, listOf(0.0, 0.0)).copyOf()
+        val out = kernelOutput(1L, listOf(0.0, 0.0))
         out[0] = 0  // corrupt magic
         assertFailsWith<IllegalArgumentException> { FedAvgKernelCodec.decodeOutput(out) }
     }
@@ -51,7 +51,33 @@ class FedAvgKernelCodecTest {
         assertFailsWith<IllegalArgumentException> { FedAvgKernelCodec.decodeOutput(ByteArray(8)) }
     }
 
-    // Little-endian readers local to the test.
+    /**
+     * The kernel's output region, assembled independently of [FedAvgKernelCodec].
+     *
+     * Deliberately re-derived here rather than reusing a production encoder: the literals below
+     * *are* the ABI (`"FAV1"` magic, `dim = 2`, LE u64 count, two LE f64 weights), so a change to
+     * the layout constants in the codec fails this test loudly instead of round-tripping against
+     * itself. Same reason the readers below are local.
+     */
+    private fun kernelOutput(sampleCount: Long, weights: List<Double>): ByteArray {
+        val out = ByteArray(FedAvgKernelCodec.RESULT_LEN)
+        writeU32LE(out, 0, 0x46415631)          // magic
+        writeU32LE(out, 4, 2)                   // dim
+        writeU64LE(out, 8, sampleCount)
+        writeU64LE(out, 16, weights[0].toRawBits())
+        writeU64LE(out, 24, weights[1].toRawBits())
+        return out
+    }
+
+    // Little-endian writers/readers local to the test.
+    private fun writeU32LE(b: ByteArray, o: Int, v: Int) {
+        for (i in 0 until 4) b[o + i] = (v ushr (8 * i)).toByte()
+    }
+
+    private fun writeU64LE(b: ByteArray, o: Int, v: Long) {
+        for (i in 0 until 8) b[o + i] = (v ushr (8 * i)).toByte()
+    }
+
     private fun readU32LE(b: ByteArray, o: Int): Int =
         (b[o].toInt() and 0xFF) or ((b[o + 1].toInt() and 0xFF) shl 8) or
             ((b[o + 2].toInt() and 0xFF) shl 16) or ((b[o + 3].toInt() and 0xFF) shl 24)

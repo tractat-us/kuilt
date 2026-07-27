@@ -2,8 +2,14 @@ package us.tractat.kuilt.warp
 
 import us.tractat.kuilt.crdt.ReplicaId
 
-/** @suppress sample for [FedAvgKernelCodec]. */
-public fun sampleFedAvgKernelCodec() {
+/**
+ * A peer encodes its batch for the training kernel and folds the decoded update into [FedAvg].
+ *
+ * Compiled as part of commonTest (like every function in `commonSamples`), so an API change
+ * breaks the build rather than silently producing stale documentation.
+ */
+@Suppress("unused")
+internal fun sampleFedAvgKernelCodec() {
     // A peer encodes its local batch + the shared model, runs the kernel (omitted), and folds the
     // decoded update into FedAvg. Here we use the reference trainer in place of the wasm run.
     val model = listOf(0.0, 0.0)
