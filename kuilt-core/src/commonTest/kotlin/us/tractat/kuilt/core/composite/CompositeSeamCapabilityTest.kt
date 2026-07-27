@@ -27,9 +27,9 @@ import kotlin.test.assertIs
 
 /**
  * A [CompositeSeam]'s live [Seam.capability] unions the roles of the constituent **Looms** of
- * every currently-[us.tractat.kuilt.core.SeamState.Woven] ply. Roles are static on the [Loom], so
- * the rollup reads them from the desired set; availability instead comes from those plies' live
- * [Seam.capability] — the Loom value is a static pre-connect claim (#1712).
+ * every currently-[us.tractat.kuilt.core.SeamState.Woven] ply. Roles are static on the [Loom], so each
+ * ply's are captured once when it attaches and the rollup folds those; availability instead comes from
+ * those plies' live [Seam.capability] — the Loom value is a static pre-connect claim (#1712).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class CompositeSeamCapabilityTest {
