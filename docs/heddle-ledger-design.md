@@ -204,8 +204,45 @@ Every subtracted term reads a slot **only `r` writes**, so `r`'s local `null`-ch
 sound with zero coordination (the `BoundedCounter` exclusive-slot discipline, per path).
 Cost O(fan-out) — asymptotically free next to the EEVDF selection loop, which already scans
 every child `EdgeSummary` per pick (so candidate B's stored-aggregate optimization was
-rejected as buying ~nothing). Quarantine: if any edge on `group`'s lineage is in the
-`validate()` conflict set, `holdings` returns 0 (transitive, §4.6).
+rejected as buying ~nothing).
+
+**Quarantine — narrower than "in the `validate()` conflict set".** An earlier draft of this
+section said `holdings` returns 0 whenever any edge on `group`'s lineage appears in the
+`validate()` report. The code deliberately does **not** do that, and the code is right: making
+a *derivation* depend on the *diagnostic* is circular (`validate` calls `holdings` for its
+`PersistentNegativeHoldings` check), and it would let a transient false report zero out a
+healthy lineage. `holdings` returns 0 on exactly four **structural** conditions, all decided by
+walking the lineage — never by consulting a report:
+
+| Quarantine condition | Reported by `validate()`? |
+|---|---|
+| a divergent record (`>1` record under one id) on the path | `RecordDivergence(id)` |
+| two **live** (ACTIVE\|CLOSING) inbound edges into one group | `DualActiveInbound(group)` |
+| the live inbound edges loop instead of reaching a root | `LineageCycle(group)` |
+| a group whose only inbound edges are all PREPARED/RETIRED | **no** — see below |
+
+The last row is the standing exception to §10.11's *quarantine ⟺ explicit report*
+correspondence. It is the normal window of an honest reshape (the old generation has retired,
+the new one has not activated yet), so reporting it would fire on healthy traffic. It clears
+when the new generation activates.
+
+**Delta-state idiom — two patches from one base lose the first.** Every mutator reads its
+receiver and emits **absolute** slot values, and the join is max. So two patches computed from
+the *same* base ledger do not compose: `l.delegate(r, e, 10)` and `l.delegate(r, e, 5)`, both
+written from `l`, merge to `issued(e)[r] = 10`, not 15. That is the price of the absolute-value
+deltas that buy duplicate-delivery idempotence, and it is a live hazard for the H4 node layer:
+each mutator must be called on a ledger that has already absorbed the previous patch, never
+fanned out from one snapshot. `HeddleNode` satisfies this by running every op *inside* its
+`Quilter.mutate` block, so the op always sees fresh state.
+
+**One root per ledger.** `holdings` credits `creditIn` from the minted supply for any group
+with **no inbound edge**, and a `MintRecord` carries only a holder and an amount — the root
+reaches the state solely inside the generated `MintId` string. Merging two independently
+bootstrapped ledgers therefore leaves two rootless groups, **each credited the whole
+`mintedTotal`**, double-counting every mint in the Σ-holdings identity — and silently, since no
+`validate()` check looks at root cardinality. This is a **caller invariant** (never merge
+across bootstraps), not a structural guarantee. Binding a `MintRecord` to its root would make
+it structural at the cost of a wire-format change; that call is deliberately deferred.
 
 `edge(id) = EdgeSummary(effIssued(id), returned(id).value, effLeafSpent(id)+effRollupSpent(id))`
 — a per-edge read, at effective values. `activeChildren(g)` = summaries of `childEdges(g)`.
@@ -228,7 +265,23 @@ list a false conflict that self-heals on anti-entropy. The checks:
   edge *sum* passes the sum check yet strands `holdings < 0` forever — this catches it). A
   transient negative on an incomplete state is **not** a conflict.
 - **`RecordDivergence(id)`** — two distinct immutable records under one `AttachmentId`.
-- **`DualActiveInbound(group)`** / **`ClosureViolation(e)`** — H2 (lifecycle); sketched.
+- **`DualActiveInbound(group)`** / **`ClosureViolation(e)`** — H2 (lifecycle); shipped.
+- **`LineageCycle(group)`** — the live inbound edges loop back instead of reaching a root.
+  Reported once per loop member, never for a group merely below the loop. Records are
+  grow-only, so a loop seen on any state is real; it can still be *transient* in the honest
+  control plane (an inverting reparent closes a loop until the old edge retires), and that
+  window is a real quarantine, so reporting it is the point.
+- **`ConservationViolation(leafSpentTotal, mintedTotal)`** — the **global** backstop:
+  `Σ effLeafSpent > mintedTotal`, i.e. more service charged than supply ever minted (§10.1).
+  Every other check is per-edge or per-`(group, replica)` and so is only as good as the
+  derivation it rests on; this one is read straight off the totals, which is what makes it a
+  backstop for a regression *in* that derivation — the H1b divergent-child re-spend
+  manufactured spendable authority the per-lineage checks then read as legitimate, but the
+  units it charged were never minted. **Exact on a converged state** (there conservation is an
+  identity, so it fires only when `Σ holdings` really went negative). Under partial delivery it
+  adds no new false-fire: charges travel with the witness carrying the actor's own minted
+  supply, and a state that observes a charge whose root mint has not arrived already strands a
+  `PersistentNegativeHoldings` at the delegator.
 
 **Honest scope note (fix 6, from C/D reviews):** under the stated non-Byzantine model,
 `piece`'s max erases the loser of an *equivocated* one-writer slot, so `heddle-design.md`

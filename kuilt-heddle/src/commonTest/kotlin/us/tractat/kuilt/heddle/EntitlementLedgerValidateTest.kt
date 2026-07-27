@@ -3,15 +3,19 @@ package us.tractat.kuilt.heddle
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.piece
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
  * The integrity checks (design §4.6 / `heddle-ledger-design.md` §`validate`): the
  * self-justifying witness (fix 2), the projection homomorphism (§10.8), and each
  * [LedgerConflict] kind — [LedgerConflict.PerEdgeSafety],
- * [LedgerConflict.PersistentNegativeHoldings], [LedgerConflict.RecordDivergence].
+ * [LedgerConflict.PersistentNegativeHoldings], [LedgerConflict.RecordDivergence],
+ * [LedgerConflict.LineageCycle] and the global [LedgerConflict.ConservationViolation]
+ * backstop (plus the overflow-checked aggregate reads that feed them).
  */
 class EntitlementLedgerValidateTest {
 
@@ -249,5 +253,123 @@ class EntitlementLedgerValidateTest {
         // holdings); the converged report is empty.
         assertTrue(full.validate().isEmpty(), "converged multi-hop state must be clean: ${full.validate()}")
         assertEquals(0L, full.holdings(g1, carol))
+    }
+
+    /**
+     * The global supply backstop (#1642 item 1): more service charged than was ever minted is
+     * a fault whatever the per-lineage derivation says, because it is read straight off the
+     * totals. Here the edge sum itself is legal (`spent == issued`), so [LedgerConflict.PerEdgeSafety]
+     * stays silent — only the global check names the manufactured supply.
+     */
+    @Test
+    fun conservationViolationBackstopsServiceChargedBeyondMintedSupply() {
+        val overcharged = EntitlementLedger.of(
+            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE, 0L))),
+            minted = mapOf(MintId("m") to MintRecord(alice, 10L)), // only 10 ever minted
+            issued = mapOf(e1 to GCounter.of(alice to 25L)),
+            leafSpent = mapOf(e1 to GCounter.of(alice to 25L)), // yet 25 charged
+        )
+        val report = overcharged.validate()
+        assertAll(
+            { assertTrue(LedgerConflict.ConservationViolation(25L, 10L) in report, "backstop missed: $report") },
+            { assertTrue(report.none { it is LedgerConflict.PerEdgeSafety }, "the edge sum is legal: $report") },
+        )
+    }
+
+    /**
+     * The backstop must not fire on honest partial delivery: a charge always travels with the
+     * witness that funded it, and that witness carries the actor's own minted supply — so no
+     * state can observe the debit without observing at least the supply backing it.
+     */
+    @Test
+    fun globalBackstopDoesNotFalseFireOnAChargeDeliveredWithoutItsFunding() {
+        var funded = twoDeepTree().piece(EntitlementLedger.bootstrap(root, mapOf(alice to 100L), nonce = "g"))
+        funded = funded.piece(funded.delegate(alice, e1, 50L)!!)
+        funded = funded.piece(funded.delegate(alice, e2, 20L)!!)
+        val spendPatch = funded.spend(alice, g2, 20L)!!
+
+        val received = EntitlementLedger.ZERO.piece(spendPatch) // no topology, no mint, no delegates
+        assertAll(
+            { assertEquals(100L, received.mintedTotal(), "the witness carried the actor's supply") },
+            { assertEquals(20L, received.leafSpentTotal()) },
+            { assertTrue(received.validate().none { it is LedgerConflict.ConservationViolation }) },
+        )
+    }
+
+    /**
+     * A topology cycle is quarantined *and* reported (#1642 item 5, §10.11): once per loop
+     * member, never for a group merely hanging below the loop.
+     */
+    @Test
+    fun lineageCycleIsReportedOncePerLoopMemberAndNotForDescendants() {
+        val g3 = GroupId("g3")
+        val up = AttachmentId("up") // g1 → g2
+        val back = AttachmentId("back") // g2 → g1, closing the loop
+        val below = AttachmentId("below") // g2 → g3, hanging under the loop
+        val looped = EntitlementLedger.of(
+            records = mapOf(
+                up to setOf(AttachmentRecord(up, g1, g2, Weight.ONE, 0L)),
+                back to setOf(AttachmentRecord(back, g2, g1, Weight.ONE, 0L)),
+                below to setOf(AttachmentRecord(below, g2, g3, Weight.ONE, 0L)),
+            ),
+        )
+        assertAll(
+            {
+                assertEquals(
+                    listOf(LedgerConflict.LineageCycle(g1), LedgerConflict.LineageCycle(g2)),
+                    looped.validate(),
+                    "exactly the two loop members, in canonical order",
+                )
+            },
+            { assertEquals(0L, looped.holdings(g1, alice), "a loop quarantines its members") },
+            { assertEquals(0L, looped.holdings(g3, alice), "quarantine is transitive below the loop") },
+        )
+    }
+
+    /**
+     * An adversarial or corrupted **deserialized** state whose slots sum past [Long.MAX_VALUE]
+     * (#1642 item 3): `GCounter.value` is a plain `sum()` and would wrap to a negative
+     * aggregate that reads as *less* charged than nothing. §10.12 says arithmetic that would
+     * exceed `Long` fails deterministically, so every aggregate read this module makes is
+     * overflow-checked.
+     */
+    @Test
+    fun anAggregateThatWouldWrapThrowsRatherThanReadingNegative() {
+        val wrapping = EntitlementLedger.of(
+            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE, 0L))),
+            issued = mapOf(e1 to GCounter.of(alice to Long.MAX_VALUE, bob to 1L)),
+        )
+        assertAll(
+            { assertFailsWith<ArithmeticException> { wrapping.edge(e1) } },
+            { assertFailsWith<ArithmeticException> { wrapping.validate() } },
+        )
+    }
+
+    /**
+     * Pins the **documented limitation** of the one-root-per-ledger invariant (#1642 item 2),
+     * not desired behaviour. A [MintRecord] carries a holder and an amount but is not bound to
+     * a root, and [EntitlementLedger.holdings] credits the full minted supply to *any* group
+     * with no inbound edge — so merging two independently bootstrapped ledgers double-counts
+     * every mint, silently. Binding the record to its root is a wire-format change and was
+     * deliberately not taken here; when it lands, this test should flip.
+     */
+    @Test
+    fun mergingTwoIndependentBootstrapsDoubleCountsMintAtEveryRoot() {
+        val otherRoot = GroupId("otherRoot")
+        val g4 = GroupId("g4")
+        val e4 = AttachmentId("e4") // otherRoot → g4
+        val left = EntitlementLedger
+            .of(records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE, 0L))))
+            .piece(EntitlementLedger.bootstrap(root, mapOf(alice to 10L), nonce = "left"))
+        val right = EntitlementLedger
+            .of(records = mapOf(e4 to setOf(AttachmentRecord(e4, otherRoot, g4, Weight.ONE, 0L))))
+            .piece(EntitlementLedger.bootstrap(otherRoot, mapOf(alice to 10L), nonce = "right"))
+        val merged = left.piece(right)
+        assertAll(
+            { assertEquals(20L, merged.mintedTotal()) },
+            { assertEquals(20L, merged.holdings(root, alice), "each root is credited the WHOLE supply") },
+            { assertEquals(20L, merged.holdings(otherRoot, alice), "…so Σ holdings is 40 against 20 minted") },
+            { assertTrue(merged.validate().isEmpty(), "and the double-count is silent — the hazard this pins") },
+        )
     }
 }
