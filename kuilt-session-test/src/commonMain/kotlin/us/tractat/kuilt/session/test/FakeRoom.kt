@@ -28,6 +28,7 @@ import us.tractat.kuilt.session.RoomFrame
 import us.tractat.kuilt.session.SessionRole
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
 
 /**
@@ -181,9 +182,19 @@ public class FakeRoom(
     /**
      * Flip the named member's [Liveness] to [Liveness.Partitioned] and emit
      * [MembershipEvent.Partitioned].
+     *
+     * [windowExpiresAt] defaults to one minute past [at] — an arbitrary but non-null stand-in,
+     * since [Liveness.Partitioned] carries a real deadline in production. Pass an explicit value
+     * when a test asserts on the countdown. It is the **last** parameter so existing positional
+     * `partition(peerId, at, reason)` call sites keep compiling.
      */
-    public suspend fun partition(peerId: PeerId, at: Instant, reason: ReconnectReason = ReconnectReason.LinkTimeout) {
-        updateLiveness(peerId, Liveness.Partitioned)
+    public suspend fun partition(
+        peerId: PeerId,
+        at: Instant,
+        reason: ReconnectReason = ReconnectReason.LinkTimeout,
+        windowExpiresAt: Instant = at + 1.minutes,
+    ) {
+        updateLiveness(peerId, Liveness.Partitioned(since = at, windowExpiresAt = windowExpiresAt))
         eventsChannel.send(MembershipEvent.Partitioned(peerId, at, reason))
     }
 

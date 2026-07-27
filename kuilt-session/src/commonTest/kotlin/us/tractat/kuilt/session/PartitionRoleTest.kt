@@ -259,7 +259,7 @@ class PartitionRoleTest {
         val partitionedEvent = partitionedDeferred.await()
         assertAll(
             { assertEquals(joinerPeerId, partitionedEvent.peerId) },
-            { assertEquals(Liveness.Partitioned, hostRoom.roster.value.first().liveness) },
+            { assertIs<Liveness.Partitioned>(hostRoom.roster.value.first().liveness) },
             { assertEquals(ReconnectReason.LinkTimeout, partitionedEvent.reason) },
         )
 
@@ -334,7 +334,7 @@ class PartitionRoleTest {
             advanceTimeBy(100L)
         }
         partitionedDeferred.await()
-        assertEquals(Liveness.Partitioned, hostRoom.roster.value.first().liveness)
+        assertIs<Liveness.Partitioned>(hostRoom.roster.value.first().liveness)
 
         // Register collector for Recovered BEFORE healing the link.
         val recoveredDeferred = async {

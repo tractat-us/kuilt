@@ -1490,27 +1490,48 @@ internal class SeamRoom(
      * Apply [Liveness.Partitioned] to [peerId] and announce it, with [reason] saying why the
      * link dropped (#1556).
      *
-     * **Idempotent** — a member already partitioned re-arms its reconnect window but emits no
-     * second [MembershipEvent.Partitioned] and re-announces nothing. That matters on a mesh,
-     * where a peer both detects the drop locally *and* receives the host's
-     * [AdmitMessage.Paused] for it (#1557): whichever arrives first wins, the other is a no-op.
+     * **Idempotent** — a member already partitioned emits no second [MembershipEvent.Partitioned]
+     * and re-announces nothing. That matters on a mesh, where a peer both detects the drop locally
+     * *and* receives the host's [AdmitMessage.Paused] for it (#1557): whichever arrives first wins,
+     * the other is a no-op. The **host** re-arms its reconnect window on re-detection (it owns the
+     * window); a non-host preserves the deadline it already holds rather than clobbering an
+     * authoritative [AdmitMessage.Paused] with a fresh local estimate.
      *
      * On the **host** the announcement is a [AdmitMessage.Paused] fan-out to the remaining
      * members — see [propagatePaused] for why local detection alone is not enough.
      */
     private fun markPartitioned(peerId: PeerId, at: Instant, reason: ReconnectReason) {
+        // Hoisted above the role gate: previously computed only in the host-only propagatePaused
+        // branch, so a joiner had no deadline at all (#1724). The level needs it on both roles.
+        // Arithmetic in epoch-millis, converted once — same operands, same order, same truncation
+        // as DefaultJoinerReconnectController.openWindow's `at + reconnectWindowMs`, so the
+        // deadline on the level *is* the one the controller enforces.
+        val expiresAt = Instant.fromEpochMilliseconds(
+            at.toEpochMilliseconds() + heartbeatConfig.reconnectWindow.inWholeMilliseconds,
+        )
+        // Read the role once: the level and the fan-out must agree on which side owns the window.
+        val isHost = _role.value == SessionRole.Host
         val (wasPartitioned, updated) = lock.withLock {
             val current = admittedById[peerId] ?: return
-            val wasPartitioned = current.liveness == Liveness.Partitioned
-            wasPartitioned to (updateMemberLiveness(peerId, Liveness.Partitioned) ?: return)
+            val existing = current.liveness as? Liveness.Partitioned
+            // `since` is first-detection, so it agrees with the single MembershipEvent.Partitioned
+            // emitted below; an idempotent re-detection must not drift it forward.
+            //
+            // The host owns the window for its joiners and genuinely re-arms it on re-detection, so
+            // it always recomputes. A non-host must PRESERVE a deadline it already holds: that value
+            // is either the host's authoritative Paused or its own earlier estimate, and a fresh
+            // local estimate is no better than either (F4).
+            val level = Liveness.Partitioned(
+                since = existing?.since ?: at,
+                windowExpiresAt = if (isHost || existing == null) expiresAt else existing.windowExpiresAt,
+            )
+            (existing != null) to (updateMemberLiveness(peerId, level) ?: return)
         }
         if (!wasPartitioned) emitEvent(MembershipEvent.Partitioned(updated.id, at, reason))
         reconnectController?.onPeerUnresponsive(peerId, at.toEpochMilliseconds())
-        if (!wasPartitioned && _role.value == SessionRole.Host) {
-            propagatePaused(
-                peerId,
-                expiresAtMs = at.toEpochMilliseconds() + heartbeatConfig.reconnectWindow.inWholeMilliseconds,
-            )
+        // The host always recomputes, so the level and this fan-out carry the same `expiresAt`.
+        if (!wasPartitioned && isHost) {
+            propagatePaused(peerId, expiresAtMs = expiresAt.toEpochMilliseconds())
         }
     }
 
@@ -1521,7 +1542,7 @@ internal class SeamRoom(
     private fun markRecovered(peerId: PeerId, at: Instant) {
         val (wasPartitioned, updated) = lock.withLock {
             val current = admittedById[peerId] ?: return
-            val wasPartitioned = current.liveness == Liveness.Partitioned
+            val wasPartitioned = current.liveness is Liveness.Partitioned
             wasPartitioned to (updateMemberLiveness(peerId, Liveness.Connected) ?: return)
         }
         if (!wasPartitioned) return
@@ -1579,8 +1600,14 @@ internal class SeamRoom(
             val host = hostPeerId
             if (host == null || sender != host || subject == host || subject == selfId) return
             val current = admittedById[subject] ?: return
-            if (current.liveness == Liveness.Partitioned) return
-            updateMemberLiveness(subject, Liveness.Partitioned) ?: return
+            if (current.liveness is Liveness.Partitioned) return
+            updateMemberLiveness(
+                subject,
+                Liveness.Partitioned(
+                    since = clock(),
+                    windowExpiresAt = Instant.fromEpochMilliseconds(paused.expiresAt),
+                ),
+            ) ?: return
         }
         // The host told us the link dropped; TransportClosed is the honest reason here — we
         // observed no timeout or backpressure ourselves, only the authoritative Paused (#1556).
@@ -1601,7 +1628,7 @@ internal class SeamRoom(
             val host = hostPeerId
             if (host == null || sender != host || subject == host || subject == selfId) return
             val current = admittedById[subject] ?: return
-            if (current.liveness != Liveness.Partitioned) return
+            if (current.liveness !is Liveness.Partitioned) return
             updateMemberLiveness(subject, Liveness.Connected) ?: return
         }
         emitEvent(MembershipEvent.Recovered(updated.id, clock()))
@@ -1640,7 +1667,7 @@ internal class SeamRoom(
     private fun evictOnExpiredWindowIfPartitioned(peerId: PeerId) {
         val shouldEvict = lock.withLock {
             val current = admittedById[peerId] ?: return
-            if (current.liveness != Liveness.Partitioned) return
+            if (current.liveness !is Liveness.Partitioned) return
             stopDetector(peerId)
             true
         }
