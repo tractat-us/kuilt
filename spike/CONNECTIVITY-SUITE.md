@@ -5,6 +5,11 @@ battery against the real `kuilt-nw` fabric, shows a pass/fail matrix, and produc
 you **Share** or **Copy** and text back. The point: reproduce the adverse-network failures (coffee-shop
 captive Wi-Fi, airplane, Wi-Fi-off/cellular-on, two SSIDs) *where they actually happen*.
 
+There is also a **sixth scenario, run on its own**, where you deliberately switch one phone's radio off
+and back on. It is the only one that needs you to do something mid-run, and it is the only way to check
+that a phone which loses its own network says *"I went offline"* rather than blaming the other phone.
+[Scenario 6](#scenario-6-the-airplane-mode-run-1712) has the step-by-step.
+
 It works. Its first real two-phone run found a bug that made roughly **one room in eight permanently
 unable to connect** — silently, with no error — that every automated test had passed straight over.
 [What it found](#what-it-found) tells that story; it is the best argument for running this in odd places.
@@ -18,7 +23,8 @@ unable to connect** — silently, with no error — that every automated test ha
 4. Watch the matrix fill in. The soak (scenario 5) takes ~2 minutes, so the whole run is ~3–4 min.
 5. When it finishes, tap **Share report** (or **Copy**) and send the text back.
 
-That's it. There is no Mac in the loop.
+That's it. There is no Mac in the loop. Then, if you have another three minutes and a free hand,
+run [scenario 6](#scenario-6-the-airplane-mode-run-1712) — it is a separate pair of buttons.
 
 ## What each scenario proves
 
@@ -29,6 +35,7 @@ That's it. There is no Mac in the loop.
 | 3 | Election establish | `SeamRoomFactory.electLobby` → the elected host (`min(peerId)`) runs `start()`, the other runs `awaitRoom()`, both adopt a `Room`. This is the `#1466` lobby path. |
 | 4 | Teardown + reconnect | The host drops the link. The **host** sees its own `close()` latch `Torn`; the **joiner** sees the recoverable `Woven → Weaving` re-form ([why they differ](#scenario-4-the-two-sides-expect-different-things)). Both then re-weave on a second service type. |
 | 5 | Soak (~2 min) | Continuous round-trip stays healthy: RTT distribution (min/p50/p95/max) with few/no stalls. This is where an AWDL data-path stall (the MC failure mode) would show up as a FAIL. |
+| 6 | Local-fabric outage *(separate buttons — you toggle Airplane Mode)* | **The same outage read two opposite ways.** The phone you switched off says *my* network died: `localFabric` → `Unavailable`, a `LocalFabricLost`, and every `Partitioned`/`HostLost` it emits tagged `Unavailable`. The phone you left alone says *they* went away: its own `localFabric` stays `Available` and the `Partitioned` it emits for the vanished peer carries that `Available` tag. A short outage keeps the seat; a long one expires it, and the switched-off phone *still* blames itself. |
 
 Every report is prefixed with the **environment** captured from `nw_path_monitor`
 (`path=satisfied ifaces=[wifi,cell,…] expensive=… constrained=…`) so a failing report is
@@ -49,6 +56,156 @@ The suite originally asserted the joiner would see `Torn` — an expectation wri
 could only ever time out. Nobody noticed for a long time because a *different* bug (#1577) was failing
 leg 1 first, so the teardown path was never reached at all. If you change scenario 4, read the `NwSeam`
 contract first.
+
+## Scenario 6: the airplane-mode run (#1712)
+
+### The idea, in one paragraph
+
+Two phones are talking. You switch one phone's radio off. Both phones notice the silence — but they
+should describe it *differently*, because from where each one is standing, different things happened.
+The phone you switched off should say **"I lost my network."** The phone you left alone should say
+**"the other one went away."** Same silence, two correct-but-opposite readings. Until recently a phone
+could only ever say the second thing, so a phone that lost its *own* Wi-Fi told its user the other
+person had left. This scenario is how we check that it now tells the truth.
+
+You have to do the switching yourself. iOS gives an app no way to touch Airplane Mode, and this is the
+one test where the radio really has to go away — so a person has to flip it. The phone tells you exactly
+when.
+
+### What to tap, and when to flip
+
+You need two phones and about three minutes. Decide up front which phone is going offline.
+
+1. On the phone you want to **keep online**, tap **Host · S6 stay up**.
+2. On the phone that will **go offline**, tap **Join · S6 go offline**. (These two buttons are the
+   bottom row — the `S4 only` row above them is a different diagnostic.)
+   *Both phones must use the matching button.* If you both tap Host, nothing connects and the report
+   says so in those words.
+3. Wait a few seconds. Both phones show an orange banner. Follow it.
+4. The offline phone will say **"AIRPLANE MODE ON now"**. Swipe into Control Centre and turn it on.
+5. It will then say **"AIRPLANE MODE OFF now"** after about eight seconds. Turn it back off.
+   *Being slow is fine* — the phone measures how long the outage actually lasted and tells you. Anything
+   up to about thirty seconds still counts as the "short" outage. Past that the seat is genuinely
+   allowed to expire, and the phone says so in the trace rather than blaming the library for it.
+6. It will say **"AIRPLANE MODE ON again — and LEAVE IT ON until this phone tells you otherwise."**
+   Turn it on and **wait**. It will take about a minute. Don't turn it back off early; the phone is
+   waiting for its own seat in the room to expire, and it will tell you the moment it has.
+7. When it says **"AIRPLANE MODE OFF now — that's the last toggle"**, turn it off. Done.
+8. **Share or Copy the report from BOTH phones.** They say different things on purpose — one report
+   alone cannot show the asymmetry.
+
+Meanwhile the online phone asks you to do nothing at all, twice. Don't touch its network; that is the
+whole point of it.
+
+### What a PASS means on each phone
+
+Both must pass, and they pass for opposite reasons:
+
+**The phone you switched off** (`role=join S6-ONLY`):
+
+```
+[6] Local-fabric outage    PASS    2.4m  MY outage both times: Lost + Unavailable tag, short recovered, long self-attributed
+```
+
+It saw its own `localFabric` go `Unavailable`, got a `LocalFabricLost`, and tagged every
+`Partitioned`/`HostLost` it emitted `Unavailable`. The short outage recovered inside the reconnect
+window with its seat intact; the long one outlasted the window, the seat expired — and it *still* said
+"my network died" rather than "the host is gone". That last part is the whole feature.
+
+**The phone you left alone** (`role=host S6-ONLY`):
+
+```
+[6] Local-fabric outage    PASS    2.4m  THEIR outage both times: Partitioned tagged Available, mine stayed Available
+```
+
+Its own `localFabric` never left `Available`, and both `Partitioned` events it emitted for the vanished
+peer carried that `Available` tag — "they went away", not "you are offline". After the short outage it
+held the seat and welcomed the peer back; after the long one it let the seat expire.
+
+### Reading a FAIL
+
+Everything is in the report; you never need a Mac. A FAIL line names the observed value, not just the
+disappointment:
+
+```
+[6] Local-fabric outage    FAIL   96.4s  long: HostLost tagged localFabric=Available — expected Unavailable. MY radio was off (72.1s outage), so this phone is blaming the host for its own outage
+```
+
+That is exactly the bug #1712 fixed, caught on hardware. The mirror-image failure on the other phone
+reads:
+
+```
+[6] Local-fabric outage    FAIL   84.0s  short: Partitioned tagged localFabric=Unknown(no path observer) — expected Available. MY radio was never touched, so this event must read as 'they went away'
+```
+
+Under the matrix, the hop trace carries the whole timeline — every event with its tag, every
+`localFabric` transition, and the roster with each member's liveness by peer id:
+
+```
+· [6] Local-fabric outage
+    role=join svc=_ksuite6._tcp side=DROPPED detect=5s window=1m
+    admitted peer=a91f2c04 role=Joiner t=1840ms
+    baseline mine=Available side=DROPPED t=1851ms
+    SAY t=1852ms | AIRPLANE MODE **ON** now, on THIS phone. Hold it ~8s; …
+    short: armed mine=Available discarded=[] t=1853ms
+    short: mine→Unavailable(path unsatisfied) t=6420ms
+    short: mine→Available after 14.7s (window 1m)
+    short: DONE outage=14.7s events=[LocalFabricLost(path unsatisfied,at=…),Partitioned(a91f2c04,LinkTimeout,mine=Unavailable(path unsatisfied),at=…),…]
+      t=6420ms mine=Unavailable(path unsatisfied)
+      t=21150ms roster=[a91f2c04:Connected]
+```
+
+Three verdicts, not two:
+
+- **PASS** — the reading was right on this phone.
+- **FAIL** — an outage happened and this phone read it wrong. A real defect.
+- **SKIP** — nothing was observed, so nothing was tested. Almost always "Airplane Mode never actually
+  went on". The SKIP text says which wait ran out, how long it waited, and what the value was instead.
+  The other SKIP you can cause yourself: turning the radio off *before* the phone asks. Each phase
+  starts by throwing away everything that happened before the prompt — otherwise an earlier Wi-Fi
+  hiccup could be mistaken for the outage under test — so a phone that is already offline when asked
+  says "my localFabric read … at the start of this phase" and measures nothing. Wait for the prompt.
+  One SKIP is worth knowing about: on the **online** phone, "no Partitioned … cross-check the DROPPED
+  phone's report". That phone has no information about the other one, so it genuinely cannot tell "they
+  never went offline" from "I failed to notice" — which is why you send back both reports. If the
+  offline phone shows a measured outage and this one says SKIP, the online phone *did* fail to notice,
+  and that is a real failure.
+
+### Why the timings are what they are
+
+The scenario runs with a tighter heartbeat than the default (`interval` 1.5 s, `timeout` 5 s,
+`reconnectWindow` 60 s):
+
+- **5 s to notice** instead of the default 15 s. A connection whose path drops is given 10 s to get it
+  back before the link is torn down, so an ~8 s outage never gets far enough to look like a lost peer —
+  the only way either phone notices is the missed heartbeats. At the default 15 s it would not notice
+  even those (15 > 10 > 8), so *neither* half of the asymmetry would be tested and the scenario would
+  skip forever. 5 s is still three missed pings, and the scenario-5 soak measures a healthy link at
+  p95 ≈ 30 ms, so it will not trip on a good day.
+- **60 s of grace** (the default, kept deliberately) is what makes ~8 s "short" and the second outage
+  "long". It also sets how long the long outage lasts: the offline phone waits for its own window to
+  expire — about 65 s — before asking for the radio back, so **the one interval that has to overrun is
+  never on your stopwatch**.
+
+Everything else is generous on purpose. You get two minutes to find the toggle after each prompt. A
+scenario that FAILs because someone took twelve seconds instead of eight is worse than no scenario.
+
+### Why there is no automatic version
+
+Tempting idea: instead of killing the radio, just tear the socket — scenario 4 already does that, and no
+human is needed. It would not test the same thing, and it would quietly test the *wrong* thing.
+
+`localFabric` moves for exactly one reason: the fabric's `nw_path_monitor` says the device's network path
+went away. Closing a connection doesn't touch the path, so after a socket tear `localFabric` still reads
+`Available` on **both** phones — no `LocalFabricLost` fires, and both sides' `Partitioned` carries the
+`Available` tag. That is the correct answer for a socket tear (nobody's radio died) and the *opposite* of
+what this scenario exists to prove. An "automatic scenario 6" would therefore be a green light for a
+lane #1712 never touched, sitting in the matrix next to the one that matters. Scenario 4 already covers
+the socket-tear lane, honestly labelled. So: the radio, or nothing.
+
+`nw` is also the *only* fabric where any of this is observable. Every fabric without a live OS path
+observer reports `FabricAvailability.Unknown` — "cannot tell" — which is a first-class third answer, not
+a gap. That is precisely why this check has to happen on two real phones.
 
 ## Reading the report
 
@@ -71,6 +228,9 @@ device: Version 18.5 (Build 22F76)
 ```
 
 The matrix is the headline; the per-scenario **hop traces** below it name the failing hop.
+
+A scenario-6 run reports on its own (`role=join S6-ONLY (airplane-mode gate)`, one row), because it
+never runs inside the battery — see [scenario 6](#scenario-6-the-airplane-mode-run-1712).
 
 ## Diagnostic mode — when a scenario fails and you need to know *why*
 
@@ -136,20 +296,23 @@ the app prints its report to stdout:
 BID=us.tractat.spike.nw
 xcrun devicectl list devices                       # get the device identifiers
 xcrun devicectl device process launch --terminate-existing --console \
-  --device <HOST_DEVICE_ID> $BID host              # host | join | host-s4 | join-s4
+  --device <HOST_DEVICE_ID> $BID host              # host | join | host-s4 | join-s4 | host-s6 | join-s6
 ```
 
 Launch both within a few seconds of each other so they overlap. `harness.sh <HOST_ID> <JOIN_ID> <APP>`
 wraps install + launch + report extraction for the full battery.
 
 `devicectl --console` rides Wi-Fi for network-attached devices, so a Wi-Fi-off scenario goes dark on
-that device — keep at least one on USB if you want live console (see `PAINPOINTS.md`).
+that device — keep at least one on USB if you want live console (see `PAINPOINTS.md`). This bites
+`host-s6`/`join-s6` hardest: the launch arg only *starts* scenario 6, a human still has to flip Airplane
+Mode, and the phone doing the flipping goes dark on a network-attached console for the whole outage. Put
+the offline phone on USB, or just read the report off the phone.
 
 ## What's real vs. control
 
-- **Scenarios 2–5 drive the shipping API** — `appleNwLoom`, `SeamRoomFactory.electLobby`,
-  `ElectionLobby.start`/`awaitRoom`, `Seam`/`Room` lifecycle. A FAIL here is a real `kuilt-nw`/
-  `kuilt-session` field failure.
+- **Scenarios 2–6 drive the shipping API** — `appleNwLoom`, `SeamRoomFactory.electLobby`,
+  `ElectionLobby.start`/`awaitRoom`, `SeamRoomFactory.adopt`, `Room.localFabric`, `Seam`/`Room`
+  lifecycle. A FAIL here is a real `kuilt-nw`/`kuilt-session` field failure.
 - **Scenario 1 is the raw transport control** (`spike.nw.SpikeNw`) — if it passes but scenario 2 fails,
   the fabric layer is at fault, not the radio.
 
@@ -208,7 +371,12 @@ Three things worth keeping from that hunt:
 
 ## Status
 
-On-device validation is **done**: 5/5 on both phones (iPhone XS / iOS 18.7.9 and iPhone 17 Pro /
-iOS 26.5.1) on infrastructure Wi-Fi, including teardown + reconnect and the 2-minute soak with zero
-stalls. The adverse-network matrix the suite was built for — captive-portal Wi-Fi, airplane mode,
-Wi-Fi-off/cellular-on, two SSIDs — is still worth walking through; that is what it is for.
+**Scenarios 1–5: on-device validation is done** — 5/5 on both phones (iPhone XS / iOS 18.7.9 and
+iPhone 17 Pro / iOS 26.5.1) on infrastructure Wi-Fi, including teardown + reconnect and the 2-minute
+soak with zero stalls. The adverse-network matrix the suite was built for — captive-portal Wi-Fi,
+airplane mode, Wi-Fi-off/cellular-on, two SSIDs — is still worth walking through; that is what it is for.
+
+**Scenario 6: never run on hardware yet.** It compiles for `iosArm64`, `iosSimulatorArm64` and
+`macosArm64`, and it is reviewable, but it has no on-device result of any kind. It cannot get one from a
+Mac: it needs two physical iPhones and a person flipping Airplane Mode. Until that run happens, #1712's
+hardware gate is *runnable*, not *passed* — do not read this file as evidence either way.

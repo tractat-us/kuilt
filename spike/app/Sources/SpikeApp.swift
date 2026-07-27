@@ -31,6 +31,8 @@ final class Model: ObservableObject {
     @Published var report = ""
     @Published var running = false
     @Published var role = ""
+    /// The current instruction for the human holding this phone (scenario 6 only). Empty = nothing to do.
+    @Published var prompt = ""
 
     private let suite = ConnectivitySuite()
 
@@ -40,6 +42,7 @@ final class Model: ObservableObject {
         self.running = true
         self.rows = []
         self.report = ""
+        self.prompt = ""
         self.log = "starting \(role)…"
         suite.start(
             role: role,
@@ -56,6 +59,13 @@ final class Model: ObservableObject {
                     self.rows.append(Row(id: Int(r.id), name: r.name, glyph: r.glyph, elapsedMs: r.elapsedMs, detail: r.detail))
                 }
             },
+            onPrompt: { [weak self] text in
+                print("[suite] SAY | " + text)
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.prompt = text
+                }
+            },
             onComplete: { [weak self] text in
                 // Emit the full report to stdout, fenced, so the harness can extract it verbatim.
                 print("[suite] ===REPORT-BEGIN===")
@@ -65,6 +75,7 @@ final class Model: ObservableObject {
                     guard let self else { return }
                     self.report = text
                     self.running = false
+                    self.prompt = ""
                 }
             }
         )
@@ -94,8 +105,30 @@ struct ContentView: View {
                 Button("Join · S4 only") { model.start(role: "join-s4") }
                     .buttonStyle(.bordered).disabled(model.running)
             }
+            // #1712 gate: run ONLY scenario 6 — the operator-driven airplane-mode outage. Unlike the
+            // battery, the button here PICKS THE ROLE: Join is the phone that goes offline, Host is the
+            // phone that stays up. Whoever taps Join does the toggling.
+            HStack(spacing: 16) {
+                Button("Host · S6 stay up") { model.start(role: "host-s6") }
+                    .buttonStyle(.bordered).disabled(model.running)
+                Button("Join · S6 go offline") { model.start(role: "join-s6") }
+                    .buttonStyle(.bordered).disabled(model.running)
+            }
             if model.running {
                 HStack(spacing: 8) { ProgressView(); Text("running \(model.role)…").font(.caption) }
+            }
+
+            // The operator banner. Deliberately the loudest thing on screen while it is non-empty: the
+            // person is holding two phones in a lift, and a missed instruction is a wasted run.
+            if !model.prompt.isEmpty {
+                Text(model.prompt)
+                    .font(.body.bold())
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                    .padding(12)
+                    .background(Color.orange.opacity(0.25))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.orange, lineWidth: 2))
+                    .accessibilityAddTraits(.isHeader)
             }
 
             // Pass/fail matrix
@@ -138,11 +171,15 @@ struct ContentView: View {
         .padding()
         .onAppear {
             // Harness drive: launch args `host`/`join` auto-start the battery headlessly.
-            // The `-s4` variants run scenario 4 alone (#1467 diagnostic); check them FIRST, since
+            // The `-s4` variants run scenario 4 alone (#1467 diagnostic) and `-s6` runs the
+            // operator-driven local-fabric gate (#1712); check the suffixed forms FIRST, since
             // `contains` is exact-match and "host-s4" must not fall through to the full battery.
+            // `-s6` still needs a human at the Airplane Mode toggle — the launch arg only starts it.
             let args = ProcessInfo.processInfo.arguments
             if args.contains("host-s4") { model.start(role: "host-s4") }
             else if args.contains("join-s4") { model.start(role: "join-s4") }
+            else if args.contains("host-s6") { model.start(role: "host-s6") }
+            else if args.contains("join-s6") { model.start(role: "join-s6") }
             else if args.contains("host") { model.start(role: "host") }
             else if args.contains("join") { model.start(role: "join") }
         }

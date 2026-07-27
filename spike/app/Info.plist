@@ -28,6 +28,7 @@
 		<string>_ksuite4a._tcp</string>
 		<string>_ksuite4b._tcp</string>
 		<string>_ksuite5._tcp</string>
+		<string>_ksuite6._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>nw-spike tests peer-to-peer connectivity between two phones over Apple's Network framework.</string>
