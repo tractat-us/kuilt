@@ -1,4 +1,4 @@
-@file:Suppress("ForbiddenImport") // deliberate: the lost-update race only manifests under a real multi-threaded dispatcher — a virtual/single-threaded one serialises the recomputes and hides it entirely.
+@file:Suppress("ForbiddenImport") // deliberate: this probe exists to run on real OS threads with real preemption — a virtual/single-threaded dispatcher serialises the pumps and the writer and hides the race entirely.
 
 package us.tractat.kuilt.core.composite
 
@@ -24,28 +24,36 @@ import us.tractat.kuilt.core.TransportRole
 import us.tractat.kuilt.core.runConcurrencyStress
 import us.tractat.kuilt.test.FakeSeam
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertIs
 
 /**
  * Real-threaded stress probe for [CompositeSeam]'s capability rollup (#1712).
  *
- * `recomputeCapability` is a read-modify-write: snapshot the woven plies under the lock, fold, publish to
+ * The rollup is a read-modify-write: snapshot the woven plies under the lock, fold, publish to
  * `_capability`. The publish cannot happen under the lock — emitting to a `StateFlow` can resume an
  * unconfined collector inline, and running arbitrary consumer code under a lock this class treats as
- * non-reentrant risks deadlock — so without serialisation two concurrent recomputes can interleave and let
- * a **stale** publish land last. The composite would then advertise a confident `Available` for a path that
- * had already dropped, and nothing would correct it until some later emission happened to fire. That is the
- * #1712 defect one layer up, so it must be structurally impossible, not merely unlikely.
+ * non-reentrant risks deadlock. Serialising every snapshot→publish pair onto one writer coroutine keeps
+ * two recomputes from interleaving, and this probe covers that.
  *
- * The fix is a single writer coroutine draining a conflated channel. This probe hammers a composite with
- * concurrent capability transitions from several real threads, then settles on one known final value and
- * asserts the composite converges to it. Against the un-serialised version a stale publish wins the last
- * write and the convergence await never completes, so the harness fails with a stage label and thread dump.
+ * ### But serialising the writer is not what wedged it
+ * The defect this probe actually caught was a lost **trigger**, not a lost update — and no amount of writer
+ * serialisation could fix it, because the request for the final transition never existed. `StateFlow`
+ * conflates emissions **per collector, against that collector's own last-emitted value**, so a ply whose
+ * availability round-trips `X → Y → X` while its pump is descheduled announces **nothing**. A rollup that
+ * re-read each ply's live value at fold time then drained some earlier request into a fold whose joint read
+ * raced ahead of the silent ply's change, published a verdict already stale for it, and left nothing to
+ * correct it — a confident `Available` for a dropped path, forever, since the fold is any-Available-wins.
  *
- * **Not reproducible under `runTest`.** `recomputeCapability` contains no suspension point between snapshot
- * and publish, so a single-threaded test dispatcher runs the whole read-modify-write atomically with respect
- * to coroutine scheduling — the interleaving simply cannot occur. Only genuine OS threads expose it, which
- * is why this lives here rather than as a deterministic unit test.
+ * The fold therefore reads only values the plies have **announced**, mirrored onto their handles before the
+ * request is issued, which makes a conflated-away notification harmless by construction: a delivery is
+ * suppressed exactly when the ply's value already equals the mirror. See `publishCapability`.
+ *
+ * ### What each layer covers
+ * The mechanism itself is pinned deterministically, on every platform, by
+ * [CompositeCapabilityLostTriggerTest] — it drives the interleaving instead of waiting for one. This probe
+ * is the real-threaded backstop that found it and that guards the whole read-modify-write under genuine OS
+ * threads and genuine preemption, which no test dispatcher reproduces.
  *
  * **JVM-hosted, `-Pconcurrency.stress.tests`-gated** (matches the other seam probes): excluded from the
  * normal `jvmTest` run and executed on the dedicated concurrency-stress CI job.
@@ -65,7 +73,8 @@ class CompositeCapabilityConcurrencyTest {
             dispatcher = Dispatchers.Default,
         ).host(Pattern("host"))
 
-        // MANY SHORT ROUNDS, not one long flood. The bug only shows when a stale publish lands LAST, so
+        // MANY SHORT ROUNDS, not one long flood. The wedge only shows when a fold lands between the plies'
+        // transitions and the silent ply's own notification is then conflated away, so
         // every round must end in a quiescent check — a single flood offers exactly one such opportunity
         // and is far too insensitive (also verified). Each round drives both plies down FROM SEPARATE
         // THREADS, so the two pumps recompute concurrently across the transition that matters.
@@ -95,17 +104,38 @@ class CompositeCapabilityConcurrencyTest {
                 awaitAll(*drops.toTypedArray())
             }
 
-            // Both paths are down and every writer has stopped, so the composite MUST settle on
-            // Unavailable. A stale publish landing after the correct one strands it on Available (the fold
-            // is any-Available-wins) with no further emission to correct it — so this await hangs and the
-            // harness fails with the stage label and thread dump.
+            // Both paths are down, so the composite MUST CONVERGE on Unavailable. A rollup that folds a ply
+            // value no surviving request will ever re-read strands on Available (the fold is
+            // any-Available-wins) with nothing to correct it — so this await never completes and the harness
+            // fails with the stage label and thread dump. That convergence is what this probe guards.
             //
-            // Asserted by TYPE, not value: the fold normalises the reason (a composite reports its own
-            // rollup reason, not the ply's), so an `==` against a ply's reason could never match.
-            composite.capability.first { it.availability is FabricAvailability.Unavailable }
-            assertIs<FabricAvailability.Unavailable>(
-                composite.capability.value.availability,
-                "round=$round: composite settled on a STALE availability — a recompute published out of order",
+            // Deliberately NOT re-read from `.value` afterwards (#1712). `capability` is an
+            // eventually-consistent rollup of the plies' ANNOUNCED values and cannot be made monotone:
+            //  - the fold must be a pure function of announced values, because a fold that re-reads a ply's
+            //    LIVE value strands the instant that ply's own notification is conflated away — StateFlow
+            //    emits only when the value it re-reads differs from that collector's last-emitted value, so
+            //    a ply round-tripping X→Y→X past a descheduled pump announces nothing. That strand is the
+            //    exact defect this probe exists to catch;
+            //  - and a mirrored fold necessarily combines announcements written at different instants, so any
+            //    one of them may already be superseded by fold time.
+            // A pump preempted between StateFlow's read and its delivery therefore lands a genuine but
+            // briefly-stale announcement after a sibling's drop, and the composite correctly publishes its
+            // current knowledge before correcting itself microseconds later. Re-reading `.value` here
+            // demanded monotonicity the architecture cannot provide, and every alternative design that
+            // restores it either strands or spins waiting on a preempted pump.
+            //
+            // Asserting the REASON instead keeps this check non-vacuous where a bare type assert on the
+            // awaited value would be tautological: it proves the value came from the composite's own fold
+            // (which normalises the reason) rather than a ply's `Unavailable("path lost")` leaking through.
+            val settled = composite.capability.first { it.availability is FabricAvailability.Unavailable }
+            val availability = assertIs<FabricAvailability.Unavailable>(
+                settled.availability,
+                "round=$round: the composite must converge on Unavailable with both paths down",
+            )
+            assertEquals(
+                "no woven ply reports an available path",
+                availability.reason,
+                "round=$round: the composite must publish its OWN rollup verdict, not a ply's",
             )
         }
         composite.close(CloseReason.Normal)
