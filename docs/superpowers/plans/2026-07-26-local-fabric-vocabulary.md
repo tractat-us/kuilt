@@ -13,7 +13,13 @@
 
 ## Global Constraints
 
-- `source ~/.sdkman/bin/sdkman-init.sh && sdk env` — kuilt pins **JDK 21** via `.sdkmanrc`. Not 25 (detekt/detekt#8714, see #1708).
+- **JDK 21 — select it explicitly:** `source ~/.sdkman/bin/sdkman-init.sh && sdk use java 21.0.5-tem`.
+  **Do NOT use `sdk env`.** There is no `.sdkmanrc` in this repo (verified 2026-07-27 — untracked and
+  absent in every worktree), so `sdk env` fails with *"Could not find .sdkmanrc in the current
+  directory"* and the build silently proceeds on the system default, JDK 25. That does not fail
+  loudly at the top — it fails ~3 minutes in, at `:kuilt-warp-ksp:detekt`, with
+  `Invalid value (25) passed to --jvm-target` (detekt/detekt#8714, see #1708), which reads like a
+  code defect and is not one. Confirm with `java -version` before trusting a build result.
 - `explicitApi()` is enforced; every new public declaration needs an explicit visibility modifier.
 - **No `!!` in production code.** CI's `:module:detektJvmMain` type-resolution pass fails on `UnsafeCallOnNullableType`, and a local `detektAll` can false-green it (#1537).
 - Use `detektAll`, never bare `detekt` — bare `detekt` is `NO-SOURCE` here and reports success without analysing anything.
