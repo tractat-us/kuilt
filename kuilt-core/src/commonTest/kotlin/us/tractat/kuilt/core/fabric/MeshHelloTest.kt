@@ -1,12 +1,15 @@
 package us.tractat.kuilt.core.fabric
 
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 /**
- * Round-trip tests for [MeshHello] length-prefix encoding (fixes #427).
+ * Round-trip tests for [MeshHello] length-prefix encoding (fixes #427), plus rejection of the malformed
+ * preambles a remote can send (#1788).
  *
  * The wire format is `[4-byte big-endian id length][id UTF-8 bytes][nonce bytes]` — no delimiter,
  * no hex encoding, no NUL bytes in the source or on the wire.
@@ -69,4 +72,41 @@ class MeshHelloTest {
         assertEquals(idByteLen, prefixLen)
         assertEquals(4 + idByteLen + nonce.size, frame.size)
     }
+
+    // --- malformed input a REMOTE can send (#1788) ---
+    //
+    // The preamble is the first bytes a remote sends, so these are reachable inputs, not local mistakes.
+    // Each defeated the decoder before the fix: a short frame index-faulted inside `readInt` (there was no
+    // check at all), and both a negative and an overflowing declared length pass any additive
+    // `size >= 4 + idLen` test. `MeshSeam` reached the decoder from `buildMesh`'s concurrent handshakes and
+    // from a hub's accept pump, so relying on a caller's guard was the wrong place for the check.
+
+    @Test
+    fun aFrameTooShortForTheLengthPrefixIsRejected() {
+        (0 until 4).forEach { size ->
+            assertFailsWith<IllegalArgumentException>("a $size-byte preamble must be rejected, not index-fault") {
+                MeshHello.decode(ByteArray(size))
+            }
+        }
+    }
+
+    @Test
+    fun aNegativeOrOverflowingDeclaredIdLengthIsRejected() {
+        assertAll(
+            { assertFailsWith<IllegalArgumentException> { MeshHello.decode(frameDeclaring(-1)) } },
+            { assertFailsWith<IllegalArgumentException> { MeshHello.decode(frameDeclaring(Int.MIN_VALUE)) } },
+            { assertFailsWith<IllegalArgumentException> { MeshHello.decode(frameDeclaring(Int.MAX_VALUE)) } },
+            // The plain truncation case too: a length larger than the frame but small enough not to wrap.
+            { assertFailsWith<IllegalArgumentException> { MeshHello.decode(frameDeclaring(1024)) } },
+        )
+    }
+
+    /** A well-formed 4-byte length prefix declaring [declaredIdLength], plus a 16-byte body. */
+    private fun frameDeclaring(declaredIdLength: Int): ByteArray =
+        ByteArray(4 + 16).also { frame ->
+            frame[0] = (declaredIdLength ushr 24).toByte()
+            frame[1] = (declaredIdLength ushr 16).toByte()
+            frame[2] = (declaredIdLength ushr 8).toByte()
+            frame[3] = declaredIdLength.toByte()
+        }
 }
