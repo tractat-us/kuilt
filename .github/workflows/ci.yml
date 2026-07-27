@@ -178,7 +178,7 @@ jobs:
       # (via assemble/build), so it needs the toolchain too. Keyed on the
       # toolchain-defining files; shared key with build-native (same cache).
       - name: Cache Kotlin/Native (~/.konan)
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.konan
           key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle.kts') }}
@@ -347,7 +347,7 @@ jobs:
           cache-read-only: false
 
       - name: Cache Kotlin/Native (~/.konan)
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.konan
           key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle.kts') }}
@@ -532,7 +532,7 @@ jobs:
       # Dokka analyses every target's main sources (incl. the native source sets),
       # so it needs the Kotlin/Native toolchain — same konan cache as the build jobs.
       - name: Cache Kotlin/Native (~/.konan)
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.konan
           key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle.kts') }}
