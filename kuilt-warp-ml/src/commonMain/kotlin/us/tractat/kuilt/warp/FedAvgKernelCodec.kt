@@ -22,8 +22,8 @@ public object FedAvgKernelCodec {
     /**
      * Encodes `(weights, examples, learnRate)` into the kernel input layout.
      *
-     * @throws IllegalArgumentException if [weights] is not [DIM]-dimensional, or if [examples] is
-     *   empty. The kernel scales the gradient by `2 / count`, so a zero count would divide by zero
+     * @throws IllegalArgumentException if [weights] is not `D = 2`-dimensional, or if [examples]
+     *   is empty. The kernel scales the gradient by `2 / count`, so a zero count divides by zero
      *   and emit a `NaN` weight vector — matching [ReferenceTrainer.step]'s guard keeps the oracle
      *   and the kernel equivalent for every input either one accepts.
      */
