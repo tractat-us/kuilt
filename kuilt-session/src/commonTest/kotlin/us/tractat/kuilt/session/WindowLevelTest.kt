@@ -695,10 +695,16 @@ class WindowLevelTest {
         runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             val h = faultedResumableJoiner()
             val windows = mutableListOf<MembershipEvent.WindowOpened>()
+            val partitions = mutableListOf<MembershipEvent.Partitioned>()
             backgroundScope.launch {
                 h.joiner.events
                     .filterIsInstance<MembershipEvent.WindowOpened>()
                     .collect { if (it.peerId == h.hostId) windows += it }
+            }
+            backgroundScope.launch {
+                h.joiner.events
+                    .filterIsInstance<MembershipEvent.Partitioned>()
+                    .collect { if (it.peerId == h.hostId) partitions += it }
             }
             testScheduler.runCurrent()
 
@@ -748,6 +754,25 @@ class WindowLevelTest {
                         windows.lastOrNull()?.expiresAt,
                         "…and the moved deadline must be the one just announced; a level that moves " +
                             "silently leaves the last WindowOpened permanently false — observed $windows",
+                    )
+                },
+                {
+                    assertEquals(
+                        1,
+                        partitions.size,
+                        "the PARTITION is announced once, on first detection — one outage is one " +
+                            "Partitioned, however many times we notice it. A consumer treating this " +
+                            "as an edge (countdown, disconnect log, metric) double-counts otherwise, " +
+                            "and Liveness.Partitioned.since's contract says it agrees with the single " +
+                            "Partitioned emitted — which requires there to be one. Observed $partitions",
+                    )
+                },
+                {
+                    assertEquals(
+                        fromTear.since,
+                        partitions.firstOrNull()?.at,
+                        "…and that one event is the FIRST detection, so the level's `since` is " +
+                            "exactly the instant the consumer was told about — observed $partitions",
                     )
                 },
             )

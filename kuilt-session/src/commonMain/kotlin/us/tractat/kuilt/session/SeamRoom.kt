@@ -680,7 +680,7 @@ internal class SeamRoom(
                         // lookup [restoreHostDetector] does. Genuine lock acquisition, not a
                         // re-entry: JoinerResumeMachine.runReconnect calls this outside its own
                         // critical sections (the lock is reentrant either way).
-                        lock.withLock {
+                        val wasPartitioned = lock.withLock {
                             val existing = admittedById[hostId]?.liveness as? Liveness.Partitioned
                             updateMemberLiveness(
                                 hostId,
@@ -699,15 +699,28 @@ internal class SeamRoom(
                                     windowExpiresAt = windowDeadline,
                                 ),
                             )
+                            existing != null
                         }
-                        emitEvent(
-                            MembershipEvent.Partitioned(
-                                hostId,
-                                at,
-                                ReconnectReason.TransportClosed,
-                                localFabric = localFabric.value,
-                            ),
-                        )
+                        // Idempotent like [markPartitioned]'s: the PARTITION is announced once, on the
+                        // first detection. Without this gate the real-hardware Timeout-then-tear
+                        // ordering emits Partitioned twice for one outage, so a consumer treating it as
+                        // an edge — start a countdown, log a disconnect, bump a metric — double-counts.
+                        // It is also what keeps [Liveness.Partitioned.since]'s contract literally true:
+                        // `since` agrees with the single Partitioned event because there is only one.
+                        if (!wasPartitioned) {
+                            emitEvent(
+                                MembershipEvent.Partitioned(
+                                    hostId,
+                                    at,
+                                    ReconnectReason.TransportClosed,
+                                    localFabric = localFabric.value,
+                                ),
+                            )
+                        }
+                        // WindowOpened stays UNCONDITIONAL — the deadline really did move on the tear,
+                        // and a moved deadline must always be announced or a consumer counts down to a
+                        // number it can no longer see is stale (the #1777 lesson, same reason as
+                        // markPartitioned's).
                         emitEvent(MembershipEvent.WindowOpened(hostId, windowDeadline))
                     }
 
