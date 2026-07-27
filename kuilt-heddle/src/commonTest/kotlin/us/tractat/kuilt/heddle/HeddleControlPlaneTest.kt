@@ -750,6 +750,47 @@ class HeddleControlPlaneTest {
         )
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // #1717: an entry that does not decode as a ControlEnvelope is SKIPPED — no outcome,
+    // no projection change — while the roster's applied index still advances over it, so
+    // the prefix marker `enrolledAt` answers against keeps tracking the DELIVERED log.
+    // Both halves are load-bearing and pinned here. The skip is now also logged at `warn`
+    // with the entry index; the log line itself has no assertable sink in commonTest, so
+    // only the behavioural half is asserted.
+    // ═══════════════════════════════════════════════════════════════════════════
+    @Test
+    fun undecodableEntryIsSkippedAndStillAdvancesTheAppliedIndex() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
+        val sink = RecordingSink()
+        val plane = HeddleControlPlane(
+            fake, ReplicaId("solo"), backgroundScope, sink, NO_REMONITOR, EntitlementLedger.ZERO, "boot-1717",
+        )
+
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Mint(ReplicaId("acme"), 100L)))
+        val projectionBefore = plane.projectionSnapshot()
+        val indexBefore = plane.rosterSnapshot().appliedIndex
+
+        // A committed entry whose bytes are not a ControlEnvelope. `0xFF` is CBOR's break byte, so it
+        // can never open a valid encoding. This is what a non-heddle entry looks like — and equally
+        // what an older heddle entry stranded by a ControlEnvelope/ControlCommand schema change would
+        // look like on the replay-from-index-1 every governed node performs at boot.
+        val undecodable = fake.pushCommitted(byteArrayOf(0xFF.toByte(), 0x00, 0x42))
+        runCurrent()
+
+        assertAll(
+            { assertTrue(undecodable.index > indexBefore, "sanity: the undecodable entry lands past the mint") },
+            { assertEquals(projectionBefore, plane.projectionSnapshot(), "the log-pure projection must be untouched") },
+            { assertEquals(100L, sink.snapshot().mintedTotal(), "no patch may be published to the data plane") },
+            {
+                assertEquals(
+                    undecodable.index,
+                    plane.rosterSnapshot().appliedIndex,
+                    "the applied index must advance over a skipped entry — it marks the delivered prefix",
+                )
+            },
+        )
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────
     // harness helpers
     // ─────────────────────────────────────────────────────────────────────────────
