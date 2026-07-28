@@ -17,6 +17,9 @@ next-plan-*.md
 .superpowers/
 .jqwik-database
 
+# Device logs pulled by spike/collect-logs.sh — evidence from a hardware run, not source
+spike-logs/
+
 # Xcode per-user data (spike/ Xcode project)
 **/xcuserdata/
 *.xcuserstate

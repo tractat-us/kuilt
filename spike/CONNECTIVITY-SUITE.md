@@ -417,6 +417,63 @@ record alongside the peer's.
 | `-9848` / `-9854` | `errSSLBadConfiguration` / `errSSLConfigurationFailed` | NW rejected the TLS options before any handshake. |
 | `-9816` | `errSSLClosedNoNotify` | Peer vanished without a close_notify — often the *other* side of a failure. |
 
+## Collecting the logs afterwards — one command
+
+Every run now writes itself to a file **on the phone**, as it goes. You don't have to do anything to
+make that happen, and you don't need a Mac anywhere near you at the time. The phone keeps it.
+
+That matters most during scenario 6. When you switch a phone into Airplane Mode, a Mac plugged into it
+stops being able to see anything — which is precisely the minute you most want to see. And if you
+relaunch the app for any reason, whatever was on screen is gone. The file survives both.
+
+Later, get both phones back to your Mac — a cable, or just the same Wi-Fi, whichever is easier — and
+run:
+
+```bash
+./spike/collect-logs.sh
+```
+
+It finds every iPhone the Mac can see, copies each one's logs off, and writes **one merged file** with
+both phones' lines interleaved in the order things actually happened, each line labelled with which
+phone said it. It prints where it put it. Run it as many times as you like — it never changes or
+deletes anything on the phones, and each run gets its own folder.
+
+The merged file is the thing to read, and for scenario 6 it is *the* thing to read: that scenario
+passes only if the two phones say **opposite** things about the same silence, so the evidence is the
+pair, side by side. It looks like this:
+
+```
+2026-07-28T00:25:16.000Z  iPhone-iPhone11-2        [6] role=join side=DROPPED detect=5s window=1m
+2026-07-28T00:25:17.250Z  Iains-Phone-iPhone18-1   [6] role=host side=ONLINE detect=5s window=1m
+2026-07-28T00:25:18.500Z  iPhone-iPhone11-2        [6] short: mine→Unavailable(path unsatisfied)
+2026-07-28T00:25:19.900Z  Iains-Phone-iPhone18-1   [6] short: Partitioned tagged Available
+```
+
+Two phones, one column of times, and you can see the asymmetry rather than having to reconstruct it.
+
+If it can't find a phone it says so and stops — it never writes a half-empty timeline and calls it a
+result. `./spike/collect-logs.sh -h` lists the few options (choose the output folder, a different app,
+or one specific phone).
+
+### The details, if you need them
+
+- Files land in the app's `Documents`, one per run, named
+  `suite-<UTC timestamp>-<hardware model>-<role>.log` — timestamp first so they sort into order, model
+  in the middle so two phones can never overwrite each other. Scenario 1's raw `nw.log` sits alongside
+  and is merged in too.
+- The file holds every line the on-screen log shows, plus the final report, plus whatever `kuilt-nw`
+  and `kuilt-session` log through `kotlin-logging` at the level the run is using — so a `nw_error` code
+  is in there without a console attached. It's a superset of **Share report**.
+- Capture can never fail a scenario. If the file can't be opened the run says so once, in the log, and
+  carries on.
+- Enabling capture also routes `kotlin-logging` through `DirectLoggerFactory`, exactly as the S4
+  diagnostic mode already did — so fabric lines now reach stdout (and `devicectl --console`) instead of
+  `os_log`. The *level* is untouched: nothing new is emitted, so the soak measures what it always did.
+  Use the `S4 only` buttons when you want the full DEBUG trace; it now lands in the file too.
+- This is step 1 of #1837. Steps 2 and 3 — the phones draining to a Mac-side `LogTapHost` over Bonjour
+  by themselves — are deliberately not built yet; they hinge on an unsettled decision about the join
+  token's lifetime. Until then, the cable is the drain, and the merged file is the same artifact.
+
 ## Mac-tethered runs (optional)
 
 The field path needs no Mac. For bench work, the launch arguments auto-start the battery headlessly and

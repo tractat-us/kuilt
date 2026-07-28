@@ -34,6 +34,10 @@ kotlin {
             // (nw.loom.*, nw.dial, nw.api.state, and the #1560 nw_error capture) at DEBUG.
             // The suite raises the level at startup so a device console run shows that trace.
             implementation(libs.kotlin.logging)
+            // #1837 step 1: SuiteLogCapture's run file is written from the suite coroutine AND from
+            // Network.framework dispatch queues (via the kotlin-logging tee), so the handle needs a real
+            // mutex. Locks API only — no gradle plugin needed (see the catalog's note).
+            implementation(libs.kotlinx.atomicfu)
         }
     }
 }
