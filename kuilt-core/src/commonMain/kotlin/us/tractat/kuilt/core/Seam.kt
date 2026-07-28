@@ -72,10 +72,16 @@ public interface Seam {
      *
      * Asserted by `SeamConformanceSuite.peersCollapseToSelfIdWhenTorn`, gated on the
      * `collapsesPeersOnTear` capability so a fabric that does not honour it yet declares a **tracked**
-     * gap rather than passing silently. **Honest limit:** the suite asserts the terminal *value* — a
-     * `Torn` seam's `peers` is `{ selfId }` — and not the *ordering*, because a `StateFlow` conflates
-     * against each collector's last-observed value, so no collector can reliably witness which of the
-     * two writes landed first.
+     * gap rather than passing silently.
+     *
+     * **What the TCK can and cannot see.** It asserts the terminal *value* — a `Torn` seam's `peers` is
+     * `{ selfId }` — and not the *ordering*, because it must work against a fabric whose seams it drives
+     * through a dispatcher: a collector that resumes after `close()` returns always reads the settled
+     * value, so an ordering assertion there would pass for every implementation and prove nothing. That
+     * makes the ordering clause above no less binding, only unenforceable from a portable suite. Pin it
+     * per fabric with an *inline* collector, as `CompositeCloseCollapseOrderTest` does — it reads `peers`
+     * from inside the `Torn` write itself, and a fabric that latches before collapsing fails it while the
+     * TCK obligation stays green.
      */
     public val peers: StateFlow<Set<PeerId>>
 
