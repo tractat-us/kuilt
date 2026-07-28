@@ -87,17 +87,31 @@ public class ConnectivitySuite {
         onPrompt: (String) -> Unit,
         onComplete: (String) -> Unit,
     ) {
+        // #1837 step 1 — the ONE call site that makes a run durable. Every line below is written to a
+        // per-run file in the app container *before* it reaches the UI, so the trace survives an app
+        // restart, a `--terminate-existing` relaunch, and the Airplane Mode window — the one window a
+        // cabled `devicectl --console` cannot see, and the window scenario 6 exists to test. Pull it
+        // afterwards with `spike/collect-logs.sh`. Capture failure is never a scenario failure: `open`
+        // always returns a sink, and a sink that could not open its file says so once and discards.
+        val capture = SuiteLogCapture.open(role)
+        val uninstallTee = capture.installFabricTee()
+        val log: (String) -> Unit = { line -> capture.line(line); onLog(line) }
+        val complete: (String) -> Unit = { text -> capture.block("=== report ===", text); onComplete(text) }
         scope.launch {
             try {
-                runSuite(role, onLog, onScenario, onPrompt, onComplete)
+                log(capture.warning ?: "trace → ${capture.path}")
+                runSuite(role, log, onScenario, onPrompt, complete)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
-                onLog("suite crashed: ${e::class.simpleName}: ${e.message}")
+                log("suite crashed: ${e::class.simpleName}: ${e.message}")
                 onPrompt("")
-                onComplete(
+                complete(
                     SuiteReport(role, NSDate().timeIntervalSince1970, EnvSnapshot.UNKNOWN, deviceDescription(), results.toList()).text,
                 )
+            } finally {
+                uninstallTee()
+                capture.close()
             }
         }
     }
