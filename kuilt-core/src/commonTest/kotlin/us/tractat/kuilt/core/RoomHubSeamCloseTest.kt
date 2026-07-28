@@ -9,6 +9,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
@@ -44,7 +45,9 @@ class RoomHubSeamCloseTest {
         room.close()
         assertAll(
             { assertIs<SeamState.Torn>(room.state.value, "close() must latch Torn") },
-            { assertTrue(room.peers.value.isEmpty(), "close() must clear the roster") },
+            // Not `isEmpty()`: `Seam.peers` collapses a Torn seam to exactly `{ selfId }`, and the hub
+            // is a peer in its own room roster.
+            { assertEquals(setOf(room.selfId), room.peers.value, "close() must collapse the roster to self") },
         )
 
         // Release the authorizer: the in-flight deliver now reaches its registration block, AFTER
@@ -53,7 +56,7 @@ class RoomHubSeamCloseTest {
         deliverJob.join()
 
         assertAll(
-            { assertTrue(room.peers.value.isEmpty(), "a post-close deliver must not re-register a peer") },
+            { assertEquals(setOf(room.selfId), room.peers.value, "a post-close deliver must not re-register a peer") },
             { assertTrue(room.attestedPrincipals.value.isEmpty(), "…nor republish attested principals") },
             { assertIs<SeamState.Torn>(room.state.value, "state must stay Torn") },
         )

@@ -292,7 +292,8 @@ class TieredSeamTest {
 
         assertAll(
             { assertTrue(f.tiered.state.value is SeamState.Torn, "tiered state is Torn after close") },
-            { assertTrue(f.tiered.peers.value.isEmpty(), "tiered peers empties after close") },
+            // Not `isEmpty()`: `Seam.peers` collapses a Torn seam to exactly `{ selfId }`.
+            { assertEquals(setOf(f.tiered.selfId), f.tiered.peers.value, "tiered peers collapse to self after close") },
             { assertTrue(f.selfLocal.state.value is SeamState.Torn, "the local tier is closed") },
             { assertTrue(f.selfPeer.state.value is SeamState.Torn, "the peer tier is closed") },
         )
@@ -336,7 +337,7 @@ class TieredSeamTest {
 
         assertAll(
             { assertTrue(f.tiered.state.value is SeamState.Torn, "state stays Torn after a second close") },
-            { assertFalse(f.tiered.peers.value.isNotEmpty(), "peers stays empty after a second close") },
+            { assertEquals(setOf(f.tiered.selfId), f.tiered.peers.value, "peers stay collapsed after a second close") },
         )
     }
 }
