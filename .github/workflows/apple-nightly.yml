@@ -13,10 +13,23 @@ name: apple-nightly
 #
 # THE DECISION (deliberately cheap)
 #   Keep per-PR CI Linux-only; run the full Apple lane on a scheduled nightly
-#   build on a macOS runner. macOS runner minutes bill ~10x Linux, so this lane
-#   is NOT wired into `ci-required` and is NOT a required status check — a red
-#   run here notifies out of band without blocking any PR merge. Trigger it on
-#   demand with `gh workflow run apple-nightly.yml` (workflow_dispatch).
+#   build on a macOS runner. This lane is NOT wired into `ci-required` and is NOT
+#   a required status check — a red run here notifies out of band without blocking
+#   any PR merge. Trigger it on demand with `gh workflow run apple-nightly.yml`
+#   (workflow_dispatch).
+#
+#   WHY OUT OF BAND — concurrency, not cost. This repo is PUBLIC, so GitHub-hosted
+#   standard runners (macos-latest included) are free at every size; there is no
+#   billing multiplier to appeal to, and an earlier version of this comment claiming
+#   "~10x Linux" was simply wrong. The real ceiling is that GitHub caps a plan at
+#   FIVE concurrent macOS jobs regardless of visibility. ci.yml fires ~25 runs/hour
+#   and this job takes ~11.5 min, so putting the Apple lane on every PR would sit
+#   permanently at that cap and queue every merge behind it.
+#
+#   The same reasoning makes this lane the home for the `:spike` compile (#1796):
+#   :spike is Apple-only and depends on the cinterop-bearing :kuilt-nw, so it needs
+#   a Mac host too. ci.yml gates it only when a PR edits spike/ sources; a kuilt
+#   change that breaks :spike without touching spike/ is caught here instead.
 
 on:
   schedule:
@@ -92,6 +105,39 @@ jobs:
       - name: macOS + iOS-sim K/N tests
         run: >-
           ./gradlew macosArm64Test iosSimulatorArm64Test --max-workers=2
+          -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8"
+          -Dkotlin.daemon.jvmargs="-Xmx3g"
+
+      # #1796: `:spike` is the two-iPhone hardware-validation harness for #1712, and
+      # until now NOTHING in CI compiled it — it is excluded from the root Gradle graph
+      # unless `-PincludeSpike` is passed, and no workflow passed it. It depends on
+      # :kuilt-core, :kuilt-session and :kuilt-nw, so any source-incompatible change to
+      # those broke it silently; the break then surfaced when someone tried to build the
+      # app for a field test, i.e. at exactly the moment they wanted an answer.
+      #
+      # This lane is the right home for the LIBRARY-side half of that gap: ci.yml's
+      # spike-compile job is path-filtered to spike/ sources (macOS runners are capped
+      # at 5 concurrent jobs plan-wide, so it must not fire on every PR), which leaves
+      # the case where kuilt code changes and spike/ does not. That case lands here,
+      # within 24 h, and the alert step below turns a red run into a tracking issue.
+      #
+      # Marginal cost is near zero: this runner is already up with a warm konan cache,
+      # and the macosArm64/iosSimulatorArm64 dependency klibs are already built by the
+      # step above. Compile only — no tests (there are none), no framework link, no
+      # Xcode app target (that one genuinely needs signing, which is why :spike was
+      # excluded in the first place).
+      #
+      # `!cancelled()` rather than the default success(): a K/N test failure above must
+      # not hide a spike break, and a spike break must not hide the test results. Both
+      # signals are independent and both feed the same failure alert.
+      - name: Compile :spike for its Apple targets (#1796)
+        if: ${{ !cancelled() }}
+        run: >-
+          ./gradlew -PincludeSpike
+          :spike:compileKotlinIosArm64
+          :spike:compileKotlinIosSimulatorArm64
+          :spike:compileKotlinMacosArm64
+          --max-workers=2
           -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8"
           -Dkotlin.daemon.jvmargs="-Xmx3g"
 
