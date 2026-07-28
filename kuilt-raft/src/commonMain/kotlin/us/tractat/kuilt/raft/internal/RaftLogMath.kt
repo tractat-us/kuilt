@@ -62,6 +62,37 @@ internal fun isLogUpToDate(ours: LogPosition, candidate: LogPosition): Boolean =
  *
  * Falls back to `maxOf(1, currentNextIndex - 1)` when no conflict metadata is available.
  *
+ * ## The result is clamped to `1..currentNextIndex` (issue #1829)
+ *
+ * [RaftMessage.AppendEntriesResponse.conflictIndex] arrives off the wire and was previously stored
+ * into `nextIndex[peer]` verbatim, which put two failure modes one malformed frame away:
+ *
+ * - **Above the leader's log** ⇒ the immediately following `sendAppendEntries` computes a
+ *   `prevIndex` with no backing entry and hits the hard `error("prevTerm for in-window index …
+ *   missing")`. That throws inside the engine's actor loop, whose `try`/`finally` has no `catch`, so
+ *   the leader is torn down permanently — the same crash #1175's success-branch clamp was added to
+ *   prevent, reached through the branch that clamp does not cover.
+ * - **Below 1** ⇒ `nextIndex ≤ snapshotIndex` forever, so every heartbeat diverts to
+ *   `sendSnapshotChunk` and that peer never resumes log replication. A silent per-peer wedge.
+ *
+ * `conflictIndex` is a **quantity**, not a nonce, so a conservative in-range reading exists and the
+ * clamp is the right disposition (unlike the round echo of #1817, where an out-of-range value is
+ * proof of forgery and must be discarded). Both honest constructions are bounded by the index the
+ * leader probed — `prevLogIndex = currentNextIndex - 1`: the "log too short" reply reports
+ * `followerLastLogIndex + 1`, taken only when `prevLogIndex > followerLastLogIndex`; a real term
+ * conflict reports the first index carrying the conflicting term, at or below `prevLogIndex`. §5.3
+ * fast backup is monotonically non-increasing by construction, so an honest `conflictIndex` always
+ * satisfies `conflictIndex < currentNextIndex` and the clamp is a no-op for every correct follower.
+ *
+ * The `lastOfTerm.index + 1` path is routed through the same clamp so the invariant lives in one
+ * place: it is already log-bounded, but a follower-supplied `conflictTerm` that the leader happens
+ * to hold *above* the probed index would otherwise move `nextIndex` **forward** on a rejection —
+ * the one direction §5.3 backup must never take.
+ *
+ * The clamp is written out rather than expressed as `coerceIn(1L, currentNextIndex)` on purpose:
+ * `coerceIn` throws when the range is inverted, and throwing here would kill the actor loop — the
+ * exact failure this function is being hardened against.
+ *
  * @param currentNextIndex the current nextIndex[peer] value
  * @param response the failed AppendEntriesResponse from the follower
  * @param log the leader's current log (used to probe for conflictTerm)
@@ -71,12 +102,14 @@ internal fun nextIndexAfterFailure(
     response: RaftMessage.AppendEntriesResponse,
     log: List<LogEntry>,
 ): Long {
-    if (response.conflictTerm != null) {
+    val proposed = if (response.conflictTerm != null) {
         val lastOfTerm = log.lastOrNull { it.term == response.conflictTerm }
-        return if (lastOfTerm != null) lastOfTerm.index + 1L
-               else response.conflictIndex ?: maxOf(1L, currentNextIndex - 1L)
+        if (lastOfTerm != null) lastOfTerm.index + 1L
+        else response.conflictIndex ?: maxOf(1L, currentNextIndex - 1L)
+    } else {
+        response.conflictIndex ?: maxOf(1L, currentNextIndex - 1L)
     }
-    return response.conflictIndex ?: maxOf(1L, currentNextIndex - 1L)
+    return maxOf(1L, minOf(proposed, currentNextIndex))
 }
 
 /**
