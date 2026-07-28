@@ -5,8 +5,9 @@ import us.tractat.kuilt.core.PeerId
 /**
  * Per-origin inbound gate for a composite fabric. Collapses duplicate [PlyFrame.Data]
  * (same `(originId, originSeq)` arriving over multiple plies) and releases per-origin
- * frames in sequence order with a bounded buffer. Not thread-safe — the composite
- * calls it from a single inbound coroutine.
+ * frames in sequence order with a bounded buffer. Not thread-safe: its caller serialises
+ * access — `CompositeSeam` holds its lock across every [accept], which is what restores the
+ * single-collection invariant across the concurrent per-ply inbound pumps.
  *
  * ### The origin key is peer-chosen, so the table is capped (#1814)
  * `originId` is a field the **sending** peer picks, read straight off the wire by
@@ -19,15 +20,15 @@ import us.tractat.kuilt.core.PeerId
  * [MAX_ORIGINS] closes that. Note exactly what it bounds and what it does not:
  *  - It bounds the **count** of origins this gate holds state for, over the gate's whole
  *    lifetime — origin state is never pruned, so a departed peer keeps its slot until the
- *    composite seam that owns this gate is gone. It is a lifetime budget, not a concurrent
- *    -origin one.
+ *    composite seam that owns this gate is gone. A lifetime budget, not a live-origin one.
  *  - It does **not** bound bytes. Each admitted origin may still hold up to [maxBuffered]
  *    payloads of whatever size its transport allows, so the retained-payload ceiling is
  *    `MAX_ORIGINS * maxBuffered` frames.
  *  - It does **not** check that an origin is an admitted member. Gating on composite roster
  *    state is the stronger property and is deliberately not done here: this gate knows
  *    nothing of the roster, and a `Data` frame can legitimately arrive before the `Announce`
- *    that registers its origin. See #1814 for that follow-on.
+ *    that registers its origin. See #1874 for that follow-on, which also covers the pruning
+ *    a membership gate would need.
  *
  * ### Refuse the new origin; never evict an admitted one
  * Evicting (LRU or otherwise) would hand the attacker the displacement: origin ids are
