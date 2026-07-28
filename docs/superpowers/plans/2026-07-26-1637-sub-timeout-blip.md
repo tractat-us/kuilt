@@ -129,6 +129,14 @@ The harness mirrors `AdoptTearTerminalTest` (same module), which is the canonica
 
 **The fixed clock is load-bearing.** The detector measures silence as `clock() - lastSeen`, so freezing it makes a `Timeout` impossible — which is exactly the real-world condition being modelled: the host's silence timer never fires because the joiner's own retries keep refreshing it.
 
+> **Correction (2026-07-27) — the sketch below is superseded by the landed test.** Three things in it do not work:
+>
+> - **A frozen clock cannot express the fix.** The dwell is measured as `clock() - since`, so with `clock()` pinned at `0` it never elapses and the no-op resume can never fire. The landed test advances the injected clock **in lockstep with virtual time** and instead keeps the host from timing out by *bounding the outage* — which is the real-world condition anyway. (The frozen clock in `FastReconnectRaceTest` is why the fix leaves that suite untouched.)
+> - **`enterWeaving()`/`recover()` live on the *seam*, not the `FlakyLifecycleLoom`** — `loom.enterWeaving()` does not compile.
+> - **`FlakyLifecycleSeam` alone collapses the grace to zero**, so the plan's own `grace < outage < hostTimeout` ordering is not representable. The landed harness layers `FlakyLifecycleSeam(FaultySeam(base))` on the joiner: the inner `FaultySeam.partition(Both)` stops frames while the seam stays `Woven` with the host still in `peers` (path lost, still in grace), and the outer `enterWeaving()` then models grace expiry.
+>
+> See `SubTimeoutBlipResumeTest.kt` for the shape that actually reproduces the bug.
+
 - [ ] **Step 1: Write the failing test**
 
 ```kotlin
@@ -462,7 +470,9 @@ Body must state: the mechanism (host `lastSeen` refreshed by the joiner's own Re
 
 - [ ] **Step 3: Hardware check before closing the issue**
 
-Do **not** `closes #1637`. Use `part of #1637`. Two phones, per `docs/one-phone-hardware-debugging.md`: airplane-mode the **joiner** (identify it from `lobby.freeze-matched` vs `lobby.freeze-round` in the logs) for **~8 seconds** — under the 15 s host timeout, over the 10 s `wovenPathGrace`. Expect `resume.no-op` in the joiner's log and a `Recovered(hostId)` membership event (see Amendment), where the current build produces `HostLost(Refused)` at ~60 s. Close by hand once that reproduces.
+Do **not** `closes #1637`. Use `part of #1637`. Two phones, per `docs/one-phone-hardware-debugging.md`: airplane-mode the **joiner** (identify it from `lobby.freeze-matched` vs `lobby.freeze-round` in the logs) for **an outage strictly between 10 s and 15 s — target ~12–13 s**. Expect `resume.no-op` in the joiner's log and a `Recovered(hostId)` membership event (see Amendment), where the current build produces `HostLost(Refused)` at ~60 s. Close by hand once that reproduces.
+
+**Correction (2026-07-27) — the earlier "~8 seconds" was wrong and self-contradictory.** It read "under the 15 s host timeout, over the 10 s `wovenPathGrace`", but 8 s is not over 10 s. Verified on `main`: `NwSeam.DEFAULT_WOVEN_PATH_GRACE` = 10 s (`NwSeam.kt:997`) and `HeartbeatConfig.timeout` = 15 s (`HeartbeatConfig.kt:26`). **An 8 s outage cannot reproduce #1637 at all**: the grace timer never expires, so `NwSeam` never evicts the host, the joiner's detector never reports `TransportClosed`, and `attemptReconnect` is never entered — the link simply resumes with no episode. The repro needs the outage sandwiched *between* the two: long enough for the grace to expire (> 10 s) and short enough that the host's silence never reaches its own timeout (< 15 s). Task 1's unit tests encode the same ordering under virtual time (grace 400 ms < outage 600 ms < host timeout 1000 ms).
 
 ---
 

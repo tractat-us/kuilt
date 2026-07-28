@@ -70,6 +70,19 @@ internal interface JoinerResumeHost {
     fun onReconnectStarted(hostId: PeerId, at: Instant, windowDeadline: Instant)
 
     /**
+     * The reconnect episode completed **without** a `ResumeAck`, because the host never
+     * partitioned us in the first place (#1637 — see [runReconnect]'s dwell). Close the arc
+     * [onReconnectStarted] opened: clear [hostId]'s partitioned level and announce the recovery.
+     *
+     * This exists because the normal success path emits nothing here. On a real resume the
+     * room's `ResumeAck` handler is what restores liveness and emits the closing edge; the
+     * no-op path completes precisely when no `ResumeAck` will ever arrive, so without this
+     * callback the `Partitioned` + `WindowOpened` pair would stay open forever — the roster
+     * pinned `Partitioned` on a host that is demonstrably reachable.
+     */
+    fun onNoOpResume(hostId: PeerId, at: Instant)
+
+    /**
      * The reconnect failed terminally (no credentials, window expired, or a non-conforming
      * loom): the room marks the host lost and tears down. [reason] classifies the failure —
      * see [FailureReason].
@@ -285,6 +298,17 @@ internal class JoinerResumeMachine(
      * non-Success resume it falls to [JoinerResumeHost.onReconnectFailed]. Transient
      * re-weave/resume failures are retried until the window deadline.
      *
+     * **A blip the host never observed (#1637).** When only *our* side of the link tore, the host's
+     * detector never fires, it opens no reconnect window, and it answers every `Resume` with the
+     * retryable [RejectCode.ResumeWindowNotYetOpen] — while our retries themselves refresh its
+     * `lastSeen`, so no window can ever open and retrying to the deadline guarantees a spurious
+     * `HostLost`. The retry loop therefore **dwells** on a persistent `ResumeWindowNotYetOpen` for
+     * one [HeartbeatConfig.timeout] (the longest the host can take to open a window it intends to
+     * open) and then completes the episode as a **no-op resume**: there was nothing to resume onto.
+     * That path takes the success branch — detector restored, guard cleared — plus
+     * [JoinerResumeHost.onNoOpResume], which closes the `Partitioned`/`WindowOpened` arc no
+     * `ResumeAck` will ever close.
+     *
      * **Non-conforming loom.** If, after re-weave, [seam] is still [SeamState.Torn], the loom
      * minted an unrelated seam instead of healing ours (it violates the same-instance-heal
      * contract on [reweave]). That throwaway seam is **closed** (else a live connection leaks)
@@ -345,8 +369,16 @@ internal class JoinerResumeMachine(
         // read/written solely on this reconnect coroutine (the withTimeoutOrNull block runs inline
         // on it), so it needs no lock.
         var failureReason: FailureReason = FailureReason.WindowExpired
+        // #1637: did this episode end on the dwell (a blip the host never observed) rather than on a
+        // real ResumeAck? Same locality as [failureReason] — written inside the inline
+        // [withTimeoutOrNull] block, read on this coroutine after it, so no lock.
+        var noOpResume = false
         val resumed = withTimeoutOrNull(heartbeatConfig.reconnectWindow) {
             var ok = false
+            // #1637: the first instant this episode saw ResumeWindowNotYetOpen, or null when the last
+            // attempt produced anything else. Local to the retry loop, which runs inline on this
+            // coroutine.
+            var windowNotYetOpenSince: Instant? = null
             while (!ok) {
                 // Bail the instant the room goes terminal (e.g. leave() mid-window), even if
                 // the cancellation of this job hasn't propagated yet — so we never re-weave
@@ -386,7 +418,49 @@ internal class JoinerResumeMachine(
                     // else — a not-yet-open window, an unrecognised code, a host too old to send
                     // one — keeps retrying to the deadline, which is what recovers the
                     // fast-reconnect race.
-                    if (lock.withLock { refusal }?.code?.retryable == false) return@withTimeoutOrNull false
+                    val code = lock.withLock { refusal }?.code
+                    if (code?.retryable == false) return@withTimeoutOrNull false
+
+                    // #1637: the host says no window has EVER opened for us. Only two things produce
+                    // that answer — the #1572 fast-reconnect race (a window IS coming, because the
+                    // host's own link closed and that fires TransportClosed at once), or a blip the
+                    // host never observed at all. The second is self-sustaining: our own Resume frames
+                    // refresh the host detector's lastSeen (any inbound frame calls observedPeer), so
+                    // its silence never reaches HeartbeatConfig.timeout and no window can ever open.
+                    // Retrying to the deadline then guarantees HostLost(Refused) on a link that is by
+                    // then perfectly healthy.
+                    //
+                    // Dwelling past the host's own timeout discriminates them: a window the host
+                    // intends to open is open by then. Past that, complete the episode as a **no-op
+                    // resume** — we were never partitioned, so there is nothing to resume onto. The
+                    // success branch below then restores the host detector AND calls
+                    // [JoinerResumeHost.onNoOpResume]: no ResumeAck arrives on this path, so the
+                    // room's ack handler never runs, and without that call the Partitioned +
+                    // WindowOpened arc this machine already emitted would stay open forever.
+                    //
+                    // WindowNotYetOpen is unambiguous, so this can never mask a real loss: an OPEN
+                    // window returns Success and an EXPIRED one returns WindowClosed. The dwell is
+                    // additionally gated on the attempt having actually been *answered* — a reject
+                    // resolves the flight as [ResumeResult.WindowClosed], whereas a host that has
+                    // gone silent yields [ResumeResult.TimedOut] (#1587) and must NOT keep a stale
+                    // refusal's dwell running.
+                    val refusedNotYetOpen =
+                        result is ResumeResult.WindowClosed && code == RejectCode.ResumeWindowNotYetOpen
+                    if (refusedNotYetOpen) {
+                        val since = windowNotYetOpenSince ?: clock().also { windowNotYetOpenSince = it }
+                        if (clock() - since >= heartbeatConfig.timeout) {
+                            logger.info {
+                                "resume.no-op host=$hostId roomId=${token.roomId.value} " +
+                                    "reason=host-never-partitioned " +
+                                    "dwellMs=${heartbeatConfig.timeout.inWholeMilliseconds}"
+                            }
+                            noOpResume = true
+                            ok = true
+                            continue
+                        }
+                    } else {
+                        windowNotYetOpenSince = null
+                    }
                     delay(heartbeatConfig.interval)
                 }
             }
@@ -414,6 +488,11 @@ internal class JoinerResumeMachine(
                 refusal = null
                 host.restoreHostDetector(hostId)
             }
+            // #1637: the dwell path emits nothing of its own — no ResumeAck arrives, so the room's
+            // ack handler (which restores the host's liveness and emits the closing edge on a real
+            // resume) never runs. Close the arc here instead, once the detector is back so the room
+            // is monitored again before it is announced live.
+            if (noOpResume) host.onNoOpResume(hostId, clock())
         } else if (!lock.withLock { reconnectJob = null; host.isClosed() }) {
             // Not resumed and not already tearing down via leave() — the reconnect genuinely
             // failed, so go terminal. Clear reconnectJob FIRST (this coroutine IS it):
