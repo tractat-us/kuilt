@@ -993,8 +993,66 @@ internal class RaftEngine(
         }
     }
 
+    /**
+     * §5.4.1 / §5.3 frame-internal well-formedness of an [RaftMessage.InstallSnapshot] chunk's
+     * snapshot metadata (issue #1868) — the sibling of [isWellFormedBatch] on the snapshot lane.
+     *
+     * `lastIncludedIndex` / `lastIncludedTerm` were inspected by nothing. [isWellFormedBatch] guards
+     * [RaftMessage.AppendEntries] and nothing else, and [onMessage]'s `MAX_PLAUSIBLE_TERM` bound
+     * guards a frame's own `term` and nothing else — so a single frame carrying the recipient's *own*
+     * current term (honest enough to clear both the stale-term check and the §5.2 leader-authority
+     * gate) reached [finalizeInstalledSnapshot] with arbitrary metadata:
+     *
+     * - `lastIncludedIndex <= currentCommitIndex` is false at `Long.MAX_VALUE - 1`, so the etcd-style
+     *   restore guard (#1219 / #1220) does not fire.
+     * - [RaftState.entryAt] is null there, so the Log Matching check falls to the **discard-whole**
+     *   branch: `truncateFrom(0)` and `state.log.clear()`.
+     * - `snapshotIndex`, `snapshotTerm`, `currentCommitIndex` and `_commitIndex` are then set from
+     *   the frame — a fabricated commit index over an emptied log.
+     *
+     * [RaftState.lastLogTerm] falls back to `snapshotTerm` when the log is empty, so the victim's
+     * [RaftState.lastLogPosition] becomes `(Long.MAX_VALUE, Long.MAX_VALUE - 1)`: the same §5.4.1
+     * lexicographic domination (§5.4 / Figure 3.2) [isWellFormedBatch] prevents on its own lane. The
+     * victim then denies every vote and wins every election it enters while holding none of the
+     * committed entries a legitimate leader must have.
+     *
+     * Checkable without trust or extra state, exactly as for a batch: a snapshot's `lastIncludedTerm`
+     * is the term of a log entry the sender held, and a node's log never carries a term above its own
+     * `currentTerm`, which is what the frame states as `term`. So `lastIncludedTerm <= term` — the
+     * identical §5.3 argument [isWellFormedBatch] makes about entry terms. The `MAX_PLAUSIBLE_TERM`
+     * ceiling is folded into the same bound; it is implied today by [onMessage]'s bound on `term`,
+     * and is restated here so this check's correctness is local rather than inherited.
+     *
+     * **Disposition: drop the frame, don't ack it.** No honest leader can emit one —
+     * [sendSnapshotChunk] copies [SnapshotMeta] from a snapshot it stored while at its own term — so
+     * there is no honest sender to answer, and an [RaftMessage.InstallSnapshotResponse] would hand a
+     * forger a free lever on the leader's [SnapshotSender] transfer state. Dropping mirrors
+     * [isWellFormedBatch] and the §5.2 leader-authority gate in [onMessage]. It is deliberately not a
+     * `require`: this runs inside the engine's actor loop, whose `try`/`finally` has no `catch`, so a
+     * throw would convert a malformed frame into permanent node death (#1818).
+     *
+     * Called before the term check, so a malformed frame never adopts its term or resets the
+     * recipient's election timeout either.
+     */
+    private fun isWellFormedSnapshotChunk(from: NodeId, m: RaftMessage.InstallSnapshot): Boolean {
+        if (m.lastIncludedIndex < 0L) {
+            debug { "onInstallSnapshot($from): DROP — negative lastIncludedIndex=${m.lastIncludedIndex}" }
+            return false
+        }
+        val termCeiling = minOf(m.term, MAX_PLAUSIBLE_TERM)
+        if (m.lastIncludedTerm < 0L || m.lastIncludedTerm > termCeiling) {
+            debug {
+                "onInstallSnapshot($from): DROP — lastIncludedTerm=${m.lastIncludedTerm} outside 0..$termCeiling " +
+                    "(term=${m.term}, MAX_PLAUSIBLE_TERM=$MAX_PLAUSIBLE_TERM; no snapshot may carry a term above the leader's)"
+            }
+            return false
+        }
+        return true
+    }
+
     /** Follower: reassemble chunks in order, then install the snapshot once the final chunk arrives. */
     private suspend fun onInstallSnapshot(from: NodeId, m: RaftMessage.InstallSnapshot) {
+        if (!isWellFormedSnapshotChunk(from, m)) return
         if (m.term < state.currentTerm) { send(from, RaftMessage.InstallSnapshotResponse(state.currentTerm, 0L)); return }
         if (m.term > state.currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
         demoteToFollowerOnLeaderContact()
@@ -1103,12 +1161,12 @@ internal class RaftEngine(
      *   election it enters while its log does *not* hold the committed entries a legitimate leader
      *   must — and committed entries can be overwritten.
      *
-     * **Scope — this closes the §5.4.1 hole on the AppendEntries lane only.** The check guards
-     * [RaftMessage.AppendEntries] and nothing else, and [onMessage]'s `MAX_PLAUSIBLE_TERM` bound
-     * guards a frame's own `term` and nothing else — so [RaftMessage.InstallSnapshot]'s
-     * `lastIncludedTerm` / `lastIncludedIndex` are validated by neither and reach the same §5.4.1
-     * domination (plus a wiped log) through a sibling frame. Tracked in issue #1868; deliberately
-     * NOT addressed here.
+     * **Scope — the AppendEntries lane.** This check guards [RaftMessage.AppendEntries] and nothing
+     * else, and [onMessage]'s `MAX_PLAUSIBLE_TERM` bound guards a frame's own `term` and nothing
+     * else. [RaftMessage.InstallSnapshot]'s `lastIncludedTerm` / `lastIncludedIndex` are therefore
+     * seen by neither, and reach the same §5.4.1 domination (plus a wiped log) through a sibling
+     * frame; that lane is closed separately by [isWellFormedSnapshotChunk] (issue #1868), which makes
+     * the identical §5.3 term argument about a snapshot's term that this one makes about entry terms.
      *
      * Unlike the in-range `matchIndex` / `nextOffset` lies of #1818, this is checkable without trust
      * or extra state: the leader states `prevLogIndex` in the same message, so the batch's required
