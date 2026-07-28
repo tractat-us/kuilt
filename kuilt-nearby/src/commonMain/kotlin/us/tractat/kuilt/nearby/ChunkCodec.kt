@@ -108,20 +108,58 @@ public object ChunkCodec {
     // ── Reassembler ───────────────────────────────────────────────────────────
 
     /**
+     * Maximum number of *incomplete* messages one [Reassembler] holds before it evicts the
+     * eldest.
+     *
+     * kuilt's own sender emits a message's chunks contiguously for one endpoint, so the honest
+     * working set is one incomplete message per concurrent `broadcast`/`sendTo` caller — a
+     * handful. This is the same bound the composite fabric's per-origin inbound gate already
+     * uses for the same shape (a peer-keyed map of partially-received frames); reusing it keeps
+     * one number for one problem rather than inventing a second knob.
+     */
+    public const val DEFAULT_MAX_PENDING_MESSAGES: Int = 16
+
+    /**
      * Per-endpoint reassembler. Feed decoded chunks in arrival order; [feed]
      * returns the complete payload once all chunks for a message have arrived.
      *
+     * Every field in a [DecodedChunk] is peer-chosen, so [feed] treats each chunk as untrusted:
+     * it re-checks the header invariants (a hand-built [DecodedChunk] never passed through
+     * [decodeChunk]) and refuses any chunk that contradicts a message already in progress.
+     * It never throws on malformed input — a fabric receive loop must survive a hostile frame.
+     *
      * Not thread-safe — use one instance per endpoint, accessed from one coroutine.
+     *
+     * @param maxPendingMessages Cap on concurrently-incomplete messages; see
+     * [DEFAULT_MAX_PENDING_MESSAGES].
      */
-    public class Reassembler {
+    public class Reassembler(
+        private val maxPendingMessages: Int = DEFAULT_MAX_PENDING_MESSAGES,
+    ) {
+        // Insertion-ordered on every target (Kotlin's mutableMapOf is a LinkedHashMap), so the
+        // eldest still-incomplete message is the first key.
         private val pending = mutableMapOf<Int, Assembly>()
 
         /**
          * Feed one decoded chunk. Returns the complete reassembled payload when
-         * all [DecodedChunk.chunkCount] chunks have arrived, or null while waiting.
+         * all [DecodedChunk.chunkCount] chunks have arrived, or null while waiting
+         * — or null if the chunk is refused.
          */
         public fun feed(chunk: DecodedChunk): ByteArray? {
-            val assembly = pending.getOrPut(chunk.msgId) { Assembly(chunk.chunkCount) }
+            // Self-consistency. `feed` is public, so a DecodedChunk may be hand-built and never
+            // have gone through decodeChunk's header check — re-derive it rather than trust it.
+            if (chunk.chunkCount <= 0 || chunk.chunkIndex < 0 || chunk.chunkIndex >= chunk.chunkCount) {
+                return null
+            }
+            val existing = pending[chunk.msgId]
+            // Cross-chunk consistency (#1819). Two chunks claiming one msgId with different
+            // chunkCounts cannot both describe the same message, so the later one is proof of a
+            // forged or corrupt frame. There is no favourable value to clamp it to: discard the
+            // FRAME and leave the assembly alone. A late arrival must never be able to redefine
+            // — or index past — a message already in progress.
+            if (existing != null && chunk.chunkCount != existing.chunkCount) return null
+
+            val assembly = existing ?: startAssembly(chunk.msgId, chunk.chunkCount)
             assembly.receive(chunk.chunkIndex, chunk.chunkPayload)
             return if (assembly.isComplete()) {
                 pending.remove(chunk.msgId)
@@ -134,27 +172,43 @@ public object ChunkCodec {
         /** Discard all in-progress state (e.g. on endpoint disconnect). */
         public fun reset() { pending.clear() }
 
-        private class Assembly(val chunkCount: Int) {
-            private val slots = arrayOfNulls<ByteArray>(chunkCount)
-            private var received = 0
+        /**
+         * Begin tracking [msgId], first making room if [pending] is at [maxPendingMessages].
+         *
+         * Eviction drops the *eldest* incomplete message rather than refusing the new one: a peer
+         * that opens messages and never finishes them must not be able to lock out fresh traffic.
+         * `msgId` is peer-chosen and unbounded, and nothing but an endpoint disconnect used to
+         * prune this map.
+         */
+        private fun startAssembly(msgId: Int, chunkCount: Int): Assembly {
+            if (pending.size >= maxPendingMessages) {
+                pending.keys.firstOrNull()?.let { pending.remove(it) }
+            }
+            return Assembly(chunkCount).also { pending[msgId] = it }
+        }
 
+        private class Assembly(val chunkCount: Int) {
+            // Sparse, so memory tracks bytes actually received rather than the peer's claim: a
+            // 9-byte chunk declaring chunkCount = 65535 costs one entry, not a 65535-slot array.
+            // That removes the allocation amplification without inventing a chunkCount cap.
+            private val slots = mutableMapOf<Int, ByteArray>()
+
+            /** Records [payload] at [index]; first write wins. [index] is validated by [feed]. */
             fun receive(index: Int, payload: ByteArray) {
-                if (slots[index] == null) {
-                    slots[index] = payload
-                    received++
-                }
+                if (index !in slots) slots[index] = payload
             }
 
-            fun isComplete(): Boolean = received == chunkCount
+            // Indices are validated into 0 until chunkCount and every chunk agrees on
+            // chunkCount, so a full slot map is exactly the full message.
+            fun isComplete(): Boolean = slots.size == chunkCount
 
             fun assemble(): ByteArray {
-                val totalSize = slots.sumOf { it?.size ?: 0 }
-                val out = ByteArray(totalSize)
+                val out = ByteArray(slots.values.sumOf { it.size })
                 var offset = 0
-                for (slot in slots) {
-                    val s = slot ?: continue
-                    s.copyInto(out, offset)
-                    offset += s.size
+                for (index in 0 until chunkCount) {
+                    val slot = slots[index] ?: continue
+                    slot.copyInto(out, offset)
+                    offset += slot.size
                 }
                 return out
             }
