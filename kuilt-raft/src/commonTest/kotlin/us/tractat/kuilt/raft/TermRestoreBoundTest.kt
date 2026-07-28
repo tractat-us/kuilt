@@ -124,6 +124,9 @@ internal class TermRestoreBoundTest {
      * bounds identical is the point: a durable term can only arrive from a wire term the boundary already
      * admitted, or from a self-increment off one, so a restore rule stricter than the wire rule would
      * refuse to start a node that the wire rule had just told it was fine to become.
+     *
+     * This stays correct if #1886 makes the *wire* bound exclusive: a durable `2^60` would then only be
+     * reachable by a self-increment off `2^60 - 1`, which is exactly the case a restore must still accept.
      */
     @Test
     fun durableTermExactlyAtTheCeiling_stillStarts() = raftRunTest {
