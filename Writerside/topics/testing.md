@@ -30,7 +30,7 @@ kuilt ships a ready-made checklist of everything a fabric must do — the
 suite at your fabric by handing it a pair of peers, and every rule in the contract is
 checked for you:
 
-<!-- verbatim from kuilt-conformance/src/commonTest/kotlin/us/tractat/kuilt/conformance/InMemoryLoomConformanceTest.kt -->
+<!-- verbatim from kuilt-conformance/src/commonTest/kotlin/us/tractat/kuilt/conformance/InMemoryLoomConformanceTest.kt#InMemoryLoomConformanceTest -->
 
 ```kotlin
 class InMemoryLoomConformanceTest : SeamConformanceSuite() {

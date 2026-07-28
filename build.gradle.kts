@@ -65,11 +65,24 @@ subprojects {
 // guard silently becomes the reason someone deletes the guard.
 //
 // A stamp is only safe if the declared inputs are HONEST — a guard that caches a stale success has
-// stopped guarding, which is strictly worse than one that re-runs needlessly. So each guard
-// declares the exact Kotlin FILES it reads (not merely the directories that contain them) via the
-// helper below, and then walks that same lazily-resolved set in `doLast`. Declared input and
-// scanned set are the same object, so they cannot drift apart, and a newly-added violating file
-// always invalidates the cached success.
+// stopped guarding, which is strictly worse than one that re-runs needlessly. So each `forbid*`
+// guard declares the exact Kotlin FILES it reads (not merely the directories that contain them)
+// via the helper below, and then walks that same lazily-resolved set in `doLast`. Declared input
+// and scanned set are the same object, so they cannot drift apart, and a newly-added violating
+// file always invalidates the cached success.
+//
+// `verifyDocCitations` is the ONE exception and does not use the helper: it reads `.md` as well as
+// `.kt`, so it declares its doc and source roots as whole DIRECTORIES (`inputs.dir` per root,
+// which over-declares — more re-runs, never fewer). What keeps that honest is not the input
+// declaration but its in-task `inputRoots` check, which fails loudly on a citation pointing
+// outside every declared root rather than letting it be silently exempt from invalidation.
+//
+// One more thing the cache key depends on that is easy to move by accident: the ALLOWLISTS in
+// `forbidPortProbeRebind` / `forbidUnboundedSwatchDelivery` are covered only because they are
+// literals in this script, and so are folded into the task-action implementation hash. Editing one
+// re-runs the guard. Moving an allowlist to `gradle.properties`, a resource file, or any other
+// external source would silently drop it out of the key and reintroduce exactly the stale-green
+// class these stamps were made safe against — if you externalise one, declare it as an input too.
 fun kotlinSourcesIn(roots: List<java.io.File>, pattern: String = "**/*.kt"): FileTree =
     files(roots).asFileTree.matching { include(pattern) }
 
@@ -318,9 +331,10 @@ val forbidSourcelessKmpTarget by tasks.registering {
 //   bodySlice  a contiguous run of body lines
 //   fullSlice  a contiguous run of declaration lines — also the whole-file mode, used by
 //              the citations that name no #symbol
-//   elided     ONLY if every mode above failed: the block is split on bare `// …` lines and
-//              each part must be a contiguous run of the source, in order, non-overlapping,
-//              with at least one real line elided at every marker (#1825)
+//   elided     ONLY if every mode above failed AND the citation names a #symbol: the block is
+//              split on bare `// …` lines and each part must be a contiguous run of the source,
+//              in order, non-overlapping, with at least one real line elided at every marker
+//              (#1825)
 // The slice modes are what let one long E2E test back three separate walkthrough blocks;
 // the de-indent is what lets a chunk lifted from inside a nested scope sit flush in a doc;
 // the annotation mode is what lets a doc quote `@Test fun …` as written. Anything looser —
@@ -336,6 +350,15 @@ val forbidSourcelessKmpTarget by tasks.registering {
 // than removing one: it says "source was omitted HERE", and the ordering, non-overlap and
 // minimum-one-line-elided rules are what stop it degrading into "match anything from here
 // on". It cannot launder a reordered, reworded or invented line — see matchElided.
+//
+// It also REQUIRES a #symbol. A symbol-less citation is matched against the whole file, and
+// ordered multi-slice over a whole file would let a block draw its parts from two unrelated
+// declarations and present them as one flow — every line real, every line in order, and the
+// block still misrepresenting the source. That is the single thing the `verbatim` label exists
+// to rule out, so it is rejected. Naming the declaration bounds the haystack to it. Note the
+// residual, deliberate limit: for a CLASS-level citation the haystack is the whole class, so an
+// elision there can still cross member boundaries — bounded by, and attributed to, the
+// declaration actually being cited, which is what the citation claims to be showing.
 //
 // `docs/superpowers/` is excluded. Those are frozen, dated planning artifacts whose
 // citations are deliberately unresolved templates (`<!-- verbatim from <cited path>#… -->`).
@@ -757,17 +780,32 @@ val verifyDocCitations by tasks.registering {
                         if (elision.matches(line.trim())) acc.add(mutableListOf()) else acc.last().add(line)
                         acc
                     }.map { canon(it) }
-                val elidedResults = if (parts.size > 1 && parts.none(List<String>::isEmpty)) {
+                val elided = !matched && parts.size > 1
+                val elidedResults = if (elided && symbols.isNotEmpty() && parts.none(List<String>::isEmpty)) {
                     candidates.map { matchElided(parts, it.first) }
                 } else {
                     emptyList()
                 }
-                if (!matched && parts.size > 1 && parts.any(List<String>::isEmpty)) {
+                if (elided && parts.any(List<String>::isEmpty)) {
                     failures += "$where\n      $label\n      an elision marker (`// …`) must sit " +
                         "BETWEEN two quoted regions — one at the start or end of the block, or two " +
                         "in a row, elides everything on one side and asserts nothing.\n      Quote " +
                         "the lines around it, or drop the marker and let the block match as a " +
                         "contiguous slice."
+                } else if (elided && symbols.isEmpty()) {
+                    // Without a #symbol the haystack is the WHOLE FILE, and ordered multi-slice over a
+                    // whole file lets a block present lines from two unrelated declarations as one
+                    // flow — e.g. a `require(...)` from one function above a field assignment from
+                    // another, reading as if the first guarded the second. Every line would be real
+                    // and in order, and the block would still misrepresent the source, which is the
+                    // one thing `verbatim` exists to rule out. Naming the declaration bounds the
+                    // haystack to it, so a cross-declaration splice is unrepresentable.
+                    failures += "$where\n      $label\n      this block uses an elision marker " +
+                        "(`// …`) but the citation names no `#symbol`, so it would be matched against " +
+                        "the whole file — which would let the block splice lines from two unrelated " +
+                        "declarations into one apparent flow.\n      Name the declaration the block " +
+                        "comes from (`<!-- verbatim from $path#<symbol> -->`), or drop the marker and " +
+                        "quote a contiguous run."
                 } else if (elidedResults.isNotEmpty() && elidedResults.none { it < 0 }) {
                     // Report against the candidate that got FURTHEST before failing — the one the
                     // author most likely meant.
