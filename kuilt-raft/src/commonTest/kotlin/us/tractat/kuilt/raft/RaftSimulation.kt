@@ -160,11 +160,23 @@ class RaftSimulation(
     /**
      * Encode and inject a [RaftMessage.RequestVote] directly into [to]'s incoming channel,
      * bypassing the normal partition/drop rules.
+     *
+     * [leadershipTransfer] sets the §4.2.3 "permission to disrupt" flag, which bypasses the
+     * recipient's leader-stickiness deny. Use it to probe the §5.4.1 up-to-dateness decision on a
+     * node that still believes a leader is alive — stickiness would otherwise short-circuit the vote
+     * before the log comparison runs, hiding whatever the log check would have said.
      */
     @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
-    suspend fun deliverRequestVote(to: NodeId, from: NodeId, term: Long, lastLogIndex: Long, lastLogTerm: Long) {
+    suspend fun deliverRequestVote(
+        to: NodeId,
+        from: NodeId,
+        term: Long,
+        lastLogIndex: Long,
+        lastLogTerm: Long,
+        leadershipTransfer: Boolean = false,
+    ) {
         val bytes = Cbor.encodeToByteArray<RaftMessage>(
-            RaftMessage.RequestVote(term, from, lastLogIndex, lastLogTerm)
+            RaftMessage.RequestVote(term, from, lastLogIndex, lastLogTerm, leadershipTransfer)
         )
         network.deliver(from = from, to = to, bytes = bytes)
     }
