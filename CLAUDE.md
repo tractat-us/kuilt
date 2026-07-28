@@ -332,9 +332,21 @@ When you rename or remove a test function that a Writerside snippet cites, updat
 - `<!-- verbatim from <path>#<symbol> -->` — the block must still appear in the cited declaration character-for-character, modulo indentation. Accepted forms: the whole declaration (including its leading `@annotations`), its body with braces stripped, or a *contiguous* run of either (which is what lets one long test back several walkthrough blocks). A citation with no `#symbol` is matched against the whole file.
 - `<!-- condensed from <path>#<symbol> -->` — the block is deliberately abridged or reworded; only the path and symbol have to resolve.
 
-So when a block stops being a literal quote — you dropped the source's own comments, trimmed an assertion message, spliced two non-adjacent chunks — **relabel it `condensed from` rather than leaving a `verbatim from` that lies.** A block that claims to be verbatim and isn't is worse than no citation, because a reader stops checking. Run `./gradlew verifyDocCitations` (about a second) after touching either side.
+**A bare `// …` line marks an omission and keeps the block `verbatim` (#1825).** It is for the shape a contiguous run cannot express — most often a class shell with members left out:
 
-**Relabel only when the block *cannot* be a literal quote — otherwise re-copy it.** `condensed from` is the cheapest way past a red gate and it is a **one-way door**: that block is never content-checked again. Reach for it when the snippet is genuinely illustrative, splices non-adjacent chunks, or abridges a class down to the members being discussed; not when re-copying is a two-line edit. And relabelling never hides a *rename* — a `condensed` citation whose symbol disappears still fails.
+```kotlin
+class InMemoryLoomConformanceTest : SeamConformanceSuite() {
+    private val loom = InMemoryLoom()
+    override fun newLoomPair(): Pair<Loom, Loom> = loom to loom
+    // …
+}
+```
+
+The marker *adds* an assertion — "source was omitted here" — it does not relax one. Each part between markers must still be a contiguous, character-for-character run of the source; the parts must appear in **source order**, must not overlap, and every marker must elide **at least one real line** (so a marker between two adjacent lines is rejected, not waved through). A marker at the start or end of a block, or two in a row, is rejected too — it would assert an omission on one side and nothing on the other. Reach for it instead of `condensed from` whenever the only reason a block isn't verbatim is that you left the middle out.
+
+So when a block stops being a literal quote — you dropped the source's own comments, trimmed an assertion message, reworded a line — **relabel it `condensed from` rather than leaving a `verbatim from` that lies.** A block that claims to be verbatim and isn't is worse than no citation, because a reader stops checking. Run `./gradlew verifyDocCitations` (about a second) after touching either side.
+
+**Relabel only when the block *cannot* be a literal quote — otherwise re-copy it, or mark the gaps.** `condensed from` is the cheapest way past a red gate and it is a **one-way door**: that block is never content-checked again. Reach for it when the snippet is genuinely illustrative or reworded; not when re-copying is a two-line edit, and **not merely because you left the middle out** — a block that splices non-adjacent chunks, or abridges a class down to the members being discussed, stays `verbatim` with a `// …` at each gap. And relabelling never hides a *rename* — a `condensed` citation whose symbol disappears still fails.
 
 - **Agent cookbook + skill stay in sync with the primitives.** When you add,
   rename, or remove a public primitive a downstream consumer would reach for (a

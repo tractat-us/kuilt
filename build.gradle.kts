@@ -318,12 +318,24 @@ val forbidSourcelessKmpTarget by tasks.registering {
 //   bodySlice  a contiguous run of body lines
 //   fullSlice  a contiguous run of declaration lines — also the whole-file mode, used by
 //              the citations that name no #symbol
+//   elided     ONLY if every mode above failed: the block is split on bare `// …` lines and
+//              each part must be a contiguous run of the source, in order, non-overlapping,
+//              with at least one real line elided at every marker (#1825)
 // The slice modes are what let one long E2E test back three separate walkthrough blocks;
 // the de-indent is what lets a chunk lifted from inside a nested scope sit flush in a doc;
 // the annotation mode is what lets a doc quote `@Test fun …` as written. Anything looser —
 // dropping the source's own comments, trimming an assertion message, rewording a line — is
 // a condensation, not a quote. Relabel such a block `condensed from` rather than widening
 // this list: a check loose enough to pass a paraphrase is not checking anything.
+//
+// The elided mode exists for one shape the contiguous modes cannot express: a class shell
+// with some members left out, which is two slices plus a synthesised `}`. Before #1825 those
+// blocks had to be relabelled `condensed`, which stopped checking them entirely — the weakest
+// outcome available, since the drift they are likeliest to suffer (a member renamed, the
+// shell changed) is precisely what then went unenforced. The marker ADDS an assertion rather
+// than removing one: it says "source was omitted HERE", and the ordering, non-overlap and
+// minimum-one-line-elided rules are what stop it degrading into "match anything from here
+// on". It cannot launder a reordered, reworded or invented line — see matchElided.
 //
 // `docs/superpowers/` is excluded. Those are frozen, dated planning artifacts whose
 // citations are deliberately unresolved templates (`<!-- verbatim from <cited path>#… -->`).
@@ -348,6 +360,10 @@ val verifyDocCitations by tasks.registering {
     doLast {
         val cite = Regex("""^<!--\s*(verbatim|condensed) from\s+(.+?)\s*-->$""")
         val symRefs = Regex("""#(`[^`]+`|[^\s#]+)""")
+        // The elision marker (#1825): a BARE `// …` (or `// ...`) line, nothing else on it. Bare on
+        // purpose — trailing prose would make it ambiguous with a real source comment, and the
+        // marker has to be unmistakable to a reader as well as to this regex.
+        val elision = Regex("""^//\s*(?:…|\.\.\.)$""")
 
         fun trimBlankEdges(ls: List<String>): List<String> =
             ls.map(String::trimEnd).dropWhile(String::isEmpty).dropLastWhile(String::isEmpty)
@@ -485,6 +501,57 @@ val verifyDocCitations by tasks.registering {
             return (0..haystack.size - block.size).any { s ->
                 canon(haystack.subList(s, s + block.size)) == block
             }
+        }
+
+        // The earliest index at or after `from` where `part` sits as a contiguous, canonicalised
+        // run of `haystack`; -1 if there is none. Earliest-first is optimal for the ordered walk
+        // below: placing a part as early as possible leaves the most room for the parts after it.
+        fun sliceIndexOf(part: List<String>, haystack: List<String>, from: Int): Int {
+            if (part.isEmpty() || part.size > haystack.size) return -1
+            for (s in from..haystack.size - part.size) {
+                if (canon(haystack.subList(s, s + part.size)) == part) return s
+            }
+            return -1
+        }
+
+        // Does this part consist of nothing but closing brackets? Such a part is the doc closing a
+        // brace that the elided region also closes, and gets anchored to the region's own end (see
+        // matchElided) instead of being allowed to match any stray `}` in between.
+        fun isCloserOnly(part: List<String>): Boolean =
+            part.isNotEmpty() && part.all { line -> line.isBlank() || line.trim().all { it in "}])" } }
+
+        // Ordered, non-overlapping multi-slice match — what an elision marker buys, and the ONLY
+        // thing it buys. Returns -1 on success, else the index of the part that could not be placed.
+        //
+        // Every part must still appear in the source contiguously and character-for-character; the
+        // parts must appear in the same ORDER as the doc gives them; and consecutive parts may not
+        // overlap or even abut — the search for part k+1 starts one line past the end of part k, so
+        // the marker has to elide at least one real line. That last rule is what stops `// …` being
+        // free slack: a marker between two adjacent regions is a lie (the block would have matched
+        // contiguously without it) and is rejected rather than waved through.
+        //
+        // What a careless or malicious citation still CANNOT do: reorder lines, invent a line,
+        // silently drop a line from inside a quoted run, or paraphrase anything. What it CAN do:
+        // hide an arbitrary amount of source at each marker, and — because each part is
+        // canonicalised in its own right, as everywhere else here — re-indent one part relative to
+        // another. Hiding source is the whole point; if what is hidden matters to the reader, that
+        // is a docs-review question, not something the checker can decide.
+        fun matchElided(parts: List<List<String>>, haystack: List<String>): Int {
+            var cursor = 0
+            parts.forEachIndexed { k, part ->
+                if (k == parts.lastIndex && k > 0 && isCloserOnly(part)) {
+                    // Anchor a trailing all-closers part to the last non-blank lines of the region,
+                    // so `}` proves the region's own closer rather than some inner one.
+                    val end = haystack.indexOfLast(String::isNotBlank)
+                    val s = end - part.size + 1
+                    if (s < cursor || s < 0 || canon(haystack.subList(s, end + 1)) != part) return k
+                    return -1
+                }
+                val s = sliceIndexOf(part, haystack, cursor)
+                if (s < 0) return k
+                cursor = s + part.size + 1 // +1 more so the marker after this part elides a real line
+            }
+            return -1
         }
 
         // Length-preserving normalisation, used only for the failure diff: the same de-indent
@@ -680,13 +747,61 @@ val verifyDocCitations by tasks.registering {
                         (body.isNotEmpty() && isSliceOf(block, body)) ||
                         isSliceOf(block, decl)
                 }
-                if (!matched) {
-                    val candidates = declRegions + bodyRegions
+                val candidates = declRegions + bodyRegions
+                // Elision fallback (#1825). Reached ONLY after every contiguous mode above has
+                // failed, which makes it strictly additive: no citation that passes today can start
+                // failing because of it, and a source that genuinely contains a `// …` line is still
+                // matched literally first.
+                val parts = if (matched) emptyList() else block
+                    .fold(mutableListOf(mutableListOf<String>())) { acc, line ->
+                        if (elision.matches(line.trim())) acc.add(mutableListOf()) else acc.last().add(line)
+                        acc
+                    }.map { canon(it) }
+                val elidedResults = if (parts.size > 1 && parts.none(List<String>::isEmpty)) {
+                    candidates.map { matchElided(parts, it.first) }
+                } else {
+                    emptyList()
+                }
+                if (!matched && parts.size > 1 && parts.any(List<String>::isEmpty)) {
+                    failures += "$where\n      $label\n      an elision marker (`// …`) must sit " +
+                        "BETWEEN two quoted regions — one at the start or end of the block, or two " +
+                        "in a row, elides everything on one side and asserts nothing.\n      Quote " +
+                        "the lines around it, or drop the marker and let the block match as a " +
+                        "contiguous slice."
+                } else if (elidedResults.isNotEmpty() && elidedResults.none { it < 0 }) {
+                    // Report against the candidate that got FURTHEST before failing — the one the
+                    // author most likely meant.
+                    val failedPart = elidedResults.max()
+                    // The likeliest authoring mistake is not drift but ORDER — parts quoted out of
+                    // source order, or a marker between two adjacent lines that elides nothing. In
+                    // both the part is present and a line-by-line diff is noise, so say what is
+                    // actually wrong instead.
+                    val strayAt = candidates.firstNotNullOfOrNull { (raw, base) ->
+                        sliceIndexOf(parts[failedPart], raw, 0).takeIf { it >= 0 }?.let { base + it + 1 }
+                    }
+                    failures += "$where\n      $label\n      the block does not appear in the cited " +
+                        "source: part ${failedPart + 1} of ${parts.size} (the lines " +
+                        (if (failedPart == 0) "before the first `// …`" else "after `// …` #$failedPart") +
+                        ") is not there, in order, after the part before it.\n" +
+                        if (strayAt != null) {
+                            "      That part IS in $path, at line $strayAt — just not after the part " +
+                                "it is quoted below. Parts must appear in source order, and each " +
+                                "`// …` must elide at least one real line (a marker between two " +
+                                "adjacent lines asserts an omission that did not happen). Reorder " +
+                                "the block to match the source, or drop the marker."
+                        } else {
+                            bestDiff(parts[failedPart], candidates) +
+                                "      Each part must still be a contiguous, character-for-character " +
+                                "run of $path, and `// …` must elide at least one real line. Re-copy " +
+                                "the part that moved."
+                        }
+                } else if (!matched && elidedResults.isEmpty()) {
                     val widest = candidates.maxOf { canon(it.first).size }
                     failures += "$where\n      $label\n      the block (${block.size} lines) does not " +
                         "appear in the cited source (up to $widest lines) in any accepted form.\n" +
                         bestDiff(block, candidates) +
-                        "      Re-copy the block from $path. Relabel the citation " +
+                        "      Re-copy the block from $path, or mark an omitted region with a bare " +
+                        "`// …` line. Relabel the citation " +
                         "`<!-- condensed from $payload -->` only if the block cannot be a literal " +
                         "quote — that exempts it from content checking for good."
                 }
