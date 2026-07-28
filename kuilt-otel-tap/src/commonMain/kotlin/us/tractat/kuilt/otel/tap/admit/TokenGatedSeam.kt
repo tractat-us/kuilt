@@ -45,8 +45,10 @@ internal sealed interface GateRole {
  * **prover** (pulling) side the gate is transparent apart from answering challenges and
  * stripping admit frames from what the replicator sees. A prover binds to the first host
  * it answers and ignores challenges from any other sender — so, in the role-inverted
- * topology where the prover hosts the session, a stray joiner cannot farm
- * `HMAC(code, nonce)` tags for an offline crack.
+ * topology where the prover hosts the session, a stray joiner that loses that race cannot
+ * farm `HMAC(code, nonce)` tags for an offline crack. A joiner that *wins* it still gets one
+ * tag over a nonce it chose, which is precomputable and so not bounded by the token TTL;
+ * closing that needs prover-contributed freshness in the `Proof` frame (#1865).
  *
  * Scope-owning: two collectors (of `inner.incoming` and of `inner.peers`) run in [scope];
  * cancel it to stop the gate. State is guarded by a [reentrantLock] with every suspending
@@ -150,7 +152,8 @@ internal class TokenGatedSeam(
         val verifier = role as GateRole.Verifier
         val nonce = lock.withLock {
             if (peer in pendingNonces || peer in verified.value) return
-            ByteString(verifier.random.nextBytes(NONCE_BYTES)).also { pendingNonces[peer] = it }
+            ByteString(verifier.random.nextBytes(TapAdmitMessage.Challenge.NONCE_BYTES))
+                .also { pendingNonces[peer] = it }
         }
         runCatchingCancellable { inner.sendTo(peer, TapAdmitMessage.encode(TapAdmitMessage.Challenge(nonce))) }
             .onFailure { logger.debug { "challenge send to $peer failed: ${it.message}" } }
@@ -158,7 +161,16 @@ internal class TokenGatedSeam(
 
     private suspend fun handleFrame(swatch: Swatch) {
         val sender = swatch.sender ?: return
-        when (val admit = TapAdmitMessage.decode(swatch.toByteArray())) {
+        val bytes = swatch.toByteArray()
+        val admit = TapAdmitMessage.decode(bytes)
+        if (admit == null && TapAdmitMessage.isAdmitFrame(bytes)) {
+            // Carries the admit prefix but did not decode: a malformed admit frame — a
+            // wrong-width Challenge nonce is one (#1820). Drop it rather than falling through to
+            // the relay, which would hand the replicator a frame that is not replication.
+            logger.debug { "dropping malformed admit frame from $sender" }
+            return
+        }
+        when (admit) {
             null -> {
                 // Replication frame — relay only if the sender is surfaced.
                 val surfaced = when (role) {
@@ -215,10 +227,6 @@ internal class TokenGatedSeam(
                 inner.sendTo(peer, TapAdmitMessage.encode(TapAdmitMessage.Reject("invalid or expired join code")))
             }.onFailure { logger.debug { "reject send to $peer failed: ${it.message}" } }
         }
-    }
-
-    private companion object {
-        const val NONCE_BYTES = 16
     }
 }
 

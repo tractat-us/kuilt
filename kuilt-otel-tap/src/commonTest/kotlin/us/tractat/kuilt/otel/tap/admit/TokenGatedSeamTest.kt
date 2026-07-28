@@ -127,6 +127,41 @@ class TokenGatedSeamTest {
     }
 
     /**
+     * Fixed-width nonce enforcement, at the live prover (#1820). The prover MACs
+     * `Challenge.nonce` verbatim with the join code, so a peer that can pick the width picks how
+     * many bytes of the MAC input exist — a zero-length nonce removes it entirely, leaving
+     * `HMAC(code, "")`, a value with no per-attempt freshness at all.
+     *
+     * Two properties, both required: the malformed challenge draws **no proof**, and it does not
+     * consume the single-use [GateRole.Prover] host binding — the legitimate host that challenges
+     * afterwards must still be answered, or a one-byte frame would be a permanent lockout.
+     */
+    @Test
+    fun proverIgnoresAChallengeWhoseNonceIsTheWrongWidth() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val proverSeam = loom.host(Pattern("prover-hosts"))
+        val attackerSeam = loom.join(InMemoryTag("attacker"))
+        val hostSeam = loom.join(InMemoryTag("host")) // the legitimate verifier device
+        val proverGate = proverSeam.tokenGated(GateRole.Prover("CODE1234"), backgroundScope)
+        val proverId = proverGate.selfId
+
+        // A zero-length nonce: HMAC(code, "") has no per-attempt freshness whatsoever.
+        attackerSeam.sendTo(proverId, challengeFrameWithNonce(ByteArray(0)))
+        val harvested = withTimeoutOrNull(1.minutes) {
+            attackerSeam.incoming.first { TapAdmitMessage.decode(it.toByteArray()) is TapAdmitMessage.Proof }
+        }
+        assertNull(harvested, "a wrong-width nonce must never be MAC'd with the join code")
+
+        // …and the malformed frame must not have burned the prover's host binding.
+        val nonce = ByteString(ByteArray(TapAdmitMessage.Challenge.NONCE_BYTES) { 1 })
+        hostSeam.sendTo(proverId, TapAdmitMessage.encode(TapAdmitMessage.Challenge(nonce)))
+        val hostProof = withTimeoutOrNull(1.minutes) {
+            hostSeam.incoming.first { TapAdmitMessage.decode(it.toByteArray()) is TapAdmitMessage.Proof }
+        }
+        assertTrue(hostProof != null, "a rejected challenge must not lock out the legitimate host")
+    }
+
+    /**
      * Wire an in-memory host/joiner [Seam] pair, wrap the host as a [GateRole.Verifier] and the
      * joiner as a [GateRole.Prover] presenting [presentedCode], and return both gated seams.
      */
