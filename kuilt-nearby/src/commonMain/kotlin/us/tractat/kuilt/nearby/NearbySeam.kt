@@ -2,6 +2,8 @@ package us.tractat.kuilt.nearby
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.atomic
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock as withReentrantLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
@@ -44,7 +46,10 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nearby.NearbySeam")
  *                            read and write on the same lock instance.
  * @param api                 The [NearbyApi] instance.
  * @param sharedPeers         The shared [MutableStateFlow] of the whole session's peer set
- *                            (owned by [NearbyLoom]).
+ *                            (owned by [NearbyLoom]). **Read-only from here**: it is the same
+ *                            instance every seam this loom weaves observes, so a write is a write
+ *                            to every other seam's roster. [peers] is a per-seam *mirror* of it —
+ *                            see [collapseRoster].
  * @param scope               Coroutine scope for the receive loop; cancelled on [close].
  * @param maxChunkPayload     Per-chunk payload cap forwarded to [ChunkCodec].
  * @param msgIdCounter        Shared monotonic counter for message IDs (use one per seam).
@@ -63,7 +68,31 @@ internal class NearbySeam(
     private val policy: DeliveryPolicy = DeliveryPolicy.Reliable,
 ) : Seam {
 
-    override val peers: StateFlow<Set<PeerId>> = sharedPeers.asStateFlow()
+    // Guards the _peers write (roster mirror) against the tear-time collapse, with the collapse
+    // marker folded into the same critical section so a post-collapse mirror emission cannot
+    // resurrect the roster.
+    private val peersLock = reentrantLock()
+
+    // Set by [collapseRoster], read by the mirror — both under [peersLock], never apart. NOT a
+    // second lifecycle latch ([closed] is still the single-shot tear gate). It exists because the
+    // collapse must be published BEFORE `Torn` becomes observable ([Seam.peers]), so the mirror can
+    // no longer key its guard on `state`: in the window between the collapse and the latch this seam
+    // is not yet Torn, and a mirror emission landing there would republish the roster. Guarding on a
+    // marker set in the same critical section as the collapse makes that window unrepresentable
+    // rather than narrow — check-and-write are one atomic step.
+    private var collapsed = false
+
+    // This seam's OWN view of the session roster. NOT [sharedPeers] itself: that flow is loom-wide,
+    // so publishing this seam's tear-time collapse into it would rewrite every sibling seam's roster
+    // — which is exactly how `close()` used to drop `selfId` from the counterparty's view (#1850).
+    // Mirrored from [sharedPeers] until the collapse, then frozen at { selfId }.
+    //
+    // `+ selfId` is unconditional because [Seam.peers] is: "always including this peer's own id".
+    // The loom adds this seam to [sharedPeers] only *after* construction, and a sibling seam's
+    // disconnect handler can drop this peer's id from the loom-wide flow — neither may be observable
+    // as a roster this seam has evicted itself from.
+    private val _peers = MutableStateFlow(sharedPeers.value + selfId)
+    override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
 
     // Starts Weaving; transitions to Woven when the first remote peer joins.
     private val _state = MutableStateFlow<SeamState>(SeamState.Weaving)
@@ -85,10 +114,13 @@ internal class NearbySeam(
     private val receiveJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { receiveLoop() }
     private val disconnectJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { disconnectLoop() }
 
-    // Watch peers: transition Weaving → Woven when the first remote peer appears.
-    private val wovenWatcher: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) {
-        sharedPeers.collect { peers ->
-            if (_state.value is SeamState.Weaving && peers.any { it != selfId }) {
+    // Mirror the loom-wide roster into this seam's own [_peers], and transition Weaving → Woven when
+    // the first remote peer appears. UNDISPATCHED so the mirror is subscribed (and StateFlow's
+    // current value already applied) before construction returns.
+    private val rosterWatcher: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+        sharedPeers.collect { session ->
+            peersLock.withReentrantLock { if (!collapsed) _peers.value = session + selfId }
+            if (_state.value is SeamState.Weaving && session.any { it != selfId }) {
                 _state.value = SeamState.Woven
             }
         }
@@ -187,26 +219,51 @@ internal class NearbySeam(
 
     override suspend fun close(reason: CloseReason) {
         // Single-shot: if a self-driven Torn (last-peer disconnect) already fired, this no-ops.
+        // The roster collapse rides inside latchTorn, ahead of the `Torn` write — see there.
         if (!latchTorn(reason)) return
-        // Local close additionally tears the wire down and drops self from the shared roster —
-        // a remote-driven latch skips these (its endpoints are already gone; self stays until close).
+        // Local close additionally tears the wire down; a remote-driven latch skips this (its
+        // endpoints are already gone). Dropping this peer from [sharedPeers] is deliberately NOT
+        // done: that flow is loom-wide, so the write landed in every sibling seam's roster — the
+        // counterparty learns of this departure from its own transport (its `endpointDisconnected`
+        // fires from the disconnects below and its [disconnectLoop] evicts us), not from a peer
+        // reaching across and editing its membership (#1850).
         val endpoints = endpointPeersMutex.withLock { endpointPeers.keys.toList() }
         for (endpointId in endpoints) {
             api.disconnect(endpointId)
         }
-        sharedPeers.update { it - selfId }
     }
 
     /**
-     * Terminal teardown, latched exactly once via [closed]. Publishes [SeamState.Torn], completes
-     * [incoming] by closing the [spool], and cancels the whole [scope] — which stops the
-     * receive/disconnect loops AND the background accept coroutine [NearbyLoom.openSession] launches
-     * into the same scope, preventing coroutine leaks. Returns `false` if teardown already ran.
+     * Collapse [peers] to `{ selfId }` and shut the roster mirror out of it, as one critical section.
      *
-     * Called from both [close] (local) and [disconnectLoop] (last remote endpoint gone).
+     * [Seam.peers] requires a `Torn` seam's roster to be exactly `{ selfId }` — **not** `emptySet()`
+     * and not the pre-tear membership: a torn radio reaches nobody, but `peers` always carries this
+     * peer's own id. Idempotent, so [latchTorn]'s losing callers may run it freely.
+     */
+    private fun collapseRoster() = peersLock.withReentrantLock {
+        collapsed = true
+        _peers.value = setOf(selfId)
+    }
+
+    /**
+     * Terminal teardown, latched exactly once via [closed]. Collapses the roster, publishes
+     * [SeamState.Torn], completes [incoming] by closing the [spool], and cancels the whole [scope] —
+     * which stops the receive/disconnect loops AND the background accept coroutine
+     * [NearbyLoom.openSession] launches into the same scope, preventing coroutine leaks. Returns
+     * `false` if teardown already ran.
+     *
+     * Called from both [close] (local) and [disconnectLoop] (last remote endpoint gone). The collapse
+     * lives *here* rather than at each call site precisely because both paths publish the same
+     * terminal `Torn` a consumer waits on, and [Seam.peers] makes the collapse ORDERED against it:
+     * running it immediately before the `_state` write is what makes "already collapsed when `Torn`
+     * becomes observable" true on either path, with no way to add a third that forgets.
+     *
+     * [peersLock] is released before the `_state` write: that write resumes `state` collectors, which
+     * can run consumer code inline and re-enter this seam.
      */
     private fun latchTorn(reason: CloseReason): Boolean {
         if (!closed.compareAndSet(expect = false, update = true)) return false
+        collapseRoster()
         _state.value = SeamState.Torn(reason)
         scope.coroutineContext[Job]?.cancel()
         spool.close()
