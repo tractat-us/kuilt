@@ -121,6 +121,86 @@ internal class InstallSnapshotMetaValidationTest {
     }
 
     /**
+     * The index half, at exactly the point the term bound does **not** reach — and the reason the two
+     * tests above cannot see it: both pair a huge index with `lastIncludedTerm = Long.MAX_VALUE`, so
+     * neither can distinguish "the term check caught it" from "the index check caught it".
+     *
+     * §5.4.1 domination does not require the term to exceed anything. `LogPosition.compareTo` is
+     * `compareValuesBy(…, ::term, ::index)` and `isLogUpToDate` is `candidate >= ours`, so **tying on
+     * term and winning on index is enough**. This frame therefore keeps `lastIncludedTerm == term` —
+     * a value the control below asserts must be accepted — and moves the whole attack into
+     * `lastIncludedIndex`.
+     *
+     * The snapshot lane has no structural defence to fall back on, which is why it needs an explicit
+     * ceiling where the AppendEntries lane needs none: `isWellFormedBatch` pins
+     * `entries[i].index == prevLogIndex + 1 + i` and `prevLogIndex` must satisfy Log Matching against
+     * the local log, so a forger cannot leap the index. The analogous snapshot check —
+     * `state.entryAt(m.lastIncludedIndex)?.term == m.lastIncludedTerm` — **fails open**: a mismatch,
+     * including the `null` returned for every index past the tail, falls through to discard-whole
+     * rather than rejecting. Ongaro §7 / Figure 13 rule 6 is guarded; rule 8 is not.
+     */
+    @Test
+    fun forgedHugeIndexAtALegalTermIsNotInstalled() = raftRunTest {
+        val sim = raftSim(this, backgroundScope, n = 3)
+        val leaderNode = awaitLeader(sim)
+        val leaderId = sim.nodes.entries.first { it.value === leaderNode }.key
+        val victimId = sim.nodeIds.first { it != leaderId }
+        val candidateId = sim.nodeIds.first { it != leaderId && it != victimId }
+        val victim = sim.nodes.getValue(victimId)
+        sim.awaitCommit(1L)
+
+        val honestTail = sim.storages.getValue(victimId).entries(1L).last()
+        val logBefore = sim.storages.getValue(victimId).entries(1L).map { it.index }
+        val floorBefore = victim.compactionFloor.value
+        val commitBefore = victim.commitIndex.value
+        val victimTerm = sim.storages.getValue(victimId).term()
+
+        sim.partitionOff(victimId)
+        sim.deliverInstallSnapshot(
+            to = victimId,
+            from = leaderId,
+            term = victimTerm,
+            lastIncludedIndex = forgedIndex,
+            lastIncludedTerm = victimTerm,   // <-- legal: == term, so the term bound cannot fire
+        )
+        delay(20)
+
+        sim.network.sent.clear()
+        sim.network.recording = true
+        sim.deliverRequestVote(
+            to = victimId,
+            from = candidateId,
+            term = victimTerm + 5L,
+            lastLogIndex = honestTail.index,
+            lastLogTerm = honestTail.term,
+            leadershipTransfer = true,
+        )
+        sim.awaitTrue("victim answered the RequestVote") {
+            sim.network.sent.any { it.from == victimId && it.message is RaftMessage.RequestVoteResponse }
+        }
+        sim.network.recording = false
+
+        val logAfter = sim.storages.getValue(victimId).entries(1L).map { it.index }
+        val voteGranted = sim.network.sent
+            .filter { it.from == victimId }
+            .mapNotNull { it.message as? RaftMessage.RequestVoteResponse }
+            .last()
+            .voteGranted
+        assertAll(
+            { assertEquals(logBefore, logAfter, "a legal-term/huge-index snapshot must not wipe the log") },
+            { assertEquals(floorBefore, victim.compactionFloor.value, "the compaction floor must not jump") },
+            { assertEquals(commitBefore, victim.commitIndex.value, "commitIndex must not be fabricated") },
+            {
+                assertTrue(
+                    voteGranted,
+                    "§5.4.1: tying on term and winning on index is enough to dominate — the victim denied a " +
+                        "vote to an honest candidate at (term=${honestTail.term}, index=${honestTail.index})",
+                )
+            },
+        )
+    }
+
+    /**
      * The non-vacuity control, and the guard against an over-broad predicate. A well-formed snapshot
      * that genuinely advances the frontier — same sender, same injection path, `lastIncludedTerm`
      * equal to the frame's own term — must still install. Without this, the forgery test above would
