@@ -1023,6 +1023,22 @@ internal class RaftEngine(
      * ceiling is folded into the same bound; it is implied today by [onMessage]'s bound on `term`,
      * and is restated here so this check's correctness is local rather than inherited.
      *
+     * **Scope — this closes the TERM half of the §5.4.1 hole, not the index half.** `lastIncludedTerm`
+     * is bounded because it is frame-internally checkable; `lastIncludedIndex` is not. A snapshot
+     * legitimately jumps a follower *far* past its own log — that is the entire point of §7 — so the
+     * recipient has no frame-internal way to tell an honest far-ahead index from a forged one, and
+     * only `>= 0` is enforced. A frame that keeps `lastIncludedTerm == term` and moves the attack into
+     * `lastIncludedIndex` therefore still passes here, still takes the discard-whole branch, and still
+     * leaves `lastLogPosition == (term, hugeIndex)` — which dominates every honest node whose last
+     * entry is at the *same* term. Verified against this implementation, not merely reasoned about.
+     *
+     * What the bound does buy is the difference between *permanent* and *recoverable*: at
+     * `lastLogTerm = Long.MAX_VALUE` the victim is unbeatable by any node at any future term and the
+     * poison survives restart, whereas at `lastLogTerm = term` any node that appends an entry at a
+     * higher term beats it again. Closing the index half needs a plausibility ceiling on
+     * `lastIncludedIndex` in the spirit of [MAX_PLAUSIBLE_TERM]; that is a separate design call and is
+     * deliberately NOT made here. Tracked in issue #1876.
+     *
      * **Disposition: drop the frame, don't ack it.** No honest leader can emit one —
      * [sendSnapshotChunk] copies [SnapshotMeta] from a snapshot it stored while at its own term — so
      * there is no honest sender to answer, and an [RaftMessage.InstallSnapshotResponse] would hand a

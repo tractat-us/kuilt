@@ -41,6 +41,13 @@ import kotlin.test.assertTrue
  * mask) the corruption before the assertions run; `deliverInstallSnapshot` / `deliverRequestVote`
  * bypass the partition, and `InMemoryRaftNetwork` records sends *before* the drop filter, so the
  * victim's own replies are still observable.
+ *
+ * **Scope — every test here forges the TERM.** `lastIncludedIndex` is not frame-internally checkable
+ * (a snapshot legitimately jumps a follower far past its own log), so only `>= 0` is enforced, and a
+ * frame holding `lastIncludedTerm == term` while moving the attack into `lastIncludedIndex` still
+ * wipes the log, fabricates the commit index, and dominates honest candidates at the same term.
+ * Measured on this branch, not assumed. That residual is issue #1876; no test here asserts against
+ * it, and none should until the design call there is made.
  */
 internal class InstallSnapshotMetaValidationTest {
 
