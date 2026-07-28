@@ -612,7 +612,19 @@ private class MeshSeam(
         // scope.cancel() cancels exactly that readLoop's coroutine — without NonCancellable the closes
         // below would be skipped by the in-flight cancellation, reintroducing the leak.
         withContext(NonCancellable) {
-            toClose.forEach { runCatchingCancellable { it.close() } }
+            // Per-conn `try`/`catch (Throwable)` rather than `runCatchingCancellable`: inside the shield
+            // this block's Job is parented to [NonCancellable], so a `CancellationException` arriving here
+            // can only be one the consumer's `Connection.close` minted itself (a close-handshake
+            // `withTimeout`) — never our own cancellation. `runCatchingCancellable` would rethrow that one
+            // case, abandoning every remaining conn and reintroducing the very half-open-connection leak
+            // this shield exists to prevent (#1803).
+            toClose.forEach {
+                try {
+                    it.close()
+                } catch (_: Throwable) {
+                    // Best-effort: one conn refusing to close must not stop its siblings being closed.
+                }
+            }
         }
     }
 

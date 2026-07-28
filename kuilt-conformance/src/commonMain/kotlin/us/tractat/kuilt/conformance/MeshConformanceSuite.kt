@@ -14,7 +14,6 @@ import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
-import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -139,8 +138,20 @@ public abstract class MeshConformanceSuite {
             // BOUNDED best-effort: NonCancellable shields cleanup from outer cancellation; withTimeoutOrNull
             // bounds a close() that can wedge on a dead transport so one fabric can't hang the suite; a
             // timeout/error is deliberately swallowed (real close bugs surface in the close-obligation tests).
+            //
+            // The per-seam guard sits OUTSIDE the bound and is a plain `catch (Throwable)`, not a
+            // `runCatchingCancellable` inside it (#1803). `withTimeoutOrNull` absorbs its own timeout; what it
+            // rethrows is a `CancellationException` the fabric's `close` minted itself, and inside the shield
+            // ours is never cancelled, so that is the only kind reachable. Letting it out would escape the
+            // whole block, leaving every later seam in the mesh un-closed with its redial loop re-arming.
             withContext(NonCancellable) {
-                seams.forEach { seam -> withTimeoutOrNull(2.seconds) { runCatchingCancellable { seam.close() } } }
+                seams.forEach { seam ->
+                    try {
+                        withTimeoutOrNull(2.seconds) { seam.close() }
+                    } catch (_: Throwable) {
+                        // Best-effort: one seam refusing to close must not strand the rest of the mesh.
+                    }
+                }
             }
         }
     }

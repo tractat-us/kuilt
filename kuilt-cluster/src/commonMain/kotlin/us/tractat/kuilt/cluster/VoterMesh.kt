@@ -9,7 +9,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import us.tractat.kuilt.core.Seam
-import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftNode
@@ -97,9 +96,8 @@ public class VoterMesh internal constructor(
      * WebSocket close), so peers drop this voter from their roster cleanly instead of holding a
      * **zombie** — an in-process `close()` that left the inter-server sessions ESTABLISHED and still
      * answering pings, so peers kept the dead voter in-roster indefinitely. The per-seam close is
-     * best-effort ([runCatchingCancellable] per seam) and runs under [NonCancellable] so a cancelled
-     * caller context still completes the cleanup (mirrors the formation-failure teardown in
-     * `voterMeshOverWebSockets`).
+     * best-effort (a `try`/`catch` per seam) and runs under [NonCancellable] so a cancelled caller context
+     * still completes the cleanup (mirrors the formation-failure teardown in `voterMeshOverWebSockets`).
      *
      * When [ownsSeams] is `false` (the test path, or caller-owned seams via the public
      * `voterMeshOverSeams`) this only cancels [scope] — the caller owns the seams' lifecycles.
@@ -111,7 +109,19 @@ public class VoterMesh internal constructor(
         scope.cancel()
         if (ownsSeams && voterSeams != null) {
             withContext(NonCancellable) {
-                voterSeams.values.forEach { runCatchingCancellable { it.close() } }
+                // Per-seam `try`/`catch (Throwable)`, NOT `runCatchingCancellable`: inside the shield this
+                // block's Job is parented to [NonCancellable], so a `CancellationException` arriving here
+                // can only be one the seam's own `close` minted (a close-handshake `withTimeout`) — never
+                // our cancellation. `runCatchingCancellable` would rethrow that one case and skip every
+                // remaining seam, leaving those inter-server sessions ESTABLISHED: precisely the zombie
+                // voter this close exists to prevent (#1803).
+                voterSeams.values.forEach {
+                    try {
+                        it.close()
+                    } catch (_: Throwable) {
+                        // Best-effort: one seam refusing to close must not strand its siblings open.
+                    }
+                }
             }
         }
     }
