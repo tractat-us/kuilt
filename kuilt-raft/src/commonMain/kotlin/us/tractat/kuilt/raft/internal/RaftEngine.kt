@@ -1083,7 +1083,63 @@ internal class RaftEngine(
         send(from, RaftMessage.InstallSnapshotResponse(state.currentTerm, bytes.size.toLong(), echoedRound = m.round))
     }
 
+    /**
+     * §5.3 frame-internal well-formedness of an [RaftMessage.AppendEntries] batch (issue #1832).
+     *
+     * The protocol implies `entries[i].index == prevLogIndex + 1 + i` — contiguous, ascending,
+     * starting immediately after the probed position — and `entries[i].term <= term`, since no entry
+     * may carry a term above the leader's own. Nothing enforced either. [RaftState.entryAt] returns
+     * null for *any* index past the tail, so the append scan's `existing == null` branch appended
+     * whatever index the sender supplied, at any distance from the real tail.
+     *
+     * Two consequences, one of them a safety violation:
+     *
+     * - **Contiguity.** [logEntryAt] computes its offset as `index - (snapshotIndex + 1)`, valid only
+     *   because indices are monotonically increasing with no gaps. A log holding `[… 7, MAX-1]`
+     *   breaks that, so subsequent lookups resolve the wrong slot or fall out of range.
+     * - **Leader Completeness (§5.4 / Figure 3.2).** [RaftState.lastLogPosition] is built from the
+     *   last entry and §5.4.1 compares `(term, index)` lexicographically, so an entry at
+     *   `term = Long.MAX_VALUE` makes the victim unbeatable by any honest node. It then wins every
+     *   election it enters while its log does *not* hold the committed entries a legitimate leader
+     *   must — and committed entries can be overwritten.
+     *
+     * Unlike the in-range `matchIndex` / `nextOffset` lies of #1818, this is checkable without trust
+     * or extra state: the leader states `prevLogIndex` in the same message, so the batch's required
+     * indices are fully determined by the frame itself.
+     *
+     * **Disposition: drop the frame, don't reply `success = false`.** An honest leader cannot emit
+     * such a batch — [sendAppendEntries] slices a contiguous suffix via [logSliceFrom] and sets
+     * `prevIndex = nextIndex - 1`, and log terms never exceed the leader's `currentTerm` — so there
+     * is no honest sender to answer, and a rejection would hand a forger a free lever on the leader's
+     * §5.3 backup. Dropping mirrors the §5.2 leader-authority gate in [onMessage]. Crucially it is
+     * also *not* a `require`: this runs inside the engine's actor loop, whose `try`/`finally` has no
+     * `catch`, so a throw would convert a malformed frame into permanent node death (#1818).
+     *
+     * Called before the term check, so a malformed frame never adopts its term either.
+     */
+    private fun isWellFormedBatch(from: NodeId, m: RaftMessage.AppendEntries): Boolean {
+        // A negative probe index is nonsense, and one within `entries.size + 1` of Long.MAX_VALUE
+        // would overflow the expected-index arithmetic below. Neither is reachable honestly.
+        if (m.prevLogIndex < 0L || m.prevLogIndex > Long.MAX_VALUE - m.entries.size - 1L) {
+            debug { "onAppendEntries($from): DROP — implausible prevLogIndex=${m.prevLogIndex} (entries=${m.entries.size})" }
+            return false
+        }
+        m.entries.forEachIndexed { i, entry ->
+            val expected = m.prevLogIndex + 1L + i
+            if (entry.index != expected) {
+                debug { "onAppendEntries($from): DROP — non-contiguous batch: entries[$i].index=${entry.index} expected=$expected (prevLogIndex=${m.prevLogIndex}, size=${m.entries.size})" }
+                return false
+            }
+            if (entry.term < 0L || entry.term > m.term) {
+                debug { "onAppendEntries($from): DROP — entries[$i].term=${entry.term} outside 0..${m.term} (no entry may carry a term above the leader's)" }
+                return false
+            }
+        }
+        return true
+    }
+
     private suspend fun onAppendEntries(from: NodeId, m: RaftMessage.AppendEntries) {
+        if (!isWellFormedBatch(from, m)) return
         if (m.term < state.currentTerm) {
             // Echo round 0, NOT `m.round` (issue #1831). This reply pairs OUR current term with a
             // request from an older one, and `ReadIndexTracker.round` resets to 0 on every
