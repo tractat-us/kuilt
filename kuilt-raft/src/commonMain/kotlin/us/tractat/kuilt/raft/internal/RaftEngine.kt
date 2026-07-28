@@ -1023,21 +1023,22 @@ internal class RaftEngine(
      * ceiling is folded into the same bound; it is implied today by [onMessage]'s bound on `term`,
      * and is restated here so this check's correctness is local rather than inherited.
      *
-     * **Scope — this closes the TERM half of the §5.4.1 hole, not the index half.** `lastIncludedTerm`
-     * is bounded because it is frame-internally checkable; `lastIncludedIndex` is not. A snapshot
-     * legitimately jumps a follower *far* past its own log — that is the entire point of §7 — so the
-     * recipient has no frame-internal way to tell an honest far-ahead index from a forged one, and
-     * only `>= 0` is enforced. A frame that keeps `lastIncludedTerm == term` and moves the attack into
-     * `lastIncludedIndex` therefore still passes here, still takes the discard-whole branch, and still
-     * leaves `lastLogPosition == (term, hugeIndex)` — which dominates every honest node whose last
-     * entry is at the *same* term. Verified against this implementation, not merely reasoned about.
+     * **Both halves of the position are bounded, because §5.4.1 needs only one of them.**
+     * [LogPosition] orders by `(term, index)` lexicographically and [isLogUpToDate] is
+     * `candidate >= ours`, so tying on term and winning on index dominates just as surely as a huge
+     * term does. Bounding `lastIncludedTerm` alone left the violation fully reachable via
+     * `lastIncludedTerm == term` — a value this check must accept — with the attack moved into
+     * `lastIncludedIndex`. Hence [MAX_PLAUSIBLE_INDEX] alongside the term bound.
      *
-     * What the bound does buy is the difference between *permanent* and *recoverable*: at
-     * `lastLogTerm = Long.MAX_VALUE` the victim is unbeatable by any node at any future term and the
-     * poison survives restart, whereas at `lastLogTerm = term` any node that appends an entry at a
-     * higher term beats it again. Closing the index half needs a plausibility ceiling on
-     * `lastIncludedIndex` in the spirit of [MAX_PLAUSIBLE_TERM]; that is a separate design call and is
-     * deliberately NOT made here. Tracked in issue #1876.
+     * **What this does NOT establish.** A plausibility ceiling rules out the *implausible* range only.
+     * Nothing in the frame distinguishes a forged in-range snapshot from a legitimate one sent by a
+     * far-ahead leader — a snapshot exists precisely to jump a follower past its own log (§7), so
+     * "far ahead" is not evidence of anything. Snapshot metadata is **unauthenticated**, and within
+     * `0..MAX_PLAUSIBLE_INDEX` a Byzantine voter can still advance a follower's `snapshotIndex`,
+     * `commitIndex` and compaction floor to a position it never reached, and wipe its log. That is
+     * not fixable at this boundary; it needs authentication or a cross-frame invariant. See #1876.
+     * Two further unvalidated fields of this same frame are out of scope here: `config` (#1880) and
+     * the unbounded reassembly buffer behind `done = false` (#1881).
      *
      * **Disposition: drop the frame, don't ack it.** No honest leader can emit one —
      * [sendSnapshotChunk] copies [SnapshotMeta] from a snapshot it stored while at its own term — so
@@ -1051,8 +1052,10 @@ internal class RaftEngine(
      * recipient's election timeout either.
      */
     private fun isWellFormedSnapshotChunk(from: NodeId, m: RaftMessage.InstallSnapshot): Boolean {
-        if (m.lastIncludedIndex < 0L) {
-            debug { "onInstallSnapshot($from): DROP — negative lastIncludedIndex=${m.lastIncludedIndex}" }
+        if (m.lastIncludedIndex < 0L || m.lastIncludedIndex > MAX_PLAUSIBLE_INDEX) {
+            debug {
+                "onInstallSnapshot($from): DROP — lastIncludedIndex=${m.lastIncludedIndex} outside 0..$MAX_PLAUSIBLE_INDEX"
+            }
             return false
         }
         val termCeiling = minOf(m.term, MAX_PLAUSIBLE_TERM)
@@ -1179,10 +1182,13 @@ internal class RaftEngine(
      *
      * **Scope — the AppendEntries lane.** This check guards [RaftMessage.AppendEntries] and nothing
      * else, and [onMessage]'s `MAX_PLAUSIBLE_TERM` bound guards a frame's own `term` and nothing
-     * else. [RaftMessage.InstallSnapshot]'s `lastIncludedTerm` / `lastIncludedIndex` are therefore
-     * seen by neither, and reach the same §5.4.1 domination (plus a wiped log) through a sibling
-     * frame; that lane is closed separately by [isWellFormedSnapshotChunk] (issue #1868), which makes
-     * the identical §5.3 term argument about a snapshot's term that this one makes about entry terms.
+     * else. [RaftMessage.InstallSnapshot]'s `lastIncludedTerm` / `lastIncludedIndex` are seen by
+     * neither and reach the same §5.4.1 domination (plus a wiped log) through a sibling frame; that
+     * lane has its own [isWellFormedSnapshotChunk] (issue #1868), which bounds **both** halves of the
+     * position. Note this lane needs no index ceiling and that one does: here `entries[i].index` is
+     * pinned to `prevLogIndex + 1 + i` and Log Matching pins `prevLogIndex` against the local log, so
+     * a forger cannot leap the index, whereas the snapshot lane's analogous term check fails open.
+     * Neither check makes the frames trustworthy — in-range metadata stays unauthenticated (#1876).
      *
      * Unlike the in-range `matchIndex` / `nextOffset` lies of #1818, this is checkable without trust
      * or extra state: the leader states `prevLogIndex` in the same message, so the batch's required
@@ -2200,5 +2206,31 @@ internal class RaftEngine(
          * `Long.MIN_VALUE` and wedge the cluster permanently.
          */
         const val MAX_PLAUSIBLE_TERM = 1L shl 60
+
+        /**
+         * Upper sanity bound on a snapshot's `lastIncludedIndex` arriving off the wire (issue #1868) —
+         * see [isWellFormedSnapshotChunk]. The index-half counterpart of [MAX_PLAUSIBLE_TERM].
+         *
+         * §5.4.1 orders positions by `(term, index)` lexicographically, so **tying on term and winning
+         * on index dominates** just as surely as a huge term does — bounding only the term half leaves
+         * the violation reachable. Unlike the AppendEntries lane, the snapshot lane has no structural
+         * check to fall back on: [isWellFormedBatch] pins each entry's index to `prevLogIndex + 1 + i`
+         * and Log Matching pins `prevLogIndex` to the local log, whereas
+         * `state.entryAt(lastIncludedIndex)?.term == lastIncludedTerm` **fails open** — the `null` for
+         * any index past the tail falls through to discard-whole rather than rejecting.
+         *
+         * `2^60` mirrors [MAX_PLAUSIBLE_TERM] and is unreachable honestly: a leader only ever sends
+         * `SnapshotMeta.lastIncludedIndex` for a snapshot it stored, so an honest value is bounded by
+         * its own `lastLogIndex` — one per proposal. Indices advance on a much faster clock than terms
+         * (per proposal, not per election), which is why the headroom matters: 2^60 is ~10^18
+         * proposals, still some 36,000 years at a sustained 1M proposals/second.
+         *
+         * The bound is **inclusive**, matching [MAX_PLAUSIBLE_TERM]'s own `> MAX_PLAUSIBLE_TERM` test.
+         * Inclusive is safe *here* because this is a pure plausibility filter with no progress
+         * obligation — contrast [nextIndexAfterFailure]'s ceiling (#1829), which must be **exclusive**
+         * because §5.3 backup has to strictly decrease or it livelocks. Accepting exactly `2^60`
+         * creates no fixed point, and no honest frame is near either side of the boundary.
+         */
+        const val MAX_PLAUSIBLE_INDEX = 1L shl 60
     }
 }

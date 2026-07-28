@@ -42,18 +42,76 @@ import kotlin.test.assertTrue
  * bypass the partition, and `InMemoryRaftNetwork` records sends *before* the drop filter, so the
  * victim's own replies are still observable.
  *
- * **Scope — every test here forges the TERM.** `lastIncludedIndex` is not frame-internally checkable
- * (a snapshot legitimately jumps a follower far past its own log), so only `>= 0` is enforced, and a
- * frame holding `lastIncludedTerm == term` while moving the attack into `lastIncludedIndex` still
- * wipes the log, fabricates the commit index, and dominates honest candidates at the same term.
- * Measured on this branch, not assumed. That residual is issue #1876; no test here asserts against
- * it, and none should until the design call there is made.
+ * **Both halves of the position are bounded, because §5.4.1 needs only one of them.** `LogPosition`
+ * orders by `(term, index)` and `isLogUpToDate` is `candidate >= ours`, so tying on term and winning
+ * on index dominates just as surely as a huge term. `forgedHugeIndexAtALegalTermIsNotInstalled`
+ * exists because the two `Long.MAX_VALUE`-term tests cannot tell the two bounds apart.
+ *
+ * **What these tests do NOT establish.** A plausibility ceiling rejects the implausible range only.
+ * Nothing in the frame separates a forged in-range snapshot from a legitimate one sent by a
+ * far-ahead leader, so within `0..MAX_PLAUSIBLE_INDEX` a Byzantine voter can still advance a
+ * follower's frontier and wipe its log — snapshot metadata is unauthenticated (#1876). The frame's
+ * `config` (#1880) and the uncapped reassembly buffer (#1881) are likewise unguarded and untested
+ * here.
  */
 internal class InstallSnapshotMetaValidationTest {
 
     /** Far past any real log, and paired with a term no honest leader can be at. */
     private val forgedIndex = Long.MAX_VALUE - 1L
     private val forgedTerm = Long.MAX_VALUE
+
+    /** Mirrors the engine's `MAX_PLAUSIBLE_INDEX` ceiling (private); the bound is **inclusive**. */
+    private val maxPlausibleIndex = 1L shl 60
+
+    /**
+     * The boundary, in both directions — the failure mode a plausibility ceiling actually ships with.
+     * #1829's ceiling was deliberately *exclusive* and #1846 had to reason carefully about why; get
+     * the inclusivity wrong here and the bound either rejects a legal frame or admits an illegal one,
+     * one value either side. Exactly `MAX_PLAUSIBLE_INDEX` must install; one above must be dropped.
+     *
+     * Two different followers are used so neither case can be contaminated by the other's frontier.
+     */
+    @Test
+    fun theIndexCeilingIsInclusiveAndOneAboveIsDropped() = raftRunTest {
+        val sim = raftSim(this, backgroundScope, n = 3)
+        val leaderNode = awaitLeader(sim)
+        val leaderId = sim.nodes.entries.first { it.value === leaderNode }.key
+        val acceptId = sim.nodeIds.first { it != leaderId }
+        val rejectId = sim.nodeIds.first { it != leaderId && it != acceptId }
+        val acceptNode = sim.nodes.getValue(acceptId)
+        val rejectNode = sim.nodes.getValue(rejectId)
+        sim.awaitCommit(1L)
+
+        val rejectFloorBefore = rejectNode.compactionFloor.value
+        val term = sim.storages.getValue(acceptId).term()
+
+        sim.partitionOff(acceptId)
+        sim.partitionOff(rejectId)
+        sim.deliverInstallSnapshot(
+            to = acceptId, from = leaderId, term = term,
+            lastIncludedIndex = maxPlausibleIndex, lastIncludedTerm = term,
+        )
+        sim.deliverInstallSnapshot(
+            to = rejectId, from = leaderId, term = term,
+            lastIncludedIndex = maxPlausibleIndex + 1L, lastIncludedTerm = term,
+        )
+        delay(20)
+
+        assertAll(
+            {
+                assertEquals(
+                    maxPlausibleIndex, acceptNode.compactionFloor.value,
+                    "lastIncludedIndex == MAX_PLAUSIBLE_INDEX is inside the bound and must install",
+                )
+            },
+            {
+                assertEquals(
+                    rejectFloorBefore, rejectNode.compactionFloor.value,
+                    "lastIncludedIndex == MAX_PLAUSIBLE_INDEX + 1 is outside the bound and must be dropped",
+                )
+            },
+        )
+    }
 
     /**
      * The trace itself: the forged metadata must not wipe the log, move the compaction floor,
