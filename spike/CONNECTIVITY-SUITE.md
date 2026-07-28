@@ -315,7 +315,8 @@ That matters most during scenario 6. When you switch a phone into Airplane Mode,
 stops being able to see anything — which is precisely the minute you most want to see. And if you
 relaunch the app for any reason, whatever was on screen is gone. The file survives both.
 
-Later, plug both phones into your Mac and run:
+Later, get both phones back to your Mac — a cable, or just the same Wi-Fi, whichever is easier — and
+run:
 
 ```bash
 ./spike/collect-logs.sh
