@@ -16,6 +16,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.FailureReason
+import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
@@ -135,6 +136,8 @@ class SubTimeoutBlipResumeTest {
                 h.joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first()
             }
 
+            val hostId = h.joinerRoom.roster.value.single().id
+
             tick(SETTLE_TICKS)
             h.dropPath()
             tick(GRACE_TICKS)
@@ -148,6 +151,26 @@ class SubTimeoutBlipResumeTest {
                     assertTrue(
                         recovered.isCompleted,
                         "a blip the host never observed must close its own arc with Recovered(hostId)",
+                    )
+                },
+                {
+                    // The arc opened on the HOST (Partitioned(hostId) + WindowOpened(hostId)), so an
+                    // edge-keying consumer can only match a closing edge that names the host —
+                    // which Resumed(selfId), the real-resume edge, does not.
+                    assertEquals(
+                        hostId,
+                        recovered.takeIf { it.isCompleted }?.getCompleted()?.peerId,
+                        "the closing edge must name the host the arc opened on",
+                    )
+                },
+                {
+                    // The level, not just the edge: onReconnectStarted pinned the host Partitioned,
+                    // and a roster left saying that about a demonstrably reachable host is exactly
+                    // the #1723 failure this callback exists to avoid.
+                    assertEquals(
+                        Liveness.Connected,
+                        h.joinerRoom.roster.value.single { it.id == hostId }.liveness,
+                        "the roster must show the host connected again, not pinned Partitioned",
                     )
                 },
                 {
