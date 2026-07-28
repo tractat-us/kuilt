@@ -1999,6 +1999,44 @@ internal class RaftEngine(
     // ── Message dispatcher ────────────────────────────────────────────────────
 
     private suspend fun onMessage(from: NodeId, m: RaftMessage) {
+        // ── Term plausibility bound (#1833) ──────────────────────────────────────
+        // Term adoption had no upper bound: any message carrying a higher term was adopted wholesale
+        // via `stepDown(m.term, HigherTermObserved)`, and the election increment is a bare
+        // `currentTerm + 1` on a `Long`, which wraps silently. One frame carrying
+        // `term = Long.MAX_VALUE` is therefore adopted; the victim's own responses then carry it, so
+        // every peer adopts it in turn on ordinary traffic; the next election computes
+        // `Long.MAX_VALUE + 1` = `Long.MIN_VALUE`; every RequestVote/PreVote proposes a hugely
+        // negative term that every recipient denies as stale — and NO LEADER CAN EVER BE ELECTED
+        // AGAIN, cluster-wide, surviving restart because `currentTerm` is persisted. No exception, no
+        // log line, no crashed node: the cluster silently stops making progress while every node
+        // reports itself healthy.
+        //
+        // Honest terms increment once per election, so a real deployment stays many orders of
+        // magnitude below MAX_PLAUSIBLE_TERM (~10^18 elections of headroom). A term outside
+        // `0..MAX_PLAUSIBLE_TERM` is therefore proof of a malformed or foreign frame, and — the
+        // #1817 nonce reasoning — admits no conservative in-range reading to clamp to, so the frame
+        // is DROPPED. Negative terms are already nonsense: terms start at 0 and only increase.
+        //
+        // Placed at the dispatch boundary, before any handler and therefore before any adoption, so
+        // one check covers every path that can raise `currentTerm`. That in turn makes the two
+        // `currentTerm + 1` increment sites provably overflow-free: `currentTerm` is only ever set
+        // from an adopted wire term (now <= 2^60) or from a self-increment, and reaching 2^63 from
+        // 2^60 would take 2^63 - 2^60 real elections.
+        //
+        // Rejecting rather than throwing is required for the usual reason: this runs inside the
+        // engine's actor loop, whose `try`/`finally` has no `catch`, so a `require` would convert a
+        // malformed frame into permanent node death (#1818).
+        //
+        // NOTE: the init-restore path (`state.currentTerm = storage.term()`) is deliberately NOT
+        // bounded. A term persisted by a pre-fix binary comes back poisoned, and that node's frames
+        // are then dropped by every peer — it is isolated, but the cluster keeps electing. Silently
+        // rewriting durable term state on load is a bigger call than this fix.
+        val wireTerm = m.wireTerm
+        if (wireTerm != null && (wireTerm < 0L || wireTerm > MAX_PLAUSIBLE_TERM)) {
+            debug { "onMessage: dropped ${m::class.simpleName} from $from — implausible term=$wireTerm (outside 0..$MAX_PLAUSIBLE_TERM)" }
+            return
+        }
+
         // ── §5.2 / §8 leader-authority gate (#1383) ──────────────────────────────
         // AppendEntries and InstallSnapshot are leader→peer RPCs, and only a voter can
         // ever be leader (§5.2: a candidate must win a majority of the voter set). So a
@@ -2071,5 +2109,15 @@ internal class RaftEngine(
     private companion object {
         /** Reserve for the CBOR envelope around a chunk's [RaftMessage.InstallSnapshot.data] payload. */
         const val HEADER_BUDGET = 256
+
+        /**
+         * Upper sanity bound on any term arriving off the wire (issue #1833) — see [onMessage].
+         *
+         * `2^60` leaves roughly 10^18 elections of headroom, which no real deployment approaches
+         * (terms advance once per election), while keeping `currentTerm + 1` three orders of
+         * magnitude clear of the `Long` overflow that would otherwise wrap an election term to
+         * `Long.MIN_VALUE` and wedge the cluster permanently.
+         */
+        const val MAX_PLAUSIBLE_TERM = 1L shl 60
     }
 }
