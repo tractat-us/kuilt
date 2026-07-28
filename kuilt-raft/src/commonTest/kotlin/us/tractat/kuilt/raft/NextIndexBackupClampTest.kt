@@ -50,8 +50,14 @@ private val BACKUP_CLAMP_CONFIG = RaftConfig(
  * index the leader probed (`prevLogIndex = currentNextIndex - 1`): "log too short" reports
  * `followerLastLogIndex + 1 ≤ prevLogIndex`, and a real term conflict reports an index at or below
  * `prevLogIndex`. §5.3 fast backup is monotonically non-increasing by construction, so clamping the
- * result to `1..currentNextIndex` is a no-op for every honest peer and bites only on a value no
+ * result to `1..currentNextIndex - 1` is a no-op for every honest peer and bites only on a value no
  * correct follower can send — the same shape and reasoning as #1175 / #1818.
+ *
+ * The ceiling is **exclusive** because a backup that does not move is its own failure: the rejection
+ * branch calls `sendAppendEntries(from)` synchronously, so an unchanged `nextIndex` re-emits an
+ * identical frame and ping-pongs forever. That property is pinned in `RaftLogMathTest`
+ * (`…_alwaysStrictlyDecreases`) rather than here on purpose — driving the loop through a live peer
+ * would hang the harness rather than fail it, which is exactly the shape this repo forbids in a test.
  */
 internal class NextIndexBackupClampTest {
 

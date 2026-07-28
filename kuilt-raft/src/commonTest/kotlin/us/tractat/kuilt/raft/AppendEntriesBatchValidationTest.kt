@@ -154,6 +154,10 @@ internal class AppendEntriesBatchValidationTest {
      * — the same decision a live election would make, not a re-derivation of `isLogUpToDate` from
      * test-side state. `leadershipTransfer = true` bypasses the recipient's §4.2.3 leader-stickiness
      * deny, which would otherwise short-circuit before the log comparison and hide the result.
+     *
+     * **Covers the AppendEntries lane only.** `InstallSnapshot`'s `lastIncludedTerm` /
+     * `lastIncludedIndex` reach the same §5.4.1 domination and are guarded by neither the batch
+     * validation nor the term bound — tracked in issue #1868, out of scope here.
      */
     @Test
     fun forgedMaxTermEntryDoesNotMakeTheVictimUnbeatableInElections() = raftRunTest {

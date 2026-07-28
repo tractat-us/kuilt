@@ -1103,6 +1103,13 @@ internal class RaftEngine(
      *   election it enters while its log does *not* hold the committed entries a legitimate leader
      *   must — and committed entries can be overwritten.
      *
+     * **Scope — this closes the §5.4.1 hole on the AppendEntries lane only.** The check guards
+     * [RaftMessage.AppendEntries] and nothing else, and [onMessage]'s `MAX_PLAUSIBLE_TERM` bound
+     * guards a frame's own `term` and nothing else — so [RaftMessage.InstallSnapshot]'s
+     * `lastIncludedTerm` / `lastIncludedIndex` are validated by neither and reach the same §5.4.1
+     * domination (plus a wiped log) through a sibling frame. Tracked in issue #1868; deliberately
+     * NOT addressed here.
+     *
      * Unlike the in-range `matchIndex` / `nextOffset` lies of #1818, this is checkable without trust
      * or extra state: the leader states `prevLogIndex` in the same message, so the batch's required
      * indices are fully determined by the frame itself.
