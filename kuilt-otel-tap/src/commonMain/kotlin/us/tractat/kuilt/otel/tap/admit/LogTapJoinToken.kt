@@ -31,10 +31,20 @@ import kotlin.time.Instant
  *   and grinds candidate codes offline against `HMAC-SHA256(candidate, nonce)`;
  * - in the **role-inverted topology** (the prover hosts), an attacker sends the hosting
  *   prover a `Challenge` purely to harvest a `HMAC(code, nonce)` tag to grind.
- * Either way the attacker only wins if they crack the code **before the token expires** —
- * a recovered code is useless once [isValid] returns false. The short [ttl] is therefore a
- * load-bearing security control, not a UX knob: it is what keeps a ~2⁴⁰ offline search from
- * being worthwhile.
+ *
+ * On the **eavesdropper** path the nonce is the verifier's own fresh random value, so the grind
+ * cannot start until the tag is captured and the attacker only wins by cracking the code
+ * **before the token expires** — a recovered code is useless once [isValid] returns false. The
+ * short [ttl] is therefore a load-bearing security control on that path, not a UX knob: it is
+ * what keeps a ~2⁴⁰ offline search from being worthwhile.
+ *
+ * The **harvest** path is weaker, and the [ttl] does not bound it (#1865). There the nonce is
+ * chosen by the attacker, who can pick a fixed value and precompute the whole ~2⁴⁰ table
+ * *before the token is minted*, making recovery on harvest a lookup. Enforcing the nonce's width
+ * (#1820) makes the challenge well-formed, not fresh, and does not change that. The only control
+ * on this path today is `TokenGatedSeam`'s first-challenger binding, which makes the harvest a
+ * race the attacker must win rather than a certainty. Closing it properly needs
+ * prover-contributed freshness in the `Proof` frame — a wire change, tracked in #1865.
  *
  * **WARNING — do not raise [DEFAULT_TTL].** Widening the window trades directly against the
  * code's entropy: every extra minute is extra offline-cracking budget on the plaintext wire.
