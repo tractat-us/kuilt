@@ -16,13 +16,20 @@ class PlyInboundGateTest {
     /**
      * Admit distinct origins until the gate refuses one; returns how many it admitted — i.e. the cap.
      * Setup only, so it probes rather than asserts: the assertions belong to the tests below.
+     *
+     * The catch is deliberately narrowed to the refusal this probe is named for. A `runCatching`
+     * here would catch **any** [Throwable] — including the [OutOfMemoryError] a pre-fix
+     * 4096-origin flood can raise, which is the very defect #1814 describes — end the loop, and
+     * report a bogus cap, turning the bug under test into a green probe.
      */
     private fun fillOriginTable(gate: PlyInboundGate): Int {
         var admitted = 0
-        while (
-            admitted < ORIGIN_PROBE_CEILING &&
-            runCatching { gate.accept(data(0, origin = "o$admitted")) }.isSuccess
-        ) {
+        while (admitted < ORIGIN_PROBE_CEILING) {
+            try {
+                gate.accept(data(0, origin = "o$admitted"))
+            } catch (_: IllegalStateException) {
+                return admitted
+            }
             admitted++
         }
         return admitted

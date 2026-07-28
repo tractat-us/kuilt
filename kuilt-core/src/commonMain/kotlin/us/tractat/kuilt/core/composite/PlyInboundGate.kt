@@ -21,9 +21,17 @@ import us.tractat.kuilt.core.PeerId
  *  - It bounds the **count** of origins this gate holds state for, over the gate's whole
  *    lifetime — origin state is never pruned, so a departed peer keeps its slot until the
  *    composite seam that owns this gate is gone. A lifetime budget, not a live-origin one.
- *  - It does **not** bound bytes. Each admitted origin may still hold up to [maxBuffered]
- *    payloads of whatever size its transport allows, so the retained-payload ceiling is
- *    `MAX_ORIGINS * maxBuffered` frames.
+ *  - It does **not** bound bytes, on either axis. Each admitted origin may still hold up to
+ *    [maxBuffered] payloads of whatever size its transport allows; and the retained [PeerId]
+ *    **key** is itself attacker-chosen and attacker-*sized*, because `PlyFrame.decode` bounds a
+ *    declared id length only by the transport's frame size — a 1 MiB `originId` decodes fine.
+ *    So the floor an attacker pins permanently is `MAX_ORIGINS * idBytes`, and pinning it costs
+ *    only 256 frames with no out-of-order games, on top of the `MAX_ORIGINS * maxBuffered`
+ *    payload ceiling.
+ *  - It does **not** bound the *refusal* rate. Every refused frame reaches `onPlyFailure` as one
+ *    [PlyReconcileException], so a flood trades memory pressure for consumer-callback pressure —
+ *    unbounded in rate, from well-formed input. That channel is shared with the malformed-frame
+ *    path and so is pre-existing in kind, but this is a cheaper way to drive it.
  *  - It does **not** check that an origin is an admitted member. Gating on composite roster
  *    state is the stronger property and is deliberately not done here: this gate knows
  *    nothing of the roster, and a `Data` frame can legitimately arrive before the `Announce`
@@ -37,8 +45,9 @@ import us.tractat.kuilt.core.PeerId
  * first-sight branch — re-baselining its sequence, which re-opens the cross-ply duplicate
  * this gate exists to collapse and discards whatever it had buffered. That trades a bounded
  * memory problem for an unbounded *duplicate-delivery* one against honest peers. Refusal is
- * contained instead: an already-admitted origin is never disturbed, and the residual damage
- * is that no *new* origin is admitted while the table is full.
+ * contained instead: an already-admitted origin is never disturbed, and the residual damage is
+ * that no *new* origin is **ever** admitted once the table is full — permanent for the life of
+ * the seam, not transient, because nothing prunes (#1874).
  *
  * The refusal throws rather than returning empty because an empty return already means
  * "duplicate" — a normal, expected outcome — while a refusal is an anomaly, and `kuilt-core`
@@ -114,9 +123,9 @@ internal class PlyInboundGate(private val maxBuffered: Int = 16) {
          * How many distinct origins one gate will ever hold state for.
          *
          * A `const`, not a constructor knob: this is not tuning. The honest working set is one
-         * origin per remote composite peer, so any real composite sits three orders of magnitude
-         * below this and the only caller that could raise it is the attacker's — a bigger number
-         * just buys a bigger table. 256 leaves absurd headroom over any plausible roster while
+         * origin per remote composite peer, so a real composite holds **single-digit** origins,
+         * and the only caller that could want this raised is the attacker's — a bigger number
+         * just buys a bigger table. 256 leaves ample headroom over any plausible roster while
          * keeping the retained-payload ceiling (`MAX_ORIGINS * maxBuffered`, 4096 frames at the
          * default) finite, which is the whole point.
          */
