@@ -114,6 +114,15 @@ struct ContentView: View {
                 Button("Join · S6 go offline") { model.start(role: "join-s6") }
                     .buttonStyle(.bordered).disabled(model.running)
             }
+            // #1637 repro: run ONLY scenario 7 — one airplane-mode blip held 10-30s, the band where a
+            // joiner's link dies but the host never notices. Same role convention as S6: Join is the
+            // phone that goes offline. EXPECTED TO FAIL until #1637 is fixed — that FAIL is the point.
+            HStack(spacing: 16) {
+                Button("Host · S7 stay up") { model.start(role: "host-s7") }
+                    .buttonStyle(.bordered).disabled(model.running)
+                Button("Join · S7 go offline") { model.start(role: "join-s7") }
+                    .buttonStyle(.bordered).disabled(model.running)
+            }
             if model.running {
                 HStack(spacing: 8) { ProgressView(); Text("running \(model.role)…").font(.caption) }
             }
@@ -171,15 +180,18 @@ struct ContentView: View {
         .padding()
         .onAppear {
             // Harness drive: launch args `host`/`join` auto-start the battery headlessly.
-            // The `-s4` variants run scenario 4 alone (#1467 diagnostic) and `-s6` runs the
-            // operator-driven local-fabric gate (#1712); check the suffixed forms FIRST, since
-            // `contains` is exact-match and "host-s4" must not fall through to the full battery.
-            // `-s6` still needs a human at the Airplane Mode toggle — the launch arg only starts it.
+            // The `-s4` variants run scenario 4 alone (#1467 diagnostic), `-s6` runs the
+            // operator-driven local-fabric gate (#1712) and `-s7` the sub-timeout-blip repro
+            // (#1637); check the suffixed forms FIRST, since `contains` is exact-match and
+            // "host-s4" must not fall through to the full battery. `-s6`/`-s7` still need a human
+            // at the Airplane Mode toggle — the launch arg only starts them.
             let args = ProcessInfo.processInfo.arguments
             if args.contains("host-s4") { model.start(role: "host-s4") }
             else if args.contains("join-s4") { model.start(role: "join-s4") }
             else if args.contains("host-s6") { model.start(role: "host-s6") }
             else if args.contains("join-s6") { model.start(role: "join-s6") }
+            else if args.contains("host-s7") { model.start(role: "host-s7") }
+            else if args.contains("join-s7") { model.start(role: "join-s7") }
             else if args.contains("host") { model.start(role: "host") }
             else if args.contains("join") { model.start(role: "join") }
         }

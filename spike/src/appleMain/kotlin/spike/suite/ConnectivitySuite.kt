@@ -34,6 +34,7 @@ import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.nw.NwLoom
 import us.tractat.kuilt.nw.appleNwLoom
+import us.tractat.kuilt.session.FailureReason
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.Member
 import us.tractat.kuilt.session.MembershipEvent
@@ -58,10 +59,12 @@ import kotlin.time.TimeSource
  * where the host echoes and the join pings) and the teardown side (scenario 4, where the host drops the
  * link). Host election (scenario 3) self-elects `min(peerId)` — the button is irrelevant there.
  *
- * **Scenario 6 is separate and operator-driven** (#1712): it needs a human to toggle Airplane Mode,
- * which no API can do, so it never runs in the automatic battery. Two dedicated buttons run it alone —
+ * **Scenarios 6 and 7 are separate and operator-driven**: both need a human to toggle Airplane Mode,
+ * which no API can do, so neither runs in the automatic battery. Each gets its own pair of buttons —
  * and there the Host/Join button *does* pick the role, because the operator has to know which phone to
- * take offline. See [scenarioLocalFabric].
+ * take offline. Scenario 6 ([scenarioLocalFabric], #1712) asks *"whose network died?"*; scenario 7
+ * ([scenarioSubTimeoutBlip], #1637) asks *"does a blip too short for the host to notice still
+ * recover?"* — and is **expected to FAIL until #1637 is fixed**.
  *
  * Entry from Swift is non-suspending: [start] launches the battery on a background scope and reports
  * progress through callbacks (the SwiftUI layer hops them to the main thread).
@@ -76,9 +79,9 @@ public class ConnectivitySuite {
      * report text.
      *
      * [onPrompt] carries an **instruction for the human holding the phone** — the operator-driven
-     * scenario 6 uses it to ask for an Airplane Mode toggle. It is deliberately a separate channel from
-     * [onLog] so the UI can render it as a banner the operator cannot miss; an empty string clears it.
-     * The automatic scenarios never call it.
+     * scenarios 6 and 7 use it to ask for an Airplane Mode toggle. It is deliberately a separate channel
+     * from [onLog] so the UI can render it as a banner the operator cannot miss; an empty string clears
+     * it. The automatic scenarios never call it.
      */
     public fun start(
         role: String,
@@ -127,7 +130,14 @@ public class ConnectivitySuite {
         // room it stands up has to survive two outages, which no earlier scenario's leftover listener
         // should be able to perturb.
         val s6Only = role.endsWith(S6_SUFFIX)
-        val baseRole = role.removeSuffix(S4_SUFFIX).removeSuffix(S6_SUFFIX)
+        // A "-s7" role suffix runs ONLY scenario 7 — the #1637 sub-timeout-blip repro. Alone for the
+        // same two reasons as scenario 6 (a human drives the radio; a leftover listener must not
+        // perturb the one room under test), plus a third of its own: it is the ONLY scenario whose
+        // heartbeat `timeout` is longer than the seam's path grace, and that config is what creates
+        // the repro interval. Folding it into a battery would mean two different detect budgets in
+        // one process.
+        val s7Only = role.endsWith(S7_SUFFIX)
+        val baseRole = role.removeSuffix(S4_SUFFIX).removeSuffix(S6_SUFFIX).removeSuffix(S7_SUFFIX)
         if (s4Only) {
             // Surface the fabric's OWN dial/connection logging (nw.loom.weave, nw.dial,
             // nw.api.state/close, the #1560 nw_error capture) — the boundary AFTER discovery, which
@@ -139,7 +149,7 @@ public class ConnectivitySuite {
             KotlinLoggingConfiguration.direct.logLevel = Level.DEBUG
             onLog("fabric logging → DirectLoggerFactory@DEBUG (diagnostic run)")
         }
-        onLog("suite start role=$baseRole s4Only=$s4Only s6Only=$s6Only")
+        onLog("suite start role=$baseRole s4Only=$s4Only s6Only=$s6Only s7Only=$s7Only")
         val env = captureEnv()
         onLog(env.line)
         val startedAt = NSDate().timeIntervalSince1970
@@ -163,6 +173,11 @@ public class ConnectivitySuite {
             // five, and the automatic battery below is byte-for-byte the run that has been passing 5/5.
             step { scenarioLocalFabric(baseRole, onLog, onPrompt) }
             onPrompt("")
+        } else if (s7Only) {
+            // Scenario 7 ALONE — the #1637 repro. Additive in exactly the same way scenario 6 was: it
+            // renumbers nothing and the automatic battery below is untouched.
+            step { scenarioSubTimeoutBlip(baseRole, onLog, onPrompt) }
+            onPrompt("")
         } else {
             step { scenarioRawRoundTrip(baseRole, onLog) }
             step { scenarioSeamWeave(baseRole, onLog) }
@@ -175,6 +190,7 @@ public class ConnectivitySuite {
             when {
                 s4Only -> "$baseRole S4-ONLY"
                 s6Only -> "$baseRole S6-ONLY (airplane-mode gate)"
+                s7Only -> "$baseRole S7-ONLY (sub-timeout blip #1637)"
                 else -> baseRole
             },
             startedAt,
@@ -512,6 +528,14 @@ public class ConnectivitySuite {
     ) {
         /** Non-null ⇒ nothing was observed because the operator never toggled; the run is a SKIP, not a FAIL. */
         var skip: String? = null
+
+        /**
+         * What this side actually measured on a PASS, so the one-line verdict quotes evidence rather
+         * than a canned sentence. Scenario 6's two PASS strings are fixed (it asserts the same two
+         * things every run); scenario 7's are not — its PASS has to name the measured outage, which is
+         * different every run and is the number an adjudicator needs.
+         */
+        var passDetail: String? = null
     }
 
     /**
@@ -1008,6 +1032,333 @@ public class ConnectivitySuite {
         }
     }
 
+    // ── 7. sub-timeout blip — the #1637 repro ─────────────────────────────────
+
+    /**
+     * **Operator-driven, and EXPECTED TO FAIL on a build without the #1637 fix.** That failure is the
+     * whole point of the scenario: it is the RED capture, on hardware, of a bug no local suite has ever
+     * reproduced.
+     *
+     * ## The bug, in one paragraph
+     *
+     * A joiner whose radio blips for **longer than the seam's path grace but shorter than the host's
+     * liveness timeout** never resumes — it burns its entire reconnect budget and dies. The joiner's
+     * `NwSeam` gives a path-lost connection [WOVEN_PATH_GRACE] to come back, then evicts the host and
+     * re-forms; its detector reports `TransportClosed` and the resume machine starts. But **the host's
+     * link never closed** — only the joiner's side tore — so the host never noticed anything. Every
+     * `Resume` the joiner sends is answered `WindowNotYetOpen` (retryable), and *the Resume frame
+     * itself refreshes the host detector's `lastSeen`*, so the host's silence never reaches its
+     * timeout and no window will ever open. The joiner retries every `interval` until the
+     * [HeartbeatConfig.reconnectWindow] elapses → `FailureReason.Refused` → `HostLost`. A live room
+     * dies of a blip both phones could have shrugged off.
+     *
+     * ## Why scenario 6 structurally cannot show this
+     *
+     * [scenarioLocalFabric] runs `timeout = 5s`, *below* the 10 s grace — deliberately, so its own
+     * short outage is detectable at all. The host therefore always opens its window **before** the
+     * joiner's grace expires, every resume finds an open window and succeeds, and the interval
+     * `grace < outage < timeout` is **empty**. Verified on hardware on 2026-07-27: a 23.7 s real outage
+     * gave `Partitioned(LinkTimeout)` + `WindowOpened` at 9.3 s and a clean `Recovered` at 30.4 s — the
+     * resume machine's failing lane was never entered.
+     *
+     * Scenario 7 exists solely to make that interval non-empty: [S7_HEARTBEAT] raises `timeout` to
+     * 30 s, so the repro band is `10s < outage < 30s` — twenty seconds wide, which a human with a
+     * thumb can hit.
+     *
+     * ## What each phone does
+     *
+     * The role comes from the BUTTON, exactly as in scenario 6, and the wiring is deliberately
+     * identical: the **DROPPED phone is the Joiner** (`reweave = { seam }`, the adopt path #1637 is
+     * about) and the surviving phone is the Host (`reweave = null`). One outage, not two.
+     *
+     * - **Dropped (Join)** — the phone under test. It measures its own outage off `localFabric`'s
+     *   edges and refuses to judge a run that landed outside the band ([Verdict.SKIP], never a FAIL:
+     *   an operator who held 8 s or 35 s must be told to retry, not shown a misleading verdict).
+     *   PASS = the room survives (`Recovered(hostId)`, or at least a live host in the roster) with **no
+     *   `HostLost`**. FAIL = `HostLost`, which is the bug.
+     * - **Stay-up (Host)** — a witness. By construction it should see *nothing at all*, and its PASS
+     *   says exactly that: it never partitioned the joiner, so no window ever opened. It reads the same
+     *   on a fixed and an unfixed build; **the verdict that matters is on the other phone.**
+     */
+    private suspend fun scenarioSubTimeoutBlip(
+        role: String,
+        onLog: (String) -> Unit,
+        onPrompt: (String) -> Unit,
+    ): ScenarioResult = scenario(7, "Sub-timeout blip", onLog) { hop ->
+        val amHost = role == "host"
+        val t0 = TimeSource.Monotonic.markNow()
+        fun ms() = t0.elapsedNow().inWholeMilliseconds
+        fun say(text: String) {
+            onPrompt(text)
+            hop("SAY t=${ms()}ms | $text")
+        }
+
+        hop(
+            "role=$role svc=$SVC7 side=${if (amHost) "SURVIVING" else "DROPPED"} " +
+                "detect=${S7_HEARTBEAT.timeout} window=${S7_HEARTBEAT.reconnectWindow} " +
+                "grace=$WOVEN_PATH_GRACE repro=($WOVEN_PATH_GRACE,${S7_HEARTBEAT.timeout}) exclusive",
+        )
+        say(
+            if (amHost) {
+                "This is the STAY-UP phone. Do NOT touch its network — it finishes on its own."
+            } else {
+                "This is the DROPPED phone. You will toggle Airplane Mode here ONCE, when asked."
+            },
+        )
+        val loom = appleNwLoom(SVC7, ROOM_KEY, weaveTimeout = WEAVE_TIMEOUT)
+        hop("self=${loom.selfId.value.take(8)}")
+        val seam = instrumentedWeave("s7", loom, hop)
+            ?: return@scenario Verdict.FAIL to "weave never established on $SVC7 (blip NOT exercised)"
+
+        // Identical wiring to scenario 6, and deliberately so: `reweave = { seam }` on the joiner is
+        // what puts the adopt-path resume machine in the loop at all, and #1637 is a defect of that
+        // machine. Change this and the scenario stops reproducing the bug.
+        val factory = SeamRoomFactory.systemClock(loom, scope, heartbeatConfig = S7_HEARTBEAT)
+        val heal: (suspend () -> Seam)? = if (amHost) null else ({ seam })
+        val room = factory.adopt(
+            seam = seam,
+            role = if (amHost) SessionRole.Host else SessionRole.Joiner,
+            memberName = role,
+            roomKey = ROOM_KEY,
+            reweave = heal,
+        )
+
+        val journal = Channel<String>(Channel.UNLIMITED)
+        val queue = Channel<MembershipEvent>(Channel.UNLIMITED)
+        val ctx = OutageCtx(room, queue, hop, ::say, ::ms, mutableListOf())
+
+        coroutineScope {
+            val eventJob = launch {
+                room.events.collect { e ->
+                    journal.trySend("t=${ms()}ms ev  ${e.short()}")
+                    queue.trySend(e)
+                }
+            }
+            val fabricJob = launch {
+                room.localFabric.collect { a -> journal.trySend("t=${ms()}ms mine=${a.short()}") }
+            }
+            val rosterJob = launch {
+                room.roster.collect { r -> journal.trySend("t=${ms()}ms roster=${r.render()}") }
+            }
+            establish(ctx, amHost)?.let { peer ->
+                if (amHost) stayUpSide(ctx, peer) else blippedSide(ctx, peer)
+            }
+            eventJob.cancel()
+            fabricJob.cancel()
+            rosterJob.cancel()
+        }
+        journal.close()
+        queue.close()
+        while (true) {
+            val r = journal.tryReceive()
+            if (!r.isSuccess) break
+            hop("  ${r.getOrNull()}")
+        }
+        hop("final mine=${room.localFabric.value.short()} roster=${room.roster.value.render()} t=${ms()}ms")
+        room.leave()
+        onPrompt("")
+
+        val skip = ctx.skip
+        when {
+            // Same precedence as scenario 6: a wrong reading outranks an unmeasurable one.
+            ctx.failures.isNotEmpty() -> Verdict.FAIL to (ctx.failures + listOfNotNull(skip)).joinToString("; ")
+            skip != null -> Verdict.SKIP to skip
+            // Never a canned string: every PASS here quotes the outage it was earned on.
+            else -> Verdict.PASS to (ctx.passDetail ?: "nothing asserted — this is a bug in the scenario")
+        }
+    }
+
+    /**
+     * The phone whose radio blips. It measures its own outage, refuses to judge one that fell outside
+     * the repro band, and then waits for the episode to close one way or the other.
+     *
+     * The three closing edges are not interchangeable, and telling them apart is what keeps this
+     * scenario honest:
+     *
+     *  - **`HostLost`** → FAIL. The room died of a blip. This is #1637.
+     *  - **`Recovered(host)`** → PASS. The joiner concluded no window was ever coming and completed the
+     *    episode as a local no-op resume — the fixed behaviour.
+     *  - **`Resumed`** → SKIP, *not* PASS. `Resumed` is emitted only from the `ResumeAck` handler, so it
+     *    proves the host had a window **open** — i.e. the host did notice, the outage overran its
+     *    detect, and this was an ordinary resume rather than the sub-timeout lane. Reading it as a PASS
+     *    is the one false-green this scenario could plausibly produce, since it looks like a healthy
+     *    recovery in every other respect.
+     */
+    private suspend fun blippedSide(ctx: OutageCtx, host: PeerId) {
+        val room = ctx.room
+        val lo = WOVEN_PATH_GRACE
+        val hi = S7_HEARTBEAT.timeout
+
+        ctx.say(
+            "AIRPLANE MODE **ON** now, on THIS phone. Leave it on until I say otherwise " +
+                "(about ${BLIP_HOLD.inWholeSeconds}s).",
+        )
+        if (!ctx.armOutage("blip")) return
+        val down = awaitFabric(room, TOGGLE_WAIT) { it is FabricAvailability.Unavailable }
+        if (down == null) {
+            ctx.skip = "blip: my localFabric never left ${room.localFabric.value.short()} in $TOGGLE_WAIT " +
+                "— Airplane Mode was never actually turned on, so nothing was tested"
+            return
+        }
+        val downAt = ctx.ms()
+        ctx.hop("blip: mine→${down.short()} t=${downAt}ms")
+
+        // The hold is timed from the OBSERVED path loss, not from the prompt, so an operator who took
+        // twenty seconds to find Control Centre still gets a ~BLIP_HOLD outage rather than a 40 s one.
+        // The queue is deliberately NOT drained here: LocalFabricLost, Partitioned and WindowOpened all
+        // land during the hold, and the verdict wait below wants every one of them in `seen`.
+        delay(BLIP_HOLD)
+        ctx.say("AIRPLANE MODE **OFF** now — that's the only toggle. (Held ${fmtMs(ctx.ms() - downAt)}.)")
+        if (awaitFabric(room, RECOVER_WAIT) { it is FabricAvailability.Available } == null) {
+            ctx.skip = "blip: my localFabric never returned to Available in $RECOVER_WAIT after the OFF " +
+                "prompt (observed ${room.localFabric.value.short()}) — was Airplane Mode turned back " +
+                "off? Nothing can be concluded about the resume"
+            return
+        }
+        val outage = (ctx.ms() - downAt).milliseconds
+
+        // ── the gate. Outside the band this run says NOTHING about #1637 ──
+        //
+        // Below `lo` the seam never evicts the host, so the resume machine is never entered; above `hi`
+        // the host DOES notice, opens a window, and the resume succeeds the ordinary way. Both are
+        // correct library behaviour, so both are SKIP — and the message names which side it fell on,
+        // because that is the only thing that tells the operator which way to adjust.
+        if (outage <= lo || outage >= hi) {
+            val which = if (outage <= lo) {
+                "SHORT of the $lo path grace — the seam never evicted the host, so the resume machine " +
+                    "was never entered. Hold it LONGER"
+            } else {
+                "PAST the host's $hi detect — an outage that long IS noticed, a window opens, and the " +
+                    "resume succeeds the ordinary way. Turn it back off FASTER"
+            }
+            ctx.skip = "blip: measured outage ${fmtMs(outage.inWholeMilliseconds)} fell $which. The repro " +
+                "interval is ($lo, $hi) exclusive; aim for a ~${BLIP_HOLD.inWholeSeconds}s hold and a " +
+                "prompt thumb on the OFF prompt, then re-run"
+            return
+        }
+        if (outage - lo < BLIP_MARGIN || hi - outage < BLIP_MARGIN) {
+            // Not a verdict change — the band is exactly as stated. But a run that landed 1 s inside an
+            // edge is one radio-reassociation hiccup away from the other side of it, and an adjudicator
+            // reading the report later deserves to know that before trusting either outcome.
+            ctx.hop(
+                "blip: MARGINAL — ${fmtMs(outage.inWholeMilliseconds)} is within $BLIP_MARGIN of a " +
+                    "($lo, $hi) edge; the verdict stands but a re-run nearer the middle is worth having",
+            )
+        }
+        ctx.hop("blip: mine→Available after ${fmtMs(outage.inWholeMilliseconds)} — INSIDE ($lo, $hi) t=${ctx.ms()}ms")
+
+        val seen = mutableListOf<MembershipEvent>()
+        val outcome = awaitEvent(ctx.queue, seen, VERDICT_WAIT) { e ->
+            when (e) {
+                is MembershipEvent.HostLost -> e
+                is MembershipEvent.Recovered -> e.takeIf { it.peerId == host }
+                is MembershipEvent.Resumed -> e
+                else -> null
+            }
+        }
+        // Did the resume machine actually run? `Partitioned`/`WindowOpened` for the host is the joiner's
+        // own record of entering it. Without either, a quiet run proves nothing — the blip never
+        // reached the machine — and calling that a PASS would be the scenario's second false green.
+        val episodeOpened = seen.any {
+            (it is MembershipEvent.Partitioned && it.peerId == host) ||
+                (it is MembershipEvent.WindowOpened && it.peerId == host)
+        }
+        val hostConnected = room.roster.value.any { it.id == host && it.liveness is Liveness.Connected }
+        val sinceDrop = ctx.ms() - downAt
+        when {
+            outcome is MembershipEvent.HostLost -> ctx.failures.add(
+                "blip: HostLost ${fmtMs(sinceDrop)} after the radio died, on a " +
+                    "${fmtMs(outage.inWholeMilliseconds)} outage that sat INSIDE the ($lo, $hi) repro " +
+                    "interval — reason=${outcome.reason.describe()}, mine=${outcome.localFabric.short()}. " +
+                    "This is #1637: the host never partitioned me (its link never closed), so every " +
+                    "Resume was answered WindowNotYetOpen and refreshed its lastSeen, and the whole " +
+                    "${S7_HEARTBEAT.reconnectWindow} budget burned down to a terminal room. EXPECTED on a " +
+                    "build without the #1637 fix — this FAIL is the capture. (saw ${seen.render()})",
+            )
+
+            outcome is MembershipEvent.Resumed -> ctx.skip =
+                "blip: the host ACKed a real resume (${outcome.short()} after ${fmtMs(sinceDrop)}), which " +
+                    "means it HAD a window open — so it noticed the outage and this was the ordinary " +
+                    "resume lane, not the sub-timeout one. Measured outage " +
+                    "${fmtMs(outage.inWholeMilliseconds)} against a $hi detect: re-run with a shorter " +
+                    "hold. (saw ${seen.render()})"
+
+            outcome is MembershipEvent.Recovered -> ctx.passDetail =
+                "survived a ${fmtMs(outage.inWholeMilliseconds)} blip inside ($lo, $hi): " +
+                    "${outcome.short()} ${fmtMs(sinceDrop)} after the radio died, no HostLost, " +
+                    "host ${if (hostConnected) "Connected" else "NOT Connected"} in the roster"
+
+            !episodeOpened -> ctx.skip =
+                "blip: no Partitioned/WindowOpened for ${host.value.take(8)} in ${fmtMs(sinceDrop)} after " +
+                    "a ${fmtMs(outage.inWholeMilliseconds)} outage — the blip never reached the resume " +
+                    "machine at all, so nothing was tested. Did the path really drop for the whole hold? " +
+                    "(saw ${seen.render()}, roster=${room.roster.value.render()})"
+
+            hostConnected -> ctx.passDetail =
+                "survived a ${fmtMs(outage.inWholeMilliseconds)} blip inside ($lo, $hi): the episode " +
+                    "opened and the host is back Connected with no HostLost — but NO explicit " +
+                    "Recovered/Resumed closed the arc within $VERDICT_WAIT. The weaker form of the PASS; " +
+                    "quote this line rather than the headline. (saw ${seen.render()})"
+
+            else -> ctx.failures.add(
+                "blip: the resume episode opened and never closed — no Recovered, no Resumed and no " +
+                    "HostLost in $VERDICT_WAIT after a ${fmtMs(outage.inWholeMilliseconds)} outage, and " +
+                    "${host.value.take(8)} is not Connected (roster=${room.roster.value.render()}, " +
+                    "saw ${seen.render()}). The room is neither recovered nor dead",
+            )
+        }
+        ctx.hop("blip: DONE outage=${fmtMs(outage.inWholeMilliseconds)} events=${seen.render()} t=${ctx.ms()}ms")
+    }
+
+    /**
+     * The phone that keeps its radio — a **witness**, not a subject. #1637 is entirely joiner-side, so
+     * this side's correct behaviour is to observe *nothing*: its link to the joiner never closed, so it
+     * never partitions it and never opens a window. That is precisely the precondition the bug needs,
+     * which makes "I saw nothing" the useful thing to record.
+     *
+     * It therefore reads the same on a fixed and an unfixed build — **it is not the verdict that
+     * matters**. What it *can* do is falsify the run: a `Partitioned` for the joiner proves the outage
+     * overran this phone's detect, which puts the whole run outside the repro band regardless of what
+     * the other phone concluded.
+     *
+     * **An empty final roster here is normal, not a finding.** The other phone finishes first and calls
+     * `leave()`, so a `Left` lands on this side well inside the observation window. It says nothing
+     * about the outage — the claim this side makes is only ever *"I never partitioned them"*.
+     */
+    private suspend fun stayUpSide(ctx: OutageCtx, peer: PeerId) {
+        val room = ctx.room
+        ctx.say(
+            "Hold still. The other phone goes offline for a few seconds. Do NOT touch this one — it " +
+                "finishes on its own in about ${HOST_OBSERVE.inWholeMinutes} minutes.",
+        )
+        if (!ctx.armOutage("blip")) return
+        val seen = mutableListOf<MembershipEvent>()
+        val partitioned = awaitEvent(ctx.queue, seen, HOST_OBSERVE) { e ->
+            (e as? MembershipEvent.Partitioned)?.takeIf { it.peerId == peer }
+        }
+        val mine = room.localFabric.value
+        if (mine !is FabricAvailability.Available) {
+            ctx.failures.add(
+                "blip: MY localFabric read ${mine.short()} — this phone's radio was never touched, so it " +
+                    "must still read Available; nothing observed here can be trusted otherwise",
+            )
+        }
+        if (partitioned != null) {
+            // Elapsed since the SCENARIO started, not since the drop: this phone has no idea when the
+            // other one's radio died — that is the whole premise — so it can only stamp its own clock.
+            ctx.skip = "blip: I DID notice ${peer.value.take(8)} go quiet (${partitioned.short()}) at " +
+                "t=${fmtMs(ctx.ms())} into the run — an outage that reaches my ${S7_HEARTBEAT.timeout} detect opens a " +
+                "window, and a resume against an open window succeeds the ordinary way. That is not the " +
+                "#1637 lane. Cross-check the DROPPED phone's measured outage and re-run with a shorter hold"
+            return
+        }
+        ctx.passDetail = "never partitioned ${peer.value.take(8)} in " +
+            "${fmtMs(HOST_OBSERVE.inWholeMilliseconds)} — my link to it never closed, so no window ever " +
+            "opened. That is the #1637 precondition holding; the verdict that matters is on the DROPPED " +
+            "phone. roster=${room.roster.value.render()}"
+        ctx.hop("blip: DONE saw=${seen.render()} mine=${mine.short()} roster=${room.roster.value.render()} t=${ctx.ms()}ms")
+    }
+
     /**
      * Drain [queue] until [select] returns non-null or [timeout] elapses; everything consumed lands in
      * [seen] so a failing phase can report what it *did* see instead of only what it missed.
@@ -1081,6 +1432,18 @@ public class ConnectivitySuite {
         is MembershipEvent.AdmissionFailed -> "AdmissionFailed(${reason::class.simpleName})"
     }
 
+    /**
+     * Why a joiner's session died, spelled out for a report someone pastes into an issue. `Refused`
+     * gets its `RejectCode` *and* that code's `retryable` flag, because `Refused(…, retryable=true)`
+     * repeated to exhaustion is the #1637 signature and "Refused" alone does not say that.
+     */
+    private fun FailureReason.describe(): String = when (this) {
+        FailureReason.WindowExpired -> "WindowExpired"
+        FailureReason.Unrecoverable -> "Unrecoverable"
+        is FailureReason.Refused ->
+            "Refused(code=${code.id.ifEmpty { "<none>" }},retryable=${code.retryable},msg=$message)"
+    }
+
     private fun SeamState.short(): String = when (this) {
         SeamState.Weaving -> "Weaving"
         SeamState.Woven -> "Woven"
@@ -1108,6 +1471,9 @@ public class ConnectivitySuite {
         /** Role suffix selecting the operator-driven scenario-6 local-fabric gate (#1712). */
         const val S6_SUFFIX = "-s6"
 
+        /** Role suffix selecting the operator-driven scenario-7 sub-timeout-blip repro (#1637). */
+        const val S7_SUFFIX = "-s7"
+
         // Per-scenario Bonjour service types keep each scenario's advertise/browse isolated so a
         // lingering listener from an earlier scenario can't cross-talk. ≤15-char service labels.
         // EVERY one of these must also be declared in app/project.yml's NSBonjourServices or iOS
@@ -1118,6 +1484,7 @@ public class ConnectivitySuite {
         const val SVC4B = "_ksuite4b._tcp"
         const val SVC5 = "_ksuite5._tcp"
         const val SVC6 = "_ksuite6._tcp"
+        const val SVC7 = "_ksuite7._tcp"
 
         val RAW_TIMEOUT: Duration = 45.seconds
         val WEAVE_TIMEOUT: Duration = 45.seconds
@@ -1185,5 +1552,81 @@ public class ConnectivitySuite {
 
         /** Radio down → seat expired (detect + window ≈ 65s), plus generous slack for a real radio. */
         val EXPIRY_WAIT: Duration = 150.seconds
+
+        // ── scenario 7 (#1637) ────────────────────────────────────────────────
+        //
+        // Scenario 7 is defined by ONE inequality that scenario 6 deliberately inverts:
+        //
+        //     wovenPathGrace (10s)  <  outage  <  HeartbeatConfig.timeout
+        //
+        // Below the grace the joiner's seam never evicts the host, so the resume machine is never
+        // entered. Above the host's detect the host DOES notice, opens a window, and the resume
+        // succeeds normally. #1637 lives strictly between the two — and with scenario 6's `timeout` of
+        // 5s that interval is EMPTY, which is why a separate scenario exists rather than another phase
+        // bolted onto scenario 6.
+
+        /**
+         * `NwSeam.DEFAULT_WOVEN_PATH_GRACE` — how long a path-lost connection is given to recover
+         * before the woven seam tears it (#1478). **Mirrored, not imported:** the real constant is
+         * `internal` to `:kuilt-nw`, so this is a copy that can silently drift. It is only ever used to
+         * classify a measured outage, so drift costs a wrong SKIP boundary, never a wrong PASS/FAIL —
+         * but if the fabric's default changes, change this.
+         */
+        val WOVEN_PATH_GRACE: Duration = 10.seconds
+
+        /**
+         * The two numbers that make the repro band exist, and why they are what they are:
+         *
+         *  * `timeout` **30s** (not the 15s default, and emphatically not scenario 6's 5s) — it is the
+         *    band's upper edge, and the band has to be wide enough for a human with a thumb. At 30s the
+         *    operator has a twenty-second target (10s..30s) instead of the default's five (10s..15s),
+         *    which is the difference between a scenario that reproduces on the first try and one that
+         *    SKIPs three times in a coffee shop. It also buys the redial: after the path returns the
+         *    joiner needs a second or so to re-dial and land its first `Resume` before the host's
+         *    silence timer would have fired.
+         *  * `reconnectWindow` **60s** (the default, kept) — the budget #1637 burns. It sets how long a
+         *    FAIL takes to arrive (≈ grace + window ≈ 70s from the radio dying) and, post-fix, leaves
+         *    ample room for the dwell: the fix concludes after `timeout` (30s) of `WindowNotYetOpen`,
+         *    so a recovery lands at ≈ outage + 32s, comfortably inside 70s for any outage the gate
+         *    admits.
+         *
+         * `interval` 1.5s: three-second-scale retries keep the trace dense and, in the failing lane,
+         * refresh the host's `lastSeen` often enough that the bug is reproduced firmly rather than
+         * marginally. `resumeTimeout` is left at its default (= `timeout`) — a resume is only ever
+         * issued once the seam is `Woven` again, and the host answers `WindowNotYetOpen` in
+         * milliseconds, so the per-RPC deadline never binds here.
+         */
+        val S7_HEARTBEAT: HeartbeatConfig = HeartbeatConfig(
+            interval = 1_500.milliseconds,
+            timeout = 30.seconds,
+            reconnectWindow = 60.seconds,
+        )
+
+        /**
+         * How long the operator is asked to hold the radio down. Aimed at the middle of the
+         * (10s, 30s) band, not at either edge: the measured outage is the hold **plus** the operator's
+         * reaction to the OFF prompt **plus** Wi-Fi reassociation, so ~15s of hold typically measures
+         * ~18–22s. The verdict never trusts this number — the outage is measured from `localFabric`'s
+         * own edges — it only aims the operator.
+         */
+        val BLIP_HOLD: Duration = 15.seconds
+
+        /** Within this of a band edge, a run is flagged MARGINAL in the trace (the verdict is unchanged). */
+        val BLIP_MARGIN: Duration = 2.seconds
+
+        /**
+         * Path back → the resume episode closes, one way or the other. Must outlast the FAILING lane,
+         * which is the slower of the two: `HostLost` arrives when the window expires, ≈ 50s after the
+         * radio returns. Doubled for a real radio on a real network.
+         */
+        val VERDICT_WAIT: Duration = 120.seconds
+
+        /**
+         * How long the stay-up phone watches for a `Partitioned` it should never see. Covers the
+         * operator finding the toggle ([TOGGLE_WAIT]) plus a whole detect budget plus slack — after
+         * which "I saw nothing" is a statement rather than an accident of timing. It is a passive wait:
+         * that phone is asked to do nothing at all for the duration.
+         */
+        val HOST_OBSERVE: Duration = 180.seconds
     }
 }

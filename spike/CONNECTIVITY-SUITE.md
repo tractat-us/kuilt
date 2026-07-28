@@ -5,10 +5,14 @@ battery against the real `kuilt-nw` fabric, shows a pass/fail matrix, and produc
 you **Share** or **Copy** and text back. The point: reproduce the adverse-network failures (coffee-shop
 captive Wi-Fi, airplane, Wi-Fi-off/cellular-on, two SSIDs) *where they actually happen*.
 
-There is also a **sixth scenario, run on its own**, where you deliberately switch one phone's radio off
-and back on. It is the only one that needs you to do something mid-run, and it is the only way to check
-that a phone which loses its own network says *"I went offline"* rather than blaming the other phone.
-[Scenario 6](#scenario-6-the-airplane-mode-run-1712) has the step-by-step.
+Two more scenarios, **6 and 7, run on their own**, and in both you deliberately switch one phone's radio
+off and back on. They are the only ones that need you to do something mid-run.
+[Scenario 6](#scenario-6-the-airplane-mode-run-1712) checks that a phone which loses its own network says
+*"I went offline"* rather than blaming the other phone.
+[Scenario 7](#scenario-7-the-blip-the-other-phone-never-notices-1637) checks something narrower and
+nastier: a drop so brief the other phone never even notices it — which today kills the connection stone
+dead. **Scenario 7 is expected to FAIL**, and catching that failure on real phones is the whole reason
+it exists.
 
 It works. Its first real two-phone run found a bug that made roughly **one room in eight permanently
 unable to connect** — silently, with no error — that every automated test had passed straight over.
@@ -24,7 +28,8 @@ unable to connect** — silently, with no error — that every automated test ha
 5. When it finishes, tap **Share report** (or **Copy**) and send the text back.
 
 That's it. There is no Mac in the loop. Then, if you have another three minutes and a free hand,
-run [scenario 6](#scenario-6-the-airplane-mode-run-1712) — it is a separate pair of buttons.
+run [scenario 6](#scenario-6-the-airplane-mode-run-1712) — it is a separate pair of buttons — and
+[scenario 7](#scenario-7-the-blip-the-other-phone-never-notices-1637), which is another pair below it.
 
 ## What each scenario proves
 
@@ -36,6 +41,7 @@ run [scenario 6](#scenario-6-the-airplane-mode-run-1712) — it is a separate pa
 | 4 | Teardown + reconnect | The host drops the link. The **host** sees its own `close()` latch `Torn`; the **joiner** sees the recoverable re-form — `Woven → Weaving` *and* `peers` collapsing to just itself ([why they differ](#scenario-4-the-two-sides-expect-different-things)). Both then re-weave on a second service type. |
 | 5 | Soak (~2 min) | Continuous round-trip stays healthy: RTT distribution (min/p50/p95/max) with few/no stalls. This is where an AWDL data-path stall (the MC failure mode) would show up as a FAIL. |
 | 6 | Local-fabric outage *(separate buttons — you toggle Airplane Mode)* | **The same outage read two opposite ways.** The phone you switched off says *my* network died: `localFabric` → `Unavailable`, a `LocalFabricLost`, and every `Partitioned`/`HostLost` it emits tagged `Unavailable`. The phone you left alone says *they* went away: its own `localFabric` stays `Available` and the `Partitioned` it emits for the vanished peer carries that `Available` tag. A short outage keeps the seat; a long one expires it, and the switched-off phone *still* blames itself. |
+| 7 | Sub-timeout blip *(separate buttons — one Airplane Mode toggle)* | **A drop too brief for the other phone to notice must still recover.** You hold the radio down for 10–30 seconds: long enough that the offline phone's own connection dies, short enough that the other phone never sees a gap. PASS = the room survives. **On today's build this FAILs** — the connection dies about seventy seconds later — and that failure is what the scenario is for ([#1637](https://github.com/tractat-us/kuilt/issues/1637)). |
 
 Every report is prefixed with the **environment** captured from `nw_path_monitor`
 (`path=satisfied ifaces=[wifi,cell,…] expensive=… constrained=…`) so a failing report is
@@ -226,6 +232,109 @@ the socket-tear lane, honestly labelled. So: the radio, or nothing.
 observer reports `FabricAvailability.Unknown` — "cannot tell" — which is a first-class third answer, not
 a gap. That is precisely why this check has to happen on two real phones.
 
+## Scenario 7: the blip the other phone never notices (#1637)
+
+### The idea, in one paragraph
+
+Two phones are talking. You switch one phone's radio off for **about fifteen seconds** and switch it
+straight back on. That is long enough that the offline phone's own connection gives up and has to be
+rebuilt — but *too short for the other phone to notice anything at all*. It was never waiting long
+enough to get worried. So when the first phone comes back and says "I'm back, let me in", the second
+phone answers, quite reasonably, "back from what? You never left." The first phone asks again. And
+again. It keeps asking for a whole minute, and then gives up and declares the session dead — over a
+fifteen-second hiccup that neither phone had any real trouble with. That is the bug. **This scenario
+is how we catch it on real phones, and today it is expected to FAIL.**
+
+### Why scenario 6 can't show it
+
+Scenario 6 is tuned to notice an outage after five seconds, which is *faster* than the ten seconds a
+connection is given to recover on its own. So in scenario 6 the other phone always notices first, and
+everything then works the ordinary way. There is simply no gap for this bug to live in. Scenario 7
+slows the other phone's noticing down to thirty seconds, which opens a twenty-second gap — anything you
+hold between ten and thirty seconds lands in it.
+
+That is also why the two scenarios can't be merged: they need opposite settings.
+
+### What to tap, and how long to hold
+
+You need two phones and about three minutes. Decide up front which phone is going offline.
+
+1. On the phone you want to **keep online**, tap **Host · S7 stay up**. Then leave it completely alone.
+   It has nothing to do and finishes by itself after about three minutes; that is normal, not a hang.
+2. On the phone that will **go offline**, tap **Join · S7 go offline**. (Bottom row of buttons.)
+   *Both phones must use the matching button* — one Host, one Join.
+3. Wait a few seconds for them to find each other, then follow the orange banner on the offline phone.
+4. It will say **"AIRPLANE MODE ON now"**. Turn it on.
+5. About fifteen seconds later it says **"AIRPLANE MODE OFF now — that's the only toggle"**. Turn it
+   back off, reasonably promptly. That's your only job.
+6. Wait. The phone now needs up to another minute to reach its verdict — leave it alone until the
+   matrix row appears.
+7. **Share or Copy the report from BOTH phones.**
+
+**The outage is the whole scenario, so it has a target: it must land between 10 and 30 seconds.** The
+phone asks for a fifteen-second hold because the real outage always runs a little longer than your
+thumb does — turning Airplane Mode off doesn't put you back on Wi-Fi instantly — so fifteen seconds of
+holding usually measures about twenty, comfortably in the middle.
+
+You don't have to be precise. The phone times the actual outage itself, from the moment the network
+really went away to the moment it really came back, and judges on that, not on the prompt. If it lands
+outside the band the phone says **SKIP** and tells you which way you missed:
+
+- *too short* → the offline phone's connection never actually died, so nothing was tested. Hold longer.
+- *too long* → the other phone noticed, and then everything works the ordinary way. Off faster.
+
+Neither is a failure of anything. Just run it again.
+
+### What the results mean
+
+**On the phone you switched off** (`role=join S7-ONLY`) — this is the one that matters:
+
+```
+[7] Sub-timeout blip       FAIL   88.1s  blip: HostLost 70.3s after the radio died, on a 19.4s outage that sat INSIDE the (10s, 30s) repro interval — reason=Refused(code=resume-window-not-yet-open,retryable=true), mine=Available. This is #1637: …
+```
+
+**That FAIL is the expected result on a build without the #1637 fix, and it is the point of the
+scenario.** It is not a broken test and not a bad run — it is the bug, caught on real hardware, with
+the measured outage and the exact failure reason attached so the report can be pasted straight into
+the issue. Once #1637 is fixed the same run should read:
+
+```
+[7] Sub-timeout blip       PASS   61.7s  survived a 19.4s blip inside (10s, 30s): Recovered(a91f2c04) 51.2s after the radio died, no HostLost, host Connected in the roster
+```
+
+**On the phone you left alone** (`role=host S7-ONLY`):
+
+```
+[7] Sub-timeout blip       PASS  183.4s  never partitioned a91f2c04 in 180.0s — my link to it never closed, so no window ever opened. That is the #1637 precondition holding; the verdict that matters is on the DROPPED phone
+```
+
+This phone is a **witness, not a subject**. It is supposed to see nothing whatsoever, and it reads the
+same before and after the fix — so don't read its PASS as good news about the bug. Its job is to prove
+the *setup* was right: that it genuinely never noticed the outage. If it says SKIP ("I DID notice…"),
+the hold was too long and the whole run is out of band no matter what the other phone said.
+
+One result to watch for on the offline phone, because it looks like success and isn't:
+
+```
+[7] Sub-timeout blip       SKIP   54.2s  blip: the host ACKed a real resume (Resumed(…) after 34.8s), which means it HAD a window open — so it noticed the outage and this was the ordinary resume lane, not the sub-timeout one…
+```
+
+The connection *did* recover — but the ordinary way, because the other phone noticed after all. That
+says nothing about #1637, so it is honestly a SKIP rather than a PASS. Hold shorter and re-run.
+
+### Why the timings are what they are
+
+Three numbers, and every one of them is doing something:
+
+- **10 seconds** is not a setting at all — it is how long the fabric gives a connection whose network
+  vanished to come back before tearing it down. Below that, nothing happens and there is nothing to
+  test.
+- **30 seconds to notice** (instead of the default 15, and scenario 6's 5) is the top of the band. It
+  is set to 30 purely to make the target wide enough for a human with a thumb: 10–30 is twenty seconds
+  of room, where the default would leave five.
+- **60 seconds of grace** is the budget the bug burns through. It is why a FAIL takes about seventy
+  seconds to arrive after the radio dies, and why you are asked to leave the phone alone at step 6.
+
 ## Reading the report
 
 ```
@@ -248,8 +357,10 @@ device: Version 18.5 (Build 22F76)
 
 The matrix is the headline; the per-scenario **hop traces** below it name the failing hop.
 
-A scenario-6 run reports on its own (`role=join S6-ONLY (airplane-mode gate)`, one row), because it
-never runs inside the battery — see [scenario 6](#scenario-6-the-airplane-mode-run-1712).
+Scenarios 6 and 7 each report on their own (`role=join S6-ONLY (airplane-mode gate)` /
+`role=join S7-ONLY (sub-timeout blip #1637)`, one row each), because neither runs inside the battery —
+see [scenario 6](#scenario-6-the-airplane-mode-run-1712) and
+[scenario 7](#scenario-7-the-blip-the-other-phone-never-notices-1637).
 
 ## Diagnostic mode — when a scenario fails and you need to know *why*
 
@@ -315,23 +426,24 @@ the app prints its report to stdout:
 BID=us.tractat.spike.nw
 xcrun devicectl list devices                       # get the device identifiers
 xcrun devicectl device process launch --terminate-existing --console \
-  --device <HOST_DEVICE_ID> $BID host              # host | join | host-s4 | join-s4 | host-s6 | join-s6
+  --device <HOST_DEVICE_ID> $BID host              # host | join | -s4 | -s6 | -s7 suffixed variants
 ```
 
 Launch both within a few seconds of each other so they overlap. `harness.sh <HOST_ID> <JOIN_ID> <APP>`
 wraps install + launch + report extraction for the full battery.
 
 `devicectl --console` rides Wi-Fi for network-attached devices, so a Wi-Fi-off scenario goes dark on
-that device — keep at least one on USB if you want live console (see `PAINPOINTS.md`). This bites
-`host-s6`/`join-s6` hardest: the launch arg only *starts* scenario 6, a human still has to flip Airplane
+that device — keep at least one on USB if you want live console (see `PAINPOINTS.md`). This bites the
+`-s6` and `-s7` variants hardest: the launch arg only *starts* them, a human still has to flip Airplane
 Mode, and the phone doing the flipping goes dark on a network-attached console for the whole outage. Put
 the offline phone on USB, or just read the report off the phone.
 
 ## What's real vs. control
 
-- **Scenarios 2–6 drive the shipping API** — `appleNwLoom`, `SeamRoomFactory.electLobby`,
-  `ElectionLobby.start`/`awaitRoom`, `SeamRoomFactory.adopt`, `Room.localFabric`, `Seam`/`Room`
-  lifecycle. A FAIL here is a real `kuilt-nw`/`kuilt-session` field failure.
+- **Scenarios 2–7 drive the shipping API** — `appleNwLoom`, `SeamRoomFactory.electLobby`,
+  `ElectionLobby.start`/`awaitRoom`, `SeamRoomFactory.adopt`, `Room.localFabric`, the adopt-path
+  resume machine, `Seam`/`Room` lifecycle. A FAIL here is a real `kuilt-nw`/`kuilt-session` field
+  failure — **except scenario 7, whose FAIL is the known, expected #1637 defect** until that lands.
 - **Scenario 1 is the raw transport control** (`spike.nw.SpikeNw`) — if it passes but scenario 2 fails,
   the fabric layer is at fault, not the radio.
 
@@ -413,7 +525,18 @@ joiner reports `peer-loss re-form seen` and the host's latch read comes back tru
 The adverse-network matrix the suite was built for — captive-portal Wi-Fi, airplane mode,
 Wi-Fi-off/cellular-on, two SSIDs — is still worth walking through; that is what it is for.
 
-**Scenario 6: never run on hardware yet.** It compiles for `iosArm64`, `iosSimulatorArm64` and
-`macosArm64`, and it is reviewable, but it has no on-device result of any kind. It cannot get one from a
-Mac: it needs two physical iPhones and a person flipping Airplane Mode. Until that run happens, #1712's
-hardware gate is *runnable*, not *passed* — do not read this file as evidence either way.
+**Scenario 6: PASSED on hardware on 2026-07-27**, on both phones, and again the same evening. The
+switched-off phone reported its own outage (`localFabric` → `Unavailable`, `LocalFabricLost`, its
+`Partitioned`/`HostLost` tagged `Unavailable`) and the phone left alone reported the peer's — the
+asymmetry #1712 exists for, read two correct-but-opposite ways. One detail from those runs is worth
+keeping, because it is what motivated scenario 7: with `detect=5s window=1m`, a 23.7 s real outage
+produced `Partitioned(LinkTimeout)` and `WindowOpened` at 9.3 s and a clean `Recovered` at 30.4 s.
+The other phone always notices first at that setting, so the resume machine's failing lane is
+unreachable from scenario 6 — see [scenario 7](#scenario-7-the-blip-the-other-phone-never-notices-1637).
+
+**Scenario 7: never run on hardware yet.** It compiles for `iosArm64`, `iosSimulatorArm64` and
+`macosArm64`, and it is reviewable, but it has no on-device result of any kind — and it cannot get one
+from a Mac: it needs two physical iPhones and a person flipping Airplane Mode once. **When it does run,
+a FAIL on a build without the #1637 fix is the expected outcome**, so the first thing to check is that
+the offline phone's report shows a measured outage *inside* the 10–30 s band and the online phone's
+shows it never noticed — without both, the run says nothing either way.
