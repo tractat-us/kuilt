@@ -5,22 +5,84 @@ import us.tractat.kuilt.core.PeerId
 /**
  * Per-origin inbound gate for a composite fabric. Collapses duplicate [PlyFrame.Data]
  * (same `(originId, originSeq)` arriving over multiple plies) and releases per-origin
- * frames in sequence order with a bounded buffer. Not thread-safe — the composite
- * calls it from a single inbound coroutine.
+ * frames in sequence order with a bounded buffer. Not thread-safe: its caller serialises
+ * access — `CompositeSeam` holds its lock across every [accept], which is what restores the
+ * single-collection invariant across the concurrent per-ply inbound pumps.
+ *
+ * ### The origin key is peer-chosen, so the table is capped (#1814)
+ * `originId` is a field the **sending** peer picks, read straight off the wire by
+ * `PlyFrame.decode`. [maxBuffered] bounds the buffer *within* one origin; nothing bounded
+ * the **number** of origins, and no path ever removes one — so a peer varying `originId`
+ * per frame grew [nextExpected] (and, once it sent a second, out-of-order frame under an
+ * id, [buffers]) without limit, for as long as the ply stayed attached. Remote memory
+ * exhaustion with no malformed frame required: every frame is well-formed.
+ *
+ * [MAX_ORIGINS] closes that. Note exactly what it bounds and what it does not:
+ *  - It bounds the **count** of origins this gate holds state for, over the gate's whole
+ *    lifetime — origin state is never pruned, so a departed peer keeps its slot until the
+ *    composite seam that owns this gate is gone. A lifetime budget, not a live-origin one.
+ *  - It does **not** bound bytes, on either axis. Each admitted origin may still hold up to
+ *    [maxBuffered] payloads of whatever size its transport allows; and the retained [PeerId]
+ *    **key** is itself attacker-chosen and attacker-*sized*, because `PlyFrame.decode` bounds a
+ *    declared id length only by the transport's frame size — a 1 MiB `originId` decodes fine.
+ *    So the floor an attacker pins permanently is `MAX_ORIGINS * idBytes`, and pinning it costs
+ *    only 256 frames with no out-of-order games, on top of the `MAX_ORIGINS * maxBuffered`
+ *    payload ceiling.
+ *  - It does **not** bound the *refusal* rate. Every refused frame reaches `onPlyFailure` as one
+ *    [PlyReconcileException], so a flood trades memory pressure for consumer-callback pressure —
+ *    unbounded in rate, from well-formed input. That channel is shared with the malformed-frame
+ *    path and so is pre-existing in kind, but this is a cheaper way to drive it.
+ *  - It does **not** check that an origin is an admitted member. Gating on composite roster
+ *    state is the stronger property and is deliberately not done here: this gate knows
+ *    nothing of the roster, and a `Data` frame can legitimately arrive before the `Announce`
+ *    that registers its origin. See #1874 for that follow-on, which also covers the pruning
+ *    a membership gate would need.
+ *
+ * ### Refuse the new origin; never evict an admitted one
+ * Evicting (LRU or otherwise) would hand the attacker the displacement: origin ids are
+ * remote-chosen and can be emitted at any rate, so a rotating-id flood would evict every
+ * honest origin within one cap-sized window, and re-admitting an evicted origin takes the
+ * first-sight branch — re-baselining its sequence, which re-opens the cross-ply duplicate
+ * this gate exists to collapse and discards whatever it had buffered. That trades a bounded
+ * memory problem for an unbounded *duplicate-delivery* one against honest peers. Refusal is
+ * contained instead: an already-admitted origin is never disturbed, and the residual damage is
+ * that no *new* origin is **ever** admitted once the table is full — permanent for the life of
+ * the seam, not transient, because nothing prunes (#1874).
+ *
+ * The refusal throws rather than returning empty because an empty return already means
+ * "duplicate" — a normal, expected outcome — while a refusal is an anomaly, and `kuilt-core`
+ * is logger-free by contract. `CompositeSeam.onPlyFrame` calls this inside its inbound
+ * guard, so the throw drops that one frame, leaves the ply live, and surfaces to the
+ * consumer as `PlyReconcileException(plyId, INBOUND, …)` — precisely the semantics that
+ * phase already documents.
  *
  * @param maxBuffered Maximum out-of-order frames held per origin before a gap-skip
  * is forced to preserve liveness.
  */
 internal class PlyInboundGate(private val maxBuffered: Int = 16) {
-    // Per origin: the next sequence we expect to deliver.
+    // Per origin: the next sequence we expect to deliver. Capped at MAX_ORIGINS entries.
     private val nextExpected = mutableMapOf<PeerId, Long>()
-    // Per origin: out-of-order frames not yet deliverable.
+    // Per origin: out-of-order frames not yet deliverable. Only ever populated for an origin
+    // already in `nextExpected` (the first-sight branch below returns before reaching it), so
+    // capping that map caps this one too.
     private val buffers = mutableMapOf<PeerId, MutableMap<Long, ByteArray>>()
 
-    /** Returns the payloads to deliver now, in order. Empty for a duplicate. */
+    /**
+     * Returns the payloads to deliver now, in order. Empty for a duplicate.
+     *
+     * Throws [IllegalStateException] for a frame from an origin this gate has not seen when its
+     * origin table is already at [MAX_ORIGINS] — the frame is refused and nothing is recorded, so
+     * the same id is refused again rather than half-admitted.
+     */
     fun accept(frame: PlyFrame.Data): List<ByteArray> {
         val origin = frame.originId
         if (origin !in nextExpected) {
+            // Peer-chosen key: admit a new one only while there is room. See the class KDoc for why
+            // this refuses rather than evicting, and for what the cap does and does not bound.
+            check(nextExpected.size < MAX_ORIGINS) {
+                "composite inbound gate is at its cap of $MAX_ORIGINS origins; " +
+                    "refusing the frame from unseen origin '${origin.value}'"
+            }
             // First sight of this origin: adopt its sequence as the baseline.
             nextExpected[origin] = frame.originSeq + 1
             return listOf(frame.payload)
@@ -55,4 +117,18 @@ internal class PlyInboundGate(private val maxBuffered: Int = 16) {
 
     // commonMain has no sorted map; scan for the min buffered key.
     private fun MutableMap<Long, ByteArray>.lowestBufferedSeq(): Long = keys.min()
+
+    private companion object {
+        /**
+         * How many distinct origins one gate will ever hold state for.
+         *
+         * A `const`, not a constructor knob: this is not tuning. The honest working set is one
+         * origin per remote composite peer, so a real composite holds **single-digit** origins,
+         * and the only caller that could want this raised is the attacker's — a bigger number
+         * just buys a bigger table. 256 leaves ample headroom over any plausible roster while
+         * keeping the retained-payload ceiling (`MAX_ORIGINS * maxBuffered`, 4096 frames at the
+         * default) finite, which is the whole point.
+         */
+        const val MAX_ORIGINS = 256
+    }
 }
