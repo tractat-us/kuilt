@@ -56,6 +56,23 @@ subprojects {
     }
 }
 
+// ─── Guard plumbing ─────────────────────────────────────────────────────────────────────────
+//
+// Every guard below is a `check`-wired verification task, and every one of them carries a stamp
+// file as its single output. The stamp's contents are meaningless; its EXISTENCE is what lets
+// Gradle do up-to-date checking at all — a task with inputs but no outputs has no basis for it
+// and re-runs on every single build (#1827). Do not delete a stamp as dead weight: without it the
+// guard silently becomes the reason someone deletes the guard.
+//
+// A stamp is only safe if the declared inputs are HONEST — a guard that caches a stale success has
+// stopped guarding, which is strictly worse than one that re-runs needlessly. So each guard
+// declares the exact Kotlin FILES it reads (not merely the directories that contain them) via the
+// helper below, and then walks that same lazily-resolved set in `doLast`. Declared input and
+// scanned set are the same object, so they cannot drift apart, and a newly-added violating file
+// always invalidates the cached success.
+fun kotlinSourcesIn(roots: List<java.io.File>, pattern: String = "**/*.kt"): FileTree =
+    files(roots).asFileTree.matching { include(pattern) }
+
 // Guard: forbid unbounded Swatch delivery channels (fabric-backpressure epic, #701/#741).
 // Every in-process fabric must deliver inbound frames through the bounded `Spool` primitive;
 // a raw `Channel<Swatch>(... UNLIMITED ...)` reintroduces the unbounded inbound backlog that
@@ -66,25 +83,35 @@ subprojects {
 val forbidUnboundedSwatchDelivery by tasks.registering {
     group = "verification"
     description = "Fails if any source declares an unbounded Channel<Swatch> — use a bounded Spool<Swatch>."
-    val srcDirs = subprojects.mapNotNull { it.projectDir.resolve("src").takeIf(java.io.File::exists) }
-    srcDirs.forEach { inputs.dir(it) }
+    val sources = kotlinSourcesIn(subprojects.map { it.projectDir.resolve("src") })
+    inputs.files(sources).withPropertyName("kotlinSources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // See "Guard plumbing" above: the stamp is what makes UP-TO-DATE possible (#1827). The verdict
+    // is a function of file NAMES (the allowlist) and file CONTENTS only, both of which a RELATIVE
+    // fingerprint captures — so a cache hit genuinely means "this exact source was verified green".
+    val stamp = layout.buildDirectory.file("verification/forbid-unbounded-swatch-delivery.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
     val rootPath = rootDir
     val allowlist = setOf("FaultySeam.kt")
     doLast {
         val ctor = Regex("""Channel<Swatch>\s*\(""")
-        val offenders = srcDirs.asSequence().flatMap { dir ->
-            dir.walkTopDown().filter { it.isFile && it.extension == "kt" && it.name !in allowlist }
-        }.flatMap { file ->
-            file.readLines().asSequence().withIndex()
-                .filter { (_, line) -> ctor.containsMatchIn(line) && "UNLIMITED" in line }
-                .map { (i, line) -> "${file.relativeTo(rootPath)}:${i + 1}  ${line.trim()}" }
-        }.toList()
+        val offenders = sources.files.sortedBy { it.invariantSeparatorsPath }.asSequence()
+            .filter { it.name !in allowlist }
+            .flatMap { file ->
+                file.readLines().asSequence().withIndex()
+                    .filter { (_, line) -> ctor.containsMatchIn(line) && "UNLIMITED" in line }
+                    .map { (i, line) -> "${file.relativeTo(rootPath)}:${i + 1}  ${line.trim()}" }
+            }.toList()
         if (offenders.isNotEmpty()) {
             error(
                 "Unbounded Swatch delivery channel(s) found — deliver through a bounded Spool<Swatch> " +
                     "instead (FaultySeam is the only allowed exception):\n  " + offenders.joinToString("\n  "),
             )
         }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText("ok — ${sources.files.size} Kotlin sources scanned\n")
     }
 }
 
@@ -118,8 +145,14 @@ val forbidUnboundedSwatchDelivery by tasks.registering {
 val forbidPortProbeRebind by tasks.registering {
     group = "verification"
     description = "Fails if a source probes a free port with ServerSocket(0) and then re-binds it (#1590)."
-    val srcDirs = subprojects.mapNotNull { it.projectDir.resolve("src").takeIf(java.io.File::exists) }
-    srcDirs.forEach { inputs.dir(it) }
+    val sources = kotlinSourcesIn(subprojects.map { it.projectDir.resolve("src") })
+    inputs.files(sources).withPropertyName("kotlinSources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // See "Guard plumbing" above: stamp ⇒ UP-TO-DATE (#1827). Same reasoning as the sibling guard —
+    // the verdict reads only file names (the allowlist) and file contents.
+    val stamp = layout.buildDirectory.file("verification/forbid-port-probe-rebind.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
     val rootPath = rootDir
     // Known #1590 sites not yet converted. Shrinks to empty as they land; never grows.
     val allowlist = setOf(
@@ -150,17 +183,17 @@ val forbidPortProbeRebind by tasks.registering {
             val t = raw.trimStart()
             return if (t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")) "" else raw.substringBefore("//")
         }
-        val offenders = srcDirs.asSequence().flatMap { dir ->
-            dir.walkTopDown().filter { it.isFile && it.extension == "kt" && it.name !in allowlist }
-        }.flatMap { file ->
-            val code = file.readLines().map(::codeOf)
-            code.asSequence().withIndex()
-                .filter { (i, line) ->
-                    probe.containsMatchIn(line) && ".use" in line &&
-                        code.subList(i, minOf(i + lookahead, code.size)).any { "localPort" in it }
-                }
-                .map { (i, line) -> "${file.relativeTo(rootPath)}:${i + 1}  ${line.trim()}" }
-        }.toList()
+        val offenders = sources.files.sortedBy { it.invariantSeparatorsPath }.asSequence()
+            .filter { it.name !in allowlist }
+            .flatMap { file ->
+                val code = file.readLines().map(::codeOf)
+                code.asSequence().withIndex()
+                    .filter { (i, line) ->
+                        probe.containsMatchIn(line) && ".use" in line &&
+                            code.subList(i, minOf(i + lookahead, code.size)).any { "localPort" in it }
+                    }
+                    .map { (i, line) -> "${file.relativeTo(rootPath)}:${i + 1}  ${line.trim()}" }
+            }.toList()
         if (offenders.isNotEmpty()) {
             error(
                 "Free-port probe then re-bind (TOCTOU) found — the probe socket is closed before the " +
@@ -171,6 +204,9 @@ val forbidPortProbeRebind by tasks.registering {
                     offenders.joinToString("\n  "),
             )
         }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText("ok — ${sources.files.size} Kotlin sources scanned\n")
     }
 }
 
@@ -197,9 +233,9 @@ val forbidPortProbeRebind by tasks.registering {
 // `gradle.projectsEvaluated`, not per-project `afterEvaluate`.
 //
 // CC-friendliness: the typed KGP extension objects aren't configuration-cache serializable,
-// so we snapshot a `List<Pair<targetLabel, List<srcDir>>>` here at configuration time and do
-// the file-existence walk in `doLast`.
-val srclessTargetProbes = mutableListOf<Pair<String, List<java.io.File>>>()
+// so we snapshot a `List<Pair<targetLabel, sourceTree>>` here at configuration time and do
+// the emptiness check in `doLast`.
+val srclessTargetProbes = mutableListOf<Pair<String, FileTree>>()
 gradle.projectsEvaluated {
     rootProject.subprojects.forEach { sub ->
         val kmp = sub.extensions.findByType(org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension::class.java)
@@ -211,12 +247,22 @@ gradle.projectsEvaluated {
             val main = target.compilations.findByName("main") ?: return@forEach
             val srcDirs = main.allKotlinSourceSets.flatMap { it.kotlin.srcDirs }
             val label = "${sub.path} target '${target.targetName}' (${target.platformType})"
-            srclessTargetProbes += label to srcDirs
+            srclessTargetProbes += label to kotlinSourcesIn(srcDirs)
         }
     }
     tasks.named("forbidSourcelessKmpTarget") {
-        srclessTargetProbes.forEach { (_, dirs) ->
-            dirs.filter(java.io.File::exists).forEach { inputs.dir(it) }
+        // One SEPARATELY NAMED input per target, not one merged file input. This guard is the only
+        // one whose verdict depends on WHICH tree a source file sits in, so pooling the trees would
+        // be a dishonest input: a file moving from a module that has only that one source into
+        // another module leaves the union fingerprint unchanged while flipping the first module's
+        // targets to source-less — a stale cached success over a real violation, which is precisely
+        // the failure the stamp output must not enable. Per-target properties also mean that adding
+        // or removing a target changes the SET of input properties, so a newly declared target can
+        // never inherit the previous run's verdict.
+        srclessTargetProbes.forEach { (label, tree) ->
+            inputs.files(tree)
+                .withPropertyName("targetSources_" + label.replace(Regex("[^A-Za-z0-9]+"), "_"))
+                .withPathSensitivity(PathSensitivity.RELATIVE)
         }
     }
 }
@@ -225,10 +271,13 @@ val forbidSourcelessKmpTarget by tasks.registering {
     group = "verification"
     description = "Fails if any subproject declares a KMP target whose main compilation has no Kotlin source (see #1014)."
     val probes = srclessTargetProbes
+    // See "Guard plumbing" above: stamp ⇒ UP-TO-DATE (#1827). The inputs are registered per target
+    // in the `projectsEvaluated` block above, once the source-set closure is resolvable.
+    val stamp = layout.buildDirectory.file("verification/forbid-sourceless-kmp-target.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
     doLast {
-        val offenders = probes.filter { (_, dirs) ->
-            dirs.none { dir -> dir.walkTopDown().any { it.isFile && it.extension == "kt" } }
-        }.map { (label, _) ->
+        val offenders = probes.filter { (_, tree) -> tree.isEmpty }.map { (label, _) ->
             "$label has no Kotlin source — do not declare a target you have no source for (see #1014)."
         }
         if (offenders.isNotEmpty()) {
@@ -239,6 +288,9 @@ val forbidSourcelessKmpTarget by tasks.registering {
                     offenders.joinToString("\n  "),
             )
         }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText("ok — ${probes.size} declared KMP targets checked\n")
     }
 }
 
@@ -700,14 +752,19 @@ val verifyDocCitations by tasks.registering {
 val forbidRunCatchingCancellableUnderNonCancellable by tasks.registering {
     group = "verification"
     description = "Fails if runCatchingCancellable appears inside a withContext(NonCancellable) block (#1803)."
-    val srcDirs = subprojects.flatMap { sub ->
-        val src = sub.projectDir.resolve("src")
-        (src.listFiles()?.toList() ?: emptyList()).filter { it.isDirectory && it.name.endsWith("Main") }
-    }
-    srcDirs.forEach { inputs.dir(it) }
+    // `*Main/**/*.kt` under each module's `src` — the production source sets, spelled as a pattern
+    // rather than a configuration-time directory listing, so a source set added later (an `appleMain`
+    // intermediate, say) is scanned without depending on the configuration cache noticing the new
+    // directory. The source-set name is part of the RELATIVE fingerprint, so moving a file out of a
+    // `*Main` set invalidates too.
+    val sources = kotlinSourcesIn(subprojects.map { it.projectDir.resolve("src") }, "*Main/**/*.kt")
+    inputs.files(sources).withPropertyName("productionSources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
     val rootPath = rootDir
+    // See "Guard plumbing" above: the stamp is what makes UP-TO-DATE possible (#1827).
     val stamp = layout.buildDirectory.file("verification/forbid-runcatching-under-noncancellable.ok")
     outputs.file(stamp)
+    outputs.cacheIf { true }
     doLast {
         // Replace every comment, string and char literal with equivalent blank space, preserving newlines
         // (hence line numbers) so the brace walk below cannot be fooled by a `{` in prose or in a literal —
@@ -779,9 +836,7 @@ val forbidRunCatchingCancellableUnderNonCancellable by tasks.registering {
         // `[^;{}\n]*` bounds the argument list to one line and cannot swallow the block's own brace.
         val anchor = Regex("""withContext\s*\(\s*[^;{}\n]*\bNonCancellable\b[^;{}\n]*\)\s*\{""")
         val call = Regex("""\brunCatchingCancellable\b""")
-        val offenders = srcDirs.asSequence().flatMap { dir ->
-            dir.walkTopDown().filter { it.isFile && it.extension == "kt" }
-        }.flatMap { file ->
+        val offenders = sources.files.sortedBy { it.invariantSeparatorsPath }.asSequence().flatMap { file ->
             val raw = file.readText()
             val code = stripNonCode(raw)
             // Character interval of every shielded block: from its `{` to the matching `}`.
