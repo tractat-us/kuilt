@@ -1113,20 +1113,36 @@ internal class CompositeSeam(
      * approached from the other side, so the fix is the same shape: stop the single writer *first*.
      * [Job.cancelAndJoin], never `cancel()` — the **join** is what turns "no publish is in flight" from
      * likely into true. It is bounded: the writer's only suspension point is the conflated-channel
-     * receive and [publishPeers] never suspends, so the join waits at most for one fold. (It would
-     * deadlock only if called *from* [peersWriter]; that coroutine runs [publishPeers] and nothing else,
-     * which makes no call that could reach here.)
+     * receive and [publishPeers] never suspends, so the join waits at most for one fold.
+     *
+     * It does **not** deadlock when reached *from* [peersWriter] — and that path is reachable, contrary
+     * to the obvious argument. [publishPeers] writes `_peers` outside [lock] precisely because emitting
+     * to a [StateFlow] can resume an unconfined collector inline, so arbitrary consumer code can run on
+     * the writer's own coroutine and call [close] from there. What saves it is not unreachability but
+     * unwinding: the [Job.join] suspends, which returns control through the inline resumption back into
+     * the writer; the writer then observes its own cancellation at the conflated receive, completes, and
+     * resumes the join.
      *
      * Any [recomputePeers] arriving afterwards is inert: the channel has no reader, and [_peers] has no
      * other writer, so the collapse is final regardless of when `live` is cleared.
      *
      * ### Why the shield, and why `tear` is inside it
-     * Splitting these two across a cancellation point is what the shield exists to prevent — in **both**
-     * directions. Cancelled after the latch, the seam would be permanently `Torn` while permanently
-     * advertising peers; cancelled after the collapse but before the latch, it would be a permanently
-     * *live* seam with a frozen `{ selfId }` roster and no writer left to correct it. Neither is
-     * recoverable, and a best-effort teardown is usually running precisely *because* something is being
-     * cancelled. Everything inside is bounded and makes no consumer-authored call.
+     * Cancelled after the latch but before the collapse, the seam would be permanently `Torn` while
+     * permanently advertising peers — unrecoverable, and a best-effort teardown is usually running
+     * precisely *because* something is being cancelled.
+     *
+     * The other direction is subtler than "cancelled between the two statements". A shield boundary is
+     * not itself a cancellation point: a `withContext(NonCancellable)` block runs to completion in an
+     * already-cancelled caller, and — since [close] keeps the caller's dispatcher, so the block takes
+     * the undispatched fast path — the code *after* the shield still runs too. So a shielded collapse
+     * followed by an unshielded [SeamStateGate.tear] would in practice still latch. Keeping all three
+     * inside one shield is nonetheless the only shape that does not rest on that undocumented exit
+     * behaviour, and it is the only one that also covers the genuinely reachable variant: with the join
+     * left *outside* the shield, [Job.cancelAndJoin] throws in a cancelled caller and strands a live
+     * seam holding a frozen **pre-close** roster with no writer left to correct it — strictly worse,
+     * since the roster still names peers that are already gone.
+     *
+     * Everything inside is bounded and makes no consumer-authored call.
      *
      * ### A losing caller re-runs the collapse, harmlessly
      * Both statements before the gate are idempotent — the writer is already dead, the roster is already
