@@ -14,6 +14,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
@@ -334,7 +335,7 @@ public class ConnectivitySuite {
             val t0 = TimeSource.Monotonic.markNow()
             fun ms() = t0.elapsedNow().inWholeMilliseconds
 
-            hop("role=$role svcLeg1=$SVC4 svcLeg2=$SVC4B weaveTimeout=$WEAVE_TIMEOUT tornTimeout=$TORN_TIMEOUT")
+            hop("role=$role svcLeg1=$SVC4 svcLeg2=$SVC4B weaveTimeout=$WEAVE_TIMEOUT peerLossTimeout=$PEER_LOSS_TIMEOUT")
             hop("leg1 weave svc=$SVC4 t=${ms()}ms")
             val loomA = appleNwLoom(SVC4, ROOM_KEY, weaveTimeout = WEAVE_TIMEOUT)
             hop("leg1 self=${loomA.selfId.value.take(8)}")
@@ -346,18 +347,44 @@ public class ConnectivitySuite {
                     "peers=[${seamA.peers.value.joinToString(",") { it.value.take(8) }}] t=${ms()}ms",
             )
 
-            val tornObserved: Boolean
+            // The two sides of ONE drop are contractually OPPOSITE (#1513), so they assert opposite things.
+            // `dropObserved` is deliberately role-neutral: each branch sets it from the signal ITS side is
+            // promised, and the verdict below names which.
+            val dropObserved: Boolean
             if (role == "host") {
                 delay(2.seconds) // let the joiner settle on the live link before the drop
                 hop("dropping link (host close) t=${ms()}ms")
                 seamA.close(CloseReason.Normal)
-                tornObserved = true // a local close is this side's own terminal signal
+                dropObserved = true // a local close is this side's own terminal signal
                 hop("post-close stateA=${seamA.state.value.short()} t=${ms()}ms")
             } else {
-                hop("awaiting terminal Torn after host drop t=${ms()}ms")
-                val torn = withTimeoutOrNull(TORN_TIMEOUT) { seamA.state.first { it is SeamState.Torn } }
-                tornObserved = torn != null
-                hop("torn=$tornObserved stateA=${seamA.state.value.short()} t=${ms()}ms")
+                // NOT Torn — that assertion (removed in #1836) could only ever time out. Per NwSeam's
+                // "peer loss is recoverable — re-form, don't tear" (#1513), a joiner losing its last remote
+                // goes Woven → Weaving, resets `peers` to `{selfId}`, keeps `incoming` open and waits for
+                // NwLoom to redial. `Torn` latches on ONLY an explicit consumer `close()` or the initial
+                // weave timeout; it "is never a consequence of peer loss".
+                //
+                // BOTH halves are required and neither alone would do. `Weaving` alone is also true of a
+                // seam that never NOTICED the drop — which is precisely the false green this replaces, so
+                // asserting it on its own would swap a guaranteed FAIL for a meaningless PASS. `peers ==
+                // {selfId}` alone is the seam's own pre-weave starting value. Together they say "this seam
+                // saw its last remote go and re-formed", and nothing else does. (Leg 1's hop above prints
+                // the two peer identities, so the pre-drop roster is legible in the shared report.)
+                //
+                // Matched on the COMBINED pair rather than awaited-then-sampled: `evictPeerLocked` writes
+                // `peers` and then `state` under one lock, so a `peers.value` read taken after the state
+                // wait could in principle observe a roster a redial had already re-grown.
+                hop("awaiting recoverable re-form (Weaving + peers={self}) after host drop t=${ms()}ms")
+                val alone = setOf(seamA.selfId)
+                val reformed = withTimeoutOrNull(PEER_LOSS_TIMEOUT) {
+                    combine(seamA.state, seamA.peers) { s, p -> s to p }
+                        .first { (s, p) -> s is SeamState.Weaving && p == alone }
+                }
+                dropObserved = reformed != null
+                hop(
+                    "reformed=$dropObserved stateA=${seamA.state.value.short()} " +
+                        "peersA=[${seamA.peers.value.joinToString(",") { it.value.take(8) }}] t=${ms()}ms",
+                )
                 seamA.close(CloseReason.Normal) // idempotent
             }
 
@@ -366,7 +393,7 @@ public class ConnectivitySuite {
             hop("leg2 self=${loomB.selfId.value.take(8)}")
             val reMark = TimeSource.Monotonic.markNow()
             val seamB = instrumentedWeave("leg2", loomB, hop)
-                ?: return@scenario Verdict.FAIL to "torn=$tornObserved but leg2 never established on $SVC4B"
+                ?: return@scenario Verdict.FAIL to "dropObserved=$dropObserved but leg2 never established on $SVC4B"
             val reMs = reMark.elapsedNow().inWholeMilliseconds
             // Verdict still keys off the IMMEDIATE peer count (unchanged semantics); the post-wait
             // sample is pure evidence — it tells us whether a convergence wait would have mattered.
@@ -377,8 +404,14 @@ public class ConnectivitySuite {
                     "peersAfter5s=${seamB.peers.value.size} woven5s=$wovenB in ${reMs}ms",
             )
             seamB.close(CloseReason.Normal)
-            if (tornObserved && peers >= 2) Verdict.PASS to "Torn seen; re-wove in ${fmtMs(reMs)}"
-            else Verdict.FAIL to "torn=$tornObserved reconnect peers=$peers"
+            if (dropObserved && peers >= 2) {
+                // The two roles PASS for contractually DIFFERENT reasons, so the verdict says which — two
+                // reports reading identically would hide the asymmetry the scenario exists to demonstrate.
+                val saw = if (role == "host") "close latched Torn" else "peer-loss re-form seen"
+                Verdict.PASS to "$saw; re-wove in ${fmtMs(reMs)}"
+            } else {
+                Verdict.FAIL to "dropObserved=$dropObserved reconnect peers=$peers"
+            }
         }
 
     // ── 5. soak (~2 min continuous round-trip) ────────────────────────────────
@@ -1078,7 +1111,14 @@ public class ConnectivitySuite {
         val RAW_TIMEOUT: Duration = 45.seconds
         val WEAVE_TIMEOUT: Duration = 45.seconds
         val ELECTION_TIMEOUT: Duration = 30.seconds
-        val TORN_TIMEOUT: Duration = 20.seconds
+
+        /**
+         * How long the **joiner** gets to observe the recoverable `Woven → Weaving` re-form after the host
+         * drops the link. Emphatically NOT a "torn" timeout: peer loss never latches `SeamState.Torn`
+         * (#1513), so a wait for `Torn` here could only ever burn this whole budget and report a false FAIL
+         * — which is what it did until #1836. The host waits nothing; its own `close()` is synchronous.
+         */
+        val PEER_LOSS_TIMEOUT: Duration = 20.seconds
         val SOAK: Duration = 120.seconds
         val PING_INTERVAL: Duration = 250.milliseconds
         const val STALL_MS = 2_000L
