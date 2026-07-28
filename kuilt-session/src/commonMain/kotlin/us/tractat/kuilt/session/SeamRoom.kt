@@ -727,6 +727,23 @@ internal class SeamRoom(
                         emitEvent(MembershipEvent.WindowOpened(hostId, windowDeadline))
                     }
 
+                    override fun onNoOpResume(hostId: PeerId, at: Instant) {
+                        // #1637. The episode closed on the resume machine's dwell, not on a
+                        // ResumeAck — the host never partitioned us, so [handleResumeAck] (which
+                        // is where a real resume resets liveness and emits its closing edge) never
+                        // runs. [markRecovered] does exactly the two things that are owed here:
+                        // clear the Partitioned level [onReconnectStarted] applied, and announce
+                        // it. Its host-only [propagateUnpaused] branch is unreachable from a
+                        // joiner, and its `wasPartitioned` gate makes a double-close silent.
+                        //
+                        // Recovered(hostId), NOT Resumed(selfId): the arc opened on the HOST, so
+                        // the closing edge must name the host or an edge-keying consumer cannot
+                        // match the two. It is also the literally true event — "a partitioned
+                        // peer's link recovered before the window expired" — where `Resumed` would
+                        // claim a resume that did not happen.
+                        markRecovered(hostId, at)
+                    }
+
                     override suspend fun onReconnectFailed(at: Instant, reason: FailureReason) =
                         markHostLost(at, reason)
                 },
