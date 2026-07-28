@@ -191,6 +191,33 @@ internal sealed interface RaftMessage {
     ) : RaftMessage
 }
 
+/**
+ * The Raft term this frame asserts, or `null` for the two frames that carry none.
+ *
+ * The single place a term is read off the wire before any adoption decision, so [RaftEngine] can
+ * apply one plausibility bound at the dispatch boundary (issue #1833) instead of at each of the
+ * handlers that call `stepDown(m.term, …)`.
+ *
+ * [RaftMessage.Forward] / [RaftMessage.ForwardResponse] are correlated by `clientRequestId`, not by
+ * term, and neither influences term state — hence `null` rather than a sentinel. The `when` is
+ * exhaustive (no `else`), so a new [RaftMessage] variant must decide explicitly whether it carries a
+ * term rather than silently defaulting out of the bound.
+ */
+internal val RaftMessage.wireTerm: Long?
+    get() = when (this) {
+        is RaftMessage.RequestVote             -> term
+        is RaftMessage.RequestVoteResponse     -> term
+        is RaftMessage.AppendEntries           -> term
+        is RaftMessage.AppendEntriesResponse   -> term
+        is RaftMessage.InstallSnapshot         -> term
+        is RaftMessage.InstallSnapshotResponse -> term
+        is RaftMessage.PreVote                 -> term
+        is RaftMessage.PreVoteResponse         -> term
+        is RaftMessage.TimeoutNow              -> term
+        is RaftMessage.Forward                 -> null
+        is RaftMessage.ForwardResponse         -> null
+    }
+
 /** Outcome of a forwarded proposal, carried in [RaftMessage.ForwardResponse]. */
 @Serializable
 internal sealed interface ForwardOutcome {

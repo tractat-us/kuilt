@@ -1083,9 +1083,90 @@ internal class RaftEngine(
         send(from, RaftMessage.InstallSnapshotResponse(state.currentTerm, bytes.size.toLong(), echoedRound = m.round))
     }
 
+    /**
+     * §5.3 frame-internal well-formedness of an [RaftMessage.AppendEntries] batch (issue #1832).
+     *
+     * The protocol implies `entries[i].index == prevLogIndex + 1 + i` — contiguous, ascending,
+     * starting immediately after the probed position — and `entries[i].term <= term`, since no entry
+     * may carry a term above the leader's own. Nothing enforced either. [RaftState.entryAt] returns
+     * null for *any* index past the tail, so the append scan's `existing == null` branch appended
+     * whatever index the sender supplied, at any distance from the real tail.
+     *
+     * Two consequences, one of them a safety violation:
+     *
+     * - **Contiguity.** [logEntryAt] computes its offset as `index - (snapshotIndex + 1)`, valid only
+     *   because indices are monotonically increasing with no gaps. A log holding `[… 7, MAX-1]`
+     *   breaks that, so subsequent lookups resolve the wrong slot or fall out of range.
+     * - **Leader Completeness (§5.4 / Figure 3.2).** [RaftState.lastLogPosition] is built from the
+     *   last entry and §5.4.1 compares `(term, index)` lexicographically, so an entry at
+     *   `term = Long.MAX_VALUE` makes the victim unbeatable by any honest node. It then wins every
+     *   election it enters while its log does *not* hold the committed entries a legitimate leader
+     *   must — and committed entries can be overwritten.
+     *
+     * **Scope — this closes the §5.4.1 hole on the AppendEntries lane only.** The check guards
+     * [RaftMessage.AppendEntries] and nothing else, and [onMessage]'s `MAX_PLAUSIBLE_TERM` bound
+     * guards a frame's own `term` and nothing else — so [RaftMessage.InstallSnapshot]'s
+     * `lastIncludedTerm` / `lastIncludedIndex` are validated by neither and reach the same §5.4.1
+     * domination (plus a wiped log) through a sibling frame. Tracked in issue #1868; deliberately
+     * NOT addressed here.
+     *
+     * Unlike the in-range `matchIndex` / `nextOffset` lies of #1818, this is checkable without trust
+     * or extra state: the leader states `prevLogIndex` in the same message, so the batch's required
+     * indices are fully determined by the frame itself.
+     *
+     * **Disposition: drop the frame, don't reply `success = false`.** An honest leader cannot emit
+     * such a batch — [sendAppendEntries] slices a contiguous suffix via [logSliceFrom] and sets
+     * `prevIndex = nextIndex - 1`, and log terms never exceed the leader's `currentTerm` — so there
+     * is no honest sender to answer, and a rejection would hand a forger a free lever on the leader's
+     * §5.3 backup. Dropping mirrors the §5.2 leader-authority gate in [onMessage]. Crucially it is
+     * also *not* a `require`: this runs inside the engine's actor loop, whose `try`/`finally` has no
+     * `catch`, so a throw would convert a malformed frame into permanent node death (#1818).
+     *
+     * Called before the term check, so a malformed frame never adopts its term either.
+     */
+    private fun isWellFormedBatch(from: NodeId, m: RaftMessage.AppendEntries): Boolean {
+        // A negative probe index is nonsense, and one within `entries.size + 1` of Long.MAX_VALUE
+        // would overflow the expected-index arithmetic below. Neither is reachable honestly.
+        if (m.prevLogIndex < 0L || m.prevLogIndex > Long.MAX_VALUE - m.entries.size - 1L) {
+            debug { "onAppendEntries($from): DROP — implausible prevLogIndex=${m.prevLogIndex} (entries=${m.entries.size})" }
+            return false
+        }
+        m.entries.forEachIndexed { i, entry ->
+            val expected = m.prevLogIndex + 1L + i
+            if (entry.index != expected) {
+                debug { "onAppendEntries($from): DROP — non-contiguous batch: entries[$i].index=${entry.index} expected=$expected (prevLogIndex=${m.prevLogIndex}, size=${m.entries.size})" }
+                return false
+            }
+            if (entry.term < 0L || entry.term > m.term) {
+                debug { "onAppendEntries($from): DROP — entries[$i].term=${entry.term} outside 0..${m.term} (no entry may carry a term above the leader's)" }
+                return false
+            }
+        }
+        return true
+    }
+
     private suspend fun onAppendEntries(from: NodeId, m: RaftMessage.AppendEntries) {
+        if (!isWellFormedBatch(from, m)) return
         if (m.term < state.currentTerm) {
-            send(from, RaftMessage.AppendEntriesResponse(state.currentTerm, false, echoedRound = m.round))
+            // Echo round 0, NOT `m.round` (issue #1831). This reply pairs OUR current term with a
+            // request from an older one, and `ReadIndexTracker.round` resets to 0 on every
+            // `becomeLeader` — so a round carried by a delayed AppendEntries from an earlier
+            // leadership can be arbitrarily larger than anything the current leadership has stamped.
+            // Echoing it produces a response that passes the leader's `m.term == currentTerm` guard
+            // and reaches `recordAck(from, <foreign round>)`, seating this voter in `resolve`'s fresh
+            // set for every read for the rest of the term: a stale read served as linearizable
+            // (§3.7), with no forgery — two honest nodes reach it on their own in the async model.
+            //
+            // A round is a NONCE, so the disposition is to attest to nothing rather than to clamp
+            // `m.round` into the current round — clamping would launder a foreign round into the
+            // most favourable valid one, which is exactly the #1817 mistake. 0 can never satisfy
+            // `ackRound > read.sinceRound` (sinceRound >= 0), which is correct: a stale-term
+            // rejection genuinely answers nothing in the current round. Reachability for CheckQuorum
+            // is unaffected — that runs off `recentVoterContacts`, which this response still feeds.
+            //
+            // Matches the sibling InstallSnapshot stale-term rejection, which already replies with
+            // the `echoedRound = 0L` default.
+            send(from, RaftMessage.AppendEntriesResponse(state.currentTerm, false, echoedRound = 0L))
             return
         }
         if (m.term > state.currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
@@ -1925,6 +2006,44 @@ internal class RaftEngine(
     // ── Message dispatcher ────────────────────────────────────────────────────
 
     private suspend fun onMessage(from: NodeId, m: RaftMessage) {
+        // ── Term plausibility bound (#1833) ──────────────────────────────────────
+        // Term adoption had no upper bound: any message carrying a higher term was adopted wholesale
+        // via `stepDown(m.term, HigherTermObserved)`, and the election increment is a bare
+        // `currentTerm + 1` on a `Long`, which wraps silently. One frame carrying
+        // `term = Long.MAX_VALUE` is therefore adopted; the victim's own responses then carry it, so
+        // every peer adopts it in turn on ordinary traffic; the next election computes
+        // `Long.MAX_VALUE + 1` = `Long.MIN_VALUE`; every RequestVote/PreVote proposes a hugely
+        // negative term that every recipient denies as stale — and NO LEADER CAN EVER BE ELECTED
+        // AGAIN, cluster-wide, surviving restart because `currentTerm` is persisted. No exception, no
+        // log line, no crashed node: the cluster silently stops making progress while every node
+        // reports itself healthy.
+        //
+        // Honest terms increment once per election, so a real deployment stays many orders of
+        // magnitude below MAX_PLAUSIBLE_TERM (~10^18 elections of headroom). A term outside
+        // `0..MAX_PLAUSIBLE_TERM` is therefore proof of a malformed or foreign frame, and — the
+        // #1817 nonce reasoning — admits no conservative in-range reading to clamp to, so the frame
+        // is DROPPED. Negative terms are already nonsense: terms start at 0 and only increase.
+        //
+        // Placed at the dispatch boundary, before any handler and therefore before any adoption, so
+        // one check covers every path that can raise `currentTerm`. That in turn makes the two
+        // `currentTerm + 1` increment sites provably overflow-free: `currentTerm` is only ever set
+        // from an adopted wire term (now <= 2^60) or from a self-increment, and reaching 2^63 from
+        // 2^60 would take 2^63 - 2^60 real elections.
+        //
+        // Rejecting rather than throwing is required for the usual reason: this runs inside the
+        // engine's actor loop, whose `try`/`finally` has no `catch`, so a `require` would convert a
+        // malformed frame into permanent node death (#1818).
+        //
+        // NOTE: the init-restore path (`state.currentTerm = storage.term()`) is deliberately NOT
+        // bounded. A term persisted by a pre-fix binary comes back poisoned, and that node's frames
+        // are then dropped by every peer — it is isolated, but the cluster keeps electing. Silently
+        // rewriting durable term state on load is a bigger call than this fix.
+        val wireTerm = m.wireTerm
+        if (wireTerm != null && (wireTerm < 0L || wireTerm > MAX_PLAUSIBLE_TERM)) {
+            debug { "onMessage: dropped ${m::class.simpleName} from $from — implausible term=$wireTerm (outside 0..$MAX_PLAUSIBLE_TERM)" }
+            return
+        }
+
         // ── §5.2 / §8 leader-authority gate (#1383) ──────────────────────────────
         // AppendEntries and InstallSnapshot are leader→peer RPCs, and only a voter can
         // ever be leader (§5.2: a candidate must win a majority of the voter set). So a
@@ -1997,5 +2116,15 @@ internal class RaftEngine(
     private companion object {
         /** Reserve for the CBOR envelope around a chunk's [RaftMessage.InstallSnapshot.data] payload. */
         const val HEADER_BUDGET = 256
+
+        /**
+         * Upper sanity bound on any term arriving off the wire (issue #1833) — see [onMessage].
+         *
+         * `2^60` leaves roughly 10^18 elections of headroom, which no real deployment approaches
+         * (terms advance once per election), while keeping `currentTerm + 1` three orders of
+         * magnitude clear of the `Long` overflow that would otherwise wrap an election term to
+         * `Long.MIN_VALUE` and wedge the cluster permanently.
+         */
+        const val MAX_PLAUSIBLE_TERM = 1L shl 60
     }
 }

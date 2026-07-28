@@ -103,9 +103,16 @@ class CheckQuorumTest {
         val cluster = ClusterConfig(voters = setOf(v1, v2))
 
         // Pre-load a conflicting log entry on v2 so it will always reject AppendEntries from v1.
-        // Pre-load a conflicting log entry on v2 so it will always reject AppendEntries from v1.
         // Term 99 at index 1 conflicts with any real leader's term 1 no-op — v2 keeps sending success=false.
+        //
+        // The persisted term is seeded alongside the entry (#1832). `storage.term() >= max(log entry
+        // terms)` is a real invariant of every append path — `persistTermAndVote` is storage-first and
+        // runs before `storage.appendEntries`, so a node cannot hold a term-99 entry while recorded at
+        // term 0. Seeding only the entry produced a state no node can reach, and the AppendEntries it
+        // led to (`term = 1` carrying an entry at `term = 99`) is now correctly rejected as malformed
+        // by the batch validation, since no entry may carry a term above the leader's own.
         val conflictingStorage = InMemoryRaftStorage().also { s ->
+            s.saveTermAndVotedFor(99L, null)
             s.appendEntries(listOf(LogEntry(index = 1L, term = 99L, command = byteArrayOf(0xFF.toByte()))))
         }
 

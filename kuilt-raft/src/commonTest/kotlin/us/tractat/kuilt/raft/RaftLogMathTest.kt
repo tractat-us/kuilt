@@ -5,6 +5,7 @@ import us.tractat.kuilt.raft.internal.RaftMessage
 import us.tractat.kuilt.raft.internal.isLogUpToDate
 import us.tractat.kuilt.raft.internal.majorityCommitIndex
 import us.tractat.kuilt.raft.internal.nextIndexAfterFailure
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -119,6 +120,101 @@ class RaftLogMathTest {
         val log = listOf(LogEntry(1L, 1L, byteArrayOf()))
         // conflictTerm=99 absent, no conflictIndex → currentNextIndex - 1
         assertEquals(9L, nextIndexAfterFailure(10L, failResponse(conflictTerm = 99L), log))
+    }
+
+    // ── nextIndexAfterFailure: #1829 conflictIndex clamp ──────────────────────
+    //
+    // Backup is monotonically non-increasing by construction (§5.3), and both honest constructions
+    // of conflictIndex are bounded by the probed index (prevLogIndex = currentNextIndex - 1). So the
+    // result is clamped to 1..currentNextIndex - 1: a no-op for every honest peer, and the only thing
+    // standing between a malformed rejection and the #1175 error() (above the log), a permanent
+    // snapshot-diversion wedge (below 1), or a zero-progress reject/resend ping-pong (equal to
+    // currentNextIndex). See NextIndexBackupClampTest for the engine-level consequences.
+
+    @Test
+    fun nextIndexAfterFailure_conflictIndexAboveCurrentNextIndex_strictlyDecreases() {
+        val log = listOf(LogEntry(1L, 1L, byteArrayOf()), LogEntry(2L, 1L, byteArrayOf()))
+        assertEquals(2L, nextIndexAfterFailure(3L, failResponse(conflictIndex = Long.MAX_VALUE), log))
+    }
+
+    /**
+     * The termination property, and the reason the ceiling is exclusive (#1829 follow-up).
+     *
+     * `onAppendEntriesResponse`'s rejection branch calls `sendAppendEntries(from)` synchronously, so
+     * a backup that does NOT move re-emits a byte-identical frame and draws an identical rejection —
+     * an unbounded ping-pong with no delay between iterations. Under this repo's virtual-time
+     * harness that starves the scheduler at a single instant, so it HANGS rather than fails. §5.3
+     * requires backup to back up: every malformed value at or above the probed index must produce a
+     * strictly smaller nextIndex.
+     */
+    @Test
+    fun nextIndexAfterFailure_malformedConflictIndexAtOrAboveNextIndex_alwaysStrictlyDecreases() {
+        val log = listOf(
+            LogEntry(1L, 1L, byteArrayOf()),
+            LogEntry(2L, 1L, byteArrayOf()),
+            LogEntry(3L, 1L, byteArrayOf()),
+        )
+        val currentNextIndex = 4L
+        val malformed = listOf(currentNextIndex, currentNextIndex + 1L, 99L, Long.MAX_VALUE)
+        assertAll(
+            *malformed.map { forged ->
+                {
+                    val result = nextIndexAfterFailure(currentNextIndex, failResponse(conflictIndex = forged), log)
+                    assertTrue(
+                        result < currentNextIndex,
+                        "conflictIndex=$forged must strictly decrease nextIndex from $currentNextIndex, got $result — " +
+                            "an unchanged nextIndex re-sends an identical AppendEntries and ping-pongs forever",
+                    )
+                }
+            }.toTypedArray()
+        )
+    }
+
+    /**
+     * The floor is the one fixed point strict decrease cannot cover — `nextIndex` has nowhere lower
+     * to go. Unreachable honestly (a rejection needs `prevLogIndex > snapshotIndex`, and at
+     * `nextIndex == 1` the probe is `prevLogIndex == 0`), and a pre-existing property of the floor
+     * rather than of the clamp. Pinned so the inverted range (`1..0`) stays a returned value and
+     * never becomes a `coerceIn` throw inside the actor loop.
+     */
+    @Test
+    fun nextIndexAfterFailure_atTheFloor_staysAtOneWithoutThrowing() {
+        val log = listOf(LogEntry(1L, 1L, byteArrayOf()))
+        assertAll(
+            { assertEquals(1L, nextIndexAfterFailure(1L, failResponse(conflictIndex = Long.MAX_VALUE), log)) },
+            { assertEquals(1L, nextIndexAfterFailure(1L, failResponse(), log)) },
+        )
+    }
+
+    @Test
+    fun nextIndexAfterFailure_conflictIndexNegative_clampedToOne() {
+        val log = listOf(LogEntry(1L, 1L, byteArrayOf()))
+        assertEquals(1L, nextIndexAfterFailure(5L, failResponse(conflictIndex = -5L), log))
+    }
+
+    @Test
+    fun nextIndexAfterFailure_conflictTermPathAlsoClamped() {
+        // conflictTerm=7 IS in the leader's log, at an index far past the probed nextIndex — the
+        // lastOfTerm branch, which would otherwise move nextIndex *forward* on a rejection.
+        val log = listOf(
+            LogEntry(1L, 1L, byteArrayOf()),
+            LogEntry(2L, 7L, byteArrayOf()),
+            LogEntry(3L, 7L, byteArrayOf()),
+        )
+        assertEquals(1L, nextIndexAfterFailure(2L, failResponse(conflictTerm = 7L), log))
+    }
+
+    @Test
+    fun nextIndexAfterFailure_honestConflictIndexIsUnchangedByTheClamp() {
+        val log = listOf(LogEntry(1L, 1L, byteArrayOf()), LogEntry(2L, 1L, byteArrayOf()))
+        // An honest follower's conflictIndex is always <= currentNextIndex - 1 (both constructions
+        // are bounded by the probed prevLogIndex), so the exclusive ceiling never bites — it is the
+        // same bound the no-metadata fallback on the last line already applies.
+        assertAll(
+            { assertEquals(3L, nextIndexAfterFailure(10L, failResponse(conflictIndex = 3L), log)) },
+            { assertEquals(1L, nextIndexAfterFailure(2L, failResponse(conflictIndex = 1L), log)) },
+            { assertEquals(9L, nextIndexAfterFailure(10L, failResponse(), log)) },
+        )
     }
 
     // ── majorityCommitIndex ───────────────────────────────────────────────────
