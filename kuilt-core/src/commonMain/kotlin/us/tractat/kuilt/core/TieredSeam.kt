@@ -65,10 +65,12 @@ import kotlinx.coroutines.flow.onEach
  * confinement. [state] runs through a [SeamStateGate]: the `combine` state pump publishes via
  * `update()` (a no-op once torn) and [close] latches `Torn` via `tear()`, so no in-flight pump write
  * can overwrite the terminal state and `tear()`'s single-shot return subsumes the old close latch.
- * [peers] is written from a single `combine` collector, but that write races [close]'s roster
- * collapse, so both are guarded by a small [reentrantLock] with the torn-check folded into the same
- * critical section — a post-close peers emission cannot resurrect the roster. [incoming] flows
- * through a bounded [Spool].
+ * [peers] is written from a single `combine` collector, but that write races [collapseRoster], so both
+ * are guarded by a small [reentrantLock] with the collapse *marker* folded into the same critical
+ * section — a post-collapse peers emission cannot resurrect the roster. The marker rather than a read
+ * of `state` is load-bearing: [Seam.peers] requires the collapse to be published **before** the `Torn`
+ * latch, so mid-close there is an instant at which the roster is collapsed and `state` is not yet
+ * terminal. [incoming] flows through a bounded [Spool].
  *
  * @param scope **required** parent scope for the union/incoming pumps — no real-dispatcher
  *   default (a default would silently decouple the pumps from a test's virtual clock). The

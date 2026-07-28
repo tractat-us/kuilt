@@ -59,9 +59,11 @@ internal fun interface OutboundSender {
  * lock. Suspend calls (authorizer, sends, spool delivery) are always performed **outside** the lock.
  * The terminal lifecycle runs through a [SeamStateGate]: [close] latches `Torn` single-shot (no more
  * non-CAS `if (_state is Torn) return`), and the roster-resurrection hazard — an in-flight [deliver]
- * re-registering a peer after `close()` cleared the roster — is closed by folding the torn-check
- * into the **same** critical section that mutates [registered]/[_peers]/[principals], so a
- * post-tear [deliver] can never republish membership.
+ * re-registering a peer after `close()` collapsed the roster — is closed by folding the [closed] check
+ * into the **same** critical section that mutates [registered]/[_peers]/[principals], so a post-close
+ * [deliver] can never republish membership. The check is that marker and not a read of `state`
+ * because [Seam.peers] requires the roster collapse to be published **before** the `Torn` latch, so
+ * mid-close there is an instant at which the roster is collapsed and `state` is not yet terminal.
  *
  * @param channelName the room name, matching the [NamedMux] channel tag clients use.
  * @param selfId this server peer's own [PeerId].
