@@ -46,10 +46,14 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nearby.NearbySeam")
  *                            read and write on the same lock instance.
  * @param api                 The [NearbyApi] instance.
  * @param sharedPeers         The shared [MutableStateFlow] of the whole session's peer set
- *                            (owned by [NearbyLoom]). **Read-only from here**: it is the same
- *                            instance every seam this loom weaves observes, so a write is a write
- *                            to every other seam's roster. [peers] is a per-seam *mirror* of it —
- *                            see [collapseRoster].
+ *                            (owned by [NearbyLoom]). It is the same instance every seam this loom
+ *                            weaves observes, so a write here lands in every sibling seam's roster.
+ *                            **Never written on the tear/close path** for that reason — [peers] is
+ *                            a per-seam *mirror* collapsed locally instead (see [collapseRoster]).
+ *                            The one remaining write is [disconnectLoop]'s eviction of a departed
+ *                            remote, which is load-bearing *because* it is session-wide: it is how
+ *                            the counterparty's own seam learns of this peer after [close]
+ *                            disconnects the endpoints.
  * @param scope               Coroutine scope for the receive loop; cancelled on [close].
  * @param maxChunkPayload     Per-chunk payload cap forwarded to [ChunkCodec].
  * @param msgIdCounter        Shared monotonic counter for message IDs (use one per seam).
@@ -238,7 +242,10 @@ internal class NearbySeam(
      *
      * [Seam.peers] requires a `Torn` seam's roster to be exactly `{ selfId }` — **not** `emptySet()`
      * and not the pre-tear membership: a torn radio reaches nobody, but `peers` always carries this
-     * peer's own id. Idempotent, so [latchTorn]'s losing callers may run it freely.
+     * peer's own id.
+     *
+     * Called from [latchTorn] and nowhere else, *after* its CAS — so it runs exactly once per seam.
+     * A second (or concurrent) [close] loses that CAS and returns before reaching here.
      */
     private fun collapseRoster() = peersLock.withReentrantLock {
         collapsed = true
@@ -258,8 +265,12 @@ internal class NearbySeam(
      * running it immediately before the `_state` write is what makes "already collapsed when `Torn`
      * becomes observable" true on either path, with no way to add a third that forgets.
      *
-     * [peersLock] is released before the `_state` write: that write resumes `state` collectors, which
-     * can run consumer code inline and re-enter this seam.
+     * [collapseRoster] releases [peersLock] before returning, so *this* frame does not hold it across
+     * the `_state` write — that write resumes `state` collectors, which can run consumer code inline
+     * and re-enter this seam. Not an absolute invariant about the thread: an inline collector resumed
+     * by the roster write could itself be inside [peersLock] further up the stack. That is safe rather
+     * than accidental — the lock is reentrant, and the CAS above already makes a re-entrant tear a
+     * no-op — but the guarantee is "no lock held by this frame", not "no lock held at all".
      */
     private fun latchTorn(reason: CloseReason): Boolean {
         if (!closed.compareAndSet(expect = false, update = true)) return false
