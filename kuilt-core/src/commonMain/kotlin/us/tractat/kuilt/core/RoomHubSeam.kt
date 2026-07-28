@@ -59,9 +59,11 @@ internal fun interface OutboundSender {
  * lock. Suspend calls (authorizer, sends, spool delivery) are always performed **outside** the lock.
  * The terminal lifecycle runs through a [SeamStateGate]: [close] latches `Torn` single-shot (no more
  * non-CAS `if (_state is Torn) return`), and the roster-resurrection hazard — an in-flight [deliver]
- * re-registering a peer after `close()` cleared the roster — is closed by folding the torn-check
- * into the **same** critical section that mutates [registered]/[_peers]/[principals], so a
- * post-tear [deliver] can never republish membership.
+ * re-registering a peer after `close()` collapsed the roster — is closed by folding the [closed] check
+ * into the **same** critical section that mutates [registered]/[_peers]/[principals], so a post-close
+ * [deliver] can never republish membership. The check is that marker and not a read of `state`
+ * because [Seam.peers] requires the roster collapse to be published **before** the `Torn` latch, so
+ * mid-close there is an instant at which the roster is collapsed and `state` is not yet terminal.
  *
  * @param channelName the room name, matching the [NamedMux] channel tag clients use.
  * @param selfId this server peer's own [PeerId].
@@ -95,6 +97,15 @@ public class RoomHubSeam(
     // departing spoke, so selfId stays present on any live (non-Torn) roster. #1506.
     private val _peers = MutableStateFlow<Set<PeerId>>(setOf(selfId))
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
+
+    // Set by [close], read by [deliver]'s registration block — both under [lock], never apart. NOT a
+    // second lifecycle latch ([stateGate] is still the single-shot close gate): it exists because the
+    // roster collapse must be published BEFORE `Torn` becomes observable ([Seam.peers]), which leaves
+    // a window in which the hub is collapsed but not yet Torn. A registration landing there would
+    // resurrect membership on a closed hub, so the guard is this marker rather than a read of
+    // `state`. Check and write share one critical section — not the check-then-set [SeamStateGate]
+    // bans, whose whole problem is that the two steps are apart.
+    private var closed = false
 
     private val stateGate = SeamStateGate(SeamState.Woven)
     override val state: StateFlow<SeamState> = stateGate.state
@@ -134,11 +145,16 @@ public class RoomHubSeam(
         if (!alreadyRegistered) {
             if (!authorizer.authorize(connPeerId, channelName)) return
             val admitted = lock.withLock {
-                // Re-check the terminal latch INSIDE the registration critical section: a close()
-                // may have latched Torn and cleared the roster while we were suspended in the
-                // authorizer above. Registering here would resurrect membership after Torn (#1364).
-                // Folding the check into the same lock that clears the roster makes it unrepresentable.
-                if (state.value is SeamState.Torn) return@withLock false
+                // Re-check INSIDE the registration critical section: a close() may have collapsed the
+                // roster while we were suspended in the authorizer above. Registering here would
+                // resurrect membership after the collapse (#1364). Folding the check into the same
+                // lock that clears the roster makes it unrepresentable.
+                //
+                // The check is [closed], not `state`: the collapse is published BEFORE the `Torn`
+                // latch ([Seam.peers]'s ordering obligation), so between the two this hub is closed
+                // while `state` still reads non-terminal. Reading `state` here would admit exactly
+                // the registration this guard exists to reject.
+                if (closed) return@withLock false
                 registered[connPeerId] = sender
                 _peers.update { it + connPeerId }
                 if (principal == null) principals.remove(connPeerId) else principals[connPeerId] = principal
@@ -185,17 +201,30 @@ public class RoomHubSeam(
     }
 
     override suspend fun close(reason: CloseReason) {
-        // Single-shot: tear() latches Torn and returns false for a loser, so a second (or concurrent)
-        // close() never re-runs teardown — the old non-CAS `if (_state is Torn) return` let two
-        // concurrent closes both run it. Latch BEFORE clearing the roster so a deliver() that acquires
-        // the lock after the clear sees Torn and cannot re-register (see deliver()).
-        if (!stateGate.tear(reason)) return
+        // Collapse the roster to { selfId } BEFORE latching Torn. [Seam.peers] makes that an ORDERED
+        // obligation — a consumer woken by the terminal state must already observe the collapse — and
+        // it is `{ selfId }`, not `emptySet()`: the hub is a peer in its own room roster, so an empty
+        // set overshoots the contract in the other direction (see the [_peers] note above).
+        //
+        // The [closed] marker set in the SAME critical section is what replaces the old latch-first
+        // order. That order existed so a [deliver] acquiring the lock after the clear would read
+        // `Torn` and decline; with the collapse now ahead of the latch there is a window in which the
+        // hub is collapsed but not yet Torn, so the guard can no longer be a read of `state`. Marking
+        // and clearing atomically closes that window instead of narrowing it — and it is strictly
+        // stronger than the state read, since it cannot be observed half-applied.
+        //
+        // [lock] is deliberately NOT held across `tear`: that write resumes `state` collectors, which
+        // can run consumer code inline and re-enter this hub, inverting the lock order against
+        // [deliver]. Clearing before the (still single-shot) latch is safe for a losing caller too —
+        // everything in the block is idempotent.
         lock.withLock {
+            closed = true
             registered.clear()
             principals.clear()
-            _peers.value = emptySet()
+            _peers.value = setOf(selfId)
             _attestedPrincipals.value = emptyMap()
         }
+        if (!stateGate.tear(reason)) return
         inboundSpool.close()
     }
 

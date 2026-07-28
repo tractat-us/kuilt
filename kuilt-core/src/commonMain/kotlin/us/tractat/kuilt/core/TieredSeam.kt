@@ -65,10 +65,12 @@ import kotlinx.coroutines.flow.onEach
  * confinement. [state] runs through a [SeamStateGate]: the `combine` state pump publishes via
  * `update()` (a no-op once torn) and [close] latches `Torn` via `tear()`, so no in-flight pump write
  * can overwrite the terminal state and `tear()`'s single-shot return subsumes the old close latch.
- * [peers] is written from a single `combine` collector, but that write races [close]'s roster
- * collapse, so both are guarded by a small [reentrantLock] with the torn-check folded into the same
- * critical section — a post-close peers emission cannot resurrect the roster. [incoming] flows
- * through a bounded [Spool].
+ * [peers] is written from a single `combine` collector, but that write races [collapseRoster], so both
+ * are guarded by a small [reentrantLock] with the collapse *marker* folded into the same critical
+ * section — a post-collapse peers emission cannot resurrect the roster. The marker rather than a read
+ * of `state` is load-bearing: [Seam.peers] requires the collapse to be published **before** the `Torn`
+ * latch, so mid-close there is an instant at which the roster is collapsed and `state` is not yet
+ * terminal. [incoming] flows through a bounded [Spool].
  *
  * @param scope **required** parent scope for the union/incoming pumps — no real-dispatcher
  *   default (a default would silently decouple the pumps from a test's virtual clock). The
@@ -107,11 +109,21 @@ internal class TieredSeam(
 
     override val selfId: PeerId = localTier.selfId
 
-    // Guards the _peers write (combine collector) against close()'s roster collapse, with the
-    // torn-check folded into the same critical section so a post-close emission cannot resurrect it.
+    // Guards the _peers write (combine collector) against the roster collapse, with the collapse
+    // marker folded into the same critical section so a post-collapse emission cannot resurrect it.
     private val peersLock = reentrantLock()
 
-    // Union roster. Written by the single combine-collector below and by close()'s collapse, both
+    // Set by [collapseRoster], read by the union pump — both under [peersLock], never apart. It is
+    // NOT a second lifecycle latch ([stateGate] is still the single-shot close gate); it exists
+    // because the collapse must be published BEFORE `Torn` becomes observable, so the pump can no
+    // longer key its guard on `state`: in the window between the collapse and the latch this seam is
+    // not yet Torn, and a union emission landing there would republish the roster PERMANENTLY (the
+    // pump's next trigger is another tier edge, and a torn tier has none). Guarding on a marker set
+    // in the same critical section as the collapse makes that window unrepresentable rather than
+    // narrow — check-and-write are one atomic step, not the check-then-set [SeamStateGate] bans.
+    private var collapsed = false
+
+    // Union roster. Written by the single combine-collector below and by [collapseRoster], both
     // under peersLock.
     private val _peers = MutableStateFlow(localTier.peers.value + peerTier.peers.value)
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
@@ -132,10 +144,10 @@ internal class TieredSeam(
     private val liveIncoming = atomic(2)
 
     init {
-        // Union roster pump: one collector. The write + torn-check are one critical section under
-        // peersLock, so a close() that latched Torn (and collapsed the roster) is never overwritten.
+        // Union roster pump: one collector. The write + collapse-check are one critical section under
+        // peersLock, so a roster collapse is never overwritten — see [collapsed].
         combine(localTier.peers, peerTier.peers) { a, b -> a + b }
-            .onEach { union -> peersLock.withLock { if (state.value !is SeamState.Torn) _peers.value = union } }
+            .onEach { union -> peersLock.withLock { if (!collapsed) _peers.value = union } }
             .launchIn(scope)
 
         // Composed lifecycle pump. A recoverable rollup (Woven/Weaving) is a derived write via
@@ -144,8 +156,20 @@ internal class TieredSeam(
         // latched via tear() — self-driven death of both tiers publishes a terminal Torn, not a
         // revivable one. The normal close() path tears first and wins the single-shot latch; this pump
         // then no-ops. Either way the latch means a later tier flap can never move state off Torn.
+        //
+        // The terminal branch collapses the roster FIRST, for the same reason [close] does: this is
+        // the *self-driven* death path (both tiers torn with nobody calling close), and it publishes
+        // exactly the same terminal `Torn` a consumer waits on. Latching here without collapsing
+        // would leave a torn union advertising the pre-death roster forever.
         combine(localTier.state, peerTier.state) { l, p -> rollup(l, p) }
-            .onEach { s -> if (s is SeamState.Torn) stateGate.tear(s.reason) else stateGate.update(s) }
+            .onEach { s ->
+                if (s is SeamState.Torn) {
+                    collapseRoster()
+                    stateGate.tear(s.reason)
+                } else {
+                    stateGate.update(s)
+                }
+            }
             .launchIn(scope)
 
         // Sole collection of each tier's incoming, teed into the one merged spool. When a tier's
@@ -161,6 +185,22 @@ internal class TieredSeam(
             .onEach { spool.deliver(it) }
             .onCompletion { closeSpoolIfBothDone() }
             .launchIn(scope)
+    }
+
+    /**
+     * Collapse [peers] to `{ selfId }` and shut the union pump out of it, as one critical section.
+     *
+     * [Seam.peers] requires a `Torn` seam's roster to be exactly `{ selfId }` — **not** `emptySet()`:
+     * `peers` always includes this peer's own id, so collapsing to empty overshoots the contract in
+     * the other direction. And it requires the collapse to be published *before* the terminal latch,
+     * which is why every caller runs this **ahead of** [SeamStateGate.tear] rather than after it.
+     *
+     * Idempotent, so both call sites — [close] (including a losing second one) and the state pump's
+     * self-driven terminal branch — may run it freely.
+     */
+    private fun collapseRoster() = peersLock.withLock {
+        collapsed = true
+        _peers.value = setOf(selfId)
     }
 
     private fun closeSpoolIfBothDone() {
@@ -190,13 +230,22 @@ internal class TieredSeam(
     }
 
     override suspend fun close(reason: CloseReason) {
-        // Single-shot via the gate: tear() latches Torn and returns false for a loser. Latch BEFORE
-        // collapsing the roster so a peers-pump emission that acquires peersLock after the collapse
-        // sees Torn and no-ops (peers-before-state + no resurrection). Correctness no longer depends
-        // on cancelling the pumps first — the gate makes a late update() a harmless no-op — so the
-        // scope is cancelled last, purely to release the pump coroutines.
+        // Collapse the roster to { selfId } BEFORE latching Torn: [Seam.peers] makes that an ORDERED
+        // obligation, so a consumer woken by the terminal state already observes the collapse. The
+        // resurrection hazard the old latch-first order guarded against is handled by [collapsed]
+        // instead, which is strictly stronger — it closes the window rather than relying on the pump
+        // reading a `state` that, mid-close, has not been latched yet.
+        //
+        // Still single-shot via the gate: tear() returns false for a loser. The collapse ahead of it
+        // is idempotent, so an unwinnable second close costs one identical write. Correctness does
+        // not depend on cancelling the pumps first — the gate makes a late update() a harmless no-op
+        // — so the scope is cancelled last, purely to release the pump coroutines.
+        //
+        // [peersLock] is deliberately NOT held across `tear`: that write resumes `state` collectors,
+        // which can run consumer code inline and re-enter this seam. Holding peersLock across it
+        // would invert the lock order against the union pump.
+        collapseRoster()
         if (!stateGate.tear(reason)) return
-        peersLock.withLock { _peers.value = emptySet() }
         spool.close()
         localTier.close(reason)
         peerTier.close(reason)
