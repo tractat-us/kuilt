@@ -157,7 +157,9 @@ internal class AppendEntriesBatchValidationTest {
      *
      * **Covers the AppendEntries lane only.** `InstallSnapshot`'s `lastIncludedTerm` /
      * `lastIncludedIndex` reach the same §5.4.1 domination and are guarded by neither the batch
-     * validation nor the term bound — tracked in issue #1868, out of scope here.
+     * validation nor the term bound; that lane has its own `isWellFormedSnapshotChunk`, pinned by
+     * `InstallSnapshotMetaValidationTest` (issue #1868). Those bounds reject implausible metadata
+     * only — in-range snapshot metadata remains unauthenticated (#1876).
      */
     @Test
     fun forgedMaxTermEntryDoesNotMakeTheVictimUnbeatableInElections() = raftRunTest {

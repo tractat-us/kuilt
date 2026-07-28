@@ -993,8 +993,85 @@ internal class RaftEngine(
         }
     }
 
+    /**
+     * §5.4.1 / §5.3 frame-internal well-formedness of an [RaftMessage.InstallSnapshot] chunk's
+     * snapshot metadata (issue #1868) — the sibling of [isWellFormedBatch] on the snapshot lane.
+     *
+     * `lastIncludedIndex` / `lastIncludedTerm` were inspected by nothing. [isWellFormedBatch] guards
+     * [RaftMessage.AppendEntries] and nothing else, and [onMessage]'s `MAX_PLAUSIBLE_TERM` bound
+     * guards a frame's own `term` and nothing else — so a single frame carrying the recipient's *own*
+     * current term (honest enough to clear both the stale-term check and the §5.2 leader-authority
+     * gate) reached [finalizeInstalledSnapshot] with arbitrary metadata:
+     *
+     * - `lastIncludedIndex <= currentCommitIndex` is false at `Long.MAX_VALUE - 1`, so the etcd-style
+     *   restore guard (#1219 / #1220) does not fire.
+     * - [RaftState.entryAt] is null there, so the Log Matching check falls to the **discard-whole**
+     *   branch: `truncateFrom(0)` and `state.log.clear()`.
+     * - `snapshotIndex`, `snapshotTerm`, `currentCommitIndex` and `_commitIndex` are then set from
+     *   the frame — a fabricated commit index over an emptied log.
+     *
+     * [RaftState.lastLogTerm] falls back to `snapshotTerm` when the log is empty, so the victim's
+     * [RaftState.lastLogPosition] becomes `(Long.MAX_VALUE, Long.MAX_VALUE - 1)`: the same §5.4.1
+     * lexicographic domination (§5.4 / Figure 3.2) [isWellFormedBatch] prevents on its own lane. The
+     * victim then denies every vote and wins every election it enters while holding none of the
+     * committed entries a legitimate leader must have.
+     *
+     * Checkable without trust or extra state, exactly as for a batch: a snapshot's `lastIncludedTerm`
+     * is the term of a log entry the sender held, and a node's log never carries a term above its own
+     * `currentTerm`, which is what the frame states as `term`. So `lastIncludedTerm <= term` — the
+     * identical §5.3 argument [isWellFormedBatch] makes about entry terms. The `MAX_PLAUSIBLE_TERM`
+     * ceiling is folded into the same bound; it is implied today by [onMessage]'s bound on `term`,
+     * and is restated here so this check's correctness is local rather than inherited.
+     *
+     * **Both halves of the position are bounded, because §5.4.1 needs only one of them.**
+     * [LogPosition] orders by `(term, index)` lexicographically and [isLogUpToDate] is
+     * `candidate >= ours`, so tying on term and winning on index dominates just as surely as a huge
+     * term does. Bounding `lastIncludedTerm` alone left the violation fully reachable via
+     * `lastIncludedTerm == term` — a value this check must accept — with the attack moved into
+     * `lastIncludedIndex`. Hence [MAX_PLAUSIBLE_INDEX] alongside the term bound.
+     *
+     * **What this does NOT establish.** A plausibility ceiling rules out the *implausible* range only.
+     * Nothing in the frame distinguishes a forged in-range snapshot from a legitimate one sent by a
+     * far-ahead leader — a snapshot exists precisely to jump a follower past its own log (§7), so
+     * "far ahead" is not evidence of anything. Snapshot metadata is **unauthenticated**, and within
+     * `0..MAX_PLAUSIBLE_INDEX` a Byzantine voter can still advance a follower's `snapshotIndex`,
+     * `commitIndex` and compaction floor to a position it never reached, and wipe its log. That is
+     * not fixable at this boundary; it needs authentication or a cross-frame invariant. See #1876.
+     * Two further unvalidated fields of this same frame are out of scope here: `config` (#1880) and
+     * the unbounded reassembly buffer behind `done = false` (#1881).
+     *
+     * **Disposition: drop the frame, don't ack it.** No honest leader can emit one —
+     * [sendSnapshotChunk] copies [SnapshotMeta] from a snapshot it stored while at its own term — so
+     * there is no honest sender to answer, and an [RaftMessage.InstallSnapshotResponse] would hand a
+     * forger a free lever on the leader's [SnapshotSender] transfer state. Dropping mirrors
+     * [isWellFormedBatch] and the §5.2 leader-authority gate in [onMessage]. It is deliberately not a
+     * `require`: this runs inside the engine's actor loop, whose `try`/`finally` has no `catch`, so a
+     * throw would convert a malformed frame into permanent node death (#1818).
+     *
+     * Called before the term check, so a malformed frame never adopts its term or resets the
+     * recipient's election timeout either.
+     */
+    private fun isWellFormedSnapshotChunk(from: NodeId, m: RaftMessage.InstallSnapshot): Boolean {
+        if (m.lastIncludedIndex < 0L || m.lastIncludedIndex > MAX_PLAUSIBLE_INDEX) {
+            debug {
+                "onInstallSnapshot($from): DROP — lastIncludedIndex=${m.lastIncludedIndex} outside 0..$MAX_PLAUSIBLE_INDEX"
+            }
+            return false
+        }
+        val termCeiling = minOf(m.term, MAX_PLAUSIBLE_TERM)
+        if (m.lastIncludedTerm < 0L || m.lastIncludedTerm > termCeiling) {
+            debug {
+                "onInstallSnapshot($from): DROP — lastIncludedTerm=${m.lastIncludedTerm} outside 0..$termCeiling " +
+                    "(term=${m.term}, MAX_PLAUSIBLE_TERM=$MAX_PLAUSIBLE_TERM; no snapshot may carry a term above the leader's)"
+            }
+            return false
+        }
+        return true
+    }
+
     /** Follower: reassemble chunks in order, then install the snapshot once the final chunk arrives. */
     private suspend fun onInstallSnapshot(from: NodeId, m: RaftMessage.InstallSnapshot) {
+        if (!isWellFormedSnapshotChunk(from, m)) return
         if (m.term < state.currentTerm) { send(from, RaftMessage.InstallSnapshotResponse(state.currentTerm, 0L)); return }
         if (m.term > state.currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
         demoteToFollowerOnLeaderContact()
@@ -1103,12 +1180,15 @@ internal class RaftEngine(
      *   election it enters while its log does *not* hold the committed entries a legitimate leader
      *   must — and committed entries can be overwritten.
      *
-     * **Scope — this closes the §5.4.1 hole on the AppendEntries lane only.** The check guards
-     * [RaftMessage.AppendEntries] and nothing else, and [onMessage]'s `MAX_PLAUSIBLE_TERM` bound
-     * guards a frame's own `term` and nothing else — so [RaftMessage.InstallSnapshot]'s
-     * `lastIncludedTerm` / `lastIncludedIndex` are validated by neither and reach the same §5.4.1
-     * domination (plus a wiped log) through a sibling frame. Tracked in issue #1868; deliberately
-     * NOT addressed here.
+     * **Scope — the AppendEntries lane.** This check guards [RaftMessage.AppendEntries] and nothing
+     * else, and [onMessage]'s `MAX_PLAUSIBLE_TERM` bound guards a frame's own `term` and nothing
+     * else. [RaftMessage.InstallSnapshot]'s `lastIncludedTerm` / `lastIncludedIndex` are seen by
+     * neither and reach the same §5.4.1 domination (plus a wiped log) through a sibling frame; that
+     * lane has its own [isWellFormedSnapshotChunk] (issue #1868), which bounds **both** halves of the
+     * position. Note this lane needs no index ceiling and that one does: here `entries[i].index` is
+     * pinned to `prevLogIndex + 1 + i` and Log Matching pins `prevLogIndex` against the local log, so
+     * a forger cannot leap the index, whereas the snapshot lane's analogous term check fails open.
+     * Neither check makes the frames trustworthy — in-range metadata stays unauthenticated (#1876).
      *
      * Unlike the in-range `matchIndex` / `nextOffset` lies of #1818, this is checkable without trust
      * or extra state: the leader states `prevLogIndex` in the same message, so the batch's required
@@ -2126,5 +2206,31 @@ internal class RaftEngine(
          * `Long.MIN_VALUE` and wedge the cluster permanently.
          */
         const val MAX_PLAUSIBLE_TERM = 1L shl 60
+
+        /**
+         * Upper sanity bound on a snapshot's `lastIncludedIndex` arriving off the wire (issue #1868) —
+         * see [isWellFormedSnapshotChunk]. The index-half counterpart of [MAX_PLAUSIBLE_TERM].
+         *
+         * §5.4.1 orders positions by `(term, index)` lexicographically, so **tying on term and winning
+         * on index dominates** just as surely as a huge term does — bounding only the term half leaves
+         * the violation reachable. Unlike the AppendEntries lane, the snapshot lane has no structural
+         * check to fall back on: [isWellFormedBatch] pins each entry's index to `prevLogIndex + 1 + i`
+         * and Log Matching pins `prevLogIndex` to the local log, whereas
+         * `state.entryAt(lastIncludedIndex)?.term == lastIncludedTerm` **fails open** — the `null` for
+         * any index past the tail falls through to discard-whole rather than rejecting.
+         *
+         * `2^60` mirrors [MAX_PLAUSIBLE_TERM] and is unreachable honestly: a leader only ever sends
+         * `SnapshotMeta.lastIncludedIndex` for a snapshot it stored, so an honest value is bounded by
+         * its own `lastLogIndex` — one per proposal. Indices advance on a much faster clock than terms
+         * (per proposal, not per election), which is why the headroom matters: 2^60 is ~10^18
+         * proposals, still some 36,000 years at a sustained 1M proposals/second.
+         *
+         * The bound is **inclusive**, matching [MAX_PLAUSIBLE_TERM]'s own `> MAX_PLAUSIBLE_TERM` test.
+         * Inclusive is safe *here* because this is a pure plausibility filter with no progress
+         * obligation — contrast [nextIndexAfterFailure]'s ceiling (#1829), which must be **exclusive**
+         * because §5.3 backup has to strictly decrease or it livelocks. Accepting exactly `2^60`
+         * creates no fixed point, and no honest frame is near either side of the boundary.
+         */
+        const val MAX_PLAUSIBLE_INDEX = 1L shl 60
     }
 }
