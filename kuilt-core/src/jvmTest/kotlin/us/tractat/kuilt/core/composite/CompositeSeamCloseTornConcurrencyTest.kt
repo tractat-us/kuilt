@@ -216,11 +216,17 @@ class CompositeSeamCloseTornConcurrencyTest {
      * predicate rejects it — its ply is no longer live, or its transport peer has left that ply's peer
      * set — and in this close-heavy probe both hold routinely: `close()` clears `live` without purging
      * `idMap` or recomputing, and a far composite closing its ply seams removes its transport ids from the
-     * shared `InMemoryLoom` mesh. Comparing against `idMap` would therefore print
-     * `LEARNED BUT UNPUBLISHED` on essentially every post-close render — a confident, named, wrong
-     * mechanism, which is precisely the failure the hardcoded `(close() was called)` caused and this
-     * snapshot exists to end. The one asymmetry that *is* a finding is a peer the fold would publish and
-     * `peers` lacks: a recompute is owed and no trigger remains to run it.
+     * shared `InMemoryLoom` mesh. Comparing against `idMap` would therefore print a lost-publish verdict on
+     * essentially every post-close render — a confident, named, wrong mechanism, which is precisely the
+     * failure the hardcoded `(close() was called)` caused and this snapshot exists to end. The one asymmetry
+     * that *is* a finding is a peer the fold would publish and `peers` lacks.
+     *
+     * **The named mechanism is kept current with the code, or it becomes the very thing it exists to
+     * prevent.** Since #1784 the publish is serialised on a single `peersWriter` and the fold reads each
+     * ply's *mirrored* peer set, so "a `recomputePeers` publish was lost" — what this string used to say —
+     * is no longer representable, and `recomputePeers` no longer publishes at all. A stall now divides into a
+     * lost *trigger* (an input advanced without a `trySend`), a dead writer, or a stale *input*; the verdicts
+     * below say so. Anyone changing the peers strand must re-read these strings, not just the KDoc.
      */
     private fun peersStrand(seam: Seam): String {
         val composite = seam as? CompositeSeam ?: return "strand=<not a CompositeSeam>"
@@ -234,12 +240,19 @@ class CompositeSeamCloseTornConcurrencyTest {
         val verdict = when {
             strand.idMap.isEmpty() -> "no mapping recorded — stall is upstream of the peers strand"
             owed.isNotEmpty() ->
-                "LEARNED BUT UNPUBLISHED $owed — a recomputePeers publish was lost (a recompute is owed " +
-                    "and, if VERDICT above reads QUIESCENT, none is in flight to deliver it)"
+                "RECOMPUTE OWED $owed — the fold would publish a peer `peers` lacks. The publish is " +
+                    "serialised on peersWriter (#1784), so a lost PUBLISH is not representable: if VERDICT " +
+                    "above reads QUIESCENT this is a lost TRIGGER — some fold input advanced without a " +
+                    "trySend — or peersWriter itself is dead; otherwise a request is still in flight"
             retained.isNotEmpty() ->
                 "peers still advertises $retained that a recompute would now drop — EXPECTED after " +
                     "close(), which clears live without recomputing; not a finding"
-            else -> "peers matches what a recompute would publish"
+            else ->
+                "peers matches what the fold would publish — publishing is NOT the fault. If peers is " +
+                    "nonetheless short of what the stage expected, the fold's INPUTS are: a ply mirror " +
+                    "that never advanced (PlyHandle.transportPeers), a missing (plyId, transportId) idMap " +
+                    "entry (both announce sends are best-effort and swallowed), or a ply absent from " +
+                    "livePlies — compare wouldPublish against the plies' live mesh membership above"
         }
         return "idMap=$entries livePlies=${strand.livePlies.map { it.value }} " +
             "wouldPublish=${strand.wouldPublish.map { it.value }} verdict=[$verdict]"
