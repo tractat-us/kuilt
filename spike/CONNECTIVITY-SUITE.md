@@ -506,7 +506,7 @@ the offline phone on USB, or just read the report off the phone.
 
 ## Building
 
-Kotlin (the Mac-free gate):
+Kotlin (the device-free gate — needs a Mac, but no iPhone):
 
 ```bash
 ./gradlew -PincludeSpike :spike:compileKotlinIosArm64
