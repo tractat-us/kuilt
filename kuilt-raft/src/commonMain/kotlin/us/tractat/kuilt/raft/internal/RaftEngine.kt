@@ -1085,7 +1085,25 @@ internal class RaftEngine(
 
     private suspend fun onAppendEntries(from: NodeId, m: RaftMessage.AppendEntries) {
         if (m.term < state.currentTerm) {
-            send(from, RaftMessage.AppendEntriesResponse(state.currentTerm, false, echoedRound = m.round))
+            // Echo round 0, NOT `m.round` (issue #1831). This reply pairs OUR current term with a
+            // request from an older one, and `ReadIndexTracker.round` resets to 0 on every
+            // `becomeLeader` — so a round carried by a delayed AppendEntries from an earlier
+            // leadership can be arbitrarily larger than anything the current leadership has stamped.
+            // Echoing it produces a response that passes the leader's `m.term == currentTerm` guard
+            // and reaches `recordAck(from, <foreign round>)`, seating this voter in `resolve`'s fresh
+            // set for every read for the rest of the term: a stale read served as linearizable
+            // (§3.7), with no forgery — two honest nodes reach it on their own in the async model.
+            //
+            // A round is a NONCE, so the disposition is to attest to nothing rather than to clamp
+            // `m.round` into the current round — clamping would launder a foreign round into the
+            // most favourable valid one, which is exactly the #1817 mistake. 0 can never satisfy
+            // `ackRound > read.sinceRound` (sinceRound >= 0), which is correct: a stale-term
+            // rejection genuinely answers nothing in the current round. Reachability for CheckQuorum
+            // is unaffected — that runs off `recentVoterContacts`, which this response still feeds.
+            //
+            // Matches the sibling InstallSnapshot stale-term rejection, which already replies with
+            // the `echoedRound = 0L` default.
+            send(from, RaftMessage.AppendEntriesResponse(state.currentTerm, false, echoedRound = 0L))
             return
         }
         if (m.term > state.currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
