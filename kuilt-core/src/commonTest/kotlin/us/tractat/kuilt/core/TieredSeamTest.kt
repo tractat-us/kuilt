@@ -249,8 +249,13 @@ class TieredSeamTest {
             // Two FakeSeams sharing one selfId (both tiers are views of the SAME node) whose state and
             // incoming we drive directly, so we can tear both then flap one back to Woven.
             val node = PeerId("node")
-            val local = FakeSeam(selfId = node, initialState = SeamState.Woven)
-            val peer = FakeSeam(selfId = node, initialState = SeamState.Woven)
+            // Each tier carries a remote, so the roster assertions below are not vacuous: FakeSeam.close
+            // only tears its `state` and leaves its own `peers` standing, so after both tiers die the
+            // union pump still has two remotes it would happily republish.
+            val localMember = PeerId("local-member")
+            val peerMember = PeerId("peer-member")
+            val local = FakeSeam(selfId = node, initialPeers = setOf(node, localMember), initialState = SeamState.Woven)
+            val peer = FakeSeam(selfId = node, initialPeers = setOf(node, peerMember), initialState = SeamState.Woven)
             val tiered = tieredSeam(local = local, peer = peer, scope = backgroundScope)
 
             // Track merged-incoming completion — it must complete when both tiers' incoming complete.
@@ -260,7 +265,17 @@ class TieredSeamTest {
                 incomingCompleted = true
             }
 
-            assertTrue(tiered.state.value is SeamState.Woven, "both tiers Woven ⇒ union Woven")
+            assertAll(
+                { assertTrue(tiered.state.value is SeamState.Woven, "both tiers Woven ⇒ union Woven") },
+                {
+                    assertEquals(
+                        setOf(node, localMember, peerMember),
+                        tiered.peers.value,
+                        "precondition: the union must hold both tiers' remotes before the tear, or the " +
+                            "collapse assertions below prove nothing",
+                    )
+                },
+            )
 
             // Tear ONE tier — the surviving tier still carries, so state stays Woven.
             local.close(CloseReason.Unreachable)
@@ -272,6 +287,19 @@ class TieredSeamTest {
             assertAll(
                 { assertTrue(tiered.state.value is SeamState.Torn, "both tiers torn ⇒ terminal Torn (#1367)") },
                 { assertTrue(incomingCompleted, "merged incoming must complete when both tiers' incoming complete") },
+                {
+                    // The SELF-DRIVEN collapse. `close()` is not the only path that publishes the
+                    // terminal Torn a consumer waits on — this one does too, with nobody calling close,
+                    // and `Seam.peers` binds it identically. Without the state pump's own collapseRoster()
+                    // this reads [node, local-member, peer-member]: a torn union advertising peers only
+                    // dead tiers could reach, with no trigger left to correct it.
+                    assertEquals(
+                        setOf(node),
+                        tiered.peers.value,
+                        "both tiers torn ⇒ the union's roster collapses to { selfId } (Seam.peers), on the " +
+                            "self-driven death path exactly as on close()",
+                    )
+                },
             )
 
             // Flap a tier back to Woven — the latched terminal Torn must NOT revive.
@@ -279,6 +307,17 @@ class TieredSeamTest {
             assertTrue(
                 tiered.state.value is SeamState.Torn,
                 "a latched terminal Torn must NOT revert when a tier flaps back to Woven (no revive)",
+            )
+
+            // A real roster emission AFTER the collapse — the union pump's own input changing, which is
+            // the one thing that could republish. It must be absorbed. This pins the marker guard on the
+            // self-driven path; nothing else does, and a `state`-based guard would also pass here only
+            // because the latch happens to precede this line.
+            local.addPeer(PeerId("latecomer"))
+            assertEquals(
+                setOf(node),
+                tiered.peers.value,
+                "a post-collapse roster emission must not resurrect peers on a terminally torn union",
             )
         }
 

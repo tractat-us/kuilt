@@ -14,18 +14,22 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * The [Seam.peers] collapse obligation, for the two `:kuilt-core` seams **no conformance suite can
- * reach**: [TieredSeam] and [RoomHubSeam].
+ * The [Seam.peers] collapse obligation, for the two `:kuilt-core` seams **no bound conformance suite
+ * reaches**: [TieredSeam] and [RoomHubSeam].
  *
  * `Seam.peers` requires a `Torn` seam's roster to be **exactly `{ selfId }`**, published **before, or
  * atomically with**, the terminal `Torn` latch. `SeamConformanceSuite.peersCollapseToSelfIdWhenTorn`
- * asserts the value half against every fabric — but it drives seams through a [Loom], and neither of
- * these types comes from one: [TieredSeam] is built by the `tieredSeam(...)` composition function over
- * two arbitrary member seams, and [RoomHubSeam] is constructed directly by `MuxServerLoom` for a named
- * room. So the TCK's enumeration — *"a fabric that cannot honour it yet declares
+ * asserts the value half — but only against the fabrics some subclass actually **binds**, and no
+ * subclass binds either of these. That is a wiring gap, **not** a structural one, and the distinction
+ * matters: `MuxServerLoom` *is* a `Loom` and its `host()` hands back exactly this [RoomHubSeam], so a
+ * conformance harness for it looks constructible (`kuilt-conformance` already wires `MuxServerLoom` in
+ * `MuxServerLoomFanoutIsolationTest`). [TieredSeam] is the harder case — it comes from the
+ * `tieredSeam(...)` composition function over two arbitrary member seams rather than from a `Loom`.
+ *
+ * Either way the TCK's enumeration — *"a fabric that cannot honour it yet declares
  * `collapsesPeersOnTear = false` with a tracking issue, so the exposure is enumerated instead of
  * unknown"* — never covered either, and both collapsed to `emptySet()` while latching `Torn` **first**.
- * This file is their standing check.
+ * This file is their standing check until that binding exists.
  *
  * ### Why both halves matter, and why the ordering needs its own probe
  * A seam that drops `selfId` has collapsed **too far**: "always including this peer's own id" is an
