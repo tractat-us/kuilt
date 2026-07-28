@@ -38,7 +38,7 @@ class MeshHelloTest {
     @Test
     fun roundTripSingleCharId() {
         val id = PeerId("X")
-        val nonce = byteArrayOf(0, 1, 127, -1)
+        val nonce = meshNonce(0, 1, 127, -1)
         val decoded = MeshHello.decode(MeshHello.encode(id, nonce))
         assertEquals(id, decoded.peerId)
         assertContentEquals(nonce, decoded.nonce)
@@ -61,7 +61,7 @@ class MeshHelloTest {
     @Test
     fun encodedLengthPrefixMatchesIdByteCount() {
         val id = PeerId("hello")
-        val nonce = byteArrayOf(1, 2, 3)
+        val nonce = meshNonce(1, 2, 3)
         val frame = MeshHello.encode(id, nonce)
         val idByteLen = id.value.encodeToByteArray().size
         // Big-endian 4-byte int at offset 0
@@ -101,6 +101,46 @@ class MeshHelloTest {
         )
     }
 
+    // --- the nonce is a FIXED-WIDTH field, not a variable-length tail (#1812) ---
+    //
+    // The decoded nonce reaches `canonicalLinkNonce`, which hex-encodes both endpoints' nonces, sorts
+    // the two strings and joins them — that string IS the link identity both ends of a mesh dedup on.
+    // A wrong-width nonce is therefore proof of a malformed or forged preamble, and the frame is
+    // REJECTED rather than reshaped: truncating or padding it to the declared width would launder the
+    // forgery into a valid-looking identity. A zero-length nonce is the concrete collapse — every peer
+    // that sends one contributes the empty string, so two distinct misbehaving peers derive the SAME
+    // canonical link identity and dedup can drop a link that is genuinely distinct.
+
+    @Test
+    fun aNonceOfTheWrongWidthIsRejected() {
+        val id = PeerId("peer-1")
+        listOf(0, 1, MESH_NONCE_BYTES - 1, MESH_NONCE_BYTES + 1, 2 * MESH_NONCE_BYTES).forEach { width ->
+            assertFailsWith<IllegalArgumentException>("a $width-byte nonce must be rejected, not accepted as identity") {
+                MeshHello.decode(frameWithNonce(id, ByteArray(width) { 7 }))
+            }
+        }
+    }
+
+    @Test
+    fun anExactWidthNonceIsStillAccepted() {
+        val id = PeerId("peer-1")
+        val nonce = ByteArray(MESH_NONCE_BYTES) { (it * 3).toByte() }
+        val decoded = MeshHello.decode(frameWithNonce(id, nonce))
+        assertAll(
+            { assertEquals(id, decoded.peerId) },
+            { assertContentEquals(nonce, decoded.nonce, "an exact-width nonce must survive the round trip") },
+        )
+    }
+
+    /** The encoder carries the same invariant, so a conforming peer can never emit a short preamble. */
+    @Test
+    fun encodingAWrongWidthNonceIsRejected() {
+        assertAll(
+            { assertFailsWith<IllegalArgumentException> { MeshHello.encode(PeerId("peer-1"), ByteArray(0)) } },
+            { assertFailsWith<IllegalArgumentException> { MeshHello.encode(PeerId("peer-1"), byteArrayOf(1, 2, 3)) } },
+        )
+    }
+
     /** A well-formed 4-byte length prefix declaring [declaredIdLength], plus a 16-byte body. */
     private fun frameDeclaring(declaredIdLength: Int): ByteArray =
         ByteArray(4 + 16).also { frame ->
@@ -109,4 +149,22 @@ class MeshHelloTest {
             frame[2] = (declaredIdLength ushr 8).toByte()
             frame[3] = declaredIdLength.toByte()
         }
+
+    /**
+     * Hand-assemble a preamble carrying [nonce] verbatim.
+     *
+     * Not [MeshHello.encode] — that enforces the same width invariant, so a wrong-width nonce cannot be
+     * produced through it. This is what a hostile or buggy remote puts on the wire.
+     */
+    private fun frameWithNonce(id: PeerId, nonce: ByteArray): ByteArray {
+        val idBytes = id.value.encodeToByteArray()
+        return ByteArray(4 + idBytes.size + nonce.size).also { frame ->
+            frame[0] = (idBytes.size ushr 24).toByte()
+            frame[1] = (idBytes.size ushr 16).toByte()
+            frame[2] = (idBytes.size ushr 8).toByte()
+            frame[3] = idBytes.size.toByte()
+            idBytes.copyInto(frame, destinationOffset = 4)
+            nonce.copyInto(frame, destinationOffset = 4 + idBytes.size)
+        }
+    }
 }

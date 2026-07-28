@@ -60,13 +60,13 @@ class MeshSeamTest {
 
         // Simulate peer-2 handshake (the failing conn — sends hello once, which succeeds).
         val peer2HelloDeferred = async {
-            badTheirs.send(MeshHello.encode(badId, byteArrayOf(2)))
+            badTheirs.send(MeshHello.encode(badId, meshNonce(2)))
             MeshHello.decode(badTheirs.incoming.first())
         }
 
         // Simulate peer-1 handshake (the good conn).
         val peer1HelloDeferred = async {
-            goodTheirs.send(MeshHello.encode(goodId, byteArrayOf(1)))
+            goodTheirs.send(MeshHello.encode(goodId, meshNonce(1)))
             MeshHello.decode(goodTheirs.incoming.first())
         }
 
@@ -195,7 +195,7 @@ class MeshSeamTest {
         val helloFromMesh = theirs.incoming.first()
         val meshNonce = MeshHello.decode(helloFromMesh).nonce
         assertTrue(meshNonce.isNotEmpty(), "mesh preamble must carry a non-empty nonce")
-        theirs.send(MeshHello.encode(remoteId, byteArrayOf(0)))
+        theirs.send(MeshHello.encode(remoteId, meshNonce(0)))
     }
 
     /**
