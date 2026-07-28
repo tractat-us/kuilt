@@ -1320,6 +1320,10 @@ public class ConnectivitySuite {
      * matters**. What it *can* do is falsify the run: a `Partitioned` for the joiner proves the outage
      * overran this phone's detect, which puts the whole run outside the repro band regardless of what
      * the other phone concluded.
+     *
+     * **An empty final roster here is normal, not a finding.** The other phone finishes first and calls
+     * `leave()`, so a `Left` lands on this side well inside the observation window. It says nothing
+     * about the outage — the claim this side makes is only ever *"I never partitioned them"*.
      */
     private suspend fun stayUpSide(ctx: OutageCtx, peer: PeerId) {
         val room = ctx.room
@@ -1340,8 +1344,10 @@ public class ConnectivitySuite {
             )
         }
         if (partitioned != null) {
-            ctx.skip = "blip: I DID notice ${peer.value.take(8)} go quiet (${partitioned.short()}) after " +
-                "${fmtMs(ctx.ms())} — an outage that reaches my ${S7_HEARTBEAT.timeout} detect opens a " +
+            // Elapsed since the SCENARIO started, not since the drop: this phone has no idea when the
+            // other one's radio died — that is the whole premise — so it can only stamp its own clock.
+            ctx.skip = "blip: I DID notice ${peer.value.take(8)} go quiet (${partitioned.short()}) at " +
+                "t=${fmtMs(ctx.ms())} into the run — an outage that reaches my ${S7_HEARTBEAT.timeout} detect opens a " +
                 "window, and a resume against an open window succeeds the ordinary way. That is not the " +
                 "#1637 lane. Cross-check the DROPPED phone's measured outage and re-run with a shorter hold"
             return
