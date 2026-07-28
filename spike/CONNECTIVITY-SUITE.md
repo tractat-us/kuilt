@@ -33,7 +33,7 @@ run [scenario 6](#scenario-6-the-airplane-mode-run-1712) — it is a separate pa
 | 1 | Raw NW round-trip | Raw Network.framework P2P connects + round-trips (the transport control). Join reports RTT; host confirms it echoed an inbound frame. |
 | 2 | Fabric Seam weave | The real `appleNwLoom(...).weave` reaches `Woven` with `peers == 2` — the fabric layer, not just raw sockets. |
 | 3 | Election establish | `SeamRoomFactory.electLobby` → the elected host (`min(peerId)`) runs `start()`, the other runs `awaitRoom()`, both adopt a `Room`. This is the `#1466` lobby path. |
-| 4 | Teardown + reconnect | The host drops the link. The **host** sees its own `close()` latch `Torn`; the **joiner** sees the recoverable `Woven → Weaving` re-form ([why they differ](#scenario-4-the-two-sides-expect-different-things)). Both then re-weave on a second service type. |
+| 4 | Teardown + reconnect | The host drops the link. The **host** sees its own `close()` latch `Torn`; the **joiner** sees the recoverable re-form — `Woven → Weaving` *and* `peers` collapsing to just itself ([why they differ](#scenario-4-the-two-sides-expect-different-things)). Both then re-weave on a second service type. |
 | 5 | Soak (~2 min) | Continuous round-trip stays healthy: RTT distribution (min/p50/p95/max) with few/no stalls. This is where an AWDL data-path stall (the MC failure mode) would show up as a FAIL. |
 | 6 | Local-fabric outage *(separate buttons — you toggle Airplane Mode)* | **The same outage read two opposite ways.** The phone you switched off says *my* network died: `localFabric` → `Unavailable`, a `LocalFabricLost`, and every `Partitioned`/`HostLost` it emits tagged `Unavailable`. The phone you left alone says *they* went away: its own `localFabric` stays `Available` and the `Partitioned` it emits for the vanished peer carries that `Available` tag. A short outage keeps the seat; a long one expires it, and the switched-off phone *still* blames itself. |
 
@@ -43,19 +43,38 @@ self-describing — you can read "join FAILed with Wi-Fi off, path unsatisfied" 
 
 ### Scenario 4: the two sides expect different things
 
-This trips people up, so it is worth stating plainly. When the host drops the link, the two peers are
-contractually *required* to observe different things (`NwSeam`, "Peer loss is recoverable — re-form,
-don't tear", #1513):
+**If you change scenario 4, read the `NwSeam` contract first.** This trips people up, so it is worth
+stating plainly: one drop, two peers, and they are contractually *required* to observe different things
+(`NwSeam`, "Peer loss is recoverable — re-form, don't tear", #1513).
 
-- **Host** — its own explicit `close()` latches `SeamState.Torn`.
-- **Joiner** — losing its last remote is **not** terminal. The seam goes `Woven → Weaving`, resets
-  `peers` to `{selfId}`, keeps `incoming` open and waits for a redial. `Torn` latches on *only* an
-  explicit consumer `close()` or the initial `weave` timeout; it "is never a consequence of peer loss".
+- **Host** — it is the one that called `close()`, and a close *decision* is terminal by definition. Its
+  seam latches `SeamState.Torn` and stays there. Nothing is waited for; the signal is its own.
+- **Joiner** — losing its last remote is **not** terminal, because nothing has decided anything: the peer
+  may simply be about to come back. The seam goes `Woven → Weaving`, resets `peers` to `{selfId}`, keeps
+  `incoming` open, and waits for `NwLoom` to redial. `Torn` latches on *only* an explicit consumer
+  `close()` or the initial `weave` timeout; it "is never a consequence of peer loss".
 
-The suite originally asserted the joiner would see `Torn` — an expectation written before #1513 — so it
-could only ever time out. Nobody noticed for a long time because a *different* bug (#1577) was failing
-leg 1 first, so the teardown path was never reached at all. If you change scenario 4, read the `NwSeam`
-contract first.
+So the joiner has no terminal signal to wait for, and a scenario that waits for one on that side cannot
+pass — it can only spend the whole timeout and report the absence. What the joiner asserts instead is the
+**pair** `Weaving` *and* `peers == {selfId}`, checked together:
+
+- `Weaving` alone does not exclude a seam that never wove at all, nor the brief moment during a peer
+  *gain* where the roster has grown but the state has not yet flipped.
+- `peers == {selfId}` alone is the seam's own value before it ever wove.
+
+The two together say *this seam saw its last remote go, and re-formed rather than died* — but **only
+given that it had provably wound up `Woven` first**. That precondition is not decoration: `Weaving` +
+`peers == {selfId}` is *also* precisely the seam's initial state, so the pair on its own is not
+self-sufficient. The suite therefore captures leg 1's `Woven` confirmation into `wovenA` and ANDs it
+into both roles' verdicts. Drop it and a leg-1 weave that stopped blocking would turn this scenario
+into a silent guaranteed PASS — a worse failure than the guaranteed FAIL it replaced.
+
+The pair is matched on a combined view of both flows rather than "wait for the state, then read the
+roster", because the eviction writes the roster and the state under one lock and a later read could
+catch a roster a redial had already re-grown.
+
+The two roles therefore also PASS with different words — `close latched Torn` on the host,
+`peer-loss re-form seen` on the joiner. Two reports that read identically would hide the asymmetry.
 
 ## Scenario 6: the airplane-mode run (#1712)
 
@@ -218,7 +237,7 @@ device: Version 18.5 (Build 22F76)
 [1] Raw NW round-trip      PASS    412ms  RTT=28ms
 [2] Fabric Seam weave      PASS     1.2s  peers=2 Woven
 [3] Election establish     PASS     0.9s  adopted as member
-[4] Teardown+reconnect     PASS     4.1s  peer-loss seen; re-wove in 1.3s
+[4] Teardown+reconnect     PASS     4.1s  peer-loss re-form seen; re-wove in 1.3s
 [5] Soak 120.0s            FAIL   121.0s  n=90 p50=31ms p95=410ms stalls=7
 ----------------------------------
 · [5] Soak 120.0s
@@ -367,14 +386,32 @@ Three things worth keeping from that hunt:
   wrong leg, then cross-talk from a leaked listener); the discovery line and the isolation mode
   falsified each in one run.
 - **Fixing one bug can expose the next.** With leg 1 finally establishing, scenario 4's stale `Torn`
-  expectation surfaced immediately — it had never been reachable before.
+  expectation surfaced immediately — it had never been reachable before, so the joiner branch had never
+  once run. Assertion corrected in #1838 (tracked by #1836, still open) —
+  [the section above](#scenario-4-the-two-sides-expect-different-things) is what it now asserts, and
+  per [Status](#status) that assertion has **not yet been re-run on hardware**.
+- **A doc can be fixed while the code it describes is not.** The guide was corrected to the #1513
+  contract in a *docs-only* commit that never touched `ConnectivitySuite.kt`, so for eight days the
+  section above described the right behaviour while the code twenty lines away still waited for `Torn`.
+  Reading the prose was actively misleading. When a doc change is the *fix* for a wrong expectation,
+  check whether the expectation lives in code too.
 
 ## Status
 
-**Scenarios 1–5: on-device validation is done** — 5/5 on both phones (iPhone XS / iOS 18.7.9 and
-iPhone 17 Pro / iOS 26.5.1) on infrastructure Wi-Fi, including teardown + reconnect and the 2-minute
-soak with zero stalls. The adverse-network matrix the suite was built for — captive-portal Wi-Fi,
-airplane mode, Wi-Fi-off/cellular-on, two SSIDs — is still worth walking through; that is what it is for.
+**Scenarios 1, 2, 3 and 5: validated on-device** on two phones (iPhone XS / iOS 18.7.9 and iPhone 17 Pro
+/ iOS 26.5.1) on infrastructure Wi-Fi, including the 2-minute soak with zero stalls.
+
+**Scenario 4: the joiner side has never passed on hardware.** A "5/5 on both phones" claim stood here
+from 2026-07-19 and does not survive #1836: that run's `Join · S4 only` shows `[4] Teardown+reconnect
+FAIL 21.1s torn=false`, and with the pre-#1836 assertion it could not have shown anything else. The
+host side and both legs' weaves are validated (leg 1 in 746 ms, leg 2 in 435 ms with both peers) — but
+note the host branch previously PASSed by *fiat*: it set its own drop signal unconditionally, so no run
+to date has actually asserted that `close()` latched `Torn`. It now reads the state, so that half is
+newly-asserted too. What is owed is one paired `Host · S4 only` / `Join · S4 only` run confirming the
+joiner reports `peer-loss re-form seen` and the host's latch read comes back true.
+
+The adverse-network matrix the suite was built for — captive-portal Wi-Fi, airplane mode,
+Wi-Fi-off/cellular-on, two SSIDs — is still worth walking through; that is what it is for.
 
 **Scenario 6: never run on hardware yet.** It compiles for `iosArm64`, `iosSimulatorArm64` and
 `macosArm64`, and it is reviewable, but it has no on-device result of any kind. It cannot get one from a
