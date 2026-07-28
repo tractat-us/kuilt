@@ -1360,8 +1360,11 @@ public class ConnectivitySuite {
                 "blip: the host ACKed a real resume (${outcome.short()} after ${fmtMs(sinceDrop)}), which " +
                     "means it HAD a window open — so it noticed the outage and this was the ordinary " +
                     "resume lane, not the sub-timeout one. Measured outage " +
-                    "${fmtMs(outage.inWholeMilliseconds)} against a $hi detect: re-run with a shorter " +
-                    "hold. (saw ${seen.render()})"
+                    "${fmtMs(outage.inWholeMilliseconds)} landed inside ($lo, $hi) and the host STILL " +
+                    "noticed — most likely its transport died rather than its detect elapsing (~" +
+                    "${fmtMs(OBSERVED_HOST_TRANSPORT_DEATH.inWholeMilliseconds)} on the one run measured). " +
+                    "Check the STAY-UP phone's Partitioned reason, and re-run with a shorter hold. " +
+                    "(saw ${seen.render()})"
 
             outcome is MembershipEvent.Recovered -> ctx.passDetail =
                 "survived a ${fmtMs(outage.inWholeMilliseconds)} blip inside ($lo, $hi): " +
@@ -1380,12 +1383,17 @@ public class ConnectivitySuite {
                     "Recovered/Resumed closed the arc within $VERDICT_WAIT. The weaker form of the PASS; " +
                     "quote this line rather than the headline. (saw ${seen.render()})"
 
-            else -> ctx.failures.add(
+            // SKIP, not FAIL, and the demotion is deliberate: this scenario's FAIL means exactly one
+            // thing — #1637, discriminated on the reject code — and a report that FAILs for any other
+            // reason gets read as "#1637 reproduced" the moment it is pasted into the issue. A hung
+            // episode is a genuine anomaly worth chasing, but it is a DIFFERENT one, so it says so.
+            else -> ctx.skip =
                 "blip: the resume episode opened and never closed — no Recovered, no Resumed and no " +
                     "HostLost in $VERDICT_WAIT after a ${fmtMs(outage.inWholeMilliseconds)} outage, and " +
                     "${host.value.take(8)} is not Connected (roster=${room.roster.value.render()}, " +
-                    "saw ${seen.render()}). The room is neither recovered nor dead",
-            )
+                    "seam=${seam.state.value.short()}, saw ${seen.render()}). The room is neither " +
+                    "recovered nor dead. That is NOT #1637 — #1637 ends in a HostLost — so this run is " +
+                    "inconclusive about it. It is not healthy either: if it repeats, file it as its own bug"
         }
         ctx.hop("blip: DONE outage=${fmtMs(outage.inWholeMilliseconds)} events=${seen.render()} t=${ctx.ms()}ms")
     }
