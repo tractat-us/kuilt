@@ -52,14 +52,14 @@ class MeshAdmissionTest {
 
         // A legitimate attested joiner is admitted and stays admitted.
         val (goodHubEnd, goodFarEnd) = connectionPair()
-        val goodHandshake = launch { handshakeRemote(goodFarEnd, good, nonce = byteArrayOf(2)) }
+        val goodHandshake = launch { handshakeRemote(goodFarEnd, good, nonce = meshNonce(2)) }
         mesh.addLink(goodHubEnd.withPrincipal(Principal("user-good")))
         goodHandshake.join()
         assertEquals(setOf(hub, good), mesh.peers.value)
 
         // An unattested joiner is rejected — closed, never published — but the seam survives.
         val (badHubEnd, badFarEnd) = connectionPair()
-        val badHandshake = launch { handshakeRemote(badFarEnd, PeerId("joiner"), nonce = byteArrayOf(1)) }
+        val badHandshake = launch { handshakeRemote(badFarEnd, PeerId("joiner"), nonce = meshNonce(1)) }
         val rejection = assertFailsWith<LinkRejectedException> { mesh.addLink(badHubEnd) }
         badHandshake.join()
         val badRemainingFrames = badFarEnd.incoming.toList()
@@ -89,7 +89,7 @@ class MeshAdmissionTest {
         val mesh = hubMesh(hub, emptyList(), dispatcher, Random(0), admission = LinkAdmission.RequireAttested)
 
         val (hubEnd, farEnd) = connectionPair()
-        val far = launch { handshakeRemote(farEnd, joiner, nonce = byteArrayOf(1)) }
+        val far = launch { handshakeRemote(farEnd, joiner, nonce = meshNonce(1)) }
         mesh.addLink(hubEnd.withPrincipal(Principal("user-7")))
         far.join()
 
@@ -116,7 +116,7 @@ class MeshAdmissionTest {
 
         // The victim's legitimate, attested link.
         val (victimHubEnd, victimFarEnd) = connectionPair()
-        val victimHandshake = launch { handshakeRemote(victimFarEnd, victim, nonce = byteArrayOf(-1)) }
+        val victimHandshake = launch { handshakeRemote(victimFarEnd, victim, nonce = meshNonce(-1)) }
         mesh.addLink(victimHubEnd.withPrincipal(Principal("victim")))
         victimHandshake.join()
         assertEquals(setOf(hub, victim), mesh.peers.value)
@@ -162,7 +162,7 @@ class MeshAdmissionTest {
         val mesh = hubMesh(hub, emptyList(), dispatcher, Random(0))
 
         val (victimHubEnd, victimFarEnd) = connectionPair()
-        val victimHandshake = launch { handshakeRemote(victimFarEnd, victim, nonce = byteArrayOf(-1)) }
+        val victimHandshake = launch { handshakeRemote(victimFarEnd, victim, nonce = meshNonce(-1)) }
         mesh.addLink(victimHubEnd)
         victimHandshake.join()
 
@@ -195,8 +195,8 @@ class MeshAdmissionTest {
 
         val (goodMine, goodTheirs) = connectionPair()
         val (badMine, badTheirs) = connectionPair()
-        val goodHandshake = launch { handshakeRemote(goodTheirs, good, nonce = byteArrayOf(1)) }
-        val badHandshake = launch { handshakeRemote(badTheirs, PeerId("joiner"), nonce = byteArrayOf(2)) }
+        val goodHandshake = launch { handshakeRemote(goodTheirs, good, nonce = meshNonce(1)) }
+        val badHandshake = launch { handshakeRemote(badTheirs, PeerId("joiner"), nonce = meshNonce(2)) }
 
         // Mixed batch: the good link is attested, the bad one is not. Construction must not throw.
         val mesh = hubMesh(
@@ -235,14 +235,14 @@ class MeshAdmissionTest {
 
         // A legitimate peer first, so we can prove the self-dial leaves it undisturbed.
         val (goodHubEnd, goodFarEnd) = connectionPair()
-        val goodHandshake = launch { handshakeRemote(goodFarEnd, good, nonce = byteArrayOf(2)) }
+        val goodHandshake = launch { handshakeRemote(goodFarEnd, good, nonce = meshNonce(2)) }
         mesh.addLink(goodHubEnd)
         goodHandshake.join()
         assertEquals(setOf(hub, good), mesh.peers.value)
 
         // The self-dial: the far end claims the hub's OWN id. addLink returns without throwing.
         val (selfHubEnd, selfFarEnd) = connectionPair()
-        val selfHandshake = launch { handshakeRemote(selfFarEnd, hub, nonce = byteArrayOf(1)) }
+        val selfHandshake = launch { handshakeRemote(selfFarEnd, hub, nonce = meshNonce(1)) }
         mesh.addLink(selfHubEnd)
         selfHandshake.join()
         val selfRemainingFrames = selfFarEnd.incoming.toList()
@@ -275,7 +275,7 @@ class MeshAdmissionTest {
         val mesh = peerMesh(self, emptyList(), dispatcher, Random(0))
 
         val (selfHubEnd, selfFarEnd) = connectionPair()
-        val selfHandshake = launch { handshakeRemote(selfFarEnd, self, nonce = byteArrayOf(1)) }
+        val selfHandshake = launch { handshakeRemote(selfFarEnd, self, nonce = meshNonce(1)) }
         mesh.addLink(selfHubEnd)
         selfHandshake.join()
 
@@ -302,7 +302,7 @@ class MeshAdmissionTest {
 
         // Construction-time attested link.
         val (aliceHubEnd, aliceFarEnd) = connectionPair()
-        val aliceHandshake = launch { handshakeRemote(aliceFarEnd, alice, nonce = byteArrayOf(1)) }
+        val aliceHandshake = launch { handshakeRemote(aliceFarEnd, alice, nonce = meshNonce(1)) }
         val mesh = hubMesh(
             hub,
             listOf(aliceHubEnd.withPrincipal(Principal("user-alice"))),
@@ -314,7 +314,7 @@ class MeshAdmissionTest {
 
         // An unattested link under AcceptAll joins peers but stays absent from the roster.
         val (bobHubEnd, bobFarEnd) = connectionPair()
-        val bobHandshake = launch { handshakeRemote(bobFarEnd, bob, nonce = byteArrayOf(2)) }
+        val bobHandshake = launch { handshakeRemote(bobFarEnd, bob, nonce = meshNonce(2)) }
         mesh.addLink(bobHubEnd)
         bobHandshake.join()
         assertAll(
@@ -337,7 +337,7 @@ class MeshAdmissionTest {
         val hub = PeerId("hub")
         val alice = PeerId("alice")
         val (aliceHubEnd, aliceFarEnd) = connectionPair()
-        val aliceHandshake = launch { handshakeRemote(aliceFarEnd, alice, nonce = byteArrayOf(1)) }
+        val aliceHandshake = launch { handshakeRemote(aliceFarEnd, alice, nonce = meshNonce(1)) }
         val mesh = hubMesh(hub, emptyList(), dispatcher, Random(0))
         val add = launch { mesh.addLink(aliceHubEnd.withPrincipal(Principal("user-alice"))) }
         aliceHandshake.join()

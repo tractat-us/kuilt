@@ -38,7 +38,7 @@ class MeshHelloTest {
     @Test
     fun roundTripSingleCharId() {
         val id = PeerId("X")
-        val nonce = byteArrayOf(0, 1, 127, -1)
+        val nonce = meshNonce(0, 1, 127, -1)
         val decoded = MeshHello.decode(MeshHello.encode(id, nonce))
         assertEquals(id, decoded.peerId)
         assertContentEquals(nonce, decoded.nonce)
@@ -61,7 +61,7 @@ class MeshHelloTest {
     @Test
     fun encodedLengthPrefixMatchesIdByteCount() {
         val id = PeerId("hello")
-        val nonce = byteArrayOf(1, 2, 3)
+        val nonce = meshNonce(1, 2, 3)
         val frame = MeshHello.encode(id, nonce)
         val idByteLen = id.value.encodeToByteArray().size
         // Big-endian 4-byte int at offset 0
