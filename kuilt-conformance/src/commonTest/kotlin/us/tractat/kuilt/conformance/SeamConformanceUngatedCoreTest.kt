@@ -60,7 +60,7 @@ class SeamConformanceUngatedCoreTest {
 
     @Test
     fun coreObligationsRunUnderAllFalseCapabilities(): TestResult = runTest {
-        assertEquals(9, allFalseHarness().capabilities().falseFlags().size, "harness must declare every flag false")
+        assertEquals(10, allFalseHarness().capabilities().falseFlags().size, "harness must declare every flag false")
         runAllCore(::allFalseHarness, this)
     }
 
@@ -80,6 +80,7 @@ class SeamConformanceUngatedCoreTest {
         harness().runHostStateIsWovenEvenAlone(scope)
         harness().runCloseDrivesStateTornNormal(scope)
         harness().runSendToAbsentPeerThrows(scope)
+        harness().runCloseDoesNotReportFailureAsCancellation(scope)
         harness().runAvailabilityReturnsAKnownVariant()
     }
 
@@ -94,6 +95,7 @@ class SeamConformanceUngatedCoreTest {
             securesTransport = false,
             meshDelivery = false,
             reportsLiveCapability = false,
+            collapsesPeersOnTear = false,
         )
         private const val GAP_URL = "https://github.com/tractat-us/kuilt/issues/1404"
     }

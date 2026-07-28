@@ -206,7 +206,14 @@ public interface Room {
      */
     public fun channel(id: String): Seam
 
-    /** Leave the room cleanly. Idempotent. */
+    /**
+     * Leave the room cleanly. Idempotent.
+     *
+     * A leave failure must **not** be reported as a cancellation — the obligation
+     * [us.tractat.kuilt.core.Seam.close] states in full (#1826). `RoomHost` and `KtorRoomHost` both
+     * call this under a best-effort guard, so a callee-minted `CancellationException` here cancels the
+     * host's cleanup rather than failing one leave.
+     */
     public suspend fun leave(reason: LeaveReason = LeaveReason.Normal)
 }
 

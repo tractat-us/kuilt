@@ -32,9 +32,11 @@ import kotlin.time.Duration.Companion.seconds
  * `CompositeLoom.weave`'s failure teardown must close EVERY already-woven ply, and must surface the real
  * weave failure — even when one ply's `close()` mints a `CancellationException` of its own (#1803).
  *
- * A `Seam` implementation is free to bound its teardown with `withTimeout`: unlike `sendTo`/`broadcast`/
- * `Loom.weave`, `Seam.close` carries no "must not report failure as cancellation" obligation (#1826). So a
- * `TimeoutCancellationException` out of a conforming consumer's `close` is expected input here, not abuse.
+ * `Seam.close` now carries the same "must not report failure as cancellation" obligation as
+ * `sendTo`/`broadcast`/`Loom.weave` (#1826), so a ply whose `close` bounds teardown with a bare
+ * `withTimeout` is **non-conforming**. That does not weaken this test — it strengthens why it exists: a
+ * library cannot trust a consumer, so a `TimeoutCancellationException` out of one ply's `close` is exactly
+ * the hostile input `CompositeLoom.weave`'s teardown must survive without leaking its siblings.
  *
  * Before the fix the teardown guarded each ply with `runCatchingCancellable`, which rethrows any
  * `CancellationException`. Inside `withContext(NonCancellable)` that can only ever be callee-minted — our

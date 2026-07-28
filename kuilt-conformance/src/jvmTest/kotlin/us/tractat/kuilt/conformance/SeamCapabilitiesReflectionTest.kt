@@ -44,6 +44,7 @@ class SeamCapabilitiesReflectionTest {
             securesTransport = false,
             meshDelivery = false,
             reportsLiveCapability = false,
+            collapsesPeersOnTear = false,
         )
 
         assertAll(

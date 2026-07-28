@@ -211,8 +211,9 @@ public class NwLoom(
      * `try`/`catch (Throwable)` rather than `runCatchingCancellable` — the distinction this file documents at
      * `:41-48` and, until #1803, contradicted right here. Inside the shield this block's Job is parented to
      * [NonCancellable], so a `CancellationException` arriving here can only be one `close` minted itself (a
-     * close-handshake `withTimeout`; note `Seam.close` carries no "never report failure as cancellation"
-     * obligation, unlike `sendTo`/`broadcast`/`weave`). `runCatchingCancellable` rethrows exactly that case —
+     * close-handshake `withTimeout` — non-conforming since #1826 put the "must not report failure as a
+     * cancellation" obligation on `Seam.close` too, but a library cannot trust a consumer to honour it).
+     * `runCatchingCancellable` rethrows exactly that case —
      * which would replace the caller's deliberate [NwUnreachableException] (or the original abort cause) with
      * a bare masquerading cancellation, silently cancelling the caller instead of failing it.
      */
