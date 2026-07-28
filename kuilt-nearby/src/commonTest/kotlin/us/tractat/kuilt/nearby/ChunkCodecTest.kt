@@ -2,6 +2,7 @@ package us.tractat.kuilt.nearby
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -169,10 +170,63 @@ class ChunkCodecTest {
         val opened = 32
         for (msgId in 1..opened) assertNull(reassembler.feed(head(msgId)))
 
-        // The eldest was evicted, so its tail starts a fresh (still incomplete) assembly.
+        // The eldest was evicted, so its tail no longer completes anything.
         assertNull(reassembler.feed(tail(1)), "eldest incomplete message was evicted")
         // The newest is untouched and still completes.
         val done = reassembler.feed(tail(opened))
         assertTrue(done != null && done.contentEquals(byteArrayOf(0xA, 0xB)), "newest message survives")
+    }
+
+    @Test
+    fun evictionCostsTheEldestMessageOnlyAndDoesNotCascade() {
+        // N concurrent senders round-robin their chunks — the natural arrival order when several
+        // `broadcast`/`sendTo` callers interleave on one endpoint. At exactly one message over the
+        // cap, the straggling chunks of the EVICTED message must not evict the next live message
+        // (and so on down the table): crossing the cap by one costs one message, not all of them.
+        val reassembler = ChunkCodec.Reassembler()
+        val senders = ChunkCodec.DEFAULT_MAX_PENDING_MESSAGES + 1
+        val delivered = mutableListOf<Int>()
+        for (chunkIndex in 0 until 2) {
+            for (msgId in 1..senders) {
+                val raw = rawChunk(msgId, chunkIndex, 2, byteArrayOf(msgId.toByte()))
+                reassembler.feed(ChunkCodec.decodeChunk(raw)!!)?.let { delivered += msgId }
+            }
+        }
+        assertEquals(
+            (2..senders).toList(),
+            delivered,
+            "only the eldest message is lost; got ${delivered.size}/$senders",
+        )
+    }
+
+    @Test
+    fun aMessageLargerThanAByteArrayIsRefusedRatherThanOverflowing() {
+        // `assemble` used to size its output with an unchecked Int sum, so a message whose chunks
+        // total more than Int.MAX_VALUE bytes wrapped negative and threw NegativeArraySizeException
+        // out of `feed`. Reached here with ONE 32 MiB array referenced from 64 slots — 64 × 32 MiB
+        // is Int.MAX_VALUE + 1 — so the test costs 32 MiB, not 2 GiB.
+        val chunkBytes = 32 * 1024 * 1024
+        val shared = ByteArray(chunkBytes)
+        val chunkCount = Int.MAX_VALUE / chunkBytes + 1
+        val reassembler = ChunkCodec.Reassembler()
+
+        for (index in 0 until chunkCount - 1) {
+            assertNull(reassembler.feed(DecodedChunk(1, index, chunkCount, shared)), "still filling")
+        }
+        // The chunk that would tip the total past Int.MAX_VALUE is refused, not fatal.
+        assertNull(
+            reassembler.feed(DecodedChunk(1, chunkCount - 1, chunkCount, shared)),
+            "the overflowing chunk is refused",
+        )
+        // And the codec is still usable.
+        val payload = byteArrayOf(1, 2, 3)
+        val done = reassembler.feed(ChunkCodec.decodeChunk(ChunkCodec.encode(payload, msgId = 2).single())!!)
+        assertTrue(done != null && done.contentEquals(payload), "codec still works afterwards")
+    }
+
+    @Test
+    fun aNonPositivePendingCapIsRejected() {
+        assertFailsWith<IllegalArgumentException> { ChunkCodec.Reassembler(maxPendingMessages = 0) }
+        assertFailsWith<IllegalArgumentException> { ChunkCodec.Reassembler(maxPendingMessages = -1) }
     }
 }

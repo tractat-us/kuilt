@@ -90,26 +90,29 @@ class NearbyMalformedChunkTest {
         )
         assertIs<SeamState.Woven>(seam.state.value)
 
-        val received = mutableListOf<Swatch>()
-        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
-            seam.incoming.collect { received += it }
+        // try/finally so a failing assertion cannot leak the seam scope into the next test.
+        try {
+            val received = mutableListOf<Swatch>()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+                seam.incoming.collect { received += it }
+            }
+
+            // The 16-byte attack from #1819: chunk 0-of-2 binds the assembly, then a chunk claiming
+            // index 5 of 6 for the same msgId indexes past it.
+            api.payloads.emit(PayloadReceived(endpointId, rawChunk(msgId = 7, 0, 2, byteArrayOf(0xA))))
+            api.payloads.emit(PayloadReceived(endpointId, rawChunk(msgId = 7, 5, 6, byteArrayOf(0xB))))
+
+            // The seam must still be alive and delivering.
+            val good = "still listening".encodeToByteArray()
+            for (chunk in ChunkCodec.encode(good, msgId = 8)) {
+                api.payloads.emit(PayloadReceived(endpointId, chunk))
+            }
+
+            assertEquals(1, received.size, "the seam still delivers after the malformed chunk")
+            assertTrue(received[0].toByteArray().contentEquals(good), "and delivers the right bytes")
+            assertIs<SeamState.Woven>(seam.state.value, "no silent teardown")
+        } finally {
+            scope.coroutineContext[Job]?.cancel()
         }
-
-        // The 16-byte attack from #1819: chunk 0-of-2 binds the assembly, then a chunk claiming
-        // index 5 of 6 for the same msgId indexes past it.
-        api.payloads.emit(PayloadReceived(endpointId, rawChunk(msgId = 7, 0, 2, byteArrayOf(0xA))))
-        api.payloads.emit(PayloadReceived(endpointId, rawChunk(msgId = 7, 5, 6, byteArrayOf(0xB))))
-
-        // The seam must still be alive and delivering.
-        val good = "still listening".encodeToByteArray()
-        for (chunk in ChunkCodec.encode(good, msgId = 8)) {
-            api.payloads.emit(PayloadReceived(endpointId, chunk))
-        }
-
-        assertEquals(1, received.size, "the seam still delivers after the malformed chunk")
-        assertTrue(received[0].toByteArray().contentEquals(good), "and delivers the right bytes")
-        assertIs<SeamState.Woven>(seam.state.value, "no silent teardown")
-
-        scope.coroutineContext[Job]?.cancel()
     }
 }
