@@ -15,6 +15,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.FailureReason
 import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
@@ -24,6 +25,7 @@ import us.tractat.kuilt.test.FaultySeam
 import us.tractat.kuilt.test.FlakyLifecycleSeam
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
@@ -152,6 +154,132 @@ class SubTimeoutBlipResumeTest {
                     assertFalse(
                         hostLost.isCompleted,
                         "a blip shorter than the host's timeout must not go terminal",
+                    )
+                },
+            )
+        }
+
+    /**
+     * **Guard 1 — the no-op path must not rescue a genuine host loss.**
+     *
+     * The path never returns, so the seam never re-forms, `reweaveFn()` keeps yielding something
+     * that is not `Woven`, and no resume is ever *sent*. No reject is recorded, the dwell never
+     * starts, and the reconnect window expires terminal — [FailureReason.WindowExpired], which is
+     * also the proof that no refusal was involved.
+     */
+    @Test
+    fun `an outage that never returns still ends terminal`() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            var nowMs = 0L
+            val clock = { Instant.fromEpochMilliseconds(nowMs) }
+            fun tick(count: Int = 1) = repeat(count) {
+                nowMs += TICK_MS
+                advanceTimeBy(TICK_MS)
+                runCurrent()
+            }
+
+            val h = blipHarness(clock, fastConfig)
+            val recovered = backgroundScope.async {
+                h.joinerRoom.events.filterIsInstance<MembershipEvent.Recovered>().first()
+            }
+            val hostLost = backgroundScope.async {
+                h.joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first()
+            }
+
+            tick(SETTLE_TICKS)
+            h.dropPath()
+            tick(GRACE_TICKS)
+            h.expireGrace() // …and the path never comes back.
+            tick(OBSERVE_TICKS)
+
+            assertAll(
+                {
+                    assertTrue(
+                        hostLost.isCompleted,
+                        "an outage that outlasts the reconnect window must still go terminal",
+                    )
+                },
+                {
+                    assertEquals(
+                        FailureReason.WindowExpired,
+                        hostLost.takeIf { it.isCompleted }?.getCompleted()?.reason,
+                        "a loss with no refusal at all expires the window rather than being refused",
+                    )
+                },
+                {
+                    assertFalse(
+                        recovered.isCompleted,
+                        "the no-op path must not rescue a host that is genuinely gone",
+                    )
+                },
+            )
+        }
+
+    /**
+     * **Guard 2 — the dwell must not pre-empt a real resume.**
+     *
+     * The same sub-timeout blip, except that partway through the joiner's retries the **host's**
+     * own side of the link drops too. That is the #1572 shape: the host now genuinely notices, opens
+     * a reconnect window, and a later retry lands on it. The episode must then end in a real
+     * [MembershipEvent.Resumed] — the host acked it — and **not** in the no-op path's
+     * [MembershipEvent.Recovered], which would mean the dwell fired while a window was on its way.
+     *
+     * The host's drop is placed inside the dwell (it starts ~200 ms after the first reject, against
+     * a 1000 ms dwell) precisely so a shortened dwell would be caught here.
+     */
+    @Test
+    fun `a drop the host also observes ends in a real resume`() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            var nowMs = 0L
+            val clock = { Instant.fromEpochMilliseconds(nowMs) }
+            fun tick(count: Int = 1) = repeat(count) {
+                nowMs += TICK_MS
+                advanceTimeBy(TICK_MS)
+                runCurrent()
+            }
+
+            val h = blipHarness(clock, fastConfig)
+            val resumed = backgroundScope.async {
+                h.joinerRoom.events.filterIsInstance<MembershipEvent.Resumed>().first()
+            }
+            val recovered = backgroundScope.async {
+                h.joinerRoom.events.filterIsInstance<MembershipEvent.Recovered>().first()
+            }
+            val hostLost = backgroundScope.async {
+                h.joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first()
+            }
+
+            tick(SETTLE_TICKS)
+            h.dropPath()
+            tick(GRACE_TICKS)
+            h.expireGrace()
+            tick(OUTAGE_TICKS - GRACE_TICKS)
+            h.restorePath()
+
+            // The joiner is now collecting ResumeWindowNotYetOpen rejects and its dwell is running.
+            tick(3)
+            h.hostObservesDrop()
+            tick(2)
+            h.hostLinkReturns()
+            tick(OBSERVE_TICKS)
+
+            assertAll(
+                {
+                    assertTrue(
+                        resumed.isCompleted,
+                        "a host that did open a window must be resumed against for real",
+                    )
+                },
+                {
+                    assertFalse(
+                        recovered.isCompleted,
+                        "the dwell must not pre-empt a resume the host was about to accept",
+                    )
+                },
+                {
+                    assertFalse(
+                        hostLost.isCompleted,
+                        "a resume the host accepts must not go terminal",
                     )
                 },
             )
