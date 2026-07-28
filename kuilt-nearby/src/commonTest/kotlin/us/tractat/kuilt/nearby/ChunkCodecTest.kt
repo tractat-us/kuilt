@@ -94,4 +94,85 @@ class ChunkCodecTest {
         val bogus = ByteArray(ChunkCodec.HEADER_SIZE) // msgId=0, index=0, count=0
         assertNull(ChunkCodec.decodeChunk(bogus), "chunkCount=0 is rejected")
     }
+
+    // ── #1819: chunkCount is bound by the FIRST chunk but validated per-chunk ──────
+
+    /** Hand-build a raw chunk with arbitrary (possibly hostile) header fields. */
+    private fun rawChunk(msgId: Int, chunkIndex: Int, chunkCount: Int, payload: ByteArray): ByteArray {
+        val out = ByteArray(ChunkCodec.HEADER_SIZE + payload.size)
+        out[0] = (msgId ushr 24).toByte()
+        out[1] = (msgId ushr 16).toByte()
+        out[2] = (msgId ushr 8).toByte()
+        out[3] = msgId.toByte()
+        out[4] = (chunkIndex ushr 8).toByte()
+        out[5] = chunkIndex.toByte()
+        out[6] = (chunkCount ushr 8).toByte()
+        out[7] = chunkCount.toByte()
+        payload.copyInto(out, ChunkCodec.HEADER_SIZE)
+        return out
+    }
+
+    @Test
+    fun chunkCountDisagreeingWithAnAssemblyInProgressIsRefused() {
+        val reassembler = ChunkCodec.Reassembler()
+        // Chunk 0 of 2 for msgId 7 binds the assembly at chunkCount = 2.
+        val head = ChunkCodec.decodeChunk(rawChunk(msgId = 7, 0, 2, byteArrayOf(0xA)))!!
+        assertNull(reassembler.feed(head), "one of two chunks — still incomplete")
+
+        // A second chunk claims the SAME msgId but chunkCount = 6, index = 5. It passes
+        // decodeChunk (5 < 6) yet indexes past the bound size-2 assembly.
+        val forged = ChunkCodec.decodeChunk(rawChunk(msgId = 7, 5, 6, byteArrayOf(0xB)))!!
+        assertNull(reassembler.feed(forged), "a chunkCount that contradicts the assembly is refused")
+
+        // The genuine remainder still completes the ORIGINAL message, unmodified.
+        val tail = ChunkCodec.decodeChunk(rawChunk(msgId = 7, 1, 2, byteArrayOf(0xC)))!!
+        val done = reassembler.feed(tail)
+        assertTrue(
+            done != null && done.contentEquals(byteArrayOf(0xA, 0xC)),
+            "the in-progress assembly survives the forged chunk; got ${done?.toList()}",
+        )
+    }
+
+    @Test
+    fun aRefusedChunkLeavesTheReassemblerUsableForLaterMessages() {
+        val reassembler = ChunkCodec.Reassembler()
+        reassembler.feed(ChunkCodec.decodeChunk(rawChunk(msgId = 7, 0, 2, byteArrayOf(0xA)))!!)
+        reassembler.feed(ChunkCodec.decodeChunk(rawChunk(msgId = 7, 5, 6, byteArrayOf(0xB)))!!)
+
+        // A completely unrelated, well-formed message must still round-trip.
+        val payload = ByteArray(10) { it.toByte() }
+        val chunks = ChunkCodec.encode(payload, msgId = 42, maxChunkPayload = 4)
+        var result: ByteArray? = null
+        for (raw in chunks) {
+            reassembler.feed(ChunkCodec.decodeChunk(raw)!!)?.let { result = it }
+        }
+        assertTrue(result != null && result.contentEquals(payload), "codec is not left deaf")
+    }
+
+    @Test
+    fun feedRejectsAHandBuiltChunkWhoseIndexIsOutOfRange() {
+        // `feed` is public, so a DecodedChunk can reach it without passing decodeChunk's checks.
+        val reassembler = ChunkCodec.Reassembler()
+        assertNull(reassembler.feed(DecodedChunk(msgId = 1, chunkIndex = 5, chunkCount = 2, byteArrayOf(1))))
+        assertNull(reassembler.feed(DecodedChunk(msgId = 1, chunkIndex = 0, chunkCount = 0, byteArrayOf(1))))
+        assertNull(reassembler.feed(DecodedChunk(msgId = 1, chunkIndex = -1, chunkCount = 2, byteArrayOf(1))))
+    }
+
+    @Test
+    fun pendingIncompleteMessagesAreBoundedAndEvictTheEldest() {
+        val reassembler = ChunkCodec.Reassembler()
+        fun head(msgId: Int) = ChunkCodec.decodeChunk(rawChunk(msgId, 0, 2, byteArrayOf(0xA)))!!
+        fun tail(msgId: Int) = ChunkCodec.decodeChunk(rawChunk(msgId, 1, 2, byteArrayOf(0xB)))!!
+
+        // A peer that opens messages and never finishes them must not grow `pending` without
+        // bound. 32 is comfortably past any sane in-flight working set for one endpoint.
+        val opened = 32
+        for (msgId in 1..opened) assertNull(reassembler.feed(head(msgId)))
+
+        // The eldest was evicted, so its tail starts a fresh (still incomplete) assembly.
+        assertNull(reassembler.feed(tail(1)), "eldest incomplete message was evicted")
+        // The newest is untouched and still completes.
+        val done = reassembler.feed(tail(opened))
+        assertTrue(done != null && done.contentEquals(byteArrayOf(0xA, 0xB)), "newest message survives")
+    }
 }
