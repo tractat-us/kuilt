@@ -259,6 +259,66 @@ internal class InstallSnapshotMetaValidationTest {
     }
 
     /**
+     * The mirror of [forgedHugeIndexAtALegalTermIsNotInstalled], and the test without which the
+     * **term** bound is pinned by nothing at all.
+     *
+     * `isWellFormedSnapshotChunk` tests the index first and returns early, so once the index ceiling
+     * landed every other forgery test here — all of which pair their forged term with
+     * `Long.MAX_VALUE - 1` — began failing the *index* check and returning before the term check was
+     * ever evaluated. Deleting the term branch outright left the whole class green. The attribution
+     * problem is symmetric, and this is the half that was missing: an index the ceiling accepts, so
+     * only the term check can reject the frame.
+     *
+     * The term bound is emphatically not redundant. Without it this frame installs, and
+     * `state.snapshotTerm = Long.MAX_VALUE` is **persisted via `storage.saveSnapshot`** — so unlike
+     * the in-range residual of #1876, the domination survives restart and no honest node at any
+     * future term can ever beat this one again. That is the #1868 headline harm, reachable at a
+     * perfectly ordinary index.
+     */
+    @Test
+    fun forgedMaxTermAtAnInRangeIndexIsNotInstalled() = raftRunTest {
+        val sim = raftSim(this, backgroundScope, n = 3)
+        val leaderNode = awaitLeader(sim)
+        val leaderId = sim.nodes.entries.first { it.value === leaderNode }.key
+        val victimId = sim.nodeIds.first { it != leaderId }
+        val victim = sim.nodes.getValue(victimId)
+        sim.awaitCommit(1L)
+
+        val logBefore = sim.storages.getValue(victimId).entries(1L).map { it.index }
+        val floorBefore = victim.compactionFloor.value
+        val commitBefore = victim.commitIndex.value
+        val victimTerm = sim.storages.getValue(victimId).term()
+
+        sim.partitionOff(victimId)
+        // An index the ceiling accepts — just past the victim's commit, exactly what an honest
+        // far-ahead leader would send — so ONLY the term check stands between this and the install.
+        sim.deliverInstallSnapshot(
+            to = victimId,
+            from = leaderId,
+            term = victimTerm,
+            lastIncludedIndex = commitBefore + 5L,
+            lastIncludedTerm = forgedTerm,
+        )
+        delay(20)
+
+        val logAfter = sim.storages.getValue(victimId).entries(1L).map { it.index }
+        val storedSnapshot = sim.storages.getValue(victimId).loadSnapshot()?.meta
+        assertAll(
+            { assertEquals(logBefore, logAfter, "in-range index + MAX term must not wipe the log") },
+            { assertEquals(floorBefore, victim.compactionFloor.value, "the compaction floor must not move") },
+            { assertEquals(commitBefore, victim.commitIndex.value, "commitIndex must not advance") },
+            {
+                assertTrue(
+                    storedSnapshot == null,
+                    "a snapshot carrying a term above the leader's must never be persisted — a stored " +
+                        "snapshotTerm survives restart, so the §5.4.1 domination becomes permanent; " +
+                        "stored=$storedSnapshot",
+                )
+            },
+        )
+    }
+
+    /**
      * The non-vacuity control, and the guard against an over-broad predicate. A well-formed snapshot
      * that genuinely advances the frontier — same sender, same injection path, `lastIncludedTerm`
      * equal to the frame's own term — must still install. Without this, the forgery test above would
