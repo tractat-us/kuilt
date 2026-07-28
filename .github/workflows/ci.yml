@@ -1,19 +1,24 @@
 name: ci
 
-# Aggregator pattern (detect → {build-jvm, build-native, detekt, dokka} → ci-required):
+# Aggregator pattern (detect → {build-jvm, build-native, detekt, dokka, …} → ci-required):
 #
-#   detect  →  build-jvm    ┐
-#           →  build-native ├→  ci-required (the one required check)
-#           →  detekt       │
-#           →  dokka        ┘
+#   detect  →  build-jvm      ┐
+#           →  build-native   │
+#           →  detekt         ├→  ci-required (the one required check)
+#           →  dokka          │
+#           →  doc-citations  │
+#           →  spike-compile  ┘
+#
+#           →  concurrency-probes   (runs, but NOT aggregated — see that job)
 #
 # detect (ubuntu, always, cheap, no JDK) classifies the change by diffing the
-# changed files, emitting TWO orthogonal flags: docs-only (every path is doc-class
-# → skip the heavy build) and dokka-inputs (any path is a Dokka input: **/module.md,
-# **/*.kt, **/commonSamples/** → run the fast Dokka module-doc check). They are
-# independent — a module.md-only PR is docs-only AND dokka-inputs, so it skips the
-# build but still MUST pass Dokka (a bad module.md header freezes the whole Pages
-# deploy silently — #1061).
+# changed files, emitting THREE orthogonal flags: docs-only (every path is doc-class
+# → skip the heavy build), dokka-inputs (any path is a Dokka input: **/module.md,
+# **/*.kt, **/commonSamples/** → run the fast Dokka module-doc check) and
+# spike-inputs (any path is `:spike` Kotlin/build source → run the Apple-only spike
+# compile on a macOS runner). They are independent — a module.md-only PR is docs-only
+# AND dokka-inputs, so it skips the build but still MUST pass Dokka (a bad module.md
+# header freezes the whole Pages deploy silently — #1061).
 #
 # The heavy KMP build runs only when detect says NOT docs-only, and is SPLIT
 # across two jobs so the memory-heavy wasm/native codegen never co-resides with
@@ -28,10 +33,26 @@ name: ci
 # ci-required (if: !cancelled()) is the SOLE required status check that branch
 # protection looks for. It passes when detect + both build jobs + detekt all
 # succeed OR when the heavy jobs were legitimately skipped (docs-only), AND the
-# Dokka check passed whenever the change touched Dokka inputs; it fails when any
+# Dokka check passed whenever the change touched Dokka inputs, AND the spike
+# compile passed whenever the change touched `:spike` sources; it fails when any
 # required job failed/cancelled. This lets pure guide/prose docs-only PRs merge
 # immediately without a build, while code PRs — and any PR touching a module.md /
-# KDoc — still gate on the relevant checks. Publishing stays separate (publish.yml).
+# KDoc / spike source — still gate on the relevant checks. Publishing stays
+# separate (publish.yml).
+#
+# APPLE COVERAGE — deliberately asymmetric, and the asymmetry is the design.
+# The per-PR lane is Linux-only because the cinterop-bearing Apple targets need a
+# Mac host, and GitHub caps a plan at FIVE concurrent macOS jobs (a hard
+# concurrency ceiling, not a cost one — this repo is public, so standard hosted
+# runners are free at every size). This workflow fires ~25 runs/hour, and the
+# nightly Apple job takes ~11.5 min, so an unconditional macOS job would saturate
+# that 5-job cap and queue every PR behind it. The shipped library's own Apple K/N
+# test executions therefore run out of band in apple-nightly.yml, NOT here (see
+# that file's header, and #933). `spike-compile` is the one macOS job in this lane
+# and it is PATH-FILTERED to `:spike` sources precisely so it does not put a macOS
+# runner on every PR. The complementary half — a change to :kuilt-core/:kuilt-session/
+# :kuilt-nw that breaks :spike without touching spike/ — is caught by the same
+# apple-nightly lane, which files a tracking issue on failure (#1796).
 
 on:
   push:
@@ -75,18 +96,22 @@ jobs:
     outputs:
       docs-only: ${{ steps.classify.outputs.docs-only }}
       dokka-inputs: ${{ steps.classify.outputs.dokka-inputs }}
+      spike-inputs: ${{ steps.classify.outputs.spike-inputs }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 50
 
-      - name: Classify change (docs-only? Dokka inputs?)
+      - name: Classify change (docs-only? Dokka inputs? spike inputs?)
         id: classify
-        # Emits TWO orthogonal flags:
+        # Emits THREE orthogonal flags:
         #   docs-only    — every changed path is doc-class (*.md / docs/** / Writerside/**);
         #                  the heavy KMP build is skipped.
         #   dokka-inputs — any changed path is a Dokka INPUT (**/module.md, **/*.kt,
         #                  **/commonSamples/**); the fast Dokka module-doc check runs.
+        #   spike-inputs — any changed path is `:spike` Gradle-compiled source
+        #                  (spike/src/** or spike/build.gradle.kts); the Apple-only
+        #                  spike compile runs on a macOS runner (#1796).
         # They are independent: a module.md-only PR is docs-only=true AND
         # dokka-inputs=true — it skips the build but MUST still pass Dokka, because a
         # bad module.md header silently freezes the whole Pages deploy (#1061).
@@ -99,26 +124,27 @@ jobs:
             push)
               BEFORE="${{ github.event.before }}"
               if [[ "$BEFORE" == "0000000000000000000000000000000000000000" ]]; then
-                echo "Initial push — treating as not docs-only, run Dokka."
-                { echo "docs-only=false"; echo "dokka-inputs=true"; } >> "$GITHUB_OUTPUT"; exit 0
+                echo "Initial push — treating as not docs-only, run Dokka + spike compile."
+                { echo "docs-only=false"; echo "dokka-inputs=true"; echo "spike-inputs=true"; } >> "$GITHUB_OUTPUT"; exit 0
               fi
               FILES=$(git diff --name-only "$BEFORE" "${{ github.event.after }}" 2>/dev/null || echo "")
               ;;
             *)
-              echo "${{ github.event_name }} — treating as not docs-only, run Dokka."
-              { echo "docs-only=false"; echo "dokka-inputs=true"; } >> "$GITHUB_OUTPUT"; exit 0
+              echo "${{ github.event_name }} — treating as not docs-only, run Dokka + spike compile."
+              { echo "docs-only=false"; echo "dokka-inputs=true"; echo "spike-inputs=true"; } >> "$GITHUB_OUTPUT"; exit 0
               ;;
           esac
 
           if [ -z "$FILES" ]; then
-            echo "No changed files detected — treating as not docs-only, no Dokka inputs."
-            { echo "docs-only=false"; echo "dokka-inputs=false"; } >> "$GITHUB_OUTPUT"; exit 0
+            echo "No changed files detected — treating as not docs-only, no Dokka/spike inputs."
+            { echo "docs-only=false"; echo "dokka-inputs=false"; echo "spike-inputs=false"; } >> "$GITHUB_OUTPUT"; exit 0
           fi
 
           echo "Changed files:"; echo "$FILES"
 
           DOCS_ONLY=true
           DOKKA_INPUTS=false
+          SPIKE_INPUTS=false
           while IFS= read -r file; do
             [ -z "$file" ] && continue
             # docs-only holds only while every file is doc-class.
@@ -130,11 +156,21 @@ jobs:
               || [[ "$file" == *.kt ]] || [[ "$file" == *commonSamples/* ]]; then
               DOKKA_INPUTS=true
             fi
+            # spike-inputs trips ONLY on what Gradle actually compiles for `:spike`:
+            # its Kotlin sources and its build script. Deliberately NOT spike/app/**
+            # (the Xcode project — never built by Gradle, needs signing), and not
+            # spike/*.md or spike/*.sh. Narrow on purpose: this flag is the ONLY thing
+            # keeping a macOS runner off every PR, and macOS runners are capped at 5
+            # concurrent jobs plan-wide (#1796).
+            if [[ "$file" == spike/src/* ]] || [[ "$file" == spike/build.gradle.kts ]]; then
+              SPIKE_INPUTS=true
+            fi
           done <<< "$FILES"
 
           [ "$DOCS_ONLY" = true ] && echo "::notice::All changes are docs-class — skipping the build."
           [ "$DOKKA_INPUTS" = true ] && echo "::notice::Change touches Dokka inputs — running the Dokka module-doc check."
-          { echo "docs-only=$DOCS_ONLY"; echo "dokka-inputs=$DOKKA_INPUTS"; } >> "$GITHUB_OUTPUT"
+          [ "$SPIKE_INPUTS" = true ] && echo "::notice::Change touches :spike sources — running the Apple spike compile."
+          { echo "docs-only=$DOCS_ONLY"; echo "dokka-inputs=$DOKKA_INPUTS"; echo "spike-inputs=$SPIKE_INPUTS"; } >> "$GITHUB_OUTPUT"
 
   # ── build-jvm ──────────────────────────────────────────────────────────────
   # The JVM/Android half of the build: full `build koverXmlReport` with the
@@ -600,6 +636,32 @@ jobs:
   # quality-hardening probes. Running them for signal must never wedge the merge
   # gate — that is the whole point of isolating them (#1158). The #1151 mitigation
   # (5-min cap + thread dump) stays as the in-test backstop.
+  #
+  # #1768 proposes making this gating, and the gap it names is real — a job that
+  # cannot fail a merge is a job nobody reads. It is NOT safe to flip yet, and the
+  # measurement is recorded here because the obvious short survey gets it wrong.
+  #
+  # Over the last 500 ci.yml runs (2026-07-23 → 07-28, 485 with this job resolved)
+  # there are 10 runs where this job FAILED while ci-required SUCCEEDED — i.e. 10
+  # merges that gating would have blocked, 7 of them pull_request runs, 3.8% of the
+  # 266 otherwise-green runs. All 10 are the same test,
+  # CompositeSeamCloseTornConcurrencyTest.closePublishesTerminalTornEvenWhenPliesAreChurning,
+  # failing at ConcurrencyStressHarness.kt:56 — the 5-minute harness cap, with the
+  # artifact showing every DefaultDispatcher worker parked in tryPark. That is
+  # QUIESCENT, not CPU-starved: it is #1784 (OPEN — CompositeSeam.peers wedging
+  # permanently), reproducing on main. So gating today would not trade a silent
+  # failure for a rare flake; it would trade it for a known unfixed bug firing ~4%
+  # of the time on unrelated PRs, in a repo whose posture is aggressive auto-merge.
+  #
+  # NB on method: a survey of the last 100 runs shows ZERO such runs and is
+  # MISLEADING — 100 runs is ~4 hours here, and that window happens to fall in a
+  # quiet pocket just after the cluster. A survey's window is part of its claim;
+  # quote the time span, not just the sample count.
+  #
+  # The path forward is #1768's option 2, not option 3: split this job so the
+  # DETERMINISTIC probes gate (e.g. a job scoped to `*CapabilityConcurrencyTest`,
+  # whose fix reverts to a reliable hang) while the contention/wedge-sensitive
+  # CompositeSeamCloseTornConcurrencyTest stays non-blocking until #1784 lands.
   concurrency-probes:
     needs: detect
     if: needs.detect.outputs.docs-only != 'true'
@@ -640,9 +702,94 @@ jobs:
             kuilt-core/build/reports/tests/
             kuilt-core/build/test-results/
 
+  # ── spike-compile ───────────────────────────────────────────────────────────
+  # Compiles `:spike` — the two-iPhone hardware-validation harness — for its Apple
+  # targets. THE ONLY macOS job in the per-PR lane, and path-filtered so it stays
+  # that way (#1796).
+  #
+  # WHY IT WAS INVISIBLE. `:spike` is excluded from the root Gradle graph unless
+  # `-PincludeSpike` is passed (settings.gradle.kts), and no workflow ever passed it,
+  # so `./gradlew build` compiled zero `:spike:` tasks. The exclusion's stated reason
+  # — a signing-less CI runner cannot build the iOS app — is still true, but it covers
+  # the Xcode app TARGET, not the Kotlin: spike/src/appleMain is ordinary K/N that
+  # compiles with no signing, no simulator and no device. Meanwhile spike/ stopped
+  # being a throwaway and became the vehicle for #1712's release-gating hardware test.
+  #
+  # WHY macOS, AND WHY PATH-FILTERED. `:spike` depends on `:kuilt-nw`, which carries a
+  # cinterop (nwshim) — cinterop-bearing Apple targets require a Mac host, so there is
+  # no Linux path for this compile (same constraint publish.yml documents).
+  #
+  # The constraint is CONCURRENCY, not cost. This repo is public, so standard hosted
+  # runners — macos-latest included — are free at every size; do NOT re-derive this
+  # filter's justification from a billing multiplier, and do not delete the filter on
+  # discovering the bill is zero. What binds is that GitHub caps a plan at FIVE
+  # concurrent macOS jobs regardless of visibility, on the smallest runner in the fleet
+  # (3 vCPU / 7 GB). This workflow fires ~25 runs/hour and the nightly Apple job takes
+  # ~11.5 min: an unconditional macOS job here would sit permanently at that 5-job
+  # ceiling and queue every PR behind a lane that gates a HARNESS, while the shipped
+  # library's own Apple targets stay ungated. So the coverage is split:
+  #   - this job (gating)  — a PR that edits :spike sources compiles them, on that PR.
+  #   - apple-nightly.yml  — a :kuilt-core/:kuilt-session/:kuilt-nw change that breaks
+  #                          :spike WITHOUT touching spike/ is caught within 24 h, and
+  #                          that lane already opens a tracking issue on failure.
+  # The residual gap is deliberate: latency, not blindness.
+  #
+  # Compile only — no tests (there are none), no link, no Xcode target, no detekt
+  # (:spike deliberately does not apply `kuilt.kmp-library`). All three targets share
+  # one appleMain source set; compiling each proves the per-target cinterop + expect/
+  # actual wiring as well as the source compatibility.
+  spike-compile:
+    needs: detect
+    if: needs.detect.outputs.spike-inputs == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      S3_BUILD_CACHE_ACCESS_KEY_ID: ${{ secrets.S3_BUILD_CACHE_ACCESS_KEY_ID }}
+      S3_BUILD_CACHE_SECRET_KEY: ${{ secrets.S3_BUILD_CACHE_SECRET_KEY }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: wrapper
+          cache-read-only: false
+
+      # Shares the `konan-macOS-*` cache key with apple-nightly.yml's job, so a PR
+      # here normally restores a toolchain the nightly already warmed. No Android SDK
+      # step: the macos-latest image ships one, and apple-nightly.yml configures the
+      # same Android library modules without it.
+      - name: Cache Kotlin/Native (~/.konan)
+        uses: actions/cache@v6
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle.kts') }}
+          restore-keys: konan-${{ runner.os }}-
+
+      - name: Compile :spike for its Apple targets
+        # Same resource caps as apple-nightly.yml, for the same reason: gradle.properties
+        # is tuned for a workstation (16 workers, -Xmx4g per daemon) and inheriting that
+        # bare onto the 3 vCPU / 7 GB arm64 runner is why that lane was never green
+        # before #1299 capped it.
+        run: >-
+          ./gradlew -PincludeSpike
+          :spike:compileKotlinIosArm64
+          :spike:compileKotlinIosSimulatorArm64
+          :spike:compileKotlinMacosArm64
+          --max-workers=2
+          -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8"
+          -Dkotlin.daemon.jvmargs="-Xmx3g"
+
   # ── ci-required ────────────────────────────────────────────────────────────
   # The SOLE required status check. Aggregates detect + build-jvm + build-native
-  # + detekt + dokka.
+  # + detekt + dokka + doc-citations + spike-compile. (concurrency-probes runs but
+  # is deliberately NOT aggregated — see that job's header and #1768.)
   #
   # Uses if: always() unconditionally — NO draft guard on the JOB. A required
   # check that is itself *skipped* is treated as "passed" by branch protection
@@ -669,7 +816,7 @@ jobs:
   # /dokka-inputs guards (cheap jobs don't burn a runner on every draft push). Only
   # ci-required runs unconditionally, so the gate is always in a definite pass/fail state.
   #
-  # Invariant: ci-required succeeds if and only if BOTH hold:
+  # Invariant: ci-required succeeds if and only if ALL of these hold:
   #   Build gate —
   #     (a) detect succeeded AND docs-only=true AND build-jvm + build-native +
   #         detekt were skipped, OR
@@ -678,6 +825,13 @@ jobs:
   #   Dokka gate (orthogonal) —
   #     (c) dokka-inputs=true  → dokka=success, OR
   #     (d) dokka-inputs=false → dokka was skipped (or success).
+  #   Spike gate (orthogonal) —
+  #     (e) spike-inputs=true  → spike-compile=success, OR
+  #     (f) spike-inputs=false → spike-compile was skipped (or success).
+  #
+  # concurrency-probes is deliberately absent from every clause above — it is not in
+  # `needs:` at all, so its result cannot influence this gate (#1158, and see that
+  # job's header for why #1768's flip is not safe yet).
   #
   # Any other combination fails. In particular:
   #   - draft PR → fails explicitly (draft runs are not a merge signal) →
@@ -686,8 +840,10 @@ jobs:
   #     race too.
   #   - dokka skipped/failed on a Dokka-input change → fails → closes the
   #     module.md-freezes-the-deploy gap (#1061).
+  #   - spike-compile skipped/failed on a :spike-source change → fails → closes the
+  #     never-compiled-harness gap (#1796).
   ci-required:
-    needs: [detect, build-jvm, build-native, detekt, dokka, doc-citations]
+    needs: [detect, build-jvm, build-native, detekt, dokka, doc-citations, spike-compile]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -716,16 +872,20 @@ jobs:
           DETEKT="${{ needs.detekt.result }}"
           DOKKA="${{ needs.dokka.result }}"
           DOC_CITATIONS="${{ needs.doc-citations.result }}"
+          SPIKE="${{ needs.spike-compile.result }}"
           DOCS_ONLY="${{ needs.detect.outputs.docs-only }}"
           DOKKA_INPUTS="${{ needs.detect.outputs.dokka-inputs }}"
-          echo "detect:        $DETECT"
-          echo "build-jvm:     $BUILD_JVM"
-          echo "build-native:  $BUILD_NATIVE"
-          echo "detekt:        $DETEKT"
-          echo "dokka:         $DOKKA"
-          echo "doc-citations: $DOC_CITATIONS"
-          echo "docs-only:     $DOCS_ONLY"
-          echo "dokka-inputs:  $DOKKA_INPUTS"
+          SPIKE_INPUTS="${{ needs.detect.outputs.spike-inputs }}"
+          echo "detect:             $DETECT"
+          echo "build-jvm:          $BUILD_JVM"
+          echo "build-native:       $BUILD_NATIVE"
+          echo "detekt:             $DETEKT"
+          echo "dokka:              $DOKKA"
+          echo "doc-citations:      $DOC_CITATIONS"
+          echo "spike-compile:      $SPIKE"
+          echo "docs-only:          $DOCS_ONLY"
+          echo "dokka-inputs:       $DOKKA_INPUTS"
+          echo "spike-inputs:       $SPIKE_INPUTS"
 
           # detect must always succeed — it runs unconditionally.
           if [ "$DETECT" != "success" ]; then
@@ -752,6 +912,23 @@ jobs:
           # job always runs, so skipped is never acceptable here (#1792).
           if [ "$DOC_CITATIONS" != "success" ]; then
             echo "::error::Doc-citation verification did not succeed (result: $DOC_CITATIONS). skipped is not accepted."; exit 1
+          fi
+
+          # Spike gate — ORTHOGONAL to docs-only, same shape as the Dokka gate: the
+          # spike-compile job is guarded on its own detect flag (spike-inputs), not on
+          # docs-only, so it must be judged against that flag. A change touching :spike
+          # Kotlin/build sources MUST compile them; otherwise the job legitimately did
+          # not run and `skipped` is the expected, passing result — which is what keeps
+          # the ~90% of PRs that never touch spike/ clear of the 5-concurrent-job macOS
+          # runner ceiling (#1796).
+          if [ "$SPIKE_INPUTS" = "true" ]; then
+            if [ "$SPIKE" != "success" ]; then
+              echo "::error::Change touches :spike sources but the spike compile did not succeed (result: $SPIKE). skipped is not accepted."; exit 1
+            fi
+          else
+            if [ "$SPIKE" != "skipped" ] && [ "$SPIKE" != "success" ]; then
+              echo "::error::spike-compile had unexpected result: $SPIKE."; exit 1
+            fi
           fi
 
           if [ "$DOCS_ONLY" = "true" ]; then
