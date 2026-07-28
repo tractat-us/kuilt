@@ -456,7 +456,7 @@ internal class RaftEngine(
      *    which [persistTermAndVote] then writes to disk. The engine drives its own durable term
      *    *backwards*, against [RaftStorage.term]'s "never safe to decrease it" contract, and a node whose
      *    term went backwards has forgotten every vote it cast.
-     * 2. It is **not confined to a migration**. kuilt ships no durable [RaftStorage] — [InMemoryRaftStorage]
+     * 2. It is **not confined to a migration**. kuilt ships no durable [RaftStorage] — `InMemoryRaftStorage`
      *    is the only implementation in the library — so every persistent one is consumer code, and the
      *    storage TCK constrains `term()` to nothing but "starts at 0" and "round-trips". An out-of-range
      *    term is an ordinary third-party storage bug (a truncated column, a sign-extended `Int`, a torn

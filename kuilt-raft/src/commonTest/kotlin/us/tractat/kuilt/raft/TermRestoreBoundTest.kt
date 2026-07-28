@@ -33,7 +33,7 @@ import kotlin.time.Duration.Companion.seconds
  *   #1855 explicitly refused to trade a liveness bug for.
  * - **It is not only a migration concern.** kuilt ships no durable [RaftStorage] at all
  *   ([InMemoryRaftStorage] is the only production implementation), so every persistent one is consumer
- *   code, and [us.tractat.kuilt.conformance.RaftStorageConformanceSuite] constrains `term()` to nothing
+ *   code, and `RaftStorageConformanceSuite` constrains `term()` to nothing
  *   but "starts at 0" and "round-trips 7". A conforming third-party store can return garbage from a bad
  *   column, a sign-extended `Int`, or a torn read — no pre-fix binary and no attacker required.
  *
