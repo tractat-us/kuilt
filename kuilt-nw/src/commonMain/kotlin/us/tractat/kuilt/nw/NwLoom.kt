@@ -108,7 +108,7 @@ public class NwUnreachableException(message: String) : Exception(message)
  *   "wait for a friend" lobby can pass a generous value and hold the session open far longer than the
  *   default; deliberately NOT infinite by default. Tests inject a small value.
  * @param wovenPathGrace how long a path-lost (`ready → waiting`) connection is given to recover before
- *   the woven seam tears it as [CloseReason.Unreachable] (#1478); default [NwSeam.DEFAULT_WOVEN_PATH_GRACE]
+ *   the woven seam tears it as [CloseReason.Unreachable] (#1478); default [DEFAULT_WOVEN_PATH_GRACE]
  *   (10s), injectable for tests.
  */
 public class NwLoom(
@@ -118,7 +118,7 @@ public class NwLoom(
     private val policy: DeliveryPolicy = DeliveryPolicy.Reliable,
     private val random: Random = Random.Default,
     private val weaveTimeout: Duration = DEFAULT_WEAVE_TIMEOUT,
-    private val wovenPathGrace: Duration = NwSeam.DEFAULT_WOVEN_PATH_GRACE,
+    private val wovenPathGrace: Duration = DEFAULT_WOVEN_PATH_GRACE,
 ) : Loom {
 
     private val _visiblePeers = MutableStateFlow<Set<NwEndpoint>>(emptySet())
@@ -241,6 +241,16 @@ public class NwLoom(
 
         /** How long [weave] waits for the first peer before declaring the fabric [CloseReason.Unreachable]. */
         public val DEFAULT_WEAVE_TIMEOUT: Duration = 30.seconds
+
+        /**
+         * How long a path-lost (`ready → waiting`) connection is given to recover before the woven seam
+         * evicts the peer and tears the connection as [CloseReason.Unreachable] (#1478) — the public
+         * name for the fabric's grace window, so a consumer (or an out-of-tree hardware harness) can
+         * read the shipping value rather than mirroring the literal.
+         *
+         * The value itself lives on `NwSeam`, which is `internal`; this is the one exported alias.
+         */
+        public val DEFAULT_WOVEN_PATH_GRACE: Duration = NwSeam.DEFAULT_WOVEN_PATH_GRACE
 
         /** First redial backoff after a dial that has not (yet) connected (#1513). */
         internal val INITIAL_REDIAL_BACKOFF: Duration = 250.milliseconds
