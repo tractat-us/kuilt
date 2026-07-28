@@ -40,7 +40,12 @@ public sealed interface TapAdmitMessage {
     @SerialName("challenge")
     public data class Challenge(
         @Serializable(with = TapByteStringSerializer::class) val nonce: ByteString,
-    ) : TapAdmitMessage
+    ) : TapAdmitMessage {
+        public companion object {
+            /** Width of a challenge nonce, in bytes. Both the generator and the check use this. */
+            public const val NONCE_BYTES: Int = 16
+        }
+    }
 
     /** Prover → verifier: `HMAC-SHA256(code, nonce)` proving knowledge of the join code. */
     @Serializable

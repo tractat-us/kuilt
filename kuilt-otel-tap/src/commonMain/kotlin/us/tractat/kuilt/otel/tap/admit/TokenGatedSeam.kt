@@ -150,7 +150,8 @@ internal class TokenGatedSeam(
         val verifier = role as GateRole.Verifier
         val nonce = lock.withLock {
             if (peer in pendingNonces || peer in verified.value) return
-            ByteString(verifier.random.nextBytes(NONCE_BYTES)).also { pendingNonces[peer] = it }
+            ByteString(verifier.random.nextBytes(TapAdmitMessage.Challenge.NONCE_BYTES))
+                .also { pendingNonces[peer] = it }
         }
         runCatchingCancellable { inner.sendTo(peer, TapAdmitMessage.encode(TapAdmitMessage.Challenge(nonce))) }
             .onFailure { logger.debug { "challenge send to $peer failed: ${it.message}" } }
@@ -215,10 +216,6 @@ internal class TokenGatedSeam(
                 inner.sendTo(peer, TapAdmitMessage.encode(TapAdmitMessage.Reject("invalid or expired join code")))
             }.onFailure { logger.debug { "reject send to $peer failed: ${it.message}" } }
         }
-    }
-
-    private companion object {
-        const val NONCE_BYTES = 16
     }
 }
 
