@@ -384,35 +384,52 @@ private suspend fun handshakeLink(selfId: PeerId, conn: Connection, dispatcher: 
 }
 
 /**
- * Close [conn], best-effort, in a loop that must reach every one of its siblings (#1834).
+ * Close [conn] best-effort: the *conn's* failure to close must not cancel the work that follows (#1834).
+ *
+ * Every unshielded close in this file goes through here. **The trigger is not "a loop" — it is whether
+ * anything the mesh still owes follows the close.** #1834 originally scoped itself to the two multi-item
+ * loops and filed the single-item closes as unaffected ("nothing follows them to skip"); that is wrong
+ * for three of them, and the item count was never the right axis:
+ *
+ *  - [MeshSeam.close] / [buildMesh]'s dedup — the rest of the roster follows. A half-open leak, and
+ *    unbounded on a hub, which accepts arbitrarily many spokes.
+ *  - [Mesh.addLink]'s displaced loser — the WINNER'S `readLoop` launch follows, and `admitOrReject` has
+ *    already installed that winner and published the rosters. A rethrow leaves a **zombie link**: the
+ *    peer sits in [Seam.peers] with nothing ever reading its conn, so its frames are never delivered
+ *    and its disconnect is never noticed. The escaping `CancellationException` then skips `acceptPump`'s
+ *    cleanup and permanently cancels `superviseVoterReconnection`'s per-peer coroutine.
+ *  - [admitLink]'s two rejection closes — a `return false` follows, consumed by [buildMesh]'s `filter`,
+ *    so a rethrow fails WHOLE-MESH construction against a documented "rejection never fails construction".
  *
  * **Not `runCatchingCancellable`.** That helper discriminates on TYPE, and type cannot separate "my
  * job was cancelled" from "the callee minted one" — most often a `Connection.close` wrapped in
  * `withTimeout(closeTimeout)`, which throws `TimeoutCancellationException` *to its caller* without
- * cancelling that caller's job. Rethrowing it out of a multi-item close loop abandons every remaining
- * conn: a half-open leak on the ordinary public close path, unbounded on a hub (which accepts
- * arbitrarily many spokes). `Seam.close` carries no *"must not report failure as cancellation"*
+ * cancelling that caller's job. `Seam.close` carries no *"must not report failure as cancellation"*
  * obligation — that contract sits only on `sendTo`/`broadcast`/`Loom.weave` — so a consumer minting
  * one here is not even a contract violation, and this library cannot trust consumer impls regardless.
  *
  * **The `ensureActive` is live, not dead.** This is the asymmetry with the `NonCancellable`-shielded
- * sites (`removePeer`'s drain teardown, and the nine fixed in #1824): inside a shield our own job can
- * never be cancelled, so every `CancellationException` reachable there is necessarily callee-minted and
- * `ensureActive` cannot fire. Here there is no shield, so the caller's cancellation is real and must
- * still propagate — [ensureActive] is exactly the discriminator that lets it, while a callee-minted one
- * falls through and the loop carries on. This is the remedy `Seam.sendTo`'s KDoc prescribes for callers
- * that cannot afford to trust the contract, and it is why #1824's lexical guard neither flags these
- * sites nor could: without a shield the two cases really are ambiguous.
+ * sites ([MeshSeam.removePeer]'s drain teardown, and the nine fixed in #1824): inside a shield our own
+ * job can never be cancelled, so every `CancellationException` reachable there is necessarily
+ * callee-minted and `ensureActive` cannot fire. Here there is no shield, so the caller's cancellation is
+ * real and must still propagate — [ensureActive] is exactly the discriminator that lets it, while a
+ * callee-minted one falls through. This is the remedy `Seam.sendTo`'s KDoc prescribes for callers that
+ * cannot afford to trust the contract, and it is why #1824's lexical guard neither flags these sites nor
+ * could: without a shield the two cases really are ambiguous.
  *
- * Shielding these loops instead would be the wrong trade — a caller that cancels `close()` would then
- * be unable to stop it — and it is also the shape #1824's guard rejects.
+ * Shielding these sites instead would be the wrong trade — a caller that cancels `close()` would then be
+ * unable to stop it — and it is also the shape #1824's guard rejects.
+ *
+ * `broadcast`/`sendTo`'s per-conn `runCatchingCancellable { conn.send(…) }` is deliberately NOT routed
+ * here: those are sends, not closes, and rethrowing there propagates a cancellation the [Seam] contract
+ * requires `Connection.send` not to have minted in the first place.
  */
 private suspend fun closeBestEffort(conn: Connection) {
     try {
         conn.close()
     } catch (_: Throwable) {
         // Genuinely our own cancellation → rethrow. Anything else — including a CancellationException
-        // the conn minted itself — is this conn's failure alone; its siblings still get closed.
+        // the conn minted itself — is this conn's failure alone; whatever follows still happens.
         currentCoroutineContext().ensureActive()
     }
 }
@@ -439,12 +456,17 @@ private fun canonicalLinkNonce(a: ByteArray, b: ByteArray): String {
  * dedup, `links`, or drain accounting — modelled on `NwSeam`'s self-connection drop (#1466/#1484).
  */
 private suspend fun admitLink(selfId: PeerId, admission: LinkAdmission, link: Link): Boolean {
+    // Both closes are best-effort (see [closeBestEffort]). Each sits directly before a `return false`
+    // that `buildMesh` consumes through `filter`, so rethrowing a cancellation the CONN minted would
+    // fail WHOLE-MESH construction — contradicting "rejection is per-link and non-fatal" above, and the
+    // same promise on the factories' `admission` parameter. The reject decision is already made and
+    // does not depend on the close succeeding (#1834).
     if (link.remoteId == selfId) {
-        runCatchingCancellable { link.conn.close() }
+        closeBestEffort(link.conn)
         return false
     }
     if (admission.admit(link.principal, link.remoteId)) return true
-    runCatchingCancellable { link.conn.close() }
+    closeBestEffort(link.conn)
     return false
 }
 
@@ -534,7 +556,14 @@ private class MeshSeam(
         // Dedup against any existing link to the same peer using the canonical nonce, then publish.
         // Snapshot the loser under the lock, close it outside.
         val loser = admitOrReject(link)
-        loser?.let { runCatchingCancellable { it.close() } }
+        // Best-effort (see [closeBestEffort]). This closes ONE conn, but item count is the wrong axis:
+        // what matters is that work which MUST happen follows it. `admitOrReject` has already installed
+        // the winner in `links` and published the rosters, and the winner's readLoop launches on the
+        // next line — so rethrowing a cancellation the loser's conn minted would leave a ZOMBIE LINK
+        // (peer in `peers`, nothing ever reading its conn, its disconnect never noticed) and let a bare
+        // CancellationException escape `addLink` into `acceptPump` and `superviseVoterReconnection`,
+        // skipping their cleanup and cancelling that peer's supervision outright (#1834).
+        loser?.let { closeBestEffort(it) }
         if (loser != link.conn) scope.launch { readLoop(link.remoteId, link.conn) }
     }
 
