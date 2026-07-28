@@ -11,6 +11,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -351,7 +353,7 @@ private suspend fun buildMesh(
             else -> losers += link
         }
     }
-    losers.forEach { runCatchingCancellable { it.conn.close() } }
+    losers.forEach { closeBestEffort(it.conn) }
 
     // A2 (born-dead): a peer-mesh that REQUESTED connections but had them ALL rejected/deduped away
     // asked for peers and got none — it has nothing that could ever drain, so it must latch Torn at
@@ -379,6 +381,40 @@ private suspend fun handshakeLink(selfId: PeerId, conn: Connection, dispatcher: 
     single.send(MeshHello.encode(selfId, myNonce))
     val remote = MeshHello.decode(single.firstFrame())
     return Link(remote.peerId, single, canonicalLinkNonce(myNonce, remote.nonce), principal)
+}
+
+/**
+ * Close [conn], best-effort, in a loop that must reach every one of its siblings (#1834).
+ *
+ * **Not `runCatchingCancellable`.** That helper discriminates on TYPE, and type cannot separate "my
+ * job was cancelled" from "the callee minted one" — most often a `Connection.close` wrapped in
+ * `withTimeout(closeTimeout)`, which throws `TimeoutCancellationException` *to its caller* without
+ * cancelling that caller's job. Rethrowing it out of a multi-item close loop abandons every remaining
+ * conn: a half-open leak on the ordinary public close path, unbounded on a hub (which accepts
+ * arbitrarily many spokes). `Seam.close` carries no *"must not report failure as cancellation"*
+ * obligation — that contract sits only on `sendTo`/`broadcast`/`Loom.weave` — so a consumer minting
+ * one here is not even a contract violation, and this library cannot trust consumer impls regardless.
+ *
+ * **The `ensureActive` is live, not dead.** This is the asymmetry with the `NonCancellable`-shielded
+ * sites (`removePeer`'s drain teardown, and the nine fixed in #1824): inside a shield our own job can
+ * never be cancelled, so every `CancellationException` reachable there is necessarily callee-minted and
+ * `ensureActive` cannot fire. Here there is no shield, so the caller's cancellation is real and must
+ * still propagate — [ensureActive] is exactly the discriminator that lets it, while a callee-minted one
+ * falls through and the loop carries on. This is the remedy `Seam.sendTo`'s KDoc prescribes for callers
+ * that cannot afford to trust the contract, and it is why #1824's lexical guard neither flags these
+ * sites nor could: without a shield the two cases really are ambiguous.
+ *
+ * Shielding these loops instead would be the wrong trade — a caller that cancels `close()` would then
+ * be unable to stop it — and it is also the shape #1824's guard rejects.
+ */
+private suspend fun closeBestEffort(conn: Connection) {
+    try {
+        conn.close()
+    } catch (_: Throwable) {
+        // Genuinely our own cancellation → rethrow. Anything else — including a CancellationException
+        // the conn minted itself — is this conn's failure alone; its siblings still get closed.
+        currentCoroutineContext().ensureActive()
+    }
 }
 
 /** Order-independent link identity from the two endpoint nonces — identical on both ends. */
@@ -547,8 +583,10 @@ private class MeshSeam(
 
     override suspend fun close(reason: CloseReason) {
         // Snapshot the connections to close under the lock; perform the suspending closes outside it.
+        // Per-conn best-effort (see [closeBestEffort]): one wedged or timing-out peer must not strand
+        // the rest of the roster half-open, and the roster is unbounded on a hub (#1834).
         val toClose = tearDown(reason) ?: return
-        toClose.forEach { conn -> runCatchingCancellable { conn.close() } }
+        toClose.forEach { conn -> closeBestEffort(conn) }
     }
 
     private suspend fun readLoop(remoteId: PeerId, conn: Connection) {
