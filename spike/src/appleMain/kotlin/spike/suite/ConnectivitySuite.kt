@@ -341,9 +341,11 @@ public class ConnectivitySuite {
             hop("leg1 self=${loomA.selfId.value.take(8)}")
             val seamA = instrumentedWeave("leg1", loomA, hop)
                 ?: return@scenario Verdict.FAIL to "leg1 never established on $SVC4 (teardown/reconnect NOT exercised)"
-            withTimeoutOrNull(5.seconds) { seamA.state.first { it is SeamState.Woven } }
+            // Load-bearing, not evidence: BOTH roles' drop assertions below are only discriminating
+            // GIVEN a confirmed prior Woven (see the joiner comment). Captured like leg 2's `wovenB`.
+            val wovenA = withTimeoutOrNull(5.seconds) { seamA.state.first { it is SeamState.Woven } } != null
             hop(
-                "leg1 wove state=${seamA.state.value.short()} " +
+                "leg1 wove state=${seamA.state.value.short()} woven5s=$wovenA " +
                     "peers=[${seamA.peers.value.joinToString(",") { it.value.take(8) }}] t=${ms()}ms",
             )
 
@@ -355,8 +357,13 @@ public class ConnectivitySuite {
                 delay(2.seconds) // let the joiner settle on the live link before the drop
                 hop("dropping link (host close) t=${ms()}ms")
                 seamA.close(CloseReason.Normal)
-                dropObserved = true // a local close is this side's own terminal signal
-                hop("post-close stateA=${seamA.state.value.short()} t=${ms()}ms")
+                // Read, don't assume: `close` calls `latchTorn` first and `latchTorn` writes
+                // `state = Torn` synchronously under the lock before returning, so this is
+                // deterministic the instant `close` returns. Asserting it is what earns the verdict
+                // word below — set unconditionally, the host would still print "close latched Torn"
+                // if the latch silently failed.
+                dropObserved = wovenA && seamA.state.value is SeamState.Torn
+                hop("post-close stateA=${seamA.state.value.short()} torn=$dropObserved t=${ms()}ms")
             } else {
                 // NOT Torn — that assertion (removed in #1836) could only ever time out. Per NwSeam's
                 // "peer loss is recoverable — re-form, don't tear" (#1513), a joiner losing its last remote
@@ -364,12 +371,16 @@ public class ConnectivitySuite {
                 // NwLoom to redial. `Torn` latches on ONLY an explicit consumer `close()` or the initial
                 // weave timeout; it "is never a consequence of peer loss".
                 //
-                // BOTH halves are required and neither alone would do. `Weaving` alone is also true of a
-                // seam that never NOTICED the drop — which is precisely the false green this replaces, so
-                // asserting it on its own would swap a guaranteed FAIL for a meaningless PASS. `peers ==
-                // {selfId}` alone is the seam's own pre-weave starting value. Together they say "this seam
-                // saw its last remote go and re-formed", and nothing else does. (Leg 1's hop above prints
-                // the two peer identities, so the pre-drop roster is legible in the shared report.)
+                // BOTH halves are required, and the pair is discriminating only GIVEN the confirmed
+                // prior Woven (`wovenA`) — on its own it is ALSO the seam's pre-weave state, since
+                // `_state` initialises to Weaving and `peers` to `{selfId}`. Do not drop `wovenA` from
+                // the conjunction below: without it a non-blocking leg-1 weave would make this
+                // scenario a silent guaranteed PASS, which is worse than the guaranteed FAIL it
+                // replaces. Individually: `Weaving` alone does not exclude a seam that never wove, nor
+                // the brief `addRemotePeer` transient where `peers` has grown but `_state` has not yet
+                // flipped; `peers == {selfId}` alone is that same pre-weave starting value. (Leg 1's
+                // hop above prints the two peer identities, so the pre-drop roster is legible in the
+                // shared report.)
                 //
                 // Matched on the COMBINED pair rather than awaited-then-sampled: `evictPeerLocked` writes
                 // `peers` and then `state` under one lock, so a `peers.value` read taken after the state
@@ -380,7 +391,7 @@ public class ConnectivitySuite {
                     combine(seamA.state, seamA.peers) { s, p -> s to p }
                         .first { (s, p) -> s is SeamState.Weaving && p == alone }
                 }
-                dropObserved = reformed != null
+                dropObserved = wovenA && reformed != null
                 hop(
                     "reformed=$dropObserved stateA=${seamA.state.value.short()} " +
                         "peersA=[${seamA.peers.value.joinToString(",") { it.value.take(8) }}] t=${ms()}ms",

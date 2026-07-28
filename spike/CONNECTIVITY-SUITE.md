@@ -58,14 +58,20 @@ So the joiner has no terminal signal to wait for, and a scenario that waits for 
 pass — it can only spend the whole timeout and report the absence. What the joiner asserts instead is the
 **pair** `Weaving` *and* `peers == {selfId}`, checked together:
 
-- `Weaving` alone is also true of a seam that never *noticed* the drop, so on its own it would trade a
-  guaranteed FAIL for a meaningless PASS.
+- `Weaving` alone does not exclude a seam that never wove at all, nor the brief moment during a peer
+  *gain* where the roster has grown but the state has not yet flipped.
 - `peers == {selfId}` alone is the seam's own value before it ever wove.
 
-Only the two together say *this seam saw its last remote go, and re-formed rather than died*. They are
-matched on a combined view of both flows rather than "wait for the state, then read the roster", because
-the eviction writes the roster and the state under one lock and a later read could catch a roster a
-redial had already re-grown.
+The two together say *this seam saw its last remote go, and re-formed rather than died* — but **only
+given that it had provably wound up `Woven` first**. That precondition is not decoration: `Weaving` +
+`peers == {selfId}` is *also* precisely the seam's initial state, so the pair on its own is not
+self-sufficient. The suite therefore captures leg 1's `Woven` confirmation into `wovenA` and ANDs it
+into both roles' verdicts. Drop it and a leg-1 weave that stopped blocking would turn this scenario
+into a silent guaranteed PASS — a worse failure than the guaranteed FAIL it replaced.
+
+The pair is matched on a combined view of both flows rather than "wait for the state, then read the
+roster", because the eviction writes the roster and the state under one lock and a later read could
+catch a roster a redial had already re-grown.
 
 The two roles therefore also PASS with different words — `close latched Torn` on the host,
 `peer-loss re-form seen` on the joiner. Two reports that read identically would hide the asymmetry.
@@ -381,8 +387,9 @@ Three things worth keeping from that hunt:
   falsified each in one run.
 - **Fixing one bug can expose the next.** With leg 1 finally establishing, scenario 4's stale `Torn`
   expectation surfaced immediately — it had never been reachable before, so the joiner branch had never
-  once run. Fixed in #1836; [the section above](#scenario-4-the-two-sides-expect-different-things) is
-  what it now asserts.
+  once run. Assertion corrected in #1838 (tracked by #1836, still open) —
+  [the section above](#scenario-4-the-two-sides-expect-different-things) is what it now asserts, and
+  per [Status](#status) that assertion has **not yet been re-run on hardware**.
 - **A doc can be fixed while the code it describes is not.** The guide was corrected to the #1513
   contract in a *docs-only* commit that never touched `ConnectivitySuite.kt`, so for eight days the
   section above described the right behaviour while the code twenty lines away still waited for `Torn`.
@@ -397,9 +404,11 @@ Three things worth keeping from that hunt:
 **Scenario 4: the joiner side has never passed on hardware.** A "5/5 on both phones" claim stood here
 from 2026-07-19 and does not survive #1836: that run's `Join · S4 only` shows `[4] Teardown+reconnect
 FAIL 21.1s torn=false`, and with the pre-#1836 assertion it could not have shown anything else. The
-host side and both legs' weaves are validated (leg 1 in 746 ms, leg 2 in 435 ms with both peers); what is
-owed is one paired `Host · S4 only` / `Join · S4 only` run confirming the joiner now reports
-`peer-loss re-form seen`.
+host side and both legs' weaves are validated (leg 1 in 746 ms, leg 2 in 435 ms with both peers) — but
+note the host branch previously PASSed by *fiat*: it set its own drop signal unconditionally, so no run
+to date has actually asserted that `close()` latched `Torn`. It now reads the state, so that half is
+newly-asserted too. What is owed is one paired `Host · S4 only` / `Join · S4 only` run confirming the
+joiner reports `peer-loss re-form seen` and the host's latch read comes back true.
 
 The adverse-network matrix the suite was built for — captive-portal Wi-Fi, airplane mode,
 Wi-Fi-off/cellular-on, two SSIDs — is still worth walking through; that is what it is for.
