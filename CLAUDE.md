@@ -223,6 +223,30 @@ still compiles but self-skips at runtime, so `./gradlew build` doesn't run it.
   before swallowing. Best-effort fabric sends are the common case:
   `runCatchingCancellable { seam.broadcast(frame) }.onFailure { logger.debug { … } }`.
 
+  **One carve-out — inside a `withContext(NonCancellable)` shield, do the opposite** (#1803, #1824).
+  The shield exists so cleanup completes *despite* outer cancellation, so your own job is never
+  cancelled there — which makes every `CancellationException` reachable inside it necessarily
+  callee-minted (a `withTimeout` in the callee), and rethrowing it aborts the very cleanup the shield
+  guarantees, skipping every remaining close. That bans `runCatchingCancellable` **and** the
+  hand-written `if (e is CancellationException) throw e` above. Use a plain `try` /
+  `catch (failure: Throwable)` + debug log, one guard **per** cleanup item —
+  `NwLoom.discardUnreturnedSeam` and `CompositeSeam.discardOrphanedPly` are the in-tree patterns:
+
+  ```kotlin
+  withContext(NonCancellable) {
+      seams.forEach { seam ->
+          try { seam.close() } catch (failure: Throwable) { logger.debug { "close failed: $failure" } }
+      }
+  }
+  ```
+
+  If a cancellable bound (`withTimeout`/`withTimeoutOrNull`) intervenes *inside* the shield, the
+  premise is false at that position — hoist the `try`/`catch` outside the bound rather than
+  swallowing within it. The root build's `forbidRunCatchingCancellableUnderNonCancellable` (wired
+  into `check`) scans production `*Main` sources for the `runCatchingCancellable` **token**
+  lexically inside a shield: it cannot see the hand-written rethrow, and neither form is visible
+  when reached through a helper called from the shield. On those two, this paragraph is the guard.
+
 - **Debugging bugs a local suite can't see** (hardware/network/contention-only) follows the
   process rules in [`docs/debugging-process.md`](docs/debugging-process.md): don't `closes #N` a
   hardware-reproduced bug until validated against the reproducer (a `FakeSeam`-injected test proves

@@ -259,6 +259,11 @@ Design:
   entry (our last ref). Cancel-first-then-drop so teardown is intentional, not GC-timed.
 - **Cancellation-safe throughout** (`runCatchingCancellable`, rethrow
   `CancellationException`; a torn connection during broadcast logs at debug, not throws).
+  **Except inside a `withContext(NonCancellable)` shield**, where the rule inverts: the job is
+  never cancelled there, so a `CancellationException` is callee-minted and rethrowing it aborts
+  the cleanup — plain `try` / `catch (failure: Throwable)` + debug log, as
+  `NwLoom.discardUnreturnedSeam` does since #1824. `forbidRunCatchingCancellableUnderNonCancellable`
+  enforces it.
 - **`Torn` is terminal and stays terminal** — the registry writer must not clobber
   `Torn` with a stale non-terminal value (the `stateStaysTornAfterClose` class).
 

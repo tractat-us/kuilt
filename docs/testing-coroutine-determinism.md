@@ -74,6 +74,8 @@ runCatchingCancellable { seam.broadcast(frame) }   // rethrows cancellation, swa
 
 A `seam.state.value is Woven` guard before the send is **not** sufficient — it's a TOCTOU: the ply can tear between the guard and the send. Tolerate the throw at the send site. (#535 fixed `CompositeSeam`'s two announce pumps this way; PR #538.)
 
+The one place this `MUST` inverts is **inside a `withContext(NonCancellable)` shield** — a farewell broadcast on a teardown path, say. There your own job is never cancelled, so every `CancellationException` reachable inside the shield is callee-minted and rethrowing it skips the rest of the cleanup; use a plain `try` / `catch (failure: Throwable)` + debug log instead. `forbidRunCatchingCancellableUnderNonCancellable` fails the build on the `runCatchingCancellable` form there — but **in `src/*Main` sources only**. Every `*Test` source set is outside the guard's scan, so in a test the prose above is the whole enforcement. See CLAUDE.md's exception-discipline rule and #1803/#1824.
+
 ## Practical guards (given CI does not run native)
 
 - **Run native locally before merging** anything touching coroutine-scoped components: `./gradlew build` on a Mac runs the Apple targets. Use `--rerun-tasks` to defeat cached-green masking when verifying a suspected flake.
