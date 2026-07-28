@@ -41,7 +41,7 @@ run [scenario 6](#scenario-6-the-airplane-mode-run-1712) — it is a separate pa
 | 4 | Teardown + reconnect | The host drops the link. The **host** sees its own `close()` latch `Torn`; the **joiner** sees the recoverable re-form — `Woven → Weaving` *and* `peers` collapsing to just itself ([why they differ](#scenario-4-the-two-sides-expect-different-things)). Both then re-weave on a second service type. |
 | 5 | Soak (~2 min) | Continuous round-trip stays healthy: RTT distribution (min/p50/p95/max) with few/no stalls. This is where an AWDL data-path stall (the MC failure mode) would show up as a FAIL. |
 | 6 | Local-fabric outage *(separate buttons — you toggle Airplane Mode)* | **The same outage read two opposite ways.** The phone you switched off says *my* network died: `localFabric` → `Unavailable`, a `LocalFabricLost`, and every `Partitioned`/`HostLost` it emits tagged `Unavailable`. The phone you left alone says *they* went away: its own `localFabric` stays `Available` and the `Partitioned` it emits for the vanished peer carries that `Available` tag. A short outage keeps the seat; a long one expires it, and the switched-off phone *still* blames itself. |
-| 7 | Sub-timeout blip *(separate buttons — one Airplane Mode toggle)* | **A drop too brief for the other phone to notice must still recover.** You hold the radio down for 10–30 seconds: long enough that the offline phone's own connection dies, short enough that the other phone never sees a gap. PASS = the room survives. **On today's build this FAILs** — the connection dies about seventy seconds later — and that failure is what the scenario is for ([#1637](https://github.com/tractat-us/kuilt/issues/1637)). |
+| 7 | Sub-timeout blip *(separate buttons — one Airplane Mode toggle)* | **A drop too brief for the other phone to notice must still recover.** The outage has to land between 10 and 15 seconds: long enough that the offline phone's own connection dies, short enough that the other phone never sees a gap. You hold the toggle for only ~3.5s — the radio supplies the rest. PASS = the room survives. **On today's build this FAILs** — the connection dies about seventy seconds later — and that failure is what the scenario is for ([#1637](https://github.com/tractat-us/kuilt/issues/1637)). It is a **narrow target and you should expect to re-run**; see [why the band is hard to hit](#why-the-band-is-hard-to-hit-and-what-would-fix-that). |
 
 Every report is prefixed with the **environment** captured from `nw_path_monitor`
 (`path=satisfied ifaces=[wifi,cell,…] expensive=… constrained=…`) so a failing report is
@@ -236,22 +236,22 @@ a gap. That is precisely why this check has to happen on two real phones.
 
 ### The idea, in one paragraph
 
-Two phones are talking. You switch one phone's radio off for **about fifteen seconds** and switch it
-straight back on. That is long enough that the offline phone's own connection gives up and has to be
-rebuilt — but *too short for the other phone to notice anything at all*. It was never waiting long
-enough to get worried. So when the first phone comes back and says "I'm back, let me in", the second
-phone answers, quite reasonably, "back from what? You never left." The first phone asks again. And
-again. It keeps asking for a whole minute, and then gives up and declares the session dead — over a
-fifteen-second hiccup that neither phone had any real trouble with. That is the bug. **This scenario
-is how we catch it on real phones, and today it is expected to FAIL.**
+Two phones are talking. You switch one phone's radio off for a moment and switch it straight back on.
+The whole gap lasts about twelve seconds — long enough that the offline phone's own connection gives up
+and has to be rebuilt, but *too short for the other phone to notice anything at all*. It was never
+waiting long enough to get worried. So when the first phone comes back and says "I'm back, let me in",
+the second phone answers, quite reasonably, "back from what? You never left." The first phone asks
+again. And again. It keeps asking for a whole minute, and then gives up and declares the session dead —
+over a twelve-second hiccup that neither phone had any real trouble with. That is the bug. **This
+scenario is how we catch it on real phones, and today it is expected to FAIL.**
 
 ### Why scenario 6 can't show it
 
 Scenario 6 is tuned to notice an outage after five seconds, which is *faster* than the ten seconds a
 connection is given to recover on its own. So in scenario 6 the other phone always notices first, and
 everything then works the ordinary way. There is simply no gap for this bug to live in. Scenario 7
-slows the other phone's noticing down to thirty seconds, which opens a twenty-second gap — anything you
-hold between ten and thirty seconds lands in it.
+gives the other phone fifteen seconds before it worries, which opens a five-second gap — anything the
+network is really down for between ten and fifteen seconds lands in it.
 
 That is also why the two scenarios can't be merged: they need opposite settings.
 
@@ -259,38 +259,75 @@ That is also why the two scenarios can't be merged: they need opposite settings.
 
 You need two phones and about three minutes. Decide up front which phone is going offline.
 
-1. On the phone you want to **keep online**, tap **Host · S7 stay up**. Then leave it completely alone.
-   It has nothing to do and finishes by itself after about three minutes; that is normal, not a hang.
+1. On the phone you want to **keep online**, tap **Host · S7 stay up**. Then leave it completely alone —
+   don't touch it, and **don't close the app**. It has to stay reachable the entire time, because the
+   other phone's whole test is coming *back* to it. It ends by itself as soon as the other phone
+   finishes (usually about a minute and a half), and gives up after four minutes at the outside; both
+   are normal, not a hang.
 2. On the phone that will **go offline**, tap **Join · S7 go offline**. (Bottom row of buttons.)
    *Both phones must use the matching button* — one Host, one Join.
 3. Wait a few seconds for them to find each other, then follow the orange banner on the offline phone.
-4. It will say **"AIRPLANE MODE ON now"**. Turn it on.
-5. About fifteen seconds later it says **"AIRPLANE MODE OFF now — that's the only toggle"**. Turn it
-   back off, reasonably promptly. That's your only job.
-6. Wait. The phone now needs up to another minute to reach its verdict — leave it alone until the
-   matrix row appears.
+4. It will say **"AIRPLANE MODE ON now"** — and to keep your thumb on the toggle. Turn it on and leave
+   your thumb there.
+5. **About three and a half seconds later** it says **"AIRPLANE MODE OFF — NOW"**. Turn it straight back
+   off. Not "reasonably promptly" — immediately. That's your only job, and the timing is the test.
+6. Wait. The phone now needs up to another minute to reach its verdict — leave both phones alone until
+   the matrix row appears on each.
 7. **Share or Copy the report from BOTH phones.**
 
-**The outage is the whole scenario, so it has a target: it must land between 10 and 30 seconds.** The
-phone asks for a fifteen-second hold because the real outage always runs a little longer than your
-thumb does — turning Airplane Mode off doesn't put you back on Wi-Fi instantly — so fifteen seconds of
-holding usually measures about twenty, comfortably in the middle.
+**Why such a short hold?** The outage is much longer than your thumb is. Turning Airplane Mode off
+doesn't put you back on Wi-Fi — the radio has to find the network again first, and on the one run we
+have measured that took **8.7 seconds** on its own (a 15.0s hold produced a 23.7s outage). So the app
+asks for ~3.5s of holding and lets the radio supply the other nine, landing near the middle of the
+10–15s target.
 
-You don't have to be precise. The phone times the actual outage itself, from the moment the network
-really went away to the moment it really came back, and judges on that, not on the prompt. If it lands
-outside the band the phone says **SKIP** and tells you which way you missed:
+The phone times the actual outage itself, from the moment the network really went away to the moment it
+really came back, and judges on that, not on the prompt. If it lands outside the band the phone says
+**SKIP** and tells you which way you missed:
 
 - *too short* → the offline phone's connection never actually died, so nothing was tested. Hold longer.
 - *too long* → the other phone noticed, and then everything works the ordinary way. Off faster.
 
-Neither is a failure of anything. Just run it again.
+Neither is a failure of anything. Just run it again — and expect to.
+
+### Why the band is hard to hit, and what would fix that
+
+Be warned: **this is a five-second target aimed through nine seconds of lag you don't control.** If the
+radio comes back three seconds quicker than last time you undershoot; three seconds slower and you
+overshoot. Both are SKIPs. Plan on several attempts, and don't read a string of SKIPs as anything being
+broken.
+
+Neither edge of the band is a setting anyone can widen:
+
+- The **bottom** (10s) is how long the fabric gives a connection whose network vanished before tearing
+  it down. It lives inside `kuilt-nw` and isn't configurable from the suite.
+- The **top** is not the fifteen-second "notice" setting at all — it is the point where the *other*
+  phone's TCP connection to a vanished peer dies of its own timeout. On the first hardware run that
+  happened at **~18.6 seconds** (one observation, not a constant — it will move with the network), and
+  it fired *regardless* of the fact that phone was configured to wait 30 seconds before worrying. That
+  is why the setting was pulled back to 15s: a band whose top half is physically unreachable just
+  invites out-of-band runs. **Raising the "notice" setting cannot buy more room.**
+
+What *would* make it hittable, in rough order of cost:
+
+1. **Make the fabric's ten-second grace injectable** for the spike, and lower it. A 3s grace with a 15s
+   notice gives a twelve-second band and a comfortable hold — this is the real fix, and it is a small
+   change inside `kuilt-nw`.
+2. **Let the app cut the outage short** instead of the operator: not possible for Airplane Mode, but a
+   Wi-Fi-only drop that the app can't cause either. No path here today.
+3. **Retry the blip inside one run** — hold, measure, and if it misses the band, prompt for another
+   toggle rather than ending the scenario. Turns three runs into one, without widening anything.
+4. **Calibrate first**: one throwaway toggle to measure *this* phone's restore lag, then aim the real
+   hold at the band using that number instead of the 8.7s we measured once.
+
+Until one of those lands, the honest expectation is: a few SKIPs, then a run that lands.
 
 ### What the results mean
 
 **On the phone you switched off** (`role=join S7-ONLY`) — this is the one that matters:
 
 ```
-[7] Sub-timeout blip       FAIL   88.1s  blip: HostLost 70.3s after the radio died, on a 19.4s outage that sat INSIDE the (10s, 30s) repro interval — reason=Refused(code=resume-window-not-yet-open,retryable=true), mine=Available. This is #1637: …
+[7] Sub-timeout blip       FAIL   88.1s  blip: HostLost 70.3s after the radio died, on a 12.4s outage that sat INSIDE the (10s, 15s) repro interval — reason=Refused(code=resume-window-not-yet-open,retryable=true), mine=Available. This IS #1637, discriminated on the reject code: …
 ```
 
 **That FAIL is the expected result on a build without the #1637 fix, and it is the point of the
@@ -299,19 +336,35 @@ the measured outage and the exact failure reason attached so the report can be p
 the issue. Once #1637 is fixed the same run should read:
 
 ```
-[7] Sub-timeout blip       PASS   61.7s  survived a 19.4s blip inside (10s, 30s): Recovered(a91f2c04) 51.2s after the radio died, no HostLost, host Connected in the roster
+[7] Sub-timeout blip       PASS   61.7s  survived a 12.4s blip inside (10s, 15s): Recovered(a91f2c04) 44.2s after the radio died, no HostLost, host Connected in the roster
 ```
+
+**Only one shape of failure is #1637**, and the scenario checks for it precisely: a `HostLost` whose
+reason is `Refused` carrying the code `resume-window-not-yet-open`. That code means the other phone was
+*answering* — over and over, "not yet, you never left" — which is the entire bug. Any other `HostLost`
+is a different problem and reports as its own **SKIP**, not as a FAIL:
+
+```
+[7] Sub-timeout blip       SKIP   72.0s  blip: HostLost 70.0s after the radio died with reason=WindowExpired … That is **not** the #1637 signature … This run's resume was never answered at all. seam=Weaving … the seam never got back to Woven, so no Resume was ever sent. Likely causes, in order: this phone never re-wove (the STAY-UP phone stopped advertising or was closed, …)
+```
+
+That one means nothing ever got through — usually because the other phone wasn't there any more. Check
+how long the stay-up phone says it stayed up, and re-run. (This exact case is what the first hardware
+run produced, and the old code reported it as "#1637 confirmed" while asserting three things that had
+not happened.)
 
 **On the phone you left alone** (`role=host S7-ONLY`):
 
 ```
-[7] Sub-timeout blip       PASS  183.4s  never partitioned a91f2c04 in 180.0s — my link to it never closed, so no window ever opened. That is the #1637 precondition holding; the verdict that matters is on the DROPPED phone
+[7] Sub-timeout blip       PASS   96.2s  never partitioned a91f2c04 while staying up 91.0s (ended on the other phone leaving) — my link to it never closed, so no window ever opened. That is the #1637 precondition holding, AND the joiner had a live peer to return to for the whole episode. …
 ```
 
-This phone is a **witness, not a subject**. It is supposed to see nothing whatsoever, and it reads the
-same before and after the fix — so don't read its PASS as good news about the bug. Its job is to prove
-the *setup* was right: that it genuinely never noticed the outage. If it says SKIP ("I DID notice…"),
-the hold was too long and the whole run is out of band no matter what the other phone said.
+This phone is a **witness, and a fixture**. It is supposed to observe nothing whatsoever, and it reads
+the same before and after the fix — so don't read its PASS as good news about the bug. It has two jobs:
+prove the *setup* was right (it genuinely never noticed the outage), and **still be there** when the
+other phone comes back. Its verdict now quotes how long it stayed up, so you can tell the two apart. If
+it says SKIP ("I DID notice…"), the outage was too long and the whole run is out of band no matter what
+the other phone said.
 
 One result to watch for on the offline phone, because it looks like success and isn't:
 
@@ -324,16 +377,28 @@ says nothing about #1637, so it is honestly a SKIP rather than a PASS. Hold shor
 
 ### Why the timings are what they are
 
-Three numbers, and every one of them is doing something:
+Four numbers, and every one of them is doing something:
 
 - **10 seconds** is not a setting at all — it is how long the fabric gives a connection whose network
   vanished to come back before tearing it down. Below that, nothing happens and there is nothing to
   test.
-- **30 seconds to notice** (instead of the default 15, and scenario 6's 5) is the top of the band. It
-  is set to 30 purely to make the target wide enough for a human with a thumb: 10–30 is twenty seconds
-  of room, where the default would leave five.
-- **60 seconds of grace** is the budget the bug burns through. It is why a FAIL takes about seventy
-  seconds to arrive after the radio dies, and why you are asked to leave the phone alone at step 6.
+- **15 seconds to notice** is the shipping default, and the band's nominal top. It used to be set to 30
+  to make the target wider; the first hardware run showed that doesn't work — see the next bullet.
+- **~18.6 seconds** is the real ceiling, and nobody chose it: it is when the stay-up phone's own TCP
+  connection to the vanished peer died of ETIMEDOUT on the one run we have measured, firing a
+  `TransportClosed` no "notice" setting has any say over. One observation, not a constant. Everything
+  above it is unreachable, which is why the notice setting was brought back under it.
+- **60 seconds of window** is the budget the bug burns through. It is why a FAIL takes about seventy
+  seconds to arrive after the radio dies, and why you are asked to leave both phones alone at step 6.
+
+And one more that isn't a timing but is just as load-bearing: **the stay-up phone must outlive the
+whole episode.** It stops advertising the moment its scenario ends, and a phone that comes back to find
+nothing to dial can't resume no matter how the library behaves — so its dwell is sized to cover the
+other phone's entire reconnect (up to four minutes) and it ends early only when the other phone leaves.
+The first hardware run got this wrong: the stay-up side decided its verdict on the first `Partitioned`
+and exited at t=25.4s, **4.1 seconds before** the other phone's radio came back. That phone then found
+only itself in its browse, got `ECONNREFUSED`, and sent zero Resumes. Both reports looked plausible;
+neither said anything about #1637.
 
 ## Reading the report
 
@@ -591,9 +656,29 @@ produced `Partitioned(LinkTimeout)` and `WindowOpened` at 9.3 s and a clean `Rec
 The other phone always notices first at that setting, so the resume machine's failing lane is
 unreachable from scenario 6 — see [scenario 7](#scenario-7-the-blip-the-other-phone-never-notices-1637).
 
-**Scenario 7: never run on hardware yet.** It compiles for `iosArm64`, `iosSimulatorArm64` and
-`macosArm64`, and it is reviewable, but it has no on-device result of any kind — and it cannot get one
-from a Mac: it needs two physical iPhones and a person flipping Airplane Mode once. **When it does run,
-a FAIL on a build without the #1637 fix is the expected outcome**, so the first thing to check is that
-the offline phone's report shows a measured outage *inside* the 10–30 s band and the online phone's
-shows it never noticed — without both, the run says nothing either way.
+**Scenario 7: run once on hardware (2026-07-28, 06:50 ET) — inconclusive about #1637, and the run
+exposed three defects in the scenario itself.** iPhone XS as the dropped joiner, iPhone 17 Pro as the
+stay-up host, `detect=30s window=1m grace=10s repro=(10s,30s)`. What happened:
+
+1. **The stay-up phone exited before the other one's episode could finish.** It decided its verdict on
+   its first `Partitioned` and finished at t=25.4 s, which stopped its advertisement — 4.1 s *before*
+   the joiner's radio returned. The joiner's browse then found only itself (`nw.loom.self-skip`), its
+   dial was refused (`posix 61`), and it sent **zero** Resumes. Every run was invalidated this way; the
+   resume machine under test was never entered.
+2. **The FAIL prose asserted #1637 without checking for it.** The joiner reported `HostLost` with
+   `reason=WindowExpired` and printed "This is #1637: the host never partitioned me (its link never
+   closed), so every Resume was answered WindowNotYetOpen" — every clause of which was false for that
+   run. #1637's signature is `Refused` carrying `RejectCode.ResumeWindowNotYetOpen`, and nothing else.
+3. **The band's upper half was physically unreachable.** Configured `detect=30s`, the host still
+   noticed at t≈18.6 s: its TCP connection to the vanished peer died of ETIMEDOUT (`posix 60`) and
+   fired `TransportClosed`. `HeartbeatConfig.timeout` never governed the ceiling.
+
+All three are fixed (this PR): the stay-up side now dwells for the joiner's whole episode and reports
+how long it stayed up; the FAIL is gated on the reject code and any other `HostLost` reports as its own
+SKIP; and the band is `(10s, 15s)` — under the observed transport death — with the hold derived from it
+(~3.5 s) and the restore lag stated. **The scenario has therefore still never produced a verdict about
+#1637.** When it next runs, check three things before believing either report: the offline phone's
+measured outage is inside 10–15 s, the online phone says it never partitioned *and* names how long it
+stayed up, and a FAIL quotes `code=resume-window-not-yet-open`. Without all three the run says nothing.
+Expect several SKIPs first — see [why the band is hard to
+hit](#why-the-band-is-hard-to-hit-and-what-would-fix-that).
