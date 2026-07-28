@@ -5,6 +5,7 @@ import us.tractat.kuilt.raft.internal.RaftMessage
 import us.tractat.kuilt.raft.internal.isLogUpToDate
 import us.tractat.kuilt.raft.internal.majorityCommitIndex
 import us.tractat.kuilt.raft.internal.nextIndexAfterFailure
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -119,6 +120,50 @@ class RaftLogMathTest {
         val log = listOf(LogEntry(1L, 1L, byteArrayOf()))
         // conflictTerm=99 absent, no conflictIndex → currentNextIndex - 1
         assertEquals(9L, nextIndexAfterFailure(10L, failResponse(conflictTerm = 99L), log))
+    }
+
+    // ── nextIndexAfterFailure: #1829 conflictIndex clamp ──────────────────────
+    //
+    // Backup is monotonically non-increasing by construction (§5.3), and both honest constructions
+    // of conflictIndex are bounded by the probed index (prevLogIndex = currentNextIndex - 1). So the
+    // result is clamped to 1..currentNextIndex: a no-op for every honest peer, and the only thing
+    // standing between a malformed rejection and either the #1175 error() (above the log) or a
+    // permanent snapshot-diversion wedge (below 1). See NextIndexBackupClampTest for the engine-level
+    // consequences.
+
+    @Test
+    fun nextIndexAfterFailure_conflictIndexAboveCurrentNextIndex_clampedToIt() {
+        val log = listOf(LogEntry(1L, 1L, byteArrayOf()), LogEntry(2L, 1L, byteArrayOf()))
+        assertEquals(3L, nextIndexAfterFailure(3L, failResponse(conflictIndex = Long.MAX_VALUE), log))
+    }
+
+    @Test
+    fun nextIndexAfterFailure_conflictIndexNegative_clampedToOne() {
+        val log = listOf(LogEntry(1L, 1L, byteArrayOf()))
+        assertEquals(1L, nextIndexAfterFailure(5L, failResponse(conflictIndex = -5L), log))
+    }
+
+    @Test
+    fun nextIndexAfterFailure_conflictTermPathAlsoClamped() {
+        // conflictTerm=7 IS in the leader's log, at an index far past the probed nextIndex — the
+        // lastOfTerm branch, which would otherwise move nextIndex *forward* on a rejection.
+        val log = listOf(
+            LogEntry(1L, 1L, byteArrayOf()),
+            LogEntry(2L, 7L, byteArrayOf()),
+            LogEntry(3L, 7L, byteArrayOf()),
+        )
+        assertEquals(2L, nextIndexAfterFailure(2L, failResponse(conflictTerm = 7L), log))
+    }
+
+    @Test
+    fun nextIndexAfterFailure_honestConflictIndexIsUnchangedByTheClamp() {
+        val log = listOf(LogEntry(1L, 1L, byteArrayOf()), LogEntry(2L, 1L, byteArrayOf()))
+        // An honest follower's conflictIndex is always < currentNextIndex, so the clamp never bites.
+        assertAll(
+            { assertEquals(3L, nextIndexAfterFailure(10L, failResponse(conflictIndex = 3L), log)) },
+            { assertEquals(1L, nextIndexAfterFailure(2L, failResponse(conflictIndex = 1L), log)) },
+            { assertEquals(9L, nextIndexAfterFailure(10L, failResponse(), log)) },
+        )
     }
 
     // ── majorityCommitIndex ───────────────────────────────────────────────────
