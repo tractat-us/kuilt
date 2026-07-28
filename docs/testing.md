@@ -33,12 +33,13 @@ role-split fabrics (WebSocket, mDNS, WebRTC, Multipeer) return distinct host/joi
 looms wired to reach each other. The reference binding is the whole point of the design
 — a fabric adapter is conformant when this subclass is green:
 
-<!-- condensed from kuilt-conformance/src/commonTest/kotlin/us/tractat/kuilt/conformance/InMemoryLoomConformanceTest.kt -->
+<!-- verbatim from kuilt-conformance/src/commonTest/kotlin/us/tractat/kuilt/conformance/InMemoryLoomConformanceTest.kt#InMemoryLoomConformanceTest -->
 
 ```kotlin
 class InMemoryLoomConformanceTest : SeamConformanceSuite() {
     private val loom = InMemoryLoom()
     override fun newLoomPair(): Pair<Loom, Loom> = loom to loom
+    // …
 }
 ```
 
