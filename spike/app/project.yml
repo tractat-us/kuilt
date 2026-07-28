@@ -35,6 +35,7 @@ targets:
           - _ksuite4b._tcp
           - _ksuite5._tcp
           - _ksuite6._tcp
+          - _ksuite7._tcp
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: us.tractat.spike.nw
