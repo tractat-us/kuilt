@@ -11,12 +11,16 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.fabric.connectionPair
 import kotlin.coroutines.coroutineContext
 import kotlin.random.Random
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * `MeshSeam`'s multi-item best-effort close loops must not abandon the rest of the roster when one
@@ -115,6 +119,116 @@ class MeshSeamBestEffortCloseTest {
     }
 
     /**
+     * `addLink`'s dedup close is a third site of the same class.
+     *
+     * It closes ONE conn, which is why #1834 filed it as out of scope — but item count is the wrong
+     * axis. What matters is whether work that MUST happen follows, and it does: `admitOrReject` has
+     * already installed the winner in `links` and published the rosters, and the winner's `readLoop` is
+     * launched on the very next line. A rethrow in between leaves a **zombie link** — the peer sits in
+     * [Mesh.peers] while nothing ever reads its conn, so its frames are never delivered and its
+     * disconnect is never noticed — and lets a bare `CancellationException` escape `addLink` into
+     * `acceptPump` (skipping its `onFailure` and its own `conn.close()`) and into
+     * `superviseVoterReconnection`, where it cancels that peer's supervision coroutine for good. On the
+     * voter-mesh path duplicate links are the norm — both ends call `addLink` concurrently — not an edge.
+     */
+    @Test
+    fun addLinkStartsTheWinnersReadLoopWhenTheDisplacedLoserMintsACancellation() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val self = PeerId("peer-0")
+        val peer = PeerId("peer-1")
+        val closed = MutableStateFlow(emptyList<PeerId>())
+
+        // The incumbent: far-end nonce all-0xFF, so the all-zero connB below deterministically wins the
+        // canonical tiebreak and displaces it. Its close is what mints the cancellation.
+        val (mineA, theirsA) = connectionPair()
+        val connA = CloseRecordingConnection(PeerId("conn-a"), mineA, closed, mintsCancellation = true)
+        val meshDeferred = async { hubMesh(self, listOf(connA), dispatcher, Random(7)) }
+        val handshakeA = async { handshakeRemote(theirsA, peer, ByteArray(MESH_NONCE_BYTES) { 0xFF.toByte() }) }
+        val mesh = meshDeferred.await()
+        handshakeA.await()
+        assertEquals(setOf(self, peer), mesh.peers.value, "precondition: the incumbent link is live")
+
+        val (mineB, theirsB) = connectionPair()
+        val add = async { closeSwallowingCalleeCancellation { mesh.addLink(mineB) } }
+        val handshakeB = async { handshakeRemote(theirsB, peer, ByteArray(MESH_NONCE_BYTES) { 0x00 }) }
+        add.await()
+        handshakeB.await()
+
+        // The winner is installed either way — the defect is that nothing READS it. Bounded, so the
+        // zombie case fails fast instead of hanging on a frame that will never arrive.
+        val delivered = async { mesh.incoming.first() }
+        val payload = byteArrayOf(9, 8, 7)
+        theirsB.send(payload)
+        val swatch = withTimeoutOrNull(5.seconds) { delivered.await() }
+        delivered.cancel()
+
+        assertAll(
+            { assertEquals(listOf(PeerId("conn-a")), closed.value, "the displaced loser must still be closed") },
+            { assertEquals(setOf(self, peer), mesh.peers.value, "the winner must be in the roster") },
+            {
+                assertContentEquals(
+                    payload,
+                    swatch?.toByteArray(),
+                    "the winner's readLoop must be running: a frame on the surviving link must reach " +
+                        "incoming. A null here is the zombie link — peer in the roster, nothing reading it",
+                )
+            },
+        )
+    }
+
+    /**
+     * `admitLink`'s two rejection closes are the fourth site, and the same one-line application.
+     *
+     * Each sits directly before a `return false` that `buildMesh` consumes through `filter`, so a
+     * rethrow fails **whole-mesh** construction — contradicting the contract stated in `admitLink`'s own
+     * KDoc three lines above ("Rejection is per-link and non-fatal: it never fails construction nor
+     * tears down sibling links") and again on the factories' `admission` parameter. No semantic call is
+     * needed: the reject decision is already made and does not depend on the close succeeding.
+     */
+    @Test
+    fun aRejectedConnWhoseCloseMintsACancellationDoesNotFailConstruction() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val self = PeerId("peer-0")
+        val admitted = PeerId("peer-1")
+        val declined = PeerId("joiner")
+        val closed = MutableStateFlow(emptyList<PeerId>())
+
+        val (mineBad, theirsBad) = connectionPair()
+        val (mineGood, theirsGood) = connectionPair()
+        val rejectedConn = CloseRecordingConnection(PeerId("conn-rejected"), mineBad, closed, mintsCancellation = true)
+
+        val meshDeferred = async {
+            closeSwallowingCalleeCancellation {
+                hubMesh(
+                    self,
+                    listOf(rejectedConn, mineGood),
+                    dispatcher,
+                    Random(7),
+                    admission = LinkAdmission { _, remoteId -> remoteId == admitted },
+                )
+            }
+        }
+        val handshakes = listOf(
+            async { handshakeRemote(theirsBad, declined, meshNonce(1)) },
+            async { handshakeRemote(theirsGood, admitted, meshNonce(2)) },
+        )
+        val mesh = meshDeferred.await()
+        handshakes.forEach { it.await() }
+
+        assertAll(
+            { assertEquals(listOf(PeerId("conn-rejected")), closed.value, "the rejected conn must be closed") },
+            {
+                assertEquals(
+                    setOf(self, admitted),
+                    mesh?.peers?.value,
+                    "rejection is per-link and non-fatal: a rejected conn whose close mints a cancellation " +
+                        "must not fail whole-mesh construction (a null mesh means construction threw)",
+                )
+            },
+        )
+    }
+
+    /**
      * Run [block], absorbing a `CancellationException` the *callee* minted.
      *
      * Deliberate, and the same discriminator the production fix uses: pre-fix both sites rethrow the
@@ -131,9 +245,9 @@ class MeshSeamBestEffortCloseTest {
         }
 
     /** Drive the far end of a [connectionPair] through the mesh handshake for [remoteId]. */
-    private suspend fun handshakeRemote(theirs: Connection, remoteId: PeerId) {
+    private suspend fun handshakeRemote(theirs: Connection, remoteId: PeerId, nonce: ByteArray = meshNonce(0)) {
         theirs.incoming.first() // consume the mesh's MeshHello preamble
-        theirs.send(MeshHello.encode(remoteId, meshNonce(0)))
+        theirs.send(MeshHello.encode(remoteId, nonce))
     }
 
     /**
