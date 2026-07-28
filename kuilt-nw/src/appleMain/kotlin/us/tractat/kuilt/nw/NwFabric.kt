@@ -32,6 +32,19 @@ import kotlin.time.Duration
  * @param policy      inbound delivery policy for each woven [Seam] (default [DeliveryPolicy.Reliable]).
  * @param weaveTimeout how long [NwLoom.weave] waits for the first peer before failing
  *   (default [NwLoom.DEFAULT_WEAVE_TIMEOUT]).
+ * @param wovenPathGrace how long a connection whose network path has vanished (`ready → waiting`) is
+ *   given to come back before the woven seam gives up on it — evicting the peer from [Seam.peers] and
+ *   tearing the connection as unreachable (#1478). Default [NwLoom.DEFAULT_WOVEN_PATH_GRACE] (10s).
+ *
+ *   **Shortening this is not free, and it is not a latency knob.** The grace is what lets a device
+ *   survive an ordinary radio hiccup — a Wi-Fi roam, a brief AWDL re-association, a phone leaving a
+ *   pocket — without the session noticing at all. Lower it and a blip that the fabric would have
+ *   healed silently instead evicts the peer, tears the link, and pushes the whole cost of recovery up
+ *   into the consumer's reconnect machinery (re-discovery, re-dial, re-handshake, a resume round-trip
+ *   — seconds, not milliseconds, and user-visible). It buys *earlier* detection of a genuinely
+ *   departed peer, which liveness detection already provides more cheaply. Reach for it when you
+ *   deliberately need eviction on a shorter fuse than the shipping default — chiefly a test or
+ *   hardware harness aiming at a narrow timing band — not to make an app "feel more responsive".
  */
 public fun appleNwLoom(
     serviceType: String,
@@ -39,6 +52,7 @@ public fun appleNwLoom(
     selfId: PeerId = freshPeerId(),
     policy: DeliveryPolicy = DeliveryPolicy.Reliable,
     weaveTimeout: Duration = NwLoom.DEFAULT_WEAVE_TIMEOUT,
+    wovenPathGrace: Duration = NwLoom.DEFAULT_WOVEN_PATH_GRACE,
 ): NwLoom = NwLoom(
     // Pass selfId to BOTH: the loom keys its pre-dial self-filter on it, and RealNwApi advertises it in
     // the Bonjour TXT record as the discovered NwEndpoint.id — the two MUST agree for self-filtering to
@@ -48,6 +62,7 @@ public fun appleNwLoom(
     selfId = selfId,
     policy = policy,
     weaveTimeout = weaveTimeout,
+    wovenPathGrace = wovenPathGrace,
 )
 
 /**

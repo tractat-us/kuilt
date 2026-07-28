@@ -1058,7 +1058,7 @@ public class ConnectivitySuite {
      *
      * A joiner whose radio blips for **longer than the seam's path grace but shorter than the host's
      * liveness timeout** never resumes — it burns its entire reconnect budget and dies. The joiner's
-     * `NwSeam` gives a path-lost connection [WOVEN_PATH_GRACE] to come back, then evicts the host and
+     * `NwSeam` gives a path-lost connection [S7_WOVEN_PATH_GRACE] to come back, then evicts the host and
      * re-forms; its detector reports `TransportClosed` and the resume machine starts. But **the host's
      * link never closed** — only the joiner's side tore — so the host never noticed anything. Every
      * `Resume` the joiner sends is answered `WindowNotYetOpen` (retryable), and *the Resume frame
@@ -1069,21 +1069,31 @@ public class ConnectivitySuite {
      *
      * ## Why scenario 6 structurally cannot show this
      *
-     * [scenarioLocalFabric] runs `timeout = 5s`, *below* the 10 s grace — deliberately, so its own
-     * short outage is detectable at all. The host therefore always opens its window **before** the
+     * [scenarioLocalFabric] runs `timeout = 5s`, *below* the shipping 10 s grace — deliberately, so its
+     * own short outage is detectable at all. The host therefore always opens its window **before** the
      * joiner's grace expires, every resume finds an open window and succeeds, and the interval
      * `grace < outage < timeout` is **empty**. Verified on hardware on 2026-07-27: a 23.7 s real outage
      * gave `Partitioned(LinkTimeout)` + `WindowOpened` at 9.3 s and a clean `Recovered` at 30.4 s — the
      * resume machine's failing lane was never entered.
      *
-     * Scenario 7 exists solely to make that interval non-empty: [S7_HEARTBEAT] keeps `timeout` at
-     * production's 15 s while the seam's grace is 10 s, so the repro band is `10s < outage < 15s`.
+     * Scenario 7 exists solely to make that interval non-empty. [S7_HEARTBEAT] keeps `timeout` at
+     * production's 15 s (the ceiling — see below), and the scenario lowers its *own* floor by passing
+     * `appleNwLoom(wovenPathGrace = `[S7_WOVEN_PATH_GRACE]`)`, so the repro band is
+     * `3s < outage < 15s`.
      *
-     * **The band's upper edge is not a setting.** The first hardware run (2026-07-27) configured
-     * `timeout = 30s` and the host noticed anyway at t≈18.6 s, because its *TCP* connection to the
-     * vanished peer died of ETIMEDOUT (`posix 60`) and fired `TransportClosed` — a transport-level
-     * death the heartbeat detect has no say over. The upper half of that configured band was
-     * physically unreachable. See [OBSERVED_HOST_TRANSPORT_DEATH]; the band is now set below it.
+     * **That 3 s floor is a deliberate test override; production ships 10 s**
+     * ([PRODUCTION_WOVEN_PATH_GRACE]). Only this scenario overrides it, and only to make a
+     * hand-operated Airplane Mode toggle able to land inside the band at all — at the shipping value
+     * the band is 5 s wide and has to be aimed through ~9 s of radio lag. The override moves *when*
+     * the joiner's resume episode starts, not the mechanism it exercises: the eviction still happens
+     * while the radio is off, the host never sees the grace, and the fix under test dwells on
+     * `HeartbeatConfig.timeout`.
+     *
+     * **The band's upper edge, by contrast, is not a setting.** The first hardware run (2026-07-27)
+     * configured `timeout = 30s` and the host noticed anyway at t≈18.6 s, because its *TCP* connection
+     * to the vanished peer died of ETIMEDOUT (`posix 60`) and fired `TransportClosed` — a
+     * transport-level death the heartbeat detect has no say over. The upper half of that configured
+     * band was physically unreachable. See [OBSERVED_HOST_TRANSPORT_DEATH]; the band is set below it.
      *
      * ## What each phone does
      *
@@ -1120,7 +1130,8 @@ public class ConnectivitySuite {
         hop(
             "role=$role svc=$SVC7 side=${if (amHost) "SURVIVING" else "DROPPED"} " +
                 "detect=${S7_HEARTBEAT.timeout} window=${S7_HEARTBEAT.reconnectWindow} " +
-                "grace=$WOVEN_PATH_GRACE repro=($WOVEN_PATH_GRACE,${S7_HEARTBEAT.timeout}) exclusive",
+                "grace=$S7_WOVEN_PATH_GRACE (TEST OVERRIDE; production ships $PRODUCTION_WOVEN_PATH_GRACE) " +
+                "repro=($S7_WOVEN_PATH_GRACE,${S7_HEARTBEAT.timeout}) exclusive",
         )
         say(
             if (amHost) {
@@ -1129,7 +1140,15 @@ public class ConnectivitySuite {
                 "This is the DROPPED phone. You will toggle Airplane Mode here ONCE, when asked."
             },
         )
-        val loom = appleNwLoom(SVC7, ROOM_KEY, weaveTimeout = WEAVE_TIMEOUT)
+        // The ONE place in this suite that overrides the fabric's path grace, and the reason the repro
+        // band is hand-hittable at all. Deliberate, scenario-local, and NOT production behaviour —
+        // every other scenario (and every shipping consumer) gets PRODUCTION_WOVEN_PATH_GRACE.
+        val loom = appleNwLoom(
+            SVC7,
+            ROOM_KEY,
+            weaveTimeout = WEAVE_TIMEOUT,
+            wovenPathGrace = S7_WOVEN_PATH_GRACE,
+        )
         hop("self=${loom.selfId.value.take(8)}")
         val seam = instrumentedWeave("s7", loom, hop)
             ?: return@scenario Verdict.FAIL to "weave never established on $SVC7 (blip NOT exercised)"
@@ -1221,19 +1240,20 @@ public class ConnectivitySuite {
      */
     private suspend fun blippedSide(ctx: OutageCtx, host: PeerId, seam: Seam) {
         val room = ctx.room
-        val lo = WOVEN_PATH_GRACE
+        val lo = S7_WOVEN_PATH_GRACE
         val hi = S7_HEARTBEAT.timeout
 
         // The instruction is DERIVED from the band, and it names the lag, because the lag is most of the
         // outage: on the 2026-07-27 run a 15.0s hold measured 23.7s. Asking for "about fifteen seconds"
         // when the target is a (10s, 15s) band would guarantee an out-of-band run every time.
         ctx.say(
-            "AIRPLANE MODE **ON** now, on THIS phone — then keep your thumb on the toggle. This is a " +
-                "SHORT one: I'll say OFF after only ~${fmtMs(BLIP_HOLD.inWholeMilliseconds)}, and you must " +
-                "turn it off the instant I do. The radio takes ~${fmtMs(RESTORE_LAG.inWholeMilliseconds)} " +
-                "more to come back on its own, so that short a hold measures ~" +
-                "${fmtMs((BLIP_HOLD + RESTORE_LAG).inWholeMilliseconds)} — the middle of the " +
-                "($lo, $hi) target.",
+            "AIRPLANE MODE **ON** now, on THIS phone — then turn it straight back OFF. Keep your thumb " +
+                "on the toggle: I'll say OFF after only ~${fmtMs(BLIP_HOLD.inWholeMilliseconds)}, and " +
+                "you must turn it off the instant I do. The radio then takes ~" +
+                "${fmtMs(RESTORE_LAG.inWholeMilliseconds)} to come back on its own, so that flick " +
+                "measures ~${fmtMs((BLIP_HOLD + RESTORE_LAG).inWholeMilliseconds)} of outage — inside " +
+                "the ($lo, $hi) target, with ~${fmtMs((BLIP_HOLD + RESTORE_LAG - lo).inWholeMilliseconds)} " +
+                "of room below it and ~${fmtMs((hi - BLIP_HOLD - RESTORE_LAG).inWholeMilliseconds)} above.",
         )
         if (!ctx.armOutage("blip")) return
         val down = awaitFabric(room, TOGGLE_WAIT) { it is FabricAvailability.Unavailable }
@@ -1267,8 +1287,9 @@ public class ConnectivitySuite {
         // because that is the only thing that tells the operator which way to adjust.
         if (outage <= lo || outage >= hi) {
             val which = if (outage <= lo) {
-                "SHORT of the $lo path grace — the seam never evicted the host, so the resume machine " +
-                    "was never entered. Hold it LONGER"
+                "SHORT of the $lo path grace (this scenario's deliberate override; production ships " +
+                    "$PRODUCTION_WOVEN_PATH_GRACE) — the seam never evicted the host, so the resume " +
+                    "machine was never entered. Hold it LONGER"
             } else {
                 "PAST the $hi top of the band — an outage that long IS noticed by the host, a window " +
                     "opens, and the resume succeeds the ordinary way. Turn it back off FASTER. (The top " +
@@ -1656,7 +1677,7 @@ public class ConnectivitySuite {
         //
         // The two numbers that matter, and why they are not the defaults (5s/15s/60s):
         //
-        //  * `timeout` 5s (not 15s) — and the binding reason is `NwSeam.DEFAULT_WOVEN_PATH_GRACE` (10s),
+        //  * `timeout` 5s (not 15s) — and the binding reason is `NwLoom.DEFAULT_WOVEN_PATH_GRACE` (10s),
         //    not operator perception. A path-lost connection gets that 10s grace before the seam tears it,
         //    so an ~8s outage NEVER evicts the peer from `seam.peers` and the detector's eviction branch
         //    cannot fire — only its timeout branch can. At the stock 15s that leaves `15 > 10 > 8`: the
@@ -1707,7 +1728,7 @@ public class ConnectivitySuite {
         //
         // Scenario 7 is defined by ONE inequality that scenario 6 deliberately inverts:
         //
-        //     wovenPathGrace (10s)  <  outage  <  the host's link to a vanished peer dying
+        //     wovenPathGrace  <  outage  <  the host's link to a vanished peer dying
         //
         // Below the grace the joiner's seam never evicts the host, so the resume machine is never
         // entered. Above the point where the HOST's link dies the host DOES notice, opens a window, and
@@ -1723,15 +1744,43 @@ public class ConnectivitySuite {
         // the configured (10s, 30s) was physically empty. `timeout` is therefore set to production's
         // 15s: it is below the observed transport death, so the band it names is one the run can
         // actually land in, and it matches #1637's original "<15s blip" framing.
+        //
+        // **The FLOOR, on the other hand, IS a knob — and scenario 7 turns it.** With production's 10s
+        // grace the band was (10s, 15s): five seconds wide, aimed through ~9s of uncontrolled radio
+        // lag, i.e. barely hittable by hand. `appleNwLoom` now exposes `wovenPathGrace`, so scenario 7
+        // — and ONLY scenario 7 — lowers its own floor to [S7_WOVEN_PATH_GRACE], widening the band to
+        // (3s, 15s). Lowering the floor changes WHEN the joiner starts its resume episode, never the
+        // mechanism it then exercises: the eviction still happens while the radio is off, the joiner
+        // still cannot dial until the path returns, the host is untouched, and the fix under test keys
+        // its dwell on `HeartbeatConfig.timeout` rather than on the grace.
 
         /**
-         * `NwSeam.DEFAULT_WOVEN_PATH_GRACE` — how long a path-lost connection is given to recover
-         * before the woven seam tears it (#1478). **Mirrored, not imported:** the real constant is
-         * `internal` to `:kuilt-nw`, so this is a copy that can silently drift. It is only ever used to
-         * classify a measured outage, so drift costs a wrong SKIP boundary, never a wrong PASS/FAIL —
-         * but if the fabric's default changes, change this.
+         * The fabric's **shipping** grace: how long a path-lost connection is given to recover before
+         * the woven seam tears it (#1478). Imported from `:kuilt-nw`, not mirrored — the old hand-copied
+         * literal could silently drift from the real default. Referenced only in prose about what
+         * production does; scenario 7 itself runs on [S7_WOVEN_PATH_GRACE].
          */
-        val WOVEN_PATH_GRACE: Duration = 10.seconds
+        val PRODUCTION_WOVEN_PATH_GRACE: Duration = NwLoom.DEFAULT_WOVEN_PATH_GRACE
+
+        /**
+         * **A deliberate test-only override, not production behaviour.** Scenario 7 passes this to
+         * `appleNwLoom(wovenPathGrace = …)` so its own repro band starts at 3s instead of the shipping
+         * [PRODUCTION_WOVEN_PATH_GRACE] (10s). Nothing else in this suite — and nothing in any shipping
+         * consumer — overrides the grace.
+         *
+         * **Why lower it.** The band's ceiling is the host's transport dying and cannot be raised (see
+         * the block comment above), so the floor is the only movable edge. At 10s the band was 5s wide
+         * and had to be aimed through ~[RESTORE_LAG] of uncontrolled radio lag — a target so tight that
+         * most runs SKIP. At 3s it is 12s wide.
+         *
+         * **Why it is still the same bug.** #1637 is "the joiner evicted the host, the host never
+         * noticed, so every Resume is answered `WindowNotYetOpen` forever". The grace decides only
+         * *when* the eviction happens; every clause after it is unchanged. The joiner's radio is still
+         * off at eviction time, so it still cannot dial until the path returns; the host's side never
+         * sees the grace at all; and the fix under test dwells on `HeartbeatConfig.timeout`, not on
+         * the grace, so the value here cannot flatter it.
+         */
+        val S7_WOVEN_PATH_GRACE: Duration = 3.seconds
 
         /**
          * The numbers that make the repro band exist, and why they are what they are:
@@ -1770,7 +1819,7 @@ public class ConnectivitySuite {
          * **One observation, not a constant.** It is a TCP/Network.framework retransmission timeout on
          * one pair of phones on one network; it will move with RTT, radio, and OS version. It is used
          * only to explain a SKIP to the operator, never to decide a verdict — the verdict's band is
-         * [WOVEN_PATH_GRACE]..[S7_HEARTBEAT]`.timeout`, which is deliberately set *below* this.
+         * [S7_WOVEN_PATH_GRACE]..[S7_HEARTBEAT]`.timeout`, which is deliberately set *below* this.
          */
         val OBSERVED_HOST_TRANSPORT_DEATH: Duration = 18_600.milliseconds
 
@@ -1788,29 +1837,31 @@ public class ConnectivitySuite {
         val RESTORE_LAG: Duration = 9.seconds
 
         /**
-         * How long the operator is asked to hold the radio down — **derived**, not chosen: aim the
-         * middle of the band and subtract the lag the radio adds on the way back ([RESTORE_LAG]). With
-         * a (10s, 15s) band that is 12.5s − 9s ≈ 3.5s, i.e. the operator holds for a *moment* and the
-         * radio supplies the rest of the outage.
+         * How long the operator is asked to hold the radio down — **derived**, not chosen, and the
+         * derivation is unchanged from when the band was (10s, 15s): aim the middle of the band and
+         * subtract the lag the radio adds on the way back ([RESTORE_LAG]).
          *
-         * **This is a hard target for a human.** The band is 5s wide and it is being aimed through ~9s
-         * of lag whose variance is unknown — a lag 3s longer than [RESTORE_LAG] overshoots the top, 3s
-         * shorter undershoots the bottom, and both are SKIPs. Expect to re-run. Widening it is not
-         * available from here: the lower edge is the fabric's internal [WOVEN_PATH_GRACE] and the upper
-         * edge is the host's transport dying ([OBSERVED_HOST_TRANSPORT_DEATH]) — neither is a knob this
-         * suite owns. See CONNECTIVITY-SUITE.md for what *would* make it hittable.
+         * What changed is the inputs. Lowering the floor to [S7_WOVEN_PATH_GRACE] makes the band
+         * (3s, 15s), whose midpoint is 9s — almost exactly [RESTORE_LAG]. The subtraction therefore
+         * bottoms out on the 1s floor, and that floor is now the *instruction*: **flip Airplane Mode on
+         * and straight back off.** The radio supplies essentially the whole outage, landing ≈ 1s + 9s
+         * ≈ 10s — 7s clear of the bottom edge and 5s clear of the top, versus the ±2.5s of headroom the
+         * old 5s band allowed.
+         *
+         * The 1s coercion is load-bearing, not defensive: without it the derivation asks for a
+         * zero-length hold, which is not a thing a thumb can do.
          */
         val BLIP_HOLD: Duration =
-            ((WOVEN_PATH_GRACE + S7_HEARTBEAT.timeout) / 2 - RESTORE_LAG).coerceAtLeast(1.seconds)
+            ((S7_WOVEN_PATH_GRACE + S7_HEARTBEAT.timeout) / 2 - RESTORE_LAG).coerceAtLeast(1.seconds)
 
         /**
          * Within this of a band edge, a run is flagged MARGINAL in the trace (the verdict is unchanged).
          *
-         * 1s, not 2s, only because the band is 5s wide: at 2s every single in-band run would be flagged
-         * and the flag would stop meaning anything. That it has to be shaved at all is itself the
-         * finding — the non-marginal core of this band is 3s across.
+         * 2s now that the band is 12s wide — it was shaved to 1s only because a 5s band flagged every
+         * run at 2s and the flag stopped meaning anything. The non-marginal core is 8s across, wider
+         * than the entire old band, so the flag is back to marking a genuinely close call.
          */
-        val BLIP_MARGIN: Duration = 1.seconds
+        val BLIP_MARGIN: Duration = 2.seconds
 
         /**
          * Path back → the resume episode closes, one way or the other. Must outlast the FAILING lane,
@@ -1830,14 +1881,14 @@ public class ConnectivitySuite {
          *
          * Sized for the worst case the joiner's own gates admit: the operator taking the full
          * [TOGGLE_WAIT] to find the toggle, plus the hold, plus [RESTORE_LAG], plus a whole episode
-         * ([WOVEN_PATH_GRACE] + `reconnectWindow` ≈ 70s), plus slack. It is a ceiling, not a duration:
+         * ([S7_WOVEN_PATH_GRACE] + `reconnectWindow` ≈ 63s), plus slack. It is a ceiling, not a duration:
          * the dwell normally ends much sooner, when the joiner leaves.
          */
         val HOST_OBSERVE: Duration = 240.seconds
 
         /**
          * If the stay-up phone *does* partition the joiner, it stays up at least this much longer past
-         * that instant. The joiner's own window expires ≈ [WOVEN_PATH_GRACE] + `reconnectWindow` after
+         * that instant. The joiner's own window expires ≈ [S7_WOVEN_PATH_GRACE] + `reconnectWindow` after
          * its radio died, and this side learns of the outage *later* than that radio died — so this
          * only ever needs to cover the remainder. Generous on purpose: the run is already out of band
          * by then and the only remaining job is to not be the reason the joiner's episode failed.
