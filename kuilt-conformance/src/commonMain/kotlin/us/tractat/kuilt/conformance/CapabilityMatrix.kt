@@ -40,7 +40,7 @@ private val CAPABILITY_COLUMNS: List<Pair<String, (SeamCapabilities) -> Boolean>
  * Render the fabric capability matrix as a stable markdown table — the visibility
  * artifact that makes every declared gap loud.
  *
- * Rows are the [entries] in input order; columns are the nine capabilities in the
+ * Rows are the [entries] in input order; columns are the ten capabilities in the
  * fixed [CAPABILITY_COLUMNS] order. A `true` cell renders `✓`; a `false` cell
  * renders an issue-linked en-dash `[–](url)` pointing at the gap's tracking URL. A
  * trailing "mesh evidence" column records, for each `meshDelivery = true` row, why

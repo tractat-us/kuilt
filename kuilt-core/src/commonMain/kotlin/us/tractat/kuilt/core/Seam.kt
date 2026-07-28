@@ -52,6 +52,36 @@ public interface Seam {
      * Every subsequent emission reflects the current connected peer set, always including
      * this peer's own id. Remote peers are added when connections complete and removed
      * when connections drop.
+     *
+     * ## A Torn seam has no reachable peers — collapse this to `{ selfId }`
+     *
+     * Once the seam reaches [SeamState.Torn] this set **must** be exactly `{ selfId }`. A torn fabric
+     * can reach nobody, so a remote peer left here is a claim [sendTo] immediately disproves by
+     * throwing [PeerNotConnected] for a peer `peers` calls reachable. Publish the collapsed roster
+     * **before, or atomically with, latching `Torn`**, so a consumer woken by the terminal state
+     * already observes the collapse. `LinkSeam.tearDown` collapses then tears; `MeshSeam.tearDown`
+     * does both inside one lock section — either shape is fine.
+     *
+     * This is load-bearing, not tidiness. A seam that *folds other seams* —
+     * [us.tractat.kuilt.core.composite.CompositeSeam] bonding plies — decides which peers are
+     * reachable from each member's `peers`, and its liveness test is only that the member is still
+     * attached. A member that latches `Torn` without collapsing therefore keeps contributing peers to
+     * that fold until it is detached, leaving the composite advertising a peer reachable only through a
+     * dead transport. Before this was stated, what closed that gap was a *convention* every in-tree
+     * fabric happened to follow rather than a rule an implementor could read (#1816).
+     *
+     * Asserted by `SeamConformanceSuite.peersCollapseToSelfIdWhenTorn`, gated on the
+     * `collapsesPeersOnTear` capability so a fabric that does not honour it yet declares a **tracked**
+     * gap rather than passing silently.
+     *
+     * **What the TCK can and cannot see.** It asserts the terminal *value* — a `Torn` seam's `peers` is
+     * `{ selfId }` — and not the *ordering*, because it must work against a fabric whose seams it drives
+     * through a dispatcher: a collector that resumes after `close()` returns always reads the settled
+     * value, so an ordering assertion there would pass for every implementation and prove nothing. That
+     * makes the ordering clause above no less binding, only unenforceable from a portable suite. Pin it
+     * per fabric with an *inline* collector, as `CompositeCloseCollapseOrderTest` does — it reads `peers`
+     * from inside the `Torn` write itself, and a fabric that latches before collapsing fails it while the
+     * TCK obligation stays green.
      */
     public val peers: StateFlow<Set<PeerId>>
 
@@ -130,6 +160,39 @@ public interface Seam {
         payload: ByteArray,
     )
 
-    /** Disconnect from the session. Idempotent. */
+    /**
+     * Disconnect from the session. Idempotent.
+     *
+     * ## A close failure must NOT be reported as a cancellation
+     *
+     * The obligation [sendTo] states, verbatim and for the same reason: throw an ordinary exception
+     * when teardown fails, and never let a `CancellationException` out of this method unless it is
+     * signalling the *caller's* own cancellation. The trap is identical — `withTimeout(closeTimeout) { … }`
+     * throws `TimeoutCancellationException`, which *is* a `CancellationException`, **to its caller**
+     * without cancelling that caller's job. Bound teardown with `withTimeoutOrNull` plus an explicit
+     * throw instead, or catch and rethrow as a plain `Exception`.
+     *
+     * `close` carries it because best-effort cleanup is where the masquerade does the most damage. A
+     * library tearing down N things loops over them under a guard; one callee-minted cancellation
+     * **cancels that loop** rather than failing one item, so every remaining close is skipped — the
+     * leak the cleanup existed to prevent, with no failure handler and no stack trace. The caller
+     * cannot simply defend its way out: [runCatchingCancellable] rethrows every
+     * `CancellationException` **by type**, and type is exactly what cannot separate "my job was
+     * cancelled" from "the callee minted one". (That is why using it inside a
+     * `withContext(NonCancellable)` shield is forbidden repo-wide by the
+     * `forbidRunCatchingCancellableUnderNonCancellable` build guard: inside the shield our job is
+     * never cancelled, so every `CancellationException` reachable there is necessarily callee-minted.)
+     * Stating the obligation converts "every caller must defend" into "an implementation that does
+     * this is non-conforming" (#1826).
+     *
+     * ## Every consumer-implemented suspend surface carries this
+     *
+     * Exhaustively, the surfaces a kuilt call site invokes under a best-effort guard are:
+     * [Loom.weave], [broadcast], [sendTo], this method, and
+     * [us.tractat.kuilt.core.fabric.Connection.send]/[us.tractat.kuilt.core.fabric.Connection.close];
+     * outside `:kuilt-core`, `Room.leave`. Each points here or at [sendTo] rather than restating it.
+     *
+     * Asserted by `SeamConformanceSuite.closeDoesNotReportFailureAsCancellation`.
+     */
     public suspend fun close(reason: CloseReason = CloseReason.Normal)
 }

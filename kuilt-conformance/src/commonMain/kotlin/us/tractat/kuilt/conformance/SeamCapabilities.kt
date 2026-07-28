@@ -10,13 +10,14 @@ package us.tractat.kuilt.conformance
  * consults it to skip only the specific assertions that don't apply — everything
  * else still runs.
  *
- * The nine flags cover the **historical** `@Ignore` escape hatches
+ * The ten flags cover the **historical** `@Ignore` escape hatches
  * ([terminatesIncomingOnClose], [staysTornAfterClose], [throwsOnSendToTorn]) — WebRTC
  * #335 and Multipeer/Gossip #1390, both since fixed — that motivated making
  * capabilities explicit, so a *future* fabric with a real gap in one of those
  * dimensions can declare it without inventing a bespoke `@Ignore`, plus the
  * remaining dimensions ([ordersDelivery], [reportsPeerLoss], [supportsSendTo],
- * [securesTransport], [meshDelivery], [reportsLiveCapability]) fabrics already vary on.
+ * [securesTransport], [meshDelivery], [reportsLiveCapability], [collapsesPeersOnTear])
+ * fabrics already vary on.
  */
 public data class SeamCapabilities(
     /** FIFO to a single collector. */
@@ -55,6 +56,16 @@ public data class SeamCapabilities(
      * to `true` only alongside a fabric-owned test proving the observer actually moves the value.
      */
     val reportsLiveCapability: Boolean,
+    /**
+     * A [us.tractat.kuilt.core.SeamState.Torn] seam's [us.tractat.kuilt.core.Seam.peers] is exactly
+     * `{ selfId }` — the collapse obligation stated on `Seam.peers` (#1816).
+     *
+     * `false` means the fabric leaves a **remote** peer advertised as reachable after it tears (a
+     * frozen pre-tear roster, or a shared session registry the closing seam removes *itself* from), so
+     * a decorator that folds member seams — `CompositeSeam` — reads it as still reachable until the
+     * member is detached. Every `false` here is a bug with a tracking issue, not a by-design gap.
+     */
+    val collapsesPeersOnTear: Boolean,
 ) {
     /**
      * The canonical names of the flags that are `false` on this value.
@@ -94,6 +105,7 @@ public data class SeamCapabilities(
             "securesTransport" to SeamCapabilities::securesTransport,
             "meshDelivery" to SeamCapabilities::meshDelivery,
             "reportsLiveCapability" to SeamCapabilities::reportsLiveCapability,
+            "collapsesPeersOnTear" to SeamCapabilities::collapsesPeersOnTear,
         )
 
         /**
@@ -110,6 +122,7 @@ public data class SeamCapabilities(
             securesTransport = true,
             meshDelivery = true,
             reportsLiveCapability = true,
+            collapsesPeersOnTear = true,
         )
     }
 }

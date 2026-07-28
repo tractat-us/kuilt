@@ -1,10 +1,13 @@
 package us.tractat.kuilt.conformance
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
@@ -34,6 +37,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.fail
 
 /**
  * Reusable contract test suite for [Loom] implementations.
@@ -70,7 +74,8 @@ import kotlin.test.assertTrue
  *
  * The **core** obligations (host yields a usable seam, broadcast delivery, order,
  * peers≥2, close-idempotency, availability, both Woven-state invariants, close→Torn,
- * absent-peer throw) are **ungated** — no capability flag can suppress them. That
+ * absent-peer throw, close-does-not-mint-a-cancellation) are **ungated** — no capability
+ * flag can suppress them. That
  * structural guarantee is pinned by [SeamConformanceUngatedCoreTest], which drives the
  * core obligations through a harness whose [capabilities] would betray any read.
  *
@@ -83,6 +88,7 @@ import kotlin.test.assertTrue
  *  - [stateStaysTornAfterClose] ↔ [SeamCapabilities.staysTornAfterClose]
  *  - [sendOnTornSeamThrows] ↔ [SeamCapabilities.throwsOnSendToTorn]
  *  - [sendToDeliversToNamedPeer] ↔ [SeamCapabilities.supportsSendTo]
+ *  - [peersCollapseToSelfIdWhenTorn] ↔ [SeamCapabilities.collapsesPeersOnTear]
  *
  * There is a **third** gating mechanism alongside *core (ungated)* and *capability-gated*:
  * **harness-hook-gated**. [incomingCompletesOnInjectedMidSessionDeath] runs only when a harness
@@ -518,6 +524,59 @@ public abstract class SeamConformanceSuite {
     public fun sendToAbsentPeerThrowsPeerNotConnected(): TestResult =
         runTest { runSendToAbsentPeerThrows(this) }
 
+    // ── (10b) close must not report a failure as a cancellation ──────────────
+    //
+    // Contract from `Seam.close`'s KDoc (#1826), the same obligation `sendTo`/`broadcast`/`Loom.weave`
+    // carry: an implementation must not let a `CancellationException` out of `close` unless it is
+    // signalling the CALLER's own cancellation. A caller cannot tell the two apart by type, so a
+    // callee-minted one *cancels* the caller rather than failing it — no handler, no stack trace — and
+    // every best-effort teardown loop in the tree stops at the first such peer, leaking the rest.
+    //
+    // UNGATED CORE: there is no fabric for which minting a cancellation is a legitimate limitation. The
+    // trap is a *choice* (`withTimeout` instead of `withTimeoutOrNull` plus an explicit throw), not a
+    // property of a transport, so no capability flag may excuse it.
+    //
+    // **Honest limit:** this proves the obligation on the paths a 2-peer harness can reach — a live
+    // close, the idempotent second close, and a close whose remote has already gone (the one most
+    // likely to be bounded by a timeout). It cannot reach a close racing a genuinely wedged transport.
+
+    internal suspend fun runCloseDoesNotReportFailureAsCancellation(scope: TestScope): Unit =
+        scope.connectedPair { host, joiner ->
+            assertNoMintedCancellation("close() on a live seam") { host.close() }
+            assertNoMintedCancellation("a second, idempotent close()") { host.close() }
+            // The joiner's remote is already gone: bounding teardown on a peer that will never answer
+            // is exactly where an implementation reaches for `withTimeout`.
+            assertNoMintedCancellation("close() after the remote end has gone") { joiner.close() }
+        }
+
+    @Test
+    public fun closeDoesNotReportFailureAsCancellation(): TestResult =
+        runTest { runCloseDoesNotReportFailureAsCancellation(this) }
+
+    /**
+     * Run [op] and fail — rather than be cancelled — if it reports its failure as a cancellation.
+     *
+     * The discrimination is the whole point, and it is done by *state*, not by type: a
+     * `CancellationException` caught here is this coroutine's own only if this coroutine is in fact
+     * cancelled, which [kotlinx.coroutines.ensureActive] is the exact test for. If it is ours it
+     * propagates (never swallow a structured-concurrency cancel); if it is not, [op] minted it, and
+     * rethrowing would inflict on this test precisely the damage the obligation forbids — a silent
+     * cancel with no assertion failure and no stack trace. So it is converted to a failure instead.
+     */
+    private suspend inline fun assertNoMintedCancellation(what: String, op: () -> Unit) {
+        try {
+            op()
+        } catch (e: CancellationException) {
+            currentCoroutineContext().ensureActive()
+            fail(
+                "$what must not report failure as a cancellation (Seam.close, #1826): a caller cannot " +
+                    "distinguish it from its own cancellation, so it CANCELS the caller instead of " +
+                    "failing it — every best-effort teardown loop stops there. Convert it before it " +
+                    "escapes (withTimeoutOrNull plus an explicit throw). Got: $e",
+            )
+        }
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     //  Flag-SELECTED obligation — reads a capability flag, but NEVER skips.
     //
@@ -709,6 +768,63 @@ public abstract class SeamConformanceSuite {
                 assertFailsWith<IllegalStateException>("sendTo on a Torn seam must throw") {
                     host.sendTo(joiner.selfId, byteArrayOf(2))
                 }
+            }
+        }
+
+    // ── (13e) a Torn seam's peers collapses to { selfId } ────────────────────
+    //
+    // Contract from `Seam.peers`' KDoc (#1816): a torn fabric can reach nobody, so a `Torn` seam's
+    // `peers` must be exactly `{ selfId }`. Until this was stated, what closed the gap was a
+    // *convention* — `LinkSeam` and `MeshSeam` happen to collapse before latching, so `CompositeSeam`'s
+    // reachability fold (whose only liveness test is "is this ply still attached") never saw a torn
+    // member contributing peers. A fabric that tears without collapsing leaves the composite
+    // advertising a peer only `sendTo` can disprove, by throwing `PeerNotConnected` for a peer `peers`
+    // calls reachable.
+    //
+    // **Only the terminal value is asserted, deliberately.** The contract asks for the collapse to be
+    // published before (or atomically with) the `Torn` latch, so a consumer woken by the terminal state
+    // already sees it — but `peers` is a StateFlow, which conflates against each collector's
+    // last-observed value, so no collector can reliably witness which write landed first. An ordering
+    // assertion here would be unreliable in both directions; the terminal value is what the fold
+    // actually reads, and it is exactly observable.
+    //
+    // The two ways a fabric deviates are asserted SEPARATELY, because they have different causes and
+    // different fixes: still advertising a remote peer (a frozen pre-tear roster) versus having dropped
+    // `selfId` (a shared session registry the closing seam removes itself from, or a collapse to
+    // `emptySet()`). A single set-equality assertion would report both as one opaque mismatch.
+    //
+    // Gated on `collapsesPeersOnTear`; every `false` is a tracked bug, not a by-design gap.
+
+    @Test
+    public fun peersCollapseToSelfIdWhenTorn(): TestResult =
+        runTest {
+            if (!capabilities().collapsesPeersOnTear) return@runTest
+            connectedPair { host, _ ->
+                assertTrue(host.peers.value.size >= 2, "precondition: the pair must be connected before the tear")
+
+                host.close()
+                assertIs<SeamState.Torn>(host.state.value, "precondition: close() must latch Torn")
+
+                val peers = host.peers.value
+                assertAll(
+                    {
+                        assertEquals(
+                            emptySet(),
+                            peers - host.selfId,
+                            "a Torn seam must advertise NO reachable remote peer — a torn fabric can reach " +
+                                "nobody, and a decorator folding this seam (CompositeSeam) reads what is left " +
+                                "here as still reachable until the member is detached",
+                        )
+                    },
+                    {
+                        assertTrue(
+                            host.selfId in peers,
+                            "a Torn seam's collapsed roster is { selfId }, not empty: peers always includes " +
+                                "this peer's own id, so a seam that drops selfId on tear has collapsed too far " +
+                                "(got ${peers.map { it.value }})",
+                        )
+                    },
+                )
             }
         }
 

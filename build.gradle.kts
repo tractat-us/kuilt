@@ -665,9 +665,10 @@ val verifyDocCitations by tasks.registering {
 // cleanup completes despite outer cancellation, so our own job is never cancelled there — which makes EVERY
 // `CancellationException` reachable inside it necessarily callee-minted, and rethrowing it aborts the very
 // cleanup the shield was written to guarantee. One `withTimeout` inside a consumer's `Seam.close` and every
-// remaining close is skipped. Note that `Seam.close` carries no "must not report failure as cancellation"
-// obligation (unlike `sendTo`/`broadcast`/`Loom.weave`, see `Seam.kt:106-126`), so a consumer minting one
-// there is not even a contract violation.
+// remaining close is skipped. `Seam.close` now carries the same "must not report failure as cancellation"
+// obligation `sendTo`/`broadcast`/`Loom.weave` do (#1826), so a consumer minting one there IS a contract
+// violation — but a library cannot trust a consumer, and this guard is what keeps the cleanup correct
+// against one that violates it anyway.
 //
 // The correct form inside the shield is a plain `try` / `catch (Throwable)` with a debug log, PER cleanup
 // item so one failure cannot skip the rest. `NwLoom.discardUnreturnedSeam` is the in-tree pattern.

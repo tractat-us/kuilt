@@ -64,8 +64,16 @@ class WebRTCConformanceTest : SeamConformanceSuite() {
      * [us.tractat.kuilt.core.FabricAvailability.Unknown] floor (#1712/#1544).
      */
     override fun capabilities(): SeamCapabilities =
-        SeamCapabilities.FULL.copy(reportsLiveCapability = false)
+        SeamCapabilities.FULL.copy(
+            reportsLiveCapability = false,
+            // `WebRTCPeerLink.close()` does not collapse `_peers`, so a locally-closed data channel
+            // reports its pre-close roster forever. The remote-tear path already collapses correctly,
+            // so the fix is to hoist it. Obligation from #1816, tracked in #1853.
+            collapsesPeersOnTear = false,
+        )
 
-    override fun capabilityGaps(): Map<String, String> =
-        mapOf("reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY)
+    override fun capabilityGaps(): Map<String, String> = mapOf(
+        "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
+        "collapsesPeersOnTear" to "https://github.com/tractat-us/kuilt/issues/1853",
+    )
 }

@@ -336,6 +336,16 @@ Unlike the two gaps above, this one is not permanent. Each fabric's observer is
 wired one lane at a time, and a lane flips its flag to `true` in the same change
 that lands the observer and a test proving the value actually moves.
 
+### Not every flag describes a design choice
+
+One flag is different in kind and is deliberately not explained here:
+`collapsesPeersOnTear` says whether a disconnected seam still lists the peers it
+could reach before it died. It always should — a dead connection reaches nobody —
+so there is no honest reason to answer "no". Every fabric that currently answers
+"no" is doing so because of a bug, and each one links to the issue tracking its
+fix rather than to this page. Treat a `false` there as a countdown, not a
+characteristic.
+
 ## Consensus and leader election
 
 `:kuilt-raft` implements a Raft consensus layer over the `Seam` transport. To

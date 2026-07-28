@@ -28,11 +28,19 @@ class InMemoryLoomConformanceTest : SeamConformanceSuite() {
      * [InMemoryLoomMeshConformanceTest] (#1408, Task 1.8).
      */
     override fun capabilities() =
-        SeamCapabilities.FULL.copy(securesTransport = false, reportsLiveCapability = false)
+        SeamCapabilities.FULL.copy(
+            securesTransport = false,
+            reportsLiveCapability = false,
+            // `InMemorySeam.peers` IS the shared factory registry, and `close()` removes SELF from it —
+            // so a closed seam reports `{ theOtherPeer }`: a remote still advertised as reachable, and
+            // `selfId` gone. Both halves of the #1816 obligation, tracked in #1849.
+            collapsesPeersOnTear = false,
+        )
 
     override fun capabilityGaps() = mapOf(
         "securesTransport" to CapabilityGaps.SECURES_TRANSPORT,
         "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
+        "collapsesPeersOnTear" to "https://github.com/tractat-us/kuilt/issues/1849",
     )
 
     /**

@@ -38,8 +38,16 @@ class NearbyConformanceTest : SeamConformanceSuite() {
      * [us.tractat.kuilt.core.FabricAvailability.Unknown] floor (#1712/#1543).
      */
     override fun capabilities(): SeamCapabilities =
-        SeamCapabilities.FULL.copy(reportsLiveCapability = false)
+        SeamCapabilities.FULL.copy(
+            reportsLiveCapability = false,
+            // `NearbySeam.peers` is the session-wide `sharedPeers` flow, and `close()` removes SELF from
+            // it after latching Torn — so a closed seam reports `{ theOtherPeer }` and drops `selfId`.
+            // The remote-drop path is already correct. Obligation from #1816, tracked in #1850.
+            collapsesPeersOnTear = false,
+        )
 
-    override fun capabilityGaps(): Map<String, String> =
-        mapOf("reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY)
+    override fun capabilityGaps(): Map<String, String> = mapOf(
+        "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
+        "collapsesPeersOnTear" to "https://github.com/tractat-us/kuilt/issues/1850",
+    )
 }
