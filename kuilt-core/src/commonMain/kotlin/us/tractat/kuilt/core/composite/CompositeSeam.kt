@@ -235,7 +235,9 @@ internal class CompositeSeam(
 
     // The SINGLE peers writer — the identical pattern, for the identical reason, on the third strand of the
     // same class (#1784; `state` was fixed by [SeamStateGate] in #1135 and `capability` by
-    // [capabilityWriter] in #1712). Dies with [scope] on close.
+    // [capabilityWriter] in #1712). Unlike [capabilityWriter] it is NOT left to die with [scope]:
+    // [collapsePeers] cancelAndJoins it first, because [_peers] has no gate to make a late publish a no-op
+    // (#1816).
     private val peersWriter: Job
 
     init {
@@ -879,27 +881,25 @@ internal class CompositeSeam(
      *
      * ### Liveness in [reachablePeersLocked] is `live[plyId] != null` only — it does NOT screen a torn ply
      * A ply that has latched `Torn` but is not yet detached still contributes its mirror to that fold, where
-     * [resolveSendTargets] filters it. What closes the gap today is a **convention, not the contract**: every
-     * in-tree fabric collapses its roster to `{selfId}` *before* latching `Torn` (`LinkSeam`, `MeshSeam`), so
-     * a torn ply's mirrored peer set is empty and contributes nothing. That obligation is not stated on
-     * [Seam] and not asserted by the conformance suite, so a consumer fabric that tears without collapsing
-     * would leave [peers] stale-inclusive until detach.
+     * [resolveSendTargets] filters it. **That is now safe by contract, not by convention (#1816):**
+     * [Seam.peers] requires a `Torn` seam's roster to be exactly `{ selfId }`, so a torn ply's mirrored peer
+     * set contributes nothing but its own transport id, which is not in [idMap] as a remote. Every fabric is
+     * checked against it by `SeamConformanceSuite.peersCollapseToSelfIdWhenTorn` rather than trusted — a
+     * fabric that cannot honour it yet declares `collapsesPeersOnTear = false` with a tracking issue, so the
+     * exposure is enumerated instead of unknown.
      *
-     * **[CompositeSeam] is itself such a fabric** — [close] never collapses [_peers], so a closed composite
-     * reports its pre-close roster forever, and a composite is type-legal as a *ply* of another composite
-     * ([CompositeLoom] is a [Loom]). So the in-tree instance already exists; it is pre-existing on `main` and
-     * deliberately not fixed here, because the naive `_peers.value = setOf(selfId)` in [close] **races** the
-     * writer — an in-flight [publishPeers] holding a pre-clear snapshot would overwrite it, which is this
-     * issue's own defect resurfacing. Doing it properly needs the writer stopped first. Tracked with the
-     * contract gap in #1816.
+     * [CompositeSeam] was itself the in-tree violator — [close] left [_peers] frozen at the pre-close roster
+     * forever, and a composite is type-legal as a *ply* of another composite ([CompositeLoom] is a [Loom]).
+     * Fixed in [collapsePeers], which explains why the naive `_peers.value = setOf(selfId)` races this
+     * writer.
      *
-     * Adding `handle.woven` to [reachablePeersLocked]'s predicate looks like the fix and **is not**: the pump
-     * that mirrors [PlyHandle.woven] requests only a *capability* recompute, never a peers one, so `woven`
-     * would become an input to that fold with no trigger — a fresh instance of the lost-trigger defect above (a ply
-     * reaching `Woven` after its peers were mirrored would stay stale-*exclusive*, permanently). Taking it
-     * safely means also requesting a peers recompute from the state pump, which is a behaviour change this
-     * fold's tests do not cover. The durable fix is to put the obligation in [Seam]'s contract and assert it
-     * in the conformance suite, tracked in #1816 rather than smuggled in here.
+     * Adding `handle.woven` to [reachablePeersLocked]'s predicate looks like a further hardening and **is
+     * not**: the pump that mirrors [PlyHandle.woven] requests only a *capability* recompute, never a peers
+     * one, so `woven` would become an input to that fold with no trigger — a fresh instance of the
+     * lost-trigger defect above (a ply reaching `Woven` after its peers were mirrored would stay
+     * stale-*exclusive*, permanently). Taking it safely means also requesting a peers recompute from the
+     * state pump, which is a behaviour change this fold's tests do not cover. The contract obligation is the
+     * durable fix; do not smuggle the predicate change in alongside it.
      *
      * ### Why [resolveSendTargets] still reads the live ply peers
      * Deliberate, not an oversight. The lost-trigger argument bites on a **published derived value with no
@@ -956,7 +956,9 @@ internal class CompositeSeam(
      *    the #1784 defect, fixed): a persistent divergence therefore means the **request** never happened or
      *    can never be served — a lost *trigger* (some fold input advanced without a `trySend`), or
      *    [peersWriter] itself is dead. Read once and it may simply be a request still in flight; read twice,
-     *    unchanged, and it is one of those two.
+     *    unchanged, and it is one of those two. **Discount a torn seam before reading it that way:** on a
+     *    seam [close] has run, [collapsePeers] cancels the writer deliberately, so "the writer is dead" is
+     *    the normal terminal state there and says nothing — check [state] first (#1816).
      *  - [PeersStrand.wouldPublish] **equals** [peers] while `peers` is short of what the test expects ⇒ the
      *    fold's own **inputs** are wrong, not its publishing — exhaustively, since the fold is total over its
      *    three inputs. Any of: a ply's *mirrored* peer set ([PlyHandle.transportPeers]) never advanced (its
@@ -1060,6 +1062,10 @@ internal class CompositeSeam(
      * of whether the scope is cancelled before or after, joined or not. The tactical `cancelAndJoin`
      * the earlier point-fix needed is therefore gone: the scope is cancelled (non-joining) purely to
      * release the pump coroutines. `tear()` also subsumes the old single-shot `closed` atomic.
+     *
+     * **[peers] is the exception, and it *is* ordering-sensitive** — [_peers] has no gate, so
+     * [collapsePeers] must stop the single [peersWriter] before it publishes `{ selfId }`, or an
+     * in-flight publish holding a pre-`clear()` snapshot lands last. See that method (#1816).
      */
     override suspend fun close(reason: CloseReason) {
         // Single-shot: tear() latches Torn and returns false for a loser, so teardown runs once.
@@ -1070,10 +1076,44 @@ internal class CompositeSeam(
             live.clear()
             snapshot
         }
+        collapsePeers()
         // The gate guarantees state correctness; cancel is a plain resource release (non-joining).
         scope.coroutineContext[Job]?.cancel()
         spool.close()
         toClose.forEach { it.seam.close(reason) }
+    }
+
+    /**
+     * Collapse [peers] to `{ selfId }` — the [Seam.peers] obligation that a `Torn` seam advertises no
+     * reachable peer (#1816). Before this, a closed composite reported its pre-close roster forever, and
+     * a [CompositeLoom] is a [Loom], so a composite nested as a *ply* of another composite made this
+     * seam the in-tree instance of the very defect [publishPeers]' fold is written to survive.
+     *
+     * ### The one-liner races the writer — this is not `_peers.value = setOf(selfId)`
+     * [publishPeers] snapshots under [lock] and writes **outside** it. A writer preempted in that gap
+     * holds a snapshot taken *before* `live.clear()` and, resuming after a bare assignment here, lands
+     * the pre-close roster **last** — with no periodic backstop and no trigger left, permanently. That is
+     * #1784's defect approached from the other side, so the fix is the same shape: stop the single
+     * writer *first*. [Job.cancelAndJoin], never `cancel()` — the **join** is what turns "no publish is
+     * in flight" from likely into true. It is bounded: the writer's only suspension point is the
+     * conflated-channel receive, and [publishPeers] itself never suspends, so the join waits at most for
+     * one fold.
+     *
+     * Any [recomputePeers] request that arrives after this is harmless twice over — the channel has no
+     * reader, and `live` is already cleared, so the fold it would run now returns `{ selfId }` anyway.
+     *
+     * ### Why the shield
+     * [close] has already latched the terminal `Torn` by the time this runs, so a caller cancelled
+     * mid-teardown would leave the seam permanently `Torn` **and** permanently advertising peers — the
+     * exact contract violation, in the window that matters most (a best-effort teardown is usually
+     * running *because* something is being cancelled). Both statements inside are bounded and make no
+     * consumer-authored call, so shielding them costs nothing.
+     */
+    private suspend fun collapsePeers() {
+        withContext(NonCancellable) {
+            peersWriter.cancelAndJoin()
+            _peers.value = setOf(selfId)
+        }
     }
 
     private companion object {
