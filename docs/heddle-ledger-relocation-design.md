@@ -921,3 +921,9 @@ section documented as safe turns out to be a real conservation break in one shap
    `HeddleAdmissionControl`'s KDoc and in the cookbook), and **whether the gate should refuse
    loudly rather than return an ambiguous in-band value is an open question** — this module's own
    precedent (#1737, #1753) is to fail loudly rather than return a silent fallback.
+
+   **Unresolved, tracked as #1892.** Unlike items 3 and 4, this one is not a text correction: what
+   ships is what the design intends, and the open question is whether the *reporting shape* should
+   change. Noted here rather than decided, because the gate is legitimately closed for a window
+   during every normal boot — so "closed" is not always a caller error, and the loudest option is
+   not obviously the right one.
