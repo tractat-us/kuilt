@@ -856,8 +856,18 @@ section documented as safe turns out to be a real conservation break in one shap
    restored, and every later one arrives in order. It works on a follower, it cannot be wedged by
    a withheld entry, and it makes §13.2's enrollment precondition *the same act*, closing both
    holes with one gate. `GovernedHeddleNode.isWritable`; `reserve`/`schedule` are the two entry
-   points that author a slot, and `complete` is transitively gated because a reservation can only
-   come from `reserve`.
+   points that author a slot.
+
+   **`complete` carries no gate, and its transitivity is exact only for the boot window.** There the
+   gate has never been open, so `reserve` has handed out no `ReservationId` and nothing is
+   completable — airtight. But the gate closes a *second* way: `depart` closes it, and a reservation
+   taken while it was open stays live across the departure, so a `complete` afterwards does author a
+   slot. That case is a **documented caller obligation, not a gate** (`depart`'s KDoc: "call it after
+   quiescing local work, or the peer keeps a promise it has already broken"). Recorded at this
+   precision deliberately: the fence's quantifier rests on the departure promise, so "`complete` is
+   transitively gated" flatly asserted would invite the next reader to assume an enforcement that
+   does not exist — the same overstatement shape as §6.5.2's "not a conservation break" (item 4),
+   which is the one that turned out to be false.
 
 3. **§6.5.2(a) required "one anti-entropy exchange" before acking, and nothing supports it.**
    §6.5.2 narrowed the cross-incarnation ack gap by having a restarted peer "replay the

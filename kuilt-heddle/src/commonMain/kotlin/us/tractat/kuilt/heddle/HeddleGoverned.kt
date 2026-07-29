@@ -164,10 +164,20 @@ public class GovernedHeddleNode internal constructor(
      *   enrollment to have landed before the first write is what makes it **structural**.
      *
      * While closed, [reserve] returns `null` and [schedule] returns `0` — the two entry points
-     * through which this node authors a counter slot. [complete] needs no gate of its own: it can
-     * only ever complete a reservation [reserve] handed out, so it is transitively gated. Reads,
-     * [advertise] (an ephemeral, advisory board that authorizes nothing), and every control verb stay
-     * open, so a peer can mint, reshape and enroll before it is writable.
+     * through which this node authors a counter slot. Reads, [advertise] (an ephemeral, advisory
+     * board that authorizes nothing), and every control verb stay open, so a peer can mint, reshape
+     * and enroll before it is writable.
+     *
+     * **[complete] carries no gate of its own, and "transitively gated" is exact only for the boot
+     * window.** In that window the gate has never been open, so [reserve] has handed out no
+     * [ReservationId] at all and there is nothing completable — the transitivity is airtight. It is
+     * *not* airtight for the other way the gate closes: [depart] closes it too, and a reservation
+     * taken while the gate was open stays live across the departure, so a [complete] afterwards does
+     * author a slot. That case is a **documented caller obligation, not a gate** — see [depart]
+     * ("call it after quiescing local work, or the peer keeps a promise it has already broken").
+     * Stated precisely here because the fence's quantifier rests on the departure promise, and an
+     * overstated "it is transitively gated" would invite a reader to assume enforcement that this
+     * class does not perform.
      */
     public val isWritable: Boolean get() = writable.value
 
