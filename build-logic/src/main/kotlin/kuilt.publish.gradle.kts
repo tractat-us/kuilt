@@ -1,6 +1,5 @@
 import com.vanniktech.maven.publish.JavadocJar
 import com.vanniktech.maven.publish.KotlinMultiplatform
-import com.vanniktech.maven.publish.SonatypeHost
 
 plugins {
     `maven-publish`
@@ -70,7 +69,7 @@ mavenPublishing {
     // version, especially the first. The release path is gated again in the
     // workflow (tags / manual dispatch only).
     if (providers.gradleProperty("mavenCentralUsername").isPresent) {
-        publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL, automaticRelease = false)
+        publishToMavenCentral(automaticRelease = false)
     }
 }
 
