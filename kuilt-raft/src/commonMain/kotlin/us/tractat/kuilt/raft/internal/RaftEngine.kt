@@ -30,6 +30,7 @@ import us.tractat.kuilt.raft.ClientIdentity
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.ConfigPayload
+import us.tractat.kuilt.raft.CorruptDurableStateException
 import us.tractat.kuilt.raft.DedupKey
 import us.tractat.kuilt.raft.DenyReason
 import us.tractat.kuilt.raft.LeadershipLostException
@@ -305,7 +306,7 @@ internal class RaftEngine(
     init {
         scope.launch {
             // Restore persisted state
-            state.currentTerm = storage.term()
+            state.currentTerm = checkedRestoredTerm(storage.term())
             state.votedFor = storage.votedFor()
             // Recover the snapshot baseline FIRST: a persisted snapshot is by definition committed, so
             // seed snapshotIndex/Term, the compaction floor, and commitIndex from it. This must happen
@@ -428,6 +429,85 @@ internal class RaftEngine(
     }
 
     // ── Persistence choke-points ──────────────────────────────────────────────
+
+    /**
+     * Returns [restored] if it is a term a real node could hold; otherwise refuses to start (#1855).
+     *
+     * ### The gap this closes
+     *
+     * #1846 put `MAX_PLAUSIBLE_TERM` at the [onMessage] dispatch boundary, which covers every term that
+     * arrives in a *frame*. It does not cover the third way `state.currentTerm` is written: the restore
+     * on the line this guards. A node whose durable term is out of range reloads it verbatim, and from
+     * then on every frame it emits is dropped by peers as implausible while every frame it receives looks
+     * stale — permanent, silent, single-node isolation with no diagnostic anywhere on the node itself.
+     *
+     * ### Why this is a refusal, not a clamp, and not a shrug
+     *
+     * **Not a clamp.** Rewriting a persisted term discards the record of which terms this node has
+     * already voted in, so it can vote a second time in a term it has forgotten — §5.2 election safety,
+     * a strictly worse fault than the lost liveness. Same reasoning that makes a term a *nonce* and not a
+     * *quantity* at the wire boundary: an out-of-range term admits no conservative in-range reading.
+     *
+     * **Not a shrug.** Two facts make "the node is merely isolated" wrong:
+     *
+     * 1. The overflow #1833 is about is **still reachable through here**. A one-voter cluster — what
+     *    an appoint-the-host bootstrap starts as, before it admits anyone — restores `Long.MAX_VALUE`,
+     *    wins its own election, and `startRealElection`'s `currentTerm + 1` wraps to `Long.MIN_VALUE`,
+     *    which [persistTermAndVote] then writes to disk. The engine drives its own durable term
+     *    *backwards*, against [RaftStorage.term]'s "never safe to decrease it" contract, and a node whose
+     *    term went backwards has forgotten every vote it cast.
+     * 2. It is **not confined to a migration**. kuilt ships no durable [RaftStorage] — `InMemoryRaftStorage`
+     *    is the only implementation in the library — so every persistent one is consumer code, and the
+     *    storage TCK constrains `term()` to nothing but "starts at 0" and "round-trips". An out-of-range
+     *    term is an ordinary third-party storage bug (a truncated column, a sign-extended `Int`, a torn
+     *    read), reachable with no pre-fix binary and no attacker.
+     *
+     * ### Why throwing here is not the #1818 failure mode
+     *
+     * The standing rule is that malformed input must be *dropped*, never thrown on, because the actor
+     * loop's `try`/`finally` has no `catch` and a `require` would convert one hostile frame into permanent
+     * node death. That rule is about *remote* input on the message path. This input is not a frame: it is
+     * the consumer's own storage, read once at start-up before [startActor] has run, with no sender.
+     *
+     * That is a statement about the *shape* of the input, **not** a claim that no remote party can reach
+     * this line — one can, a restart later. Measured on this branch: a single [RaftMessage.TimeoutNow]
+     * carrying `term == MAX_PLAUSIBLE_TERM` from *any* peer is admitted by [onMessage]'s inclusive ceiling;
+     * [onTimeoutNow]'s leader check is scoped to `m.term == state.currentTerm`, so a strictly-higher term
+     * bypasses it; the receiver steps down to `2^60`, and the transfer-driven `startRealElection` it then
+     * runs persists `currentTerm + 1` = `2^60 + 1`, above the ceiling. Its next restart arrives here.
+     *
+     * The refusal is still the right disposition at *this* site — before it, that same node came back up
+     * permanently and *silently* isolated, strictly worse than a loud failure that names the state. What
+     * needs fixing is the remote *cause*, and it is not here: the ceiling admits a term with no headroom
+     * for the `+ 1` that necessarily follows (#1886), and TimeoutNow sits outside the §5.2 authority gate
+     * (#1889). Both are tracked; neither is fixed by this guard.
+     *
+     * Dropping is also not available at this site: the value is not a message to discard but the node's own
+     * identity, and continuing without it means either inventing a term (the clamp) or running on a
+     * poisoned one (the shrug). The throw surfaces through the caller's scope, which is the documented
+     * contract of `CoroutineScope.raftNode` — "any exception in the node propagates to the scope's
+     * supervisor" — putting the persisted value in front of the operator, who can then tell a storage-
+     * adapter bug from the remote escalation above by whether it is `2^60 + 1`.
+     *
+     * ### Scope boundary
+     *
+     * This bounds the restored **term** only. `SnapshotMeta.lastIncludedTerm`/`lastIncludedIndex` and the
+     * terms/indices of restored [LogEntry]s come back from the same storage equally unvalidated, and a
+     * poisoned `lastLogTerm` dominates every peer's log under §5.4.1 — the #1832 shape reached through
+     * restore instead of the wire. Deliberately **not** fixed here; tracked in #1887.
+     */
+    private fun checkedRestoredTerm(restored: Long): Long {
+        if (restored < 0L || restored > MAX_PLAUSIBLE_TERM) {
+            throw CorruptDurableStateException(
+                "RaftStorage returned an implausible persisted term ($restored): a term must be in " +
+                    "0..$MAX_PLAUSIBLE_TERM. Refusing to start ${transport.selfId.value} — adopting it " +
+                    "would isolate this node silently, and clamping it would let it vote twice in a term " +
+                    "it had forgotten (Raft §5.2). Inspect the storage adapter's persisted term, then " +
+                    "repair it or re-provision this node from empty state.",
+            )
+        }
+        return restored
+    }
 
     /** Persist term+vote durably, THEN update in-memory — uniform crash-consistent ordering. */
     private suspend fun persistTermAndVote(term: Long, vote: NodeId?) {
@@ -2105,19 +2185,27 @@ internal class RaftEngine(
         // is DROPPED. Negative terms are already nonsense: terms start at 0 and only increase.
         //
         // Placed at the dispatch boundary, before any handler and therefore before any adoption, so
-        // one check covers every path that can raise `currentTerm`. That in turn makes the two
-        // `currentTerm + 1` increment sites provably overflow-free: `currentTerm` is only ever set
-        // from an adopted wire term (now <= 2^60) or from a self-increment, and reaching 2^63 from
-        // 2^60 would take 2^63 - 2^60 real elections.
+        // one check covers every path on which a FRAME can raise `currentTerm`.
         //
         // Rejecting rather than throwing is required for the usual reason: this runs inside the
         // engine's actor loop, whose `try`/`finally` has no `catch`, so a `require` would convert a
         // malformed frame into permanent node death (#1818).
         //
-        // NOTE: the init-restore path (`state.currentTerm = storage.term()`) is deliberately NOT
-        // bounded. A term persisted by a pre-fix binary comes back poisoned, and that node's frames
-        // are then dropped by every peer — it is isolated, but the cluster keeps electing. Silently
-        // rewriting durable term state on load is a bigger call than this fix.
+        // `currentTerm` has exactly three writers, and the `currentTerm + 1` increment sites are
+        // overflow-free only because ALL THREE are bounded: this one, the self-increment (bounded by
+        // its input), and the init-restore `storage.term()`, which is bounded by [checkedRestoredTerm]
+        // (#1855). The restore was originally left out on the reading that a poisoned durable term only
+        // costs that node's liveness — wrong on both halves: a one-voter cluster reaches the wrap from
+        // there and PERSISTS `Long.MIN_VALUE`, and since kuilt ships no durable RaftStorage the
+        // out-of-range value is an ordinary third-party storage bug, not a migration artefact. See
+        // [checkedRestoredTerm] for why that site refuses to start instead of dropping (there is no
+        // frame to drop) or clamping (§5.2).
+        //
+        // "Overflow-free" here means free of Long wrap, and nothing stronger. The bound is INCLUSIVE, so
+        // a term admitted at exactly MAX_PLAUSIBLE_TERM still increments to `2^60 + 1` — no wrap, but
+        // above the ceiling, and therefore dropped by every peer including its author. One frame at the
+        // boundary reproduces #1833's symptom cluster-wide through the one value this check lets past;
+        // making both this bound and [checkedRestoredTerm]'s exclusive is tracked in #1886.
         val wireTerm = m.wireTerm
         if (wireTerm != null && (wireTerm < 0L || wireTerm > MAX_PLAUSIBLE_TERM)) {
             debug { "onMessage: dropped ${m::class.simpleName} from $from — implausible term=$wireTerm (outside 0..$MAX_PLAUSIBLE_TERM)" }

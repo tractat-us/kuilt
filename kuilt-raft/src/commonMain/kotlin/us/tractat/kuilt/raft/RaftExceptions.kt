@@ -43,3 +43,37 @@ public class MembershipChangeInProgressException(
  * when this exception propagates — the caller does not need to do anything to recover.
  */
 public class LeadershipTransferException(message: String) : Exception(message)
+
+/**
+ * Thrown during a node's start-up restore when the [RaftStorage] it was given returns durable state
+ * that violates the storage contract — currently, a persisted term outside the plausible range
+ * (issue #1855).
+ *
+ * ### Why this is loud rather than repaired
+ *
+ * Terms advance once per election, so an honest deployment stays many orders of magnitude below the
+ * `2^60` ceiling the wire boundary already enforces (issue #1833). A restored term above it — or below
+ * zero — is therefore not a value to interpret; it is evidence that the durable state is wrong.
+ *
+ * Clamping it would be worse than the fault: rewriting a persisted term silently discards the record of
+ * which terms this node has already voted in, so it can vote a second time in a term it has forgotten —
+ * a Raft §5.2 election-safety violation, and a strictly worse trade than the lost liveness.
+ *
+ * Ignoring it is not free either. The node adopts the poisoned term, every frame it emits is dropped by
+ * peers as implausible, and every frame it receives looks stale — it is permanently and *silently*
+ * isolated. In a one-voter bootstrap it is worse still: the node wins its own election, `currentTerm + 1`
+ * wraps, and it persists a **negative** term, driving its own durable state backwards past
+ * [RaftStorage.term]'s monotonicity guarantee.
+ *
+ * ### What to do about it
+ *
+ * kuilt ships no durable [RaftStorage] — [InMemoryRaftStorage] is the only implementation in the library
+ * — so this exception is a report about *your* storage adapter. Treat it as you would a failed integrity
+ * check: inspect the persisted term (a truncated column, a sign-extended `Int`, a torn or partially
+ * deserialised read are the usual causes) and repair or re-provision the node deliberately. Erasing the
+ * node's durable state and letting it rejoin as a fresh member is safe; silently continuing is not.
+ *
+ * Because the restore runs in the coroutine started by [CoroutineScope.raftNode][raftNode], this
+ * surfaces through the scope rather than from the `raftNode(...)` call itself.
+ */
+public class CorruptDurableStateException(message: String) : IllegalStateException(message)
