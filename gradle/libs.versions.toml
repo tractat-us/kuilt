@@ -26,7 +26,7 @@ kotlincrypto-hash = "0.8.0"
 kotlincrypto-macs = "0.8.0"
 kotlincrypto-random = "0.6.0"
 chicory = "1.7.5"
-vanniktechMavenPublish = "0.30.0"
+vanniktechMavenPublish = "0.37.0"
 otel = "1.64.0"
 # KSP versions ≥2.3.0 are decoupled from the Kotlin version (KSP2 only) — no
 # Kotlin-prefix matching required, works with the catalog's Kotlin 2.3.x.
