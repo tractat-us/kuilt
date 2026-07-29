@@ -466,15 +466,28 @@ internal class RaftEngine(
      *
      * The standing rule is that malformed input must be *dropped*, never thrown on, because the actor
      * loop's `try`/`finally` has no `catch` and a `require` would convert one hostile frame into permanent
-     * node death. That rule is about *remote* input on the message path. This input is the consumer's own
-     * storage, read once at start-up, before [startActor] has run — there is no frame, no sender, and no
-     * remote party who can reach it. Dropping is also not available: the value is not a message to discard
-     * but the node's own identity, and continuing without it means either inventing a term (the clamp) or
-     * running on a poisoned one (the shrug).
+     * node death. That rule is about *remote* input on the message path. This input is not a frame: it is
+     * the consumer's own storage, read once at start-up before [startActor] has run, with no sender.
      *
-     * The throw surfaces through the caller's scope, which is the documented contract of
-     * `CoroutineScope.raftNode` — "any exception in the node propagates to the scope's supervisor" — and
-     * routes the failure to the party that owns the storage adapter that produced it.
+     * That is a statement about the *shape* of the input, **not** a claim that no remote party can reach
+     * this line — one can, a restart later. Measured on this branch: a single [RaftMessage.TimeoutNow]
+     * carrying `term == MAX_PLAUSIBLE_TERM` from *any* peer is admitted by [onMessage]'s inclusive ceiling;
+     * [onTimeoutNow]'s leader check is scoped to `m.term == state.currentTerm`, so a strictly-higher term
+     * bypasses it; the receiver steps down to `2^60`, and the transfer-driven `startRealElection` it then
+     * runs persists `currentTerm + 1` = `2^60 + 1`, above the ceiling. Its next restart arrives here.
+     *
+     * The refusal is still the right disposition at *this* site — before it, that same node came back up
+     * permanently and *silently* isolated, strictly worse than a loud failure that names the state. What
+     * needs fixing is the remote *cause*, and it is not here: the ceiling admits a term with no headroom
+     * for the `+ 1` that necessarily follows (#1886), and TimeoutNow sits outside the §5.2 authority gate
+     * (#1889). Both are tracked; neither is fixed by this guard.
+     *
+     * Dropping is also not available at this site: the value is not a message to discard but the node's own
+     * identity, and continuing without it means either inventing a term (the clamp) or running on a
+     * poisoned one (the shrug). The throw surfaces through the caller's scope, which is the documented
+     * contract of `CoroutineScope.raftNode` — "any exception in the node propagates to the scope's
+     * supervisor" — putting the persisted value in front of the operator, who can then tell a storage-
+     * adapter bug from the remote escalation above by whether it is `2^60 + 1`.
      *
      * ### Scope boundary
      *
@@ -2187,6 +2200,12 @@ internal class RaftEngine(
         // out-of-range value is an ordinary third-party storage bug, not a migration artefact. See
         // [checkedRestoredTerm] for why that site refuses to start instead of dropping (there is no
         // frame to drop) or clamping (§5.2).
+        //
+        // "Overflow-free" here means free of Long wrap, and nothing stronger. The bound is INCLUSIVE, so
+        // a term admitted at exactly MAX_PLAUSIBLE_TERM still increments to `2^60 + 1` — no wrap, but
+        // above the ceiling, and therefore dropped by every peer including its author. One frame at the
+        // boundary reproduces #1833's symptom cluster-wide through the one value this check lets past;
+        // making both this bound and [checkedRestoredTerm]'s exclusive is tracked in #1886.
         val wireTerm = m.wireTerm
         if (wireTerm != null && (wireTerm < 0L || wireTerm > MAX_PLAUSIBLE_TERM)) {
             debug { "onMessage: dropped ${m::class.simpleName} from $from — implausible term=$wireTerm (outside 0..$MAX_PLAUSIBLE_TERM)" }
