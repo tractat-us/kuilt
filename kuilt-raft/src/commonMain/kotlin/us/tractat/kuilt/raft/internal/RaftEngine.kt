@@ -470,17 +470,20 @@ internal class RaftEngine(
      * the consumer's own storage, read once at start-up before [startActor] has run, with no sender.
      *
      * That is a statement about the *shape* of the input, **not** a claim that no remote party can reach
-     * this line — one can, a restart later. Measured on this branch: a single [RaftMessage.TimeoutNow]
-     * carrying `term == MAX_PLAUSIBLE_TERM` from *any* peer is admitted by [onMessage]'s inclusive ceiling;
-     * [onTimeoutNow]'s leader check is scoped to `m.term == state.currentTerm`, so a strictly-higher term
-     * bypasses it; the receiver steps down to `2^60`, and the transfer-driven `startRealElection` it then
-     * runs persists `currentTerm + 1` = `2^60 + 1`, above the ceiling. Its next restart arrives here.
+     * this line — one can, a restart later. Measured on this branch *before* #1889: a single
+     * [RaftMessage.TimeoutNow] carrying `term == MAX_PLAUSIBLE_TERM` from *any* peer was admitted by
+     * [onMessage]'s inclusive ceiling; [onTimeoutNow]'s leader check was scoped to
+     * `m.term == state.currentTerm`, so a strictly-higher term bypassed it; the receiver stepped down to
+     * `2^60`, and the transfer-driven `startRealElection` it then ran persisted `currentTerm + 1` =
+     * `2^60 + 1`, above the ceiling. Its next restart arrived here.
      *
      * The refusal is still the right disposition at *this* site — before it, that same node came back up
      * permanently and *silently* isolated, strictly worse than a loud failure that names the state. What
-     * needs fixing is the remote *cause*, and it is not here: the ceiling admits a term with no headroom
-     * for the `+ 1` that necessarily follows (#1886), and TimeoutNow sits outside the §5.2 authority gate
-     * (#1889). Both are tracked; neither is fixed by this guard.
+     * needs fixing is the remote *cause*, and it is not here. #1889 has since closed the TimeoutNow route
+     * specifically: a TimeoutNow whose sender is not a voter, or whose term is strictly ahead of ours, is
+     * now dropped without adopting its term. The general shape survives it — the ceiling still admits a
+     * term with no headroom for the `+ 1` that necessarily follows on *any* term-adopting path (#1886) —
+     * so this guard stays the backstop, not the fix.
      *
      * Dropping is also not available at this site: the value is not a message to discard but the node's own
      * identity, and continuing without it means either inventing a term (the clamp) or running on a
@@ -2053,9 +2056,11 @@ internal class RaftEngine(
     /**
      * §3.10 TimeoutNow received: immediately start a real election without waiting for election timeout.
      *
-     * Only valid when this node is a voting follower (not a leader, candidate, or learner) and only
-     * when [from] is the leader we currently recognise. The message must carry the sender's current
-     * term — if it's stale, or if a same-term TimeoutNow arrives from a non-leader peer, ignore it.
+     * Only valid when this node is a voting follower (not a leader, candidate, or learner), only when
+     * [from] is a current voter ([onMessage]'s §5.2/§8 authority gate — TimeoutNow is a leader→peer RPC,
+     * so a non-voter sender is a forgery), and only when [from] is the leader we currently recognise.
+     * The message must carry **exactly** our current term: a stale one is ignored, and so is one
+     * strictly ahead of us (#1889 — see the guard below for why nothing honest is lost).
      *
      * The pre-vote phase is intentionally skipped: the leader already validated this node's log is
      * up-to-date (it just sent AppendEntries to sync us), so the pre-vote safety check is redundant
@@ -2072,13 +2077,36 @@ internal class RaftEngine(
             debug { "onTimeoutNow: already ${_role.value} — ignoring" }
             return
         }
-        // Only the current leader may issue TimeoutNow. A stale or spoofed same-term TimeoutNow from
-        // a peer that is not the leader we know about must not trigger a spurious election. _leader is
-        // only meaningful at the current term: for a strictly-higher term the sender has legitimately
-        // advanced past us (we step down below), and _leader is stale, so the check applies only when
-        // m.term == currentTerm. _leader may be null before we have heard from any leader this term;
-        // in that case accept (the sender asserts current-term leadership, validated by the term guards).
-        if (m.term == state.currentTerm && _leader.value != null && from != _leader.value) {
+        // A TimeoutNow strictly ahead of our term carries NO authority we can check (#1889). `_leader` is
+        // only meaningful at our own term, so at a higher term there is nothing to authenticate the sender
+        // against — which is precisely why the leader check below used to be scoped to the same-term lane,
+        // and precisely why the higher-term lane was a free pre-vote-less election on demand for any peer
+        // that could address us, repeatedly.
+        //
+        // Refusing it costs no honest §3.10 transfer. Unlike AppendEntries, TimeoutNow has no catch-up
+        // role: [sendTimeoutNow] emits the *leader's own* currentTerm, and it is only reached once the
+        // target's matchIndex has caught up to the leader's lastLogIndex. matchIndex is reset to 0 for
+        // every peer in [becomeLeader] and a leader's log is never empty ([appendNoOp]), so matchIndex can
+        // only have advanced through a **same-term** AppendEntriesResponse — the target has therefore
+        // provably already adopted the leader's term before this frame was even created, and that
+        // causality survives arbitrary reordering (the frame does not exist until the ACK lands). A node
+        // that genuinely IS behind must catch up through the ordinary election-timeout path, whose
+        // pre-vote round checks its log — not through an immediate election that skips that check.
+        //
+        // Dropped WITHOUT adopting m.term, matching the precedence the §5.2 gate below and the
+        // implausible-term bound (#1855/#1886) already set: sender-authority validation comes before
+        // §5.1 term adoption, or an unauthenticated frame gets to move durable state on its way to the
+        // floor. (This also closes the remote route into [checkedRestoredTerm] documented there.)
+        if (m.term > state.currentTerm) {
+            debug { "onTimeoutNow: unauthenticated future term ${m.term} > currentTerm=${state.currentTerm} — ignoring" }
+            return
+        }
+        // Only the current leader may issue TimeoutNow. A stale or spoofed TimeoutNow from a peer that is
+        // not the leader we know about must not trigger a spurious election. m.term is now provably equal
+        // to currentTerm (the two guards above), so _leader is meaningful and the comparison is sound.
+        // _leader may be null before we have heard from any leader this term; in that case accept — the
+        // §5.2 authority gate has already established that the sender is a current voter.
+        if (_leader.value != null && from != _leader.value) {
             debug { "onTimeoutNow: sender ${from.value} is not the current leader (${_leader.value?.value}) — ignoring" }
             return
         }
@@ -2087,7 +2115,6 @@ internal class RaftEngine(
             debug { "onTimeoutNow: self is a learner — ignoring" }
             return
         }
-        if (m.term > state.currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
         // Start a real election immediately (skip pre-vote — we are already up-to-date per the leader's sync).
         // §4.2.3: this election's RequestVotes carry the disrupt flag so the OTHER voters grant it despite
         // their leader-lease being live (needed at n>=4, where the transferring leader alone is not a quorum).
@@ -2212,10 +2239,10 @@ internal class RaftEngine(
             return
         }
 
-        // ── §5.2 / §8 leader-authority gate (#1383) ──────────────────────────────
-        // AppendEntries and InstallSnapshot are leader→peer RPCs, and only a voter can
+        // ── §5.2 / §8 leader-authority gate (#1383, #1889) ───────────────────────
+        // AppendEntries, InstallSnapshot and TimeoutNow are leader→peer RPCs, and only a voter can
         // ever be leader (§5.2: a candidate must win a majority of the voter set). So a
-        // frame of either type whose *sender* is not a current voter is a forgery — an
+        // frame of any of those types whose *sender* is not a current voter is a forgery — an
         // admitted-but-malicious learner/spoke that reached us over the cross-server
         // relay, which preserves the honest origin (`origin == sender` spoof-checking
         // passes) yet cannot vouch for the RPC type. Drop it BEFORE dispatch: the log
@@ -2227,17 +2254,26 @@ internal class RaftEngine(
         // envelope), and `membershipState.voters` is the live committed voter set, so a
         // legitimate leader (always a voter) passes unchanged.
         //
+        // TimeoutNow joined the type test in #1889. Its damage is not the log but *liveness*:
+        // [onTimeoutNow] bypasses the election timeout AND the pre-vote round, so an ungated
+        // frame is an election a non-voter can force on demand and repeat at will — exactly
+        // the disruption PreVote exists to deny. Narrowing the attacker set to voters is only
+        // half of the fix; the other half (a TimeoutNow ahead of our term has no authority to
+        // check, so it is refused rather than adopted) lives in [onTimeoutNow].
+        //
         // The gate is skipped while `voters` is empty — the pre-bootstrap learner seed
         // (`ClusterConfig(voters = emptySet(), learners = {self})`) of an appoint-the-host
         // joiner/spectator, which has not yet learned the cluster's config and MUST accept
         // the leader's AppendEntries/InstallSnapshot to catch up and be promoted (dropping
         // them here would deadlock the join). This exposes no voter: a node with no known
         // voters is by definition not a voter, and the issue is a *voter's* log integrity.
+        // It exposes no leadership either: such a node has none to transfer, and [onTimeoutNow]
+        // refuses to campaign as a Learner regardless.
         // The instant it applies the config entry that seats voters, the gate arms and
         // every subsequent leader→peer frame is validated. Mirrors RoutedRaftTransport's
         // player-side `origin ∈ voters()` check (the relay-side half of #1383).
         val voters = state.membershipState.voters
-        if ((m is RaftMessage.AppendEntries || m is RaftMessage.InstallSnapshot) &&
+        if ((m is RaftMessage.AppendEntries || m is RaftMessage.InstallSnapshot || m is RaftMessage.TimeoutNow) &&
             voters.isNotEmpty() && from !in voters
         ) {
             debug { "onMessage: dropped ${m::class.simpleName} from non-voter $from (§5.2 leader-authority gate) membershipState=${state.membershipState}" }
