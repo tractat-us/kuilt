@@ -58,8 +58,9 @@ import kotlin.time.Instant
  * affinity at all: the same tasks are charged, conservation holds (`validate()` is empty), and the
  * per-lane spend is unchanged.
  *
- * Same discipline as [HeddleAdmissionControlTest]: 5 s timeout, [StandardTestDispatcher], node
- * coroutines on [TestScope.backgroundScope], seeded RNG, bounded [drainAntiEntropy].
+ * Same discipline as [HeddleAdmissionControlTest]: [StandardTestDispatcher], node coroutines on
+ * [TestScope.backgroundScope], seeded RNG, bounded [drainAntiEntropy], and [WEDGE_BACKSTOP] as the
+ * wall-clock ceiling — a wedge detector, deliberately not a tight budget (see its KDoc; #1891).
  */
 class EligibilityLedgerOrthogonalityTest {
 
@@ -158,7 +159,7 @@ class EligibilityLedgerOrthogonalityTest {
     }
 
     @Test
-    fun eligibilityHasZeroEffectOnLedgerInvariants() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun eligibilityHasZeroEffectOnLedgerInvariants() = runTest(StandardTestDispatcher(), timeout = WEDGE_BACKSTOP) {
         val clock = schedulerClock(testScheduler)
 
         // Arm A: eligibility ACTIVE — an affinity predicate + a matching capability.

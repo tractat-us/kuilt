@@ -64,9 +64,11 @@ import kotlin.time.Instant
  * opaque [Lane] tags to `:kuilt-heddle` fair-share leaves and gates warp's **free** execution
  * path on entitlement — without warp core learning a single fair-share type.
  *
- * Discipline (repo CLAUDE.md): tight 5 s timeout, [StandardTestDispatcher], node coroutines on
+ * Discipline (repo CLAUDE.md): [StandardTestDispatcher], node coroutines on
  * [TestScope.backgroundScope], seeded RNG, bounded time advance via [drainAntiEntropy] — never
- * `advanceUntilIdle` (the Quilter anti-entropy loops re-arm forever).
+ * `advanceUntilIdle` (the Quilter anti-entropy loops re-arm forever). The wall-clock ceiling is
+ * [WEDGE_BACKSTOP], a wedge detector rather than a tight budget: these trajectories are purely
+ * virtual, so a tight real-time bound measures the host and nothing else (see its KDoc; #1891).
  */
 class HeddleAdmissionControlTest {
 
@@ -159,7 +161,7 @@ class HeddleAdmissionControlTest {
     // ─────────────────────────────────────────────────────────────────────────────
 
     @Test
-    fun twoLanes3To1ConvergeInCompletedTasks() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun twoLanes3To1ConvergeInCompletedTasks() = runTest(StandardTestDispatcher(), timeout = WEDGE_BACKSTOP) {
         val mint = 40L // 3:1 → 30 to laneA, 10 to laneB
         val heddleSeam = InMemoryLoom().host(Pattern("h6-heddle-3to1"))
         val clock = schedulerClock(testScheduler)
@@ -231,7 +233,7 @@ class HeddleAdmissionControlTest {
 
     @Test
     fun untaggedWorkloadBehavesIdenticallyWithAndWithoutTheHeddle() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = WEDGE_BACKSTOP) {
             val clock = schedulerClock(testScheduler)
             val ids = (0 until 12).map { TaskId("plain-$it") }
 
@@ -312,7 +314,7 @@ class HeddleAdmissionControlTest {
     // ─────────────────────────────────────────────────────────────────────────────
 
     @Test
-    fun freePathIssuesZeroConsensusMessages() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun freePathIssuesZeroConsensusMessages() = runTest(StandardTestDispatcher(), timeout = WEDGE_BACKSTOP) {
         val clock = schedulerClock(testScheduler)
         val heddleSeam = InMemoryLoom().host(Pattern("h6-zeroconsensus-heddle"))
         val heddle = backgroundScope.fairShareNode(heddleSeam, clock, mint = 40L, seed = 3)
@@ -360,7 +362,7 @@ class HeddleAdmissionControlTest {
     // ─────────────────────────────────────────────────────────────────────────────
 
     @Test
-    fun governedNodeComposesIntoAdmissionControl() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun governedNodeComposesIntoAdmissionControl() = runTest(StandardTestDispatcher(), timeout = WEDGE_BACKSTOP) {
         val clock = schedulerClock(testScheduler)
         val heddleSeam = InMemoryLoom().host(Pattern("h6-governed-heddle"))
         val self = ReplicaId(heddleSeam.selfId.value)
