@@ -196,14 +196,14 @@ class HeddleRosterTest {
             val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
             val solo = ReplicaId("solo")
             val author = HeddleControlPlane(
-                fake, solo, backgroundScope, RecordingSink(), NO_REMONITOR, EntitlementLedger.ZERO, "boot-author",
+                fake, solo, backgroundScope, RecordingSink(), NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-author",
             )
             assertIs<ControlOutcome.Applied>(author.submit(ControlCommand.Enroll(a)))
             assertIs<ControlOutcome.Applied>(author.submit(ControlCommand.Enroll(solo)))
             assertIs<ControlOutcome.Applied>(author.submit(ControlCommand.Depart(solo)))
 
             val observer = HeddleControlPlane(
-                fake, ReplicaId("observer"), backgroundScope, RecordingSink(), NO_REMONITOR, EntitlementLedger.ZERO, "boot-obs",
+                fake, ReplicaId("observer"), backgroundScope, RecordingSink(), NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-obs",
             )
             runCurrent() // let the observer replay the committed prefix
             assertEquals(author.rosterSnapshot(), observer.rosterSnapshot())
@@ -358,13 +358,16 @@ class HeddleRosterTest {
 
     private val NO_REMONITOR = ControlMembershipSink { }
 
+    /** These suites do not exercise the §6.2 peer-local barrier — see `HeddleFenceTest`. */
+    private val NO_BARRIER = ControlBarrierSink { SlotFinals.ZERO }
+
     private fun soloPlane(
         scope: CoroutineScope,
         sink: ControlLedgerSink,
         membership: ControlMembershipSink = NO_REMONITOR,
     ) = HeddleControlPlane(
         raft = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader),
-        self = ReplicaId("solo"), scope = scope, sink = sink, membership = membership,
+        self = ReplicaId("solo"), scope = scope, sink = sink, membership = membership, barrier = NO_BARRIER,
         initial = EntitlementLedger.ZERO, incarnation = "boot-roster",
     )
 
@@ -378,7 +381,7 @@ class HeddleRosterTest {
     )
 
     private fun plane(raft: RaftNode, id: NodeId, sink: ControlLedgerSink, scope: CoroutineScope) =
-        HeddleControlPlane(raft, ReplicaId(id.value), scope, sink, NO_REMONITOR, EntitlementLedger.ZERO, "inc-${id.value}")
+        HeddleControlPlane(raft, ReplicaId(id.value), scope, sink, NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "inc-${id.value}")
 
     /** Launch [block] on [scope], pump [sim]'s virtual time until it commits, and require it Applied. */
     private suspend fun applied(

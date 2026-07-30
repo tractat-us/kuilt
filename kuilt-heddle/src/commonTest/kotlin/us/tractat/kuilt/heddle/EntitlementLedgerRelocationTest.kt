@@ -1,7 +1,6 @@
 package us.tractat.kuilt.heddle
 
 import us.tractat.kuilt.crdt.GCounter
-import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.piece
 import kotlin.random.Random
@@ -127,17 +126,21 @@ class EntitlementLedgerRelocationTest {
     @Test
     fun rehomeWitnessNeverWritesABaseIssuedSlot() {
         val l = strandedNoThroughService(mapOf(p3 to 25L), listOf(p3 to 10L), listOf(p3 to 6L))
-        val patch = l.reconcileStranded(g)
+        val patch = l.relocationOrNull(g)
         assertNotNull(patch, "there is a strand to reconcile")
         // §6.3 slot-ownership: base counters on a LIVE edge are the data plane's exclusively.
         // The re-home's credit must ride a control-plane-owned relocation counter instead, so
         // the erasure of finding 1 has no slot to happen on.
         assertTrue(
-            patch.delta.issuedEdges().isEmpty(),
-            "the re-home must not write any base `issued` slot (it writes issuedReloc.in on the live edge); wrote ${patch.delta.issuedEdges()}",
+            e3 !in patch.issuedEdges(),
+            "the re-home must not write the LIVE edge's base `issued` slot (it writes issuedReloc.in there); wrote ${patch.issuedEdges()}",
         )
-        // It still drains the retired edge through the ordinary (fenced, uncontended) base slot.
-        assertEquals(setOf(e1), patch.delta.returnedEdges(), "the drain of the retired edge stays a base `returned` write")
+        assertEquals(setOf(e3), patch.issuedRelocInEdges(), "the credit lands on the live edge's relocation counter")
+        // It still drains the retired edge through the ordinary (fenced, uncontended) base slots —
+        // and republishes that edge's own base at its acked final, so no observer can hold the
+        // conclusion without its premises (§6.4 observer completeness).
+        assertEquals(setOf(e1), patch.returnedEdges(), "the drain of the retired edge stays a base `returned` write")
+        assertEquals(setOf(e1), patch.issuedEdges(), "the only base `issued` slot written is the FENCED edge's republish")
     }
 
     // ── finding 1, single replica: the concurrent delegate and the re-home both survive ──
@@ -145,11 +148,11 @@ class EntitlementLedgerRelocationTest {
     @Test
     fun concurrentDelegateDownTheLiveEdgeDoesNotEraseTheRehome() {
         val l = strandedNoThroughService(mapOf(p3 to 25L), listOf(p3 to 10L), listOf(p3 to 6L))
-        val rehome = assertNotNull(l.reconcileStranded(g), "there is a strand to reconcile")
+        val rehome = assertNotNull(l.relocationOrNull(g), "there is a strand to reconcile")
         // Concurrently — on p3's own pre-reconcile view, which is feasible: holdings(root,p3) = 15.
         val delegate = assertNotNull(l.delegate(p3, e3, 12L), "the ordinary data-plane delegate is feasible")
 
-        val converged = l.piece(rehome.delta).piece(delegate.delta)
+        val converged = l.piece(rehome).piece(delegate.delta)
 
         // BOTH writes must survive: 12 delegated + 10 re-homed. (Before the migration the
         // max-join collapsed these two absolutes on one slot to 12 — the delegate won, the
@@ -166,9 +169,9 @@ class EntitlementLedgerRelocationTest {
     @Test
     fun aSmallerConcurrentDelegateIsNotSwallowedByTheRehome() {
         val l = strandedNoThroughService(mapOf(p3 to 25L), listOf(p3 to 10L), listOf(p3 to 6L))
-        val rehome = assertNotNull(l.reconcileStranded(g))
+        val rehome = assertNotNull(l.relocationOrNull(g))
         val delegate = assertNotNull(l.delegate(p3, e3, 8L))
-        val converged = l.piece(rehome.delta).piece(delegate.delta)
+        val converged = l.piece(rehome).piece(delegate.delta)
         // The other direction of the same erasure: a delegate SMALLER than the re-home used to
         // be swallowed whole by max(10, 8) = 10.
         assertEquals(18L, converged.edge(e3)!!.issued, "8 delegated + 10 re-homed")
@@ -188,14 +191,14 @@ class EntitlementLedgerRelocationTest {
         )
         assertEquals(16L, l.edge(e1)!!.outstanding, "both replicas' delegations are stranded on e1")
 
-        val rehome = assertNotNull(l.reconcileStranded(g), "a two-replica strand is re-homable")
+        val rehome = assertNotNull(l.relocationOrNull(g), "a two-replica strand is re-homable")
         // Two independent data-plane writers race the re-home on the live edge — one with a
         // delegate SMALLER than its re-home (p3: 3 vs 10), one LARGER (q: 7 vs 6). Under the
         // old base-`issued` witness p3 lost its delegate and q lost its relocation.
         val delegateP3 = assertNotNull(l.delegate(p3, e3, 3L))
         val delegateQ = assertNotNull(l.delegate(q, e3, 7L))
 
-        val converged = l.piece(rehome.delta).piece(delegateP3.delta).piece(delegateQ.delta)
+        val converged = l.piece(rehome).piece(delegateP3.delta).piece(delegateQ.delta)
 
         assertEquals(26L, converged.edge(e3)!!.issued, "effective issued = (3+7) delegated + (10+6) re-homed")
         assertEquals(9L, converged.holdings(g, p3), "p3 at g: re-homed 10 + delegated 3 − 4 handed onward")
@@ -214,10 +217,10 @@ class EntitlementLedgerRelocationTest {
             downE1 = listOf(p3 to 10L, q to 6L),
             downE2 = listOf(p3 to 4L),
         )
-        val deltas: List<Patch<EntitlementLedger>> = listOf(
-            assertNotNull(l.reconcileStranded(g)),
-            assertNotNull(l.delegate(p3, e3, 3L)),
-            assertNotNull(l.delegate(q, e3, 7L)),
+        val deltas: List<EntitlementLedger> = listOf(
+            assertNotNull(l.relocationOrNull(g)),
+            assertNotNull(l.delegate(p3, e3, 3L)).delta,
+            assertNotNull(l.delegate(q, e3, 7L)).delta,
         )
         val rehomeIndex = 0
         // The strand's deficit is EXACTLY the stranded net inflow (16) and nothing else, at
@@ -229,7 +232,7 @@ class EntitlementLedgerRelocationTest {
             var acc = l
             val delivered = HashSet<Int>()
             for (i in order) {
-                acc = acc.piece(deltas[i].delta)
+                acc = acc.piece(deltas[i])
                 delivered += i
                 val expected = if (rehomeIndex in delivered) 80L else 64L
                 assertEquals(expected, conservation(acc, replicas), "conservation drifted mid-delivery on order $order after $delivered")
@@ -244,7 +247,7 @@ class EntitlementLedgerRelocationTest {
         assertEquals(13L, converged.holdings(g, q), "q's re-home and delegate both land at g")
         // Duplicate delivery of every delta, in every order, is absorbed idempotently.
         var doubled = converged
-        for (d in deltas) doubled = doubled.piece(d.delta)
+        for (d in deltas) doubled = doubled.piece(d)
         assertEquals(converged, doubled, "re-delivery must be a no-op (max-join idempotence)")
     }
 
@@ -267,11 +270,11 @@ class EntitlementLedgerRelocationTest {
             val stranded = strandP3 + strandQ
             assertEquals(minted - stranded, conservation(l, replicas), "the deficit is exactly the strand")
 
-            val rehome = assertNotNull(l.reconcileStranded(g))
+            val rehome = assertNotNull(l.relocationOrNull(g))
             // Concurrent, independently-feasible delegations down the live edge by both replicas.
             val dP3 = rnd.nextLong(1L, 30L)
             val dQ = rnd.nextLong(1L, 30L)
-            var converged = l.piece(rehome.delta)
+            var converged = l.piece(rehome)
             for ((r, amount) in listOf(p3 to dP3, q to dQ)) {
                 val d = l.delegate(r, e3, amount) ?: continue
                 converged = converged.piece(d.delta)
@@ -286,17 +289,17 @@ class EntitlementLedgerRelocationTest {
             assertEquals(strandQ + dQ, converged.holdings(g, q), "q's re-homed strand and delegate both landed at g")
             assertTrue(converged.validate().isEmpty(), "no conflict remains: ${converged.validate()}")
             // Re-homed exactly once: the strand is cleared, so a second pass finds nothing.
-            assertNull(converged.reconcileStranded(g), "a second reconcile must find nothing to move")
+            assertNull(converged.relocationOrNull(g), "a second reconcile must find nothing to move")
         }
     }
 
-    // ── slice 1 fails closed: through-service relocation is NOT un-gated here ────────────
+    // ── the un-gate (#1693): a through-service strand now moves, and the D1 target table lands ──
 
     @Test
-    fun throughServiceStrandStaysRefusedAndShipsNoRelocation() {
-        // Same strand, but service was spent THROUGH e1 before the reparent. Relocating that
-        // already-charged spend needs the §6 fence (slices 2–3); until then reconcile must
-        // fail closed, leaving the conflicts standing rather than moving the wrong magnitude.
+    fun throughServiceStrandRelocatesToTheDesignTargetTable() {
+        // The design's §2 worked example, end to end. Service was spent THROUGH e1 before the
+        // reparent (rollupSpent(e1) = 3), which slice 1 refused because relocating an already-charged
+        // spend needs the fence. With the fence, the move lands on the design's target table exactly.
         var l = EntitlementLedger.ZERO.piece(EntitlementLedger.bootstrap(root, mapOf(p3 to 10L), nonce = "genesis"))
         l = l.piece(l.prepare(rec(e1, root, g))!!.delta)
         l = l.piece(l.activate(e1)!!.delta)
@@ -311,10 +314,71 @@ class EntitlementLedgerRelocationTest {
         l = l.piece(l.activate(e3)!!.delta)
 
         assertEquals(3L, l.edge(e1)!!.spent, "service was spent through the stranded edge")
-        assertNull(l.reconcileStranded(g), "through-service relocation stays REFUSED in slice 1 — the fence is not built")
         assertTrue(
             l.validate().contains(LedgerConflict.PersistentNegativeHoldings(g, p3)),
-            "the refusal leaves the pre-existing conflicts standing (recoverable), never a silent break",
+            "pre-condition: the strand's conflicts stand before the move",
+        )
+        val moved = l.piece(assertNotNull(l.relocationOrNull(g), "the fenced move clears a through-service strand"))
+
+        // Design §2's target table: e1 drained (issued 10, returned 10, eff spend 0); e3 carries the
+        // re-homed generation (eff issued 10) AND the 3 units of service charged through it.
+        assertEquals(10L, moved.edge(e1)!!.issued)
+        assertEquals(10L, moved.edge(e1)!!.returned)
+        assertEquals(0L, moved.edge(e1)!!.spent, "e1's effective spend nets to zero — relocated, not decremented")
+        assertEquals(0L, moved.edge(e1)!!.outstanding, "e1 is drained, clearing its ClosureViolation")
+        assertEquals(10L, moved.edge(e3)!!.issued, "the full net inflow re-homes onto the live edge")
+        assertEquals(3L, moved.edge(e3)!!.spent, "the through-service charge re-homes with it")
+        assertEquals(4L, moved.holdings(g, p3), "g holds the un-spent remainder (10 − 6 handed onward)")
+        assertEquals(10L, moved.mintedTotal(), "the move mints nothing")
+        assertEquals(10L, conservation(moved, listOf(p3)), "conservation restored: Σ holdings + Σ effLeafSpent = minted")
+        assertTrue(moved.validate().isEmpty(), "every conflict cleared: ${moved.validate()}")
+        // Idempotent: a second move finds a drained edge and does nothing.
+        assertNull(moved.relocationOrNull(g), "the fenced edge reads drained — a second move is refused")
+    }
+
+    // ── §6.4 observer completeness: the conclusion never travels without its premises ────
+
+    @Test
+    fun thePublishedMoveCarriesTheBaseItCancelsSoNoObserverReadsNegativeSpend() {
+        // Attack 1 of the adversarial review (§11 finding 3): an observer that receives the
+        // log-published move BEFORE it gossips in the base spend it cancels used to read
+        // effRollup(s) < 0 and false-fire PerEdgeSafety. The move now republishes s's base slots
+        // at their acked finals in the SAME delta (the drain-witness idiom `retire` already uses),
+        // so that state is unobservable.
+        var truth = EntitlementLedger.ZERO.piece(EntitlementLedger.bootstrap(root, mapOf(p3 to 10L), nonce = "genesis"))
+        truth = truth.piece(truth.prepare(rec(e1, root, g))!!.delta)
+        truth = truth.piece(truth.activate(e1)!!.delta)
+        truth = truth.piece(truth.prepare(rec(e2, g, h))!!.delta)
+        truth = truth.piece(truth.activate(e2)!!.delta)
+        truth = truth.piece(truth.delegate(p3, e1, 10L)!!.delta)
+        truth = truth.piece(truth.delegate(p3, e2, 6L)!!.delta)
+        truth = truth.piece(truth.spend(p3, h, 3L)!!.delta)
+        truth = truth.piece(truth.close(e1)!!.delta)
+        truth = truth.piece(EntitlementLedger.of(lifecycle = mapOf(e1 to Lifecycle.RETIRED)))
+        truth = truth.piece(truth.prepare(rec(e3, root, g))!!.delta)
+        truth = truth.piece(truth.activate(e3)!!.delta)
+        val move = assertNotNull(truth.relocationOrNull(g))
+
+        // A laggard holding the topology but NOT the through-spend delta, merging the move alone.
+        var observer = EntitlementLedger.ZERO.piece(EntitlementLedger.bootstrap(root, mapOf(p3 to 10L), nonce = "genesis"))
+        observer = observer.piece(observer.prepare(rec(e1, root, g))!!.delta)
+        observer = observer.piece(observer.activate(e1)!!.delta)
+        observer = observer.piece(observer.prepare(rec(e3, root, g))!!.delta)
+        observer = observer.piece(observer.activate(e3)!!.delta)
+        val merged = observer.piece(move)
+
+        assertEquals(0L, merged.edge(e1)!!.spent, "e1's effective spend is zero, never negative, on the laggard")
+        assertTrue(
+            merged.validate().none { it is LedgerConflict.NegativeEffectiveSpend },
+            "no negative effective spend is observable: ${merged.validate()}",
+        )
+        // And the check itself is non-vacuous: strip the covering base and it fires.
+        val stripped = observer.piece(
+            EntitlementLedger.of(rollupRelocOut = mapOf(e1 to GCounter.of(p3 to 3L))),
+        )
+        assertTrue(
+            stripped.validate().contains(LedgerConflict.NegativeEffectiveSpend(e1)),
+            "fixture non-vacuity: a relocOut without its base DOES report, was ${stripped.validate()}",
         )
     }
 

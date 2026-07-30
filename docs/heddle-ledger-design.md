@@ -118,11 +118,14 @@ absolute on the contended base `issued(liveEdge)[r]` that `r`'s own `delegate` w
 concurrently — two writers on one max-joined slot silently erase one side, with conservation
 *and* per-edge safety blind to the loss (#1691).
 
-**Spend relocation is expressible but not enabled.** `reconcileStranded` still refuses a
-strand with service spent through it: the move drains the retired edge to zero headroom, so a
-straggler charge arriving afterwards would leave a permanently unclearable per-edge-safety
-violation. Un-gating it needs a per-peer quiesce fence recording, in the log, that every
-replica has sworn off writing the edge again — a later slice.
+**Spend relocation is enabled, behind the quiesce fence (#1693).** The move drains the retired
+edge to zero headroom, so a straggler charge arriving afterwards would leave a permanently
+unclearable per-edge-safety violation. What makes it safe is a per-peer barrier recorded in the
+log: `Quiesce(s)` commits, every peer marks `s` locally unwritable *atomically with its own
+mutator execution* and acks its own final slot values, and the relocation **magnitude is derived
+at apply time from those log-recorded acks** — never read from a proposer's gossip view. The
+whole recovery, through-service or not, rides that one path
+([`heddle-ledger-relocation-design.md`](heddle-ledger-relocation-design.md) §6).
 
 ## Mutators
 

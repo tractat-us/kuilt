@@ -143,10 +143,11 @@ import kotlinx.serialization.Serializable
  * writes concurrently — two writers on one max-joined slot would silently erase one side,
  * with conservation *and* per-edge safety blind to the loss.
  *
- * Slice 1 ships the representation and moves the re-home onto it. **Spend relocation is not
- * enabled**: [reconcileStranded] still refuses a strand with service spent through it, because
- * relocating an already-charged spend safely needs a per-peer quiesce fence that is not built
- * yet.
+ * **Spend relocation rides the quiesce fence** (#1693). Moving an already-charged spend drains the
+ * dead edge to zero headroom, so one straggler charge afterwards would leave a permanently
+ * unclearable per-edge-safety violation. What makes it safe is that the move's magnitude is derived
+ * from **log-recorded per-peer promises** rather than any peer's gossip view — see
+ * [relocationPatch] and `ControlCommand.Quiesce`.
  *
  * @sample us.tractat.kuilt.heddle.sampleEntitlementLedgerMerge
  * @sample us.tractat.kuilt.heddle.sampleEntitlementLedgerLifecycle
@@ -537,124 +538,209 @@ public class EntitlementLedger private constructor(
     internal fun drainWitnessFor(edge: AttachmentId): EntitlementLedger = drainWitness(edge)
 
     /**
-     * Re-home the entitlement **stranded on RETIRED inbound edges** of [child] onto [child]'s single
-     * live inbound edge — the conserving reconciliation for the advisory-retire race of design §5.4
-     * (reparent) / §9 #3 (recovery), issue #1665. Returns the patch, or `null` when the strand **cannot
-     * be conservingly cleared** on this view (see the carve-outs below) — a deliberate *fail-closed*: a
-     * refusal leaves the pre-existing conflicts standing (safe, recoverable), never a silent
-     * conservation break.
+     * The **§4 generation-move**: drain each fenced retired edge in [finals] and re-home everything it
+     * carried — net inflow *and* already-charged service — onto the child's live inbound [liveEdge]
+     * (relocation design §4, issue #1665 slice 3 / #1693). This is the conserving recovery for the
+     * advisory-retire race, and it is **pure**: acked finals in, patch out.
      *
-     * ## The strand, and why the child needs its FULL net inflow re-homed
+     * ## Why the child needs its FULL net inflow re-homed
      *
      * When a gossip-lagged peer retires an edge whose `delegate` it had not yet merged, the edge is
      * RETIRED with `outstanding != 0` and its budget is stranded on a generation no longer on the live
-     * lineage (`GovernedHeddleNode.retire`). Once [child] is legally reparented onto a fresh inbound
-     * edge with `issued = 0`, [holdings] at [child] derive **permanently negative** — a persistent
+     * lineage (`GovernedHeddleNode.retire`). Once the child is legally reparented onto a fresh inbound
+     * edge with `issued = 0`, [holdings] at the child derive **permanently negative** — a persistent
      * [LedgerConflict.PersistentNegativeHoldings] / [LedgerConflict.PerEdgeSafety] with zero real
      * overspend. `release` refuses a retired edge, so the data plane cannot recover it.
      *
-     * [child]'s holdings under the old edge `s` were credited by its **full net inflow**
-     * `netInflow(s)[r] = issued(s)[r] − returned(s)[r]` — *not* its `outstanding` (which nets out
-     * `spent(s)`). So making [child] whole means re-homing `netInflow(s)[r]`.
+     * The child's holdings under the old edge `s` were credited by its **full net inflow**
+     * `n = effIssued(s)[r] − returned(s)[r]` — *not* its `outstanding` (which nets out `spent(s)`). So
+     * making the child whole means re-homing `n`, and relocating the `sp = effLeafSpent + effRollupSpent`
+     * that rode with it so `s` stays per-edge-safe.
      *
-     * ## Release-up-then-redelegate (conserving by construction)
+     * ## The patch, per fenced edge `s` and replica `r`
      *
-     * For each stranded retired inbound edge `s`, and each replica `r`, the patch:
-     *  - **releases up `s`** — bumps `returned(s)[r]` to `effIssued(s)[r]`, driving `netInflow(s)[r] → 0`
-     *    and `outstanding(s) → 0` (clearing its [LedgerConflict.ClosureViolation]); and
-     *  - **re-delegates down the live edge** — bumps `issuedRelocIn(liveEdge)[r]` by the same
-     *    `netInflow(s)[r]`, restoring [child]'s inbound credit.
+     * ```
+     * returned(s)[r]        → iss           # drain: netInflow(s)[r] → 0, outstanding(s) → 0
+     * issued/leafSpent/rollupSpent(s)[r] → the acked finals   # republished (observer completeness, §6.4)
+     * leafRelocOut(s)[r]    += lsp          leafRelocIn(t)[r]   += lsp
+     * rollupRelocOut(s)[r]  += rsp          rollupRelocIn(t)[r] += rsp
+     * issuedRelocIn(t)[r]   += n            # NEVER the live edge's base `issued` slot (#1691)
+     * ```
      *
-     * Both bumps move the **same** already-minted units, so `mintedTotal` is unchanged and the global
-     * conservation identity (`minted = Σ holdings + Σ leafSpent`) is *restored*. Counter targets are
-     * shipped at their **absolute** values, so duplicate delivery is absorbed idempotently by the
-     * `GCounter` max-join.
+     * Every move sends equal and opposite relocation credits, so `Σ effLeafSpent` — the conservation
+     * term — is invariant; the net-inflow half telescopes (the parent's subtraction of `netInflow(s)`
+     * drops by `n` exactly as the child's `creditIn` rises by `n`). `mintedTotal` is untouched.
      *
-     * ## Why the re-delegation rides `issuedRelocIn`, not base `issued` (#1691, design §6.3)
+     * ## The two inputs, and why neither is read from a gossip view
      *
-     * The live edge is *live*: replica `r` writes `issued(liveEdge)[r]` concurrently through an
-     * ordinary [delegate]. Writing an absolute target into that slot puts **two independent writers
-     * on one max-joined slot**, and the join silently keeps the larger — erasing either the concurrent
-     * delegation or the whole re-home. Nothing surfaces: conservation still balances and every edge
-     * still passes per-edge safety, so the units simply end up at the wrong node. Routing the credit
-     * through the control-plane-owned `issuedRelocIn` family removes the contended slot altogether,
-     * so both writes survive and `effIssued(liveEdge)[r] = delegated + re-homed`. The retired edge's
-     * `returned` slot stays a base write: `s` is RETIRED, so no data-plane mutator will ever author it
-     * again ([release] refuses a non-live inbound edge).
+     *  - **[finals]** — per fenced edge, each replica's log-recorded [SlotFinals] from its
+     *    [ControlCommand.QuiesceAck]. Base slots are single-writer, and the acking replica has
+     *    marked the edge locally unwritable, so these values are *final* and consensus-recorded.
+     *  - **`this`** — the control plane's own accumulated relocation state ([FenceState.relocations]).
+     *    The relocation families and a fenced edge's base slots are control-plane-owned exclusively
+     *    (§6.3), so `this` holds their true values with no data-plane read at all.
      *
-     * **Residual — the magnitude is still read from this view.** Two re-homes onto the *same* live edge
-     * must each be computed from a view that has merged the previous one, or the second absolute
-     * under-shoots and max-join keeps the first. That is the same unfenced-magnitude residual described
-     * below, narrowed: the relocation slot has exactly one writer (the log-serialized control plane),
-     * where the base slot had two.
+     * Both are functions of the committed log prefix, so **every peer derives the identical patch**
+     * (Raft §5.4.3). That is what closes the Wall-A magnitude residual #1669 documented and what
+     * removes §12.3's magnitude-freshness residual: a second move onto one live edge accumulates on
+     * `this` rather than max-colliding with the first.
      *
-     * ## Carve-outs — cases this fails closed on (issue #1665 review; the two representation walls)
+     * ## Preconditions, checked per replica against the acked finals
      *
-     *  - **Through-service (`spent(s) != 0`) — still refused.** If service was spent *through* `s`
-     *    before the reparent (`leafSpent(s)`/`rollupSpent(s) > 0`), releasing the full net inflow up
-     *    `s` would need `returned(s) = effIssued(s)`, which **violates per-edge safety** on `s`
-     *    (`spent + returned ≤ issued`) unless the already-charged service is relocated too. The
-     *    `leafReloc`/`rollupReloc` families make that *expressible* — but not yet *safe to compute*:
-     *    the move drains `s` to zero headroom, so a single straggler charge arriving afterwards
-     *    (a captured-path completion can still charge a RETIRED edge) leaves a **permanently
-     *    unclearable** per-edge-safety violation. Making it safe needs a per-peer quiesce fence that
-     *    records, in the log, that every replica has sworn off writing `s` again. That fence is not
-     *    built, so this case **fails closed** — deliberately, and it is the whole reason the
-     *    representation ships ahead of the un-gate.
-     *  - **Transfer-tangle** (a replica left net-negative on `s` by a transfer *at [child]* then a
-     *    release): re-homing faithfully would also have to relocate the transfer rows. Out of scope; refuses.
+     *  - `n ≥ 0` — a replica left **net-negative** on `s` (the transfer-tangle case, PR #1669
+     *    `break4`) would need its transfer rows moved too. Out of scope ⇒ [Relocation.Refused].
+     *  - `n ≥ sp` ⟺ `outstanding(s)[r] ≥ 0`. Holds for a healthy strand; refused otherwise.
+     *  - `lsp ≥ 0`, `rsp ≥ 0` — an acked base below what has already been relocated out is
+     *    protocol-impossible, so it fails closed rather than moving a negative quantity.
      *
-     * ## Not a safety fence — magnitudes are read from THIS (possibly stale) view
+     * The live edge needs **no** data-plane read: the move adds `sp` to `t`'s effective spend and
+     * `n ≥ sp` to its effective issuance, so per-edge safety on `t` survives by increment.
      *
-     * This computes the re-home amounts from `this` ledger. If `this` is a **gossip-lagged** view of
-     * `s`'s counters, the amounts (and even the `spent(s) == 0` carve-out test) are wrong, and committing
-     * them would break conservation on the converged state (issue #1665 review, "phantom supply"). The
-     * caller MUST compute this on a **causally-complete** view of `s`; the governed control plane fences
-     * *leader authority* via `readIndex()` (§9 #3) but does **not** yet fence data-plane magnitude
-     * freshness — see `GovernedHeddleNode.reconcile`.
+     * `Relocation.Nothing` when every fenced edge is already drained (`n = 0, sp = 0`) — the
+     * deterministic idempotence guard of §5.4 (iii): a second `Reconcile` for one child moves nothing.
+     *
+     * A replica that authored slots on `s` but is **absent from [finals]** (never acked) is left
+     * untouched: its strand stays stranded on the same terms as a crashed peer's holdings
+     * (`heddle-design.md` §8.1). Draining a slot whose owner never promised is precisely the
+     * fabricate-beyond-owner violation the fence exists to prevent.
+     *
+     * `internal` — the caller is [HeddleControlPlane]'s apply loop, which alone holds log-pure inputs.
      */
-    public fun reconcileStranded(child: GroupId): Patch<EntitlementLedger>? {
-        val live = liveInboundEdges(child)
-        if (live.size != 1) return null
-        val liveEdge = live.single()
-        val returnedTargets = HashMap<AttachmentId, GCounter>()
-        val rehomedByReplica = HashMap<ReplicaId, Long>()
-        for (s in retiredInboundEdges(child)) {
-            val summary = edge(s) ?: continue
-            if (summary.outstanding <= 0L) continue
-            // Carve-out: through-service on the retired edge cannot be re-homed conservingly (grow-only
-            // rollupSpent can't be relocated; releasing the full net inflow would break per-edge safety).
-            if (summary.spent != 0L) return null
-            val perReplica = ArrayList<Pair<ReplicaId, Long>>()
-            var positiveSum = 0L
-            for (r in replicasOnEdge(s)) {
-                val net = netInflow(s, r) // == the per-replica strand, since spent(s) == 0 here
-                if (net > 0L) {
-                    perReplica += r to net
-                    positiveSum = checkedAdd(positiveSum, net)
+    internal fun relocationPatch(
+        liveEdge: AttachmentId,
+        finals: Map<AttachmentId, Map<ReplicaId, SlotFinals>>,
+    ): Relocation {
+        // ── pass 1: derive every fenced slot, and total each replica's cover and charge.
+        val drainable = ArrayList<DrainedSlot>()
+        val coverByReplica = HashMap<ReplicaId, Long>()
+        val chargeByReplica = HashMap<ReplicaId, Long>()
+
+        for ((s, perReplica) in finals.entries.sortedBy { it.key }) {
+            for ((r, acked) in perReplica.entries.sortedBy { it.key }) {
+                val relIssIn = slot(issuedRelocIn, s, r)
+                val relLeafIn = slot(leafRelocIn, s, r)
+                val relLeafOut = slot(leafRelocOut, s, r)
+                val relRollIn = slot(rollupRelocIn, s, r)
+                val relRollOut = slot(rollupRelocOut, s, r)
+                // §12.1: the drain target is effIssued(s)[r], not the base — s may itself have
+                // received an earlier relocation, and draining against the base under-drains it.
+                val iss = checkedAdd(acked.issued, relIssIn)
+                // The control plane may already have drained this slot; max keeps the join honest.
+                val ret = maxOf(acked.returned, slot(returned, s, r))
+                val lsp = checkedSub(checkedAdd(acked.leafSpent, relLeafIn), relLeafOut)
+                val rsp = checkedSub(checkedAdd(acked.rollupSpent, relRollIn), relRollOut)
+                if (lsp < 0L || rsp < 0L) {
+                    return Relocation.Refused(
+                        "relocate refused: effective spend on ${s.value} for ${r.value} is negative " +
+                            "(leaf=$lsp, rollup=$rsp) — an acked base below what was already relocated out",
+                    )
                 }
-            }
-            // Carve-out: a replica left net-negative on s by a transfer-at-child (positiveSum overshoots
-            // the edge's outstanding). Re-homing would have to move transfer rows too — out of scope.
-            if (positiveSum != summary.outstanding) return null
-            for ((r, net) in perReplica) {
-                // returned(s)[r] → effIssued(s)[r]: drains s (netInflow → 0), keeps per-edge safety
-                // (spent == 0 here). A base write, legal because s is RETIRED — no data-plane mutator
-                // can author it again, so the control plane is its only writer.
-                val returnedTarget = checkedAdd(slot(returned, s, r), net)
-                returnedTargets[s] = returnedTargets[s]?.piece(GCounter.of(r to returnedTarget)) ?: GCounter.of(r to returnedTarget)
-                rehomedByReplica[r] = checkedAdd(rehomedByReplica[r] ?: 0L, net)
+                val n = checkedSub(iss, ret)
+                val sp = checkedAdd(lsp, rsp)
+                if (n < 0L) {
+                    return Relocation.Refused(
+                        "relocate refused: ${r.value} is net-negative on ${s.value} (n=$n) — a " +
+                            "transfer-tangled strand needs its transfer rows moved too (out of scope)",
+                    )
+                }
+                if (n == 0L && sp == 0L) continue // already drained: contribute nothing
+                coverByReplica[r] = checkedAdd(coverByReplica[r] ?: 0L, n)
+                chargeByReplica[r] = checkedAdd(chargeByReplica[r] ?: 0L, sp)
+                drainable += DrainedSlot(
+                    edge = s,
+                    replica = r,
+                    acked = acked,
+                    relIssIn = relIssIn,
+                    relLeafIn = relLeafIn,
+                    relRollIn = relRollIn,
+                    relLeafOut = relLeafOut,
+                    relRollOut = relRollOut,
+                    iss = iss,
+                    n = n,
+                    lsp = lsp,
+                    rsp = rsp,
+                )
             }
         }
-        if (rehomedByReplica.isEmpty()) return null
-        // The re-delegation lands on the control-plane-owned relocation family, NEVER on the live
-        // edge's contended base `issued` slot (#1691 / design §6.3 — see the KDoc above).
-        var relocTarget = GCounter.ZERO
-        for ((r, add) in rehomedByReplica) {
-            relocTarget = relocTarget.piece(GCounter.of(r to checkedAdd(slot(issuedRelocIn, liveEdge, r), add)))
+        if (drainable.isEmpty()) return Relocation.Nothing
+
+        // ── the `n ≥ sp` precondition, quantified per (child, replica) over the WHOLE derivation
+        // rather than per edge (#1895). The re-home lands a charge on the live edge at charge time
+        // but its covering issuance only arrives with this very Reconcile, so if that edge is itself
+        // fenced before the recovery runs it reads spend-with-no-cover and a per-edge test refused
+        // the whole child forever. The cover is genuinely there — on the sibling fenced edge the
+        // entitlement came from before the re-home split charge from credit — so the honest question
+        // is whether this replica's fenced edges TOGETHER cover what was charged through them.
+        //
+        // Aggregated per replica and NEVER across replicas: entitlement is per-replica, so funding
+        // one replica's spend from another's surplus would be a real conservation break, not a fix.
+        for (r in chargeByReplica.keys.sortedBy { it.value }) {
+            val charge = chargeByReplica.getValue(r)
+            // getValue, not `?: 0L`: the two maps are written in lockstep under the same key two
+            // statements apart, so their key sets are identical by construction. A silent zero here
+            // would refuse undiagnosably if that ever stopped being true.
+            val cover = coverByReplica.getValue(r)
+            if (cover < charge) {
+                return Relocation.Refused(
+                    "relocate refused: ${r.value}'s fenced edges cannot cover what was charged " +
+                        "through them (cover=$cover < spent=$charge)",
+                )
+            }
         }
-        return Patch(of(returned = returnedTargets, issuedRelocIn = mapOf(liveEdge to relocTarget)))
+
+        // ── pass 2: drain each fenced slot, and accumulate the live edge's credit.
+        val drain = EdgePatchBuilder()
+        val creditIssued = HashMap<ReplicaId, Long>()
+        val creditLeaf = HashMap<ReplicaId, Long>()
+        val creditRollup = HashMap<ReplicaId, Long>()
+        for (d in drainable) {
+            // ── the fenced edge: drain it, and republish every premise of that conclusion so no
+            // observer can hold `relocOut` without the base it cancels (§6.4 / §5.3 proviso).
+            drain.put(CounterFamily.RETURNED, d.edge, d.replica, d.iss)
+            drain.put(CounterFamily.ISSUED, d.edge, d.replica, d.acked.issued)
+            drain.put(CounterFamily.LEAF_SPENT, d.edge, d.replica, d.acked.leafSpent)
+            drain.put(CounterFamily.ROLLUP_SPENT, d.edge, d.replica, d.acked.rollupSpent)
+            drain.put(CounterFamily.ISSUED_RELOC_IN, d.edge, d.replica, d.relIssIn)
+            drain.put(CounterFamily.LEAF_RELOC_IN, d.edge, d.replica, d.relLeafIn)
+            drain.put(CounterFamily.ROLLUP_RELOC_IN, d.edge, d.replica, d.relRollIn)
+            drain.put(CounterFamily.LEAF_RELOC_OUT, d.edge, d.replica, checkedAdd(d.relLeafOut, d.lsp))
+            drain.put(CounterFamily.ROLLUP_RELOC_OUT, d.edge, d.replica, checkedAdd(d.relRollOut, d.rsp))
+
+            // ── the live edge: accumulate across every fenced edge in THIS move before adding
+            // the standing control-plane total, so two edges re-homing onto one `t` sum.
+            creditIssued[d.replica] = checkedAdd(creditIssued[d.replica] ?: 0L, d.n)
+            creditLeaf[d.replica] = checkedAdd(creditLeaf[d.replica] ?: 0L, d.lsp)
+            creditRollup[d.replica] = checkedAdd(creditRollup[d.replica] ?: 0L, d.rsp)
+        }
+
+        for ((r, add) in creditIssued) {
+            drain.put(CounterFamily.ISSUED_RELOC_IN, liveEdge, r, checkedAdd(slot(issuedRelocIn, liveEdge, r), add))
+        }
+        for ((r, add) in creditLeaf) {
+            drain.put(CounterFamily.LEAF_RELOC_IN, liveEdge, r, checkedAdd(slot(leafRelocIn, liveEdge, r), add))
+        }
+        for ((r, add) in creditRollup) {
+            drain.put(CounterFamily.ROLLUP_RELOC_IN, liveEdge, r, checkedAdd(slot(rollupRelocIn, liveEdge, r), add))
+        }
+        return Relocation.Moved(drain.build())
     }
+
+    /**
+     * The **base** counter slots of [edge], by replica — the shape a [ControlCommand.QuiesceAck]
+     * declares. Read on the acking peer's own complete state (for its own slot) at the moment it
+     * marks [edge] locally unwritable, or over every replica for a test that models a converged view.
+     * `internal` — barrier + test support.
+     */
+    internal fun baseFinalsOn(edge: AttachmentId): Map<ReplicaId, SlotFinals> =
+        replicasOnEdge(edge).associateWith { r -> baseFinalsOn(edge, r) }
+
+    /** [r]'s own base counter slots on [edge] — its [ControlCommand.QuiesceAck] payload. */
+    internal fun baseFinalsOn(edge: AttachmentId, r: ReplicaId): SlotFinals = SlotFinals(
+        issued = slot(issued, edge, r),
+        returned = slot(returned, edge, r),
+        leafSpent = slot(leafSpent, edge, r),
+        rollupSpent = slot(rollupSpent, edge, r),
+    )
 
     /** The replicas that authored any counter slot on [edge] — base or relocation. */
     private fun replicasOnEdge(edge: AttachmentId): Set<ReplicaId> {
@@ -919,11 +1005,15 @@ public class EntitlementLedger private constructor(
     public fun validate(): List<LedgerConflict> {
         val conflicts = ArrayList<LedgerConflict>()
         for (e in allEdges()) {
-            val charged = checkedAdd(
-                checkedAdd(effLeafSpentTotal(e), effRollupSpentTotal(e)),
-                counterValue(returned, e),
-            )
+            val effLeaf = effLeafSpentTotal(e)
+            val effRollup = effRollupSpentTotal(e)
+            val charged = checkedAdd(checkedAdd(effLeaf, effRollup), counterValue(returned, e))
             if (charged > effIssuedTotal(e)) conflicts += LedgerConflict.PerEdgeSafety(e)
+            // §5.3's lower bound, reported rather than assumed (#1693 / relocation design §12.5). A
+            // negative effective spend means an edge carries a relocation-out whose covering base has
+            // not arrived — and it also *lowers* `charged` above, so the per-edge upper bound alone
+            // would let it pass silently.
+            if (effLeaf < 0L || effRollup < 0L) conflicts += LedgerConflict.NegativeEffectiveSpend(e)
             // A retired edge must have drained before retiring; non-zero outstanding
             // means entitlement crossed a generation already retired elsewhere.
             if (lifecycleOf(e) == Lifecycle.RETIRED) {
@@ -1008,21 +1098,6 @@ public class EntitlementLedger private constructor(
 
     /** The edge ids carrying an `issuedRelocIn` slot — where a re-home's credit legally lands. */
     internal fun issuedRelocInEdges(): Set<AttachmentId> = issuedRelocIn.keys
-
-    /**
-     * True when this ledger carries **only** `returned` slots and `issuedRelocIn` slots — no topology,
-     * supply, base issuance, spend, spend-relocation, or transfer components. The control plane asserts
-     * this of a governed reconciliation witness before publishing it, so a malformed witness can never
-     * (a) smuggle new minted supply or topology past the log-pure gate (design §9 #3), (b) fabricate a
-     * value on a **live** edge's contended base `issued` slot (#1691 / relocation design §6.3 — the
-     * silent max-join erasure), or (c) relocate already-charged **spend**, which stays gated until the
-     * per-peer quiesce fence ships. `internal` — control-plane support.
-     */
-    internal fun carriesOnlyRehomeSlots(): Boolean =
-        records.isEmpty() && minted.isEmpty() && issued.isEmpty() && leafSpent.isEmpty() &&
-            rollupSpent.isEmpty() && transfers.isEmpty() && lifecycle.isEmpty() &&
-            leafRelocIn.isEmpty() && leafRelocOut.isEmpty() &&
-            rollupRelocIn.isEmpty() && rollupRelocOut.isEmpty()
 
     /** Every group named as a parent or child by any (singleton or divergent) record. */
     internal fun allGroups(): Set<GroupId> =
@@ -1204,11 +1279,6 @@ public class EntitlementLedger private constructor(
 }
 
 /**
- * The nine per-edge [GCounter] families of [EntitlementLedger] — four base, five relocation.
- * Names one family for [EntitlementLedger.storedSlot], whose contract is that **every** family is
- * grow-only: no `piece` on any state may lower a stored slot. `internal` — test support.
- */
-/**
  * The outcome of one [EntitlementLedger] lineage walk: the root→group edge list, or `null`
  * when the lineage is quarantined, plus whether the walked group lies **on** a topology cycle.
  */
@@ -1219,6 +1289,11 @@ private class LineageWalk(val edges: List<AttachmentId>?, val onCycle: Boolean) 
     }
 }
 
+/**
+ * The nine per-edge [GCounter] families of [EntitlementLedger] — four base, five relocation.
+ * Names one family for [EntitlementLedger.storedSlot], whose contract is that **every** family is
+ * grow-only: no `piece` on any state may lower a stored slot. `internal` — test + derivation support.
+ */
 internal enum class CounterFamily {
     ISSUED,
     RETURNED,
@@ -1263,6 +1338,69 @@ private fun addSlot(acc: HashMap<AttachmentId, GCounter>, edge: AttachmentId, r:
     if (value <= 0L) return
     val one = GCounter.of(r to value)
     acc[edge] = acc[edge]?.piece(one) ?: one
+}
+
+/**
+ * One `(fenced edge, replica)` slot of a relocation derivation, carried from the deriving pass to
+ * the building pass so the two agree by construction.
+ *
+ * The split exists because the `n ≥ sp` precondition is a property of **all** of one replica's
+ * fenced edges together, not of each edge alone (#1895) — so every slot has to be derived before
+ * any of them can be drained. Holding the derived values rather than recomputing them in the second
+ * pass is deliberate: two copies of this arithmetic could drift, and it is conservation-critical.
+ *
+ * Construct it with **named arguments**: nine of the twelve parameters are bare `Long`s, so a
+ * transposed `relLeafOut`/`relRollOut` or `lsp`/`rsp` compiles clean and silently mis-drains — the
+ * one drift vector carrying the values instead of recomputing them does not already close.
+ *
+ * @property n `iss - ret`, this slot's cover — what the edge can fund.
+ * @property lsp the slot's effective leaf spend.
+ * @property rsp the slot's effective roll-up spend.
+ */
+private data class DrainedSlot(
+    val edge: AttachmentId,
+    val replica: ReplicaId,
+    val acked: SlotFinals,
+    val relIssIn: Long,
+    val relLeafIn: Long,
+    val relRollIn: Long,
+    val relLeafOut: Long,
+    val relRollOut: Long,
+    val iss: Long,
+    val n: Long,
+    val lsp: Long,
+    val rsp: Long,
+)
+
+/**
+ * Accumulates `(family, edge, replica) → absolute value` writes into one [EntitlementLedger] delta.
+ *
+ * The relocation derivation writes across all nine per-edge counter families at once, and a
+ * hand-rolled nine-map accumulator at each call site is where a family gets silently forgotten.
+ * Non-positive values are skipped (a zero slot is the lattice bottom — shipping it says nothing);
+ * repeated writes to one slot join by max, matching the wire semantics exactly.
+ */
+private class EdgePatchBuilder {
+    private val families = HashMap<CounterFamily, HashMap<AttachmentId, GCounter>>()
+
+    fun put(family: CounterFamily, edge: AttachmentId, r: ReplicaId, value: Long) {
+        if (value <= 0L) return
+        addSlot(families.getOrPut(family) { HashMap() }, edge, r, value)
+    }
+
+    private fun of(family: CounterFamily): Map<AttachmentId, GCounter> = families[family] ?: emptyMap()
+
+    fun build(): EntitlementLedger = EntitlementLedger.of(
+        issued = of(CounterFamily.ISSUED),
+        returned = of(CounterFamily.RETURNED),
+        leafSpent = of(CounterFamily.LEAF_SPENT),
+        rollupSpent = of(CounterFamily.ROLLUP_SPENT),
+        issuedRelocIn = of(CounterFamily.ISSUED_RELOC_IN),
+        leafRelocIn = of(CounterFamily.LEAF_RELOC_IN),
+        leafRelocOut = of(CounterFamily.LEAF_RELOC_OUT),
+        rollupRelocIn = of(CounterFamily.ROLLUP_RELOC_IN),
+        rollupRelocOut = of(CounterFamily.ROLLUP_RELOC_OUT),
+    )
 }
 
 private fun Map<AttachmentId, GCounter>.mergeEdgeCounters(

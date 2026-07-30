@@ -41,7 +41,10 @@ import us.tractat.kuilt.warp.WarpNode
  * @param heddle the fair-share data plane whose holdings this adapter reserves against — the
  *   [FairShareExecution] surface shared by both front doors, so this accepts either a
  *   [us.tractat.kuilt.heddle.heddleStatic] node (no consensus) or an H5
- *   [us.tractat.kuilt.heddle.heddleGoverned] node (governed) interchangeably.
+ *   [us.tractat.kuilt.heddle.heddleGoverned] node (governed) interchangeably. One asymmetry: a
+ *   governed node must have enrolled **itself** before it will author any entitlement — until
+ *   `enroll(self)` applies, its write gate is closed, so `reserve` returns `null` and `schedule`
+ *   delegates nothing and this adapter admits no gated task (#1693, design §13.2).
  * @param costPerTask service units reserved and charged per task. Defaults to `1` — the §14.4
  *   "one unit per task" costing; a caller with variable-cost work supplies a per-descriptor cost
  *   via [costOf].

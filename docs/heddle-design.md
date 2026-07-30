@@ -332,6 +332,21 @@ authority under which the work was admitted, never the topology visible when
 the receipt merges. A later reshape mints a new `AttachmentId`, so there is no
 ambiguity and no rewrite of history.
 
+**The one exception: a quiesced edge (#1693).** When a generation was retired
+with entitlement still riding on it (the advisory-retire race, #1665), the
+recovery moves that entitlement onto the live generation — and to make the move
+safe every peer must first *promise* it will never write the dead edge again.
+That promise is the `Quiesce` barrier of
+[`heddle-ledger-relocation-design.md`](heddle-ledger-relocation-design.md) §6.2:
+once a peer has applied it, a completion whose captured path names the quiesced
+edge charges the child's **live inbound generation** at that peer's applied log
+index instead. It is not a rewrite of history — it is the *same* conserving move
+the recovery performs, applied at charge time rather than afterwards, and it is
+sound precisely because a quiesced edge is drained by construction. If no live
+inbound exists yet (between a `Close` and the next `Activate`), the charge is
+buffered locally and flushed when one activates: **never dropped, never charged
+to the dead edge.**
+
 Two honest notes where this differs from the source's event-set model:
 
 - **Reservations are local state, not replicated state.** Only the owning
@@ -798,7 +813,12 @@ Carried over from the source intact; each is a named property test (§13).
    `outstanding` may fall but is always derived, never stored.
 3. **Per-edge safety.** `0 ≤ spent(e) + returned(e) ≤ issued(e)`.
 4. **Path-relative accounting.** A completion charges every edge of the path
-   captured at reservation; history never moves to a newer generation.
+   captured at reservation; history never moves to a newer generation —
+   **except across a quiesced edge**, where the charge re-homes to the child's
+   live inbound generation (§4.4; relocation design §6.2 step 2). That weakening
+   is deliberate and narrow: it applies only to an edge every peer has
+   log-recorded a promise never to write again, and the re-home is the same
+   conserving move the recovery would perform, taken at charge time.
 5. **Neutral attachment initialization.** A new generation starts at the
    parent's current virtual time — the front over its *demanding* children,
    not over all its active ones (§7.2) — never with lifetime credit. Where

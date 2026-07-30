@@ -1,5 +1,6 @@
 package us.tractat.kuilt.heddle
 
+import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
@@ -106,6 +107,7 @@ public fun CoroutineScope.heddleGoverned(
         scope = this,
         sink = node.asControlSink(),
         membership = node.asMembershipSink(),
+        barrier = node.asBarrierSink(),
         initial = initialLedger,
         incarnation = incarnation,
     )
@@ -132,10 +134,52 @@ public class GovernedHeddleNode internal constructor(
     private val node: HeddleNode,
     private val control: HeddleControlPlane,
 ) : FairShareExecution {
+
+    /** The §6.5.3 boot gate. Set once, by [enroll]; a restart starts a fresh incarnation closed. */
+    private val writable = atomic(false)
+
     // ── data plane (design §4/§6/§7 — coordination-free, never touches the log) ──────
 
     /** This peer's replica identity. */
     public val self: ReplicaId get() = node.self
+
+    /**
+     * Whether this peer may author entitlement yet — the **boot gate** of
+     * `docs/heddle-ledger-relocation-design.md` §6.5 residual 3 and §13.2. It opens when this peer's
+     * own [enroll]`(self)` has committed *and been applied here*, and it closes again on restart.
+     *
+     * ## Two holes, one gate
+     *
+     * - **§6.5.3, the restored-mark hole.** A peer's quiesce marks are local, in-memory state
+     *   ([HeddleNode] `quiescedEdges`), so a restart loses them. Until the control log is replayed
+     *   they are gone, and a mutator run in that window could charge an edge the cluster has already
+     *   fenced — the straggler the fence exists to make impossible. `enroll(self)` closes it exactly:
+     *   because Raft applies in index order, a peer that has applied its own post-boot enroll has
+     *   applied **every entry before it**, so every barrier committed before that point is restored,
+     *   and every barrier committed after it arrives in order. No `readIndex()` is involved, so it
+     *   works on a follower and cannot be wedged by an entry Raft withholds from `committedFrom`.
+     * - **§13.2, the unenrolled-writer hole.** The fence quantifies over the *enrolled* set, so a peer
+     *   that authors a slot without enrolling is a writer no barrier ever waits for — finding 2
+     *   through a side door. Slice 2 could only document that as an obligation; requiring the
+     *   enrollment to have landed before the first write is what makes it **structural**.
+     *
+     * While closed, [reserve] returns `null` and [schedule] returns `0` — the two entry points
+     * through which this node authors a counter slot. Reads, [advertise] (an ephemeral, advisory
+     * board that authorizes nothing), and every control verb stay open, so a peer can mint, reshape
+     * and enroll before it is writable.
+     *
+     * **[complete] carries no gate of its own, and "transitively gated" is exact only for the boot
+     * window.** In that window the gate has never been open, so [reserve] has handed out no
+     * [ReservationId] at all and there is nothing completable — the transitivity is airtight. It is
+     * *not* airtight for the other way the gate closes: [depart] closes it too, and a reservation
+     * taken while the gate was open stays live across the departure, so a [complete] afterwards does
+     * author a slot. That case is a **documented caller obligation, not a gate** — see [depart]
+     * ("call it after quiescing local work, or the peer keeps a promise it has already broken").
+     * Stated precisely here because the fence's quantifier rests on the departure promise, and an
+     * overstated "it is transitively gated" would invite a reader to assume enforcement that this
+     * class does not perform.
+     */
+    public val isWritable: Boolean get() = writable.value
 
     /** The replicated entitlement ledger as converged on this peer (the gossip-merged data-plane view). */
     public val ledger: StateFlow<EntitlementLedger> get() = node.ledger
@@ -146,8 +190,13 @@ public class GovernedHeddleNode internal constructor(
     /** Peers currently flagged unresponsive or lost by the liveness detectors. */
     public val unreachable: StateFlow<Set<ReplicaId>> get() = node.unreachable
 
-    /** Earmark up to [maximumCost] against holdings at leaf [leaf] ([HeddleNode.reserve]). */
-    override fun reserve(leaf: GroupId, maximumCost: Long): ReservationId? = node.reserve(leaf, maximumCost)
+    /**
+     * Earmark up to [maximumCost] against holdings at leaf [leaf] ([HeddleNode.reserve]), or `null`
+     * while the [isWritable] boot gate is closed — this peer must have enrolled before it may author
+     * entitlement.
+     */
+    override fun reserve(leaf: GroupId, maximumCost: Long): ReservationId? =
+        if (!isWritable) null else node.reserve(leaf, maximumCost)
 
     /** Complete reservation [id], charging [actualCost] ([HeddleNode.complete]). */
     override fun complete(id: ReservationId, actualCost: Long): Unit = node.complete(id, actualCost)
@@ -161,8 +210,11 @@ public class GovernedHeddleNode internal constructor(
     /** Advertise this peer's per-edge appetite ([HeddleNode.advertise]). */
     public fun advertise(edge: AttachmentId, demand: Demand): Unit = node.advertise(edge, demand)
 
-    /** Run allocation rounds at [parent], delegating holdings toward demand ([HeddleNode.schedule]). */
-    public fun schedule(parent: GroupId): Int = node.schedule(parent)
+    /**
+     * Run allocation rounds at [parent], delegating holdings toward demand ([HeddleNode.schedule]).
+     * Returns `0` without delegating while the [isWritable] boot gate is closed.
+     */
+    public fun schedule(parent: GroupId): Int = if (!isWritable) 0 else node.schedule(parent)
 
     /** The §8.2 bound metrics at [parent] ([HeddleNode.boundMetrics]). */
     public fun boundMetrics(parent: GroupId): BoundMetrics = node.boundMetrics(parent)
@@ -328,9 +380,9 @@ public class GovernedHeddleNode internal constructor(
      * fresh inbound edge, [holdings] at the child derive **persistently negative** — a permanent
      * [LedgerConflict.PersistentNegativeHoldings] / [LedgerConflict.PerEdgeSafety] with zero real overspend
      * (issue #1665). The strand does **not** self-heal. [reconcile] re-homes it onto the child's live lineage
-     * through the log, restoring conservation and clearing the conflicts — **when no service was spent
-     * *through* the stranded edge** (the through-service and transfer-tangled cases are carved out and remain
-     * open, part of #1665). Until reconciled it is the same safe stranding class as a crashed peer's holdings (§8.1).
+     * through the log — net inflow *and* any service already spent *through* the stranded edge — restoring
+     * conservation and clearing the conflicts. Only a **transfer-tangled** strand stays carved out. Until
+     * reconciled it is the same safe stranding class as a crashed peer's holdings (§8.1).
      */
     public suspend fun retire(edge: AttachmentId, timeout: Duration? = null): ControlOutcome {
         // Advisory local drain gate: refuse only a *clear* drain violation (outstanding > 0 in the
@@ -350,42 +402,78 @@ public class GovernedHeddleNode internal constructor(
     }
 
     /**
-     * Reconcile the budget **stranded** on [child]'s RETIRED inbound edge(s) by re-homing [child]'s full
-     * net inflow onto its live inbound lineage, serialized through the log (design §9 #3, §5.4; issue
-     * #1665). This unparks the reconciliation slice of the specified-only [revocation] seam: for the
-     * cases it clears, it removes the permanent [LedgerConflict.PersistentNegativeHoldings] /
-     * [LedgerConflict.PerEdgeSafety] / [ClosureViolation][LedgerConflict.ClosureViolation] left by a
-     * raced advisory-[retire] followed by a legal reparent.
+     * Open the **quiesce barrier** over [edge], serialized through the log: every peer that applies it
+     * marks [edge] locally unwritable and answers with its own final slot values
+     * (`docs/heddle-ledger-relocation-design.md` §6.2). Refused unless [edge] is RETIRED in log order.
      *
-     * The re-home is **conserving** ([EntitlementLedger.reconcileStranded], release-up-then-redelegate):
-     * it relocates already-minted units, never mints new supply, so `mintedTotal` is unchanged and the
-     * global conservation identity is *restored*. The decision is applied deterministically on every peer
-     * against the **log-pure projection** (topology + witness *shape*), so every peer converges identically.
+     * This is the first half of [reconcile], which opens the barriers it needs itself — call it
+     * directly only to fence an edge ahead of time. Idempotent, and a re-applied barrier deliberately
+     * re-runs on every peer, which is how a restarted peer re-acks.
      *
-     * The re-delegated credit lands on the live edge's **relocation** counter, a family the control plane
-     * owns exclusively — never on its base `issued` slot, which this peer's own data plane writes
-     * concurrently. Two writers on one max-joined slot would silently erase one side with every diagnostic
-     * blind to it (#1691); the apply gate refuses any witness that touches a base `issued` slot at all.
+     * Applied ≠ fenced: the acks arrive as their own committed acts afterwards. [pendingAcks] is the
+     * read that tells you whom the barrier is still waiting on.
+     */
+    public suspend fun quiesce(edge: AttachmentId, timeout: Duration? = null): ControlOutcome =
+        control.submit(ControlCommand.Quiesce(edge), timeout)
+
+    /**
+     * The replicas [edge]'s barrier is still waiting on — the set enrolled when the barrier committed,
+     * minus those that have acked. `null` if [edge] has never been quiesced; empty once the fence is
+     * complete and a [reconcile] can proceed.
      *
-     * **Two fences, one still open (issue #1665 review):**
-     *  - **Leader authority (shipped).** Before computing the witness this calls the §9 #3
-     *    [readIndex()][HeddleControlPlane.fenceReadIndex] fence, so only a leader still holding a voter
-     *    quorum drives recovery; a deposed/partitioned proposer is refused.
-     *  - **Data-plane magnitude freshness (NOT shipped — the residual).** The witness *magnitude* is
-     *    computed from this peer's gossip-replicated ledger, which is **not** fenced by `readIndex()`
-     *    (it rides an independent transport) and is not even stable post-retire (captured-path
-     *    completions can still charge the edge). A causally-lagged leader can therefore commit a **wrong
-     *    magnitude** → a conservation break on the converged state. Until a causal-stability quiesce of
-     *    the stranded edge's counters is wired in, this recovery is **only sound on a causally-complete
-     *    view** and must not be driven from an actively-diverging one.
+     * **The wait is deliberately hostage to every enrolled peer** (§6.5 residual 1). An unreachable
+     * peer is *exactly* the peer that may hold an unreplicated reservation crossing [edge], so it is
+     * the one promise the barrier cannot do without. A crashed peer therefore leaves relocation
+     * refused until it returns and acks, or formally departs — this design trades the availability of
+     * a rare recovery operation for its correctness, and stands by that trade. Use this to *see* the
+     * blockage; there is deliberately no way to proceed without them.
+     */
+    public fun pendingAcks(edge: AttachmentId): Set<ReplicaId>? = control.pendingAcks(edge)
+
+    /**
+     * Reconcile the budget **stranded** on [child]'s RETIRED inbound edge(s) by re-homing everything
+     * they carry — net inflow *and* already-charged service — onto [child]'s live inbound generation,
+     * serialized through the log (design §9 #3, §5.4; issue #1665). It removes the permanent
+     * [LedgerConflict.PersistentNegativeHoldings] / [LedgerConflict.PerEdgeSafety] /
+     * [ClosureViolation][LedgerConflict.ClosureViolation] left by a raced advisory-[retire] followed by
+     * a legal reparent.
      *
-     * **Carve-outs — [ControlConflict.Refused] at [ControlOutcome.NOT_COMMITTED] (fail-closed).** No
-     * unique live inbound edge; nothing stranded; **through-service** on the stranded edge
-     * (`spent(s) != 0` — grow-only `rollupSpent` cannot be relocated, so no conserving patch exists); a
-     * **transfer-tangled** strand. A refusal leaves the conflicts standing (safe), never a silent break.
+     * The move is **conserving**: it relocates already-minted units through counters that only ever
+     * grow (a net decrease expressed as a second, cancelling counter), so `mintedTotal` is unchanged
+     * and the global conservation identity is *restored*.
+     *
+     * ## This peer computes no magnitudes at all
+     *
+     * It opens a [quiesce] barrier over each of [child]'s RETIRED inbound edges and then proposes a
+     * `Reconcile` carrying **only the child**. The patch is *derived at apply time*, on every peer, from
+     * the per-peer finals the fence recorded in the log. That is what retires #1669's standing caveat —
+     * "not a safety fence: magnitudes are read from this possibly stale view" — rather than carrying it
+     * forever: the magnitude is now a deterministic function of the log prefix, so a lagged, deposed or
+     * restarted proposer cannot commit a wrong one. The **through-service** case (`spent(s) != 0`),
+     * carved out and refused since #1669, is un-gated by exactly this.
+     *
+     * ## Applied in two acts — expect to call it twice
+     *
+     * The barriers commit here; the acks are separate committed acts that land afterwards. So the
+     * first call typically returns [ControlConflict.Refused] naming the replicas it is waiting on, and
+     * the caller retries once [pendingAcks] is empty. Refusing rather than blocking is the deliberate
+     * shape: the fence's completion is as available as the slowest enrolled peer, and a caller that
+     * hung on it would be waiting inside a recovery path with no bound.
+     *
+     * The `readIndex()` leader-authority check is kept as a **cheap pre-propose courtesy** only — with
+     * the magnitude derived at apply, a stale or deposed proposer's `Reconcile` is refused or correctly
+     * derived at apply regardless (§6.2 step 4 corollary), so it is no longer load-bearing.
+     *
+     * **Refusals — [ControlConflict.Refused], fail-closed, nothing written.** No unique live inbound
+     * edge; no RETIRED inbound edge; a barrier not yet open; a barrier still missing acks; nothing left
+     * stranded (already reconciled); or a **transfer-tangled** strand, where a replica's acked finals
+     * leave it net-negative on the edge and re-homing faithfully would have to move transfer rows too
+     * (out of scope). A refusal leaves the conflicts standing — safe and recoverable — never a silent
+     * conservation break.
      */
     public suspend fun reconcile(child: GroupId, timeout: Duration? = null): ControlOutcome {
-        // §9 #3 leader-authority fence — only a leader still holding quorum drives recovery.
+        // §9 #3 leader-authority courtesy check — cheap, and it keeps recovery driven from a node that
+        // still holds quorum. No longer load-bearing: the apply-derived magnitude fences correctness.
         val fenced = runCatchingCancellable { control.fenceReadIndex() }
         if (fenced.isFailure) {
             return ControlOutcome.Conflict(
@@ -393,15 +481,15 @@ public class GovernedHeddleNode internal constructor(
                 ControlConflict.Refused("reconcile refused: readIndex fence failed — recovery must be proposed by the current leader (§9 #3)"),
             )
         }
-        val ledger = node.ledger.value
-        val patch = ledger.reconcileStranded(child)
-            ?: return ControlOutcome.Conflict(
-                ControlOutcome.NOT_COMMITTED,
-                ControlConflict.Refused("reconcile refused locally: nothing stranded / through-service or transfer-tangled / no unique live inbound for ${child.value}"),
-            )
-        // reconcileStranded returned non-null ⇒ the child has exactly one live inbound edge.
-        val liveEdge = ledger.liveInboundEdges(child).single()
-        return control.submit(ControlCommand.Reconcile(child, liveEdge, patch.delta), timeout)
+        // Open a barrier over every RETIRED inbound edge that does not have one, read off the LOG-PURE
+        // projection (the same set the apply gate re-derives), never the gossip-merged data plane.
+        for (edge in control.projectionSnapshot().retiredInboundEdges(child)) {
+            if (control.pendingAcks(edge) == null) {
+                val opened = quiesce(edge, timeout)
+                if (opened is ControlOutcome.Conflict) return opened
+            }
+        }
+        return control.submit(ControlCommand.Reconcile(child), timeout)
     }
 
 
@@ -414,14 +502,26 @@ public class GovernedHeddleNode internal constructor(
      * enroll makes a barrier wait for a promise that never comes (a liveness cost, and the same
      * class as an unreachable enrolled peer), never lets one complete without a promise it needed.
      *
-     * **A peer must enroll before it authors any entitlement.** The roster is what makes "every
-     * writer has promised" a well-defined question; a replica that spends, delegates, or completes
-     * without being enrolled is a writer no barrier is waiting for. Enrolling costs one log entry
-     * at bootstrap — do it before the first data-plane call. (Nothing enforces this yet: the
-     * boot-ordering gate that makes it structural arrives with the fence, §6.5 residual 3.)
+     * **A peer must enroll before it authors any entitlement, and that is now structural.** The roster
+     * is what makes "every writer has promised" a well-defined question; a replica that spends,
+     * delegates, or completes without being enrolled is a writer no barrier is waiting for (§13.2).
+     * So enrolling **self** is what opens this node's [isWritable] boot gate — until it returns
+     * [ControlOutcome.Applied] here, [reserve] returns `null` and [schedule] delegates nothing.
+     *
+     * It doubles as the §6.5.3 **boot-ordering** fence: `submit` returns only once this peer's apply
+     * loop has applied the entry, and Raft applies in index order, so a peer that has applied its own
+     * enroll has applied every entry before it — every quiesce mark this incarnation lost to a restart
+     * is restored before the first mutator can run. Do it on **every** boot, including a restart where
+     * the replica is already enrolled: the fold is then idempotent, but the act still commits, still
+     * applies, and still opens the gate (and it is also what re-attaches a lost peer's detector, #1652).
      */
-    public suspend fun enroll(replica: ReplicaId, timeout: Duration? = null): ControlOutcome =
-        control.submit(ControlCommand.Enroll(replica), timeout)
+    public suspend fun enroll(replica: ReplicaId, timeout: Duration? = null): ControlOutcome {
+        val outcome = control.submit(ControlCommand.Enroll(replica), timeout)
+        // The gate opens on OUR OWN applied enroll and nothing else: a third party enrolling this
+        // replica proves nothing about what this incarnation has applied.
+        if (replica == self && outcome is ControlOutcome.Applied) writable.value = true
+        return outcome
+    }
 
     /**
      * Remove **this peer** from the log-known roster, serialized through the log. Idempotent.
@@ -437,9 +537,16 @@ public class GovernedHeddleNode internal constructor(
      * cancel this peer's *local, unreplicated* reservations: call it after quiescing local work,
      * or the peer keeps a promise it has already broken. Recovering an **absent** peer's authority
      * needs the fenced [revocation] seam, which v1 does not ship.
+     *
+     * Departing also closes this node's [isWritable] boot gate: the promise a departure makes is "I
+     * will never author another slot", and a node that kept writing after making it would break the
+     * very quantifier the fence rests on. Re-[enroll] to become writable again.
      */
-    public suspend fun depart(timeout: Duration? = null): ControlOutcome =
-        control.submit(ControlCommand.Depart(self), timeout)
+    public suspend fun depart(timeout: Duration? = null): ControlOutcome {
+        val outcome = control.submit(ControlCommand.Depart(self), timeout)
+        if (outcome is ControlOutcome.Applied) writable.value = false
+        return outcome
+    }
 
     /**
      * The replicas enrolled as of the control log this peer has applied — the log-order membership
