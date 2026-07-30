@@ -2,7 +2,9 @@ package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.delay
 import us.tractat.kuilt.raft.internal.wireTerm
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
@@ -198,6 +200,63 @@ internal class TermSanityBoundTest {
             overCeiling.isEmpty(),
             "a term above the ceiling must never be emitted — every peer drops it, including its " +
                 "author: ${overCeiling.take(3)}",
+        )
+    }
+
+    /**
+     * The diagnosability the containment actually buys, asserted on the engine's observable surface.
+     *
+     * A single voter is used because it removes every other variable: it needs no quorum, so absent the
+     * guard it wins its own election immediately and drives its durable term to `2^60 + 1` in one step.
+     * The term is supplied by **restore** rather than by a frame on purpose — it is the other of the two
+     * provenances a ceiling term can have, and it is why `checkedRestoredTerm`'s bound did not need to
+     * move alongside the wire bound: both provenances converge on this one emission-site check.
+     *
+     * What is asserted is *not* that the node recovers. It cannot, and must not appear to: the term is
+     * pinned, the metric repeats, and the durable term stays exactly where it was. The whole delta over
+     * unfixed code is that the failure now has a name.
+     */
+    @Test
+    fun aNodeAtTheCeilingReportsTheSuppressedElectionInsteadOfFailingSilently() = raftRunTest {
+        val metrics = mutableListOf<RaftMetric>()
+        val storage = InMemoryRaftStorage()
+        storage.saveTermAndVotedFor(maxPlausibleTerm, null)
+        val self = NodeId("solo")
+        val network = InMemoryRaftNetwork()
+        backgroundScope.raftNode(
+            clusterConfig = ClusterConfig(voters = setOf(self)),
+            transport = network.transport(self),
+            storage = storage,
+            raftConfig = FAST_RAFT_CONFIG,
+            onMetric = { metrics += it },
+        )
+        delay(50)   // several election timeouts: the condition must report as a level, not once
+
+        val suppressed = metrics.filterIsInstance<RaftMetric.ElectionSuppressedTermCeiling>()
+        val persisted = storage.term()
+        assertAll(
+            { assertTrue(suppressed.isNotEmpty(), "the suppressed election must be observable; metrics=$metrics") },
+            { assertEquals(maxPlausibleTerm, suppressed.first().term, "the metric must name the pinned term") },
+            { assertEquals(maxPlausibleTerm, suppressed.first().ceiling, "the metric must name the ceiling") },
+            {
+                assertTrue(
+                    suppressed.size > 1,
+                    "the condition is permanent and must re-report on each attempt; got ${suppressed.size}",
+                )
+            },
+            {
+                assertTrue(
+                    metrics.none { it is RaftMetric.ElectionStarted },
+                    "no election may start from the ceiling; metrics=$metrics",
+                )
+            },
+            {
+                assertEquals(
+                    maxPlausibleTerm,
+                    persisted,
+                    "a suppressed election must leave the durable term exactly where it was",
+                )
+            },
         )
     }
 }

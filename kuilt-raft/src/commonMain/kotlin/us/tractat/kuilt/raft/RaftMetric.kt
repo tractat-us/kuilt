@@ -67,4 +67,24 @@ public sealed interface RaftMetric {
      * indicating the prior term's election failed.
      */
     public data class ElectionTimedOut(val term: Long) : RaftMetric
+
+    /**
+     * No election was started, because this node's [term] has reached the engine's term
+     * plausibility [ceiling] and the `term + 1` an election must propose would sit above it (#1886).
+     *
+     * **This node cannot become leader again, and this metric does not mean it will recover.** A term
+     * at the ceiling is only reachable from a malformed or hostile frame — honest terms advance once
+     * per election and stay some 18 orders of magnitude below it — and terms never decrease, so the
+     * condition is permanent for the lifetime of this node's durable state. Re-emitted on every
+     * subsequent election timeout, so it reads as a level, not an edge.
+     *
+     * What it buys is a *name* for a failure that was previously silent: the alternative is
+     * broadcasting a term above the ceiling that every recipient (including this node) drops at the
+     * wire boundary, leaving a cluster that has permanently stopped electing while every node reports
+     * itself healthy. Treat one of these as an operational incident: inspect the peer that supplied
+     * the term, then re-provision this node from empty state.
+     *
+     * @see ElectionStarted for the ordinary path this replaces when the ceiling is reached.
+     */
+    public data class ElectionSuppressedTermCeiling(val term: Long, val ceiling: Long) : RaftMetric
 }

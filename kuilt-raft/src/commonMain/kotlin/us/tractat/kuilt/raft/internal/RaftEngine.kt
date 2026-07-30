@@ -485,6 +485,35 @@ internal class RaftEngine(
      * term with no headroom for the `+ 1` that necessarily follows on *any* term-adopting path (#1886) —
      * so this guard stays the backstop, not the fix.
      *
+     * ### Why this bound stays inclusive after #1886
+     *
+     * #1886 was expected to make this bound exclusive in lockstep with [onMessage]'s. It does not:
+     * measurement showed an exclusive ceiling only relocates the boundary by one (see
+     * [termPinnedAtCeiling]), so neither bound moved. The containment went in at the *increment* instead.
+     *
+     * The two bounds stay consistent for the simplest possible reason — **they are the same constant**, so
+     * every term [onMessage] admits is a term this site admits, by definition. No argument about where a
+     * durable term came from is needed, and none would hold: `storage.term()` is third-party input, which
+     * is the entire premise above. A durable term **above** the ceiling therefore remains reachable, by at
+     * least two routes this engine cannot police — a **pre-#1886 binary** that persisted `2^60 + 1` through
+     * the escalation described above and then upgrades onto this refusal (snapshots publish on every push
+     * to `main`), and a storage adapter that simply returns a corrupt value. Both land here, loudly, which
+     * is the design: this guard is where an out-of-range durable term is *supposed* to surface.
+     *
+     * That escalation is now closed **twice over, at different layers**, and the division of labour is worth
+     * being precise about because only one half generalises:
+     *
+     * - **#1889 closes the frame.** A higher-term `TimeoutNow` is dropped before it can step the victim down
+     *   at all, so that specific remote route no longer reaches the ceiling term in the first place.
+     * - **#1886 closes the increment.** Even when a node *does* hold a ceiling term, `startRealElection`
+     *   will not persist above it. This is the half that still holds when the ceiling term arrives by any
+     *   other means — a restored durable term (which no frame gate can see), or any future term-adopting
+     *   path #1889's TimeoutNow-specific check does not cover.
+     *
+     * So a node restored at exactly `2^60` still starts, as it must, and then reports
+     * [RaftMetric.ElectionSuppressedTermCeiling] on its first election attempt instead of silently failing
+     * to elect.
+     *
      * Dropping is also not available at this site: the value is not a message to discard but the node's own
      * identity, and continuing without it means either inventing a term (the clamp) or running on a
      * poisoned one (the shrug). The throw surfaces through the caller's scope, which is the documented
@@ -604,8 +633,85 @@ internal class RaftEngine(
 
     // ── Election ──────────────────────────────────────────────────────────────
 
+    /**
+     * `true` when [state]`.currentTerm` has reached [MAX_PLAUSIBLE_TERM], so the `currentTerm + 1` an
+     * election necessarily proposes would sit *above* the ceiling every peer — this node included —
+     * enforces at [onMessage] (#1886).
+     *
+     * Written as `>=` against the ceiling rather than `currentTerm + 1 > MAX_PLAUSIBLE_TERM` so the
+     * guard against an overflowing increment does not itself compute one.
+     *
+     * ### Why this is a separate check and not a tighter wire bound
+     *
+     * The #1886 proposal was to make [onMessage]'s bound exclusive, on the principle that "the
+     * adoption ceiling must sit strictly below the emission ceiling". The principle is right; an
+     * exclusive bound does not implement it, because *one* constant serves both ends — the ceiling
+     * limiting what we adopt is the same ceiling our own `+ 1` must clear. Measured: with the bound at
+     * `>=`, one frame at `2^60 - 1` propagates on ordinary traffic exactly as `2^60` does today, and
+     * every election then proposes `2^60`, which every recipient drops. The boundary moved down by
+     * one; nothing else changed.
+     *
+     * Closing the chain would need `T ≤ A ⟹ T + 1 ≤ A` for the adoption ceiling `A`, which holds only
+     * for `A = ∞`. A two-constant split (admit up to `E`, adopt up to `A = E - 1`) fails the same way:
+     * the emitted `A + 1 = E` is admitted but not *adoptable*, so voters deny the candidate while
+     * having already adopted `A` off its responses. The boundary is inherent to bounding an
+     * incremented value against a constant. It can be made loud or made unreachable — not moved.
+     *
+     * ### What this buys, and what it does not
+     *
+     * It is **loud containment, not a fix.** It does not preserve liveness: a node at the ceiling
+     * still cannot become leader, and if the term propagated cluster-wide the cluster still cannot
+     * elect. What it removes is #1833's headline complaint — *"no exception, no log line, every node
+     * reports itself healthy"*. Instead of broadcasting a frame with no possible recipient, the node
+     * warn-logs and emits [RaftMetric.ElectionSuppressedTermCeiling] on every attempt, and never
+     * drives its own durable term above the ceiling (which #1855's [checkedRestoredTerm] would then
+     * refuse to restart on — one hostile frame otherwise bricks the next boot).
+     *
+     * The real fix is to bound the *jump* (`m.term > currentTerm + MAX_TERM_JUMP`) rather than the
+     * value, which admits `+ 1` at every term and so has no boundary at all; it costs rejoin liveness
+     * for a node absent across more than `MAX_TERM_JUMP` elections and needs a catch-up path. Tracked
+     * as design work on #1886.
+     *
+     * ### Placement
+     *
+     * One predicate, two emission sites — [onElectionTimeout] (the `PreVote` at `currentTerm + 1`) and
+     * [startRealElection] (the `RequestVote`, and the `persistTermAndVote` that makes it durable).
+     * Both are needed: `startRealElection` is entered directly from [onTimeoutNow] without passing
+     * through [onElectionTimeout], and [onElectionTimeout] emits a frame before `startRealElection` is
+     * ever reached. Guarding here rather than at the three `currentTerm` writers is deliberate — the
+     * writers are already bounded (#1833/#1855); it is the *increment off* a bounded value that
+     * escapes, and both increments live in these two functions.
+     */
+    private fun termPinnedAtCeiling(): Boolean = state.currentTerm >= MAX_PLAUSIBLE_TERM
+
+    /**
+     * Report the [termPinnedAtCeiling] condition on the engine's two observable surfaces and name the
+     * election [attempt] that was suppressed. Never throws: this is reached from the actor loop on a
+     * path a remote frame controls, so a `require` here would convert one hostile frame into permanent
+     * node death (#1818).
+     */
+    private fun reportTermPinnedAtCeiling(attempt: String) {
+        emitMetric(RaftMetric.ElectionSuppressedTermCeiling(state.currentTerm, MAX_PLAUSIBLE_TERM))
+        logger.warn {
+            "[raft:${transport.selfId}] suppressed $attempt: currentTerm=${state.currentTerm} has reached the " +
+                "plausibility ceiling $MAX_PLAUSIBLE_TERM, so the term this election must propose would be " +
+                "dropped as implausible by every peer including this node (#1886). This node can no longer be " +
+                "elected and will not recover — a term this high is only reachable from a malformed or hostile " +
+                "frame. Inspect the peer that supplied it, then re-provision this node from empty state."
+        }
+    }
+
     private suspend fun onElectionTimeout() {
         if (_role.value is RaftRole.Leader) return
+        // #1886: the PreVote below would carry `currentTerm + 1`, above the ceiling every peer
+        // enforces. Report it and re-arm rather than broadcast a frame with no possible recipient —
+        // re-arming keeps the warning/metric repeating so the condition reads as a level, not a
+        // single line lost in a log. See termPinnedAtCeiling: this contains, it does not fix.
+        if (termPinnedAtCeiling()) {
+            reportTermPinnedAtCeiling("pre-vote")
+            resetElectionTimeout()
+            return
+        }
         // A re-timing-out Candidate (probe didn't gather quorum) drops back to follower role
         // for the probe phase so the role accurately reflects "not yet a candidate".
         _role.value = followerRole
@@ -631,6 +737,17 @@ internal class RaftEngine(
      * believe is alive. A normal (pre-vote-gated) election leaves it `false` so leader-stickiness holds.
      */
     private suspend fun startRealElection(leadershipTransfer: Boolean = false) {
+        // #1886: `persistTermAndVote(currentTerm + 1, …)` below would write a term above the ceiling to
+        // DURABLE storage, which [checkedRestoredTerm] then refuses to restart on (#1855) — so one
+        // hostile frame would brick the next boot — and the RequestVote carrying it is dropped by every
+        // peer anyway. Reached from [onTimeoutNow] without passing [onElectionTimeout]'s guard, so this
+        // is a second, independent check rather than a redundant one. See [termPinnedAtCeiling].
+        if (termPinnedAtCeiling()) {
+            preVoteTerm = null
+            reportTermPinnedAtCeiling("election")
+            resetElectionTimeout()
+            return
+        }
         preVoteTerm = null
         // If a prior election is still pending, it timed out — emit before overwriting the term.
         if (electionStartTime != null) {
@@ -2243,8 +2360,15 @@ internal class RaftEngine(
         // "Overflow-free" here means free of Long wrap, and nothing stronger. The bound is INCLUSIVE, so
         // a term admitted at exactly MAX_PLAUSIBLE_TERM still increments to `2^60 + 1` — no wrap, but
         // above the ceiling, and therefore dropped by every peer including its author. One frame at the
-        // boundary reproduces #1833's symptom cluster-wide through the one value this check lets past;
-        // making both this bound and [checkedRestoredTerm]'s exclusive is tracked in #1886.
+        // boundary reproduces #1833's symptom cluster-wide through the one value this check lets past.
+        //
+        // The boundary CANNOT be closed by moving this constant, and #1886 measured that: an exclusive
+        // `>=` simply relocates it to `2^60 - 1`. Closing it needs `T <= A ==> T + 1 <= A`, true only for
+        // an infinite ceiling. So the bound deliberately stays where it is and the increment is guarded
+        // at the two sites that perform it — see [termPinnedAtCeiling], which contains the condition
+        // loudly rather than pretending to fix it. [checkedRestoredTerm]'s bound stays inclusive too,
+        // and stays consistent with this one by construction: both provenances (a wire term, and a
+        // durable term restored off one) converge on that single emission-site check.
         val wireTerm = m.wireTerm
         if (wireTerm != null && (wireTerm < 0L || wireTerm > MAX_PLAUSIBLE_TERM)) {
             debug { "onMessage: dropped ${m::class.simpleName} from $from — implausible term=$wireTerm (outside 0..$MAX_PLAUSIBLE_TERM)" }
