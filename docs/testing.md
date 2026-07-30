@@ -112,7 +112,10 @@ the spinning test, fix convergence. Never widen a bounded `await*` and retry.
 parameter on the node factory — a **callback, not a flow**. It fires synchronously on the
 engine coroutine (so it never misses an event, and must not block). The vocabulary is the
 propose lifecycle (`ProposeAccepted → ProposeCommitted → ProposeApplied`) and the election
-lifecycle (`ElectionStarted → ElectionWon` / `ElectionTimedOut`), each carrying the log
+lifecycle (`ElectionStarted → ElectionWon` / `ElectionTimedOut`), plus
+`ElectionSuppressedTermCeiling` — a permanent *level* rather than a lifecycle step, emitted on
+every election timeout by a node whose term has reached the plausibility ceiling and so can
+never be elected again (#1886). Each carries the log
 index or term and, where relevant, elapsed wall-time. A test collects into a list and
 asserts on the sequence — see `MetricInstrumentationTest#proposeEmitsAcceptedThenCommittedThenApplied`
 (shown in the [guide](https://tractat-us.github.io/kuilt/guide/testing.html)).

@@ -83,6 +83,14 @@ internal class TermRestoreBoundTest {
      * path #1846 excluded, and it is what makes "the node is merely isolated" wrong. Deliberately asserts
      * on durable state rather than on the exception, so it keeps its teeth if the refusal mechanism is
      * ever changed.
+     *
+     * **No longer a unique pin on [checkedRestoredTerm] (#1886).** The property is now held twice over:
+     * #1886's emission-site guard refuses to increment *any* term at or above the ceiling, so it stops
+     * this wrap on its own. Mutation-measured: disabling `checkedRestoredTerm` alone leaves this test
+     * green (`implausiblyHighDurableTerm_refusesToStart` and `negativeDurableTerm_refusesToStart` still
+     * fail, so the guard stays pinned); disabling **both** makes this one fail again. Defence in depth on
+     * the property, one fewer pin on the mechanism — check those two tests, not this one, when changing
+     * the restore disposition.
      */
     @Test
     fun poisonedDurableTerm_neverWrapsToANegativePersistedTerm() = raftRunTest {
@@ -125,8 +133,16 @@ internal class TermRestoreBoundTest {
      * admitted, or from a self-increment off one, so a restore rule stricter than the wire rule would
      * refuse to start a node that the wire rule had just told it was fine to become.
      *
-     * This stays correct if #1886 makes the *wire* bound exclusive: a durable `2^60` would then only be
-     * reachable by a self-increment off `2^60 - 1`, which is exactly the case a restore must still accept.
+     * #1886 was expected to make the *wire* bound exclusive and move this one with it. Neither moved: an
+     * exclusive ceiling only relocates the boundary by one (a frame at `2^60 - 1` propagates and every
+     * election then proposes `2^60`, dropped by all), so the containment went in at the `currentTerm + 1`
+     * increment instead. The two bounds agree for the plainest reason available — **they are the same
+     * constant** — so every term the wire admits is restorable, and no claim about a durable term's
+     * provenance is needed to justify it (none would hold: `storage.term()` is third-party input, which is
+     * this whole test class's premise). A durable term *above* the ceiling stays reachable — a pre-#1886
+     * binary could have persisted `2^60 + 1`, and a buggy adapter can return anything — and lands on the
+     * refusal above by design. A node restored at exactly the ceiling must still start; what it must not do
+     * is silently fail to elect, which `TermSanityBoundTest` pins on the metric.
      */
     @Test
     fun durableTermExactlyAtTheCeiling_stillStarts() = raftRunTest {
