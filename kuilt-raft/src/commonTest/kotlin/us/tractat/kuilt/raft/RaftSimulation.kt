@@ -14,6 +14,7 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.encodeToByteArray
+import us.tractat.kuilt.raft.internal.ForwardOutcome
 import us.tractat.kuilt.raft.internal.RaftMessage
 import kotlin.test.assertTrue
 import kotlin.time.Duration
@@ -308,6 +309,21 @@ class RaftSimulation(
     ) {
         val bytes = Cbor.encodeToByteArray<RaftMessage>(
             RaftMessage.InstallSnapshotResponse(term, nextOffset, echoedRound)
+        )
+        network.deliver(from = from, to = to, bytes = bytes)
+    }
+
+    /**
+     * Encode and inject a [RaftMessage.ForwardResponse] directly into [to]'s incoming channel,
+     * bypassing the normal partition/drop rules. The transport-level sender is [from], so a peer that
+     * never received the correlated `Forward` exercises the receiver's response-provenance guard
+     * (issue #1911): a `ForwardResponse` carries no term and no leader identity, so [from] is the only
+     * thing tying the receipt to the peer the forward was actually sent to.
+     */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    internal suspend fun deliverForwardResponse(to: NodeId, from: NodeId, clientRequestId: Long, outcome: ForwardOutcome) {
+        val bytes = Cbor.encodeToByteArray<RaftMessage>(
+            RaftMessage.ForwardResponse(clientRequestId, outcome)
         )
         network.deliver(from = from, to = to, bytes = bytes)
     }
