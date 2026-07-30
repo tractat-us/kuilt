@@ -377,16 +377,24 @@ pre-1.0 posture). Auto-merge is enabled and head branches are deleted on merge,
 so the normal flow is: open PR → `gh pr merge <n> --auto --squash` → it lands as
 soon as `ci-required` is green.
 
-**Merge-poll gotcha — a drafted-then-readied PR keeps a STALE `ci-required`
-FAILURE in `statusCheckRollup`.** Opening a PR as Draft skips the `build-jvm` /
-`build-native` jobs, so the `ci-required` aggregator records a `FAILURE` for that
-draft run. Marking the PR ready starts a fresh run, but GitHub leaves **both**
-entries under the `ci-required` name. A poll loop that scans the rollup for the
-substring `FAILURE` then false-alarms on every iteration while the real post-ready
-build is still green/pending. Key the verdict to the **latest run** (max run id in
-the check's `detailsUrl`) or treat a later `SUCCESS` as authoritative
-(`FAILURE,SUCCESS` for one check name ⇒ pass) — never a bare presence-of-`FAILURE`
-scan. (Open the PR ready when you can to avoid the stale draft run entirely.)
+**Don't hand-roll a merge poll — run `~/.claude/bin/gh-pr-wait <PR> --arm-auto`.**
+It exits on a terminal state (`0` merged, `1` gate failed, `2` conflict, `3`
+timeout, `4` closed, `5` blocked) and encodes the traps below. This paragraph
+used to describe those traps and expect you to apply them by hand; that failed
+twice in one session while landing #1760, which is why the fix is now executable.
+
+**The trap, and why the obvious fix is also wrong.** A drafted-then-readied PR
+keeps a STALE `ci-required` FAILURE in `statusCheckRollup`: opening as Draft
+skips the `build-jvm` / `build-native` jobs, so the aggregator records a
+`FAILURE` for that draft run, and marking the PR ready starts a fresh run while
+GitHub leaves **both** entries under the `ci-required` name. Scanning the rollup
+for the substring `FAILURE` false-alarms on every iteration. **But keying the
+verdict to the newest run id — the fix this file used to recommend — is also
+wrong:** for ~30 s after `gh pr ready` the post-ready run does not exist yet, so
+the newest row *is* the stale draft row. The sound discriminator is structural:
+**a run whose non-aggregator jobs are all `SKIPPED` executed nothing, and is
+never a verdict.** (Opening the PR ready when you can avoids the stale run
+entirely.)
 
 **Before starting work on an issue, check whether someone already is.** Several
 Claude sessions run against this repo concurrently. Two independent sessions
