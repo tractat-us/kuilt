@@ -92,18 +92,27 @@ because plenty of hostile frames *are* catchable. The line this module draws:
 
 - **Leader authority (§5.2 / §8).** `AppendEntries` and `InstallSnapshot` are
   leader→peer RPCs and only a voter can be leader, so a frame of either type from a
-  sender outside the recipient's committed voter set is a forgery and is dropped
-  (`RaftEngine.onMessage`, #1383). The witness is local: `membershipState.voters` is
-  right there.
+  sender outside the voter set the recipient has currently adopted is a forgery and is
+  dropped (`RaftEngine.onMessage`, #1383). The witness is local:
+  `membershipState.voters` is right there.
 - **Well-formedness of wire fields.** A term or a snapshot position outside
   `0..2^60`, or a batch whose entry terms exceed the sender's own stated term, is proof
   of a malformed or foreign frame — checkable against the frame plus the recipient's own
   term, with no trust required (#1833, #1868, #1872, #1886).
-- **Values with exactly one in-range reading** are clamped rather than trusted or
-  thrown on, because a throw inside the engine's actor loop is permanent node death
-  (#1817, #1818).
-- A **missing** local check is a bug in this class, not an accepted exposure — the
-  uncapped snapshot reassembly buffer is tracked as one (#1881).
+- **A quantity is clamped**, because one conservative in-range reading exists, and
+  because a throw inside the engine's actor loop would make a malformed frame permanent
+  node death. A follower's snapshot `nextOffset` and a §5.3 `conflictIndex` are
+  quantities (#1818, #1829).
+- **A nonce is discarded, not clamped.** A read-index round echo has no conservative
+  reading, so clamping it into the current round would launder a foreign or forged value
+  into the *most favourable valid one* — the mistake #1817 records. An out-of-range echo
+  is dropped outright, and a stale-term rejection attests to nothing rather than
+  echoing a round it cannot vouch for (#1817, #1831).
+- A **missing** local check is a bug in this class, not an accepted exposure. Two are
+  open: the uncapped snapshot reassembly buffer (#1881), and `AppendEntries` /
+  `InstallSnapshot` adopting `leaderId` without comparing it to the sender the frame
+  arrived from — a free witness, whose absence also weakens the `TimeoutNow` authority
+  test, since that keys on the `_leader` a forged `leaderId` can poison (#1906).
 
 ### What it accepts, unauthenticated
 
@@ -113,9 +122,10 @@ except against a joiner that has not yet learned any voters, where the gate is
 deliberately skipped so the join cannot deadlock, and there the second exposure is open
 to any admitted peer. The third runs the other way, told *to* the leader by whichever
 peer it is currently catching up (voter or learner), since a peer→leader ack is outside
-the gate. The `AppendEntries` lane has no equivalent residual: an entry's index is
-pinned to `prevLogIndex + 1 + i` and Log Matching pins `prevLogIndex` against the local
-log.
+the gate. The `AppendEntries` lane has no equivalent *field-range* residual — an entry's
+index is pinned to `prevLogIndex + 1 + i` and Log Matching pins `prevLogIndex` against
+the local log — but it does carry an unvalidated `leaderId`, which is a missing check
+rather than an accepted one (#1906).
 
 1. **Snapshot position** (#1876). A recipient cannot distinguish a forged
    `lastIncludedTerm`/`lastIncludedIndex` from the genuine position of a far-ahead
@@ -143,31 +153,36 @@ log.
    `nextOffset == state.size` is credited a full `matchIndex`
    (`SnapshotSender.onAck`). The value is in range, so it is indistinguishable from an
    honest completion, and unprovable without an end-to-end digest of the transferred
-   bytes.
+   bytes. When the liar is a voter this is a safety matter and not just bookkeeping: a
+   credited `matchIndex` counts toward the commit quorum (`tryAdvanceLeaderCommit`), so
+   the leader can commit entries no majority actually holds.
 
-### One gate, two known tensions
+### One gate, two failure directions
 
-The leader-authority gate is the "defend" exemplar above, and its predicate has two
-open failure directions — worth stating because they are the cost of the rule, not
+The leader-authority gate is the "defend" exemplar above, and its predicate has failed
+in both directions — worth stating because these are the cost of the rule, not
 exceptions to it. The local witness is local, and it is also possibly out of date.
 
-- **Too narrow.** `TimeoutNow` is a leader→peer RPC too, and currently sits outside the
-  gate's type test, so a peer that is not the leader can push a target into an
-  immediate, pre-vote-less election (#1889).
-- **Too strict.** The gate keys on the *recipient's* committed voter set. A node absent
-  across a full rotation of that set can drop the current leader's frames forever — and
-  those frames are the only thing that could teach it the new set (#1898).
-
-Both are tracked and neither is settled; this section records the tension, not a
-resolution.
+- **Too narrow.** `TimeoutNow` is a leader→peer RPC too, and sits outside the gate's
+  type test, so any peer — learner or spoke included — can send one at all. That is one
+  of two halves: `onTimeoutNow`'s own "sender must be the leader" check is scoped to
+  `m.term == state.currentTerm`, because `_leader` is meaningless at a higher term, so a
+  frame one term ahead bypasses it and forces an immediate, pre-vote-less election
+  (#1889).
+- **Too strict.** The gate keys on the *recipient's* currently-adopted voter set, which
+  may be stale. A node absent across a full rotation of that set may be unable to accept
+  the current leader's frames at all — and those frames are the only thing that could
+  teach it the new set. Reported from a code reading and not yet reproduced; the
+  reachability step is the part still to verify (#1898).
 
 ### Out of scope
 
 Authenticating the snapshot channel — signed configs, an authenticated transport, a
-quorum witness travelling with a config — is not a Raft-layer fix and is not attempted
-here. Nothing in these frames proves that a config was agreed by a quorum, and no
-amount of frame validation can supply that proof. A check that constrained the
-*consequence* instead of the value (what a node may do having learned its entire
-electorate from a snapshot) would be a change to §4 membership handling rather than a
-frame check, and is likewise not attempted. If either is ever wanted it is its own
-design.
+quorum witness travelling with a config, an end-to-end digest for the ack half — is not
+a Raft-layer fix and is not attempted here. Nothing in these frames proves that a config
+was agreed by a quorum, and no amount of frame validation can supply that proof. A check
+that constrained the *consequence* instead of the value (what a node may do having
+learned its entire electorate from a snapshot) would be a change to §4 membership
+handling rather than a frame check, and is likewise not attempted. Both directions are
+tracked in #1907, so the exposures above have an open home even once #1876 and #1880
+close against this text.
