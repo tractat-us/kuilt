@@ -306,6 +306,18 @@ rises by `n` (net 0). `rollupSpent` appears in neither the identity nor `holding
 its relocation is conservation-neutral. Therefore every move preserves the identity;
 on D1-through it *restores* it (0 → 10 = minted, §2). ∎
 
+> **Precondition — `s` and `t` must share a parent (issue #1916).** The telescoping above
+> is an argument about *one* group: the same `P = parent(s) = parent(t)` both recovers `n`
+> (its `netInflow(s)` subtraction drops) and pays `n` (its `netInflow(t)` subtraction rises).
+> Across a **reparent** those halves land on different groups: `parent(s)` gains `n` of
+> genuinely spendable authority while `parent(t)` goes `−n`. Holdings may legally be
+> negative, so nothing objects — and the *identity itself stays true*, because the negative
+> pocket is unenforceable and offsets the phantom credit exactly. The invariant that does
+> catch it is **enforceable supply**, `Σ_g max(0, holdings(g)) + Σ_e effLeafSpent(e) ≤ minted`,
+> which doubles. `HeddleControlPlane.reconcile` therefore refuses a `Reconcile` whose fenced
+> edges do not all share the live edge's parent, leaving the strand standing. Reparenting
+> across parents stays a legal reshape; only re-homing a strand across one is refused.
+
 ### 5.3 Per-edge safety `0 ≤ effLeaf(e)+effRollup(e)+effReturned(e) ≤ effIssued(e)`
 
 Per replica, post-move:
