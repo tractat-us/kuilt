@@ -2084,14 +2084,26 @@ internal class RaftEngine(
         // that could address us, repeatedly.
         //
         // Refusing it costs no honest §3.10 transfer. Unlike AppendEntries, TimeoutNow has no catch-up
-        // role: [sendTimeoutNow] emits the *leader's own* currentTerm, and it is only reached once the
-        // target's matchIndex has caught up to the leader's lastLogIndex. matchIndex is reset to 0 for
-        // every peer in [becomeLeader] and a leader's log is never empty ([appendNoOp]), so matchIndex can
-        // only have advanced through a **same-term** AppendEntriesResponse — the target has therefore
-        // provably already adopted the leader's term before this frame was even created, and that
-        // causality survives arbitrary reordering (the frame does not exist until the ACK lands). A node
-        // that genuinely IS behind must catch up through the ordinary election-timeout path, whose
-        // pre-vote round checks its log — not through an immediate election that skips that check.
+        // role: [sendTimeoutNow] emits the *leader's own* currentTerm, and both call sites reach it only
+        // once `isTargetCaughtUp` holds — matchIndex[target] >= lastLogIndex. matchIndex advances by
+        // exactly two writes, [onAppendEntriesResponse] and [onInstallSnapshotResponse], both gated on
+        // `_role is Leader && m.term == currentTerm` and both fed by a responder that replies with its
+        // OWN post-adoption currentTerm. So a matchIndex value produced *this term* proves the target
+        // already reached our term before the frame existed, and that causality survives arbitrary
+        // reordering (the frame does not exist until the ACK lands).
+        //
+        // The one hole in "produced this term": [becomeLeader] resets matchIndex to 0 only for
+        // `otherMembers` — the CURRENT configuration's members — and nothing ever clears the map, so a
+        // NodeId outside the config at election time keeps a stale value across the term change. A peer
+        // removed while its matchIndex was high, then re-admitted and made a transfer target, can satisfy
+        // `isTargetCaughtUp` on that stale index and be sent a TimeoutNow at a term it never adopted.
+        // This guard is therefore **fail-safe-then-retry**, not "cannot happen": the premature frame is
+        // dropped with no state touched, the in-flight transfer survives, and the next heartbeat ACK from
+        // the now-same-term target re-fires [sendTimeoutNow] correctly — well inside the transfer's
+        // one-election-timeout auto-abandon window, since heartbeatInterval << electionTimeout.
+        //
+        // Either way a node that genuinely IS behind must catch up through the ordinary election-timeout
+        // path, whose pre-vote round checks its log — not through an immediate election that skips it.
         //
         // Dropped WITHOUT adopting m.term, matching the precedence the §5.2 gate below and the
         // implausible-term bound (#1855/#1886) already set: sender-authority validation comes before

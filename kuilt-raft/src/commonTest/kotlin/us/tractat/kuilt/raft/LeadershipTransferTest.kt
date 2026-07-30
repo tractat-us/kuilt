@@ -507,13 +507,19 @@ internal class LeadershipTransferTest {
      * therefore force any follower to campaign, on demand and repeatedly — the disruption PreVote
      * exists to deny (issue #1889).
      *
-     * No honest §3.10 transfer can produce such a frame. `sendTimeoutNow` emits the *leader's own*
-     * `currentTerm`, and it is only reached once the target's `matchIndex` has caught up to the
-     * leader's `lastLogIndex` — and `matchIndex` is reset to 0 for every peer on election while a
-     * leader's log is never empty (the no-op entry), so it can only have advanced via a **same-term**
-     * `AppendEntriesResponse`. The target therefore provably already adopted the leader's term before
-     * the frame was even created. A recipient that really is behind must reach the current term by the
-     * ordinary election-timeout path, not by an immediate election that skips the log check.
+     * On the normal path no honest §3.10 transfer produces such a frame. `sendTimeoutNow` emits the
+     * *leader's own* `currentTerm`, and it is only reached once `matchIndex[target] >= lastLogIndex`;
+     * `matchIndex` advances only through `onAppendEntriesResponse` / `onInstallSnapshotResponse`, both
+     * gated on `_role is Leader && m.term == currentTerm` with the responder replying at its own
+     * post-adoption term — so a value produced this term proves the target already reached it.
+     *
+     * That is not an absolute guarantee, and this test does not claim one: `becomeLeader` resets
+     * `matchIndex` only for the **current configuration's** members, so a removed-then-re-admitted
+     * target can satisfy the predicate on a stale index and be sent a `TimeoutNow` at a term it never
+     * adopted. The guard is fail-safe-then-retry — the premature frame is dropped and the next
+     * heartbeat ACK re-fires it correctly. What must never happen is the case pinned here: an
+     * *unauthenticated* higher-term frame moving the recipient's durable term and forcing an election.
+     * A recipient that really is behind reaches the current term by the ordinary election-timeout path.
      *
      * The target is partitioned off and the test only [RaftSimulation.settle]s (never advancing virtual
      * time), so its own election timer cannot fire: the injected frame is the only thing that could
