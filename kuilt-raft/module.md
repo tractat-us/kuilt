@@ -120,10 +120,19 @@ because plenty of hostile frames *are* catchable. The line this module draws:
 - A **missing** local check is a bug in this class, not an accepted exposure — the
   distinction being whether *any* predicate over the recipient's own state could catch the
   claim, which is what separates this list from the accepted exposures below. Such gaps are
-  tracked as `kuilt-raft` issues rather than enumerated here, so that this section stays a
-  description of the *rule*: `gh issue list --repo tractat-us/kuilt --search "kuilt-raft
-  local check in:title,body" --state open`. When one closes it becomes a bullet in this
-  list, carrying the argument for the witness it found — nothing here needs decrementing.
+  **labelled `raft-missing-local-check`** and tracked there rather than enumerated here, so
+  that this section stays a description of the *rule*:
+
+  ```
+  gh issue list --repo tractat-us/kuilt --label raft-missing-local-check --state open
+  ```
+
+  The label is part of the rule, not just a convenience: file a gap of this class **with that
+  label**, and when it closes turn it into a bullet in this list, carrying the argument for
+  the witness it found. That keeps the pointer honest — a label is a maintained index, where
+  a full-text search is a guess that drifts as titles change — and it is why nothing on this
+  page counts anything. The set shrinks on its own as gaps close, and the two lists that
+  remain here both only grow.
 
 ### What it accepts, unauthenticated
 
