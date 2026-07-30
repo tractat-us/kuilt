@@ -6,14 +6,23 @@ import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.NodeId
 
 /**
- * A forward awaiting its `ForwardResponse`: the caller's deferred, the original command, and the
- * proposer-stamped [dedupKey]. Re-wrapped with the proposer's own [dedupKey] on completion so the
- * returned [LogEntry] matches what the leader appended.
+ * A forward awaiting its `ForwardResponse`: the caller's deferred, the original command, the
+ * proposer-stamped [dedupKey], and [sentTo] — the peer the `Forward` was actually handed to.
+ * Re-wrapped with the proposer's own [dedupKey] on completion so the returned [LogEntry] matches what
+ * the leader appended.
+ *
+ * [sentTo] is the **response-provenance key** (#1911, §8). A `ForwardResponse` carries no term and no
+ * leader identity, and its correlation id is a follower-local nonce that starts at `0` on every node —
+ * so the transport-level sender is the only thing tying a receipt to the peer that could have produced
+ * it. `null` means the forward is parked in `waitingForLeader` and has not been sent to anyone yet, so
+ * *no* response for it can be genuine. It is stamped at each send site (registration and flush), never
+ * only at construction.
  */
 internal data class PendingForward(
     val deferred: CompletableDeferred<LogEntry>,
     val command: ByteArray,
     val dedupKey: DedupKey?,
+    val sentTo: NodeId?,
 )
 
 /**
@@ -35,6 +44,12 @@ internal data class PendingForward(
  * appends under that unchanged key so a retry of an already-committed proposal coalesces (§8 exactly-once)
  * rather than double-appending. The correlation id — not the dedupKey — is what [onResponse] matches a
  * `ForwardResponse` back to its pending forward.
+ *
+ * **Response provenance (do not regress, #1911).** The correlation id alone is *not* sufficient to
+ * accept a `ForwardResponse`: it is a follower-local nonce starting at `0` on every node, and the frame
+ * carries neither a term nor a leader identity. Every [PendingForward] therefore records
+ * [PendingForward.sentTo] — the peer its `Forward` was handed to — stamped at **both** send sites
+ * ([forward] and the [flush] leader path), and [onResponse] accepts a receipt only from that peer.
  *
  * **Queue-while-no-leader → flush-on-leader-known (do not regress).** When no leader is known, [forward]
  * parks the correlation id in [waitingForLeader] instead of sending; [flush] (called by the actor loop
@@ -84,9 +99,10 @@ internal class ProposalForwarder {
         selfId: NodeId,
     ): ForwardDecision {
         val id = nextForwardId++
-        forwardedProposals[id] = PendingForward(response, command, dedupKey)
-        return if (leaderId != null && leaderId != selfId) {
-            ForwardDecision.SendToLeader(leaderId, id, command, dedupKey)
+        val target = leaderId?.takeIf { it != selfId }
+        forwardedProposals[id] = PendingForward(response, command, dedupKey, sentTo = target)
+        return if (target != null) {
+            ForwardDecision.SendToLeader(target, id, command, dedupKey)
         } else {
             waitingForLeader += id
             ForwardDecision.Queued
@@ -94,12 +110,28 @@ internal class ProposalForwarder {
     }
 
     /**
-     * Resolve the `ForwardResponse` correlated to [clientRequestId]: remove and return the matching
-     * [PendingForward] so the engine completes its deferred (with the committed entry, or exceptionally on
-     * NotLeader/Failed). Returns `null` for an unknown/duplicate/already-reaped id — the engine then does
-     * nothing. Removal here means [failAll]/[flush] will never touch this deferred again (exactly-once).
+     * Resolve the `ForwardResponse` correlated to [clientRequestId] **and sent by [from]**: remove and
+     * return the matching [PendingForward] so the engine completes its deferred (with the committed
+     * entry, or exceptionally on NotLeader/Failed). Returns `null` — leaving any pending entry
+     * untouched — for an unknown/duplicate/already-reaped id, for a forward that has not been sent to
+     * anyone yet, and for a response from any peer other than the one the `Forward` went to. Removal on
+     * the accept path means [failAll]/[flush] will never touch this deferred again (exactly-once).
+     *
+     * **Provenance (#1911, §8 client interaction).** Without the [from] check any admitted peer could
+     * fabricate a commit receipt: `propose()` would return a `LogEntry` for a command no node ever
+     * appended, and the consumer's exactly-once bookkeeping would mark that write done — so the retry
+     * exactly-once exists to provide never happens and the write is lost permanently. A mismatched
+     * receipt is **dropped**, not clamped and not thrown: a correlation id is a nonce with no
+     * conservative in-range reading (#1817), and a throw on the engine's actor loop is permanent node
+     * death (#1818). Dropping leaves the forward outstanding exactly as if the response had been lost on
+     * the wire, so the genuine reply — or the caller's own timeout/retry — still resolves it.
      */
-    fun onResponse(clientRequestId: Long): PendingForward? = forwardedProposals.remove(clientRequestId)
+    fun onResponse(clientRequestId: Long, from: NodeId): PendingForward? {
+        val pf = forwardedProposals[clientRequestId] ?: return null
+        if (pf.sentTo != from) return null
+        forwardedProposals.remove(clientRequestId)
+        return pf
+    }
 
     /**
      * Drain forwards parked while no leader was known. Returns the [FlushAction]s the engine should carry
@@ -108,7 +140,9 @@ internal class ProposalForwarder {
      * when this node is neither leader nor knows a distinct leader yet (the parked entries stay queued).
      *
      * Entries whose deferred is already completed (cancelled by the caller, or resolved) are dropped and
-     * removed here — never re-sent or re-proposed. Leader-path entries are LEFT in the map here and evicted
+     * removed here — never re-sent or re-proposed. Every entry sent on the non-leader path has its
+     * [PendingForward.sentTo] stamped with the leader it is sent to, so the reply passes [onResponse]'s
+     * provenance check. Leader-path entries are LEFT in the map here and evicted
      * by the engine via [reProposed] only after its `onPropose` returns, so [failAll] still owns the
      * deferred across the suspendable propose window; non-leader-path entries stay in the map awaiting their
      * `ForwardResponse`.
@@ -132,10 +166,12 @@ internal class ProposalForwarder {
                 // orphan the deferred in the onPropose suspension window (cancel/append-throw → hang).
                 actions += FlushAction.ReProposeLocally(id, pf)
             } else {
-                actions += FlushAction.SendToLeader(
-                    requireNotNull(leaderId) { "flush: no leader known on the non-leader forward path" },
-                    id, pf.command, pf.dedupKey,
-                )
+                val target = requireNotNull(leaderId) { "flush: no leader known on the non-leader forward path" }
+                // Stamp the provenance key at THIS send site too (#1911): a parked forward is first sent
+                // here, to whichever leader turned up, so leaving sentTo at its registration-time null
+                // would drop the leader's genuine reply and hang the caller forever.
+                forwardedProposals[id] = pf.copy(sentTo = target)
+                actions += FlushAction.SendToLeader(target, id, pf.command, pf.dedupKey)
             }
         }
         return actions

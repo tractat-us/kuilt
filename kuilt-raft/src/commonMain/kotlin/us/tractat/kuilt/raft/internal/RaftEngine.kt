@@ -2353,9 +2353,22 @@ internal class RaftEngine(
         }
     }
 
-    /** Follower handles the leader's reply to a forward it sent. */
+    /**
+     * Follower handles the leader's reply to a forward it sent.
+     *
+     * §8 provenance (#1911): a `ForwardResponse` carries no term and no leader identity, and its
+     * correlation id is a follower-local nonce starting at `0` on every node — so [from] is the only
+     * thing tying the receipt to the peer the `Forward` actually went to. The forwarder drops any
+     * receipt whose sender is not that peer (and any receipt at all when no forward is outstanding);
+     * without that check any admitted peer could fabricate a commit for a command no node appended,
+     * and the consumer's exactly-once bookkeeping would mark that write done — a permanently lost
+     * write. A dropped receipt leaves the forward outstanding, exactly as a lost reply would.
+     */
     private fun onForwardResponse(from: NodeId, m: RaftMessage.ForwardResponse) {
-        val pf = forwarder.onResponse(m.clientRequestId) ?: return
+        val pf = forwarder.onResponse(m.clientRequestId, from) ?: run {
+            debug { "onForwardResponse: dropped reqId=${m.clientRequestId} from $from — no forward outstanding to that peer" }
+            return
+        }
         when (val o = m.outcome) {
             // Re-wrap with the proposer's own dedupKey so the returned entry matches what the leader appended.
             is ForwardOutcome.Committed -> pf.deferred.complete(LogEntry(o.index, o.term, pf.command, dedupKey = pf.dedupKey))
