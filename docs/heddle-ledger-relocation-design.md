@@ -748,6 +748,56 @@ attributable (`base > ackedFinal` in log state), and its cleanup is specified as
 refused-in-v1 residue sweep. Closing it outright requires durable per-peer
 authored-slot storage — a dependency this design declines to smuggle in.
 
+### 11.1 The eighth interleaving (2026-07-29, slice 3 review — #1895)
+
+A second adversarial pass on the slice-3 implementation found an interleaving the seven
+above do not cover, and it is **the re-home itself that arms it**. Reasoned by the
+reviewer, then reproduced by execution before being accepted.
+
+The re-home moves only the **charge** half of the conserving move onto the live edge at
+charge time; the **credit** half (`issuedRelocIn`) can only arrive with a committed
+`Reconcile`, because §6.3 reserves the relocation families to the control plane. So
+between a post-barrier completion and the recovery, the live edge carries spend with
+zero effective issuance for that replica. Race-retire and quiesce **that** edge before
+any `Reconcile` — the founding #1665 race, run a second time — and the derivation read
+spend-with-no-cover on it and refused the *whole child*:
+
+```
+Reconcile#1 -> Refused("outstanding on e3 for peer-1 is negative (n=0 < spent=3)")
+Reconcile#2 -> Refused(identical)          <-- deterministic, permanent
+```
+
+No crash, no Byzantine peer, no understated ack, no departed peer. `issued(e3)` can
+never rise afterwards (retired ⇒ `delegate` refuses; the control plane writes a fenced
+edge's base slots only inside a `Moved` patch, which never happens), so the child's
+recovery was permanently defeated — the exact disease class §6 exists to cure, produced
+by §6's own companion mechanism. Sharpest statement: the pre-fence design left this
+unrecoverable state on the **dead** edge, and the re-home **relocated it one edge over**
+onto the live lineage.
+
+**Not** a conservation break (it errs stranded — no overspend) and **not** a
+consensus-safety break (every peer refuses identically from the same log prefix), but a
+permanent liveness defeat of the recovery.
+
+**Answered by:** the `n ≥ sp` precondition is now quantified **per (child, replica)
+across all the fenced edges of one derivation**, not per edge. The cover is genuinely
+present — on the sibling fenced edge the entitlement came from before the re-home split
+charge from credit — so the honest question is whether a replica's fenced edges
+*together* cover what was charged through them. In the trace, Σn = 10 against Σsp = 3.
+
+Two properties this must keep, and does: it is aggregated **per replica and never across
+replicas** (entitlement is per-replica; funding one replica's spend from another's
+surplus would be a conservation break, not a fix), and a genuine overspend
+(Σcover < Σcharge) still refuses. Pinned by
+`HeddleFenceTest.aReHomedChargeWhoseLandingEdgeIsThenFencedIsFundedFromItsSiblingFencedEdge`.
+
+**Test-coverage lesson.** `postBarrierCompletionRehomesOffTheDeadEdge` pinned case (c)
+only in the order *Reconcile-then-complete*; its `validate().isEmpty()` passed precisely
+*because* `issuedRelocIn` already existed when the charge landed. The adversarial
+ordering was the one that mattered — the #1753 pattern again. Related: **#1894**, the
+randomized conservation generator never exercises relocation, so it could not have found
+this either.
+
 ---
 
 *Deliverable for #1665, revision 2 — the post-adversarial-review redesign of the

@@ -202,6 +202,47 @@ class EntitlementLedgerReconcileTest {
     }
 
     /**
+     * #1895 widened the `n ≥ sp` precondition from per-edge to per-`(child, replica)`. These three pin
+     * the widening **and its two limits** — the old per-edge form had no test of its own, so the
+     * relaxation would otherwise be unguarded.
+     */
+    @Test
+    fun aChargeOnOneFencedEdgeIsFundedByASiblingFencedEdgesSurplus() {
+        // e1 carries the cover, e2 carries the charge — the shape the re-home produces when a charge
+        // lands on a live edge that is then itself fenced before Reconcile runs.
+        val finals = mapOf(
+            e1 to mapOf(p3 to SlotFinals(issued = 10L, returned = 0L, leafSpent = 0L, rollupSpent = 0L)),
+            e2 to mapOf(p3 to SlotFinals(issued = 0L, returned = 0L, leafSpent = 3L, rollupSpent = 0L)),
+        )
+        // Per-edge, e2 reads n=0 < sp=3 and the whole child was refused forever. Together, 10 ≥ 3.
+        assertIs<Relocation.Moved>(EntitlementLedger.ZERO.relocationPatch(e3, finals))
+    }
+
+    @Test
+    fun aChargeExceedingEveryFencedEdgesCoverTogetherStillRefuses() {
+        // The widening must not become a way to fund a spend from entitlement that does not exist.
+        val finals = mapOf(
+            e1 to mapOf(p3 to SlotFinals(issued = 2L, returned = 0L, leafSpent = 5L, rollupSpent = 0L)),
+        )
+        assertIs<Relocation.Refused>(EntitlementLedger.ZERO.relocationPatch(e3, finals))
+    }
+
+    @Test
+    fun oneReplicasSurplusNeverFundsAnotherReplicasCharge() {
+        val q = ReplicaId("q")
+        // p3 holds all the cover and owes nothing; q owes everything and holds no cover.
+        val finals = mapOf(
+            e1 to mapOf(
+                p3 to SlotFinals(issued = 10L, returned = 0L, leafSpent = 0L, rollupSpent = 0L),
+                q to SlotFinals(issued = 0L, returned = 0L, leafSpent = 5L, rollupSpent = 0L),
+            ),
+        )
+        // Aggregating across replicas would read cover=10 ≥ charge=5 and MOVE — a real conservation
+        // break, since entitlement is per-replica. The quantifier is per (child, replica), so: refuse.
+        assertIs<Relocation.Refused>(EntitlementLedger.ZERO.relocationPatch(e3, finals))
+    }
+
+    /**
      * The §6.5.2 residual, reproduced on the **roll-up** family: an ack that understates a replica's
      * spend on the fenced edge (the cross-incarnation gap — charge, delta escapes to one other peer,
      * crash before ack, restart re-acks lower). Deliberately **not closed** in v1: closing it needs

@@ -23,3 +23,6 @@ spike-logs/
 # Xcode per-user data (spike/ Xcode project)
 **/xcuserdata/
 *.xcuserstate
+
+# Local build/gate logs (`./gradlew … > foo.log`) — evidence from a verification run, not source
+*.log

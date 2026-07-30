@@ -59,6 +59,7 @@ import kotlin.time.Instant
  * | 5 | a joiner enrolling mid-fence | [aJoinerEnrollingMidFenceIsExcludedFromTheAckSet] |
  * | 6 | a double `Reconcile` | `HeddleControlPlaneTest.reconcileClearsRacedRetireStrandAcrossAllPeers` |
  * | 7 | a straggler `release` on the fenced edge | [aStragglerReleaseOnAFencedEdgeHasNoDataPlaneWriterAtAll] |
+ * | 8 | a re-homed charge whose landing edge is itself fenced before `Reconcile` (#1895) | [aReHomedChargeWhoseLandingEdgeIsThenFencedIsFundedFromItsSiblingFencedEdge] |
  *
  * plus the two things the fence deliberately does **not** deliver: liveness hostage to every enrolled
  * peer ([anAbsentEnrolledPeerBlocksTheFenceAndTheStrandStaysStanding]) and the boot gate that makes
