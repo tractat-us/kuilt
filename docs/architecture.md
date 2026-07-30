@@ -369,9 +369,11 @@ records the current commit index, confirms it still holds a quorum via a
 heartbeat round, and the caller waits for its state machine to apply through that
 index (`awaitRead` packages the barrier). **Graceful leadership transfer**
 (`transferLeadership(target)`, §3.10) hands the lease to a named peer — the leader
-brings the target's log up to the commit index, sends `TimeoutNow` to trigger an
-immediate election there, and stops accepting new proposals until the handoff
-completes or `cancelTransfer()` aborts it.
+brings the target's log up to its own *last* log index (not merely the commit
+index: an uncommitted tail would otherwise trigger a premature `TimeoutNow` to a
+target whose election then fails), sends `TimeoutNow` to trigger an immediate
+election there, and stops accepting new proposals until the handoff completes or
+`cancelTransfer()` aborts it.
 
 ## Session metadata convergence
 
