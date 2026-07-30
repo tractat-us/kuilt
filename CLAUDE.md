@@ -176,18 +176,37 @@ still compiles but self-skips at runtime, so `./gradlew build` doesn't run it.
     **starves its own virtual timeout: the test HANGS, it does not fail** (a hand-rolled done-when
     test once ran ~90 min this way before being killed). The harness encodes the only setup that
     converges and fails fast:
-    - **`runTest(StandardTestDispatcher(), timeout = 5.seconds)`** — a *tight* timeout, never the
-      60 s default. Paired with the harness's `dumpState()`, a hang becomes a fast, legible failure.
+    - **`runTest`'s `timeout` is a GENEROUS wedge backstop, never a tight assertion.** It is
+      **wall-clock over a virtual-time trajectory**, so it measures the *host*, not the code — a
+      contended box inflates it while the trajectory is unchanged. Tightening it asserts nothing and
+      manufactures load-sensitive false reds. Use a named, generously-sized constant (30 s is the
+      established value here) and say in its KDoc that it is a backstop. What makes a hang *fast* and
+      *legible* is the next bullet's bounded `await*`/`settle()` plus the harness's `dumpState()` —
+      not the ceiling.
+      **Receipt:** learned on #1382, left uncorrected here, and so recurred — #1891 red-lit
+      `apple-nightly` on `main` at a 5 s ceiling with only 1.8× headroom against a measured 2.65×
+      contention degradation, i.e. *deterministically* under load, not flakily. Mutation-verified: 5 s
+      → 4/4 fail reproducing the CI signature, 30 s → 4/4 pass, same binary, load the only variable.
+      Third module hit; #1739 counts 293 such sites. The property to hold is **"no real-time ceiling
+      is load-bearing for a virtual-time test"** — a rule naming `5.seconds` is evaded by `4.seconds`.
     - **Bounded `await*` / `settle()` only — NEVER `advanceUntilIdle()`.** Election/heartbeat timers
       re-arm forever, so the idle state is never reached; advance virtual time in bounded steps.
+      These are the real fast-failure mechanism: they fail in ~1.4 s either way, independent of host
+      load, because they are bounded in *virtual* time.
     - **Per-node seeded election RNG** so timeouts differ and a leader actually wins (symmetry-
       breaking); seed every `RaftConfig.random` — never an unseeded `Random` in a test.
     - Node coroutines live on `TestScope.backgroundScope` child scopes so the infinite election/
       heartbeat loops cancel cleanly at teardown (no `UncompletedCoroutinesError`).
     When running such a test from an agent, **fence the command too**: `timeout 90 ./gradlew
-    :<module>:test --tests "<oneTest>"`, one test at a time. **A hang/timeout is a STOP-and-re-plan
-    signal** — `jstack` the test JVM, name the spinning test, fix convergence; do NOT widen the
-    timeout and retry.
+    :<module>:test --tests "<oneTest>"`, one test at a time. The OS-level fence *stays tight* — unlike
+    `runTest`'s ceiling it bounds a real shell command, so wall-clock is the right unit there. Keep the
+    two straight: **tight fence outside, generous backstop inside.**
+    **A hang is a STOP-and-re-plan signal** — `jstack` the test JVM, name the spinning test, fix
+    convergence; do NOT widen a bound and retry. But first **read the results XML, not the console
+    line**: a K/N timeout renders as `at null:-1` on the console while the XML carries the full stack
+    (e.g. `TimeoutCoroutine.run`) *and* `time="…"`. Those two fields distinguish "the trajectory
+    wedged" from "the box was slow" — #1891 was diagnosed entirely from them, after the console had
+    made it look undiagnosable.
   - **No real-dispatcher defaults.** A factory/helper that owns a scope makes the
     `scope`/dispatcher a **required** parameter — never `= CoroutineScope(Dispatchers.Unconfined)`
     or similar. A default real dispatcher silently decouples the work from `runTest`'s
