@@ -610,11 +610,10 @@ public class EntitlementLedger private constructor(
         liveEdge: AttachmentId,
         finals: Map<AttachmentId, Map<ReplicaId, SlotFinals>>,
     ): Relocation {
-        val drain = EdgePatchBuilder()
-        val creditIssued = HashMap<ReplicaId, Long>()
-        val creditLeaf = HashMap<ReplicaId, Long>()
-        val creditRollup = HashMap<ReplicaId, Long>()
-        var moved = false
+        // ── pass 1: derive every fenced slot, and total each replica's cover and charge.
+        val drainable = ArrayList<DrainedSlot>()
+        val coverByReplica = HashMap<ReplicaId, Long>()
+        val chargeByReplica = HashMap<ReplicaId, Long>()
 
         for ((s, perReplica) in finals.entries.sortedBy { it.key }) {
             for ((r, acked) in perReplica.entries.sortedBy { it.key }) {
@@ -644,35 +643,59 @@ public class EntitlementLedger private constructor(
                             "transfer-tangled strand needs its transfer rows moved too (out of scope)",
                     )
                 }
-                if (n < sp) {
-                    return Relocation.Refused(
-                        "relocate refused: outstanding on ${s.value} for ${r.value} is negative " +
-                            "(n=$n < spent=$sp) — the edge cannot cover what was charged through it",
-                    )
-                }
                 if (n == 0L && sp == 0L) continue // already drained: contribute nothing
-                moved = true
-
-                // ── the fenced edge: drain it, and republish every premise of that conclusion so no
-                // observer can hold `relocOut` without the base it cancels (§6.4 / §5.3 proviso).
-                drain.put(CounterFamily.RETURNED, s, r, iss)
-                drain.put(CounterFamily.ISSUED, s, r, acked.issued)
-                drain.put(CounterFamily.LEAF_SPENT, s, r, acked.leafSpent)
-                drain.put(CounterFamily.ROLLUP_SPENT, s, r, acked.rollupSpent)
-                drain.put(CounterFamily.ISSUED_RELOC_IN, s, r, relIssIn)
-                drain.put(CounterFamily.LEAF_RELOC_IN, s, r, relLeafIn)
-                drain.put(CounterFamily.ROLLUP_RELOC_IN, s, r, relRollIn)
-                drain.put(CounterFamily.LEAF_RELOC_OUT, s, r, checkedAdd(relLeafOut, lsp))
-                drain.put(CounterFamily.ROLLUP_RELOC_OUT, s, r, checkedAdd(relRollOut, rsp))
-
-                // ── the live edge: accumulate across every fenced edge in THIS move before adding
-                // the standing control-plane total, so two edges re-homing onto one `t` sum.
-                creditIssued[r] = checkedAdd(creditIssued[r] ?: 0L, n)
-                creditLeaf[r] = checkedAdd(creditLeaf[r] ?: 0L, lsp)
-                creditRollup[r] = checkedAdd(creditRollup[r] ?: 0L, rsp)
+                coverByReplica[r] = checkedAdd(coverByReplica[r] ?: 0L, n)
+                chargeByReplica[r] = checkedAdd(chargeByReplica[r] ?: 0L, sp)
+                drainable += DrainedSlot(s, r, acked, relIssIn, relLeafIn, relRollIn, relLeafOut, relRollOut, iss, n, lsp, rsp)
             }
         }
-        if (!moved) return Relocation.Nothing
+        if (drainable.isEmpty()) return Relocation.Nothing
+
+        // ── the `n ≥ sp` precondition, quantified per (child, replica) over the WHOLE derivation
+        // rather than per edge (#1895). The re-home lands a charge on the live edge at charge time
+        // but its covering issuance only arrives with this very Reconcile, so if that edge is itself
+        // fenced before the recovery runs it reads spend-with-no-cover and a per-edge test refused
+        // the whole child forever. The cover is genuinely there — on the sibling fenced edge the
+        // entitlement came from before the re-home split charge from credit — so the honest question
+        // is whether this replica's fenced edges TOGETHER cover what was charged through them.
+        //
+        // Aggregated per replica and NEVER across replicas: entitlement is per-replica, so funding
+        // one replica's spend from another's surplus would be a real conservation break, not a fix.
+        for (r in chargeByReplica.keys.sortedBy { it.value }) {
+            val charge = chargeByReplica.getValue(r)
+            val cover = coverByReplica[r] ?: 0L
+            if (cover < charge) {
+                return Relocation.Refused(
+                    "relocate refused: ${r.value}'s fenced edges cannot cover what was charged " +
+                        "through them (cover=$cover < spent=$charge)",
+                )
+            }
+        }
+
+        // ── pass 2: drain each fenced slot, and accumulate the live edge's credit.
+        val drain = EdgePatchBuilder()
+        val creditIssued = HashMap<ReplicaId, Long>()
+        val creditLeaf = HashMap<ReplicaId, Long>()
+        val creditRollup = HashMap<ReplicaId, Long>()
+        for (d in drainable) {
+            // ── the fenced edge: drain it, and republish every premise of that conclusion so no
+            // observer can hold `relocOut` without the base it cancels (§6.4 / §5.3 proviso).
+            drain.put(CounterFamily.RETURNED, d.edge, d.replica, d.iss)
+            drain.put(CounterFamily.ISSUED, d.edge, d.replica, d.acked.issued)
+            drain.put(CounterFamily.LEAF_SPENT, d.edge, d.replica, d.acked.leafSpent)
+            drain.put(CounterFamily.ROLLUP_SPENT, d.edge, d.replica, d.acked.rollupSpent)
+            drain.put(CounterFamily.ISSUED_RELOC_IN, d.edge, d.replica, d.relIssIn)
+            drain.put(CounterFamily.LEAF_RELOC_IN, d.edge, d.replica, d.relLeafIn)
+            drain.put(CounterFamily.ROLLUP_RELOC_IN, d.edge, d.replica, d.relRollIn)
+            drain.put(CounterFamily.LEAF_RELOC_OUT, d.edge, d.replica, checkedAdd(d.relLeafOut, d.lsp))
+            drain.put(CounterFamily.ROLLUP_RELOC_OUT, d.edge, d.replica, checkedAdd(d.relRollOut, d.rsp))
+
+            // ── the live edge: accumulate across every fenced edge in THIS move before adding
+            // the standing control-plane total, so two edges re-homing onto one `t` sum.
+            creditIssued[d.replica] = checkedAdd(creditIssued[d.replica] ?: 0L, d.n)
+            creditLeaf[d.replica] = checkedAdd(creditLeaf[d.replica] ?: 0L, d.lsp)
+            creditRollup[d.replica] = checkedAdd(creditRollup[d.replica] ?: 0L, d.rsp)
+        }
 
         for ((r, add) in creditIssued) {
             drain.put(CounterFamily.ISSUED_RELOC_IN, liveEdge, r, checkedAdd(slot(issuedRelocIn, liveEdge, r), add))
@@ -1309,6 +1332,33 @@ private fun addSlot(acc: HashMap<AttachmentId, GCounter>, edge: AttachmentId, r:
  * Non-positive values are skipped (a zero slot is the lattice bottom — shipping it says nothing);
  * repeated writes to one slot join by max, matching the wire semantics exactly.
  */
+/**
+ * One `(fenced edge, replica)` slot of a relocation derivation, carried from the deriving pass to
+ * the building pass so the two agree by construction.
+ *
+ * The split exists because the `n ≥ sp` precondition is a property of **all** of one replica's
+ * fenced edges together, not of each edge alone (#1895) — so every slot has to be derived before
+ * any of them can be drained. Holding the derived values rather than recomputing them in the second
+ * pass is deliberate: two copies of this arithmetic could drift, and it is conservation-critical.
+ *
+ * @property n `iss - ret`, this slot's cover — what the edge can fund.
+ * @property lsp the slot's effective leaf spend; @property rsp its effective roll-up spend.
+ */
+private class DrainedSlot(
+    val edge: AttachmentId,
+    val replica: ReplicaId,
+    val acked: SlotFinals,
+    val relIssIn: Long,
+    val relLeafIn: Long,
+    val relRollIn: Long,
+    val relLeafOut: Long,
+    val relRollOut: Long,
+    val iss: Long,
+    val n: Long,
+    val lsp: Long,
+    val rsp: Long,
+)
+
 private class EdgePatchBuilder {
     private val families = HashMap<CounterFamily, HashMap<AttachmentId, GCounter>>()
 
