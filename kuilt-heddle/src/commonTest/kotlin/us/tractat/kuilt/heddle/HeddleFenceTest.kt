@@ -515,6 +515,71 @@ class HeddleFenceTest {
         )
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // THE EIGHTH INTERLEAVING (#1895). The seven above are all single-round. This one
+    // runs the founding #1665 race TWICE, and it is the re-home itself that arms it.
+    //
+    // The re-home moves only the CHARGE half of the conserving move onto the live edge at
+    // charge time; the CREDIT half (`issuedRelocIn`) can only arrive with a committed
+    // `Reconcile`, because §6.3 reserves the relocation families to the control plane. So
+    // between a post-barrier completion and the recovery, the live edge carries spend with
+    // zero issuance. Race-retire and quiesce THAT edge before any `Reconcile` and the
+    // per-edge `n ≥ sp` precondition refused the whole child — deterministically, forever.
+    //
+    // The fix: `n ≥ sp` is a per-(child, replica) property aggregated across the fenced
+    // edges of one derivation, not a per-edge one. Here Σn = 10 (all on e1) against
+    // Σsp = 3 (all on e3), so the charge is fundable from its own sibling's surplus —
+    // which is exactly where the entitlement came from before the re-home split them.
+    // ═══════════════════════════════════════════════════════════════════════════
+    @Test
+    fun aReHomedChargeWhoseLandingEdgeIsThenFencedIsFundedFromItsSiblingFencedEdge() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val e4 = AttachmentId("e4") // root → g, the SECOND legal reparent generation
+            val f = fixture("fence-eighth")
+            f.mintAndDelegateDownE1()
+            val reservation = assertNotNull(f.node.reserve(g, 3L), "reserve against the funded leaf")
+
+            // Round 1: the raced retire of e1, reparent onto e3, fence e1.
+            f.racedRetireAndReparent()
+            assertIs<ControlOutcome.Applied>(f.plane.submit(ControlCommand.Quiesce(e1)))
+            runCurrent()
+
+            // The straggler completes BEFORE any Reconcile, so the charge re-homes onto the LIVE
+            // edge e3 — which holds no issuance for this replica. This transient is the arming step.
+            f.node.complete(reservation, 3L)
+            assertEquals(3L, f.node.ledger.value.edge(e3)?.spent, "the charge re-homed onto the live edge")
+
+            // Round 2: the same founding race again, now on e3 — retire it, reparent onto e4, fence it.
+            assertIs<ControlOutcome.Applied>(f.plane.submit(ControlCommand.Close(e3)))
+            assertIs<ControlOutcome.Applied>(f.plane.submit(ControlCommand.Retire(e3, witness = null)))
+            assertIs<ControlOutcome.Applied>(f.plane.submit(ControlCommand.Prepare(f.rec(e4, root, g))))
+            assertIs<ControlOutcome.Applied>(f.plane.submit(ControlCommand.Activate(e4)))
+            assertIs<ControlOutcome.Applied>(f.plane.submit(ControlCommand.Quiesce(e3)))
+            runCurrent()
+
+            // Before #1895 this refused with "outstanding on e3 for peer-1 is negative (n=0 < spent=3)",
+            // identically on every peer and on every retry — the recovery permanently defeated.
+            assertIs<ControlOutcome.Applied>(
+                f.plane.submit(ControlCommand.Reconcile(g)),
+                "the child's recovery must not be wedged by its own re-home",
+            )
+
+            val end = f.node.ledger.value
+            assertAll(
+                { assertTrue(end.validate().isEmpty(), "no violation survives the recovery: ${end.validate()}") },
+                { assertEquals(0L, end.edge(e1)?.outstanding, "e1 drained") },
+                { assertEquals(0L, end.edge(e3)?.outstanding, "e3 drained — its spend moved to the live edge") },
+                { assertEquals(7L, end.edge(e4)?.outstanding, "the live edge carries 10 issued less the 3 spent") },
+                {
+                    assertEquals(
+                        10L,
+                        end.holdings(root, f.self) + end.holdings(g, f.self) + end.leafSpentTotal(),
+                        "conservation holds across both rounds",
+                    )
+                },
+            )
+        }
+
     // ─────────────────────────────────────────────────────────────────────────────
     // harness
     // ─────────────────────────────────────────────────────────────────────────────
