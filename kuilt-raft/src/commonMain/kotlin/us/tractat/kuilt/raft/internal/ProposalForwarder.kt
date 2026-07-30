@@ -110,12 +110,11 @@ internal class ProposalForwarder {
     }
 
     /**
-     * Resolve the `ForwardResponse` correlated to [clientRequestId] **and sent by [from]**: remove and
-     * return the matching [PendingForward] so the engine completes its deferred (with the committed
-     * entry, or exceptionally on NotLeader/Failed). Returns `null` — leaving any pending entry
-     * untouched — for an unknown/duplicate/already-reaped id, for a forward that has not been sent to
-     * anyone yet, and for a response from any peer other than the one the `Forward` went to. Removal on
-     * the accept path means [failAll]/[flush] will never touch this deferred again (exactly-once).
+     * Resolve the `ForwardResponse` correlated to [clientRequestId] **and sent by [from]**: on
+     * [ResponseResolution.Resolved] the matching [PendingForward] is removed and handed back so the
+     * engine completes its deferred (with the committed entry, or exceptionally on NotLeader/Failed).
+     * Removal on that path means [failAll]/[flush] will never touch this deferred again (exactly-once).
+     * Every other resolution leaves the pending entry untouched.
      *
      * **Provenance (#1911, §8 client interaction).** Without the [from] check any admitted peer could
      * fabricate a commit receipt: `propose()` would return a `LogEntry` for a command no node ever
@@ -125,12 +124,22 @@ internal class ProposalForwarder {
      * conservative in-range reading (#1817), and a throw on the engine's actor loop is permanent node
      * death (#1818). Dropping leaves the forward outstanding exactly as if the response had been lost on
      * the wire, so the genuine reply — or the caller's own timeout/retry — still resolves it.
+     *
+     * **Why the three refusals are distinguished rather than collapsed into one `null`.** They have
+     * opposite causes and the engine can only log what it is told. [ResponseResolution.WrongSender] is
+     * a forgery (or a stale reply from a deposed leader); [ResponseResolution.NoSuchForward] is an
+     * unknown/duplicate/already-reaped id; and [ResponseResolution.NotYetSent] means *this node* failed
+     * to stamp [PendingForward.sentTo] at a send site — the regression a lost [flush] stamp produces,
+     * whose symptom is a `propose()` that hangs forever on a genuine reply from the real leader. Under
+     * a single `null` the only runtime signal would report a forgery in exactly the case where the
+     * local bookkeeping, not the sender, is at fault.
      */
-    fun onResponse(clientRequestId: Long, from: NodeId): PendingForward? {
-        val pf = forwardedProposals[clientRequestId] ?: return null
-        if (pf.sentTo != from) return null
+    fun onResponse(clientRequestId: Long, from: NodeId): ResponseResolution {
+        val pf = forwardedProposals[clientRequestId] ?: return ResponseResolution.NoSuchForward
+        val sentTo = pf.sentTo ?: return ResponseResolution.NotYetSent
+        if (sentTo != from) return ResponseResolution.WrongSender(sentTo)
         forwardedProposals.remove(clientRequestId)
-        return pf
+        return ResponseResolution.Resolved(pf)
     }
 
     /**
@@ -198,6 +207,28 @@ internal class ProposalForwarder {
      */
     fun reProposed(id: Long) {
         forwardedProposals.remove(id)
+    }
+
+    /**
+     * What a `ForwardResponse` resolved to. The engine completes the caller's deferred on
+     * [Resolved] and otherwise drops the frame, logging *which* refusal fired — see [onResponse].
+     */
+    sealed interface ResponseResolution {
+        /** The receipt came from the peer this forward was sent to; [pf] is removed from the map. */
+        data class Resolved(val pf: PendingForward) : ResponseResolution
+
+        /** No forward is registered under that correlation id — unknown, duplicate, or already reaped. */
+        data object NoSuchForward : ResponseResolution
+
+        /**
+         * The forward exists but is still parked in [waitingForLeader] and has been sent to nobody, so
+         * no receipt for it can be genuine. Also the signature of a **local** defect: a send site that
+         * failed to stamp [PendingForward.sentTo].
+         */
+        data object NotYetSent : ResponseResolution
+
+        /** The forward was sent to [sentTo] — the responder is not that peer, so the receipt is a forgery. */
+        data class WrongSender(val sentTo: NodeId) : ResponseResolution
     }
 
     /** The engine's next action after registering a proposal to forward. */
