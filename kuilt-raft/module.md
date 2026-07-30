@@ -108,14 +108,31 @@ because plenty of hostile frames *are* catchable. The line this module draws:
   into the *most favourable valid one* — the mistake #1817 records. An out-of-range echo
   is dropped outright, and a stale-term rejection attests to nothing rather than
   echoing a round it cannot vouch for (#1817, #1831).
-- A **missing** local check is a bug in this class, not an accepted exposure, and four are
-  open: the uncapped snapshot reassembly buffer (#1881); five redundant sender-identity
-  fields (`leaderId` / `candidateId`) carried on the wire and then read as authority when
-  `from` already says who sent the frame, so the fix is to delete them (#1912);
-  `ForwardResponse`, which has no provenance check at all, so a forged receipt makes
-  `propose()` report a commit that never happened and the write is silently lost (#1911);
-  and `_leader` accepting a same-term reassignment, which lets a voter name itself leader
-  (#1906).
+- **A correlation nonce is answered only by the peer it was sent to.** A `ForwardResponse`
+  (§8) carries no term and no leader identity, and its correlation id is a follower-local
+  nonce starting at `0` on every node — so nothing *in* the frame distinguishes a genuine
+  receipt from a fabricated one. The recipient holds the witness anyway, because it knows
+  which peer it handed the `Forward` to: `PendingForward.sentTo`, stamped at both send
+  sites. A receipt from any other peer is discarded on the same reasoning as the round echo
+  above — a nonce has no conservative in-range reading, and clamping one would launder a
+  forgery into the most favourable valid value. Discarding leaves the forward outstanding
+  exactly as a lost reply would, so the genuine reply still resolves it (#1911).
+- A **missing** local check is a bug in this class, not an accepted exposure — the
+  distinction being whether *any* predicate over the recipient's own state could catch the
+  claim, which is what separates this list from the accepted exposures below. Such gaps are
+  **labelled `raft-missing-local-check`** and tracked there rather than enumerated here, so
+  that this section stays a description of the *rule*:
+
+  ```
+  gh issue list --repo tractat-us/kuilt --label raft-missing-local-check --state open
+  ```
+
+  The label is part of the rule, not just a convenience: file a gap of this class **with that
+  label**, and when it closes turn it into a bullet in this list, carrying the argument for
+  the witness it found. That keeps the pointer honest — a label is a maintained index, where
+  a full-text search is a guess that drifts as titles change — and it is why nothing on this
+  page counts anything. The set shrinks on its own as gaps close, and the two lists that
+  remain here both only grow.
 
 ### What it accepts, unauthenticated
 
@@ -126,7 +143,10 @@ where the gate is deliberately skipped so the join cannot deadlock, and there ex
 is open to any admitted peer; the third runs the other way, told *to* the leader by
 whichever peer it is currently catching up (voter or learner), since a peer→leader ack is
 outside the gate. The **vote** lane (4–5) and the **forwarding** lane (6) are peer→peer
-and sit outside the gate entirely, so any admitted peer can lie on them. The
+and sit outside the gate entirely, so any admitted peer can lie on them — which is why the
+*response* half of the forwarding lane had to grow a witness of its own rather than inherit
+one (#1911, above); what remains accepted here is the `Forward.dedupKey` half (6), and only
+the durable-id part of that. The
 `AppendEntries` lane has no equivalent *field-range* residual — an entry's index is
 pinned to `prevLogIndex + 1 + i` and Log Matching pins `prevLogIndex` against the local
 log.

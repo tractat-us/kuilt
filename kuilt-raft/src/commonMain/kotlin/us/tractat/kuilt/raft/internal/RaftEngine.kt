@@ -2353,9 +2353,43 @@ internal class RaftEngine(
         }
     }
 
-    /** Follower handles the leader's reply to a forward it sent. */
+    /**
+     * Follower handles the leader's reply to a forward it sent.
+     *
+     * §8 provenance (#1911): a `ForwardResponse` carries no term and no leader identity, and its
+     * correlation id is a follower-local nonce starting at `0` on every node — so [from] is the only
+     * thing tying the receipt to the peer the `Forward` actually went to. The forwarder drops any
+     * receipt whose sender is not that peer (and any receipt at all when no forward is outstanding);
+     * without that check any admitted peer could fabricate a commit for a command no node appended,
+     * and the consumer's exactly-once bookkeeping would mark that write done — a permanently lost
+     * write. A dropped receipt leaves the forward outstanding, exactly as a lost reply would.
+     *
+     * Each refusal logs the witness it checked against and which predicate fired, never a single
+     * phrasing covering all three: `NotYetSent` is a *local* bookkeeping defect (a send site that
+     * failed to stamp `sentTo`), and reporting it as "no forward outstanding to that peer" would tell
+     * an operator the inverse of reality in precisely the case where a forward IS outstanding to
+     * exactly that peer.
+     */
     private fun onForwardResponse(from: NodeId, m: RaftMessage.ForwardResponse) {
-        val pf = forwarder.onResponse(m.clientRequestId) ?: return
+        val reqId = m.clientRequestId
+        val pf = when (val r = forwarder.onResponse(reqId, from)) {
+            is ProposalForwarder.ResponseResolution.Resolved -> r.pf
+            ProposalForwarder.ResponseResolution.NoSuchForward -> {
+                debug { "onForwardResponse: dropped reqId=$reqId from $from — no forward registered under that id" }
+                return
+            }
+            ProposalForwarder.ResponseResolution.NotYetSent -> {
+                debug {
+                    "onForwardResponse: dropped reqId=$reqId from $from — that forward is parked (sentTo=null), " +
+                        "sent to no peer; a genuine reply here would mean a send site failed to stamp sentTo"
+                }
+                return
+            }
+            is ProposalForwarder.ResponseResolution.WrongSender -> {
+                debug { "onForwardResponse: dropped reqId=$reqId from $from — that forward was sent to ${r.sentTo}" }
+                return
+            }
+        }
         when (val o = m.outcome) {
             // Re-wrap with the proposer's own dedupKey so the returned entry matches what the leader appended.
             is ForwardOutcome.Committed -> pf.deferred.complete(LogEntry(o.index, o.term, pf.command, dedupKey = pf.dedupKey))
