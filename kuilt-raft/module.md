@@ -2,9 +2,9 @@
 
 Keeps a handful of devices agreeing on one shared list of decisions, in one order, even
 while some of them are asleep, slow, or gone for good. The group picks one peer to put
-decisions in order and the rest follow it; a decision counts once more than half the
-group has written it down, so the group can lose a peer and carry on without losing
-anything it had already agreed.
+decisions in order and the rest follow it, and a decision only counts once more than
+half the group has written it down — so the group can lose a peer and carry on without
+losing anything it had already agreed.
 
 Raft consensus over a `Seam`: leader election + PreVote, log replication, log
 compaction with chunked `InstallSnapshot`, dynamic membership, linearizable reads
