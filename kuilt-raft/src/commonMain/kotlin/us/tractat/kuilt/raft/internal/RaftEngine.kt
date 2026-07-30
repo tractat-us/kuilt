@@ -2284,6 +2284,14 @@ internal class RaftEngine(
         // The instant it applies the config entry that seats voters, the gate arms and
         // every subsequent leader→peer frame is validated. Mirrors RoutedRaftTransport's
         // player-side `origin ∈ voters()` check (the relay-side half of #1383).
+        //
+        // This gate is the module's exemplar of the "defend — the recipient holds a local
+        // witness" half of its trust policy; the accepted, unauthenticated exposures on the
+        // other half are listed under "Trust between peers" in kuilt-raft/module.md. That
+        // section also records where this same predicate has failed in BOTH directions — too
+        // narrow (#1889, fixed above) and too strict (#1898, open) — i.e. that the witness
+        // being local and the witness being possibly stale are one property, and the cost of
+        // the rule.
         val voters = state.membershipState.voters
         if ((m is RaftMessage.AppendEntries || m is RaftMessage.InstallSnapshot || m is RaftMessage.TimeoutNow) &&
             voters.isNotEmpty() && from !in voters

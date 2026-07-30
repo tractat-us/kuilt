@@ -87,6 +87,12 @@ internal class SnapshotSender(
      * `matchIndex = lastIncludedIndex`. That value is in range, so it is indistinguishable from an honest
      * completion — a Byzantine lie, outside Raft's crash-fault model, and unprovable without an
      * end-to-end digest of the transferred bytes.
+     *
+     * That is not an oversight here but the module's exemplar of the "record as accepted — no local
+     * witness exists" half of its trust policy; the counterpart exemplar is the §5.2 leader-authority
+     * gate, which defends because it *has* one. The full policy and the other accepted exposures
+     * (snapshot position #1876, snapshot config #1880) are under "Trust between peers" in
+     * kuilt-raft/module.md.
      */
     fun onAck(peer: NodeId, nextOffset: Long): AckOutcome {
         val xfer = snapshotXfer[peer] ?: return AckOutcome.NoTransfer
