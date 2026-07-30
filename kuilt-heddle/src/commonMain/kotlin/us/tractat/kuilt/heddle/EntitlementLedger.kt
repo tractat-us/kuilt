@@ -646,7 +646,20 @@ public class EntitlementLedger private constructor(
                 if (n == 0L && sp == 0L) continue // already drained: contribute nothing
                 coverByReplica[r] = checkedAdd(coverByReplica[r] ?: 0L, n)
                 chargeByReplica[r] = checkedAdd(chargeByReplica[r] ?: 0L, sp)
-                drainable += DrainedSlot(s, r, acked, relIssIn, relLeafIn, relRollIn, relLeafOut, relRollOut, iss, n, lsp, rsp)
+                drainable += DrainedSlot(
+                    edge = s,
+                    replica = r,
+                    acked = acked,
+                    relIssIn = relIssIn,
+                    relLeafIn = relLeafIn,
+                    relRollIn = relRollIn,
+                    relLeafOut = relLeafOut,
+                    relRollOut = relRollOut,
+                    iss = iss,
+                    n = n,
+                    lsp = lsp,
+                    rsp = rsp,
+                )
             }
         }
         if (drainable.isEmpty()) return Relocation.Nothing
@@ -663,7 +676,10 @@ public class EntitlementLedger private constructor(
         // one replica's spend from another's surplus would be a real conservation break, not a fix.
         for (r in chargeByReplica.keys.sortedBy { it.value }) {
             val charge = chargeByReplica.getValue(r)
-            val cover = coverByReplica[r] ?: 0L
+            // getValue, not `?: 0L`: the two maps are written in lockstep under the same key two
+            // statements apart, so their key sets are identical by construction. A silent zero here
+            // would refuse undiagnosably if that ever stopped being true.
+            val cover = coverByReplica.getValue(r)
             if (cover < charge) {
                 return Relocation.Refused(
                     "relocate refused: ${r.value}'s fenced edges cannot cover what was charged " +
@@ -1325,14 +1341,6 @@ private fun addSlot(acc: HashMap<AttachmentId, GCounter>, edge: AttachmentId, r:
 }
 
 /**
- * Accumulates `(family, edge, replica) → absolute value` writes into one [EntitlementLedger] delta.
- *
- * The relocation derivation writes across all nine per-edge counter families at once, and a
- * hand-rolled nine-map accumulator at each call site is where a family gets silently forgotten.
- * Non-positive values are skipped (a zero slot is the lattice bottom — shipping it says nothing);
- * repeated writes to one slot join by max, matching the wire semantics exactly.
- */
-/**
  * One `(fenced edge, replica)` slot of a relocation derivation, carried from the deriving pass to
  * the building pass so the two agree by construction.
  *
@@ -1341,10 +1349,15 @@ private fun addSlot(acc: HashMap<AttachmentId, GCounter>, edge: AttachmentId, r:
  * any of them can be drained. Holding the derived values rather than recomputing them in the second
  * pass is deliberate: two copies of this arithmetic could drift, and it is conservation-critical.
  *
+ * Construct it with **named arguments**: nine of the twelve parameters are bare `Long`s, so a
+ * transposed `relLeafOut`/`relRollOut` or `lsp`/`rsp` compiles clean and silently mis-drains — the
+ * one drift vector carrying the values instead of recomputing them does not already close.
+ *
  * @property n `iss - ret`, this slot's cover — what the edge can fund.
- * @property lsp the slot's effective leaf spend; @property rsp its effective roll-up spend.
+ * @property lsp the slot's effective leaf spend.
+ * @property rsp the slot's effective roll-up spend.
  */
-private class DrainedSlot(
+private data class DrainedSlot(
     val edge: AttachmentId,
     val replica: ReplicaId,
     val acked: SlotFinals,
@@ -1359,6 +1372,14 @@ private class DrainedSlot(
     val rsp: Long,
 )
 
+/**
+ * Accumulates `(family, edge, replica) → absolute value` writes into one [EntitlementLedger] delta.
+ *
+ * The relocation derivation writes across all nine per-edge counter families at once, and a
+ * hand-rolled nine-map accumulator at each call site is where a family gets silently forgotten.
+ * Non-positive values are skipped (a zero slot is the lattice bottom — shipping it says nothing);
+ * repeated writes to one slot join by max, matching the wire semantics exactly.
+ */
 private class EdgePatchBuilder {
     private val families = HashMap<CounterFamily, HashMap<AttachmentId, GCounter>>()
 

@@ -243,6 +243,51 @@ class EntitlementLedgerReconcileTest {
     }
 
     /**
+     * The charge is `leafSpent + rollupSpent`. Every other test in this group puts the charge in
+     * `leafSpent`, so the roll-up half of the sum was unpinned — accumulating only `lsp` passed the
+     * whole suite while letting a roll-up overspend through onto the live edge.
+     */
+    @Test
+    fun aRollUpChargeCountsTowardTheCoverPreconditionToo() {
+        val finals = mapOf(
+            e1 to mapOf(p3 to SlotFinals(issued = 2L, returned = 0L, leafSpent = 0L, rollupSpent = 5L)),
+        )
+        assertIs<Relocation.Refused>(EntitlementLedger.ZERO.relocationPatch(e3, finals))
+    }
+
+    /**
+     * The `n < 0` net-negative guard used to be double-covered: pre-#1895 the per-edge `n ≥ sp` test
+     * refused every net-negative shape anyway. It is now the **sole** protection, so it needs a pin
+     * the aggregate cannot supply — a replica whose net-negative edge sits beside a sibling with
+     * enough surplus to satisfy `Σcover ≥ Σcharge`. `break4` does not distinguish it: with the guard
+     * deleted, the aggregate happens to catch break4's shape and its assertion still passes.
+     */
+    @Test
+    fun aNetNegativeFencedEdgeIsRefusedEvenWhenASiblingCoversIt() {
+        val finals = mapOf(
+            e1 to mapOf(p3 to SlotFinals(issued = 10L, returned = 0L, leafSpent = 0L, rollupSpent = 0L)),
+            e2 to mapOf(p3 to SlotFinals(issued = 0L, returned = 4L, leafSpent = 0L, rollupSpent = 0L)),
+        )
+        // Σcover = 10 + (−4) = 6 ≥ Σcharge = 0, so the aggregate is satisfied — only the per-edge
+        // net-negative guard stands between this and a drain that cannot write a negative RETURNED.
+        assertIs<Relocation.Refused>(EntitlementLedger.ZERO.relocationPatch(e3, finals))
+    }
+
+    @Test
+    fun theCoverPreconditionIsExactAtItsBoundary() {
+        fun move(cover: Long, charge: Long) = EntitlementLedger.ZERO.relocationPatch(
+            e3,
+            mapOf(e1 to mapOf(p3 to SlotFinals(issued = cover, returned = 0L, leafSpent = charge, rollupSpent = 0L))),
+        )
+        assertAll(
+            // Exactly covered is fundable; one unit short is not. Without both, `cover + 1 < charge`
+            // — permitting a single unit of overspend — passes the entire suite.
+            { assertIs<Relocation.Moved>(move(cover = 5L, charge = 5L), "cover == charge is fundable") },
+            { assertIs<Relocation.Refused>(move(cover = 4L, charge = 5L), "one unit short refuses") },
+        )
+    }
+
+    /**
      * The §6.5.2 residual, reproduced on the **roll-up** family: an ack that understates a replica's
      * spend on the fenced edge (the cross-incarnation gap — charge, delta escapes to one other peer,
      * crash before ack, restart re-acks lower). Deliberately **not closed** in v1: closing it needs
