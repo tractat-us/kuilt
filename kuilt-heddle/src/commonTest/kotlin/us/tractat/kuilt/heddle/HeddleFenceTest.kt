@@ -581,6 +581,87 @@ class HeddleFenceTest {
             )
         }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // #1916 — THE PARENT PRECONDITION. Every interleaving above reparents `g` under the
+    // SAME parent, and the §5.2 telescoping quietly depends on that: the `+n` a parent
+    // recovers when `netInflow(s)` drains is supposed to be the same `−n` it takes on
+    // `issuedRelocIn(t)`. Reparent across parents — a legal reshape — and the two terms land
+    // on different groups. Nothing is dishonest here and nothing has crashed: `a` recovers
+    // the whole mint, the debit lands on `b`, which never held it, and `g` is credited too.
+    //
+    // The conservation IDENTITY is intact at every step (b's unenforceable −10 offsets a's
+    // phantom credit), so no check fires — which is why the fence must refuse the move rather
+    // than rely on anything downstream noticing. The arithmetic, and the 20-units-of-service-
+    // from-a-10-unit-mint it buys, are pinned in `EntitlementLedgerReconcileTest`.
+    // ═══════════════════════════════════════════════════════════════════════════
+    @Test
+    fun aReconcileAcrossACrossParentReparentIsRefused() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val a = GroupId("a")
+        val b = GroupId("b")
+        val ea = AttachmentId("ea") // root → a
+        val eb = AttachmentId("eb") // root → b
+        val e5 = AttachmentId("e5") // a → g, stranded by the raced retire
+        val e6 = AttachmentId("e6") // b → g, the CROSS-PARENT reparent generation
+        val self = ReplicaId("p1")
+        val sink = RecordingSink()
+        val plane = HeddleControlPlane(
+            raft = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader),
+            self = self, scope = backgroundScope, sink = sink, membership = ControlMembershipSink { },
+            barrier = ControlBarrierSink { edge -> sink.snapshot().baseFinalsOn(edge, self) },
+            initial = EntitlementLedger.bootstrap(root, emptyMap(), nonce = "cross-parent-genesis"),
+            incarnation = "cross-parent",
+        )
+        fun rec(id: AttachmentId, parent: GroupId, child: GroupId) =
+            AttachmentRecord(id, parent, child, Weight.ONE, 0L)
+        suspend fun commit(command: ControlCommand) =
+            assertIs<ControlOutcome.Applied>(plane.submit(command), "expected Applied for $command")
+
+        commit(ControlCommand.Enroll(self))
+        commit(ControlCommand.Mint(self, 10L))
+        for ((id, parent, child) in listOf(Triple(ea, root, a), Triple(eb, root, b), Triple(e5, a, g))) {
+            commit(ControlCommand.Prepare(rec(id, parent, child)))
+            commit(ControlCommand.Activate(id))
+        }
+        // The data plane delegates the whole mint root → a → g. (The control projection holds no
+        // counters by design, so the delegation reaches it the way gossip would: as merged state.)
+        sink.forceMerge(
+            EntitlementLedger.of(issued = mapOf(ea to GCounter.of(self to 10L), e5 to GCounter.of(self to 10L))),
+        )
+        // The #1665 race, then a reparent onto a DIFFERENT parent — both individually legal acts.
+        commit(ControlCommand.Close(e5))
+        commit(ControlCommand.Retire(e5, witness = null))
+        commit(ControlCommand.Prepare(rec(e6, b, g)))
+        commit(ControlCommand.Activate(e6))
+
+        // The fence closes HONESTLY: the only enrolled peer marks e5 unwritable and acks its real finals.
+        commit(ControlCommand.Quiesce(e5))
+        runCurrent()
+        assertEquals(emptySet<ReplicaId>(), plane.pendingAcks(e5), "the fence is complete — no ack is missing")
+
+        val outcome = plane.submit(ControlCommand.Reconcile(g))
+        val conflict = assertIs<ControlConflict.Refused>(assertIs<ControlOutcome.Conflict>(outcome).conflict)
+        val end = sink.snapshot()
+        val enforceable = listOf(root, a, b, g).sumOf { maxOf(0L, end.holdings(it, self)) } + end.leafSpentTotal()
+        assertAll(
+            { assertTrue(conflict.reason.contains(e5.value), "the refusal names the retired edge: ${conflict.reason}") },
+            { assertTrue(conflict.reason.contains(e6.value), "…and the live edge: ${conflict.reason}") },
+            {
+                assertEquals(
+                    0L,
+                    end.storedSlot(CounterFamily.ISSUED_RELOC_IN, e6, self),
+                    "fail-closed: a refused reconcile publishes nothing",
+                )
+            },
+            {
+                assertTrue(
+                    enforceable <= end.mintedTotal(),
+                    "enforceable supply (Σ max(0, holdings) + Σ effLeafSpent = $enforceable) must never " +
+                        "exceed the mint (${end.mintedTotal()}) — the strand simply stays standing",
+                )
+            },
+        )
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────
     // harness
     // ─────────────────────────────────────────────────────────────────────────────
