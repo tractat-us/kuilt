@@ -1,6 +1,7 @@
 package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.delay
+import us.tractat.kuilt.raft.internal.wireTerm
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
@@ -112,6 +113,91 @@ internal class TermSanityBoundTest {
         assertTrue(
             terms.all { it in 1L..maxPlausibleTerm },
             "a normally-operating cluster must stay far inside the plausibility bound; terms=$terms",
+        )
+    }
+
+    // ── The boundary value itself (#1886) ─────────────────────────────────────
+    // The tests above use Long.MAX_VALUE, which the bound rejects outright — so they are
+    // structurally blind to the one value it ADMITS. A term of exactly `maxPlausibleTerm` passes
+    // `wireTerm > MAX_PLAUSIBLE_TERM`, is adopted, and propagates on ordinary traffic; the
+    // `currentTerm + 1` that every election necessarily computes then lands at `2^60 + 1`, which the
+    // same bound drops on every recipient including its author. No wrap, and #1833's symptom exactly.
+    //
+    // Measured (#1886): moving the bound to `>=` does NOT fix this — it moves the boundary down by
+    // one and the attacker sends `2^60 - 1` instead. A probe run with the exclusive bound wedged
+    // identically, with all three voters at `1152921504606846975` and the trace showing
+    // `PreVoteStarted(proposedTerm=1152921504606846976)` repeating forever. No absolute ceiling `A`
+    // can satisfy `T <= A ==> T + 1 <= A`, so the boundary is inherent to bounding an incremented
+    // value against a constant.
+    //
+    // What IS fixable is the silence. The two assertions below are the containment contract: a node
+    // pinned at the ceiling must neither EMIT a frame above it (which every peer, itself included,
+    // drops) nor PERSIST one (which #1888's restore guard then refuses to start on). Liveness is
+    // deliberately NOT asserted — a cluster pinned at the ceiling still cannot elect, and pretending
+    // otherwise here would pin the bug rather than the containment.
+
+    /**
+     * The safety half, and the one that outlives a restart: adopting a term at exactly the ceiling
+     * must never write `ceiling + 1` to durable storage.
+     *
+     * `TimeoutNow` is the fast route to the increment. `RaftEngine.onTimeoutNow` calls
+     * `startRealElection` directly — deliberately skipping pre-vote, since the leader has already
+     * validated the target's log — so nothing stalls the term bump the way an ordinary election
+     * timeout's pre-vote quorum does. It also sits outside the §5.2 leader-authority gate (#1889),
+     * so *any* peer can send it, and its own leader check is scoped to `m.term == currentTerm`, which
+     * a strictly-higher term bypasses. One frame from a non-leader therefore takes the victim from
+     * term 1 to a persisted `2^60 + 1`.
+     *
+     * That persisted value is the durable half of the defect: it is above the ceiling, so #1888's
+     * `checkedRestoredTerm` refuses to start the node on its next boot. A remote peer writes a term
+     * that bricks a restart.
+     */
+    @Test
+    fun aTimeoutNowAtExactlyTheCeilingNeverPersistsATermAboveIt() = raftRunTest {
+        val sim = raftSim(this, backgroundScope, n = 3)
+        val leaderNode = awaitLeader(sim)
+        val leaderId = sim.nodes.entries.first { it.value === leaderNode }.key
+        val (victimId, spooferId) = sim.nodeIds.filter { it != leaderId }
+        sim.awaitCommit(1L)
+
+        sim.deliverTimeoutNow(to = victimId, from = spooferId, term = maxPlausibleTerm)
+        delay(20)
+
+        val persisted = sim.storages.getValue(victimId).term()
+        assertTrue(
+            persisted <= maxPlausibleTerm,
+            "a term at the ceiling must not be incremented past it into durable storage: " +
+                "$victimId persisted $persisted (ceiling $maxPlausibleTerm)",
+        )
+    }
+
+    /**
+     * The liveness half's *containment*: a node pinned at the ceiling must not put a frame on the
+     * wire that every recipient — itself included — is contractually obliged to drop.
+     *
+     * The poison is delivered at exactly the ceiling and allowed to propagate on ordinary traffic, so
+     * every voter pins itself; then several election timeouts are allowed to fire. Each one computes
+     * `currentTerm + 1 = 2^60 + 1` and, unfixed, broadcasts it as a `PreVote` — a frame with no
+     * possible recipient. Recording the network captures the sender's *decision*, before the drop
+     * filter, so this sees the emission itself rather than its (non-)delivery.
+     */
+    @Test
+    fun aNodePinnedAtTheCeilingNeverEmitsAFrameAboveIt() = raftRunTest {
+        val sim = raftSim(this, backgroundScope, n = 3)
+        val leaderNode = awaitLeader(sim)
+        val leaderId = sim.nodes.entries.first { it.value === leaderNode }.key
+        val victimId = sim.nodeIds.first { it != leaderId }
+        sim.awaitCommit(1L)
+
+        sim.network.recording = true
+        sim.deliverAppendEntries(to = victimId, from = leaderId, term = maxPlausibleTerm)
+        delay(50)   // several election timeouts: every self-pinned voter gets to try to elect
+
+        val overCeiling = sim.network.sent.filter { (it.message.wireTerm ?: 0L) > maxPlausibleTerm }
+        assertTrue(
+            overCeiling.isEmpty(),
+            "a term above the ceiling must never be emitted — every peer drops it, including its " +
+                "author: ${overCeiling.take(3)}",
         )
     }
 }
