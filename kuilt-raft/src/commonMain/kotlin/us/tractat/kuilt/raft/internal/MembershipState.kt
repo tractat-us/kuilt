@@ -111,9 +111,10 @@ internal sealed interface MembershipState {
      * True iff [id] is a voter in ANY currently-active configuration.
      *
      * The §5.2 leader-authority boundary: only a voter can be leader, so only a voter
-     * may originate an `AppendEntries`/`InstallSnapshot`. [RaftEngine.onMessage] uses
-     * this to reject a leader→peer RPC forged by a non-voter (an admitted learner/spoke
-     * across the relay) before it can adopt a term, set the leader, or mutate the log —
+     * may originate an `AppendEntries`/`InstallSnapshot`/`TimeoutNow`. [RaftEngine.onMessage]
+     * uses this to reject a leader→peer RPC forged by a non-voter (an admitted learner/spoke
+     * across the relay) before it can adopt a term, set the leader, mutate the log, or force
+     * an election (#1889) —
      * but ONLY once [voters] is non-empty, so a bootstrapping learner that has not yet
      * learned the config can still catch up from the leader (see the gate in
      * [RaftEngine.onMessage]).

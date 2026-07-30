@@ -27,6 +27,9 @@ import kotlin.time.Duration.Companion.seconds
  */
 internal class LeadershipTransferTest {
 
+    /** A sender that is not in any committed voter set — the §5.2/§8 authority gate's target (#1383/#1889). */
+    private val nonVoter = NodeId("attacker-not-a-voter")
+
     // ── Happy path ────────────────────────────────────────────────────────────
 
     /**
@@ -494,6 +497,153 @@ internal class LeadershipTransferTest {
         assertFalse(
             targetTrace.any { it is RaftTraceEvent.RequestVote || it is RaftTraceEvent.Timeout },
             "target must not start an election from a non-leader TimeoutNow",
+        )
+    }
+
+    /**
+     * The same-term guard exercised above is scoped to `m.term == currentTerm`, so a `TimeoutNow` one
+     * term *ahead* of the recipient used to skip sender validation entirely and run straight into
+     * `stepDown(m.term)` → an immediate, **pre-vote-less** election. Any non-leader **voter** could
+     * therefore force any follower to campaign, on demand and repeatedly — the disruption PreVote
+     * exists to deny (issue #1889).
+     *
+     * On the normal path no honest §3.10 transfer produces such a frame. `sendTimeoutNow` emits the
+     * *leader's own* `currentTerm`, and it is only reached once `matchIndex[target] >= lastLogIndex`;
+     * `matchIndex` advances only through `onAppendEntriesResponse` / `onInstallSnapshotResponse`, both
+     * gated on `_role is Leader && m.term == currentTerm` with the responder replying at its own
+     * post-adoption term — so a value produced this term proves the target already reached it.
+     *
+     * That is not an absolute guarantee, and this test does not claim one: `becomeLeader` resets
+     * `matchIndex` only for the **current configuration's** members, so a removed-then-re-admitted
+     * target can satisfy the predicate on a stale index and be sent a `TimeoutNow` at a term it never
+     * adopted. The guard is fail-safe-then-retry — the premature frame is dropped and the next
+     * heartbeat ACK re-fires it correctly. What must never happen is the case pinned here: an
+     * *unauthenticated* higher-term frame moving the recipient's durable term and forcing an election.
+     * A recipient that really is behind reaches the current term by the ordinary election-timeout path.
+     *
+     * The target is partitioned off and the test only [RaftSimulation.settle]s (never advancing virtual
+     * time), so its own election timer cannot fire: the injected frame is the only thing that could
+     * move its state, which keeps the revert-verify honest instead of racy.
+     */
+    @Test
+    fun timeoutNow_fromNonLeaderVoter_atHigherTerm_isIgnored() = raftRunTest(timeout = 10.seconds) {
+        val sim = raftSim(this, backgroundScope, n = 3)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
+        val followers = sim.nodeIds.filter { it != leaderId }
+        val target = followers[0]
+        val spoofedSender = followers[1]   // a VOTER, but not the leader — the residual the §5.2 gate cannot see
+
+        val committed = sim.proposeOnLeader("before-spoof".encodeToByteArray())
+        sim.awaitCommit(committed.index, on = setOf(target))
+        sim.settle()
+
+        // Isolate the target so neither a legitimate heartbeat nor its own election timer competes.
+        sim.partitionOff(target)
+        val targetStore = sim.storages.getValue(target)
+        val baselineTerm = targetStore.term()
+
+        val targetTrace = mutableListOf<RaftTraceEvent>()
+        backgroundScope.launch { sim.nodes.getValue(target).trace.collect { targetTrace += it } }
+        sim.settle()
+
+        sim.deliverTimeoutNow(to = target, from = spoofedSender, term = baselineTerm + 1)
+        sim.settle()
+        val afterTerm = targetStore.term()
+
+        assertAll(
+            {
+                assertEquals(
+                    RaftRole.Follower, sim.nodes.getValue(target).role.value,
+                    "a higher-term TimeoutNow from a non-leader must not push the target into an election",
+                )
+            },
+            {
+                assertEquals(
+                    baselineTerm, afterTerm,
+                    "a higher-term TimeoutNow from a non-leader carries no authority — its term must not be adopted",
+                )
+            },
+            {
+                assertFalse(
+                    targetTrace.any { it is RaftTraceEvent.RequestVote || it is RaftTraceEvent.Timeout },
+                    "target must not start an election from a non-leader TimeoutNow one term ahead",
+                )
+            },
+        )
+    }
+
+    /**
+     * `TimeoutNow` is a leader→peer RPC and only a voter can ever be leader (§5.2), so a frame whose
+     * true sender is not a current voter is a forgery — an admitted-but-malicious learner/spoke that
+     * reached a voter over the cross-server relay. It belongs in the same §5.2/§8 authority gate as
+     * `AppendEntries`/`InstallSnapshot` (#1383), and before #1889 it was outside it.
+     *
+     * The lane probed here is deliberately the one *neither* term-based guard defends: a **same-term**
+     * frame delivered to a node that has not yet heard from a leader this term (`_leader == null`), where
+     * the same-term leader check has nothing to compare against and accepts. The target is walked into
+     * that state by a disrupt-flagged higher-term `RequestVote` from a real voter — `stepDown` adopts the
+     * term and clears `_leader`. Only the sender-membership gate can drop what follows.
+     */
+    @Test
+    fun timeoutNow_fromNonVoter_atCurrentTerm_isDroppedByAuthorityGate() = raftRunTest(timeout = 10.seconds) {
+        val sim = raftSim(this, backgroundScope, n = 3)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
+        val followers = sim.nodeIds.filter { it != leaderId }
+        val target = followers[0]
+        val peerVoter = followers[1]
+
+        val committed = sim.proposeOnLeader("before-spoof".encodeToByteArray())
+        sim.awaitCommit(committed.index, on = setOf(target))
+        sim.settle()
+
+        // Isolate the target, then clear its leader pointer at a fresh term (see KDoc).
+        sim.partitionOff(target)
+        sim.deliverRequestVote(
+            to = target,
+            from = peerVoter,
+            term = sim.storages.getValue(target).term() + 1,
+            lastLogIndex = committed.index,
+            lastLogTerm = committed.term,
+            leadershipTransfer = true,
+        )
+        sim.settle()
+
+        val targetStore = sim.storages.getValue(target)
+        val baselineTerm = targetStore.term()
+        assertEquals(
+            null, sim.nodes.getValue(target).leader.value,
+            "pre-condition: the target must have no known leader, so the same-term leader check cannot fire",
+        )
+
+        val targetTrace = mutableListOf<RaftTraceEvent>()
+        backgroundScope.launch { sim.nodes.getValue(target).trace.collect { targetTrace += it } }
+        sim.settle()
+
+        sim.deliverTimeoutNow(to = target, from = nonVoter, term = baselineTerm)
+        sim.settle()
+        val afterTerm = targetStore.term()
+
+        assertAll(
+            {
+                assertEquals(
+                    RaftRole.Follower, sim.nodes.getValue(target).role.value,
+                    "a TimeoutNow from a non-voter must be dropped by the §5.2 authority gate, not start an election",
+                )
+            },
+            {
+                assertEquals(
+                    baselineTerm, afterTerm,
+                    "a dropped TimeoutNow must not bump the target's durable term",
+                )
+            },
+            {
+                assertFalse(
+                    targetTrace.any { it is RaftTraceEvent.RequestVote || it is RaftTraceEvent.Timeout },
+                    "target must not start an election from a non-voter TimeoutNow",
+                )
+            },
         )
     }
 
