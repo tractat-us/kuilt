@@ -72,17 +72,26 @@ public sealed interface RaftMetric {
      * No election was started, because this node's [term] has reached the engine's term
      * plausibility [ceiling] and the `term + 1` an election must propose would sit above it (#1886).
      *
-     * **This node cannot become leader again, and this metric does not mean it will recover.** A term
-     * at the ceiling is only reachable from a malformed or hostile frame — honest terms advance once
-     * per election and stay some 18 orders of magnitude below it — and terms never decrease, so the
-     * condition is permanent for the lifetime of this node's durable state. Re-emitted on every
-     * subsequent election timeout, so it reads as a level, not an edge.
+     * **This node cannot become leader again, and this metric does not mean it will recover.** Honest
+     * terms advance once per election and stay some 18 orders of magnitude below the ceiling, and terms
+     * never decrease, so the condition is permanent for the lifetime of this node's durable state.
      *
-     * What it buys is a *name* for a failure that was previously silent: the alternative is
+     * **Emitted on every subsequent election timeout** — it is a level to sample, not an edge to count.
+     * (The engine's matching `warn` log is deliberately latched to fire *once*; a permanent condition
+     * re-logged a few times a second would bury every other diagnostic. Read this metric, not the log,
+     * to tell whether the node is still pinned.)
+     *
+     * Two origins are possible, and the cheaper one to check is the likelier:
+     * 1. **This node's own durable storage** — a `RaftStorage` adapter that returned a corrupt term (a
+     *    truncated column, a sign-extended `Int`, a torn read). No attacker and no malformed frame
+     *    required; kuilt ships no durable `RaftStorage`, so this surface is always consumer code.
+     * 2. **A malformed or hostile frame** from a peer, carrying a term at the ceiling.
+     *
+     * What this buys is a *name* for a failure that was previously silent: the alternative is
      * broadcasting a term above the ceiling that every recipient (including this node) drops at the
      * wire boundary, leaving a cluster that has permanently stopped electing while every node reports
-     * itself healthy. Treat one of these as an operational incident: inspect the peer that supplied
-     * the term, then re-provision this node from empty state.
+     * itself healthy. Treat one of these as an operational incident — inspect this node's persisted
+     * term first, then the peer that last raised it, then re-provision from empty state.
      *
      * @see ElectionStarted for the ordinary path this replaces when the ceiling is reached.
      */

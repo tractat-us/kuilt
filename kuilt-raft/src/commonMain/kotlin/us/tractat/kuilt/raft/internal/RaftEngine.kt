@@ -271,6 +271,20 @@ internal class RaftEngine(
     /** Term for which [electionStartTime] was recorded — used to emit [RaftMetric.ElectionTimedOut]. */
     private var electionStartTerm: Long = 0L
 
+    /**
+     * `true` once [reportTermPinnedAtCeiling] has logged its `warn`, latching it to **once per node**.
+     *
+     * The condition it reports is permanent (terms never decrease) and re-checked on every election
+     * timeout, so an unlatched `warn` would fire for the life of the process — at the default
+     * [RaftConfig] timings roughly 4 lines/second, forever, on a node that by construction never
+     * recovers. That buries every other diagnostic, which is the exact opposite of what #1886 buys, and
+     * is worse still on a mobile target. Every other `warn` in this engine reports a *transient* event.
+     *
+     * The **metric** is deliberately NOT latched: [RaftMetric.ElectionSuppressedTermCeiling] is a level a
+     * consumer samples, so it must keep being emitted. Log once, measure continuously.
+     */
+    private var ceilingWarnLogged: Boolean = false
+
     // ── Client-proposal forwarding state (§8) — actor-teardown-touched ─────────
     // MUST stay declared BEFORE the `init` block below (which launches the actor).
     // The actor's `finally` teardown calls forwarder.failAll(...), which dereferences
@@ -663,9 +677,20 @@ internal class RaftEngine(
      * still cannot become leader, and if the term propagated cluster-wide the cluster still cannot
      * elect. What it removes is #1833's headline complaint — *"no exception, no log line, every node
      * reports itself healthy"*. Instead of broadcasting a frame with no possible recipient, the node
-     * warn-logs and emits [RaftMetric.ElectionSuppressedTermCeiling] on every attempt, and never
+     * emits [RaftMetric.ElectionSuppressedTermCeiling] on every attempt (and warn-logs once), and never
      * drives its own durable term above the ceiling (which #1855's [checkedRestoredTerm] would then
      * refuse to restart on — one hostile frame otherwise bricks the next boot).
+     *
+     * ### The state this does not warn about: a healthy leader sitting *on* the ceiling
+     *
+     * `2^60` is admissible, so a cluster can legitimately be serving with a leader whose term is exactly
+     * the ceiling — an election from `2^60 - 1` persists `2^60` and wins. Nothing is suppressed there and
+     * nothing should be: a leader never increments its own term, so it replicates normally and every frame
+     * it sends is in range. But that cluster is **one leader-lifetime from permanent wedge**: the moment
+     * that leader dies, is partitioned, or is stepped down by `CheckQuorum`, every voter is pinned at the
+     * ceiling and no election can ever succeed again. The guard fires only at that transition, which is
+     * the earliest point at which anything is actually wrong — but it means a green cluster can already
+     * be one failure away, and no metric here says so.
      *
      * The real fix is to bound the *jump* (`m.term > currentTerm + MAX_TERM_JUMP`) rather than the
      * value, which admits `+ 1` at every term and so has no boundary at all; it costs rejoin liveness
@@ -685,36 +710,79 @@ internal class RaftEngine(
     private fun termPinnedAtCeiling(): Boolean = state.currentTerm >= MAX_PLAUSIBLE_TERM
 
     /**
-     * Report the [termPinnedAtCeiling] condition on the engine's two observable surfaces and name the
-     * election [attempt] that was suppressed. Never throws: this is reached from the actor loop on a
-     * path a remote frame controls, so a `require` here would convert one hostile frame into permanent
-     * node death (#1818).
+     * The operator-facing diagnostic for [termPinnedAtCeiling], naming the election [attempt] suppressed.
+     *
+     * Built by a function rather than inlined so the `warn` and `debug` call sites share one text while
+     * both stay lazy — neither builds the string unless its level is enabled.
+     *
+     * **Names both provenances, and orders the remediation accordingly.** A term at the ceiling is *not*
+     * only reachable from a hostile frame: `storage.term()` is third-party input in every deployment (kuilt
+     * ships no durable [RaftStorage]), so an adapter that returns a corrupt term — a truncated column, a
+     * sign-extended `Int`, a torn read — reaches this state with no attacker and no malformed frame at all.
+     * That is the case [checkedRestoredTerm] argues at length, and an operator told to hunt for an attacker
+     * who does not exist would be sent to the wrong half of the system by the very line that is supposed to
+     * be this change's whole deliverable. Local storage is checked first because it is the cheaper check and
+     * the likelier cause.
+     */
+    private fun ceilingDiagnostic(attempt: String): String =
+        "suppressed $attempt: currentTerm=${state.currentTerm} has reached the plausibility ceiling " +
+            "$MAX_PLAUSIBLE_TERM, so the term this election must propose would be dropped as implausible by " +
+            "every peer including this node (#1886). This node can no longer be elected and will not " +
+            "recover. A term this high has two possible origins: this node's own durable storage (a " +
+            "RaftStorage adapter that returned a corrupt term — no attacker required), or a malformed or " +
+            "hostile frame from a peer. Inspect this node's persisted term first, then the peer that last " +
+            "raised it; then re-provision this node from empty state."
+
+    /**
+     * Report the [termPinnedAtCeiling] condition on the engine's two observable surfaces.
+     *
+     * Never throws: this is reached from the actor loop on a path a remote frame controls, so a `require`
+     * here would convert one hostile frame into permanent node death (#1818).
+     *
+     * Also closes the election-metric lifecycle. Both call sites return *before* the
+     * [RaftMetric.ElectionTimedOut] emit that [startRealElection] would otherwise perform, and no
+     * [RaftMetric.ElectionStarted] will ever follow, so a prior unresolved election's `ElectionTimedOut`
+     * has to fire here or the `ElectionStarted → ElectionWon`/`ElectionTimedOut` pair documented on
+     * [RaftMetric] never terminates. Mirrors `relinquishToFollower`'s identical closure.
      */
     private fun reportTermPinnedAtCeiling(attempt: String) {
+        if (electionStartTime != null) {
+            emitMetric(RaftMetric.ElectionTimedOut(electionStartTerm))
+            electionStartTime = null
+        }
         emitMetric(RaftMetric.ElectionSuppressedTermCeiling(state.currentTerm, MAX_PLAUSIBLE_TERM))
-        logger.warn {
-            "[raft:${transport.selfId}] suppressed $attempt: currentTerm=${state.currentTerm} has reached the " +
-                "plausibility ceiling $MAX_PLAUSIBLE_TERM, so the term this election must propose would be " +
-                "dropped as implausible by every peer including this node (#1886). This node can no longer be " +
-                "elected and will not recover — a term this high is only reachable from a malformed or hostile " +
-                "frame. Inspect the peer that supplied it, then re-provision this node from empty state."
+        // Latched to once per node — see ceilingWarnLogged. The metric above is not latched.
+        if (ceilingWarnLogged) {
+            debug { ceilingDiagnostic(attempt) }
+        } else {
+            ceilingWarnLogged = true
+            logger.warn { "[raft:${transport.selfId}] ${ceilingDiagnostic(attempt)}" }
         }
     }
 
     private suspend fun onElectionTimeout() {
         if (_role.value is RaftRole.Leader) return
+        // A re-timing-out Candidate (probe didn't gather quorum) drops back to follower role
+        // for the probe phase so the role accurately reflects "not yet a candidate".
+        _role.value = followerRole
         // #1886: the PreVote below would carry `currentTerm + 1`, above the ceiling every peer
         // enforces. Report it and re-arm rather than broadcast a frame with no possible recipient —
-        // re-arming keeps the warning/metric repeating so the condition reads as a level, not a
-        // single line lost in a log. See termPinnedAtCeiling: this contains, it does not fix.
+        // re-arming keeps the metric repeating so the condition reads as a level (the log is latched
+        // separately). See termPinnedAtCeiling: this contains, it does not fix.
+        //
+        // Deliberately placed AFTER the role write, not before it. A node can land exactly ON the
+        // ceiling and become a Candidate there (an election from `2^60 - 1` persists `2^60`, which the
+        // wire bound admits); if that election then fails to win, guarding earlier would return with the
+        // role still `Candidate` FOREVER — a permanently wrong `role` flow on the one change whose entire
+        // product is diagnosability, and a direct contradiction of what this state reports. Ordering it
+        // here also inherits the normal path's Learner handling: `followerRole` re-derives the role from
+        // live `membershipState`, so a demoted node is corrected before `resetElectionTimeout` reads
+        // `_role` to decide whether to re-arm at all (a learner must not).
         if (termPinnedAtCeiling()) {
             reportTermPinnedAtCeiling("pre-vote")
             resetElectionTimeout()
             return
         }
-        // A re-timing-out Candidate (probe didn't gather quorum) drops back to follower role
-        // for the probe phase so the role accurately reflects "not yet a candidate".
-        _role.value = followerRole
         val proposed = state.currentTerm + 1
         preVoteTerm = proposed
         preVoteRound++
@@ -2366,9 +2434,10 @@ internal class RaftEngine(
         // `>=` simply relocates it to `2^60 - 1`. Closing it needs `T <= A ==> T + 1 <= A`, true only for
         // an infinite ceiling. So the bound deliberately stays where it is and the increment is guarded
         // at the two sites that perform it — see [termPinnedAtCeiling], which contains the condition
-        // loudly rather than pretending to fix it. [checkedRestoredTerm]'s bound stays inclusive too,
-        // and stays consistent with this one by construction: both provenances (a wire term, and a
-        // durable term restored off one) converge on that single emission-site check.
+        // loudly rather than pretending to fix it. [checkedRestoredTerm]'s bound stays inclusive too and
+        // is THE SAME CONSTANT as this one, so the two agree by definition — every term admitted here is
+        // restorable, and a durable term above the ceiling (which third-party storage can still produce)
+        // lands on that site's loud refusal by design.
         val wireTerm = m.wireTerm
         if (wireTerm != null && (wireTerm < 0L || wireTerm > MAX_PLAUSIBLE_TERM)) {
             debug { "onMessage: dropped ${m::class.simpleName} from $from — implausible term=$wireTerm (outside 0..$MAX_PLAUSIBLE_TERM)" }

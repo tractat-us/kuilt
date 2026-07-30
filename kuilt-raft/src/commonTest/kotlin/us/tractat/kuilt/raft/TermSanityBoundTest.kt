@@ -234,8 +234,12 @@ internal class TermSanityBoundTest {
 
         val suppressed = metrics.filterIsInstance<RaftMetric.ElectionSuppressedTermCeiling>()
         val persisted = storage.term()
+        // Hoisted OUT of assertAll deliberately. `assertAll` collects AssertionErrors but lets any other
+        // throwable propagate immediately, so an empty `suppressed` would surface as a bare
+        // NoSuchElementException from the `first()` calls below and DISCARD this message — losing the
+        // `metrics` dump in exactly the run where it is the only useful evidence.
+        assertTrue(suppressed.isNotEmpty(), "the suppressed election must be observable; metrics=$metrics")
         assertAll(
-            { assertTrue(suppressed.isNotEmpty(), "the suppressed election must be observable; metrics=$metrics") },
             { assertEquals(maxPlausibleTerm, suppressed.first().term, "the metric must name the pinned term") },
             { assertEquals(maxPlausibleTerm, suppressed.first().ceiling, "the metric must name the ceiling") },
             {
@@ -255,6 +259,89 @@ internal class TermSanityBoundTest {
                     maxPlausibleTerm,
                     persisted,
                     "a suppressed election must leave the durable term exactly where it was",
+                )
+            },
+        )
+    }
+
+    /**
+     * A node can land exactly **on** the ceiling as a Candidate, and must not be stranded reporting
+     * `Candidate` forever when it does.
+     *
+     * An election run from `ceiling - 1` persists `ceiling` — a value the wire bound admits — so this is a
+     * legitimately reachable state, not a forged one. If that election then fails to win, the *next*
+     * election timeout is the first moment anything is wrong. Suppressing it before the role write would
+     * leave `role` pinned at `Candidate` for the life of the process: a permanently false reading on the
+     * one flow a consumer watches, on the very change whose entire product is diagnosability, and flatly
+     * contradicted by what the suppression metric says about the node.
+     *
+     * Peers are removed first so the triggered election cannot reach quorum — that is what holds the node
+     * at the ceiling as a Candidate long enough for the guard to see it.
+     *
+     * Also pins the metric lifecycle. The guard returns before the `ElectionTimedOut` that
+     * `startRealElection` would have emitted, and no `ElectionStarted` can ever follow, so without an
+     * explicit close the `ElectionStarted → ElectionWon`/`ElectionTimedOut` pair documented on `RaftMetric`
+     * would dangle for good.
+     */
+    @Test
+    fun aCandidateThatLandsOnTheCeilingDropsBackToFollowerAndClosesItsElectionMetric() = raftRunTest {
+        val metricsBy = mutableMapOf<NodeId, MutableList<RaftMetric>>()
+        val ids = (1..3).map { NodeId("v$it") }
+        val cluster = ClusterConfig(voters = ids.toSet())
+        val sim = RaftSimulation(
+            nodeIds = ids,
+            scope = this,
+            raftConfig = FAST_RAFT_CONFIG,
+            nodeScope = backgroundScope,
+            nodeFactory = { id, transport, storage, childScope ->
+                childScope.raftNode(
+                    cluster,
+                    transport,
+                    storage,
+                    FAST_RAFT_CONFIG,
+                    onMetric = { metricsBy.getOrPut(id) { mutableListOf() } += it },
+                )
+            },
+        )
+        val leaderNode = sim.awaitLeader()
+        val leaderId = sim.nodes.entries.first { it.value === leaderNode }.key
+        sim.awaitCommit(1L)
+        val (victimId, otherId) = sim.nodeIds.filter { it != leaderId }
+
+        sim.crash(leaderId)
+        sim.crash(otherId)
+        sim.deliverTimeoutNow(to = victimId, from = leaderId, term = maxPlausibleTerm - 1L)
+        delay(50)   // several election timeouts after the one the TimeoutNow forced
+
+        val role = sim.nodes.getValue(victimId).role.value
+        val metrics = metricsBy[victimId].orEmpty()
+        val persisted = sim.storages.getValue(victimId).term()
+        assertAll(
+            {
+                assertEquals(
+                    maxPlausibleTerm,
+                    persisted,
+                    "an election off `ceiling - 1` must land exactly ON the ceiling, which is admissible",
+                )
+            },
+            {
+                assertTrue(
+                    role is RaftRole.Follower,
+                    "a Candidate pinned at the ceiling must drop back to Follower, not report Candidate " +
+                        "forever: role=$role",
+                )
+            },
+            {
+                assertTrue(
+                    metrics.any { it is RaftMetric.ElectionSuppressedTermCeiling },
+                    "the pinned term must be reported; metrics=$metrics",
+                )
+            },
+            {
+                assertTrue(
+                    metrics.any { it is RaftMetric.ElectionTimedOut && it.term == maxPlausibleTerm },
+                    "a suppressed election must close the ElectionStarted/ElectionTimedOut pair; " +
+                        "metrics=$metrics",
                 )
             },
         )

@@ -136,10 +136,13 @@ internal class TermRestoreBoundTest {
      * #1886 was expected to make the *wire* bound exclusive and move this one with it. Neither moved: an
      * exclusive ceiling only relocates the boundary by one (a frame at `2^60 - 1` propagates and every
      * election then proposes `2^60`, dropped by all), so the containment went in at the `currentTerm + 1`
-     * increment instead. Both bounds therefore stay inclusive and stay consistent *by construction* — a
-     * durable term is only ever a wire term this ceiling admitted or a self-increment off one, and that
-     * increment is the guarded step. A node restored at exactly the ceiling must still start; what it must
-     * not do is silently fail to elect, which `TermSanityBoundTest` pins on the metric.
+     * increment instead. The two bounds agree for the plainest reason available — **they are the same
+     * constant** — so every term the wire admits is restorable, and no claim about a durable term's
+     * provenance is needed to justify it (none would hold: `storage.term()` is third-party input, which is
+     * this whole test class's premise). A durable term *above* the ceiling stays reachable — a pre-#1886
+     * binary could have persisted `2^60 + 1`, and a buggy adapter can return anything — and lands on the
+     * refusal above by design. A node restored at exactly the ceiling must still start; what it must not do
+     * is silently fail to elect, which `TermSanityBoundTest` pins on the metric.
      */
     @Test
     fun durableTermExactlyAtTheCeiling_stillStarts() = raftRunTest {
