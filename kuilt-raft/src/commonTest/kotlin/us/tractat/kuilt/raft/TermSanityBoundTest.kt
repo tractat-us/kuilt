@@ -142,27 +142,38 @@ internal class TermSanityBoundTest {
      * The safety half, and the one that outlives a restart: adopting a term at exactly the ceiling
      * must never write `ceiling + 1` to durable storage.
      *
-     * `TimeoutNow` is the fast route to the increment. `RaftEngine.onTimeoutNow` calls
-     * `startRealElection` directly — deliberately skipping pre-vote, since the leader has already
-     * validated the target's log — so nothing stalls the term bump the way an ordinary election
-     * timeout's pre-vote quorum does. It also sits outside the §5.2 leader-authority gate (#1889),
-     * so *any* peer can send it, and its own leader check is scoped to `m.term == currentTerm`, which
-     * a strictly-higher term bypasses. One frame from a non-leader therefore takes the victim from
-     * term 1 to a persisted `2^60 + 1`.
+     * `TimeoutNow` is the fast route to the increment — `RaftEngine.onTimeoutNow` calls
+     * `startRealElection` directly, deliberately skipping pre-vote since the leader has already
+     * validated the target's log, so nothing stalls the term bump the way an ordinary election
+     * timeout's pre-vote quorum does.
      *
-     * That persisted value is the durable half of the defect: it is above the ceiling, so #1888's
-     * `checkedRestoredTerm` refuses to start the node on its next boot. A remote peer writes a term
-     * that bricks a restart.
+     * **This is the honest §3.10 lane, not a forgery.** An earlier version of this test reached the
+     * ceiling with a single higher-term `TimeoutNow` from a non-leader; #1889 closed that lane (a
+     * `TimeoutNow` strictly ahead of our term now carries no checkable authority and is dropped without
+     * adopting), which left the test passing *vacuously* — measured: with the `startRealElection` guard
+     * disabled the assertion still held, because the victim never left term 1. So the vector is now
+     * built from two frames that are each individually **authorised** after #1889: a heartbeat at exactly
+     * the ceiling (the wire bound is inclusive, so it is admitted and also sets `_leader`), then a
+     * same-term `TimeoutNow` from that same recognised leader. Nothing here is spoofed, and a real
+     * cluster reaches this state whenever a leader legitimately sits at the ceiling and transfers away.
+     *
+     * The persisted value is the durable half of the defect: `ceiling + 1` is above the ceiling, so
+     * `checkedRestoredTerm` refuses to start the node on its next boot — a graceful transfer that bricks
+     * a restart.
      */
     @Test
     fun aTimeoutNowAtExactlyTheCeilingNeverPersistsATermAboveIt() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 3)
         val leaderNode = awaitLeader(sim)
         val leaderId = sim.nodes.entries.first { it.value === leaderNode }.key
-        val (victimId, spooferId) = sim.nodeIds.filter { it != leaderId }
+        val victimId = sim.nodeIds.first { it != leaderId }
         sim.awaitCommit(1L)
 
-        sim.deliverTimeoutNow(to = victimId, from = spooferId, term = maxPlausibleTerm)
+        // Adopt the ceiling term from the recognised leader, which also sets `_leader = leaderId` — both
+        // preconditions the same-term TimeoutNow below needs to pass #1889's authority checks.
+        sim.deliverAppendEntries(to = victimId, from = leaderId, term = maxPlausibleTerm)
+        delay(10)
+        sim.deliverTimeoutNow(to = victimId, from = leaderId, term = maxPlausibleTerm)
         delay(20)
 
         val persisted = sim.storages.getValue(victimId).term()
@@ -276,7 +287,10 @@ internal class TermSanityBoundTest {
      * contradicted by what the suppression metric says about the node.
      *
      * Peers are removed first so the triggered election cannot reach quorum — that is what holds the node
-     * at the ceiling as a Candidate long enough for the guard to see it.
+     * at the ceiling as a Candidate long enough for the guard to see it. The election is triggered through
+     * the same-term `TimeoutNow` lane #1889 leaves open (a heartbeat at `ceiling - 1` establishes both the
+     * term and `_leader` first); a higher-term `TimeoutNow` would now be dropped without adopting, which
+     * is what made an earlier version of this test fail outright rather than exercise the guard.
      *
      * Also pins the metric lifecycle. The guard returns before the `ElectionTimedOut` that
      * `startRealElection` would have emitted, and no `ElectionStarted` can ever follow, so without an
@@ -310,6 +324,8 @@ internal class TermSanityBoundTest {
 
         sim.crash(leaderId)
         sim.crash(otherId)
+        sim.deliverAppendEntries(to = victimId, from = leaderId, term = maxPlausibleTerm - 1L)
+        delay(10)
         sim.deliverTimeoutNow(to = victimId, from = leaderId, term = maxPlausibleTerm - 1L)
         delay(50)   // several election timeouts after the one the TimeoutNow forced
 
