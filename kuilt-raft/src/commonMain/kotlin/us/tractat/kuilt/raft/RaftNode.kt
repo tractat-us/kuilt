@@ -42,6 +42,7 @@
  *     node.committed.collect { committed ->
  *         when (committed) {
  *             is Committed.Entry -> { applyToStateMachine(committed.entry.command); appliedIndex = committed.entry.index }
+ *             is Committed.Internal -> appliedIndex = committed.index  // raft bookkeeping: nothing to apply
  *             is Committed.Install -> { resetStateMachineTo(committed.snapshot.state); appliedIndex = committed.snapshot.throughIndex }
  *         }
  *         // Optionally publish a snapshot so raft can compact the log prefix:
@@ -150,10 +151,16 @@ public interface RaftNode {
      * Collect this flow to drive a state machine: apply [Committed.Entry] entries and reset
      * to [Committed.Install] snapshots as they arrive.
      *
-     * The internal §5.4.2 election no-op ([LogEntry.isNoOp]) is withheld: it advances
-     * [commitIndex] but never appears here, so consumers see only application commands
-     * and need not filter. Application-proposed entries always surface, including those
-     * with an empty [LogEntry.command].
+     * Raft's own bookkeeping — the internal §5.4.2 election no-op ([LogEntry.isNoOp]) and §6
+     * membership-change entries ([LogEntry.config]) — is **withheld**: its contents never appear
+     * here, so a consumer applying [Committed.Entry] sees only application commands and need not
+     * filter. Application-proposed entries always surface, including those with an empty
+     * [LogEntry.command].
+     *
+     * Those entries still occupy a committed index, so each surfaces as a payload-free
+     * [Committed.Internal] marker in its own position in the stream. Fold it by advancing your
+     * applied index and doing nothing else — then every index [commitIndex] counts is accounted for,
+     * which is what makes an applied prefix comparable to [readIndex]'s fence (#1718).
      *
      * Replay=0; late collectors miss entries emitted before they subscribed.
      * To resume without gaps after subscribing late (e.g. on crash recovery),
@@ -168,8 +175,16 @@ public interface RaftNode {
      *
      * Unlike [committed] (replay=0), this lets a late subscriber catch up: a state
      * machine that has applied up to index `i` resumes with `committedFrom(i + 1)`
-     * and sees every subsequent instruction exactly once, in index order. The internal
-     * §5.4.2 no-op ([LogEntry.isNoOp]) is withheld here too.
+     * and sees every subsequent instruction exactly once, in index order. Withholding works
+     * exactly as on [committed] — the §5.4.2 no-op and §6 config entries never surface as
+     * [Committed.Entry], on the replayed prefix or the live tail; each replays as a payload-free
+     * [Committed.Internal] marker at its own index.
+     *
+     * **Every committed index is represented exactly once**, so folding this stream advances an
+     * applied prefix as fast as [commitIndex] and it can therefore reach a [readIndex] fence. A
+     * consumer that drops [Committed.Internal] instead of folding it re-opens the #1718 trap: right
+     * after an election or a membership change its applied index sits legitimately below the fence
+     * until unrelated application traffic commits past the gap.
      *
      * If [fromIndex] falls at or below [compactionFloor], a [Committed.Install] is
      * emitted first so the consumer can reset its state machine before replaying entries
@@ -263,6 +278,14 @@ public interface RaftNode {
      * returns immediately. A freshly-elected leader suspends until its current-term no-op
      * commits before returning. Because the state machine is external (driven by [committed]),
      * the caller must wait until it has applied through the returned index — see [awaitRead].
+     *
+     * **The returned index is a [commitIndex], so it counts entries whose contents are withheld**
+     * from [committed] — the §5.4.2 no-op this call may have just waited for, and any §6 config
+     * entry. It is reachable anyway: each such index arrives as a [Committed.Internal] marker, so a
+     * consumer that folds the whole stream (not just [Committed.Entry]) advances past them. A
+     * consumer that folds only application entries will sit below the returned index after an
+     * election or a membership change until unrelated traffic commits past the gap — a gate written
+     * that way refuses a legitimate act, and a wait written that way blocks (#1718).
      *
      * @throws NotLeaderException if this node is not the leader (including learners).
      * @throws LeadershipLostException if leadership is lost before the round confirms.
@@ -393,6 +416,27 @@ public interface RaftNode {
  * Linearizable read barrier: confirms the read index via [RaftNode.readIndex], then suspends
  * until [applied] reaches it, returning that index. [applied] is the caller's own monotonic
  * applied-index flow, advanced as it consumes [RaftNode.committed].
+ *
+ * **[applied] must advance on every [Committed] value, not only [Committed.Entry].** The read index
+ * is a commit index and counts entries raft withholds the contents of (the §5.4.2 election no-op,
+ * §6 config entries); those arrive as [Committed.Internal] markers precisely so the applied prefix
+ * can cross them. An [applied] fed only by application entries can sit legitimately below the read
+ * index after an election or a membership change, and this call then blocks until unrelated traffic
+ * commits past the gap (#1718):
+ *
+ * ```kotlin
+ * val applied = MutableStateFlow(0L)
+ * scope.launch {
+ *     node.committed.collect { c ->
+ *         when (c) {
+ *             is Committed.Entry -> { apply(c.entry.command); applied.value = c.entry.index }
+ *             is Committed.Internal -> applied.value = c.index          // nothing to apply
+ *             is Committed.Install -> { reset(c.snapshot.state); applied.value = c.snapshot.throughIndex }
+ *         }
+ *     }
+ * }
+ * val fenced = node.awaitRead(applied)
+ * ```
  *
  * @throws NotLeaderException if not the leader.
  * @throws LeadershipLostException if leadership is lost before the round confirms.

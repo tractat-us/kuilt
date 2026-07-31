@@ -1378,8 +1378,10 @@ public class WarpNode(
      * - [coordinatedApplied] plus queue-membership and [Results]-board checks (under [lock])
      *   prevent re-execution when two entries for the same [TaskId] committed — warp-roster
      *   churn double-propose, or a re-drive re-proposal racing the original entry.
-     * - [Committed.Install] (snapshot installs) are ignored — coordinated tasks are not part
-     *   of the persistent Raft state machine.
+     * - [Committed.Install] (snapshot installs) and [Committed.Internal] (raft's own §5.4.2 no-op /
+     *   §6 config bookkeeping) are ignored — coordinated tasks are not part of the persistent Raft
+     *   state machine, and this path tracks task ids rather than an applied index, so it has no use
+     *   for the index-only marker (#1718).
      */
     private fun onCoordinatedCommit(committed: Committed) {
         val entry = (committed as? Committed.Entry)?.entry ?: return

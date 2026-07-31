@@ -432,6 +432,9 @@ public class MultiNodeRaftSim(
         private val acc = ArrayList<Byte>()
         fun apply(c: Committed) = when (c) {
             is Committed.Entry -> acc.addAll(c.entry.command.asList())
+            // Raft bookkeeping contributes no state bytes — the marker moves an applied *index*,
+            // and this fold compares applied *state* across nodes (#1718).
+            is Committed.Internal -> Unit
             is Committed.Install -> { acc.clear(); acc.addAll(c.snapshot.state.asList()) }
         }
         fun bytes(): ByteArray = acc.toByteArray()

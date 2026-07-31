@@ -71,6 +71,7 @@ class ClientSessionCloseIntegrationTest {
             h.node.committed.collect { c ->
                 when (c) {
                     is Committed.Install -> Unit // no compaction in this test
+                    is Committed.Internal -> Unit // raft bookkeeping — no application command to apply
                     is Committed.Entry -> {
                         val closeId = parseCloseId(c.entry.command)
                         if (closeId != null) {
@@ -168,6 +169,7 @@ class ClientSessionCloseIntegrationTest {
                 sim.nodes.getValue(id).committed.collect { c ->
                     when (c) {
                         is Committed.Install -> Unit
+                        is Committed.Internal -> Unit // raft bookkeeping — no application command to apply
                         is Committed.Entry -> {
                             val closeId = parseCloseId(c.entry.command)
                             if (closeId != null) {

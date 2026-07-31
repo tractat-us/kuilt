@@ -50,6 +50,7 @@ import us.tractat.kuilt.raft.RaftTransport
 import us.tractat.kuilt.raft.Snapshot
 import us.tractat.kuilt.raft.SnapshotMeta
 import us.tractat.kuilt.raft.StepDownReason
+import us.tractat.kuilt.raft.asCommitted
 import kotlin.time.Duration
 import kotlin.time.TimeSource
 
@@ -155,12 +156,15 @@ internal class RaftEngine(
             }
             val cut = result.await()
             cut.install?.let { emit(Committed.Install(it)) }
-            cut.replay.forEach { emit(Committed.Entry(it)) }
-            // Tail live, deduped against the replayed prefix. Entries with index <= cutIndex
-            // were already replayed from the snapshot; no-ops never surface.
+            cut.replay.forEach { emit(it) }
+            // Tail live, deduped against the replayed prefix: anything at or below cutIndex was
+            // already replayed. An Install is never index-deduped — it is a reset, not a position.
             for (committed in buffer) {
-                if (committed is Committed.Entry && committed.entry.index > cut.cutIndex) emit(committed)
-                else if (committed is Committed.Install) emit(committed)
+                when (committed) {
+                    is Committed.Entry -> if (committed.entry.index > cut.cutIndex) emit(committed)
+                    is Committed.Internal -> if (committed.index > cut.cutIndex) emit(committed)
+                    is Committed.Install -> emit(committed)
+                }
             }
             tail.cancel()
         }
@@ -2185,11 +2189,14 @@ internal class RaftEngine(
             val entry = state.entryAt(idx) ?: continue
             when {
                 entry.config != null -> {
-                    // Config entry: advance commitIndex but withhold from _committed (internal, like no-op).
+                    // Config entry: withhold the payload, but mark the index so a folding consumer's
+                    // applied prefix can still cross it (#1718).
+                    _committed.emit(Committed.Internal(idx))
                     committedConfigEntry = entry
                 }
                 entry.isNoOp -> {
-                    // §5.4.2 no-op: advance commitIndex but withhold from application-facing flow.
+                    // §5.4.2 no-op: same — the index is marked, the entry never surfaces.
+                    _committed.emit(Committed.Internal(idx))
                 }
                 else -> {
                     detectCollision(entry)
@@ -2258,10 +2265,17 @@ internal class RaftEngine(
     }
 
     /**
-     * Snapshot the committed application log for [committedFrom]. Runs in the actor, so
-     * [currentCommitIndex] and [log] are read at a single consistent point in the commit
-     * stream — the caller has already registered a live subscriber, so entries committed
-     * after this cut tail through that subscription without a gap.
+     * Snapshot the committed log for [committedFrom]. Runs in the actor, so [currentCommitIndex] and
+     * [log] are read at a single consistent point in the commit stream — the caller has already
+     * registered a live subscriber, so entries committed after this cut tail through that
+     * subscription without a gap.
+     *
+     * Every committed index in the window is represented exactly once, classified by [asCommitted]:
+     * an application entry replays as [Committed.Entry], an internal no-op/config entry as a
+     * payload-free [Committed.Internal] marker. Replaying the marker rather than dropping the entry
+     * is what lets a resuming consumer's applied prefix cross a withheld index (#1718) — and it is
+     * why a config entry can no longer reach a consumer as a [Committed.Entry] it would try to
+     * decode as an application command.
      *
      * When [fromIndex] falls at or below [snapshotIndex], loads the stored snapshot and
      * prepends a [Committed.Install] so the subscriber can reset its state machine.
@@ -2271,7 +2285,8 @@ internal class RaftEngine(
             storage.loadSnapshot()?.let { Snapshot(it.meta.lastIncludedIndex, it.state) } else null
         val from = maxOf(c.fromIndex, state.snapshotIndex + 1)
         val replay = logSliceFrom(state.log, state.snapshotIndex, from)
-            .filter { it.index <= state.currentCommitIndex && !it.isNoOp }
+            .filter { it.index <= state.currentCommitIndex }
+            .map { it.asCommitted() }
         c.response.complete(CommitCutResult(replay, state.currentCommitIndex, install))
     }
 
