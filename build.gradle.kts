@@ -54,6 +54,177 @@ subprojects {
         timeout.set(java.time.Duration.ofMinutes(15))
         systemProperty("kotlinx.coroutines.debug", "")
     }
+    // 3. Elapsed-vs-ceiling on timeout-shaped failures — see TimeoutShape below (#1931).
+    //    On EVERY test task, not just the JVM ones: `Test` does not cover the Kotlin/Native or
+    //    Kotlin/JS test tasks (they extend `AbstractTestTask` directly), and Native is the platform
+    //    whose console rendering is worst.
+    tasks.withType<AbstractTestTask>().configureEach {
+        addTestListener(TimeoutShapedFailureReporter(reports.junitXml.outputLocation.locationOnly.map { it.asFile.path }))
+    }
+}
+
+// ─── Timeout-shaped failures print elapsed-vs-ceiling (#1931) ────────────────────────────────────
+//
+// Gradle renders a failed test on the console as `<exception class> at <file>:<line>` and NOTHING
+// else — no message. For a `runTest` wall-clock trip on Kotlin/Native that is
+//
+//     kotlinx.coroutines.test.UncompletedCoroutinesError at null:-1
+//
+// which reads as "the stack is missing" and makes the failure look undiagnosable. It is not. The
+// archived results XML already carries the full stack, the exception MESSAGE, and a `time=`
+// attribute. The gap is the console, not the data — so this is a REPORTING fix and adds nothing to
+// any test.
+//
+// Two values decide "slow box or genuinely wedged", and both are in hand at `afterTest`:
+//
+//   * ELAPSED — `TestResult.endTime - startTime`, millisecond granularity (the results XML's
+//     `time=` to 3 decimal places is computed from the same pair).
+//   * The CEILING — Gradle does not know it (it is a Kotlin-level value), but the coroutines library
+//     puts it in the exception MESSAGE verbatim. Four shapes, all parsed below, all pinned to
+//     kotlinx-coroutines 1.11.0 sources; re-check them on an upgrade, because a reworded message
+//     silently degrades this to elapsed-only rather than failing:
+//       "After waiting for 5s, …"                    `test/TestBuilders.kt:343` and `:547`
+//       "Timed out waiting for 5000 ms"              `Timeout.kt:275` (real-time `withTimeout`)
+//       "Timed out waiting for 5s"                   `flow/operators/Delay.kt:403` (`Flow.timeout`)
+//       "Timed out after 750ms of _virtual_ …"       `test/TestDispatcher.kt:46`
+//     When none matches, elapsed is printed alone rather than a guess — that is still most of the
+//     value, because the reader can compare it to the constant in the test source.
+//
+// Read the percentage as "did this consume its whole budget?", NOT as a precise overshoot — the two
+// platforms bracket 100% from opposite sides, measured here on an idle box (load ~2.4):
+//
+//   * JVM — elapsed runs slightly OVER (2.193 s against a 2 s ceiling, 110%).
+//   * Kotlin/Native — elapsed runs a constant ~0.7 s UNDER, so it approaches 100% from below as the
+//     ceiling grows: 1.333 s / 2 s (67%), 5.267 s / 6 s (88%), 11.233 s / 12 s (94%). The K/N test
+//     runner's clock starts after the ceiling's does; the same understated value is what Gradle
+//     writes into the results XML's `time=`, so this is a property of the data, not of this code.
+//
+// Honesty about what the ratio means: when a `runTest` ceiling trips, elapsed is ~always within a
+// second of the ceiling, so the percentage is near-tautologically ~100%. What the line actually buys
+// is (a) the ceiling is NAMED, without opening the source to chase a named backstop constant;
+// (b) the message is surfaced, and its variants are the real discriminator — "the test completed,
+// but only after the timeout" is a slow box, "the test body did not run to completion" is a wedge,
+// "active child jobs" is a leak; and (c) elapsed separates a ceiling trip (elapsed ≈ ceiling) from a
+// teardown-leak `UncompletedCoroutinesError` (elapsed ≪ ceiling), which carries no ceiling in its
+// message at all. For a real-time `withTimeout` the ratio is not tautological and reads normally; for
+// the VIRTUAL-time variant the percentage is suppressed outright, since comparing wall-clock elapsed
+// to a virtual budget is a category error (a 750 ms virtual ceiling trips in 4 ms of wall clock).
+//
+// Deliberately scoped to TIMEOUT-SHAPED failures: an ordinary assertion failure already renders a
+// line in the test's own source and needs no help; a `runTest` trip renders a line inside the
+// coroutines library. Known and accepted over-trigger: a test asserting ON one of these message
+// texts, should it fail, matches the phrase predicate and gets an extra informational line. Known
+// gap: the task-level `timeout` above kills the whole task and produces no per-test result, so a
+// task timeout is out of a test listener's reach by construction.
+//
+// Declared as a top-level object/class rather than script-level functions for the same reason
+// `KotlinCodeScanner` is (see "Guard plumbing" below): a script-level `fun` referenced from a lazily
+// executed body captures the `Build_gradle` script instance, which the configuration cache cannot
+// serialize. A top-level class in a Kotlin script compiles to a STATIC nested class and captures
+// nothing.
+object TimeoutShape {
+    /** Exception simple names that mean "a duration budget was exceeded". */
+    private val TIMEOUT_TYPES = listOf("UncompletedCoroutinesError", "TimeoutCancellationException")
+
+    /** One `Duration.toString()` component (`1.5s`, `500ms`) or a `<n> ms` pair. Longest unit first. */
+    private const val TOKEN = """\d+(?:\.\d+)?\s*(?:ms|us|ns|d|h|m|s)"""
+
+    /** The declared ceiling as the coroutines library writes it, e.g. `After waiting for 1m 30s,`. */
+    private val CEILING =
+        Regex("""(?:After waiting for|Timed out waiting for|Timed out after)\s+($TOKEN(?:\s+$TOKEN)*)""")
+
+    private val COMPONENT = Regex("""(\d+(?:\.\d+)?)\s*(ms|us|ns|d|h|m|s)""")
+
+    /**
+     * `TestDispatcher.timeoutMessage` (1.11.0 `TestDispatcher.kt:46`) marks a budget spent in VIRTUAL
+     * time. Wall-clock elapsed is not comparable to it — the budget was consumed by advancing the test
+     * clock, not by the box — so the percentage is suppressed rather than printed as a category error.
+     */
+    private const val VIRTUAL_MARKER = "of _virtual_ (kotlinx.coroutines.test) time"
+
+    /** True when [className] or [message] identifies a duration-budget failure. */
+    fun isTimeoutShaped(className: String?, message: String?): Boolean =
+        TIMEOUT_TYPES.any { className.orEmpty().contains(it) || message.orEmpty().contains(it) } ||
+            CEILING.containsMatchIn(message.orEmpty())
+
+    /** The ceiling exactly as the message spells it (`5s`, `1m 30s`, `5000 ms`), or null. */
+    fun ceilingText(message: String?): String? = CEILING.find(message.orEmpty())?.groupValues?.get(1)
+
+    /** [ceilingText] in milliseconds, or null when it does not parse. */
+    fun ceilingMillis(ceiling: String): Double? {
+        var total = 0.0
+        var matched = false
+        for (m in COMPONENT.findAll(ceiling)) {
+            val value = m.groupValues[1].toDoubleOrNull() ?: return null
+            total += value * when (m.groupValues[2]) {
+                "d" -> 86_400_000.0
+                "h" -> 3_600_000.0
+                "m" -> 60_000.0
+                "s" -> 1_000.0
+                "ms" -> 1.0
+                "us" -> 0.001
+                else -> 0.000_001 // "ns"
+            }
+            matched = true
+        }
+        return if (matched) total else null
+    }
+
+    /**
+     * `<class>: <message>`, without repeating the class when the message already carries it —
+     * Kotlin/Native reports the message as the full `toString()` where the JVM reports it bare.
+     */
+    fun describe(className: String?, message: String?): String {
+        val type = className.orEmpty()
+        val text = message.orEmpty()
+        return when {
+            type.isEmpty() -> text
+            text.startsWith("$type:") -> text
+            else -> "$type: $text"
+        }
+    }
+
+    /** The console block for one timeout-shaped failure, or null when [result] is not one. */
+    fun render(qualifiedName: String, result: TestResult, resultsDir: String): String? {
+        val failure = result.failures.firstOrNull { isTimeoutShaped(it.details.className, it.details.message) }
+            ?: return null
+        val elapsedMs = (result.endTime - result.startTime).coerceAtLeast(0)
+        val elapsed = "%.3fs".format(java.util.Locale.ROOT, elapsedMs / 1000.0)
+        val ceiling = ceilingText(failure.details.message)
+        val ceilingMs = ceiling?.let(::ceilingMillis)
+        val budget = when {
+            ceiling == null ->
+                "elapsed $elapsed, no ceiling in the message — compare it with the timeout in the test source"
+            failure.details.message.orEmpty().contains(VIRTUAL_MARKER) ->
+                "elapsed $elapsed wall-clock, ceiling $ceiling of VIRTUAL time — not comparable; " +
+                    "the budget went on advancing the test clock, not on the box"
+            ceilingMs == null -> "elapsed $elapsed vs ceiling $ceiling"
+            else ->
+                "elapsed $elapsed vs ceiling $ceiling (${Math.round(elapsedMs / ceilingMs * 100)}%)" +
+                    "  ← slow box or wedge?"
+        }
+        return buildString {
+            appendLine("TIMEOUT-SHAPED FAILURE  $qualifiedName — $budget")
+            appendLine("    ${describe(failure.details.className, failure.details.message)}")
+            append("    full stack + per-test timings: $resultsDir")
+        }
+    }
+}
+
+/** Prints [TimeoutShape.render] for every timeout-shaped failure on the task it is attached to. */
+class TimeoutShapedFailureReporter(private val resultsDir: Provider<String>) : TestListener {
+    override fun beforeSuite(suite: TestDescriptor): Unit = Unit
+    override fun afterSuite(suite: TestDescriptor, result: TestResult): Unit = Unit
+    override fun beforeTest(testDescriptor: TestDescriptor): Unit = Unit
+
+    override fun afterTest(testDescriptor: TestDescriptor, result: TestResult) {
+        if (result.resultType != TestResult.ResultType.FAILURE) return
+        val qualifiedName = listOfNotNull(testDescriptor.className, testDescriptor.name).joinToString(".")
+        // The DIRECTORY, never a constructed file name: the results XML is `TEST-<class>.xml` on the
+        // JVM but `TEST-<task>.<class>.xml` on Kotlin/Native, and a wrong path is worse than none.
+        val block = TimeoutShape.render(qualifiedName, result, resultsDir.get()) ?: return
+        Logging.getLogger("kuilt.timeout-shape").lifecycle(block)
+    }
 }
 
 // ─── Guard plumbing ─────────────────────────────────────────────────────────────────────────
