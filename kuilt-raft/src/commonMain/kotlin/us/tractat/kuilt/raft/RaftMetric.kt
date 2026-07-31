@@ -96,4 +96,35 @@ public sealed interface RaftMetric {
      * @see ElectionStarted for the ordinary path this replaces when the ceiling is reached.
      */
     public data class ElectionSuppressedTermCeiling(val term: Long, val ceiling: Long) : RaftMetric
+
+    // ── Snapshot install ───────────────────────────────────────────────────────
+
+    /**
+     * An inbound snapshot chunk would have pushed this follower's reassembly to [attemptedTotal]
+     * bytes, above the configured [RaftConfig.snapshotTotalCeiling] of [ceiling], so the whole
+     * in-flight reassembly was discarded and offset `0` re-advertised to the sender (#1881, #1926).
+     *
+     * **Emitted on every rejection** — it is a level to sample, not an edge to count, because the two
+     * things it can mean are told apart by whether it *keeps* firing:
+     *
+     * 1. **A misconfiguration**, if it repeats. An honest leader whose snapshot is genuinely larger
+     *    than this follower's ceiling restarts from `0`, refills to the ceiling, is discarded again,
+     *    and repeats — the follower never catches up. Nothing recovers on its own. The fix is to raise
+     *    [RaftConfig.snapshotTotalCeiling] above the leader's snapshot size; the ceiling is read once
+     *    when the node is built, so the new value takes effect on restart.
+     * 2. **A defeated resource attack**, if it does not. The sender chooses `done`, so a peer can hold
+     *    a follower in reassembly forever — every chunk well-formed, every offset advancing,
+     *    `done = false` each time — and grow the buffer until the process dies. The ceiling is what
+     *    stops that, and a one-off rejection is the guard working rather than a fault. The §5.2
+     *    leader-authority gate means such a sender is a current voter (or this node has not yet
+     *    learned its voter set), so this is the Byzantine-voter model, not an open door for a stranger.
+     *
+     * (The engine's matching `warn` log fires **once per node**, and only on a *repeat* for the same
+     * peer and snapshot position — the signature of case 1. Read this metric, not the log, to tell
+     * whether the follower is still stuck.)
+     *
+     * [attemptedTotal] is a `Long` because it is the sum of two attacker-influenced `Int`s: an `Int`
+     * sum can overflow negative and sail under the very ceiling this reports.
+     */
+    public data class SnapshotRejectedSizeCeiling(val attemptedTotal: Long, val ceiling: Int) : RaftMetric
 }

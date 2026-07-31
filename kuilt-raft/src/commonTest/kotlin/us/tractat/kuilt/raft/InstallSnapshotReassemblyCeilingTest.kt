@@ -4,6 +4,7 @@ import us.tractat.kuilt.raft.internal.RaftMessage
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
  * Regression for #1881, at the engine boundary: the follower's InstallSnapshot reassembly buffer must
@@ -94,6 +95,98 @@ internal class InstallSnapshotReassemblyCeilingTest {
             { assertEquals(term, acks.first().term, "the ack carries the follower's current term") },
         )
     }
+
+    /**
+     * Regression for #1926: the rejection must be observable on the metric hook, not only at `debug`.
+     *
+     * The ack asserted above is the right disposition for a hostile sender, but it is *also* what an
+     * **honest** leader gets when its snapshot genuinely exceeds this follower's
+     * `snapshotTotalCeiling` — it restarts from `0`, refills to the ceiling, is discarded again, and
+     * the follower never catches up. The remedy is a configuration change (raise the ceiling), and it
+     * is not derivable from the symptom: a follower that silently never converges, with the only
+     * explanation at `debug`. So the arm has to say so on the one surface a consumer samples.
+     *
+     * Two chunks are injected from the same peer under the same [SnapshotMeta] — the signature of that
+     * non-convergent loop, as opposed to a one-shot oversized frame — and both must report, because the
+     * metric is a level to sample rather than an edge to count (the same "log once, measure
+     * continuously" split `RaftMetric.ElectionSuppressedTermCeiling` documents). The engine's matching
+     * `warn` escalation is deliberately **not** asserted here: `kuilt-raft`'s tests are `commonTest`
+     * with no log-capture backend on the Kotlin/Native and wasmJs targets, so the metric is the
+     * assertable half.
+     */
+    @Test
+    fun aChunkPastTheTotalCeilingIsReportedOnTheMetricHook() = raftRunTest {
+        val metricsBy = mutableMapOf<NodeId, MutableList<RaftMetric>>()
+        val ids = (1..3).map { NodeId("v$it") }
+        val cluster = ClusterConfig(voters = ids.toSet())
+        val config = FAST_RAFT_CONFIG.copy(snapshotTotalCeiling = ceiling)
+        val sim = RaftSimulation(
+            nodeIds = ids,
+            scope = this,
+            raftConfig = config,
+            nodeScope = backgroundScope,
+            nodeFactory = { id, transport, storage, childScope ->
+                childScope.raftNode(
+                    cluster,
+                    transport,
+                    storage,
+                    config,
+                    onMetric = { metricsBy.getOrPut(id) { mutableListOf() } += it },
+                )
+            },
+        )
+        val leaderNode = sim.awaitLeader()
+        val leaderId = sim.nodes.entries.first { it.value === leaderNode }.key
+        val victimId = sim.nodeIds.first { it != leaderId }
+        sim.awaitCommit(1L)
+
+        val term = sim.storages.getValue(leaderId).term()
+        repeat(2) { round ->
+            sim.deliverInstallSnapshot(
+                to = victimId, from = leaderId, term = term,
+                lastIncludedIndex = snapshotIndex, lastIncludedTerm = term,
+                data = ByteArray(ceiling + 1), done = false,
+            )
+            sim.awaitTrue("the victim reported oversized chunk #${round + 1}") {
+                rejections(metricsBy, victimId).size > round
+            }
+        }
+
+        val rejections = rejections(metricsBy, victimId)
+        // Hoisted out of assertAll: an empty list would surface from `first()` as a bare
+        // NoSuchElementException, which assertAll rethrows without this message and its metric dump.
+        assertTrue(
+            rejections.isNotEmpty(),
+            "a chunk breaching snapshotTotalCeiling=$ceiling must be observable on the metric hook; " +
+                "metrics=${metricsBy[victimId].orEmpty()}",
+        )
+        assertAll(
+            {
+                assertEquals(
+                    (ceiling + 1).toLong(), rejections.first().attemptedTotal,
+                    "the metric must name the size the reassembly would have reached",
+                )
+            },
+            {
+                assertEquals(
+                    ceiling, rejections.first().ceiling,
+                    "the metric must name the configured ceiling that rejected it — the knob to raise",
+                )
+            },
+            {
+                assertEquals(
+                    2, rejections.size,
+                    "the metric is a level to sample, so every rejection must report; got $rejections",
+                )
+            },
+        )
+    }
+
+    private fun rejections(
+        metricsBy: Map<NodeId, List<RaftMetric>>,
+        victimId: NodeId,
+    ): List<RaftMetric.SnapshotRejectedSizeCeiling> =
+        metricsBy[victimId].orEmpty().filterIsInstance<RaftMetric.SnapshotRejectedSizeCeiling>()
 
     private fun victimAcks(sim: RaftSimulation, victimId: NodeId): List<RaftMessage.InstallSnapshotResponse> =
         sim.network.sent
