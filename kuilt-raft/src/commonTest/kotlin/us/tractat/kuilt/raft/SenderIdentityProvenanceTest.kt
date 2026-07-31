@@ -37,9 +37,15 @@ import kotlin.test.assertTrue
 class SenderIdentityProvenanceTest {
 
     /**
-     * An `AppendEntries` from a voter that is not the recognised leader still moves `_leader` — the
-     * #1906 lane, deliberately unchanged here. What is pinned is *who* it moves it to: the sender,
-     * with no payload field left that could name anyone else.
+     * An `AppendEntries` from a voter that is not the recognised leader moves `_leader` to **its
+     * sender** — no payload field is left that could name anyone else.
+     *
+     * Delivered at a **higher** term, which is what makes the adoption legitimate rather than a
+     * forgery: #1906 subsequently pinned the leader identity per term, so a *same*-term frame from a
+     * peer that is not this term's established leader is now dropped outright (that lane moved to
+     * `LeaderForTermPinTest`). A higher term re-opens adoption, and the identity adopted still has
+     * exactly one possible source — the transport's `from` — which is the #1912 property this test
+     * exists to pin.
      */
     @Test
     fun appendEntries_makesTheRecipientNameItsSender() = raftRunTest {
@@ -50,7 +56,7 @@ class SenderIdentityProvenanceTest {
         val senderId = sim.nodeIds.first { it != leaderId && it != victimId }
         val victimTerm = sim.storages.getValue(victimId).term()
 
-        sim.deliverAppendEntries(to = victimId, from = senderId, term = victimTerm)
+        sim.deliverAppendEntries(to = victimId, from = senderId, term = victimTerm + 1L)
         sim.settle()
 
         assertEquals(

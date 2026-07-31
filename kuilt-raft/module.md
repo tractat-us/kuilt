@@ -129,6 +129,27 @@ because plenty of hostile frames *are* catchable. The line this module draws:
   and the diff was net-negative. The evidence it is the right call is in the set itself —
   `TimeoutNow.leaderId` sat unread for its whole life, and what protected it was that nobody read
   it, not that anyone checked it.
+- **One leader per term, and the recipient remembers which.** §5.2 Election Safety permits at
+  most one leader per term, so two same-term leader→peer frames naming different senders are
+  proof that one is forged — and the witness is the recipient's own memory of which node was
+  established as leader for the term it is currently in (`leaderForTerm`). `AppendEntries` and
+  `InstallSnapshot` adopt a leader if none is established for this term and must match it
+  otherwise; a mismatching frame is dropped, on the nonce reasoning above (an identity has no
+  conservative in-range reading). Without it, `_leader` took whichever leader→peer frame arrived
+  last, so any voter could redirect a victim's belief to itself in one ordinary frame — and
+  `_leader` is read as authority, so the second frame cashed it in: a `TimeoutNow` that then
+  passed its sender check, or an `AppendEntries` from a §3.10 transfer target that falsely
+  *resolved* the transfer, cancelling the timer that would have reported the truth (#1906).
+  The identity is deliberately a second value rather than a reinterpretation of `_leader`, which
+  keeps its own meaning — *a live leader I can talk to*, cleared when one steps down — because
+  proposal forwarding must not route to a leader that has just stood down. The term scoping is
+  the whole of the rule's safety: a pin belongs to a term, so any term change re-opens adoption
+  and nothing honest is refused. What it does **not** do is decide *which* of two claimants is
+  the real one — the pin is first-claim-wins, so a forger that lands the first leader-contact of
+  a term pins itself and the honest leader's frames are the ones dropped for that term. That is
+  no worse than the pre-fix behaviour and it is not fixable here: the attack value is also a
+  reachable legitimate value, so no predicate over local state separates them. It is an
+  **accepted exposure** pending the authorization mechanism in #1907.
 - A **missing** local check is a bug in this class, not an accepted exposure — the
   distinction being whether *any* predicate over the recipient's own state could catch the
   claim, which is what separates this list from the accepted exposures below. Such gaps are
