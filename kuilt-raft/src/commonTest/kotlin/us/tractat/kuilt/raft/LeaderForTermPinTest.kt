@@ -1,6 +1,8 @@
 @file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 package us.tractat.kuilt.raft
 
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -203,6 +205,54 @@ class LeaderForTermPinTest {
                 )
             },
         )
+    }
+
+    /**
+     * The third consumer of `_leader`'s provenance from #1906, and why the refusal is placed *before*
+     * the rest of `onAppendEntries`' side-effects rather than merely guarding the `_leader` write.
+     *
+     * §3.10's transfer completes on a leader-authored message from the target at a term above the one
+     * the transfer started in — `transfer.onLeaderElected`. That is a **resolution** path: it cancels
+     * the auto-abandon timer, so a frame that reaches it falsely does not merely mis-report, it
+     * disarms the mechanism that would later have reported the truth. `transferLeadership()` returns
+     * normally while the target sits partitioned, having won nothing.
+     *
+     * A frame refused by the per-term pin must therefore not reach it. Here the transfer starts at
+     * term `T`, term `T + 1` is legitimately won by a third node, and the target then claims `T + 1`:
+     * from the target, above the transfer's start term, so it satisfies `onLeaderElected` on both
+     * counts — and is refused before it gets there.
+     */
+    @Test
+    fun aRefusedFrameCannotFalselyConfirmALeadershipTransfer() = raftRunTest(timeout = 30.seconds) {
+        val sim = raftSim(this, backgroundScope, n = 3)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
+        val (targetId, winnerId) = sim.nodeIds.filter { it != leaderId }
+        val term = sim.storages.getValue(leaderId).term()
+
+        // The target can neither hear the TimeoutNow nor win an election, so only a frame reaching
+        // onLeaderElected could resolve the transfer inside this window.
+        sim.partitionOff(targetId)
+        val transfer = async { leader.transferLeadership(targetId) }
+        sim.settle()
+        assertTrue(!transfer.isCompleted, "precondition: the transfer must still be in flight")
+
+        // `winnerId` legitimately takes term+1 — the old leader steps down and pins it for that term.
+        sim.deliverAppendEntries(to = leaderId, from = winnerId, term = term + 1L)
+        sim.settle()
+        assertEquals(winnerId, leader.leader.value, "precondition: term ${term + 1} belongs to $winnerId")
+
+        // Now the target claims that same term.
+        sim.deliverAppendEntries(to = leaderId, from = targetId, term = term + 1L)
+        sim.settle()
+
+        assertTrue(
+            !transfer.isCompleted,
+            "a transfer to $targetId must not be confirmed by a frame the term's established leader " +
+                "($winnerId) contradicts — onLeaderElected cancels the auto-abandon timer, so a false " +
+                "confirmation is terminal, not merely wrong",
+        )
+        transfer.cancelAndJoin()
     }
 
     // ── Write-once rejects nothing honest ────────────────────────────────────
