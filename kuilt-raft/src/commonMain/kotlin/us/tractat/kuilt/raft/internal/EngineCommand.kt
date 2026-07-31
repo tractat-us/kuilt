@@ -2,6 +2,7 @@ package us.tractat.kuilt.raft.internal
 
 import kotlinx.coroutines.CompletableDeferred
 import us.tractat.kuilt.raft.ClusterConfig
+import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.Snapshot
@@ -61,10 +62,13 @@ internal sealed interface EngineCommand {
     data class TransferTimeout(val epoch: Long) : EngineCommand
 }
 
-/** The result of an [EngineCommand.CommitCut]: committed application entries plus the cut index. */
+/** The result of an [EngineCommand.CommitCut]: the committed instruction prefix plus the cut index. */
 internal class CommitCutResult(
-    /** Committed application entries (no-ops excluded) with index in `fromIndex..cutIndex`. */
-    val replay: List<LogEntry>,
+    /**
+     * One [Committed] per committed index in `fromIndex..cutIndex`, in order — application entries as
+     * [Committed.Entry], withheld no-op/config entries as payload-free [Committed.Internal] markers.
+     */
+    val replay: List<Committed>,
     /** The `commitIndex` at the moment of the cut; live entries with a greater index tail afterwards. */
     val cutIndex: Long,
     /** A snapshot to emit before the replay, or `null` if no install is needed (no compaction yet). */

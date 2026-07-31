@@ -535,6 +535,8 @@ class RaftSimulation(
         private val acc = ArrayList<Byte>()
         fun apply(c: Committed) = when (c) {
             is Committed.Entry -> { acc.addAll(c.entry.command.asList()); Unit }
+            // Raft bookkeeping carries no state bytes — it moves an applied index, not applied state.
+            is Committed.Internal -> Unit
             is Committed.Install -> { acc.clear(); acc.addAll(c.snapshot.state.asList()); Unit }
         }
         fun bytes(): ByteArray = acc.toByteArray()

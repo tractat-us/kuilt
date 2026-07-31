@@ -3,7 +3,7 @@
 package us.tractat.kuilt.game
 
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.serialization.BinaryFormat
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.cbor.Cbor
@@ -79,9 +79,15 @@ public class TurnSequencer<A>(
      * Each [Committed.Entry] surfaces as [TurnEvent.Committed] carrying the decoded action, its log
      * index, and the proposer-stamped [IndexedAction.dedupKey] (always present — fold it through a
      * [us.tractat.kuilt.raft.ClientSessionTable] for exactly-once). Each [Committed.Install] surfaces
-     * as [TurnEvent.Reset] carrying the raft [us.tractat.kuilt.raft.Snapshot] directly. The internal
-     * §5.4.2 election no-op never appears. Both event kinds share this one stream so a reset always
-     * arrives in order relative to the entries around it.
+     * as [TurnEvent.Reset] carrying the raft [us.tractat.kuilt.raft.Snapshot] directly. Both event
+     * kinds share this one stream so a reset always arrives in order relative to the entries
+     * around it.
+     *
+     * **Raft bookkeeping is dropped, not translated.** A [Committed.Internal] marker (the §5.4.2
+     * election no-op, a §6 config entry) has no counterpart in a turn stream, so it never appears
+     * here — this stream's indices are the game's turns, not raft's commit positions. A consumer
+     * that needs an applied index comparable to [us.tractat.kuilt.raft.RaftNode.readIndex] must fold
+     * [RaftNode.committed] itself, where those markers do surface (#1718).
      *
      * **Replay=0.** Late collectors miss events emitted before they subscribed.
      *
@@ -92,8 +98,9 @@ public class TurnSequencer<A>(
      * by a `Channel.receiveAsFlow()` (single-collection), so two concurrent collectors of this flow
      * against a fake node will race for events rather than both receiving every event.
      */
-    public val events: Flow<TurnEvent<A>> = node.committed.map { committed ->
+    public val events: Flow<TurnEvent<A>> = node.committed.mapNotNull { committed ->
         when (committed) {
+            is Committed.Internal -> null
             is Committed.Entry -> {
                 val entry = committed.entry
                 TurnEvent.Committed(

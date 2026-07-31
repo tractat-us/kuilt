@@ -30,7 +30,7 @@ transport.
 | Log replication | Leader replicates entries; followers commit once quorum confirms |
 | Log compaction | Publish a snapshot into `node.snapshots`; Raft discards covered log entries and catches lagging peers up with chunked `InstallSnapshot` |
 | Dynamic membership | `changeMembership()` — add/remove voters via joint consensus (§6) or simple config for learner-set-only changes |
-| Linearizable reads | `readIndex()` confirms a voter quorum at current term before returning a safe read index (§3.6/§3.7); no log write required |
+| Linearizable reads | `readIndex()` confirms a voter quorum at current term before returning a safe read index (§3.6/§3.7); no log write required. Wait until you have applied through it — `awaitRead(applied)` does both |
 | Graceful leadership transfer | `transferLeadership(target)` sends `TimeoutNow` to the target so it wins the next election without waiting for a timeout (§3.10) |
 | Propose forwarding | Any peer can call `propose()` — non-leaders forward the proposal to the current leader and await commit, so callers need not track who the leader is |
 | Learner nodes | Non-voting replicas that receive all entries but never lead |
@@ -44,11 +44,13 @@ val storage = InMemoryRaftStorage()   // use persistent storage in production
 val node: RaftNode = scope.raftNode(cluster, transport, storage)
 
 // Apply committed entries on every node:
+var applied = 0L
 scope.launch {
     node.committed.collect { committed ->
         when (committed) {
-            is Committed.Entry   -> applyToStateMachine(committed.entry.command)
-            is Committed.Install -> resetStateMachineTo(committed.snapshot.state)
+            is Committed.Entry    -> { applyToStateMachine(committed.entry.command); applied = committed.entry.index }
+            is Committed.Internal -> applied = committed.index   // raft's own bookkeeping: nothing to apply
+            is Committed.Install  -> { resetStateMachineTo(committed.snapshot.state); applied = committed.snapshot.throughIndex }
         }
     }
 }

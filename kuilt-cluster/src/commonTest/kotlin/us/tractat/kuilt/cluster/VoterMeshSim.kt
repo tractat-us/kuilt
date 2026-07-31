@@ -93,6 +93,8 @@ internal class VoterMeshSim internal constructor(
                     when (committed) {
                         is Committed.Entry -> applied.getValue(id).update { it + committed.entry.command }
                         is Committed.Install -> applied.getValue(id).value = emptyList()
+                        // Raft bookkeeping: no application command, so applied state is unchanged.
+                        is Committed.Internal -> Unit
                     }
                 }
             }

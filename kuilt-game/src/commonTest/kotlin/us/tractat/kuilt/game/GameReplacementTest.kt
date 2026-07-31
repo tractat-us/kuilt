@@ -6,7 +6,6 @@
 package us.tractat.kuilt.game
 
 import kotlinx.coroutines.async
-import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -307,24 +306,22 @@ internal fun fastLivenessConfig(): HeartbeatConfig = HeartbeatConfig(
 )
 
 /**
- * Waits until the cluster has committed a config entry whose **new** [ClusterConfig]
- * has exactly [expectedCount] voters.
+ * Waits until [node]'s effective membership has exactly [expectedCount] voters. Learners are not
+ * counted.
  *
- * Scans from index 1 (replaying all committed entries) and resolves on the first
- * Simple (`config.old == null`) config entry that matches. Learners are not counted.
+ * [RaftNode.membership] is the membership surface: §6 configs are adopted on append, and this flow
+ * carries the effective `ClusterConfig` (the target C_new while a joint transition is in flight).
  *
- * Note: Raft membership changes go through a Joint then a Simple entry. We wait for
- * the Simple entry (which finalises the new voter set) so the count is stable.
+ * This helper used to scan `committedFrom(1)` for a `Committed.Entry` carrying a Simple config
+ * payload, which worked only because config entries leaked into the application stream on the
+ * replay path — they are raft bookkeeping, and #1718 replaced that leak with a payload-free
+ * [us.tractat.kuilt.raft.Committed.Internal] marker. The membership flow is what a consumer was
+ * always supposed to read; the difference is that this resolves on adoption rather than on the
+ * Simple entry's commit, which only makes the wait shorter — every assertion after it still blocks
+ * on the real post-condition (a replacement being admitted, the log replaying).
  */
 private suspend fun awaitVoterCount(node: RaftNode, expectedCount: Int) {
-    node.committedFrom(1)
-        .filter { committed ->
-            committed is Committed.Entry &&
-                committed.entry.config != null &&
-                committed.entry.config!!.old == null &&
-                committed.entry.config!!.new.voters.size == expectedCount
-        }
-        .first()
+    node.membership.first { it.voters.size == expectedCount }
 }
 
 /** Decodes an application [Int] from a committed entry, returning null for no-ops and configs. */

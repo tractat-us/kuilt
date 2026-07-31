@@ -25,6 +25,7 @@ import kotlin.random.Random
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.RaftTraceEvent
 import us.tractat.kuilt.raft.Snapshot
+import us.tractat.kuilt.raft.asCommitted
 
 /**
  * A test double for [RaftNode] with driver helpers for driving role transitions,
@@ -108,11 +109,13 @@ public class FakeRaftNode(
                 }
             }
             val cutIndex = _commitIndex.value
+            // Faithful to the engine: every committed index is represented exactly once, internal
+            // entries as index-only markers rather than dropped (see asCommitted / #1718).
             committedHistory
-                .filter { it.index in fromIndex..cutIndex && !it.isNoOp }
-                .forEach { emit(Committed.Entry(it)) }
+                .filter { it.index in fromIndex..cutIndex }
+                .forEach { emit(it.asCommitted()) }
             for (entry in buffer) {
-                if (entry.index > cutIndex && !entry.isNoOp) emit(Committed.Entry(entry))
+                if (entry.index > cutIndex) emit(entry.asCommitted())
             }
             tail.cancel()
         }
@@ -250,9 +253,14 @@ public class FakeRaftNode(
      * node.pushCommitted(LogEntry(index = 1, term = 1, command = byteArrayOf(42)))
      * val entry = node.committed.first()
      * ```
+     *
+     * An internal entry (a §5.4.2 no-op or a §6 config entry) surfaces as a payload-free
+     * [Committed.Internal] marker at its index, exactly as the real engine withholds it — see
+     * [asCommitted]. Push one to model what a consumer sees across an election or a membership
+     * change (#1718).
      */
     public suspend fun pushCommitted(entry: LogEntry): LogEntry {
-        committedChannel.send(Committed.Entry(entry))
+        committedChannel.send(entry.asCommitted())
         committedHistory.add(entry)
         _commitIndex.value = entry.index
         committedTail.emit(entry)

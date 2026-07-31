@@ -47,6 +47,7 @@ class AppliedPrefixReachesReadIndexTest {
      */
     private fun Committed.appliedIndex(): Long = when (this) {
         is Committed.Entry -> entry.index
+        is Committed.Internal -> index
         is Committed.Install -> snapshot.throughIndex
     }
 

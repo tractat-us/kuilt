@@ -382,6 +382,10 @@ internal class HeddleControlPlane(
             raft.committedFrom(nextIndex).collect { committed ->
                 when (committed) {
                     is Committed.Entry -> applyEntry(committed.entry)
+                    // Raft's own bookkeeping (§5.4.2 no-op, §6 config) — no control payload to project.
+                    // The marker exists so a folding consumer's applied prefix can cross the index
+                    // (#1718); this projection tracks control state, not an index, so it ignores it.
+                    is Committed.Internal -> Unit
                     // v1 does not publish snapshots to raft (compaction disabled — see heddleGoverned),
                     // so no Install ever arrives. If one does, a shared RaftNode compacted below an
                     // unreplayed control entry — the projection would silently continue from a wrong
