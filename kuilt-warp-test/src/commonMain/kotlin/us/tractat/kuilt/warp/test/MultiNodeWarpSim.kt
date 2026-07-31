@@ -37,7 +37,7 @@
  *
  * ```kotlin
  * @Test
- * fun tasksConvergeManual() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+ * fun tasksConvergeManual() = runTest(StandardTestDispatcher(), timeout = WARP_SIM_WEDGE_BACKSTOP) {
  *     val sim = multiNodeWarpSim(n = 3, nodeScope = backgroundScope, scheduler = testScheduler)
  *     try {
  *         sim.enqueueEcho(TaskId("t1"))
@@ -55,8 +55,8 @@
  * which makes the interleaving of anti-entropy timer fires vs Quilter delta round-trips
  * load-dependent even though every `delay()` is already virtual — the exact mechanism behind
  * the #966 flake class. `StandardTestDispatcher` fixes that ordering. Use [warpSimTest] as the
- * standard entry point: it wires `StandardTestDispatcher`, a tight 5 s timeout, and hands a
- * ready [MultiNodeWarpSim] into the test body.
+ * standard entry point: it wires `StandardTestDispatcher`, the [WARP_SIM_WEDGE_BACKSTOP]
+ * wall-clock backstop, and hands a ready [MultiNodeWarpSim] into the test body.
  *
  * ## Non-convergence
  *
@@ -381,8 +381,8 @@ public class MultiNodeWarpSim internal constructor(
 /**
  * Weave an [n]-peer [InMemoryLoom] mesh and stand up one coordination-free [WarpNode] per
  * peer, returning the ready [MultiNodeWarpSim]. Prefer [warpSimTest], which also wires
- * `runTest(StandardTestDispatcher(), timeout = 5.seconds)` and teardown; use this directly
- * only when the test needs to own the `runTest` invocation.
+ * `runTest(StandardTestDispatcher(), timeout = WARP_SIM_WEDGE_BACKSTOP)` and teardown; use this
+ * directly only when the test needs to own the `runTest` invocation.
  *
  * @param n Number of peers (the first hosts the mesh; the rest join).
  * @param nodeScope Scope for node coroutines — pass
@@ -433,8 +433,43 @@ public suspend fun multiNodeWarpSim(
 }
 
 /**
+ * Wall-clock backstop for [warpSimTest] — the budget for a genuine **wedge**, *not* a performance
+ * assertion. Mirrors `RAFT_SIM_WEDGE_BACKSTOP` (`:kuilt-raft-test`) and `TEST_WEDGE_BACKSTOP`
+ * (`:kuilt-test`), which carry the same contract.
+ *
+ * ## Why it is deliberately loose
+ *
+ * A [MultiNodeWarpSim] test runs entirely on virtual time: [StandardTestDispatcher], an in-memory
+ * [InMemoryLoom] mesh, and node clocks driven from [TestScope.testScheduler]. There is **no
+ * real-clock input anywhere on the execution path**, so the virtual trajectory — and therefore the
+ * total quantity of real work — is identical on every run. Machine load can change only the
+ * wall-clock *rate* at which that fixed work is retired.
+ *
+ * A tight wall-clock cap over a fixed quantity of work is therefore not an assertion about the code
+ * at all. It asserts *"this host can retire N units of work in T seconds"*. Measured on a 16-core
+ * box, an unchanged binary slowed **2.65×** between load 7–10 and load 21–36, against **1.8×** of
+ * headroom under the previous 5 s cap — degradation exceeding headroom, i.e. a *deterministic* red
+ * on a busy runner rather than a flake. Mutation-verified with the ceiling as the only variable:
+ * 5 s → 4/4 FAIL, 30 s → 4/4 PASS (kuilt #1891).
+ *
+ * ## Do NOT tighten this back to a few seconds
+ *
+ * The instinct is that a tight timeout buys fast failure. Here it does not — fast failure is already
+ * bought, *load-independently*, by the bounded `await*` helpers' `within` bound (2 s of **virtual**
+ * time, immune to contention), and those throw an [AssertionError] carrying a full
+ * [MultiNodeWarpSim.dumpState]. A tight outer cap fires *before* that can speak, producing a bare
+ * `UncompletedCoroutinesError` with no mesh state at all. Tightening it adds no detector; it
+ * pre-empts the legible ones with a load-sensitive false-red generator.
+ *
+ * What it *is* for is the residual case the virtual bounds cannot cover: a wedge **outside** the
+ * bounded helpers — an unbounded `await`, a deadlocked hand-rolled `Channel` receive. 30 s still
+ * bounds that to half a minute.
+ */
+public val WARP_SIM_WEDGE_BACKSTOP: Duration = 30.seconds
+
+/**
  * Build a [MultiNodeWarpSim] of [n] peers and run [body] under
- * `runTest(StandardTestDispatcher(), timeout = 5.seconds)` — the canonical harness for
+ * `runTest(StandardTestDispatcher(), timeout = WARP_SIM_WEDGE_BACKSTOP)` — the canonical harness for
  * multi-node coordination-free warp tests. Closes every node after [body]. See
  * [MultiNodeWarpSim] for the full determinism contract.
  *
@@ -453,8 +488,10 @@ public suspend fun multiNodeWarpSim(
  * @param strategy Claim strategy, forwarded to [multiNodeWarpSim].
  * @param registryFactory Per-node registry builder, forwarded to [multiNodeWarpSim].
  * @param nodeFactory Custom node builder, forwarded to [multiNodeWarpSim].
- * @param timeout Test timeout. Default 5 s — tight enough to surface hangs quickly. Widen
- *   only for tests that intentionally span long virtual stretches.
+ * @param timeout Wall-clock **wedge backstop**, not a performance budget — read
+ *   [WARP_SIM_WEDGE_BACKSTOP] before changing it, and in particular before tightening it. Fast
+ *   failure is the job of the bounded `await*` helpers' virtual `within` bounds, which are
+ *   load-independent and dump state.
  */
 public fun warpSimTest(
     n: Int = 3,
@@ -463,7 +500,7 @@ public fun warpSimTest(
     strategy: ClaimStrategy = ClaimStrategy.RingWithIntent(),
     registryFactory: (MultiNodeWarpSim, PeerId) -> OpRegistry = { sim, id -> sim.trackedEchoRegistry(id) },
     nodeFactory: ((MultiNodeWarpSim, PeerId, Seam, CoroutineScope) -> WarpNode)? = null,
-    timeout: Duration = 5.seconds,
+    timeout: Duration = WARP_SIM_WEDGE_BACKSTOP,
     body: suspend TestScope.(MultiNodeWarpSim) -> Unit,
 ): TestResult = runTest(
     context = StandardTestDispatcher(),

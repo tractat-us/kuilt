@@ -22,6 +22,7 @@ import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.test.FakeRaftNode
 import us.tractat.kuilt.raft.test.MultiNodeRaftSim
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -86,7 +87,7 @@ class HeddleFenceTest {
     // unrecoverable. It must now re-home to the live lineage and never touch e1.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun postBarrierCompletionRehomesOffTheDeadEdge() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun postBarrierCompletionRehomesOffTheDeadEdge() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val f = fixture("fence-finding2")
         f.mintAndDelegateDownE1()
         val issued = f.node.ledger.value.edge(e1)!!.issued
@@ -148,7 +149,7 @@ class HeddleFenceTest {
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
     fun postBarrierCompletionOnAMultiHopPathRehomesOnlyTheQuiescedHop() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val h = GroupId("h")
             val e2 = AttachmentId("e2") // g → h
             val f = fixture("fence-multihop")
@@ -194,7 +195,7 @@ class HeddleFenceTest {
     // cases: there is no window in which a charge lands after the read and before the mark.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun preBarrierCompletionLandsInsideTheAckedFinals() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun preBarrierCompletionLandsInsideTheAckedFinals() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val f = fixture("fence-prebarrier")
         f.mintAndDelegateDownE1()
         val issued = f.node.ledger.value.edge(e1)!!.issued
@@ -233,7 +234,7 @@ class HeddleFenceTest {
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
     fun aChargeWithNoLiveGenerationToRehomeOntoIsBufferedAndFlushesOnActivate() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val f = fixture("fence-buffer")
             f.mintAndDelegateDownE1()
             val issued = f.node.ledger.value.edge(e1)!!.issued
@@ -283,7 +284,7 @@ class HeddleFenceTest {
     // their writer), so max-join absorbs it into the already-relocated values. Harmless.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun aPreAckInFlightDeltaIsAbsorbedByTheAckedFinals() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun aPreAckInFlightDeltaIsAbsorbedByTheAckedFinals() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val f = fixture("fence-inflight")
         f.mintAndDelegateDownE1()
         val issued = f.node.ledger.value.edge(e1)!!.issued
@@ -342,7 +343,7 @@ class HeddleFenceTest {
     // the hole finding 2 came through, so there is no way to do it.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun anAbsentEnrolledPeerBlocksTheFenceAndTheStrandStaysStanding() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun anAbsentEnrolledPeerBlocksTheFenceAndTheStrandStaysStanding() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val f = fixture("fence-absent")
         val absent = ReplicaId("absent-peer")
         assertIs<ControlOutcome.Applied>(f.plane.submit(ControlCommand.Enroll(absent)))
@@ -387,7 +388,7 @@ class HeddleFenceTest {
     // yet a member for, and the boot gate stops it authoring one afterwards.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun aJoinerEnrollingMidFenceIsExcludedFromTheAckSet() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun aJoinerEnrollingMidFenceIsExcludedFromTheAckSet() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val f = fixture("fence-joiner")
         f.mintAndDelegateDownE1()
         f.racedRetireAndReparent()
@@ -422,7 +423,7 @@ class HeddleFenceTest {
     // the reconcile — deriving the identical patch, because the inputs are the log prefix.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun aDeposedProposerDoesNotStallTheFenceAnyLeaderFinishesIt() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun aDeposedProposerDoesNotStallTheFenceAnyLeaderFinishesIt() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val ids = listOf(NodeId("p1"), NodeId("p2"), NodeId("p3"), NodeId("p4"), NodeId("p5"))
         val sim = MultiNodeRaftSim(nodeIds = ids, scope = this, nodeScope = backgroundScope)
         val sinks = ids.associateWith { RecordingSink() }
@@ -480,7 +481,7 @@ class HeddleFenceTest {
     // guarantees every quiesce mark a restart lost has been replayed first.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun theBootGateRefusesWritesUntilSelfEnrollApplies() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun theBootGateRefusesWritesUntilSelfEnrollApplies() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         val loom = InMemoryLoom()
         val seam: Seam = loom.host(Pattern("heddle-boot-gate"))
@@ -534,7 +535,7 @@ class HeddleFenceTest {
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
     fun aReHomedChargeWhoseLandingEdgeIsThenFencedIsFundedFromItsSiblingFencedEdge() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val e4 = AttachmentId("e4") // root → g, the SECOND legal reparent generation
             val f = fixture("fence-eighth")
             f.mintAndDelegateDownE1()
@@ -595,7 +596,7 @@ class HeddleFenceTest {
     // from-a-10-unit-mint it buys, are pinned in `EntitlementLedgerReconcileTest`.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun aReconcileAcrossACrossParentReparentIsRefused() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun aReconcileAcrossACrossParentReparentIsRefused() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val a = GroupId("a")
         val b = GroupId("b")
         val ea = AttachmentId("ea") // root → a
