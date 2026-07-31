@@ -135,11 +135,14 @@ because plenty of hostile frames *are* catchable. The line this module draws:
   established as leader for the term it is currently in (`leaderForTerm`). `AppendEntries` and
   `InstallSnapshot` adopt a leader if none is established for this term and must match it
   otherwise; a mismatching frame is dropped, on the nonce reasoning above (an identity has no
-  conservative in-range reading). Without it, `_leader` took whichever leader→peer frame arrived
-  last, so any voter could redirect a victim's belief to itself in one ordinary frame — and
-  `_leader` is read as authority, so the second frame cashed it in: a `TimeoutNow` that then
-  passed its sender check, or an `AppendEntries` from a §3.10 transfer target that falsely
-  *resolved* the transfer, cancelling the timer that would have reported the truth (#1906).
+  conservative in-range reading). `TimeoutNow` authenticates its sender against the same pin
+  (#1900) — `_leader` is cleared by a *same-term* step-down, so a node that led term T and stood
+  down at T used to accept a `TimeoutNow` from any voter for the rest of that term. Without the
+  pin, `_leader` took whichever leader→peer frame arrived last, so any voter could redirect a
+  victim's belief to itself in one ordinary frame — and `_leader` was read as authority, so the
+  second frame cashed it in: a `TimeoutNow` that then passed its sender check, or an
+  `AppendEntries` from a §3.10 transfer target that falsely *resolved* the transfer, cancelling
+  the timer that would have reported the truth (#1906).
   The identity is deliberately a second value rather than a reinterpretation of `_leader`, which
   keeps its own meaning — *a live leader I can talk to*, cleared when one steps down — because
   proposal forwarding must not route to a leader that has just stood down. The term scoping is
@@ -149,7 +152,10 @@ because plenty of hostile frames *are* catchable. The line this module draws:
   a term pins itself and the honest leader's frames are the ones dropped for that term. That is
   no worse than the pre-fix behaviour and it is not fixable here: the attack value is also a
   reachable legitimate value, so no predicate over local state separates them. It is an
-  **accepted exposure** pending the authorization mechanism in #1907.
+  **accepted exposure** pending the authorization mechanism in #1907. The pin is also in-memory,
+  so a restarted node holds none and must still admit a `TimeoutNow` naming nobody — an honest
+  §3.10 target that ACKed and restarted is in exactly that state. That window is **open, not
+  accepted**: it needs an authority signal that survives a restart (#1900).
 - A **missing** local check is a bug in this class, not an accepted exposure — the
   distinction being whether *any* predicate over the recipient's own state could catch the
   claim, which is what separates this list from the accepted exposures below. Such gaps are
@@ -243,7 +249,7 @@ exceptions to it. The local witness is local, and it is also possibly out of dat
   the gate's type test, so any peer — learner or spoke included — could send one at all.
   That was one of two halves, and the sharper half was elsewhere: `onTimeoutNow`'s own
   "sender must be the leader" check was scoped to `m.term == state.currentTerm`, because
-  `_leader` is meaningless at a higher term, so a frame one term ahead bypassed it
+  a leader identity is meaningless at a higher term, so a frame one term ahead bypassed it
   entirely and forced an immediate, pre-vote-less election. Both halves closed in #1889 —
   `TimeoutNow` joined the type test, and a `TimeoutNow` ahead of our term is now refused
   rather than adopted.

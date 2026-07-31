@@ -119,16 +119,16 @@ class LeaderForTermPinTest {
 
     /**
      * The composed two-frame attack from the issue. Forge the belief with a same-term `AppendEntries`,
-     * then send a same-term `TimeoutNow` from the same peer: `onTimeoutNow` authenticates its sender
-     * against `_leader`, so a poisoned `_leader` turns the second frame into a pre-vote-less election
-     * the attacker can force at will.
+     * then send a same-term `TimeoutNow` from the same peer: `onTimeoutNow` authenticated its sender
+     * against `_leader`, so a poisoned `_leader` turned the second frame into a pre-vote-less election
+     * the attacker could force at will.
      *
      * With the belief pinned, frame one is dropped and frame two fails the authority test it was
-     * relying on — so the victim neither campaigns nor bumps its term.
+     * relying on — so the victim neither campaigns nor bumps its term. That is what slice 1 buys, and
+     * it is what this test asserts: the attack is closed by keeping `_leader` honest.
      *
-     * (`onTimeoutNow` still *reads* `_leader` here; moving that read to `leaderForTerm` is #1900 and
-     * is deliberately not in this change. This test asserts the composed attack is closed by keeping
-     * `_leader` honest, which is what slice 1 buys.)
+     * `onTimeoutNow` has since moved its read to `leaderForTerm` (#1900, slice 2), so frame two is now
+     * refused twice over — see [TimeoutNowAuthorityPinTest] for the window that only the pin closes.
      */
     @Test
     fun forgedLeaderBeliefThenSameTermTimeoutNowStartsNoElection() = raftRunTest(timeout = 30.seconds) {
