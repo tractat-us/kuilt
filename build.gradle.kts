@@ -86,6 +86,93 @@ subprojects {
 fun kotlinSourcesIn(roots: List<java.io.File>, pattern: String = "**/*.kt"): FileTree =
     files(roots).asFileTree.matching { include(pattern) }
 
+// Shared lexical scanner for the guards that must distinguish CODE from prose.
+//
+// Replace every comment, string and char literal with equivalent blank space, preserving newlines
+// (hence line numbers) so a brace or an identifier in prose or in a literal cannot be mistaken for
+// the real thing — the hazard #1799's citation checker hit. Block comments nest, as they do in
+// Kotlin. `forbidRunCatchingCancellableUnderNonCancellable` (#1803) needs it so a `{` in a string
+// cannot fool its brace walk; `forbidBareRunCatching` (#1329) needs it because `runCatching`
+// appears in PROSE in several scanned files, including a `[runCatching]` KDoc link inside
+// `RunCatchingCancellable.kt` itself.
+//
+// The `$`-template handling (re-entering code mode inside a hole) is what keeps it sound, and it
+// exists because both failure directions were observed: `"A${f(x = "{")}B"` used to emit a stray
+// `{` and flag correct code (a false POSITIVE, which on a `check`-wired guard blocks a correct PR),
+// and its dual (`"}"`) used to hide a real violation. Both are fixed. If you touch this, re-verify
+// BOTH directions with a mutation receipt on EVERY guard that calls it — only one direction is loud.
+//
+// Declared as an `object` rather than a top-level `fun` deliberately: the callers invoke it from
+// inside `doLast`, and a script-level function reference there would capture the `Build_gradle`
+// script instance, which the configuration cache (on in `gradle.properties`) cannot serialize.
+// Object member access compiles to a static reference and captures nothing.
+object KotlinCodeScanner {
+    fun stripNonCode(text: String): String {
+        val out = StringBuilder(text.length)
+        // Frame kinds: 0 = outermost code, 1 = template code (a string-template hole), 2 = string,
+        // 3 = raw string.
+        val kinds = ArrayList<Int>().apply { add(0) }
+        val depths = ArrayList<Int>().apply { add(0) }
+        fun push(kind: Int, depth: Int) { kinds.add(kind); depths.add(depth) }
+        fun pop() { kinds.removeAt(kinds.size - 1); depths.removeAt(depths.size - 1) }
+        var i = 0
+        var blockDepth = 0
+        while (i < text.length) {
+            val kind = kinds[kinds.size - 1]
+            val c = text[i]
+            val next = if (i + 1 < text.length) text[i + 1] else ' '
+            if (kind >= 2) { // inside a string literal
+                when {
+                    kind == 3 && text.startsWith("\"\"\"", i) -> { pop(); i += 3 }
+                    kind == 2 && c == '\\' -> i += 2
+                    kind == 2 && c == '"' -> { pop(); i++ }
+                    c == '$' && next == '{' -> { push(1, 1); i += 2 }
+                    c == '\n' -> {
+                        out.append('\n')
+                        if (kind == 2) pop() // malformed single-line string; recover, don't run away
+                        i++
+                    }
+                    else -> i++
+                }
+                continue
+            }
+            when {
+                blockDepth > 0 -> when {
+                    c == '/' && next == '*' -> { blockDepth++; i += 2 }
+                    c == '*' && next == '/' -> { blockDepth--; i += 2 }
+                    else -> { if (c == '\n') out.append('\n'); i++ }
+                }
+                c == '/' && next == '*' -> { blockDepth = 1; i += 2 }
+                c == '/' && next == '/' -> while (i < text.length && text[i] != '\n') i++
+                text.startsWith("\"\"\"", i) -> { push(3, 0); i += 3 }
+                c == '"' -> { push(2, 0); i++ }
+                c == '\'' -> { // char literal: no templates, bounded to its line
+                    i++
+                    while (i < text.length && text[i] != '\'' && text[i] != '\n') {
+                        if (text[i] == '\\') i++
+                        i++
+                    }
+                    if (i < text.length && text[i] == '\'') i++
+                }
+                c == '{' -> {
+                    if (kind == 1) depths[depths.size - 1] = depths[depths.size - 1] + 1
+                    out.append('{'); i++
+                }
+                c == '}' -> {
+                    if (kind == 1 && depths[depths.size - 1] - 1 == 0) {
+                        pop(); i++ // the template's own closer; its opener was not emitted either
+                    } else {
+                        if (kind == 1) depths[depths.size - 1] = depths[depths.size - 1] - 1
+                        out.append('}'); i++
+                    }
+                }
+                else -> { out.append(c); i++ }
+            }
+        }
+        return out.toString()
+    }
+}
+
 // Guard: forbid unbounded Swatch delivery channels (fabric-backpressure epic, #701/#741).
 // Every in-process fabric must deliver inbound frames through the bounded `Spool` primitive;
 // a raw `Channel<Swatch>(... UNLIMITED ...)` reintroduces the unbounded inbound backlog that
@@ -881,20 +968,18 @@ val verifyDocCitations by tasks.registering {
 // `CompositeSeam.discardOrphanedPly`/`detachPly` do carry one, deliberately, "for symmetry" and
 // self-documented as unable to fire; this guard neither requires nor forbids it.
 //
-// Detection is LEXICAL: a comment/string-literal-aware scanner strips `//`, `/* */` (nesting), `"…"`,
-// `"""…"""` and `'…'` — re-entering code mode inside a `$`-template hole so a literal nested in one cannot
-// leak a brace — then brace-depth-walks each `withContext(NonCancellable) {` block and flags any
+// Detection is LEXICAL: `KotlinCodeScanner.stripNonCode` (hoisted to the "Guard plumbing" section, shared
+// with `forbidBareRunCatching`) blanks `//`, `/* */` (nesting), `"…"`, `"""…"""` and `'…'` — re-entering
+// code mode inside a `$`-template hole so a literal nested in one cannot leak a brace — and this guard then
+// brace-depth-walks each `withContext(NonCancellable) {` block in the blanked text and flags any
 // `runCatchingCancellable` inside it. Three known limits:
 //   - the shield's ARGUMENT LIST must be on one line (`[^;{}\n]*`); the `{` itself may wrap to the next
 //     line, since `\)\s*\{` crosses newlines. A multi-line argument list is not scanned — a miss, not a
 //     false alarm;
 //   - a `runCatchingCancellable` reached through a HELPER called from inside the shield is invisible
 //     (e.g. `CompositeSeam.raisePlyFailure`), because the call site, not the callee, is what is scanned;
-//   - the template-hole handling above is what keeps the walk sound. Before it, `"A${f(x = "{")}B"` inside
-//     a shield emitted a stray `{` and flagged correct code OUTSIDE the shield — a false POSITIVE, which
-//     on a `check`-wired guard blocks a correct PR. The dual (`"}"`) hid a real violation. Both are fixed
-//     and fixture-verified; if you touch the scanner, re-verify BOTH directions, because only one of them
-//     is loud.
+//   - the scanner's template-hole handling is what keeps the walk sound, and it has bitten in BOTH
+//     directions — see its own doc comment. Re-verify both if you touch it.
 // It also flags a `runCatchingCancellable` nested under an intervening `withTimeoutOrNull` inside the
 // shield. That is not a false positive: the shape only survives its OWN timeout — a callee-minted
 // cancellation escapes the `withTimeoutOrNull` (`e.coroutine !== coroutine` ⇒ rethrow) and leaves the
@@ -920,79 +1005,12 @@ val forbidRunCatchingCancellableUnderNonCancellable by tasks.registering {
     outputs.file(stamp)
     outputs.cacheIf { true }
     doLast {
-        // Replace every comment, string and char literal with equivalent blank space, preserving newlines
-        // (hence line numbers) so the brace walk below cannot be fooled by a `{` in prose or in a literal —
-        // the hazard #1799's citation checker hit. Block comments nest, as they do in Kotlin.
-        fun stripNonCode(text: String): String {
-            val out = StringBuilder(text.length)
-            // Frame kinds: 0 = outermost code, 1 = template code (a string-template hole), 2 = string,
-            // 3 = raw string.
-            val kinds = ArrayList<Int>().apply { add(0) }
-            val depths = ArrayList<Int>().apply { add(0) }
-            fun push(kind: Int, depth: Int) { kinds.add(kind); depths.add(depth) }
-            fun pop() { kinds.removeAt(kinds.size - 1); depths.removeAt(depths.size - 1) }
-            var i = 0
-            var blockDepth = 0
-            while (i < text.length) {
-                val kind = kinds[kinds.size - 1]
-                val c = text[i]
-                val next = if (i + 1 < text.length) text[i + 1] else ' '
-                if (kind >= 2) { // inside a string literal
-                    when {
-                        kind == 3 && text.startsWith("\"\"\"", i) -> { pop(); i += 3 }
-                        kind == 2 && c == '\\' -> i += 2
-                        kind == 2 && c == '"' -> { pop(); i++ }
-                        c == '$' && next == '{' -> { push(1, 1); i += 2 }
-                        c == '\n' -> {
-                            out.append('\n')
-                            if (kind == 2) pop() // malformed single-line string; recover, don't run away
-                            i++
-                        }
-                        else -> i++
-                    }
-                    continue
-                }
-                when {
-                    blockDepth > 0 -> when {
-                        c == '/' && next == '*' -> { blockDepth++; i += 2 }
-                        c == '*' && next == '/' -> { blockDepth--; i += 2 }
-                        else -> { if (c == '\n') out.append('\n'); i++ }
-                    }
-                    c == '/' && next == '*' -> { blockDepth = 1; i += 2 }
-                    c == '/' && next == '/' -> while (i < text.length && text[i] != '\n') i++
-                    text.startsWith("\"\"\"", i) -> { push(3, 0); i += 3 }
-                    c == '"' -> { push(2, 0); i++ }
-                    c == '\'' -> { // char literal: no templates, bounded to its line
-                        i++
-                        while (i < text.length && text[i] != '\'' && text[i] != '\n') {
-                            if (text[i] == '\\') i++
-                            i++
-                        }
-                        if (i < text.length && text[i] == '\'') i++
-                    }
-                    c == '{' -> {
-                        if (kind == 1) depths[depths.size - 1] = depths[depths.size - 1] + 1
-                        out.append('{'); i++
-                    }
-                    c == '}' -> {
-                        if (kind == 1 && depths[depths.size - 1] - 1 == 0) {
-                            pop(); i++ // the template's own closer; its opener was not emitted either
-                        } else {
-                            if (kind == 1) depths[depths.size - 1] = depths[depths.size - 1] - 1
-                            out.append('}'); i++
-                        }
-                    }
-                    else -> { out.append(c); i++ }
-                }
-            }
-            return out.toString()
-        }
         // `[^;{}\n]*` bounds the argument list to one line and cannot swallow the block's own brace.
         val anchor = Regex("""withContext\s*\(\s*[^;{}\n]*\bNonCancellable\b[^;{}\n]*\)\s*\{""")
         val call = Regex("""\brunCatchingCancellable\b""")
         val offenders = sources.files.sortedBy { it.invariantSeparatorsPath }.asSequence().flatMap { file ->
             val raw = file.readText()
-            val code = stripNonCode(raw)
+            val code = KotlinCodeScanner.stripNonCode(raw)
             // Character interval of every shielded block: from its `{` to the matching `}`.
             val shielded = anchor.findAll(code).mapNotNull { match ->
                 var depth = 0
