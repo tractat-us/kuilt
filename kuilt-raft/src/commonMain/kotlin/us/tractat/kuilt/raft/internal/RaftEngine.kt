@@ -312,6 +312,100 @@ internal class RaftEngine(
      */
     private var snapshotSizeRejectionWarnLogged: Boolean = false
 
+    // ── Per-term leader identity (#1906) ──────────────────────────────────────
+    /**
+     * The term [leaderForTermId] was recorded for, or `-1` before any leader has been recorded.
+     * Read only through [leaderForTerm] / [adoptLeaderForTerm] — a bare read is meaningless without
+     * the term comparison.
+     *
+     * **Why two fields rather than a bare `NodeId?`.** The pin is a *fact about a term*, so it has to
+     * carry the term it belongs to; a lone identity would have to be explicitly cleared at every site
+     * that moves `currentTerm`, and would silently go wrong the day one of them is missed. Storing the
+     * term makes staleness self-evident at the read: a pin whose term is not the current one simply
+     * is not a pin. That holds for all **three** `currentTerm` writers — [persistTermAndVote] (from
+     * [startRealElection] and [stepDown]) and the init-restore in the `init` block, which the #1906
+     * enumeration did not count and which raises the term without touching `_leader` at all. A `Pair`
+     * or a small holder would read the same; two plain fields just avoid an allocation per election.
+     *
+     * Plain `var`s are correct here: every read and write is on the engine's actor loop, which is
+     * single-threaded by construction ([ceilingWarnLogged] and `serial` are the precedent).
+     */
+    private var leaderForTermTerm: Long = -1L
+
+    /** The node established as leader for [leaderForTermTerm]. See [leaderForTermTerm]. */
+    private var leaderForTermId: NodeId? = null
+
+    /**
+     * The node established as leader for the **current** term, or `null` when this term's leader is
+     * genuinely still unknown (a fresh node, a node that just restored durable state, a node that just
+     * bumped its own term to campaign).
+     *
+     * Deliberately **not** the same value as `_leader`, and the two answer different questions:
+     *
+     * | | Question | Lifecycle |
+     * |---|---|---|
+     * | `_leader` | who do I believe is a live leader I can **talk to** | cleared on step-down |
+     * | [leaderForTerm] | who was **established** as leader for this term | sticky for the term |
+     *
+     * §5.2 Election Safety permits at most one leader per term, so the second answer cannot change
+     * once known — which is exactly what makes it usable as an authority. Proposal forwarding keeps
+     * reading `_leader`: it must not route a proposal to a leader that has just stood down.
+     */
+    private val leaderForTerm: NodeId?
+        get() = leaderForTermId.takeIf { leaderForTermTerm == state.currentTerm }
+
+    /** Record [id] as this term's leader, overwriting any pin left over from an earlier term. */
+    private fun pinLeaderForTerm(id: NodeId) {
+        leaderForTermTerm = state.currentTerm
+        leaderForTermId = id
+    }
+
+    /**
+     * Adopt-if-unset-else-must-match: `true` if [from] may act as this term's leader, `false` if some
+     * *other* node was already established as leader for this term — in which case, by §5.2, one of
+     * the two frames is forged and the caller must drop the one it is holding.
+     *
+     * This is the whole of #1906. `_leader` used to be assigned straight from whichever leader→peer
+     * frame arrived last, so an ordinary same-term `AppendEntries` from any voter redirected a
+     * victim's belief to its sender — and `onTimeoutNow` authenticates its sender against `_leader`,
+     * so the poisoned belief turned a second frame into a pre-vote-less election on demand. Two
+     * frames, from a peer that was never leader.
+     *
+     * **The rule rejects nothing honest**, which is the load-bearing claim and is driven rather than
+     * argued (`LeaderForTermPinTest`): a term's pin is set exactly once, on the first leader-contact
+     * of that term or on winning it, and a term change invalidates it. So every legitimate `null → L`
+     * adoption still happens — on first contact, in the next term, from a Candidate that lost (a
+     * Candidate at term `T` got there by bumping to `T`, so it holds no pin for `T`), and after a
+     * restart. A mismatch requires two same-term leaders, which Election Safety forbids.
+     *
+     * **Disposition: drop the frame.** Not a clamp — an identity has no conservative in-range reading,
+     * and clamping one launders a forgery into the most favourable valid value (#1817). Not a throw —
+     * this runs inside the engine's actor loop, whose `try`/`finally` has no `catch`, so a throw would
+     * convert one remote frame into permanent node death (#1818). Not a reply either, matching
+     * [clearsCommittedTermFloor]: no honest sender can emit this frame, so there is nobody to answer.
+     *
+     * Logged at `debug`, like its sibling drops, deliberately: the caller is an unauthenticated remote
+     * peer that can repeat the frame at will, so a `warn` here would be a log-flood lever. The
+     * Election-Safety-violating case that *is* locally attributable — this node still believing it is
+     * Leader — already emits `BecomeFollower(AppendEntriesFromLeader)` on the trace via
+     * [demoteToFollowerOnLeaderContact].
+     */
+    private fun adoptLeaderForTerm(from: NodeId, rpc: String): Boolean {
+        val established = leaderForTerm
+        if (established == null) {
+            pinLeaderForTerm(from)
+            return true
+        }
+        if (established != from) {
+            debug {
+                "$rpc($from): DROP — ${established.value} is already established as leader for term " +
+                    "${state.currentTerm}; §5.2 permits one leader per term, so this frame is forged"
+            }
+            return false
+        }
+        return true
+    }
+
     // ── Client-proposal forwarding state (§8) — actor-teardown-touched ─────────
     // MUST stay declared BEFORE the `init` block below (which launches the actor).
     // The actor's `finally` teardown calls forwarder.failAll(...), which dereferences
@@ -1101,6 +1195,10 @@ internal class RaftEngine(
 
         _role.value = RaftRole.Leader
         _leader.value = transport.selfId
+        // Winning the term IS the establishing event for it (#1906), and it cannot collide with an
+        // earlier pin: becomeLeader is reachable only from Candidate, and becoming a Candidate bumps
+        // the term, which invalidates whatever was pinned for the previous one.
+        pinLeaderForTerm(transport.selfId)
         electionJob?.cancel()
         leaderAlive = true
         leaderLeaseJob?.cancel()
@@ -1563,7 +1661,11 @@ internal class RaftEngine(
      * buggy sender. The §5.4.1 domination lever wants a *high* `lastIncludedTerm`, and the attacker
      * picks the term — so this is bounded hardening, not a fix for the Byzantine case (#1876/#1907).
      * The decisive check — "only the node I recognise as leader for this term may install a snapshot"
-     * — is blocked on making `_leader` trustworthy (#1906).
+     * — was blocked on there being a trustworthy leader identity to check against. [leaderForTerm]
+     * (#1906) is now that identity, and [onInstallSnapshot] enforces adopt-if-unset-else-must-match
+     * against it, so a snapshot from a peer that is not this term's established leader is already
+     * dropped. Promoting that from an adoption rule to a full authority check — refusing an install
+     * while the term's leader is genuinely unknown — is #1910's deferred half and is not done here.
      */
     private fun clearsCommittedTermFloor(from: NodeId, m: RaftMessage.InstallSnapshot): Boolean {
         if (m.lastIncludedIndex <= state.currentCommitIndex) return true
@@ -1586,6 +1688,13 @@ internal class RaftEngine(
         if (!clearsCommittedTermFloor(from, m)) return
         if (m.term > state.currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
         demoteToFollowerOnLeaderContact()
+        // #1906: the demotion above fires FIRST and unconditionally — a same-term leader-contact
+        // reaching a node that still believes it is Leader must still tear that leadership down
+        // (#1250) — but the sender does not thereby get to install itself as this term's leader. The
+        // two concerns are separable and both are kept; see [adoptLeaderForTerm]. Placed before every
+        // remaining side-effect so a refused frame also cannot cancel an in-flight pre-vote probe or
+        // hold this node's election timer open.
+        if (!adoptLeaderForTerm(from, "onInstallSnapshot")) return
         preVoteTerm = null          // a live leader appeared — cancel any in-flight pre-vote probe
         // The leader is [from]: the peer that authored this frame, not a payload claim (#1912).
         _leader.value = from
@@ -1844,6 +1953,12 @@ internal class RaftEngine(
         // Same-term: normally a cheap role flip, but if we were somehow still Leader (Election Safety
         // violated), route through the relinquish path so timers/deferreds/dedup tear down (#1250).
         demoteToFollowerOnLeaderContact()
+        // #1906: the demotion above fires FIRST and unconditionally (that is #1250's defense in
+        // depth), but the sender does not thereby get to install itself as this term's leader — the
+        // two concerns are separable and both are kept. Placed before every remaining side-effect so
+        // a refused frame cannot cancel an in-flight pre-vote probe, hold this node's election timer
+        // open, resolve a §3.10 transfer, or reach the log. See [adoptLeaderForTerm].
+        if (!adoptLeaderForTerm(from, "onAppendEntries")) return
         preVoteTerm = null          // a live leader appeared — cancel any in-flight pre-vote probe
         // The leader is [from]: the peer that authored this frame, not a payload claim (#1912).
         _leader.value = from
