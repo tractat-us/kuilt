@@ -342,6 +342,7 @@ internal class StageTracker {
 
     /** Evaluate the latest registered snapshot, tolerating a throwing supplier. Called on timeout only. */
     fun diagnosticSnapshot(): String =
+        // ALLOW-runCatching: non-suspend diagnostic over a non-suspend `() -> String` supplier, evaluated on the harness thread — no coroutine context, and a throwing supplier must degrade to text rather than replace the hang report.
         runCatching { snapshot() }.getOrElse { "<snapshot supplier threw: ${it::class.simpleName}: ${it.message}>" }
 
     /**

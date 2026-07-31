@@ -1054,6 +1054,133 @@ val forbidRunCatchingCancellableUnderNonCancellable by tasks.registering {
     }
 }
 
+// Guard: forbid bare `kotlin.runCatching` anywhere in the tree (#1329).
+//
+// WHAT IS BANNED. `runCatching` catches `Throwable`, and `CancellationException` is a `Throwable`.
+// In any suspend or coroutine context that turns a structured-concurrency cancel into an ordinary
+// `Result.failure` — the coroutine keeps running inside a scope that has been told to stop, the
+// cancel is never observed, and nothing anywhere reports an error. It is the quietest bug shape in
+// the codebase. The fix is `runCatchingCancellable` (`:kuilt-core`), which rethrows every
+// `CancellationException` and captures the rest.
+//
+// WHY A GRADLE GUARD AND NOT DETEKT. This is the whole point of #1329. The ban was supposed to be
+// `ForbiddenMethodCall: kotlin.runCatching` in `detekt.yml`; #1086 specified it, the PR that closed
+// #1086 (#1133) shipped the conversions and dropped the gate, and when the gate was finally tried it
+// turned out not to work at all: `ForbiddenMethodCall` resolves NO kotlin-stdlib callee in this KMP
+// setup — reproduced with caches off on real `jvmMain`/`jvmTest` sources, where
+// `UnsafeCallOnNullableType` fires (so type resolution IS active) and `ForbiddenComment` fires (so
+// the style ruleset IS applied), yet `ForbiddenMethodCall` matches neither `kotlin.runCatching` nor
+// `kotlin.io.println`. It silently no-ops on stdlib callees. A detekt rule would also miss `:spike`,
+// which has no detekt task at all (#1796). So: a source scan, which covers the tree by construction.
+// Corollary — every `@Suppress("ForbiddenMethodCall")` in the tree is INERT. The rule is configured
+// in neither `config/detekt/detekt.yml` nor `config/detekt/detekt-test.yml` (the latter bans
+// dispatchers via `ForbiddenImport`, a different rule that does fire). Do not add one expecting it
+// to do anything.
+//
+// SCOPE IS BLANKET — production AND test, unlike the `*Main`-only NonCancellable guard above. The
+// real rule is narrower ("in any suspend or coroutine context"), but deciding lexically whether a
+// given line sits in one is exactly the problem the sibling guard's scanner shows to be hard, and
+// its failure mode is a SILENT false negative. A blanket ban fails the other way — loud, and cleared
+// in one line. It also makes the marker sweep worth having: before it, a reader could not tell a
+// deliberate bare `runCatching` from an oversight, and that indistinguishability is how the class
+// regenerates.
+//
+// THE ESCAPE HATCH is a line-scoped marker with a MANDATORY reason:
+//
+//     // ALLOW-runCatching: raw daemon Thread, not a coroutine — no cancellation to swallow.
+//     thread(isDaemon = true) { runCatching { pump() } }
+//
+// It must sit trailing on the offending line or on the line immediately above — line-tight, so it
+// cannot silently cover a `runCatching` added to the same function later, which is precisely what
+// `@Suppress` (declaration-scoped) would do. A marker with an EMPTY reason is itself a violation:
+// the reason is the entire value of the sweep. Markers are comments, so the marker is matched
+// against the RAW text while the call is found in the STRIPPED text; `stripNonCode` preserves
+// newlines, so the two line-index spaces coincide.
+//
+// DETECTION. `(?<![A-Za-z0-9_])runCatching\s*[({]` over `KotlinCodeScanner.stripNonCode` output.
+// Stripping is not optional here: `runCatching` appears in PROSE in several scanned files,
+// including a `[runCatching]` KDoc link inside `RunCatchingCancellable.kt` itself. The right-hand
+// `\s*[({]` is what keeps the ban off the longer names that merely share the prefix —
+// `runCatchingCancellable` and the in-tree helpers `runCatchingBroadcast` / `runCatchingClosed` /
+// `runCatchingAddLink` / `runCatchingAdmit` all continue with a letter, not `(` or `{`.
+//
+// KNOWN COVERAGE EDGES, stated rather than fixed: `:spike` is only a subproject under
+// `-PincludeSpike`, so it is absent from `subprojects` on a normal build; and `build-logic/` is a
+// separate included build with its own `subprojects`. Neither is scanned. Both are out of the
+// runtime library, which is where a swallowed cancel actually costs something.
+val forbidBareRunCatching by tasks.registering {
+    group = "verification"
+    description = "Fails if any source calls bare runCatching without an ALLOW-runCatching marker — use runCatchingCancellable (#1329)."
+    // ALL source sets, production and test: `**/*.kt` under each module's `src`, which also picks up
+    // the plain-JVM layout (`:kuilt-scale`'s `src/test`) that a `*Main`/`*Test` pattern would miss.
+    val sources = kotlinSourcesIn(subprojects.map { it.projectDir.resolve("src") })
+    inputs.files(sources).withPropertyName("kotlinSources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // See "Guard plumbing" above: the stamp is what makes UP-TO-DATE possible (#1827). The verdict is
+    // a pure function of file contents — there is no allowlist, the markers live in the sources
+    // themselves — so a RELATIVE fingerprint hit genuinely means "this exact source was verified".
+    val stamp = layout.buildDirectory.file("verification/forbid-bare-runcatching.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    val rootPath = rootDir
+    doLast {
+        val call = Regex("""(?<![A-Za-z0-9_])runCatching\s*[({]""")
+        // Group 1 is everything after the colon; blank ⇒ a reasonless marker, itself a violation.
+        val marker = Regex("""//\s*ALLOW-runCatching:(.*)""")
+        val unmarked = mutableListOf<String>()
+        val reasonless = mutableListOf<String>()
+        sources.files.sortedBy { it.invariantSeparatorsPath }.forEach { file ->
+            val raw = file.readText()
+            val code = KotlinCodeScanner.stripNonCode(raw)
+            if (!call.containsMatchIn(code)) return@forEach
+            val rawLines = raw.lines()
+            call.findAll(code).forEach { hit ->
+                val line = code.take(hit.range.first).count { it == '\n' } + 1
+                // Trailing on the same line, or the line immediately above. Deliberately NOT a
+                // multi-line lookback window — line-tight is the point.
+                val candidates = listOfNotNull(rawLines.getOrNull(line - 1), rawLines.getOrNull(line - 2))
+                val reasons = candidates.mapNotNull { marker.find(it)?.groupValues?.get(1)?.trim() }
+                val where = "${file.relativeTo(rootPath)}:$line  ${rawLines.getOrElse(line - 1) { "" }.trim()}"
+                when {
+                    reasons.any { it.isNotEmpty() } -> Unit // exempt
+                    reasons.isNotEmpty() -> reasonless += where
+                    else -> unmarked += where
+                }
+            }
+        }
+        if (unmarked.isNotEmpty() || reasonless.isNotEmpty()) {
+            val detail = buildString {
+                if (unmarked.isNotEmpty()) {
+                    append("\n  ").append(unmarked.joinToString("\n  "))
+                }
+                if (reasonless.isNotEmpty()) {
+                    append("\n\n  An `// ALLOW-runCatching:` marker with an EMPTY reason is itself a violation — ")
+                    append("the reason is the whole point. Say why this site is not a coroutine context, or why ")
+                    append("catching the cancellation is deliberate:\n  ")
+                    append(reasonless.joinToString("\n  "))
+                }
+            }
+            error(
+                "Bare `runCatching` found (#1329). It catches `Throwable`, and `CancellationException` " +
+                    "is one — in a suspend or coroutine context it converts a structured-concurrency " +
+                    "cancel into an ordinary `Result.failure`, so the cancel is never observed and " +
+                    "nothing reports an error. Use `runCatchingCancellable` (`us.tractat.kuilt.core`), " +
+                    "which rethrows cancellation and captures the rest. If this site genuinely is not a " +
+                    "coroutine context (a raw `Thread`/`thread {}` body, a non-suspend `close()`), or the " +
+                    "cancellation really must be caught (a test asserting on it), keep it and say so in a " +
+                    "marker on this line or the line above:\n" +
+                    "      // ALLOW-runCatching: <why this is safe>\n" +
+                    "  `@Suppress(\"ForbiddenMethodCall\")` is NOT the escape hatch — that detekt rule is " +
+                    "configured nowhere and never fires, which is what #1329 exists to fix." +
+                    detail,
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText("ok — ${sources.files.size} Kotlin sources scanned\n")
+    }
+}
+
 // Run the guards as part of `check` (hence `build`, hence CI) in every module.
 allprojects {
     tasks.matching { it.name == "check" }.configureEach {
@@ -1062,5 +1189,6 @@ allprojects {
         dependsOn(rootProject.tasks.named("forbidPortProbeRebind"))
         dependsOn(rootProject.tasks.named("verifyDocCitations"))
         dependsOn(rootProject.tasks.named("forbidRunCatchingCancellableUnderNonCancellable"))
+        dependsOn(rootProject.tasks.named("forbidBareRunCatching"))
     }
 }

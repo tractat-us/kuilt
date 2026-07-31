@@ -352,6 +352,7 @@ class HeddleRosterTest {
 
     private fun assertAll(vararg checks: () -> Unit) {
         // kotlin.test has no assertAll on common; run every check so one failure doesn't mask the rest.
+        // ALLOW-runCatching: non-suspend assertAll polyfill over non-suspend `() -> Unit` checks — no coroutine context, and running every check is the whole point.
         val failures = checks.mapNotNull { runCatching(it).exceptionOrNull() }
         if (failures.isNotEmpty()) throw AssertionError(failures.joinToString("\n") { it.message ?: it.toString() })
     }

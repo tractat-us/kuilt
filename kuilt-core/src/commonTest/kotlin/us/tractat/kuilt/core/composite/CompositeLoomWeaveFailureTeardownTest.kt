@@ -63,6 +63,7 @@ class CompositeLoomWeaveFailureTeardownTest {
         )
         val loom = CompositeLoom(MutableStateFlow(desired), UnconfinedTestDispatcher())
 
+        // ALLOW-runCatching: this test's whole subject is WHICH exception host() surfaces, and the regression it pins is a masquerading CancellationException surfacing instead of the real failure — runCatchingCancellable would rethrow exactly that masquerade, cancelling the test coroutine and erasing the "expected the real weave failure, got: …" signal the assertion exists to give.
         val thrown = runCatching { loom.host(Pattern("t")) }.exceptionOrNull()
 
         assertAll(
