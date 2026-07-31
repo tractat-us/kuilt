@@ -150,8 +150,15 @@ internal class RestoredLogValidationTest {
     /**
      * The negative half of the entry-term bound. Deliberately negative rather than huge: a term *above*
      * `MAX_PLAUSIBLE_TERM` is necessarily also above `state.currentTerm` (which [checkedRestoredTerm] has
-     * already bounded), so only a negative term pins the range half independently of the domination half
-     * below.
+     * already bounded), so only a negative term reaches this half at all.
+     *
+     * **Not a unique pin on any one check**, and measured rather than assumed: with a snapshot term of 0
+     * a negative entry term is *also* a term decrease, so the §5.3 monotonicity check catches it too.
+     * Mutation-measured — disabling the term bound alone leaves this green
+     * ([restoredEntryTermAbovePersistedTerm_refusesToStart] still fails, so that check stays pinned);
+     * disabling the monotonicity check alone likewise ([nonMonotonicRestoredEntryTerms_refusesToStart]
+     * still fails); disabling **both** makes this one fail. Defence in depth on the property, no extra pin
+     * on either mechanism — check those two tests, not this one, when changing either check.
      */
     @Test
     fun negativeRestoredEntryTerm_refusesToStart() = raftRunTest {
