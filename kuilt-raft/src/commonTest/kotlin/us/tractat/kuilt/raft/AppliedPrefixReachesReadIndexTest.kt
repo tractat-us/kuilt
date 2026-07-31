@@ -142,9 +142,15 @@ class AppliedPrefixReachesReadIndexTest {
         sim.awaitCommit(e1.index)
         sim.settle()
 
+        fun kindOf(c: Committed): String = when (c) {
+            is Committed.Entry -> "Entry"
+            is Committed.Internal -> "Internal"
+            is Committed.Install -> "Install"
+        }
+
         assertEquals(
-            listOf<Pair<String, Long>>("Internal" to 1L, "Entry" to e1.index),
-            seen.map { c -> (if (c is Committed.Entry) "Entry" else "Internal") to c.appliedIndex() },
+            listOf("Internal" to 1L, "Entry" to e1.index),
+            seen.map { c -> kindOf(c) to c.appliedIndex() },
             "the election no-op must surface as an index-only marker at its own committed index, " +
                 "ordered before the application entry that follows it: $seen",
         )

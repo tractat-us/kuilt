@@ -2274,7 +2274,7 @@ internal class RaftEngine(
      * an application entry replays as [Committed.Entry], an internal no-op/config entry as a
      * payload-free [Committed.Internal] marker. Replaying the marker rather than dropping the entry
      * is what lets a resuming consumer's applied prefix cross a withheld index (#1718) — and it is
-     * why a config entry can no longer reach a consumer as an [Committed.Entry] it would try to
+     * why a config entry can no longer reach a consumer as a [Committed.Entry] it would try to
      * decode as an application command.
      *
      * When [fromIndex] falls at or below [snapshotIndex], loads the stored snapshot and
