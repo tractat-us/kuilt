@@ -9,9 +9,12 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.DeliveryPolicy
+import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.TransportCapability
+import us.tractat.kuilt.core.TransportRole
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -598,6 +601,54 @@ class FaultySeamTest {
                 b.framesDelivered <= DeliveryPolicy.DEFAULT_CAPACITY.toLong(),
                 "inbound must be bounded at ${DeliveryPolicy.DEFAULT_CAPACITY}; was ${b.framesDelivered}",
             )
+        }
+
+    // ── capability() forwards the delegate's verdict (#1936) ──────────────────
+
+    /**
+     * A [FaultProfile] describes **link behaviour** — delay, drop, partition — on a link the
+     * delegate's fabric already carries. [us.tractat.kuilt.core.FabricAvailability] is a different
+     * question: whether that fabric is usable *on this runtime at all*, pre-connect. [FaultyLoom]
+     * has no answer to it of its own (it weaves whatever the delegate weaves, faults or not), so the
+     * delegate's verdict is the only established one and must survive the wrap.
+     */
+    @Test
+    fun `FaultyLoom capability forwards the delegate's established verdict`() =
+        runTest {
+            val declared = TransportCapability(
+                roles = setOf(TransportRole.Discovery, TransportRole.WifiLan),
+                availability = FabricAvailability.Unavailable("delegate fabric unusable on this runtime"),
+            )
+            val delegate = FixedCapabilityLoom(declared)
+            val loom = FaultyLoom(delegate, backgroundScope)
+
+            assertAll(
+                { assertEquals(declared, loom.capability(), "FaultyLoom must forward its delegate's capability()") },
+                {
+                    assertEquals(
+                        declared.availability,
+                        loom.availability(),
+                        "availability() derives from the forwarded capability()",
+                    )
+                },
+                { assertEquals(0, delegate.weaveCount, "capability() is a pre-connect surface — reading it must not weave") },
+            )
+        }
+
+    /**
+     * An injected fault must not be laundered into a fabric-availability verdict either: the
+     * canonical partition profile ([FaultProfile.DropAll]) still reports whatever the delegate does.
+     */
+    @Test
+    fun `FaultyLoom capability is unaffected by the injected fault profile`() =
+        runTest {
+            val declared = TransportCapability(
+                roles = setOf(TransportRole.Data),
+                availability = FabricAvailability.Available,
+            )
+            val loom = FaultyLoom(FixedCapabilityLoom(declared), backgroundScope, FaultProfile.DropAll())
+
+            assertEquals(declared, loom.capability(), "a FaultProfile describes link behaviour, not fabric availability")
         }
 }
 

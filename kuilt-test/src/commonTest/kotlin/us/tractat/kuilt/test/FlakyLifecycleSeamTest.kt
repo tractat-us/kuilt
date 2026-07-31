@@ -9,10 +9,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.TransportCapability
+import us.tractat.kuilt.core.TransportRole
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
@@ -456,6 +459,37 @@ class FlakyLifecycleSeamTest {
                 { assertEquals(2, loom.links.size) },
                 { assertEquals(a.selfId, loom.links[0].selfId) },
                 { assertEquals(b.selfId, loom.links[1].selfId) },
+            )
+        }
+
+    // ── capability() forwards the delegate's verdict (#1936) ──────────────────
+
+    /**
+     * [FlakyLifecycleLoom] flaps its seams' *lifecycle*; it does not change which fabric carries
+     * them or whether that fabric is usable on this runtime. So the delegate's verdict is this
+     * loom's verdict, and inheriting [us.tractat.kuilt.core.Loom]'s confident roleless `Available`
+     * default would overwrite one that was correctly established a layer down.
+     */
+    @Test
+    fun `FlakyLifecycleLoom capability forwards the delegate's established verdict`() =
+        runTest {
+            val declared = TransportCapability(
+                roles = setOf(TransportRole.WifiDirect, TransportRole.Bluetooth),
+                availability = FabricAvailability.Unavailable("delegate fabric unusable on this runtime"),
+            )
+            val delegate = FixedCapabilityLoom(declared)
+            val loom = FlakyLifecycleLoom(delegate, backgroundScope)
+
+            assertAll(
+                { assertEquals(declared, loom.capability(), "FlakyLifecycleLoom must forward its delegate's capability()") },
+                {
+                    assertEquals(
+                        declared.availability,
+                        loom.availability(),
+                        "availability() derives from the forwarded capability()",
+                    )
+                },
+                { assertEquals(0, delegate.weaveCount, "capability() is a pre-connect surface — reading it must not weave") },
             )
         }
 }

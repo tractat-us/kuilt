@@ -85,6 +85,24 @@ public class MuxClientLoom(
     }
 
     /**
+     * The [base] fabric's verdict, verbatim. Multiplexing changes how many logical sessions share a
+     * link — not which medium carries it, nor whether that medium is usable on this runtime — so the
+     * base's capability *is* this loom's capability, in both halves.
+     *
+     * Inheriting [Loom]'s default would be strictly worse than an un-established guess: it would
+     * discard a verdict already established one layer down. A base that knows its dylib will not
+     * load reports [FabricAvailability.Unavailable], and wrapping it must not launder that into a
+     * confident `Available`. The [TransportCapability.roles] half matters just as much — it is read
+     * pre-weave by `CompositeLoom.weave` and `CompositeSeam.attachDesiredPly` and captured onto the
+     * ply for the composite's role rollup, so a muxed ply defaulting to `emptySet()` silently
+     * under-reports what the composite can do (#1936).
+     *
+     * Deliberately **not** generation-aware: [Loom.capability] is the pre-connect surface, answered
+     * before and independently of any [weave]. The live per-session view is [Seam.capability].
+     */
+    override fun capability(): TransportCapability = base.capability()
+
+    /**
      * Closes the current base fabric, tearing down the single shared socket. The next [weave]
      * re-weaves the base and heals every channel handle onto it.
      */

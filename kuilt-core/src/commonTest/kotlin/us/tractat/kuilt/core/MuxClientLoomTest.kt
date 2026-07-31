@@ -272,6 +272,68 @@ class MuxClientLoomTest {
         )
     }
 
+    // ── capability() forwards the base's verdict (#1936) ──────────────────────
+
+    /**
+     * A muxed channel rides the base fabric's medium, so the base's verdict *is* this loom's
+     * verdict. Inheriting [Loom]'s confident roleless `Available` default would overwrite a
+     * correctly-established one — a base that knows its dylib will not load reports
+     * [FabricAvailability.Unavailable], and wrapping it must not launder that into `Available`.
+     */
+    @Test
+    fun `capability forwards the base Loom's established verdict`() =
+        runTest {
+            val declared = TransportCapability(
+                roles = setOf(TransportRole.ServerRelay, TransportRole.Data),
+                availability = FabricAvailability.Unavailable("base fabric unusable on this runtime"),
+            )
+            val loom = muxClientLoom(FixedCapabilityLoom(declared), backgroundScope)
+
+            assertAll(
+                { assertEquals(declared, loom.capability(), "MuxClientLoom must forward its base's capability()") },
+                {
+                    assertEquals(
+                        declared.availability,
+                        loom.availability(),
+                        "availability() derives from the forwarded capability()",
+                    )
+                },
+            )
+        }
+
+    /**
+     * [Loom.capability] is read pre-weave by `CompositeLoom.weave` and `CompositeSeam.attachDesiredPly`,
+     * so forwarding must not require the base to have been woven first.
+     */
+    @Test
+    fun `capability forwards before any weave`() =
+        runTest {
+            val declared = TransportCapability(
+                roles = setOf(TransportRole.WifiDirect),
+                availability = FabricAvailability.Unknown("base has no live path observer"),
+            )
+            val base = FixedCapabilityLoom(declared)
+            val loom = muxClientLoom(base, backgroundScope)
+
+            assertAll(
+                { assertEquals(declared, loom.capability(), "capability() is a pre-connect surface — no weave required") },
+                { assertEquals(0, base.weaveCount, "reading capability() must not weave the base") },
+            )
+        }
+
+    /** A base [Loom] reporting a fixed [declared] capability; [weave] is not exercised by these tests. */
+    private class FixedCapabilityLoom(private val declared: TransportCapability) : Loom {
+        var weaveCount: Int = 0
+            private set
+
+        override suspend fun weave(rendezvous: Rendezvous): Seam {
+            weaveCount++
+            error("FixedCapabilityLoom is capability-only and must not be woven")
+        }
+
+        override fun capability(): TransportCapability = declared
+    }
+
     /** A base [Loom] that hands out a scripted sequence of [ScriptedSeam]s, one per [weave]. */
     private class ScriptedLoom(private val seams: List<Seam>) : Loom {
         private var next = 0
