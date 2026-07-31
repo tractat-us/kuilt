@@ -144,7 +144,12 @@ because plenty of hostile frames *are* catchable. The line this module draws:
   keeps its own meaning — *a live leader I can talk to*, cleared when one steps down — because
   proposal forwarding must not route to a leader that has just stood down. The term scoping is
   the whole of the rule's safety: a pin belongs to a term, so any term change re-opens adoption
-  and nothing honest is refused.
+  and nothing honest is refused. What it does **not** do is decide *which* of two claimants is
+  the real one — the pin is first-claim-wins, so a forger that lands the first leader-contact of
+  a term pins itself and the honest leader's frames are the ones dropped for that term. That is
+  no worse than the pre-fix behaviour and it is not fixable here: the attack value is also a
+  reachable legitimate value, so no predicate over local state separates them. It is an
+  **accepted exposure** pending the authorization mechanism in #1907.
 - A **missing** local check is a bug in this class, not an accepted exposure — the
   distinction being whether *any* predicate over the recipient's own state could catch the
   claim, which is what separates this list from the accepted exposures below. Such gaps are

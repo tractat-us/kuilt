@@ -381,8 +381,21 @@ internal class RaftEngine(
      * **Disposition: drop the frame.** Not a clamp — an identity has no conservative in-range reading,
      * and clamping one launders a forgery into the most favourable valid value (#1817). Not a throw —
      * this runs inside the engine's actor loop, whose `try`/`finally` has no `catch`, so a throw would
-     * convert one remote frame into permanent node death (#1818). Not a reply either, matching
-     * [clearsCommittedTermFloor]: no honest sender can emit this frame, so there is nobody to answer.
+     * convert one remote frame into permanent node death (#1818). Not a reply either — but for a weaker
+     * reason than [clearsCommittedTermFloor]'s: there, no honest sender can emit the frame at all, so
+     * there is nobody to answer. Here the dropped frame may well be the honest leader's (see below), and
+     * the reason not to answer is simply that no reply helps — the recipient cannot tell the two senders
+     * apart, so it has nothing to say that the honest one could act on.
+     *
+     * **Residual exposure: the pin is first-claim-wins, and that is not authorization.** Which of the
+     * two candidates gets established is decided by arrival order, not by evidence. A forger that lands
+     * the *first* leader-contact of a term pins itself, and this node then drops the real leader's
+     * frames for the rest of that term — quietly, since neither side is told. That is not an escalation
+     * over the pre-fix behaviour (before this, the forger simply overwrote the belief whenever it liked,
+     * and additionally unlocked `onTimeoutNow`), and it is inherent to deciding between two
+     * unauthenticated claims from local state alone: **a local predicate cannot substitute for
+     * authorization** when the attack value is also a reachable legitimate value (#1880). Closing it
+     * needs the mechanism tracked in #1907, not a better local check.
      *
      * Logged at `debug`, like its sibling drops, deliberately: the caller is an unauthenticated remote
      * peer that can repeat the frame at will, so a `warn` here would be a log-flood lever. The
@@ -399,7 +412,8 @@ internal class RaftEngine(
         if (established != from) {
             debug {
                 "$rpc($from): DROP — ${established.value} is already established as leader for term " +
-                    "${state.currentTerm}; §5.2 permits one leader per term, so this frame is forged"
+                    "${state.currentTerm}; §5.2 permits one leader per term, so one of the two is " +
+                    "forged — which one is not locally decidable, and the pin is first-claim-wins"
             }
             return false
         }
