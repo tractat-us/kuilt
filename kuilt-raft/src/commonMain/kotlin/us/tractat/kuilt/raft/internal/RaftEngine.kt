@@ -286,6 +286,32 @@ internal class RaftEngine(
      */
     private var ceilingWarnLogged: Boolean = false
 
+    /**
+     * The `(sender, position)` of the most recent snapshot chunk rejected by `snapshotTotalCeiling`,
+     * or `null` if none has been. Read by [reportSnapshotRejectedSizeCeiling] to tell a *repeat* from
+     * a first occurrence.
+     *
+     * One pair, not a set: the only thing needed is whether the previous rejection was the same, and a
+     * per-peer map would be unbounded state a remote peer controls the keys of.
+     */
+    private var lastSnapshotSizeRejection: Pair<NodeId, SnapshotMeta>? = null
+
+    /**
+     * `true` once [reportSnapshotRejectedSizeCeiling] has logged its `warn`, latching it to **once per
+     * node** — the same "log once, measure continuously" split as [ceilingWarnLogged].
+     *
+     * Both halves are load-bearing here. The `warn` waits for a *repeat* because a single rejection is
+     * the resource bound working as designed against a peer feeding an unbounded `done = false` stream
+     * (#1881), which is not an operator's problem; it is the *sustained* case — an honest leader whose
+     * snapshot genuinely exceeds this ceiling, restarting from `0` forever — that is a
+     * misconfiguration and needs a name above `debug`. And it latches because otherwise a hostile peer
+     * that alternates snapshot positions in pairs mints a fresh `warn` per streak, one frame each: a
+     * log-amplification lever handed to the very sender this bound exists to contain. Once per node
+     * costs an operator nothing, since the condition the `warn` reports does not clear on its own —
+     * `snapshotTotalCeiling` is read when the node is built, so raising it means a restart anyway.
+     */
+    private var snapshotSizeRejectionWarnLogged: Boolean = false
+
     // ── Client-proposal forwarding state (§8) — actor-teardown-touched ─────────
     // MUST stay declared BEFORE the `init` block below (which launches the actor).
     // The actor's `finally` teardown calls forwarder.failAll(...), which dereferences
@@ -1583,11 +1609,11 @@ internal class RaftEngine(
                 // this IS answerable — an honest leader can legitimately have an oversized snapshot, and
                 // the ack is what tells it to restart rather than keep feeding a buffer that is no longer
                 // there. If its snapshot is genuinely above the ceiling the transfer will not converge;
-                // that is the intended loud, configurable failure in place of an OOM (#1881).
-                debug {
-                    "onInstallSnapshot($from): DISCARD — reassembly would reach ${outcome.attemptedTotal} bytes, " +
-                        "above snapshotTotalCeiling=${outcome.ceiling} → discard and re-advertise 0"
-                }
+                // that is the intended loud, configurable failure in place of an OOM (#1881) — and
+                // `loud` is what reportSnapshotRejectedSizeCeiling makes true (#1926): before it, the
+                // whole signal was one `debug` line, so an operator saw a follower that never caught
+                // up with nothing naming the knob that would fix it.
+                reportSnapshotRejectedSizeCeiling(from, meta, outcome)
                 send(from, RaftMessage.InstallSnapshotResponse(state.currentTerm, 0L, echoedRound = m.round))
             }
             is SnapshotReceiver.ChunkOutcome.AwaitMore -> {
@@ -1597,6 +1623,71 @@ internal class RaftEngine(
             is SnapshotReceiver.ChunkOutcome.Complete -> finalizeInstalledSnapshot(from, m, outcome.meta, outcome.bytes)
         }
     }
+
+    /**
+     * Report a `snapshotTotalCeiling` rejection on the engine's two observable surfaces (#1926).
+     *
+     * The disposition is not this function's business — [onInstallSnapshot] has already discarded the
+     * reassembly and is about to re-advertise `0`, and that is correct either way. What this adds is a
+     * *name* for the resulting state, because the two things a rejection can mean look identical in the
+     * frame and are told apart only by whether it keeps happening:
+     *
+     * - **Once** is the bound working. The sender picks `done`, so a peer can hold a follower in
+     *   reassembly forever and grow the buffer until the process dies; the ceiling is what stops that
+     *   (#1881), and a single rejection is not an operator's problem.
+     * - **Repeatedly, for the same peer and the same [SnapshotMeta]**, is a misconfiguration. An honest
+     *   leader whose snapshot genuinely exceeds this follower's ceiling restarts from `0`, refills to
+     *   the ceiling, is discarded again, and the follower never catches up. Nothing recovers on its
+     *   own and the remedy — raise `RaftConfig.snapshotTotalCeiling` — is not derivable from the
+     *   symptom.
+     *
+     * So the `warn` fires on the repeat rather than the first occurrence, and is latched to once per
+     * node; the [RaftMetric.SnapshotRejectedSizeCeiling] emit is unlatched, because a consumer samples
+     * it as a level and "is this still happening?" is exactly the question that separates the two cases
+     * above. See [snapshotSizeRejectionWarnLogged] for why the latch is not merely tidiness.
+     *
+     * Never throws: this is reached from the actor loop on a path a remote frame controls, so a
+     * `require` here would convert one hostile frame into permanent node death (#1818).
+     */
+    private fun reportSnapshotRejectedSizeCeiling(
+        from: NodeId,
+        meta: SnapshotMeta,
+        outcome: SnapshotReceiver.ChunkOutcome.TooLarge,
+    ) {
+        emitMetric(RaftMetric.SnapshotRejectedSizeCeiling(outcome.attemptedTotal, outcome.ceiling))
+        val rejection = from to meta
+        val repeat = rejection == lastSnapshotSizeRejection
+        lastSnapshotSizeRejection = rejection
+        // Latched to once per node — see snapshotSizeRejectionWarnLogged. The metric above is not latched.
+        if (repeat && !snapshotSizeRejectionWarnLogged) {
+            snapshotSizeRejectionWarnLogged = true
+            logger.warn { "[raft:${transport.selfId}] ${snapshotCeilingDiagnostic(from, outcome)}" }
+        } else {
+            debug { snapshotCeilingDiagnostic(from, outcome) }
+        }
+    }
+
+    /**
+     * The operator-facing diagnostic for [reportSnapshotRejectedSizeCeiling].
+     *
+     * Built by a function rather than inlined so the `warn` and `debug` call sites share one text while
+     * both stay lazy — neither builds the string unless its level is enabled. Mirrors
+     * [ceilingDiagnostic].
+     *
+     * **Names both cases, and says which one needs an operator.** The `warn` fires only on the repeat,
+     * but the text is shared with the `debug` a first occurrence gets, so it cannot assume the reader is
+     * looking at a misconfiguration — a line that told every reader to raise the ceiling would send an
+     * operator to reconfigure a node whose only event was the bound successfully containing a hostile
+     * peer.
+     */
+    private fun snapshotCeilingDiagnostic(from: NodeId, outcome: SnapshotReceiver.ChunkOutcome.TooLarge): String =
+        "onInstallSnapshot($from): DISCARD — reassembly would reach ${outcome.attemptedTotal} bytes, above " +
+            "snapshotTotalCeiling=${outcome.ceiling} → discard and re-advertise 0. Repeats for the same peer " +
+            "and snapshot position mean this follower cannot install that snapshot at all and will never " +
+            "catch up: raise RaftConfig.snapshotTotalCeiling above the leader's snapshot size and restart " +
+            "this node (the ceiling is read once, when the node is built). A single occurrence is instead " +
+            "the bound containing a peer that would otherwise grow this buffer without limit, and needs no " +
+            "action (#1881, #1926)."
 
     /** Persist + apply a fully-reassembled snapshot, reset the log around it, and emit the install. */
     private suspend fun finalizeInstalledSnapshot(
