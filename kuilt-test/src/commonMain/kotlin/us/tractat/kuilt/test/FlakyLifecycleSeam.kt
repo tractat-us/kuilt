@@ -21,6 +21,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.Tag
+import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.test.internal.initialLifecycleState
 import us.tractat.kuilt.test.internal.onEnterWeaving
 import us.tractat.kuilt.test.internal.onRecover
@@ -281,6 +282,14 @@ public class FlakyLifecycleLoom(
     override suspend fun host(pattern: Pattern): FlakyLifecycleSeam = wrap(delegate.host(pattern))
 
     override suspend fun join(tag: Tag): FlakyLifecycleSeam = wrap(delegate.join(tag))
+
+    /**
+     * The [delegate]'s verdict, verbatim. This loom flaps its seams' *lifecycle*; it does not change
+     * which medium carries them or whether that medium is usable on this runtime — the pre-connect
+     * question [us.tractat.kuilt.core.Loom.capability] answers. Substituting a verdict of its own
+     * would only discard the delegate's established one (#1936).
+     */
+    override fun capability(): TransportCapability = delegate.capability()
 
     private fun wrap(delegate: Seam): FlakyLifecycleSeam {
         val seam = FlakyLifecycleSeam(delegate, scope)

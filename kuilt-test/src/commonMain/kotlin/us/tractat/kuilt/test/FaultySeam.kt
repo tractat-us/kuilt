@@ -21,6 +21,7 @@ import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.Tag
+import us.tractat.kuilt.core.TransportCapability
 
 /**
  * A [Seam] wrapper that injects configurable faults for use in tests.
@@ -190,6 +191,18 @@ public class FaultyLoom(
     override suspend fun host(pattern: Pattern): FaultySeam = wrap(delegate.host(pattern))
 
     override suspend fun join(tag: Tag): FaultySeam = wrap(delegate.join(tag))
+
+    /**
+     * The [delegate]'s verdict, verbatim — including when a [defaultProfile] partitions every link.
+     *
+     * A [FaultProfile] describes **link behaviour** (delay, drop, partition) on a link the delegate's
+     * fabric already carries; [us.tractat.kuilt.core.FabricAvailability] answers the different,
+     * pre-connect question of whether that fabric is usable *on this runtime at all*. This loom has
+     * no answer of its own to that — it weaves whatever the delegate weaves — so substituting one
+     * would only discard the delegate's established verdict (#1936). A simulated partition belongs
+     * on the seam's live surface, not in a claim that the fabric does not exist here.
+     */
+    override fun capability(): TransportCapability = delegate.capability()
 
     /** Apply [profile] to every link the factory has created so far. */
     public fun setFaultProfileOnAll(profile: FaultProfile) {
