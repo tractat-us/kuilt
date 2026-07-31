@@ -126,6 +126,7 @@ public class BinaryenWasmOptimizer(
 
             val dir = Files.createTempDirectory("kuilt-binaryen-").toFile()
             Runtime.getRuntime().addShutdownHook(
+                // ALLOW-runCatching: raw JVM shutdown-hook Thread, not a coroutine — there is no job here to cancel and so no cancellation to swallow.
                 Thread { runCatching { dir.deleteRecursively() } },
             )
             for (rel in files) {

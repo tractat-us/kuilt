@@ -236,6 +236,7 @@ class WebSocketVoterMeshReconnectionTest {
                 // is a defensive, idempotent backstop (Seam.close is idempotent) — belt-and-braces against
                 // runBlocking parking on a leaked CIO session if any seam slipped close().
                 withTimeout(window) { mesh.close() }
+                // ALLOW-runCatching: the catch IS the mechanism — this backstop must tolerate its own withTimeout's TimeoutCancellationException so the teardown below still runs. runCatchingCancellable would rethrow it, skip httpClient.close(), and leave a CIO session parking runBlocking forever.
                 runCatching { withTimeout(window) { mesh.voterSeams?.values?.forEach { it.close() } } }
             }
             hostScope?.cancel()
@@ -347,6 +348,7 @@ private class SeverableTcpProxy(
 
     init {
         thread(isDaemon = true, name = "severable-proxy-accept") {
+            // ALLOW-runCatching: raw daemon Thread body, not a coroutine — the accept loop dies with a SocketException on close() and there is no cancellation to swallow.
             runCatching {
                 while (!serverSocket.isClosed) {
                     val downstream = serverSocket.accept()
@@ -362,6 +364,7 @@ private class SeverableTcpProxy(
 
     private fun pump(from: Socket, to: Socket) {
         thread(isDaemon = true, name = "severable-proxy-pump") {
+            // ALLOW-runCatching: raw daemon Thread body, not a coroutine — the blocking read/write pump dies with an IOException on close() and there is no cancellation to swallow.
             runCatching {
                 val input = from.getInputStream()
                 val output = to.getOutputStream()
@@ -391,7 +394,9 @@ private class SeverableTcpProxy(
     }
 
     override fun close() {
+        // ALLOW-runCatching: non-suspend AutoCloseable.close() over a blocking java.net socket — no coroutine context, and this close must not stop the ones below.
         runCatching { serverSocket.close() }
+        // ALLOW-runCatching: as above — non-suspend socket close, best-effort per socket.
         openSockets.forEach { runCatching { it.close() } }
     }
 

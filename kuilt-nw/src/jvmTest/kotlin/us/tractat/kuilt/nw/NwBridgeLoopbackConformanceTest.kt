@@ -64,7 +64,9 @@ class NwBridgeLoopbackConformanceTest : SeamConformanceSuite() {
         // Runtimes before the rendezvous. close() cancels the drain scope AND disposes the native
         // runtime exactly once (its Cleaner and this close() share a CAS gate), so this never
         // double-destroys — even if a bridge later becomes GC-unreachable.
+        // ALLOW-runCatching: non-suspend @AfterTest teardown over JNA handles — no coroutine context, and one failing close must not skip the rest.
         bridges.forEach { bridge -> runCatching { bridge.close() } }
+        // ALLOW-runCatching: as above — non-suspend native handle disposal, best-effort per handle.
         rendezvousHandles.forEach { rv -> runCatching { lib?.nw_loopback_rendezvous_destroy(rv) } }
         bridges.clear()
         rendezvousHandles.clear()
