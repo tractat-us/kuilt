@@ -324,8 +324,8 @@ public interface RaftNode {
     /**
      * Initiates a graceful leadership transfer to [target] per Raft §3.10, and suspends until the
      * transfer is **confirmed** or fails. It returns normally only when this node observes a
-     * **leader-authored message from [target]** — an AppendEntries/InstallSnapshot with
-     * `leaderId == target` at a term above the transfer's start term — proof the target actually won
+     * **leader-authored message from [target]** — an AppendEntries/InstallSnapshot *sent by* [target]
+     * at a term above the transfer's start term — proof the target actually won
      * an election. An intervening step-down does *not* resolve the call (the sender of the first
      * higher-term message identifies neither the winner nor even a campaigner): the transfer stays
      * pending until the confirmation arrives or the one-election-timeout auto-abandon fires. Failure

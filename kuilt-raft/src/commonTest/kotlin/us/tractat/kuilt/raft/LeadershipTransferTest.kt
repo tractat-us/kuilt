@@ -145,7 +145,7 @@ internal class LeadershipTransferTest {
      * The residual false-SUCCESS of #1243, the echo route: a higher-term message whose *sender* is the
      * transfer target is not proof the target won — the target may merely have adopted a higher term from
      * elsewhere and echoed it. The §3.10-faithful success signal is a **leader-authored** message
-     * (AppendEntries/InstallSnapshot with `leaderId == target`) at a higher term.
+     * (AppendEntries/InstallSnapshot) *sent by* the target at a higher term.
      *
      * Repro: transfer A→B in flight with B fully isolated (it can never campaign or win). B "echoes" a
      * higher term at A via an injected `AppendEntriesResponse(term+1)` — exactly what B would send after
@@ -188,7 +188,7 @@ internal class LeadershipTransferTest {
         assertFalse(
             transferOutcome.isCompleted,
             "transfer must not complete on a higher-term echo from the target — only a leader-authored " +
-                "message (AppendEntries/InstallSnapshot with leaderId == target) proves the target won",
+                "message (AppendEntries/InstallSnapshot) sent by the target proves the target won",
         )
 
         // With the target isolated, no confirmation can ever arrive: the transfer fails on the auto-timeout.

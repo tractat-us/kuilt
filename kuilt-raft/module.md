@@ -117,6 +117,18 @@ because plenty of hostile frames *are* catchable. The line this module draws:
   above — a nonce has no conservative in-range reading, and clamping one would launder a
   forgery into the most favourable valid value. Discarding leaves the forward outstanding
   exactly as a lost reply would, so the genuine reply still resolves it (#1911).
+- **A sender never names itself.** No frame carries a `leaderId`/`candidateId` restating its own
+  origin, because the transport already supplies one: `from` is the true sender (the relay layers
+  unwrap their envelope) and every handler takes it. Five such fields existed and were read as
+  authority — `_leader.value`, the persisted `votedFor`, the §3.10 transfer confirmation — so a
+  voter could name a third party as leader, burn a victim's vote on a phantom that never
+  campaigned (denying the genuine candidate at that term thereafter), or falsely confirm a transfer
+  for a node that never won. They were **deleted rather than checked** (#1912). That is the
+  strongest disposition available and the one to prefer: a check must be repeated at every read
+  site and can be forgotten at the next one, whereas a field that does not exist cannot be forged,
+  and the diff was net-negative. The evidence it is the right call is in the set itself —
+  `TimeoutNow.leaderId` sat unread for its whole life, and what protected it was that nobody read
+  it, not that anyone checked it.
 - A **missing** local check is a bug in this class, not an accepted exposure — the
   distinction being whether *any* predicate over the recipient's own state could catch the
   claim, which is what separates this list from the accepted exposures below. Such gaps are

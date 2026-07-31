@@ -67,7 +67,7 @@ class AppendEntriesApplyPathTest {
         entries: List<LogEntry>,
         leaderCommit: Long,
     ): ByteArray = Cbor.encodeToByteArray<RaftMessage>(
-        RaftMessage.AppendEntries(term, leader, prevLogIndex, prevLogTerm, entries, leaderCommit, round = 0L),
+        RaftMessage.AppendEntries(term, prevLogIndex, prevLogTerm, entries, leaderCommit, round = 0L),
     )
 
     private fun InMemoryRaftNetwork.lastAppendResponse(): RaftMessage.AppendEntriesResponse =
