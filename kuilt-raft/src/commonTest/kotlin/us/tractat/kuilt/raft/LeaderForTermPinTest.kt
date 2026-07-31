@@ -73,6 +73,48 @@ class LeaderForTermPinTest {
     }
 
     /**
+     * The sibling adoption site, and the one where the forgery is worse than a mis-set belief. An
+     * `InstallSnapshot` that clears the recipient's commit frontier **wipes its log** (`truncateFrom(0)`
+     * when the boundary term does not match) and resets its state machine to attacker-supplied bytes.
+     * Same-term, from a peer that Election Safety says cannot be this term's leader, that must not
+     * happen — so the frame is refused before it reaches `SnapshotReceiver` at all.
+     */
+    @Test
+    fun sameTermInstallSnapshotFromAnotherVoterNeitherSeizesBeliefNorInstalls() = raftRunTest(timeout = 30.seconds) {
+        val sim = raftSim(this, backgroundScope, n = 3)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
+        val (victimId, forgerId) = sim.nodeIds.filter { it != leaderId }
+
+        sim.awaitTrue("$victimId recognises $leaderId") { sim.nodes.getValue(victimId).leader.value == leaderId }
+        val term = sim.storages.getValue(victimId).term()
+        sim.partitionOff(victimId)
+
+        val victim = sim.nodes.getValue(victimId)
+        val installs = sim.collectInstalls(victimId)
+        val commitBefore = victim.commitIndex.value
+        sim.settle()   // let the install collector subscribe before the frame is injected
+
+        // Above the victim's commit frontier, so pre-fix this genuinely installs rather than being
+        // waved off as a stale duplicate.
+        sim.deliverInstallSnapshot(
+            to = victimId,
+            from = forgerId,
+            term = term,
+            lastIncludedIndex = commitBefore + 5L,
+            lastIncludedTerm = term,
+            data = byteArrayOf(6, 6, 6),
+        )
+        sim.settle()
+
+        assertAll(
+            { assertEquals(leaderId, victim.leader.value, "a same-term InstallSnapshot from $forgerId must not install it as leader") },
+            { assertTrue(installs.isEmpty(), "and must not reset the state machine — installs were $installs") },
+            { assertEquals(commitBefore, victim.commitIndex.value, "nor advance the commit frontier") },
+        )
+    }
+
+    /**
      * The composed two-frame attack from the issue. Forge the belief with a same-term `AppendEntries`,
      * then send a same-term `TimeoutNow` from the same peer: `onTimeoutNow` authenticates its sender
      * against `_leader`, so a poisoned `_leader` turns the second frame into a pre-vote-less election
