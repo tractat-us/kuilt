@@ -348,7 +348,8 @@ internal class RaftEngine(
      * | [leaderForTerm] | who was **established** as leader for this term | sticky for the term |
      *
      * §5.2 Election Safety permits at most one leader per term, so the second answer cannot change
-     * once known — which is exactly what makes it usable as an authority. Proposal forwarding keeps
+     * once known — which is exactly what makes it usable as an authority, and why [onTimeoutNow]
+     * authenticates its sender against this rather than `_leader` (#1900). Proposal forwarding keeps
      * reading `_leader`: it must not route a proposal to a leader that has just stood down.
      */
     private val leaderForTerm: NodeId?
@@ -367,9 +368,9 @@ internal class RaftEngine(
      *
      * This is the whole of #1906. `_leader` used to be assigned straight from whichever leader→peer
      * frame arrived last, so an ordinary same-term `AppendEntries` from any voter redirected a
-     * victim's belief to its sender — and `onTimeoutNow` authenticates its sender against `_leader`,
-     * so the poisoned belief turned a second frame into a pre-vote-less election on demand. Two
-     * frames, from a peer that was never leader.
+     * victim's belief to its sender — and [onTimeoutNow] authenticated its sender against `_leader`
+     * (it reads this pin instead since #1900), so the poisoned belief turned a second frame into a
+     * pre-vote-less election on demand. Two frames, from a peer that was never leader.
      *
      * **The rule rejects nothing honest**, which is the load-bearing claim and is driven rather than
      * argued (`LeaderForTermPinTest`): a term's pin is set exactly once, on the first leader-contact
@@ -2695,7 +2696,9 @@ internal class RaftEngine(
      *
      * Only valid when this node is a voting follower (not a leader, candidate, or learner), only when
      * [from] is a current voter ([onMessage]'s §5.2/§8 authority gate — TimeoutNow is a leader→peer RPC,
-     * so a non-voter sender is a forgery), and only when [from] is the leader we currently recognise.
+     * so a non-voter sender is a forgery), and only when [from] is the node [leaderForTerm] holds as
+     * this term's established leader — or nobody is, which after a restart is a state an honest
+     * transfer target reaches (#1900, see the guard below).
      * The message must carry **exactly** our current term: a stale one is ignored, and so is one
      * strictly ahead of us (#1889 — see the guard below for why nothing honest is lost).
      *
@@ -2714,8 +2717,9 @@ internal class RaftEngine(
             debug { "onTimeoutNow: already ${_role.value} — ignoring" }
             return
         }
-        // A TimeoutNow strictly ahead of our term carries NO authority we can check (#1889). `_leader` is
-        // only meaningful at our own term, so at a higher term there is nothing to authenticate the sender
+        // A TimeoutNow strictly ahead of our term carries NO authority we can check (#1889). The leader
+        // identity below is meaningful only at our own term ([leaderForTerm] is by construction a fact
+        // about `currentTerm`), so at a higher term there is nothing to authenticate the sender
         // against — which is precisely why the leader check below used to be scoped to the same-term lane,
         // and precisely why the higher-term lane was a free pre-vote-less election on demand for any peer
         // that could address us, repeatedly.
@@ -2750,13 +2754,27 @@ internal class RaftEngine(
             debug { "onTimeoutNow: unauthenticated future term ${m.term} > currentTerm=${state.currentTerm} — ignoring" }
             return
         }
-        // Only the current leader may issue TimeoutNow. A stale or spoofed TimeoutNow from a peer that is
-        // not the leader we know about must not trigger a spurious election. m.term is now provably equal
-        // to currentTerm (the two guards above), so _leader is meaningful and the comparison is sound.
-        // _leader may be null before we have heard from any leader this term; in that case accept — the
-        // §5.2 authority gate has already established that the sender is a current voter.
-        if (_leader.value != null && from != _leader.value) {
-            debug { "onTimeoutNow: sender ${from.value} is not the current leader (${_leader.value?.value}) — ignoring" }
+        // Only this term's leader may issue TimeoutNow. m.term is now provably equal to currentTerm (the
+        // two guards above), so a per-term leader identity is meaningful and the comparison is sound.
+        //
+        // Authenticated against [leaderForTerm], NOT `_leader` (#1900). The two differ precisely where it
+        // matters here: `_leader` is "a live leader I can talk to" and [relinquishToFollower] nulls it on
+        // a SAME-term step-down — reachable from [onQuorumCheck]'s LostQuorum and from RemovedFromConfig,
+        // neither of which moves the term. A node that led term T and stood down at T therefore sat at
+        // `_leader == null` for the rest of T and accepted a TimeoutNow from ANY voter. [leaderForTerm]
+        // is sticky for the term (nothing clears it; staleness is decided at the read), so that node
+        // still holds itself as the term's established leader and the frame is refused.
+        //
+        // The null carve-out STAYS, and it is not free: [leaderForTerm] is in-memory, so after a restart
+        // it reads null exactly as `_leader` does. An honest §3.10 target that ACKed at term T, restarted,
+        // and came back at T as a caught-up Follower holds no pin — requiring `from == leaderForTerm`
+        // outright would drop its TimeoutNow and fail the transfer on its auto-timeout. So the
+        // restart-window forgery that shares that state is still accepted; closing it needs an authority
+        // signal that survives a restart, which is the open half of #1900 and a design choice, not a
+        // tightening of this predicate.
+        val established = leaderForTerm
+        if (established != null && from != established) {
+            debug { "onTimeoutNow: sender ${from.value} is not term ${state.currentTerm}'s leader (${established.value}) — ignoring" }
             return
         }
         // A learner never votes and must never start an election.
