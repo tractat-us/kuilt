@@ -51,8 +51,9 @@ import kotlin.test.assertTrue
  * Nothing in the frame separates a forged in-range snapshot from a legitimate one sent by a
  * far-ahead leader, so within `0..MAX_PLAUSIBLE_INDEX` a Byzantine voter can still advance a
  * follower's frontier and wipe its log — snapshot metadata is unauthenticated (#1876). The frame's
- * `config` (#1880) and the uncapped reassembly buffer (#1881) are likewise unguarded and untested
- * here.
+ * `config` (#1880) is likewise unguarded and untested here; the reassembly buffer's total is bounded
+ * now (#1881), but by `RaftConfig.snapshotTotalCeiling` in `SnapshotReceiver`, pinned by
+ * `InstallSnapshotReassemblyCeilingTest` — not by anything these tests exercise.
  */
 internal class InstallSnapshotMetaValidationTest {
 

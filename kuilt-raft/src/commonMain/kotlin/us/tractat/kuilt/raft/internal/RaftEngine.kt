@@ -220,8 +220,9 @@ internal class RaftEngine(
     // side-effect is loading the stored snapshot bytes.
     private val snapshotSender = SnapshotSender(storage, ::chunkBytes)
 
-    // §7 InstallSnapshot reassembly state — follower-only (in-order chunk accumulation).
-    private val snapshotReceiver = SnapshotReceiver()
+    // §7 InstallSnapshot reassembly state — follower-only (in-order chunk accumulation), bounded by
+    // raftConfig.snapshotTotalCeiling so a peer choosing `done` can't grow the buffer forever (#1881).
+    private val snapshotReceiver = SnapshotReceiver(raftConfig.snapshotTotalCeiling)
 
     // Timer jobs (cancelled/restarted by actor)
     // timer jobs are children of scope and die with it; Close only stops the actor loop
@@ -1304,8 +1305,10 @@ internal class RaftEngine(
      * `0..MAX_PLAUSIBLE_INDEX` a Byzantine voter can still advance a follower's `snapshotIndex`,
      * `commitIndex` and compaction floor to a position it never reached, and wipe its log. That is
      * not fixable at this boundary; it needs authentication or a cross-frame invariant. See #1876.
-     * Two further unvalidated fields of this same frame are out of scope here: `config` (#1880) and
-     * the unbounded reassembly buffer behind `done = false` (#1881).
+     * One further unvalidated field of this same frame is out of scope here: `config` (#1880). The
+     * reassembly buffer behind `done = false` is no longer unbounded — it is capped by
+     * `RaftConfig.snapshotTotalCeiling` in [SnapshotReceiver] (#1881) — but that is a resource bound,
+     * not a validity one, and it lives there rather than in this frame-shape check.
      *
      * **Disposition: drop the frame, don't ack it.** No honest leader can emit one —
      * [sendSnapshotChunk] copies [SnapshotMeta] from a snapshot it stored while at its own term — so
@@ -1358,6 +1361,19 @@ internal class RaftEngine(
             is SnapshotReceiver.ChunkOutcome.ReAdvertise -> {
                 debug { "onInstallSnapshot($from): out-of-order offset=${m.offset} (have=${outcome.haveOffset}) → re-advertise, await resend" }
                 send(from, RaftMessage.InstallSnapshotResponse(state.currentTerm, outcome.haveOffset, echoedRound = m.round))
+            }
+            is SnapshotReceiver.ChunkOutcome.TooLarge -> {
+                // The reassembly was discarded before the append, so we hold nothing: re-advertise 0,
+                // exactly as the ReAdvertise arm does when the buffer is gone. Unlike a malformed frame
+                // this IS answerable — an honest leader can legitimately have an oversized snapshot, and
+                // the ack is what tells it to restart rather than keep feeding a buffer that is no longer
+                // there. If its snapshot is genuinely above the ceiling the transfer will not converge;
+                // that is the intended loud, configurable failure in place of an OOM (#1881).
+                debug {
+                    "onInstallSnapshot($from): DISCARD — reassembly would reach ${outcome.attemptedTotal} bytes, " +
+                        "above snapshotTotalCeiling=${outcome.ceiling} → discard and re-advertise 0"
+                }
+                send(from, RaftMessage.InstallSnapshotResponse(state.currentTerm, 0L, echoedRound = m.round))
             }
             is SnapshotReceiver.ChunkOutcome.AwaitMore -> {
                 debug { "onInstallSnapshot($from): chunk offset=${m.offset} accepted (have=${outcome.haveOffset}), await more" }
