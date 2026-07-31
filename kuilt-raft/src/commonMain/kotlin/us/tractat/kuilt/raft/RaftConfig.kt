@@ -51,6 +51,32 @@ import kotlin.time.Duration.Companion.milliseconds
  *   InstallSnapshot chunk. The actual chunk size is the lesser of this and the
  *   transport's [RaftTransport.maxPayloadBytes] (minus a small header budget), so
  *   a fabric with a tighter framing limit shrinks chunks automatically.
+ * @param snapshotTotalCeiling Upper bound on the bytes a follower will accumulate
+ *   reassembling one §7 snapshot. [snapshotChunkCeiling] bounds a single chunk; this
+ *   bounds their **sum**. The sender chooses `done`, so without it a peer that keeps
+ *   sending well-formed non-final chunks grows the follower's buffer without limit
+ *   until the process dies (#1881). A chunk that would breach it discards the
+ *   in-flight reassembly — the overshoot is never allocated — and the follower
+ *   re-advertises offset 0, so an honest leader restarts the transfer.
+ *
+ *   The default is **64 MiB**, chosen from three directions rather than picked:
+ *
+ *   1. *Above it, the protocol cannot deliver anyway.* The transfer is stop-and-wait
+ *      — one chunk in flight per peer, await-ack-then-next — so 64 MiB at the default
+ *      16 KiB chunk is 4096 round trips: a few seconds on a 1 ms LAN, well over a
+ *      minute on a 20 ms mobile link. A larger ceiling would bound nothing reachable.
+ *   2. *Below it, no legitimate snapshot lives.* A snapshot is the application's state
+ *      machine; the state kuilt's own consumers replicate is kilobytes to low
+ *      megabytes. 64 MiB leaves three to four orders of magnitude of headroom.
+ *   3. *It is sized for the smallest target, not the largest.* kuilt runs on wasmJs and
+ *      iOS as well as JVM servers. Peak follower heap over an install is roughly twice
+ *      the ceiling (the reassembly buffer plus the copy handed to the installer), so
+ *      64 MiB means ~128 MiB — survivable in a browser heap or a mobile process, where
+ *      a gigabyte is not. A server consumer that genuinely needs more raises it; that
+ *      is a supportable outcome, and a loud rejection beats an out-of-memory kill.
+ *
+ *   The type is [Int], mirroring [snapshotChunkCeiling], which also means the ceiling
+ *   can never be configured above what a single `ByteArray` can hold.
  * @param random Source of randomness for the election-timeout draw. Randomness is a
  *   dependency, like time: under virtual time a [kotlinx.coroutines.test.TestDispatcher]
  *   makes scheduling deterministic, but an unseeded RNG still injects non-determinism into
@@ -70,5 +96,6 @@ public data class RaftConfig(
     val expectVirtualTime: Boolean = false,
     val slowProposeThreshold: Duration = 100.milliseconds,
     val snapshotChunkCeiling: Int = 16 * 1024,
+    val snapshotTotalCeiling: Int = 64 * 1024 * 1024,
     val random: Random = Random.Default,
 )
