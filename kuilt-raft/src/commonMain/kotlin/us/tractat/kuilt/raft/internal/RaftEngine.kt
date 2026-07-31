@@ -1484,10 +1484,80 @@ internal class RaftEngine(
         return true
     }
 
+    /**
+     * §5.4 cross-check of an [RaftMessage.InstallSnapshot]'s `lastIncludedTerm` against **local
+     * committed state** (issue #1910) — the tighter sibling of [isWellFormedSnapshotChunk]'s
+     * frame-internal bound.
+     *
+     * [isWellFormedSnapshotChunk] admits any `lastIncludedTerm` in `0..min(term, MAX_PLAUSIBLE_TERM)`,
+     * which is everything a *stale, replayed or forged* frame naming a real earlier term needs. There
+     * is a tighter bound available from state the recipient already holds:
+     *
+     * > `lastIncludedTerm` must be at or above the term of our own entry at [RaftState.currentCommitIndex].
+     *
+     * **Soundness — the floor never rejects a legitimate snapshot.** Let `C` be our commit frontier.
+     * The frame cleared the stale-term check, so the sender's term is at least ours, hence at least
+     * the term in which we committed `C`; by Leader Completeness (§5.4 / Figure 3.2) the sender's log
+     * therefore contains our committed entry at `C` with the same term. A snapshot covering an index
+     * above `C` is a compaction of a prefix that includes `C`, and terms are non-decreasing along a
+     * log, so its `lastIncludedTerm` is at or above `C`'s term.
+     *
+     * **The floor is the term at `currentCommitIndex`, NOT [RaftState.lastLogTerm].** Uncommitted
+     * entries can legitimately be overwritten by a snapshot carrying a *lower* term — a node holding
+     * an uncommitted term-7 entry can be caught up by a legitimate term-8 leader whose log has term 5
+     * at that index — so keying to `lastLogTerm` would reject honest snapshots. [RaftState.entryAt]
+     * returns null at `currentCommitIndex` exactly when `currentCommitIndex == snapshotIndex` (the
+     * index is at or below the compaction floor), hence the [RaftState.snapshotTerm] fallback, which
+     * is by definition the term at that index; `snapshotIndex <= currentCommitIndex` always holds —
+     * [finalizeInstalledSnapshot] and [onCompact] raise commit to the snapshot boundary, restore
+     * seeds it the same way — so there is no third case.
+     *
+     * **Gated on the snapshot advancing our frontier**, mirroring [finalizeInstalledSnapshot]'s
+     * `lastIncludedIndex <= currentCommitIndex` guard. The soundness argument holds only above `C`:
+     * an honest *behind-commit* snapshot (a delayed duplicate, §7's retransmission case) has its
+     * boundary at an index at or below `C`, where the sender's term is legitimately *lower* than
+     * `C`'s. Those frames are inert — [finalizeInstalledSnapshot] acks and ignores them (#1219/#1220)
+     * — and must keep being acked rather than dropped, so they are exempted here rather than
+     * laundered through a bound that does not apply to them.
+     *
+     * **Disposition: drop the frame, don't ack it**, as for [isWellFormedSnapshotChunk] — no honest
+     * leader can emit one, so there is no honest sender to answer, and a reply would hand a forger a
+     * lever on the sender's [SnapshotSender] transfer state. Deliberately not a `require`: this runs
+     * inside the engine's actor loop, whose `try`/`finally` has no `catch`, so a throw would convert a
+     * remote frame into permanent node death (#1818).
+     *
+     * Called at chunk 0, *before* [SnapshotReceiver] reassembles a payload we would refuse anyway
+     * (composing with the reassembly ceiling of #1881), and before [stepDown]/[resetElectionTimeout],
+     * so a refused frame grants its sender no leader authority either. It is called *after* the
+     * stale-term reply, though — a frame from a leader at a term below ours fails the soundness
+     * argument's premise, and the right disposition for it is the §5.1 term reply that deposes the
+     * stale sender, not a silent drop.
+     *
+     * **What this does NOT establish.** The floor stops a *low*-term forgery and a stale/replayed or
+     * buggy sender. The §5.4.1 domination lever wants a *high* `lastIncludedTerm`, and the attacker
+     * picks the term — so this is bounded hardening, not a fix for the Byzantine case (#1876/#1907).
+     * The decisive check — "only the node I recognise as leader for this term may install a snapshot"
+     * — is blocked on making `_leader` trustworthy (#1906).
+     */
+    private fun clearsCommittedTermFloor(from: NodeId, m: RaftMessage.InstallSnapshot): Boolean {
+        if (m.lastIncludedIndex <= state.currentCommitIndex) return true
+        val floor = state.entryAt(state.currentCommitIndex)?.term ?: state.snapshotTerm
+        if (m.lastIncludedTerm < floor) {
+            debug {
+                "onInstallSnapshot($from): DROP — lastIncludedTerm=${m.lastIncludedTerm} below our committed floor " +
+                    "$floor (the term of our own entry at commitIndex=${state.currentCommitIndex}); no snapshot " +
+                    "covering ${m.lastIncludedIndex} can predate an entry we have committed"
+            }
+            return false
+        }
+        return true
+    }
+
     /** Follower: reassemble chunks in order, then install the snapshot once the final chunk arrives. */
     private suspend fun onInstallSnapshot(from: NodeId, m: RaftMessage.InstallSnapshot) {
         if (!isWellFormedSnapshotChunk(from, m)) return
         if (m.term < state.currentTerm) { send(from, RaftMessage.InstallSnapshotResponse(state.currentTerm, 0L)); return }
+        if (!clearsCommittedTermFloor(from, m)) return
         if (m.term > state.currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
         demoteToFollowerOnLeaderContact()
         preVoteTerm = null          // a live leader appeared — cancel any in-flight pre-vote probe
