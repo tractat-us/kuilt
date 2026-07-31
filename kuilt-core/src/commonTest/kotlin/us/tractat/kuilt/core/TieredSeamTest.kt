@@ -31,6 +31,7 @@ import us.tractat.kuilt.test.FakeSeam
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
@@ -170,23 +171,36 @@ class TieredSeamTest {
         localInbox.cancel()
     }
 
+    /**
+     * An id absent from BOTH tiers throws [PeerNotConnected] and reaches neither tier (#1935).
+     *
+     * This used to assert a silent drop. `Seam.sendTo` makes the throw the contract for every
+     * fabric, and `Seam.peers`' collapse obligation (#1816) is argued *from* it — a torn seam may
+     * advertise no remote precisely because `sendTo` "immediately disproves" a stale id by
+     * throwing. The union swallowing the send removed that disproof and gave the caller silent
+     * frame loss instead. Caught by `TieredSeamConformanceTest`, the harness bound in #1871:
+     * `sendToAbsentPeerThrowsPeerNotConnected` is an **ungated core** obligation of
+     * `SeamConformanceSuite`, so no capability flag could have excused it.
+     */
     @Test
-    fun sendToUnknownPeerIsDroppedNothingSent() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
-        val f = buildFixture(backgroundScope)
+    fun sendToUnknownPeerThrowsPeerNotConnectedAndReachesNeitherTier() =
+        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+            val f = buildFixture(backgroundScope)
 
-        val localInbox = f.localMember.incoming.produceIn(this)
-        val peerInbox = f.peerMember.incoming.produceIn(this)
+            val localInbox = f.localMember.incoming.produceIn(this)
+            val peerInbox = f.peerMember.incoming.produceIn(this)
 
-        // No exception, and nothing delivered to either tier.
-        f.tiered.sendTo(PeerId("nobody"), byteArrayOf(9))
+            assertFailsWith<PeerNotConnected>("a peer in neither tier is absent from the union roster") {
+                f.tiered.sendTo(PeerId("nobody"), byteArrayOf(9))
+            }
 
-        assertAll(
-            { assertTrue(localInbox.tryReceive().isFailure, "unknown-peer unicast must not reach the local tier") },
-            { assertTrue(peerInbox.tryReceive().isFailure, "unknown-peer unicast must not reach the peer tier") },
-        )
-        localInbox.cancel()
-        peerInbox.cancel()
-    }
+            assertAll(
+                { assertTrue(localInbox.tryReceive().isFailure, "unknown-peer unicast must not reach the local tier") },
+                { assertTrue(peerInbox.tryReceive().isFailure, "unknown-peer unicast must not reach the peer tier") },
+            )
+            localInbox.cancel()
+            peerInbox.cancel()
+        }
 
     // ── 4 · incoming merges both underlying seams, exactly once each ──────────
 

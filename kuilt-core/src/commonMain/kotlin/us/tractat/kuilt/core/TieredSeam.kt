@@ -43,8 +43,8 @@ import kotlinx.coroutines.flow.onEach
  *   other servers). Each side is best-effort and independent: a failure on one tier never
  *   prevents the other from being attempted.
  * - **[sendTo]** routes to whichever tier **owns** the addressed peer — `peer ∈ local.peers` →
- *   `local.sendTo`, else `peer ∈ peer.peers` → `peer.sendTo`, else the peer is unknown to both
- *   and the frame is **dropped** (a silent no-op — `kuilt-core` is logger-free by contract). It
+ *   `local.sendTo`, else `peer ∈ peer.peers` → `peer.sendTo`, else the peer is absent from the
+ *   union and [PeerNotConnected] is thrown, as [Seam.sendTo] requires of every fabric (#1935). It
  *   **never fans to both**: unicast stays single-addressee across the union, preserving the
  *   ADR-005 single-addressee leak boundary. (A shared/overlapping id resolves to the local tier,
  *   since it is checked first.)
@@ -221,11 +221,19 @@ internal class TieredSeam(
         check(state.value !is SeamState.Torn) { "TieredSeam is Torn" }
         // Route to the owning tier — NEVER fan to both (that would breach the single-addressee
         // leak boundary, ADR-005). Local is checked first, so a shared/overlapping id resolves
-        // there. An id owned by neither tier is dropped (silent — kuilt-core is logger-free).
+        // there.
+        //
+        // An id owned by NEITHER tier throws, it is not dropped (#1935). [Seam.sendTo] makes that
+        // the contract for every fabric, and [Seam.peers]' collapse obligation (#1816) is argued
+        // FROM it — "a remote peer left here is a claim sendTo immediately disproves by throwing
+        // PeerNotConnected for a peer `peers` calls reachable". A union that swallowed the send
+        // would remove the disproof and hand the caller silent frame loss on a stale id instead.
+        // The old silent no-op justified itself by "kuilt-core is logger-free", which is an
+        // argument against LOGGING the failure, not against reporting it.
         when {
             peer in localTier.peers.value -> localTier.sendTo(peer, payload)
             peer in peerTier.peers.value -> peerTier.sendTo(peer, payload)
-            else -> Unit
+            else -> throw PeerNotConnected(peer)
         }
     }
 
