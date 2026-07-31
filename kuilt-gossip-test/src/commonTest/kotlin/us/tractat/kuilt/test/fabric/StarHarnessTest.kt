@@ -12,20 +12,20 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.gossip.GossipSeam
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.coroutines.coroutineContext
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class StarHarnessTest {
 
     @Test
-    fun clientBroadcastReachesEveryOtherClientViaHub() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun clientBroadcastReachesEveryOtherClientViaHub() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val star = backgroundScope.inMemoryStarOf(n = 3)
         advanceTimeBy(300); runCurrent()   // let FullFanout reconcile past the jitter window
 
@@ -48,7 +48,7 @@ class StarHarnessTest {
      * A failure here is a hidden-information leak, not a flake — fix the relay, never the assert.
      */
     @Test
-    fun hubSendToReachesOnlyTheAddressedSpokeNeverTheOthers() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun hubSendToReachesOnlyTheAddressedSpokeNeverTheOthers() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val star = backgroundScope.inMemoryStarOf(n = 3)
         advanceTimeBy(300); runCurrent()
 
@@ -75,7 +75,7 @@ class StarHarnessTest {
      */
     @Test
     fun hubOneShotBroadcastReachesPassiveSpokesDespiteAnEarlierUnfloodedBroadcast() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val star = backgroundScope.inMemoryStarOf(n = 2)
             // Broadcast BEFORE advancing time: the hub's FullFanout view may not have
             // reconciled yet, so this flood can reach nobody.
@@ -105,7 +105,7 @@ class StarHarnessTest {
      */
     @Test
     fun lateJoinedSpokeReceivesSubsequentHubOneShotsWithinTheReorderGrace() =
-        runTest(StandardTestDispatcher(), timeout = 10.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val star = backgroundScope.inMemoryStarOf(n = 1)
             advanceTimeBy(300); runCurrent()
             star.hub.broadcast("pre-join".encodeToByteArray())   // seq 1 — flooded to client-0 only

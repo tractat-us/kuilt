@@ -173,6 +173,83 @@ object KotlinCodeScanner {
     }
 }
 
+// Locates `runTest(…)` calls whose `timeout =` argument is a BARE DURATION LITERAL, for
+// `forbidTightRunTestTimeout` below. Same `object` rationale as `KotlinCodeScanner`: the caller
+// invokes it from inside `doLast`, where a script-level function reference would capture the
+// unserializable `Build_gradle` instance.
+//
+// The argument list is walked with a PAREN COUNTER, not a regex. `runTest\([^)]*timeout` looks
+// right and is wrong: `[^)]*` cannot cross the `)` in `runTest(StandardTestDispatcher(), …)`, so it
+// misses the idiomatic form — which is ~all of them. Measuring the population that way undercounted
+// it 5×. Depth tracking also keeps a nested `timeout =` (an argument of an argument) from being
+// read as `runTest`'s own.
+//
+// "Bare literal" is decided by asking whether the value expression contains a DIGIT, not by
+// matching `5.seconds`. That is the whole point: a rule keyed to the number 5 is satisfied by 4.
+// A named constant contains no digit and passes; `5.seconds`, `4.seconds` and `2 * SOMETHING` do
+// not. Known edge, stated rather than fixed: a POSITIONAL timeout (`runTest(dispatcher, 5.seconds)`)
+// is not detected — `runTest`'s parameter order makes it unwritable by accident, and zero sites in
+// the tree use it.
+object RunTestTimeoutScanner {
+    private val call = Regex("""(?<![A-Za-z0-9_])runTest\s*\(""")
+    private val named = Regex("""(?<![A-Za-z0-9_])timeout\s*=""")
+    private val digit = Regex("""[0-9]""")
+
+    /** 1-based line numbers, in source order, of every violating call in already-stripped [code]. */
+    fun violations(code: String): List<Int> {
+        val out = mutableListOf<Int>()
+        for (m in call.findAll(code)) {
+            val open = m.range.last // index of the '('
+            var i = open + 1
+            var depth = 1
+            while (i < code.length && depth > 0) {
+                when (code[i]) {
+                    '(', '[', '{' -> depth++
+                    ')', ']', '}' -> depth--
+                }
+                i++
+            }
+            if (depth != 0) continue // unbalanced: malformed source, leave it to the compiler
+            if (hasLiteralTimeout(code.substring(open + 1, i - 1))) {
+                out += code.take(m.range.first).count { it == '\n' } + 1
+            }
+        }
+        return out
+    }
+
+    private fun hasLiteralTimeout(args: String): Boolean =
+        splitTopLevel(args).any { arg ->
+            val name = named.find(arg) ?: return@any false
+            depthAt(arg, name.range.first) == 0 && digit.containsMatchIn(arg.substring(name.range.last + 1))
+        }
+
+    private fun splitTopLevel(args: String): List<String> {
+        val parts = mutableListOf<String>()
+        var start = 0
+        var depth = 0
+        args.forEachIndexed { idx, c ->
+            when (c) {
+                '(', '[', '{' -> depth++
+                ')', ']', '}' -> depth--
+                ',' -> if (depth == 0) { parts += args.substring(start, idx); start = idx + 1 }
+            }
+        }
+        parts += args.substring(start)
+        return parts
+    }
+
+    private fun depthAt(text: String, index: Int): Int {
+        var depth = 0
+        for (k in 0 until index) {
+            when (text[k]) {
+                '(', '[', '{' -> depth++
+                ')', ']', '}' -> depth--
+            }
+        }
+        return depth
+    }
+}
+
 // Guard: forbid unbounded Swatch delivery channels (fabric-backpressure epic, #701/#741).
 // Every in-process fabric must deliver inbound frames through the bounded `Spool` primitive;
 // a raw `Channel<Swatch>(... UNLIMITED ...)` reintroduces the unbounded inbound backlog that
@@ -1181,6 +1258,242 @@ val forbidBareRunCatching by tasks.registering {
     }
 }
 
+// Guard: forbid a bare duration literal in a `runTest(…)` timeout argument (#1739).
+//
+// WHAT IS BANNED. `runTest(StandardTestDispatcher(), timeout = 5.seconds)`. Under a test dispatcher
+// with seeded RNG and in-memory transports a test has no real-clock input anywhere on its execution
+// path, so its virtual trajectory — and therefore the total quantity of real work it performs — is
+// identical on every run. A wall-clock cap over a fixed quantity of work asserts nothing about the
+// code; it asserts "this host can retire N units of work in T seconds", which is false exactly when
+// the box is busy. Measured on the worst site: 2.65× contention degradation against 1.8× headroom,
+// i.e. a DETERMINISTIC red on a busy runner, not a flake (#1891, mutation-verified 5 s → 4/4 FAIL,
+// 30 s → 4/4 PASS). It also produces the worst diagnostic in the tree — a bare
+// `UncompletedCoroutinesError` — by pre-empting the bounded `await*`/`settle()` assertions inside
+// the test, which are the fast, load-INDEPENDENT detector and dump state when they fire.
+//
+// THE FIX IS A NAMED CONSTANT, NOT A DIFFERENT NUMBER: `TEST_WEDGE_BACKSTOP` (`:kuilt-test`), or a
+// harness's own (`RAFT_SIM_WEDGE_BACKSTOP`, `WARP_SIM_WEDGE_BACKSTOP`). A `runTest(…)` with NO
+// `timeout` argument is also fine — the 60 s library default is a perfectly good backstop.
+//
+// WHY THE RULE IS "ANY LITERAL" AND NOT "5.seconds". #1918 corrected the prose (`CLAUDE.md` used to
+// instruct "a tight timeout, never the 60 s default"); a new 5 s ceiling was written HOURS later, in
+// a module that correction had just red-lit, by a worker branching off a commit that contained it.
+// Local convention beat the document. A rule keyed to the number 5 is satisfied by 4; a rule
+// requiring a NAME is not, and a name is also the correct thing for the next contributor to copy.
+//
+// WHY A PER-FILE COUNT RATCHET AND NOT A FILE ALLOWLIST. This is the load-bearing design decision.
+// The instance that escalated #1739 was an 11th ceiling written into `HeddleFenceTest.kt`, which
+// already had ten — the ten are WHY the eleventh was written. Under the `forbidPortProbeRebind`-shape
+// file allowlist that file is exempt, so the new violation lands green and the guard is decorative
+// against the exact event it exists to stop (the #1086/#1133 failure). So the baseline records a
+// COUNT per file and the guard fails when a count INCREASES. Sweeping a file drives it to zero and
+// deletes its entry; the baseline only moves down.
+//
+// KNOWN LIMITS, stated rather than papered over:
+//   * The ratchet does not auto-tighten. Sweeping a file without deleting its entry leaves the
+//     baseline loose for that path until someone notices. Failing on a DECREASE would fix it, and is
+//     deliberately not done here: it would red-light every in-flight branch that merely deletes a
+//     test, for a diff this PR is explicitly trying not to be a bad neighbour to.
+//   * A wrapper harness's own default (`fun simTest(timeout: Duration = 5.seconds)`) is invisible to
+//     a rule scoped to `runTest(` call sites — the wrapper passes `timeout = timeout`, which has no
+//     literal. That is how `warpSimTest`'s 5 s default hid on a published `commonMain` harness while
+//     applying to every call site. Both in-tree wrappers now use named constants; a third would need
+//     catching by review.
+//   * `:spike` (only present under `-PincludeSpike`) and `build-logic/` are not scanned, same as the
+//     sibling guards.
+val forbidTightRunTestTimeout by tasks.registering {
+    group = "verification"
+    description = "Fails if a file gains a runTest(timeout = <literal>) beyond its baseline — use a named backstop constant (#1739)."
+    val sources = kotlinSourcesIn(subprojects.map { it.projectDir.resolve("src") })
+    inputs.files(sources).withPropertyName("kotlinSources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // See "Guard plumbing" above: the stamp is what makes UP-TO-DATE possible (#1827). The verdict is
+    // a function of file PATHS (the baseline keys) and file CONTENTS, both captured by a RELATIVE
+    // fingerprint — so a cache hit genuinely means "this exact source was verified green".
+    val stamp = layout.buildDirectory.file("verification/forbid-tight-runtest-timeout.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    val rootPath = rootDir
+    // The baseline MUST stay a literal here. Per "Guard plumbing" above it is covered by the cache
+    // key only because it is folded into the task-action implementation hash; moving it to
+    // `gradle.properties` or a resource would silently drop it out and reintroduce the stale-green
+    // class the stamps were made safe against. Regenerate after a sweep with the same scanner rather
+    // than by hand. Entries are paths relative to the root, violation counts as of #1739's first PR.
+    val baseline = mapOf(
+        "demo/cli/src/test/kotlin/us/tractat/kuilt/demo/cli/PatchworkCliTest.kt" to 2,
+        "demo/shared/src/commonTest/kotlin/us/tractat/kuilt/demo/PatchworkSessionSeamTearTest.kt" to 2,
+        "demo/shared/src/commonTest/kotlin/us/tractat/kuilt/demo/PatchworkSessionTest.kt" to 4,
+        "examples/src/test/kotlin/us/tractat/kuilt/examples/AddWinsTagSetTest.kt" to 2,
+        "examples/src/test/kotlin/us/tractat/kuilt/examples/CollabDocTest.kt" to 2,
+        "examples/src/test/kotlin/us/tractat/kuilt/examples/ConcurrentEditTest.kt" to 2,
+        "examples/src/test/kotlin/us/tractat/kuilt/examples/ExactlyOnceHappyPathTest.kt" to 1,
+        "examples/src/test/kotlin/us/tractat/kuilt/examples/FederatedGamePerRoomE2ETest.kt" to 9,
+        "examples/src/test/kotlin/us/tractat/kuilt/examples/GCounterReactionTallyTest.kt" to 2,
+        "examples/src/test/kotlin/us/tractat/kuilt/examples/GrowOnlyTagSetTest.kt" to 2,
+        "examples/src/test/kotlin/us/tractat/kuilt/examples/MemberRosterORMapTest.kt" to 3,
+        "examples/src/test/kotlin/us/tractat/kuilt/examples/PresenceRosterLWWMapTest.kt" to 2,
+        "examples/src/test/kotlin/us/tractat/kuilt/examples/PresenceTest.kt" to 1,
+        "examples/src/test/kotlin/us/tractat/kuilt/examples/RgaCollabEditTest.kt" to 3,
+        "examples/src/test/kotlin/us/tractat/kuilt/examples/SeatReservationTest.kt" to 3,
+        "examples/src/test/kotlin/us/tractat/kuilt/examples/SharedTitleTest.kt" to 2,
+        "examples/src/test/kotlin/us/tractat/kuilt/examples/TicTacToeChatTest.kt" to 1,
+        "examples/src/test/kotlin/us/tractat/kuilt/examples/TicTacToeTest.kt" to 1,
+        "examples/src/test/kotlin/us/tractat/kuilt/examples/TombstonedTagSetTest.kt" to 2,
+        "examples/src/test/kotlin/us/tractat/kuilt/examples/VoteTallyTest.kt" to 2,
+        "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/AttachmentDirectoryTest.kt" to 2,
+        "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/ClusterClientFailoverTest.kt" to 7,
+        "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/ClusterClientTest.kt" to 8,
+        "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/EndpointRotationTest.kt" to 5,
+        "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/FederatedCoreAdmissionTest.kt" to 5,
+        "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/OverlayServerFailoverTest.kt" to 3,
+        "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/RaftRelayHubTest.kt" to 8,
+        "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/RelayDialectOriginPreservationTest.kt" to 1,
+        "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/RoutedRaftTransportTest.kt" to 16,
+        "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/RoutedUnicastRouterTest.kt" to 4,
+        "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/ServerClusterDirectoryConvergenceTest.kt" to 1,
+        "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/VoterReconnectionSupervisorTest.kt" to 4,
+        "kuilt-cluster/src/jvmTest/kotlin/us/tractat/kuilt/cluster/RoutedRaftTransportMisWiredRelayTest.kt" to 1,
+        "kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/PrincipalAttestationConformanceSuite.kt" to 6,
+        "kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/RoomFanoutIsolationConformanceSuite.kt" to 4,
+        "kuilt-core/src/commonTest/kotlin/us/tractat/kuilt/core/MuxServerLoomLifecycleTest.kt" to 7,
+        "kuilt-core/src/commonTest/kotlin/us/tractat/kuilt/core/RoomHubSeamCloseTest.kt" to 2,
+        "kuilt-core/src/commonTest/kotlin/us/tractat/kuilt/core/RoomHubSeamMembershipTest.kt" to 1,
+        "kuilt-core/src/commonTest/kotlin/us/tractat/kuilt/core/RoomHubSeamSelfIdTest.kt" to 1,
+        "kuilt-core/src/commonTest/kotlin/us/tractat/kuilt/core/StarTopologyPeerRoutingTest.kt" to 2,
+        "kuilt-core/src/commonTest/kotlin/us/tractat/kuilt/core/TieredSeamTest.kt" to 12,
+        "kuilt-core/src/commonTest/kotlin/us/tractat/kuilt/core/fabric/AcceptPumpTest.kt" to 1,
+        "kuilt-game/src/commonSamples/kotlin/us/tractat/kuilt/game/GameSamples.kt" to 8,
+        "kuilt-game/src/commonTest/kotlin/us/tractat/kuilt/game/CommitSafetyLaunderingE2ETest.kt" to 1,
+        "kuilt-game/src/commonTest/kotlin/us/tractat/kuilt/game/ConsensusPlacementTest.kt" to 6,
+        "kuilt-game/src/commonTest/kotlin/us/tractat/kuilt/game/FederatedPlacementWiringTest.kt" to 3,
+        "kuilt-game/src/commonTest/kotlin/us/tractat/kuilt/game/GameHostedAttestationTest.kt" to 1,
+        "kuilt-game/src/commonTest/kotlin/us/tractat/kuilt/game/GameNodeDetectorTeardownTest.kt" to 1,
+        "kuilt-game/src/commonTest/kotlin/us/tractat/kuilt/game/GameNodeTest.kt" to 9,
+        "kuilt-game/src/commonTest/kotlin/us/tractat/kuilt/game/GamePresenceTest.kt" to 5,
+        "kuilt-game/src/commonTest/kotlin/us/tractat/kuilt/game/GameReplacementTest.kt" to 5,
+        "kuilt-game/src/commonTest/kotlin/us/tractat/kuilt/game/GameRoomPrincipalTest.kt" to 1,
+        "kuilt-game/src/commonTest/kotlin/us/tractat/kuilt/game/GameRoomTest.kt" to 2,
+        "kuilt-game/src/commonTest/kotlin/us/tractat/kuilt/game/GameSessionTest.kt" to 4,
+        "kuilt-game/src/commonTest/kotlin/us/tractat/kuilt/game/GameSpectateTest.kt" to 5,
+        "kuilt-game/src/commonTest/kotlin/us/tractat/kuilt/game/HarnessSmokeTest.kt" to 1,
+        "kuilt-game/src/commonTest/kotlin/us/tractat/kuilt/game/HostedHubReplicationTest.kt" to 3,
+        "kuilt-game/src/commonTest/kotlin/us/tractat/kuilt/game/NoRoomBootstrapTest.kt" to 1,
+        "kuilt-game/src/commonTest/kotlin/us/tractat/kuilt/game/RoomGameLifecycleTest.kt" to 1,
+        "kuilt-game/src/commonTest/kotlin/us/tractat/kuilt/game/RoomGamePresenceTest.kt" to 1,
+        "kuilt-game/src/commonTest/kotlin/us/tractat/kuilt/game/SpeculativeSequencerTest.kt" to 22,
+        "kuilt-game/src/commonTest/kotlin/us/tractat/kuilt/game/TurnSequencerTest.kt" to 19,
+        "kuilt-gossip/src/commonTest/kotlin/us/tractat/kuilt/gossip/GossipSimulationTest.kt" to 1,
+        "kuilt-gossip/src/commonTest/kotlin/us/tractat/kuilt/gossip/GossipViewTest.kt" to 1,
+        "kuilt-heddle/src/commonTest/kotlin/us/tractat/kuilt/heddle/HeddleControlPlaneTest.kt" to 20,
+        "kuilt-heddle/src/commonTest/kotlin/us/tractat/kuilt/heddle/HeddleNodeTest.kt" to 19,
+        "kuilt-heddle/src/commonTest/kotlin/us/tractat/kuilt/heddle/HeddleRosterTest.kt" to 11,
+        "kuilt-liveness/src/commonTest/kotlin/us/tractat/kuilt/liveness/HeartbeatPartitionDetectorTransportCloseTest.kt" to 2,
+        "kuilt-liveness/src/commonTest/kotlin/us/tractat/kuilt/liveness/SoloDeadlineDetectorTest.kt" to 9,
+        "kuilt-nearby/src/commonTest/kotlin/us/tractat/kuilt/nearby/NearbyIdentityTest.kt" to 1,
+        "kuilt-nw/src/commonTest/kotlin/us/tractat/kuilt/nw/NwMeshRoomPartitionTest.kt" to 1,
+        "kuilt-quilter/src/commonSamples/kotlin/us/tractat/kuilt/quilter/QuilterSamples.kt" to 6,
+        "kuilt-quilter/src/commonTest/kotlin/us/tractat/kuilt/quilter/BoundedCounterEqualizerTest.kt" to 5,
+        "kuilt-quilter/src/commonTest/kotlin/us/tractat/kuilt/quilter/QuilterCustomReplicaIdTest.kt" to 2,
+        "kuilt-quilter/src/commonTest/kotlin/us/tractat/kuilt/quilter/QuilterFullStateResyncTest.kt" to 1,
+        "kuilt-quilter/src/commonTest/kotlin/us/tractat/kuilt/quilter/QuilterFullStateRetryTest.kt" to 2,
+        "kuilt-quilter/src/commonTest/kotlin/us/tractat/kuilt/quilter/QuilterResendRetryTest.kt" to 3,
+        "kuilt-quilter/src/jvmTest/kotlin/us/tractat/kuilt/quilter/QuilterConcurrencyTest.kt" to 3,
+        "kuilt-scale/src/test/kotlin/us/tractat/kuilt/scale/InMemoryMeshBuilderTest.kt" to 11,
+        "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/AdmitFanOutOrderingTest.kt" to 4,
+        "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/AdoptTearTerminalTest.kt" to 3,
+        "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/ConcurrentResumeHangTest.kt" to 2,
+        "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/FastReconnectRaceTest.kt" to 3,
+        "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/GracefulLeaveTest.kt" to 1,
+        "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/HostAuthoritativeLeaveTest.kt" to 2,
+        "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/HostReconnectControllerInjectionTest.kt" to 1,
+        "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/JoinerHostTimeoutRecoveryTest.kt" to 2,
+        "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/JoinerReconnectTest.kt" to 9,
+        "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/LivenessRouteGateTest.kt" to 3,
+        "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/LocalFabricTest.kt" to 13,
+        "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/MembershipEventDropContractTest.kt" to 2,
+        "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/MeshRoomRecoveryTest.kt" to 3,
+        "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/MultiRoomIsolationTest.kt" to 1,
+        "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/MuxHubPrincipalTest.kt" to 1,
+        "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/RoomAttestedPrincipalsTest.kt" to 1,
+        "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/RoomResumeTimeoutTest.kt" to 2,
+        "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/SeamRoomCloseResurrectionTest.kt" to 1,
+        "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/SeamRoomDetectorTeardownTest.kt" to 1,
+        "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/StarTopologyPresenceFanoutTest.kt" to 4,
+        "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/TransportCloseWindowTest.kt" to 5,
+        "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/WindowLevelTest.kt" to 10,
+        "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/election/SeamElectionLobbyTest.kt" to 3,
+        "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/partition/SubTimeoutBlipResumeTest.kt" to 3,
+        "kuilt-test/src/commonTest/kotlin/us/tractat/kuilt/test/FakeSeamTest.kt" to 5,
+        "kuilt-warp-compiler/src/jvmTest/kotlin/us/tractat/kuilt/warp/RealVariantTieringTest.kt" to 1,
+        "kuilt-warp-otel/src/commonTest/kotlin/us/tractat/kuilt/warp/otel/WarpMetricsTest.kt" to 3,
+        "kuilt-warp-runtime/src/appleTest/kotlin/us/tractat/kuilt/warp/Wasm3RuntimeDispatchTest.kt" to 1,
+        "kuilt-warp-runtime/src/jvmTest/kotlin/us/tractat/kuilt/warp/ChicoryRuntimeDispatchTest.kt" to 1,
+        "kuilt-warp-runtime/src/jvmTest/kotlin/us/tractat/kuilt/warp/ChicoryWasmRuntimeTest.kt" to 1,
+        "kuilt-warp-runtime/src/jvmTest/kotlin/us/tractat/kuilt/warp/ChicoryWasmRuntimeTimingTest.kt" to 1,
+        "kuilt-warp-runtime/src/jvmTest/kotlin/us/tractat/kuilt/warp/LazyFetchAndRunTest.kt" to 4,
+        "kuilt-warp-runtime/src/jvmTest/kotlin/us/tractat/kuilt/warp/SettleUntilRealIoTest.kt" to 1,
+        "kuilt-warp-runtime/src/wasmJsTest/kotlin/us/tractat/kuilt/warp/BrowserWasmRuntimeDispatchTest.kt" to 1,
+        "kuilt-warp-test/src/commonMain/kotlin/us/tractat/kuilt/warp/test/WasmRuntimeConformanceSuite.kt" to 10,
+        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/BobbinExchangeTest.kt" to 7,
+        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/BoundedLazyFetchTest.kt" to 1,
+        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/CompileOpDispatchTest.kt" to 2,
+        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/IncrementalExecutionTest.kt" to 6,
+        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/SymbolicDispatchTest.kt" to 2,
+        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/TieredCompilationGoNoGoTest.kt" to 1,
+        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/VariantManifestTest.kt" to 1,
+        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/WarpCapabilityRestartTest.kt" to 1,
+        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/WarpIntentRegisterTest.kt" to 4,
+        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/WarpNodeCoordinatedRaftSimTest.kt" to 2,
+        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/WarpNodeCoordinatedWindowsTest.kt" to 3,
+        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/WarpNodeCoordinationTagTest.kt" to 3,
+        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/WarpNodeEligibilityTest.kt" to 4,
+        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/WarpNodePartitionFailoverTest.kt" to 2,
+        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/WarpNodePinnedExecutionTest.kt" to 5,
+        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/WarpNodeTest.kt" to 6,
+        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/WarpNodeTieringTest.kt" to 1,
+    )
+    doLast {
+        val found = sortedMapOf<String, List<Int>>()
+        sources.files.forEach { file ->
+            val raw = file.readText()
+            if ("runTest" !in raw) return@forEach
+            val hits = RunTestTimeoutScanner.violations(KotlinCodeScanner.stripNonCode(raw))
+            if (hits.isNotEmpty()) found[file.relativeTo(rootPath).invariantSeparatorsPath] = hits
+        }
+        val regressions = found.filter { (path, hits) -> hits.size > (baseline[path] ?: 0) }
+        if (regressions.isNotEmpty()) {
+            val detail = regressions.entries.joinToString("\n") { (path, hits) ->
+                val was = baseline[path]
+                val from = if (was == null) "no baseline (this file is new to the ratchet)" else "baseline $was"
+                "  $path — $from, now ${hits.size}\n    line(s): ${hits.joinToString(", ")}"
+            }
+            error(
+                "A `runTest(…)` gained a bare duration-literal timeout (#1739).\n" +
+                    "A wall-clock ceiling over a VIRTUAL-time trajectory asserts nothing about the code — it " +
+                    "asserts \"this host can retire N units of work in T seconds\", which is false exactly when " +
+                    "the box is busy, and it pre-empts the bounded `await*`/`settle()` assertions that are the " +
+                    "fast, load-independent detector.\n" +
+                    "  THE FIX IS A NAMED CONSTANT, NOT A DIFFERENT NUMBER — `4.seconds` is the same defect as " +
+                    "`5.seconds`:\n" +
+                    "      timeout = TEST_WEDGE_BACKSTOP        // us.tractat.kuilt.test, :kuilt-test\n" +
+                    "      timeout = RAFT_SIM_WEDGE_BACKSTOP    // :kuilt-raft-test\n" +
+                    "      timeout = WARP_SIM_WEDGE_BACKSTOP    // :kuilt-warp-test\n" +
+                    "  Dropping the `timeout` argument entirely is also fine (the 60 s library default).\n" +
+                    "  This is a per-file COUNT ratchet: a file already over baseline is not an excuse to add " +
+                    "one more. Do NOT raise the baseline in `build.gradle.kts` — sweep the file (all-or-none, " +
+                    "so the next contributor copies the constant rather than a neighbour) and delete its " +
+                    "entry.\n" + detail,
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText(
+            "ok — ${sources.files.size} Kotlin sources scanned, " +
+                "${found.size} file(s) at or below baseline (${found.values.sumOf { it.size }} sites)\n",
+        )
+    }
+}
+
 // Run the guards as part of `check` (hence `build`, hence CI) in every module.
 allprojects {
     tasks.matching { it.name == "check" }.configureEach {
@@ -1190,5 +1503,6 @@ allprojects {
         dependsOn(rootProject.tasks.named("verifyDocCitations"))
         dependsOn(rootProject.tasks.named("forbidRunCatchingCancellableUnderNonCancellable"))
         dependsOn(rootProject.tasks.named("forbidBareRunCatching"))
+        dependsOn(rootProject.tasks.named("forbidTightRunTestTimeout"))
     }
 }
