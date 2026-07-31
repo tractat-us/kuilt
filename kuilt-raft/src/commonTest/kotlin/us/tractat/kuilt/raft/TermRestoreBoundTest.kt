@@ -2,20 +2,11 @@
 
 package us.tractat.kuilt.raft
 
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineExceptionHandler
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.test.StandardTestDispatcher
-import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Regression for #1855: the #1833 term plausibility bound must also cover **init-restore**.
@@ -152,33 +143,5 @@ internal class TermRestoreBoundTest {
         val failure = awaitRestoreFailure(storage)
 
         assertNull(failure, "a term exactly at the ceiling is admissible, matching the wire bound")
-    }
-
-    /**
-     * Starts a node over [storage] in a scope whose failures are captured rather than propagated, and
-     * returns the throwable the init-restore surfaced — or `null` if it started cleanly.
-     *
-     * The restore runs in a coroutine (`storage.term()` suspends, so it cannot happen in the `raftNode`
-     * call itself), which is why the failure is observed through a [CoroutineExceptionHandler] on a
-     * [SupervisorJob] rather than as a thrown constructor exception. `backgroundScope` is deliberately not
-     * used: it reports uncaught exceptions as test failures, which would make the expected failure
-     * unassertable.
-     *
-     * Bounded by [withTimeoutOrNull] on virtual time, so a node that *does* start returns `null` promptly
-     * instead of hanging on its perpetually re-arming election timer.
-     */
-    private suspend fun TestScope.awaitRestoreFailure(storage: InMemoryRaftStorage): Throwable? {
-        val caught = CompletableDeferred<Throwable>()
-        val nodeScope = CoroutineScope(
-            StandardTestDispatcher(testScheduler) +
-                SupervisorJob() +
-                CoroutineExceptionHandler { _, e -> caught.complete(e) },
-        )
-        try {
-            singleVoterNode(nodeScope, storage)
-            return withTimeoutOrNull(2.seconds) { caught.await() }
-        } finally {
-            nodeScope.cancel()
-        }
     }
 }
