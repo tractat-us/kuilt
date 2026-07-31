@@ -313,6 +313,14 @@ every other peer. Declaring `meshDelivery = false` (or `true` vacuously, on a
 strictly 2-peer fabric with no third peer to relay through) records honestly
 that the frame did not travel peer-to-peer.
 
+A third shape also declares `false`, for a different reason: a seam that bonds
+two separate transports into one roster — `TieredSeam`, whose members are this
+server's own room *plus* the other servers — adds no hop of its own, but two of
+its members can be on different transports, in which case they cannot reach each
+other through it at all. `true` there would tell a reader that any member
+reaches any other directly, which is the one thing that is not true, so `false`
+is the honest value even though nothing is relaying.
+
 ### reportsLiveCapability — fabrics without a path observer
 
 Ask a device "is the network up?" and there are three honest answers: yes, no,

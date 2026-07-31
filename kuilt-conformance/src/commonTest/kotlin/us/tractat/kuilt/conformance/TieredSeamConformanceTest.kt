@@ -36,9 +36,9 @@ import us.tractat.kuilt.core.tieredSeam
  * This also keeps the two tiers' rosters **disjoint**, which the primitive assumes. Both tiers
  * are [InMemoryLoom]s that mint `peer-N` ids from their own counters, so a joiner present on
  * *both* tiers would be delivered every broadcast twice (the union tees to both) — an invalid
- * harness rather than a finding. [TieredSeamTest][us.tractat.kuilt.core] in `:kuilt-core` uses
- * exactly this fixture shape (host on each loom so `selfId` agrees, then burn the peer loom's
- * counter so the peer-tier member's id is disjoint); this harness reuses it.
+ * harness rather than a finding. `:kuilt-core`'s `TieredSeamTest` uses exactly this fixture shape
+ * (host on each loom so `selfId` agrees, then burn the peer loom's counter so the peer-tier
+ * member's id is disjoint); this harness reuses it.
  *
  * [UnconfinedTestDispatcher] backs the union/state/incoming pumps so they run eagerly, letting
  * the suite's synchronous `peers.value` / `state.value` assertions observe the settled union —
@@ -47,14 +47,11 @@ import us.tractat.kuilt.core.tieredSeam
 @OptIn(ExperimentalCoroutinesApi::class)
 class TieredSeamConformanceTest : SeamConformanceSuite() {
 
-    /** Retained so [injectMembershipDrain] can drop the joiner from the local tier. */
-    private var pair: TieredLoomPair? = null
-
     override fun newLoomPair(): Pair<Loom, Loom> =
         TieredLoomPair(testScope = null).let { it.hostLoom to it.joinerLoom }
 
     override fun newLoomPair(testScope: TestScope): Pair<Loom, Loom> =
-        TieredLoomPair(testScope).also { pair = it }.let { it.hostLoom to it.joinerLoom }
+        TieredLoomPair(testScope).let { it.hostLoom to it.joinerLoom }
 
     /**
      * `securesTransport = false`: both tiers are in-memory meshes — nothing is on a wire.
@@ -131,9 +128,6 @@ internal class TieredLoomPair(private val testScope: TestScope?) {
     /** Released once the host has taken its `peer-1` id on [roomLoom]; gates the joiner. */
     private val hostWoven = CompletableDeferred<Unit>()
 
-    /** Kept alive so the peer tier carries a real remote member, not just `selfId`. */
-    private var siblingServer: Seam? = null
-
     val hostLoom: Loom = object : Loom {
         override suspend fun weave(rendezvous: Rendezvous): Seam {
             val scope = pumpScope()
@@ -144,7 +138,9 @@ internal class TieredLoomPair(private val testScope: TestScope?) {
             // member's — the disjointness `tieredSeam` assumes. Same device as TieredSeamTest.
             coreLoom.join(InMemoryTag("burn-1")).close()
             coreLoom.join(InMemoryTag("burn-2")).close()
-            siblingServer = coreLoom.join(InMemoryTag("sibling-server"))
+            // Left open on purpose: the peer tier must carry a real remote, or the union roster is
+            // just `{ selfId }` and every union assertion reduces to the local tier's.
+            coreLoom.join(InMemoryTag("sibling-server"))
             hostWoven.complete(Unit)
             return tieredSeam(local = local, peer = peer, scope = scope)
         }
