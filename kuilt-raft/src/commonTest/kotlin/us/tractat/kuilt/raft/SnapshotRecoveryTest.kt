@@ -22,6 +22,11 @@ class SnapshotRecoveryTest {
     fun nodeRestart_recoversSnapshotBaseline_andReplaysInstallThenTail() = raftRunTest {
         val storage = InMemoryRaftStorage()
         // A prior life: a durable snapshot through index 7 (term 3) plus uncompacted entries 8, 9.
+        // The persisted term is seeded alongside them (#1887): `storage.term() >= max(log entry terms)`
+        // is an invariant of every append path — `persistTermAndVote` is storage-first and runs before
+        // `storage.appendEntries` — so a node cannot hold term-3 entries while recorded at term 0.
+        // Seeding only the entries produced a state no node can reach, which the restore now refuses.
+        storage.saveTermAndVotedFor(3L, null)
         storage.saveSnapshot(SnapshotMeta(7L, 3L), byteArrayOf(1, 2, 3))
         storage.appendEntries(
             listOf(LogEntry(8L, 3L, byteArrayOf(8)), LogEntry(9L, 3L, byteArrayOf(9))),
@@ -67,7 +72,9 @@ class SnapshotRecoveryTest {
         val storage = InMemoryRaftStorage()
         // A prior life that crashed in the saveSnapshot→discardLogPrefix window: the snapshot through
         // index 100 (term 5) is durable, but `discardLogPrefix` never ran — so storage still holds the
-        // full log 1..150 alongside the snapshot.
+        // full log 1..150 alongside the snapshot. The persisted term is seeded alongside them for the
+        // reason given in the test above (#1887): `storage.term() >= max(log entry terms)`.
+        storage.saveTermAndVotedFor(5L, null)
         storage.saveSnapshot(SnapshotMeta(100L, 5L), byteArrayOf(1, 2, 3))
         storage.appendEntries((1L..150L).map { LogEntry(it, 5L, byteArrayOf(it.toByte())) })
 

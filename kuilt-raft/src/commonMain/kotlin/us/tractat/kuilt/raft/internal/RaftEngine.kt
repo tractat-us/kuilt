@@ -326,11 +326,15 @@ internal class RaftEngine(
             // seed snapshotIndex/Term, the compaction floor, and commitIndex from it. This must happen
             // BEFORE the log load so `snapshotIndex` is known when we filter the persisted entries.
             storage.loadSnapshot()?.let { stored ->
-                state.snapshotIndex = stored.meta.lastIncludedIndex
-                state.snapshotTerm = stored.meta.lastIncludedTerm
+                // Bound the metadata BEFORE adopting any of it (#1887): `state.snapshotIndex` seeds the
+                // positional log math, the compaction floor, `commitIndex`, and the `snapshotIndex + 1`
+                // filter on the line below, so an unchecked value poisons all four at once.
+                val meta = checkedRestoredSnapshotMeta(stored.meta)
+                state.snapshotIndex = meta.lastIncludedIndex
+                state.snapshotTerm = meta.lastIncludedTerm
                 // Seed the membershipState baseline from the snapshot so a node that crashed after compacting
                 // past a config change recovers under that change (the config entry is gone from the log).
-                state.snapshotConfig = stored.meta.config
+                state.snapshotConfig = meta.config
                 _compactionFloor.value = state.snapshotIndex
                 if (state.currentCommitIndex < state.snapshotIndex) {
                     state.currentCommitIndex = state.snapshotIndex
@@ -343,7 +347,7 @@ internal class RaftEngine(
             // prefix into the in-memory log, and the positional log math (RaftLogMath: log[index - snapshotIndex
             // - 1], which assumes the list begins at snapshotIndex + 1) would then silently return the wrong
             // entry for every lookup. Filtering here restores the invariant regardless of the crash window.
-            state.log.addAll(storage.entries(state.snapshotIndex + 1))
+            state.log.addAll(checkedRestoredEntries(storage.entries(state.snapshotIndex + 1)))
             // Recompute effective membershipState from the recovered log + snapshot (restart recovery).
             // This is load-bearing: a node that crashed mid-transition comes back under exactly
             // the config its durable log justifies — no special restart path needed.
@@ -537,10 +541,12 @@ internal class RaftEngine(
      *
      * ### Scope boundary
      *
-     * This bounds the restored **term** only. `SnapshotMeta.lastIncludedTerm`/`lastIncludedIndex` and the
-     * terms/indices of restored [LogEntry]s come back from the same storage equally unvalidated, and a
-     * poisoned `lastLogTerm` dominates every peer's log under §5.4.1 — the #1832 shape reached through
-     * restore instead of the wire. Deliberately **not** fixed here; tracked in #1887.
+     * This bounds the restored **term** only. The rest of what the restore reads from the same storage —
+     * `SnapshotMeta.lastIncludedTerm`/`lastIncludedIndex` and the terms/indices of restored [LogEntry]s —
+     * is bounded by its siblings [checkedRestoredSnapshotMeta] and [checkedRestoredEntries] (#1887), which
+     * close the §5.4.1 domination this bound cannot see: a `RequestVote` carries the candidate's *term*,
+     * never its `lastLogTerm`, so a node with a perfectly plausible term and a poisoned entry term passes
+     * every check on this line. All three refuse rather than repair, for the reason argued above.
      */
     private fun checkedRestoredTerm(restored: Long): Long {
         if (restored < 0L || restored > MAX_PLAUSIBLE_TERM) {
@@ -553,6 +559,145 @@ internal class RaftEngine(
             )
         }
         return restored
+    }
+
+    /**
+     * Returns [meta] if a real node could have stored it; otherwise refuses to start (#1887).
+     *
+     * The sibling of [checkedRestoredTerm] for the snapshot baseline. #1855 bounded the restored term and
+     * left everything else the init-restore reads adopted verbatim, which leaves the **whole** §5.4.1
+     * lever reachable through storage: [RaftState.lastLogPosition] falls back to
+     * `(snapshotTerm, snapshotIndex)` when the log is empty, and §5.4.1 orders positions by
+     * `(term, index)` **lexicographically**, so a node restored with a huge `lastIncludedTerm` is
+     * unbeatable in every election — `isLogUpToDate` tells every honest peer *its own* log is less
+     * current, so all of them grant the vote. It then becomes leader carrying a log it cannot justify and
+     * overwrites the cluster's. This is exactly #1832 (AppendEntries) and #1868 (InstallSnapshot), reached
+     * from storage instead of the wire, and [checkedRestoredTerm] cannot see it: a `RequestVote` carries
+     * the candidate's `term`, never its `lastLogTerm`.
+     *
+     * **Both halves are bounded, for the reason in [MAX_PLAUSIBLE_INDEX]'s KDoc** — tying on term and
+     * winning on index dominates just as surely as a huge term does, so bounding only the term half leaves
+     * the violation reachable. `lastIncludedIndex` additionally seeds the compaction floor, `commitIndex`,
+     * and the `entries(snapshotIndex + 1)` filter, and `Long.MAX_VALUE` there would overflow that `+ 1`
+     * to `Long.MIN_VALUE` and load the compacted prefix straight back into the positional log.
+     *
+     * The ceilings are the same constants the [RaftMessage.InstallSnapshot] lane uses in
+     * [isWellFormedSnapshotChunk], and inclusive for the same reason: a pure plausibility filter with no
+     * progress obligation creates no fixed point at the boundary.
+     *
+     * **Refuse, don't repair** — the disposition [checkedRestoredTerm] argues for, and the reason it also
+     * applies to the alternative available *here* but not there. A trailing corrupt suffix could in
+     * principle be truncated back to the snapshot baseline and re-replicated, which is safe iff the
+     * truncation point is at or below `commitIndex`. But `commitIndex` is itself seeded from this very
+     * `loadSnapshot()`, so that safety predicate is computed from the corrupt input it is meant to police.
+     * A node that refuses to start on a poisoned durable *term* and silently repairs a poisoned *entry
+     * term* would be incoherent besides.
+     */
+    private fun checkedRestoredSnapshotMeta(meta: SnapshotMeta): SnapshotMeta {
+        if (meta.lastIncludedTerm < 0L || meta.lastIncludedTerm > MAX_PLAUSIBLE_TERM) {
+            throw CorruptDurableStateException(
+                "RaftStorage returned a snapshot with an implausible lastIncludedTerm " +
+                    "(${meta.lastIncludedTerm}): it must be in 0..$MAX_PLAUSIBLE_TERM. Refusing to start " +
+                    "${transport.selfId.value} — §5.4.1 orders log positions by (term, index) " +
+                    "lexicographically, so adopting it would make this node unbeatable in every election " +
+                    "while carrying a log it cannot justify. Inspect the storage adapter's persisted " +
+                    "snapshot metadata, then repair it or re-provision this node from empty state.",
+            )
+        }
+        if (meta.lastIncludedIndex < 0L || meta.lastIncludedIndex > MAX_PLAUSIBLE_INDEX) {
+            throw CorruptDurableStateException(
+                "RaftStorage returned a snapshot with an implausible lastIncludedIndex " +
+                    "(${meta.lastIncludedIndex}): it must be in 0..$MAX_PLAUSIBLE_INDEX. Refusing to start " +
+                    "${transport.selfId.value} — it seeds the positional log math, the compaction floor, " +
+                    "and commitIndex, so adopting it would corrupt all three at once. Inspect the storage " +
+                    "adapter's persisted snapshot metadata, then repair it or re-provision this node from " +
+                    "empty state.",
+            )
+        }
+        return meta
+    }
+
+    /**
+     * Returns [entries] if they are a log a real node could have persisted; otherwise refuses to start
+     * (#1887). Runs after [checkedRestoredTerm] and [checkedRestoredSnapshotMeta], whose results it uses.
+     *
+     * Four properties, each of which the engine's own append paths hold by construction and a third-party
+     * [RaftStorage] can break — kuilt ships no durable implementation, and `RaftStorageConformanceSuite`
+     * constrains none of these fields, so every persistent adapter is consumer code that can pass the
+     * whole TCK and still return garbage.
+     *
+     * - **Term in `0..state.currentTerm`.** The wire analogue is [isWellFormedBatch]'s
+     *   `entry.term > m.term` — "no entry may carry a term above the leader's"; here the ceiling is the
+     *   node's *own* persisted term. `storage.term() >= max(log entry terms)` is an invariant of every
+     *   append path, because [persistTermAndVote] is storage-first and runs before `storage.appendEntries`.
+     *   This subsumes a separate [MAX_PLAUSIBLE_TERM] range check: `state.currentTerm` was already bounded
+     *   by [checkedRestoredTerm], so anything above the ceiling is above `currentTerm` too. It is also the
+     *   §5.4.1 lever [checkedRestoredSnapshotMeta] closes on the snapshot half —
+     *   [RaftState.lastLogPosition] reads the *last entry* when the log is non-empty.
+     * - **Index in `0..`[MAX_PLAUSIBLE_INDEX].** Bounded independently of contiguity: with a snapshot at
+     *   the ceiling, `snapshotIndex + 1` is a *contiguous* position that is nonetheless out of range.
+     * - **Contiguity.** [RaftLogMath] reads positionally (`log[index - snapshotIndex - 1]`, which assumes
+     *   the list begins at `snapshotIndex + 1`), so a gap silently returns the wrong entry for **every**
+     *   lookup above it — wrong `prevTerm`, wrong conflict checks, wrong applies, with no error anywhere.
+     *   Distinct from the compacted-*prefix* case (#1221) that the `entries(snapshotIndex + 1)` filter
+     *   handles and `nodeRestart_filtersCompactedPrefix_whenLogDiscardCrashedMidWay` pins: that shape has
+     *   entries *below* the baseline, which the filter removes; this one has a gap the filter cannot see.
+     * - **Non-decreasing terms (§5.3).** A leader only ever appends at its own `currentTerm`, which never
+     *   decreases, and conflict resolution truncates a suffix rather than rewriting the middle — so terms
+     *   run non-decreasing along any real log. §5.3's fast-backup search and the Log Matching argument
+     *   both assume it.
+     *
+     * Disposition and its rejected alternative: see [checkedRestoredSnapshotMeta].
+     */
+    private fun checkedRestoredEntries(entries: List<LogEntry>): List<LogEntry> {
+        var previousTerm = state.snapshotTerm
+        entries.forEachIndexed { i, entry ->
+            if (entry.index < 0L || entry.index > MAX_PLAUSIBLE_INDEX) {
+                throw CorruptDurableStateException(
+                    "RaftStorage returned a restored log entry with an implausible index " +
+                        "(index=${entry.index}, term=${entry.term}): it must be in 0..$MAX_PLAUSIBLE_INDEX. " +
+                        "Refusing to start ${transport.selfId.value} — §5.4.1 orders log positions by " +
+                        "(term, index) lexicographically, so a log position past any honest one dominates " +
+                        "every election. Inspect the storage adapter's persisted log, then repair it or " +
+                        "re-provision this node from empty state.",
+                )
+            }
+            if (entry.term < 0L || entry.term > state.currentTerm) {
+                throw CorruptDurableStateException(
+                    "RaftStorage returned a restored log entry outside 0..${state.currentTerm} " +
+                        "(index=${entry.index}, term=${entry.term}): no entry may carry a term above this " +
+                        "node's own persisted term, which every append path guarantees by persisting the " +
+                        "term before the entry. Refusing to start ${transport.selfId.value} — under §5.4.1 " +
+                        "a restored entry term above every honest peer's makes this node unbeatable in " +
+                        "every election while carrying a log it cannot justify. Inspect the storage " +
+                        "adapter's persisted log, then repair it or re-provision this node from empty state.",
+                )
+            }
+            val expected = state.snapshotIndex + 1L + i
+            if (entry.index != expected) {
+                throw CorruptDurableStateException(
+                    "RaftStorage returned a log that is not contiguous from the snapshot baseline: " +
+                        "entry $i has index=${entry.index}, expected $expected (snapshotIndex=" +
+                        "${state.snapshotIndex}, entries=${entries.size}). Refusing to start " +
+                        "${transport.selfId.value} — the log math reads positionally " +
+                        "(log[index - snapshotIndex - 1]), so a gap silently resolves the wrong entry for " +
+                        "every lookup above it. Inspect the storage adapter's persisted log, then repair " +
+                        "it or re-provision this node from empty state.",
+                )
+            }
+            if (entry.term < previousTerm) {
+                throw CorruptDurableStateException(
+                    "RaftStorage returned a log whose terms decrease: entry $i (index=${entry.index}, " +
+                        "term=${entry.term}) is below the preceding term $previousTerm. Refusing to start " +
+                        "${transport.selfId.value} — Raft §5.3 requires log terms to be non-decreasing, " +
+                        "and both the fast-backup search and the Log Matching argument assume it. Inspect " +
+                        "the storage adapter's persisted log, then repair it or re-provision this node " +
+                        "from empty state.",
+                )
+            }
+            previousTerm = entry.term
+        }
+        return entries
     }
 
     /** Persist term+vote durably, THEN update in-memory — uniform crash-consistent ordering. */
