@@ -238,9 +238,29 @@ class CheckQuorumTest {
     }
 
     /**
-     * Heal after step-down: partition → step-down → heal. The stepped-down node rejoins as
-     * follower under the new leader without term inflation (PreVote interaction).
-     * The old leader's term in the BecomeFollower(LostQuorum) trace must match the final cluster term.
+     * Heal after step-down — partition → step-down → heal — and the three term properties that make
+     * "no term inflation" mean something. Every one of them is measured against `electedTerm`, the term
+     * the leader actually held before it was isolated; the version this replaced compared against
+     * nothing and asserted only `term > 0` (#1929).
+     *
+     * **§6.2 — the step-down does not bump.** CheckQuorum relinquishes *at the same term*
+     * ([StepDownReason.LostQuorum]'s own contract), so the `BecomeFollower(LostQuorum)` event carries
+     * exactly `electedTerm`.
+     *
+     * The docstring this replaces instead claimed that term "must match the final cluster term". It
+     * cannot: the majority side has to reach `electedTerm + 1` to elect at all, so the two quantities
+     * are one apart by construction — and asserting the literal claim would have pinned the *bug*, since
+     * making the step-down bump is exactly what brings them into agreement. The claim's intent survives
+     * in the two assertions below; the comparand it named was the wrong one.
+     *
+     * **§9.6 — PreVote keeps the minority side pinned.** While partitioned the old leader probes on every
+     * election timeout and never gathers a pre-vote quorum, so it never persists a bump: it is still at
+     * `electedTerm` when the partition heals.
+     *
+     * **One election, one bump.** After the heal every node — the rejoining old leader included — sits at
+     * exactly `electedTerm + 1`. Equality, not `<=`, is the non-vacuous form: an upper bound alone passes
+     * just as well against a cluster where the majority never elected anything, which is the shape of
+     * vacuity this file has already been bitten by (#1856).
      */
     @Test
     fun healAfterStepDown_nodeRejoinsAsFollower_noTermInflation() = raftRunTest {
@@ -252,6 +272,8 @@ class CheckQuorumTest {
         val leaderTrace = mutableListOf<RaftTraceEvent>()
         backgroundScope.launch { sim.nodes.getValue(leaderId).trace.collect { leaderTrace += it } }
 
+        val electedTerm = sim.storages.getValue(leaderId).term()
+
         // Isolate the leader — the majority elects a new leader.
         sim.partition(setOf(leaderId), others)
         delay(80)
@@ -260,6 +282,33 @@ class CheckQuorumTest {
         val lostQuorumEvent = leaderTrace.filterIsInstance<RaftTraceEvent.BecomeFollower>()
             .firstOrNull { it.reason == StepDownReason.LostQuorum }
         assertTrue(lostQuorumEvent != null, "old leader must have stepped down via LostQuorum: $leaderTrace")
+
+        val minoritySideTerm = sim.storages.getValue(leaderId).term()
+        // Identities, not counts: which terms the isolated node proposed, and whether any probe became a
+        // real election (a Timeout event is a persisted bump — exactly what PreVote must prevent here).
+        val minoritySideCampaign = leaderTrace.mapNotNull {
+            when (it) {
+                is RaftTraceEvent.PreVoteStarted -> "PreVoteStarted(proposedTerm=${it.proposedTerm})"
+                is RaftTraceEvent.Timeout -> "Timeout(newTerm=${it.newTerm})"
+                is RaftTraceEvent.BecomeLeader -> "BecomeLeader(term=${it.term})"
+                else -> null
+            }
+        }.distinct()
+        assertAll(
+            {
+                assertEquals(
+                    electedTerm, lostQuorumEvent.term,
+                    "§6.2: CheckQuorum relinquishes at the SAME term — the step-down must not bump: $lostQuorumEvent"
+                )
+            },
+            {
+                assertEquals(
+                    electedTerm, minoritySideTerm,
+                    "§9.6: PreVote must leave the isolated node still at $electedTerm after every probe it " +
+                        "made while partitioned: $minoritySideCampaign"
+                )
+            },
+        )
 
         // Heal the partition.
         sim.heal()
@@ -272,23 +321,22 @@ class CheckQuorumTest {
         // Old leader rejoins as follower and catches up.
         sim.awaitRole(leaderId, RaftRole.Follower)
 
+        val finalTerms = sim.nodeIds.associateWith { sim.storages.getValue(it).term() }
+
         assertAll(
             { assertTrue(leader.role.value is RaftRole.Follower, "old leader must be Follower after heal: ${leader.role.value}") },
-            // The LostQuorum step-down must carry a positive term (the real elected term),
-            // proving no term inflation occurred on the minority side.
-            {
-                assertTrue(
-                    lostQuorumEvent.term > 0L,
-                    "LostQuorum step-down term must be > 0 (the elected term, not initial 0 — no term bump): was ${lostQuorumEvent.term}"
-                )
-            },
-            // After heal, the cluster term must not have inflated past the original term+1
-            // (only the new election on the majority side bumps to term+1, never higher).
             {
                 val newLeaderRole = newLeader.role.value
                 assertTrue(
                     newLeaderRole is RaftRole.Leader,
                     "majority should have a stable leader after heal, was: $newLeaderRole"
+                )
+            },
+            {
+                assertEquals(
+                    sim.nodeIds.associateWith { electedTerm + 1L }, finalTerms,
+                    "exactly one election, on the majority side: every node — the rejoined old leader " +
+                        "included — must sit at ${electedTerm + 1L}"
                 )
             },
         )
