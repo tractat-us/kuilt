@@ -465,7 +465,9 @@ public class GovernedHeddleNode internal constructor(
      * derived at apply regardless (§6.2 step 4 corollary), so it is no longer load-bearing.
      *
      * **Refusals — [ControlConflict.Refused], fail-closed, nothing written.** No unique live inbound
-     * edge; no RETIRED inbound edge; a barrier not yet open; a barrier still missing acks; nothing left
+     * edge; a RETIRED inbound edge that does not share the live edge's **parent** (§5.2's telescoping
+     * precondition — reparenting across parents stays legal, re-homing a strand across one does not);
+     * no RETIRED inbound edge; a barrier not yet open; a barrier still missing acks; nothing left
      * stranded (already reconciled); or a **transfer-tangled** strand, where a replica's acked finals
      * leave it net-negative on the edge and re-homing faithfully would have to move transfer rows too
      * (out of scope). A refusal leaves the conflicts standing — safe and recoverable — never a silent

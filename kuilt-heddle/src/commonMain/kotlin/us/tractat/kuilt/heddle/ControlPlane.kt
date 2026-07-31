@@ -74,10 +74,12 @@ internal sealed interface ControlCommand {
      * (`docs/heddle-ledger-relocation-design.md` §6.2 step 4). Consensus here confers *correctness*,
      * not merely agreement.
      *
-     * Refused, deterministically, when: [child] has no unique live inbound edge; any of its RETIRED
-     * inbound edges is not under a committed [Quiesce]; any quiesced edge is missing an ack from the
-     * set enrolled at that barrier's commit index; nothing is left to move (already reconciled); or a
-     * replica's acked finals leave it net-negative on a stranded edge (the transfer-tangle carve-out).
+     * Refused, deterministically, when: [child] has no unique live inbound edge; a RETIRED inbound edge
+     * does not share the live edge's **parent** (§5.2's telescoping precondition — see [reconcile]);
+     * any of its RETIRED inbound edges is not under a committed [Quiesce]; any quiesced edge is missing
+     * an ack from the set enrolled at that barrier's commit index; nothing is left to move (already
+     * reconciled); or a replica's acked finals leave it net-negative on a stranded edge (the
+     * transfer-tangle carve-out).
      */
     @Serializable
     data class Reconcile(val child: GroupId) : ControlCommand
@@ -773,6 +775,35 @@ internal class HeddleControlPlane(
         val liveEdge = live.single()
         val retired = projection.retiredInboundEdges(child)
         if (retired.isEmpty()) return refuse("reconcile refused: ${child.value} has no RETIRED inbound edge")
+
+        // Every fenced edge must hang off the SAME PARENT as the live edge (§5.2, issue #1916).
+        //
+        // The telescoping that makes a move conserving is an argument about ONE group: the parent's
+        // subtraction of `netInflow(s)` drops by `n` exactly as the child's `creditIn` rises by `n`,
+        // and the `issuedRelocIn(t)` the child gains is the same `n` that parent now delegates. Across
+        // a reparent those two halves land on different groups — the old parent recovers `n` of
+        // genuinely spendable authority while the new parent is left `−n`. Holdings may legally go
+        // negative, so nothing downstream objects; worse, `Σ holdings + Σ effLeafSpent == minted` stays
+        // TRUE, because the new parent's unenforceable negative pocket arithmetically offsets the old
+        // parent's phantom credit. The identity is not a safety invariant — enforceable supply
+        // (`Σ max(0, holdings) + Σ effLeafSpent`) is, and it doubles. So this must be refused here, at
+        // the only point that can still see the topology; there is no later check that fires.
+        //
+        // Reparenting under a different parent stays a legal reshape — only *re-homing a strand across
+        // one* is refused. The strand stays standing, exactly as it does for an incomplete fence: safe,
+        // diagnosed, and recoverable by reparenting back under the original parent.
+        val liveParent = projection.record(liveEdge)?.parent
+            ?: return refuse("reconcile refused: live inbound edge ${liveEdge.value} has no single record")
+        for (s in retired) {
+            val strandedParent = projection.record(s)?.parent
+            if (strandedParent != liveParent) {
+                return refuse(
+                    "reconcile refused: ${s.value} hangs off ${strandedParent?.value} but the live edge " +
+                        "${liveEdge.value} hangs off ${liveParent.value} — a strand may only be re-homed " +
+                        "within one parent (§5.2 telescoping), never across a reparent",
+                )
+            }
+        }
 
         // The fence, quantified over the enrolled set AT EACH BARRIER'S COMMIT INDEX. A peer that
         // enrolled after the barrier committed is excluded (it cannot have written the edge before

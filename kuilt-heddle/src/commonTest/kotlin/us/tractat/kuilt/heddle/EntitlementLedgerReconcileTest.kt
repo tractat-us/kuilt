@@ -34,6 +34,16 @@ class EntitlementLedgerReconcileTest {
     private val e2 = AttachmentId("e2") // g    → h
     private val e3 = AttachmentId("e3") // root → g  (the legal reparent generation)
 
+    // #1916 — the cross-parent reparent: `g` moves out from under `a` and in under `b`.
+    private val a = GroupId("a")
+    private val b = GroupId("b")
+    private val la = GroupId("la")
+    private val ea = AttachmentId("ea") // root → a
+    private val eb = AttachmentId("eb") // root → b
+    private val e5 = AttachmentId("e5") // a → g,  stranded by the raced retire
+    private val e6 = AttachmentId("e6") // b → g,  the CROSS-PARENT reparent generation
+    private val e7 = AttachmentId("e7") // a → la, a leaf for `a` to spend its phantom credit through
+
     private fun rec(id: AttachmentId, parent: GroupId, child: GroupId) =
         AttachmentRecord(id, parent, child, Weight.ONE, 0L)
 
@@ -372,6 +382,148 @@ class EntitlementLedgerReconcileTest {
             "the leaf residue is diagnosed on the edge: ${residual.validate()}",
         )
         assertTrue(residual.baseFinalsOn(e1, p3).leafSpent > 0L, "base(e1)[p3] still exceeds the ack")
+    }
+
+    // ── #1916 — the live edge and the retired edge must share a parent ───────────────────────────
+
+    /**
+     * The #1916 shape. `g`'s raced-retired inbound `e5` hangs off **`a`**; the legal reparent `e6`
+     * hangs off **`b`**. Nothing here is dishonest and nothing has crashed: the retire lost the
+     * ordinary advisory race of #1665, and reparenting a child under a *different* parent is a legal
+     * reshape — `activate` only refuses a second *live* inbound, and `e5` is RETIRED by then.
+     */
+    private fun crossParentReparent(): EntitlementLedger {
+        var l = EntitlementLedger.ZERO.piece(EntitlementLedger.bootstrap(root, mapOf(p3 to 10L), nonce = "genesis"))
+        l = l.piece(l.prepare(rec(ea, root, a))!!.delta)
+        l = l.piece(l.activate(ea)!!.delta)
+        l = l.piece(l.prepare(rec(eb, root, b))!!.delta)
+        l = l.piece(l.activate(eb)!!.delta)
+        l = l.piece(l.prepare(rec(e5, a, g))!!.delta)
+        l = l.piece(l.activate(e5)!!.delta)
+        l = l.piece(l.delegate(p3, ea, 10L)!!.delta) // the whole mint moves root → a…
+        l = l.piece(l.delegate(p3, e5, 10L)!!.delta) // …and on a → g
+        // The raced advisory retire: a gossip-lagged peer read outstanding(e5) = 0 and retired it.
+        l = l.piece(l.close(e5)!!.delta)
+        l = l.piece(EntitlementLedger.of(lifecycle = mapOf(e5 to Lifecycle.RETIRED)))
+        // The legal reparent — onto a DIFFERENT parent.
+        l = l.piece(l.prepare(rec(e6, b, g))!!.delta)
+        l = l.piece(l.activate(e6)!!.delta)
+        return l
+    }
+
+    /**
+     * `Σ max(0, holdings) + Σ effLeafSpent` — the supply this state can actually be made to serve.
+     *
+     * The conservation *identity* (`Σ holdings + Σ effLeafSpent == minted`) is **not** a safety
+     * invariant: a negative pocket is unenforceable (its owner simply never spends again), so it can
+     * arithmetically offset spendable credit manufactured somewhere else and keep the identity true
+     * while real chargeable service exceeds the mint. Clamping each pocket at zero is what makes the
+     * quantity mean "what can be spent", and the safety statement is the inequality `≤ minted`.
+     */
+    private fun enforceableSupply(l: EntitlementLedger): Long =
+        l.allGroups().sumOf { maxOf(0L, l.holdings(it, p3)) } + l.leafSpentTotal()
+
+    /**
+     * #1916 — the §5.2 telescoping that makes a generation move conserving assumes the retired edge
+     * `s` and the live edge `t` **share a parent**: the `−n` the parent of `t` takes on
+     * `issuedRelocIn(t)` is supposed to be the same `+n` the parent of `s` recovers when
+     * `netInflow(s)` drains to zero. Across a reparent those two terms land on *different* groups, so
+     * they no longer cancel — one parent is credited spendable authority it does not own and the
+     * other is left an unenforceable debt.
+     *
+     * This is the arithmetic the gate exists to refuse, derived by bypassing the gate — so it stays
+     * true either side of the fix and documents exactly what the refusal is buying.
+     */
+    @Test
+    fun aCrossParentMoveDoublesTheEnforceableSupplyWhileTheIdentityStaysIntact() {
+        val l = crossParentReparent()
+        // Derived the way `ControlPlane.reconcile` derives it: `relocationPatch` on the CONTROL
+        // PLANE's own relocation accumulator (`FenceState.relocations` — empty, nothing has moved
+        // yet), never on the data-plane view. The acks are honest: each replica's real base slots.
+        val move = EntitlementLedger.ZERO.relocationPatch(e6, mapOf(e5 to l.baseFinalsOn(e5)))
+        val moved = l.piece(assertIs<Relocation.Moved>(move).patch)
+
+        assertAll(
+            { assertEquals(10L, moved.holdings(a, p3), "a's netInflow(e5) subtraction vanishes — it recovers the whole mint") },
+            { assertEquals(-10L, moved.holdings(b, p3), "…while issuedRelocIn(e6) debits b, which never held it") },
+            { assertEquals(10L, moved.holdings(g, p3), "…and g is credited it as well") },
+            {
+                assertEquals(
+                    moved.mintedTotal(),
+                    moved.allGroups().sumOf { moved.holdings(it, p3) } + moved.leafSpentTotal(),
+                    "the conservation IDENTITY stays intact — b's unenforceable −10 offsets a's phantom credit",
+                )
+            },
+            {
+                assertTrue(
+                    moved.validate().none { it is LedgerConflict.ConservationViolation },
+                    "…so the global conservation backstop does not fire: ${moved.validate()}",
+                )
+            },
+            {
+                assertEquals(
+                    20L,
+                    enforceableSupply(moved),
+                    "…yet twice the mint is enforceable — an identity-based assertion proves nothing here",
+                )
+            },
+        )
+    }
+
+    /**
+     * …and the phantom credit is not a bookkeeping curiosity: it buys real service. Both `a` and `g`
+     * spend their apparent 10 with the ordinary mutator — every holdings check passes — and the
+     * cluster has served 20 units against a 10-unit mint.
+     */
+    @Test
+    fun theCrossParentMovesPhantomCreditBuysRealService() {
+        val l = crossParentReparent()
+        val move = EntitlementLedger.ZERO.relocationPatch(e6, mapOf(e5 to l.baseFinalsOn(e5)))
+        var spent = l.piece(assertIs<Relocation.Moved>(move).patch)
+
+        // `g` is a leaf, so its phantom 10 spends directly. `a` is not (the retired `e5` is still a
+        // child edge of it), so it delegates its phantom 10 to a leaf of its own and spends there.
+        spent = spent.piece(assertNotNull(spent.spend(p3, g, 10L), "g's re-homed 10 is spendable").delta)
+        spent = spent.piece(spent.prepare(rec(e7, a, la))!!.delta)
+        spent = spent.piece(spent.activate(e7)!!.delta)
+        spent = spent.piece(assertNotNull(spent.delegate(p3, e7, 10L), "a's recovered 10 is delegable").delta)
+        spent = spent.piece(assertNotNull(spent.spend(p3, la, 10L), "…and spendable").delta)
+
+        assertAll(
+            { assertEquals(10L, spent.mintedTotal(), "the mint was never raised") },
+            { assertEquals(20L, spent.leafSpentTotal(), "…yet 20 units of real service were charged against it") },
+            {
+                assertTrue(
+                    spent.validate().contains(LedgerConflict.ConservationViolation(leafSpentTotal = 20L, mintedTotal = 10L)),
+                    "the global backstop fires only now, long after the move that manufactured the supply: ${spent.validate()}",
+                )
+            },
+        )
+    }
+
+    /**
+     * The gate itself, at the ledger level: the one-line fence model refuses a strand whose retired
+     * and live edges do not share a parent, naming both. The production gate it mirrors lives in
+     * `HeddleControlPlane.reconcile` and is pinned by
+     * `HeddleFenceTest.aReconcileAcrossACrossParentReparentIsRefused`.
+     */
+    @Test
+    fun reconcileRefusesWhenTheLiveAndRetiredEdgesDoNotShareAParent() {
+        val refused = crossParentReparent().relocateFromConvergedView(g)
+        assertIs<Relocation.Refused>(refused, "a strand may only be re-homed within one parent (§5.2)")
+        assertAll(
+            { assertTrue(refused.reason.contains(e5.value), "the refusal names the retired edge: ${refused.reason}") },
+            { assertTrue(refused.reason.contains(e6.value), "…and the live edge: ${refused.reason}") },
+        )
+    }
+
+    /**
+     * Non-vacuity for the gate: the ordinary #1665 reparent — same parent, new generation — still
+     * reconciles. The refusal above must be about the *parent change*, not about reparenting at all.
+     */
+    @Test
+    fun aSameParentReparentStillReconciles() {
+        assertIs<Relocation.Moved>(d1Converged().relocateFromConvergedView(g))
     }
 
     @Test

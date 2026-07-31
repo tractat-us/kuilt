@@ -13,8 +13,23 @@ package us.tractat.kuilt.heddle
 internal fun EntitlementLedger.relocateFromConvergedView(child: GroupId): Relocation {
     val live = liveInboundEdges(child)
     if (live.size != 1) return Relocation.Refused("no unique live inbound for ${child.value}")
-    val finals = retiredInboundEdges(child).associateWith { baseFinalsOn(it) }
-    return relocationPatch(live.single(), finals)
+    val liveEdge = live.single()
+    val retired = retiredInboundEdges(child)
+    // Mirrors `HeddleControlPlane.reconcile`'s §5.2 parent gate (#1916) — read its comment for why.
+    // The helper claims to model the WHOLE fence, so omitting the gate here would let a ledger-level
+    // test "prove" a cross-parent move sound when production refuses it.
+    val liveParent = record(liveEdge)?.parent
+        ?: return Relocation.Refused("live inbound edge ${liveEdge.value} has no single record")
+    for (s in retired) {
+        val strandedParent = record(s)?.parent
+        if (strandedParent != liveParent) {
+            return Relocation.Refused(
+                "${s.value} hangs off ${strandedParent?.value} but the live edge ${liveEdge.value} " +
+                    "hangs off ${liveParent.value} — a strand may only be re-homed within one parent",
+            )
+        }
+    }
+    return relocationPatch(liveEdge, retired.associateWith { baseFinalsOn(it) })
 }
 
 /** The derived patch, or `null` when the move was refused or found nothing to do. */
