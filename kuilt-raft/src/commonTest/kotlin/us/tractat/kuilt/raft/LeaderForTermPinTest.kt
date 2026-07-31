@@ -1,6 +1,7 @@
 @file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 package us.tractat.kuilt.raft
 
+import kotlinx.coroutines.launch
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -154,6 +155,53 @@ class LeaderForTermPinTest {
             },
             { assertEquals(term, termAfter, "no election means no term bump: the durable term must still be $term") },
             { assertEquals(leaderId, victim.leader.value, "belief must still name the real leader") },
+        )
+    }
+
+    /**
+     * Decision (b) on #1906, and the reason `becomeLeader` pins **itself**: winning term `T` is the
+     * establishing event for `T`, so a same-term leader-contact reaching a node that still believes it
+     * is Leader can never be honest — §5.2 already gave the term to this node.
+     *
+     * Both halves are kept, deliberately. #1250's defence-in-depth still fires: a node that somehow
+     * holds leadership when such a frame arrives tears its leadership down through the full relinquish
+     * path (timers, pending proposals, dedup) rather than flipping a role field. But the sender does
+     * **not** thereby install itself — the belief goes to `null` (the step-down's own clearing), not
+     * to the frame's author. Option (a) — dropping the frame outright — was rejected because it buys
+     * the invariant by leaving a deposed leader still running its timers.
+     */
+    @Test
+    fun sameTermAppendEntriesWhileLeaderDemotesButDoesNotInstallTheSender() = raftRunTest(timeout = 30.seconds) {
+        val sim = raftSim(this, backgroundScope, n = 3)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
+        val forgerId = sim.nodeIds.first { it != leaderId }
+
+        val trace = mutableListOf<RaftTraceEvent>()
+        backgroundScope.launch { leader.trace.collect { trace += it } }
+        sim.partitionOff(leaderId)
+        val term = sim.storages.getValue(leaderId).term()
+        sim.settle()   // let the trace collector subscribe
+
+        sim.deliverAppendEntries(to = leaderId, from = forgerId, term = term)
+        sim.settle()
+
+        assertAll(
+            {
+                assertTrue(
+                    trace.filterIsInstance<RaftTraceEvent.BecomeFollower>()
+                        .any { it.reason == StepDownReason.AppendEntriesFromLeader },
+                    "#1250's teardown must still run — BecomeFollower(AppendEntriesFromLeader) absent. trace=$trace",
+                )
+            },
+            {
+                assertEquals(
+                    null,
+                    leader.leader.value,
+                    "$forgerId must NOT be installed as the term-$term leader: this node won that term, " +
+                        "so §5.2 says no other node can hold it",
+                )
+            },
         )
     }
 
