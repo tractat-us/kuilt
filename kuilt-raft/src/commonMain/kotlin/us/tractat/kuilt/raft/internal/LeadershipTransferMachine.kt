@@ -19,8 +19,10 @@ import us.tractat.kuilt.raft.RaftConfig
  *
  * **Success is gated on a leader-authored message from the target (#1243).** A transfer completes
  * successfully **only** via [onLeaderElected] — the engine's cue that a leader-authored message
- * (`AppendEntries`/`InstallSnapshot` with `leaderId == target`) arrived at a term above the transfer's
- * start term, i.e. the target *actually is* leader. The old leader's step-down is deliberately NOT a
+ * (`AppendEntries`/`InstallSnapshot`) arrived *from* the target, at a term above the transfer's start
+ * term, i.e. the target *actually is* leader. The sender is the transport's `from`, not a payload
+ * field, so no other peer can confirm a transfer on the target's behalf (#1912). The old leader's
+ * step-down is deliberately NOT a
  * resolution point: the *sender* of the first higher-term message identifies neither the winner nor
  * even a campaigner — a higher-term echo *from* the target (adopted from an unrelated new leader)
  * would be a false SUCCESS, and a non-target voter's higher-term reject outracing the target's genuine
@@ -133,17 +135,20 @@ internal class LeadershipTransferMachine(
     }
 
     /**
-     * A **leader-authored** message (`AppendEntries`/`InstallSnapshot`) from [leaderId] at [term] reached
+     * A **leader-authored** message (`AppendEntries`/`InstallSnapshot`) from [sender] at [term] reached
      * this node — the engine calls this wherever it resolves its leader StateFlow from a live leader's
-     * message. Returns true iff this confirmed the in-flight transfer: [leaderId] is the transfer target
+     * message. [sender] is the transport's `from`, the frame's true origin, never a payload field
+     * (#1912): otherwise any peer could name the target and confirm a transfer it never won.
+     *
+     * Returns true iff this confirmed the in-flight transfer: [sender] is the transfer target
      * and [term] is strictly above the transfer's start term — proof the target actually won an election
      * (#1243, the §3.10 success condition). Completes the deferred successfully and clears state. Returns
      * false otherwise (no transfer in flight, a different leader, or a not-higher term — the latter only
      * reachable under an Election Safety violation, which must not report transfer success).
      */
-    fun onLeaderElected(leaderId: NodeId, term: Long): Boolean {
+    fun onLeaderElected(sender: NodeId, term: Long): Boolean {
         val current = inFlight ?: return false
-        if (leaderId != current.target || term <= current.startTerm) return false
+        if (sender != current.target || term <= current.startTerm) return false
         current.timeoutJob.cancel()
         current.deferred.complete(Unit)
         inFlight = null

@@ -4,8 +4,19 @@ import kotlinx.serialization.Serializable
 import us.tractat.kuilt.raft.ConfigPayload
 import us.tractat.kuilt.raft.DedupKey
 import us.tractat.kuilt.raft.LogEntry
-import us.tractat.kuilt.raft.NodeId
 
+/**
+ * The Raft wire frames.
+ *
+ * **No frame restates its own sender (#1912).** The transport already carries the true origin as
+ * `from` — `SeamRaftTransport` / `RoutedRaftTransport` / `RaftRelayHub` unwrap the relay envelope —
+ * and every handler takes it as its first parameter. A `leaderId`/`candidateId` field alongside it
+ * would be redundant on every honest frame (the sender writes its own `selfId`) and forgeable on
+ * every hostile one, and the engine read those fields as *authority*: `_leader.value`,
+ * `persistVote(…)`, §3.10 transfer confirmation. Five such fields were deleted rather than
+ * checked against `from`, which removes the forgery instead of adding four checks that a new read
+ * site can forget. A new frame type must not reintroduce one: read `from`.
+ */
 @Serializable
 internal sealed interface RaftMessage {
 
@@ -23,7 +34,6 @@ internal sealed interface RaftMessage {
     @Serializable
     data class RequestVote(
         val term: Long,
-        val candidateId: NodeId,
         val lastLogIndex: Long,
         val lastLogTerm: Long,
         val leadershipTransfer: Boolean = false,
@@ -44,7 +54,6 @@ internal sealed interface RaftMessage {
     @Serializable
     data class AppendEntries(
         val term: Long,
-        val leaderId: NodeId,
         val prevLogIndex: Long,
         val prevLogTerm: Long,
         val entries: List<LogEntry>,
@@ -94,7 +103,6 @@ internal sealed interface RaftMessage {
     @Serializable
     data class InstallSnapshot(
         val term: Long,
-        val leaderId: NodeId,
         val lastIncludedIndex: Long,
         val lastIncludedTerm: Long,
         val offset: Long,
@@ -129,7 +137,6 @@ internal sealed interface RaftMessage {
     @Serializable
     data class PreVote(
         val term: Long,
-        val candidateId: NodeId,
         val lastLogIndex: Long,
         val lastLogTerm: Long,
         val round: Long,
@@ -151,16 +158,18 @@ internal sealed interface RaftMessage {
     ) : RaftMessage
 
     /**
-     * §3.10 TimeoutNow: sent by the leader to [targetId] to initiate a graceful leadership transfer.
-     * The target immediately converts to a candidate and starts a real election (bypassing its
-     * election-timeout wait and the pre-vote phase), so the transfer completes within one round-trip.
+     * §3.10 TimeoutNow: sent by the leader to the transfer target to initiate a graceful leadership
+     * transfer. The target immediately converts to a candidate and starts a real election (bypassing
+     * its election-timeout wait and the pre-vote phase), so the transfer completes within one
+     * round-trip.
      *
-     * [term] is the sender's current term; the target uses it to verify the message is current.
+     * [term] is the sender's current term; the target uses it to verify the message is current. The
+     * sender's identity is the transport's `from`, which `onTimeoutNow` checks against the leader it
+     * currently recognises — see the banner above for why the frame carries no `leaderId` (#1912).
      */
     @Serializable
     data class TimeoutNow(
         val term: Long,
-        val leaderId: NodeId,
     ) : RaftMessage
 
     /**

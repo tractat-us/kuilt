@@ -1,11 +1,9 @@
-@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, kotlinx.serialization.ExperimentalSerializationApi::class)
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 
 package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
-import kotlinx.serialization.cbor.Cbor
-import kotlinx.serialization.encodeToByteArray
 import us.tractat.kuilt.raft.internal.RaftMessage
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -19,13 +17,19 @@ import kotlin.test.assertTrue
  * Five `RaftMessage` fields used to restate the sender's own id — `AppendEntries.leaderId`,
  * `InstallSnapshot.leaderId`, `RequestVote.candidateId`, `PreVote.candidateId`,
  * `TimeoutNow.leaderId`. Every honest sender set them to its own `selfId`, nobody compared them to
- * `from`, and the engine then read them as *authority*: `_leader.value = m.leaderId`,
+ * `from`, and the engine read them as *authority*: `_leader.value = m.leaderId`,
  * `persistVote(m.candidateId)`, `transfer.onLeaderElected(m.leaderId, …)`. So each was redundant on
- * every honest frame and forgeable on every hostile one.
+ * every honest frame and forgeable on every hostile one — a voter could name a third party as
+ * leader, burn a victim's vote on a phantom that never campaigned, or falsely confirm a §3.10
+ * transfer for a node that never won.
  *
- * These tests inject the frames by hand rather than through [RaftSimulation]'s typed
- * `deliver*` helpers, because those helpers pass `from` into the identity field — they cannot
- * express the mismatch that is the whole point.
+ * **Those forgeries are no longer representable.** The fields are gone rather than checked, so there
+ * is no frame to construct: the identity a handler reads *is* `from`, structurally, at every read
+ * site including ones not yet written. This class is therefore the positive form — each test drives
+ * the honest path and pins that the derived state (`leader`, `votedFor`, transfer confirmation)
+ * names the peer that actually authored the frame. The earlier, negative form of these three tests
+ * (a `leaderId`/`candidateId` naming someone other than the sender) is preserved in this branch's
+ * first commit; it no longer compiles, which is the point.
  *
  * Runs on the canonical [raftRunTest] + [raftSim] harness (virtual time, seeded election RNG); see
  * [RaftTestFixtures] for the determinism contract.
@@ -33,154 +37,111 @@ import kotlin.test.assertTrue
 class SenderIdentityProvenanceTest {
 
     /**
-     * A voter sends an `AppendEntries` naming a third party as leader. The victim must recognise the
-     * peer that actually addressed it, not the name in the payload.
+     * An `AppendEntries` from a voter that is not the recognised leader still moves `_leader` — the
+     * #1906 lane, deliberately unchanged here. What is pinned is *who* it moves it to: the sender,
+     * with no payload field left that could name anyone else.
      */
     @Test
-    fun appendEntries_namingAThirdPartyAsLeader_doesNotSetLeaderToThatName() = raftRunTest {
+    fun appendEntries_makesTheRecipientNameItsSender() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
         val victimId = sim.nodeIds.first { it != leaderId }
-        val attackerId = sim.nodeIds.first { it != leaderId && it != victimId }
+        val senderId = sim.nodeIds.first { it != leaderId && it != victimId }
         val victimTerm = sim.storages.getValue(victimId).term()
 
-        sim.network.deliver(
-            from = attackerId,
-            to = victimId,
-            bytes = Cbor.encodeToByteArray<RaftMessage>(
-                RaftMessage.AppendEntries(
-                    term = victimTerm,
-                    leaderId = GHOST,
-                    prevLogIndex = 0L,
-                    prevLogTerm = 0L,
-                    entries = emptyList(),
-                    leaderCommit = 0L,
-                )
-            ),
-        )
+        sim.deliverAppendEntries(to = victimId, from = senderId, term = victimTerm)
         sim.settle()
 
         assertEquals(
-            attackerId,
+            senderId,
             sim.nodes.getValue(victimId).leader.value,
-            "the victim must name the peer that addressed it ($attackerId), not the payload's claim (${GHOST.value})",
+            "the recipient must name the peer that addressed it",
         )
     }
 
     /**
-     * A voter sends a `RequestVote` naming a third party as candidate. Pre-fix the victim persists the
-     * phantom as `votedFor`, which then denies the *genuine* candidate at that term with `AlreadyVoted`
-     * — a vote burned on a node that never campaigned, at two frames per term, indefinitely (§5.2).
+     * §5.2: the vote is recorded for the peer that asked. Pre-fix the payload's `candidateId` was
+     * persisted instead, so a voter could burn a victim's vote on a phantom — after which the victim
+     * denied the *genuine* candidate at that term with `AlreadyVoted`, at two frames per term,
+     * indefinitely. The second half of this test is that denial's absence.
      */
     @Test
-    fun requestVote_namingAThirdPartyAsCandidate_doesNotBurnTheVoteOnThatName() = raftRunTest {
+    fun requestVote_recordsTheVoteForItsSender_andTheSameSenderIsNotThenDenied() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
         val victimId = sim.nodeIds.first { it != leaderId }
-        val attackerId = sim.nodeIds.first { it != leaderId && it != victimId }
-        val forgedTerm = sim.storages.getValue(victimId).term() + 1L
+        val candidateId = sim.nodeIds.first { it != leaderId && it != victimId }
+        val electionTerm = sim.storages.getValue(victimId).term() + 1L
 
         // `leadershipTransfer = true` bypasses the §4.2.3 leader-stickiness deny, so the vote is
         // actually processed against a victim that still believes the real leader is alive.
-        sim.network.deliver(
-            from = attackerId,
+        sim.deliverRequestVote(
             to = victimId,
-            bytes = Cbor.encodeToByteArray<RaftMessage>(
-                RaftMessage.RequestVote(
-                    term = forgedTerm,
-                    candidateId = GHOST,
-                    lastLogIndex = 99L,
-                    lastLogTerm = 99L,
-                    leadershipTransfer = true,
-                )
-            ),
+            from = candidateId,
+            term = electionTerm,
+            lastLogIndex = 99L,
+            lastLogTerm = 99L,
+            leadershipTransfer = true,
         )
         sim.settle()
         val votedFor = sim.storages.getValue(victimId).votedFor()
 
-        // The genuine candidate now asks for the same term. It must not be denied on behalf of a
-        // phantom that never ran.
+        // The same candidate asks again at the same term — a retransmit. §5.2 grants it, because the
+        // recorded vote is already this peer's. It is denied only if the first frame recorded someone else.
         sim.network.recording = true
         sim.deliverRequestVote(
             to = victimId,
-            from = attackerId,
-            term = forgedTerm,
+            from = candidateId,
+            term = electionTerm,
             lastLogIndex = 99L,
             lastLogTerm = 99L,
             leadershipTransfer = true,
         )
         sim.settle()
         val granted = sim.network.sent.any { s ->
-            s.from == victimId && s.to == attackerId &&
+            s.from == victimId && s.to == candidateId &&
                 (s.message as? RaftMessage.RequestVoteResponse)?.voteGranted == true
         }
         sim.network.recording = false
 
         assertAll(
-            {
-                assertEquals(
-                    attackerId,
-                    votedFor,
-                    "the vote must be recorded for the peer that asked ($attackerId), not the payload's claim (${GHOST.value})",
-                )
-            },
-            {
-                assertTrue(
-                    granted,
-                    "the genuine candidate $attackerId must not be denied at term $forgedTerm on behalf of ${GHOST.value}",
-                )
-            },
+            { assertEquals(candidateId, votedFor, "the vote must be recorded for the peer that asked") },
+            { assertTrue(granted, "$candidateId must not be denied at term $electionTerm on behalf of another name") },
         )
     }
 
     /**
      * §3.10: a transfer completes only on a leader-authored message **from the target**. Pre-fix any
-     * voter could name the target in an `AppendEntries` and falsely confirm a transfer for a node that
-     * never won an election — [transferLeadership] returns success while the target is unreachable.
+     * voter could name the target in an `AppendEntries` and falsely confirm a transfer for a node
+     * that never won an election. With no name in the frame, a non-target sender cannot confirm it —
+     * pinned here on the sender that could previously have lied.
      */
     @Test
-    fun appendEntries_namingTheTransferTarget_doesNotConfirmTheTransfer() = raftRunTest {
+    fun transferIsNotConfirmedByAnAppendEntriesFromAnyPeerButTheTarget() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
         val targetId = sim.nodeIds.first { it != leaderId }
-        val attackerId = sim.nodeIds.first { it != leaderId && it != targetId }
+        val otherId = sim.nodeIds.first { it != leaderId && it != targetId }
         val leaderTerm = sim.storages.getValue(leaderId).term()
 
-        // The target can neither hear the TimeoutNow nor win an election.
+        // The target can neither hear the TimeoutNow nor win an election, so nothing but a forgery
+        // could resolve the transfer inside the test's window.
         sim.partitionOff(targetId)
         val transfer = async { leader.transferLeadership(targetId) }
         sim.settle()
         assertFalse(transfer.isCompleted, "precondition: the transfer must still be in flight")
 
-        sim.network.deliver(
-            from = attackerId,
-            to = leaderId,
-            bytes = Cbor.encodeToByteArray<RaftMessage>(
-                RaftMessage.AppendEntries(
-                    term = leaderTerm + 1L,
-                    leaderId = targetId,
-                    prevLogIndex = 0L,
-                    prevLogTerm = 0L,
-                    entries = emptyList(),
-                    leaderCommit = 0L,
-                )
-            ),
-        )
+        sim.deliverAppendEntries(to = leaderId, from = otherId, term = leaderTerm + 1L)
         sim.settle()
 
         assertFalse(
             transfer.isCompleted,
-            "a transfer to $targetId must not be confirmed by an AppendEntries from $attackerId — " +
+            "a transfer to $targetId must not be confirmed by an AppendEntries from $otherId — " +
                 "only a message the target itself authored proves it won",
         )
         transfer.cancelAndJoin()
-    }
-
-    private companion object {
-        /** A NodeId no peer in the simulation holds — a name nobody can have authored a frame from. */
-        val GHOST = NodeId("ghost")
     }
 }

@@ -792,7 +792,7 @@ internal class RaftEngine(
         // Single-voter (or all other voters already granted): self pre-vote satisfies quorum — skip probe.
         if (state.membershipState.voterQuorumReached(preVotesGranted - transport.selfId, transport.selfId)) { startRealElection(); return }
         emitTrace(RaftTraceEvent.PreVoteStarted(nextClock(), transport.selfId, proposed))
-        val pv = RaftMessage.PreVote(proposed, transport.selfId, state.lastLogIndex, state.lastLogTerm, preVoteRound)
+        val pv = RaftMessage.PreVote(proposed, state.lastLogIndex, state.lastLogTerm, preVoteRound)
         otherVoters.forEach { send(it, pv) }
     }
 
@@ -836,7 +836,7 @@ internal class RaftEngine(
         // Single-voter cluster: self-vote already satisfies quorum — become leader immediately.
         if (state.membershipState.voterQuorumReached(votesGranted - transport.selfId, transport.selfId)) { becomeLeader(); return }
         emitTrace(RaftTraceEvent.Timeout(nextClock(), transport.selfId, state.currentTerm))
-        val rv = RaftMessage.RequestVote(state.currentTerm, transport.selfId, state.lastLogIndex, state.lastLogTerm, leadershipTransfer)
+        val rv = RaftMessage.RequestVote(state.currentTerm, state.lastLogIndex, state.lastLogTerm, leadershipTransfer)
         otherVoters.forEach { peer ->
             emitTrace(RaftTraceEvent.RequestVote(nextClock(), transport.selfId, peer, state.currentTerm, state.lastLogIndex, state.lastLogTerm))
             send(peer, rv)
@@ -865,15 +865,16 @@ internal class RaftEngine(
         }
         if (m.term > state.currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
         val logOk = isLogUpToDate(ours = state.lastLogPosition, candidate = m.lastLogPosition)
-        val grant = m.term == state.currentTerm && logOk && (state.votedFor == null || state.votedFor == m.candidateId)
+        // The candidate is [from] — the transport's origin — never a payload field (#1912).
+        val grant = m.term == state.currentTerm && logOk && (state.votedFor == null || state.votedFor == from)
         if (grant) {
-            persistVote(m.candidateId)
+            persistVote(from)
             resetElectionTimeout()
             emitTrace(RaftTraceEvent.VoteGranted(nextClock(), transport.selfId, from, m.term))
         } else {
             val reason = when {
                 m.term < state.currentTerm -> DenyReason.StaleTerm
-                state.votedFor != null && state.votedFor != m.candidateId -> DenyReason.AlreadyVoted
+                state.votedFor != null && state.votedFor != from -> DenyReason.AlreadyVoted
                 else -> DenyReason.LogNotUpToDate
             }
             emitTrace(RaftTraceEvent.VoteDenied(nextClock(), transport.selfId, from, m.term, reason))
@@ -1057,7 +1058,7 @@ internal class RaftEngine(
      * message that triggered the step-down identifies neither the election winner nor even a campaigner,
      * so completing (or failing) the transfer on step-down mis-resolves it on degraded networks. The
      * transfer stays pending; it completes only via `transfer.onLeaderElected` — a leader-authored
-     * message with `leaderId == target` at a higher term ([onAppendEntries]/[onInstallSnapshot]) — and
+     * message *sent by* the target at a higher term ([onAppendEntries]/[onInstallSnapshot]) — and
      * otherwise fails on its auto-timeout, an explicit cancel, or this node's own re-election
      * ([becomeLeader] → `transfer.onSelfElected`).
      */
@@ -1183,7 +1184,6 @@ internal class RaftEngine(
             peer,
             RaftMessage.AppendEntries(
                 term = state.currentTerm,
-                leaderId = transport.selfId,
                 prevLogIndex = prevIndex,
                 prevLogTerm = prevTerm,
                 entries = entries,
@@ -1226,7 +1226,6 @@ internal class RaftEngine(
             peer,
             RaftMessage.InstallSnapshot(
                 term = state.currentTerm,
-                leaderId = transport.selfId,
                 lastIncludedIndex = chunk.meta.lastIncludedIndex,
                 lastIncludedTerm = chunk.meta.lastIncludedTerm,
                 offset = chunk.offset,
@@ -1344,11 +1343,12 @@ internal class RaftEngine(
         if (m.term > state.currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
         demoteToFollowerOnLeaderContact()
         preVoteTerm = null          // a live leader appeared — cancel any in-flight pre-vote probe
-        _leader.value = m.leaderId
+        // The leader is [from]: the peer that authored this frame, not a payload claim (#1912).
+        _leader.value = from
         // §3.10 (#1243): a leader-authored message from the transfer target at a higher term is the
         // conclusive transfer-success signal — the target actually won its election.
-        if (transfer.onLeaderElected(m.leaderId, m.term)) {
-            debug { "leadership transfer confirmed: ${m.leaderId.value} is leader at term ${m.term}" }
+        if (transfer.onLeaderElected(from, m.term)) {
+            debug { "leadership transfer confirmed: ${from.value} is leader at term ${m.term}" }
         }
         resetElectionTimeout()
         armLeaderLease()
@@ -1523,11 +1523,12 @@ internal class RaftEngine(
         // violated), route through the relinquish path so timers/deferreds/dedup tear down (#1250).
         demoteToFollowerOnLeaderContact()
         preVoteTerm = null          // a live leader appeared — cancel any in-flight pre-vote probe
-        _leader.value = m.leaderId
+        // The leader is [from]: the peer that authored this frame, not a payload claim (#1912).
+        _leader.value = from
         // §3.10 (#1243): a leader-authored message from the transfer target at a higher term is the
         // conclusive transfer-success signal — the target actually won its election.
-        if (transfer.onLeaderElected(m.leaderId, m.term)) {
-            debug { "leadership transfer confirmed: ${m.leaderId.value} is leader at term ${m.term}" }
+        if (transfer.onLeaderElected(from, m.term)) {
+            debug { "leadership transfer confirmed: ${from.value} is leader at term ${m.term}" }
         }
         resetElectionTimeout()
         armLeaderLease()
@@ -2212,7 +2213,7 @@ internal class RaftEngine(
     /** Send a [RaftMessage.TimeoutNow] to [target]. */
     private suspend fun sendTimeoutNow(target: NodeId) {
         debug { "sendTimeoutNow: sending TimeoutNow to ${target.value} term=${state.currentTerm}" }
-        send(target, RaftMessage.TimeoutNow(state.currentTerm, transport.selfId))
+        send(target, RaftMessage.TimeoutNow(state.currentTerm))
     }
 
     /**

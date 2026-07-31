@@ -153,7 +153,7 @@ class RaftSimulation(
         round: Long = 1L,
     ) {
         val bytes = Cbor.encodeToByteArray<RaftMessage>(
-            RaftMessage.PreVote(term, from, lastLogIndex, lastLogTerm, round)
+            RaftMessage.PreVote(term, lastLogIndex, lastLogTerm, round)
         )
         network.deliver(from = from, to = to, bytes = bytes)
     }
@@ -177,7 +177,7 @@ class RaftSimulation(
         leadershipTransfer: Boolean = false,
     ) {
         val bytes = Cbor.encodeToByteArray<RaftMessage>(
-            RaftMessage.RequestVote(term, from, lastLogIndex, lastLogTerm, leadershipTransfer)
+            RaftMessage.RequestVote(term, lastLogIndex, lastLogTerm, leadershipTransfer)
         )
         network.deliver(from = from, to = to, bytes = bytes)
     }
@@ -204,14 +204,15 @@ class RaftSimulation(
 
     /**
      * Encode and inject a [RaftMessage.TimeoutNow] directly into [to]'s incoming channel,
-     * bypassing the normal partition/drop rules. The transport-level sender is [from], so a
-     * non-leader [from] exercises the receiver's sender-authentication guard. Use this to simulate
-     * a stale or spoofed TimeoutNow from a peer that is not the current leader.
+     * bypassing the normal partition/drop rules. The frame carries only a term; its sender is the
+     * transport-level [from], which is what the receiver's sender-authentication guard checks
+     * against the leader it recognises. Use this to simulate a stale or spoofed TimeoutNow from a
+     * peer that is not the current leader.
      */
     @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
     suspend fun deliverTimeoutNow(to: NodeId, from: NodeId, term: Long) {
         val bytes = Cbor.encodeToByteArray<RaftMessage>(
-            RaftMessage.TimeoutNow(term, from)
+            RaftMessage.TimeoutNow(term)
         )
         network.deliver(from = from, to = to, bytes = bytes)
     }
@@ -234,7 +235,7 @@ class RaftSimulation(
         round: Long = 0L,
     ) {
         val bytes = Cbor.encodeToByteArray<RaftMessage>(
-            RaftMessage.AppendEntries(term, from, prevLogIndex, prevLogTerm, entries, leaderCommit, round)
+            RaftMessage.AppendEntries(term, prevLogIndex, prevLogTerm, entries, leaderCommit, round)
         )
         network.deliver(from = from, to = to, bytes = bytes)
     }
@@ -264,6 +265,7 @@ class RaftSimulation(
      * into [to]'s incoming channel, bypassing the normal partition/drop rules. Models a delayed /
      * duplicate or behind-commit snapshot arriving at a caught-up follower — the safety regressions
      * in #1219 (stale duplicate below the compaction floor) and #1220 (behind-commit retain-suffix).
+     * The frame names no leader; the transport-level [from] is the sender the receiver reads.
      */
     @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
     suspend fun deliverInstallSnapshot(
@@ -279,7 +281,6 @@ class RaftSimulation(
         val bytes = Cbor.encodeToByteArray<RaftMessage>(
             RaftMessage.InstallSnapshot(
                 term = term,
-                leaderId = from,
                 lastIncludedIndex = lastIncludedIndex,
                 lastIncludedTerm = lastIncludedTerm,
                 offset = 0L,

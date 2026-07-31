@@ -42,7 +42,7 @@ class SnapshotJointConfigTest {
     @Test
     fun jointConfig_roundTripsThroughInstallSnapshotCbor() {
         val msg = RaftMessage.InstallSnapshot(
-            term = 2L, leaderId = a, lastIncludedIndex = 5L, lastIncludedTerm = 1L,
+            term = 2L, lastIncludedIndex = 5L, lastIncludedTerm = 1L,
             offset = 0L, data = byteArrayOf(1, 2, 3), done = true, config = joint,
         )
         val decoded = Cbor.decodeFromByteArray<RaftMessage>(Cbor.encodeToByteArray<RaftMessage>(msg))

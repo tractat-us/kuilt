@@ -67,7 +67,7 @@ import kotlin.time.Duration.Companion.seconds
  * The learner's `LinkSeam` stamps `sender = serverPeerId` on every inbound Raft frame, so
  * `SeamRaftTransport` maps all incoming messages to `NodeId(serverPeerId.value)`.
  * Consequently:
- * - `AppendEntries.leaderId` from the aligned voter equals `NodeId(serverPeerId.value)`.
+ * - An `AppendEntries` from the aligned voter is attributed to `NodeId(serverPeerId.value)`.
  * - The learner sets `currentLeader = alignedVoterId`, then sends `Forward` to `alignedVoterId`.
  * - `seam.sendTo(PeerId(alignedVoterId.value))` matches the one peer in `seam.peers`.
  *
