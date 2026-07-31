@@ -5,6 +5,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 
@@ -89,28 +90,99 @@ class CheckQuorumTest {
     }
 
     /**
-     * success=false still counts as contact: a peer that consistently rejects AppendEntries
-     * (log conflict) but is reachable keeps the leader in office. Reachability, not success,
-     * is the CheckQuorum signal.
+     * §6.2 check-quorum, the property this file is named for: a **rejected** AppendEntries still
+     * proves the peer is reachable, so an `AppendEntriesResponse(success = false)` must refresh the
+     * leader's contact clock exactly as a successful one does. Reachability, not success, is the
+     * CheckQuorum signal — `RaftEngine.onAppendEntriesResponse` credits `recentVoterContacts` *before*
+     * it branches on `m.success`, and that unconditional credit is what this test pins.
      *
-     * Setup: a 2-voter cluster. The follower has a pre-loaded conflicting entry at index 1
-     * (term 99), so it will keep rejecting the leader's AppendEntries. But each rejection
-     * is an AppendEntriesResponse that counts as reachability. quorum = 2: leader + 1 peer = 2 ≥ 2.
+     * Setup: elect a leader in a 2-voter cluster (quorum = 2, so the leader needs its one peer in every
+     * window), then **partition the leader off** so nothing the real peer sends can reach it. The only
+     * traffic the leader sees from then on is a hand-injected stream of `success = false` responses at
+     * its own term, delivered faster than the check-quorum window (a fresh 5–10 ms draw per tick under
+     * [FAST_RAFT_CONFIG]). `deliverAppendEntriesResponse` bypasses the partition, which is the whole
+     * point: rejections are the *only* contact.
+     *
+     * Phase 2 is the control, and it is not optional. Stopping the injections must make the leader lose
+     * quorum — without that half, phase 1 would pass just as well against a leader that never checks
+     * quorum at all, and the test would assert nothing. (That is precisely how the version this
+     * replaced went vacuous: it seeded a higher-term log on the *peer*, so the peer won the election and
+     * the leader it produced was fed an ordinary `success = true` heartbeat stream — see #1856.)
      */
     @Test
-    fun successFalseResponse_countsAsContact_leaderRetainsLeadership() = raftRunTest {
+    fun rejectedAppendEntriesResponse_countsAsContact_leaderRetainsLeadership() = raftRunTest {
+        val sim = raftSim(this, backgroundScope, n = 2)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodes.entries.first { it.value === leader }.key
+        val peerId = sim.nodeIds.first { it != leaderId }
+        val leaderTerm = sim.storages.getValue(leaderId).term()
+
+        val leaderTrace = mutableListOf<RaftTraceEvent>()
+        backgroundScope.launch { sim.nodes.getValue(leaderId).trace.collect { leaderTrace += it } }
+        sim.settle()
+
+        // Cut the leader off: every genuine contact signal is gone, injected rejections are all that's left.
+        sim.partitionOff(leaderId)
+
+        // Phase 1 — rejections only, ~80 ms ≈ 8+ check-quorum windows.
+        repeat(40) {
+            sim.deliverAppendEntriesResponse(to = leaderId, from = peerId, term = leaderTerm, success = false)
+            delay(2)
+        }
+        val roleUnderRejections = leader.role.value
+        val lostQuorumUnderRejections = leaderTrace.filterIsInstance<RaftTraceEvent.BecomeFollower>()
+            .filter { it.reason == StepDownReason.LostQuorum }
+
+        // Phase 2 (control) — stop injecting; the same partitioned leader must now step down.
+        delay(80)
+        val lostQuorumAfterSilence = leaderTrace.filterIsInstance<RaftTraceEvent.BecomeFollower>()
+            .filter { it.reason == StepDownReason.LostQuorum }
+
+        assertAll(
+            {
+                assertTrue(lostQuorumUnderRejections.isEmpty(),
+                    "a rejected AppendEntries is still contact — leader must not lose quorum: $leaderTrace")
+            },
+            {
+                assertTrue(roleUnderRejections is RaftRole.Leader,
+                    "leader must stay in office on success=false responses alone, was: $roleUnderRejections")
+            },
+            {
+                assertTrue(lostQuorumAfterSilence.isNotEmpty(),
+                    "control: with the rejections stopped the partitioned leader must lose quorum — " +
+                        "otherwise phase 1 proved nothing: $leaderTrace")
+            },
+            {
+                assertTrue(leader.role.value !is RaftRole.Leader,
+                    "control: leader must not still be Leader once contact stops, was: ${leader.role.value}")
+            },
+        )
+    }
+
+    /**
+     * A follower whose log diverges from the elected leader's rejects the first AppendEntries and is
+     * recovered by §5.3 backup — and the leader holds office throughout. Not a check-quorum property
+     * (the follower accepts within a couple of ms, so the leader's contact clock is refreshed by
+     * ordinary successes); it is the regression test for the seeded fixture #1846 corrected, kept here
+     * because that fixture is what produces a divergent log at all.
+     *
+     * Setup: a 2-voter cluster where v2 starts at term 99 holding an entry at index 1. §5.4.1
+     * up-to-dateness therefore denies v1's pre-vote and **v2 wins the election** — the assertions below
+     * pin that, because the name and the prose are only true if v2 is the one leading. v1 then rejects
+     * v2's first AppendEntries (`prevLogIndex = 1` is past v1's empty log), v2 backs up, and v1 catches up.
+     *
+     * The persisted term is seeded alongside the entry (#1832). `storage.term() >= max(log entry terms)`
+     * is a real invariant of every append path — `persistTermAndVote` is storage-first and runs before
+     * `storage.appendEntries`, so a node cannot hold a term-99 entry while recorded at term 0. Seeding
+     * only the entry produced a state no node can reach, and the AppendEntries it led to (`term = 1`
+     * carrying an entry at `term = 99`) is now correctly rejected as malformed by the batch validation,
+     * since no entry may carry a term above the leader's own.
+     */
+    @Test
+    fun divergentFollowerLog_higherTermVoterWins_andRetainsLeadershipThroughBackup() = raftRunTest {
         val v1 = NodeId("v1"); val v2 = NodeId("v2")
         val cluster = ClusterConfig(voters = setOf(v1, v2))
 
-        // Pre-load a conflicting log entry on v2 so it will always reject AppendEntries from v1.
-        // Term 99 at index 1 conflicts with any real leader's term 1 no-op — v2 keeps sending success=false.
-        //
-        // The persisted term is seeded alongside the entry (#1832). `storage.term() >= max(log entry
-        // terms)` is a real invariant of every append path — `persistTermAndVote` is storage-first and
-        // runs before `storage.appendEntries`, so a node cannot hold a term-99 entry while recorded at
-        // term 0. Seeding only the entry produced a state no node can reach, and the AppendEntries it
-        // led to (`term = 1` carrying an entry at `term = 99`) is now correctly rejected as malformed
-        // by the batch validation, since no entry may carry a term above the leader's own.
         val conflictingStorage = InMemoryRaftStorage().also { s ->
             s.saveTermAndVotedFor(99L, null)
             s.appendEntries(listOf(LogEntry(index = 1L, term = 99L, command = byteArrayOf(0xFF.toByte()))))
@@ -126,21 +198,42 @@ class CheckQuorumTest {
             childScope.raftNode(cluster, transport, storage, FAST_RAFT_CONFIG)
         }
 
+        // Collect BEFORE the election so the rejection v1 emits on the very first AppendEntries is seen.
+        val followerTrace = mutableListOf<RaftTraceEvent>()
+        backgroundScope.launch { customSim.nodes.getValue(v1).trace.collect { followerTrace += it } }
+        customSim.settle()
+
         val leader = awaitLeader(customSim)
         val leaderId = customSim.nodes.entries.first { it.value === leader }.key
         val leaderTrace = mutableListOf<RaftTraceEvent>()
         backgroundScope.launch { customSim.nodes.getValue(leaderId).trace.collect { leaderTrace += it } }
 
-        // Wait past multiple quorum-check windows — the conflicting peer keeps sending success=false,
-        // but that still counts as a reachability signal. The leader must stay in office.
         delay(150)
 
-        val lostQuorumEvents = leaderTrace.filterIsInstance<RaftTraceEvent.BecomeFollower>()
-            .filter { it.reason == StepDownReason.LostQuorum }
-
         assertAll(
-            { assertTrue(lostQuorumEvents.isEmpty(), "leader must not lose quorum when peer is reachable (success=false): $leaderTrace") },
-            { assertTrue(leader.role.value is RaftRole.Leader, "leader must remain Leader when peer is reachable, was: ${leader.role.value}") },
+            {
+                assertEquals(v2, leaderId,
+                    "§5.4.1: the voter holding the term-99 entry must win — a leader elsewhere means this " +
+                        "fixture no longer produces a divergent follower log")
+            },
+            {
+                assertTrue(followerTrace.filterIsInstance<RaftTraceEvent.AppendEntriesRejected>().isNotEmpty(),
+                    "v1 must reject at least once (prevLogIndex past its empty log): $followerTrace")
+            },
+            {
+                assertTrue(followerTrace.filterIsInstance<RaftTraceEvent.AppendEntriesAccepted>().isNotEmpty(),
+                    "§5.3 backup must recover v1 — it never accepted: $followerTrace")
+            },
+            {
+                val lostQuorumEvents = leaderTrace.filterIsInstance<RaftTraceEvent.BecomeFollower>()
+                    .filter { it.reason == StepDownReason.LostQuorum }
+                assertTrue(lostQuorumEvents.isEmpty(),
+                    "leader must not lose quorum while backing a divergent follower up: $leaderTrace")
+            },
+            {
+                assertTrue(leader.role.value is RaftRole.Leader,
+                    "leader must remain Leader, was: ${leader.role.value}")
+            },
         )
     }
 
