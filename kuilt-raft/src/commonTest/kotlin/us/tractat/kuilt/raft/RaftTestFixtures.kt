@@ -50,13 +50,18 @@
 
 package us.tractat.kuilt.raft
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -178,3 +183,38 @@ internal fun raftSim(
  * no change.
  */
 internal suspend fun awaitLeader(sim: RaftSimulation): RaftNode = sim.awaitLeader()
+
+/**
+ * Starts a single-voter node over [storage] in a scope whose failures are **captured** rather than
+ * propagated, and returns the throwable the `RaftEngine` init-restore surfaced — or `null` if the node
+ * started cleanly.
+ *
+ * The restore runs in a coroutine (`storage.term()` suspends, so it cannot happen in the `raftNode` call
+ * itself), which is why the failure is observed through a [CoroutineExceptionHandler] on a [SupervisorJob]
+ * rather than as a thrown constructor exception. `backgroundScope` is deliberately **not** used: it reports
+ * uncaught exceptions as test failures, which would make the expected failure unassertable.
+ *
+ * Bounded by [withTimeoutOrNull] on virtual time, so a node that *does* start returns `null` promptly
+ * instead of hanging on its perpetually re-arming election timer.
+ *
+ * Lives here rather than in a test class because two suites now assert on the restore refusals — the term
+ * bound (#1855) and the log/snapshot-metadata bounds (#1887) — and this is the sanctioned home for a
+ * bounded await (issue #192 harness discipline).
+ */
+internal suspend fun TestScope.awaitRestoreFailure(
+    storage: InMemoryRaftStorage,
+    within: Duration = 2.seconds,
+): Throwable? {
+    val caught = CompletableDeferred<Throwable>()
+    val nodeScope = CoroutineScope(
+        StandardTestDispatcher(testScheduler) +
+            SupervisorJob() +
+            CoroutineExceptionHandler { _, e -> caught.complete(e) },
+    )
+    try {
+        singleVoterNode(nodeScope, storage)
+        return withTimeoutOrNull(within) { caught.await() }
+    } finally {
+        nodeScope.cancel()
+    }
+}
