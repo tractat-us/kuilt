@@ -2,12 +2,13 @@ name: ci
 
 # Aggregator pattern (detect → {build-jvm, build-native, detekt, dokka, …} → ci-required):
 #
-#   detect  →  build-jvm      ┐
-#           →  build-native   │
-#           →  detekt         ├→  ci-required (the one required check)
-#           →  dokka          │
-#           →  doc-citations  │
-#           →  spike-compile  ┘
+#   detect  →  build-jvm          ┐
+#           →  build-native       │
+#           →  detekt             │
+#           →  dokka              ├→  ci-required (the one required check)
+#           →  doc-citations      │
+#           →  spike-compile      │
+#           →  capability-probes  ┘
 #
 #           →  concurrency-probes   (runs, but NOT aggregated — see that job)
 #
@@ -622,6 +623,74 @@ jobs:
       - name: Verify doc citations match their cited sources
         run: ./gradlew verifyDocCitations
 
+  # ── capability-probes ───────────────────────────────────────────────────────
+  # The GATING half of the probe split (#1768's option 2). Runs only the
+  # DETERMINISTIC real-threaded probes — those whose guarded defect reproduces
+  # reliably rather than under contention — and IS in ci-required's needs +
+  # success clauses, so a red here blocks the merge. Everything else about the
+  # setup mirrors concurrency-probes below (dedicated runner, no sibling test
+  # forks, same -P un-gate, same docs-only guard).
+  #
+  # Scoped by NAME CONTRACT, not an enumeration: `*CapabilityConcurrencyTest`.
+  # The sibling job's header records why — an enumeration went stale as probes
+  # were added, so the class name is the contract and a new deterministic probe
+  # opts into the gate by being named for it.
+  #
+  # Today that matches exactly one class, CompositeCapabilityConcurrencyTest
+  # (#1767), guarding a lost-update race in CompositeSeam's capability rollup:
+  # two recomputes interleave and a stale confident `Available` lands last with
+  # no later emission to correct it. Reverting the fix does not make the probe
+  # flaky — it hangs RELIABLY (observed at round=842). That determinism is the
+  # entire reason this one can gate: a red here is a real defect essentially
+  # every time, and the failure class is exactly the one #1712 exists to
+  # eliminate (a peer confidently asserting a network state it never observed).
+  #
+  # DELIBERATE OVERLAP: concurrency-probes still runs `*ConcurrencyTest`, which
+  # includes this probe, so it executes twice per run. That costs seconds and
+  # keeps the non-blocking signal complete (one artifact covering every probe).
+  # Do NOT "optimise" it away by excluding the capability test from that job.
+  capability-probes:
+    needs: detect
+    if: needs.detect.outputs.docs-only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      S3_BUILD_CACHE_ACCESS_KEY_ID: ${{ secrets.S3_BUILD_CACHE_ACCESS_KEY_ID }}
+      S3_BUILD_CACHE_SECRET_KEY: ${{ secrets.S3_BUILD_CACHE_SECRET_KEY }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: wrapper
+          cache-read-only: false
+
+      - name: Run deterministic capability probes (isolated runner, GATING)
+        # -Pconcurrency.stress.tests=true drops the build-defined `*ConcurrencyTest`
+        # exclusion (kuilt-core/build.gradle.kts); the narrower --tests include then
+        # selects only the deterministic capability probes. The -P flag is required
+        # for the include to match at all — a build-defined exclude would otherwise
+        # win over a command-line include and this job would be green-by-vacuity.
+        run: >-
+          ./gradlew :kuilt-core:jvmTest -Pconcurrency.stress.tests=true
+          --tests "*CapabilityConcurrencyTest"
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports-capability-probes
+          path: |
+            kuilt-core/build/reports/tests/
+            kuilt-core/build/test-results/
+
   # ── concurrency-probes ──────────────────────────────────────────────────────
   # Every `*ConcurrencyTest` in kuilt-core is a real-threaded probe (the name is the
   # contract — deliberately not an enumeration here, which is what went stale as
@@ -632,36 +701,51 @@ jobs:
   # here ALONE on a dedicated runner with no sibling test forks, so they finish in
   # seconds. Mirrors build-jvm's setup + docs-only guard.
   #
-  # INTENTIONALLY NOT in ci-required's needs/aggregation: these are non-blocking
-  # quality-hardening probes. Running them for signal must never wedge the merge
-  # gate — that is the whole point of isolating them (#1158). The #1151 mitigation
-  # (5-min cap + thread dump) stays as the in-test backstop.
+  # STILL INTENTIONALLY NOT in ci-required's needs/aggregation. #1768's option 2
+  # split the probes: the deterministic ones now gate via capability-probes above,
+  # and THIS job — which still runs everything, including the capability probe —
+  # stays non-blocking for the contention/wedge-sensitive ones. A starved probe
+  # must never wedge the merge gate (#1158); the #1151 mitigation (5-min cap +
+  # thread dump) stays as the in-test backstop.
   #
-  # #1768 proposes making this gating, and the gap it names is real — a job that
-  # cannot fail a merge is a job nobody reads. It is NOT safe to flip yet, and the
-  # measurement is recorded here because the obvious short survey gets it wrong.
-  #
-  # Over the last 500 ci.yml runs (2026-07-23 → 07-28, 485 with this job resolved)
-  # there are 10 runs where this job FAILED while ci-required SUCCEEDED — i.e. 10
-  # merges that gating would have blocked, 7 of them pull_request runs, 3.8% of the
-  # 266 otherwise-green runs. All 10 are the same test,
+  # WHY THIS HALF IS STILL NOT GATING. Over the last 500 ci.yml runs
+  # (2026-07-23 → 07-28, 485 with this job resolved) there were 10 runs where this
+  # job FAILED while ci-required SUCCEEDED — i.e. 10 merges that gating would have
+  # blocked, 7 of them pull_request runs, 3.8% of the 266 otherwise-green runs. All
+  # 10 were the same test,
   # CompositeSeamCloseTornConcurrencyTest.closePublishesTerminalTornEvenWhenPliesAreChurning,
   # failing at ConcurrencyStressHarness.kt:56 — the 5-minute harness cap, with the
-  # artifact showing every DefaultDispatcher worker parked in tryPark. That is
-  # QUIESCENT, not CPU-starved: it is #1784 (OPEN — CompositeSeam.peers wedging
-  # permanently), reproducing on main. So gating today would not trade a silent
-  # failure for a rare flake; it would trade it for a known unfixed bug firing ~4%
-  # of the time on unrelated PRs, in a repo whose posture is aggressive auto-merge.
+  # artifact showing every DefaultDispatcher worker parked in tryPark. QUIESCENT,
+  # not CPU-starved: #1784 (CompositeSeam.peers wedging permanently), reproducing
+  # on main. That is the entire pre-fix failure cluster — one test, one bug.
   #
-  # NB on method: a survey of the last 100 runs shows ZERO such runs and is
-  # MISLEADING — 100 runs is ~4 hours here, and that window happens to fall in a
+  # #1784 CLOSED 2026-07-28T04:12Z, i.e. INSIDE that window, so the 3.8% above is
+  # almost entirely a pre-fix number. Re-measured on post-fix data only —
+  # 2026-07-28T04:12Z → 2026-07-31T08:45Z, 111 completed ci.yml runs (~3.2 days,
+  # not a quiet pocket: 53 runs on 07-28, 9 on 07-29, 38 on 07-30, 11 on 07-31):
+  #   - runs where this job FAILED while ci-required SUCCEEDED: 0
+  #   - probe-job failures of any kind: 19 — ALL on two Renovate dependency
+  #     branches (renovate/gradle-9.x, renovate/vanniktechmavenpublish), every one
+  #     also failing ci-required, and every one dying at
+  #     :build-logic:generatePrecompiledScriptPluginAccessors without reaching a
+  #     test. So: zero probe TEST failures in the window.
+  # Suggestive, not conclusive — that is only 64 otherwise-green runs against 266
+  # before, and P(0 | n=64, p=0.038) ≈ 8.4%. Roughly double the otherwise-green
+  # runs would push it under 1%. Both measurements are kept because the newer one
+  # is only readable against the older baseline.
+  #
+  # NB on method: a survey of the last 100 runs showed ZERO such runs and was
+  # MISLEADING — 100 runs is ~4 hours here, and that window happened to fall in a
   # quiet pocket just after the cluster. A survey's window is part of its claim;
-  # quote the time span, not just the sample count.
+  # quote the time span, not just the sample count. That is why both windows above
+  # are stated as time spans, and why the post-fix one is anchored causally (to
+  # #1784's fix) rather than to an arbitrary run count.
   #
-  # The path forward is #1768's option 2, not option 3: split this job so the
-  # DETERMINISTIC probes gate (e.g. a job scoped to `*CapabilityConcurrencyTest`,
-  # whose fix reverts to a reliable hang) while the contention/wedge-sensitive
-  # CompositeSeamCloseTornConcurrencyTest stays non-blocking until #1784 lands.
+  # GRADUATING TO #1768's OPTION 3 — folding this job into the gate too — is then a
+  # one-line change (add it to ci-required's needs + success clauses, exactly as
+  # capability-probes is wired). Do it once the post-#1784 sample matures, and
+  # RE-MEASURE the lone-failure rate over a stated window rather than assuming the
+  # 0/64 above has held.
   concurrency-probes:
     needs: detect
     if: needs.detect.outputs.docs-only != 'true'
@@ -685,10 +769,11 @@ jobs:
           gradle-version: wrapper
           cache-read-only: false
 
-      - name: Run real-threaded concurrency probes (isolated runner)
-        # -Pconcurrency.stress.tests=true un-gates the three *ConcurrencyTest classes
+      - name: Run real-threaded concurrency probes (isolated runner, NON-BLOCKING)
+        # -Pconcurrency.stress.tests=true un-gates the *ConcurrencyTest classes
         # (excluded from the normal run in kuilt-core/build.gradle.kts); --tests scopes
         # the JVM test task to exactly them so nothing else co-schedules on this runner.
+        # The count is deliberately not stated — the name is the contract (see header).
         run: >-
           ./gradlew :kuilt-core:jvmTest -Pconcurrency.stress.tests=true
           --tests "*ConcurrencyTest"
@@ -788,8 +873,10 @@ jobs:
 
   # ── ci-required ────────────────────────────────────────────────────────────
   # The SOLE required status check. Aggregates detect + build-jvm + build-native
-  # + detekt + dokka + doc-citations + spike-compile. (concurrency-probes runs but
-  # is deliberately NOT aggregated — see that job's header and #1768.)
+  # + detekt + dokka + doc-citations + spike-compile + capability-probes.
+  # (concurrency-probes runs but is deliberately NOT aggregated — see that job's
+  # header and #1768. capability-probes is the deterministic half of that split
+  # and IS aggregated, as of #1768's option 2.)
   #
   # Uses if: always() unconditionally — NO draft guard on the JOB. A required
   # check that is itself *skipped* is treated as "passed" by branch protection
@@ -812,9 +899,10 @@ jobs:
   # draft FAILURE on the same sha. The split is the load-bearing #1132 fix and
   # stays; only the green park is reverted.
   #
-  # detect/build-jvm/build-native/detekt/dokka still carry their own draft/docs-only
-  # /dokka-inputs guards (cheap jobs don't burn a runner on every draft push). Only
-  # ci-required runs unconditionally, so the gate is always in a definite pass/fail state.
+  # detect/build-jvm/build-native/detekt/dokka/capability-probes still carry their own
+  # draft/docs-only/dokka-inputs guards (cheap jobs don't burn a runner on every draft
+  # push). Only ci-required runs unconditionally, so the gate is always in a definite
+  # pass/fail state.
   #
   # Invariant: ci-required succeeds if and only if ALL of these hold:
   #   Build gate —
@@ -828,10 +916,18 @@ jobs:
   #   Spike gate (orthogonal) —
   #     (e) spike-inputs=true  → spike-compile=success, OR
   #     (f) spike-inputs=false → spike-compile was skipped (or success).
+  #   Deterministic-probe gate — same docs-only guard as the build gate, so judged by
+  #   the same rule and evaluated in the same two loops —
+  #     (g) docs-only=true  → capability-probes was skipped (or success), OR
+  #     (h) docs-only=false → capability-probes=success.
   #
-  # concurrency-probes is deliberately absent from every clause above — it is not in
-  # `needs:` at all, so its result cannot influence this gate (#1158, and see that
-  # job's header for why #1768's flip is not safe yet).
+  # The two probe jobs are treated DIFFERENTLY and that asymmetry is #1768's option 2:
+  #   - capability-probes IS in `needs:` and in clauses (g)/(h) — its probes are
+  #     deterministic, so a red is a real defect essentially every time.
+  #   - concurrency-probes is deliberately absent from every clause above and not in
+  #     `needs:` at all, so its result cannot influence this gate (#1158). It stays
+  #     non-blocking because it also carries the contention/wedge-sensitive probes;
+  #     see that job's header for the measurement and for what graduating it needs.
   #
   # Any other combination fails. In particular:
   #   - draft PR → fails explicitly (draft runs are not a merge signal) →
@@ -842,8 +938,10 @@ jobs:
   #     module.md-freezes-the-deploy gap (#1061).
   #   - spike-compile skipped/failed on a :spike-source change → fails → closes the
   #     never-compiled-harness gap (#1796).
+  #   - capability-probes skipped/failed on a non-docs change → fails → closes the
+  #     regressed-race-merges-green gap (#1768).
   ci-required:
-    needs: [detect, build-jvm, build-native, detekt, dokka, doc-citations, spike-compile]
+    needs: [detect, build-jvm, build-native, detekt, dokka, doc-citations, spike-compile, capability-probes]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -873,6 +971,7 @@ jobs:
           DOKKA="${{ needs.dokka.result }}"
           DOC_CITATIONS="${{ needs.doc-citations.result }}"
           SPIKE="${{ needs.spike-compile.result }}"
+          CAPABILITY_PROBES="${{ needs.capability-probes.result }}"
           DOCS_ONLY="${{ needs.detect.outputs.docs-only }}"
           DOKKA_INPUTS="${{ needs.detect.outputs.dokka-inputs }}"
           SPIKE_INPUTS="${{ needs.detect.outputs.spike-inputs }}"
@@ -883,6 +982,7 @@ jobs:
           echo "dokka:              $DOKKA"
           echo "doc-citations:      $DOC_CITATIONS"
           echo "spike-compile:      $SPIKE"
+          echo "capability-probes:  $CAPABILITY_PROBES"
           echo "docs-only:          $DOCS_ONLY"
           echo "dokka-inputs:       $DOKKA_INPUTS"
           echo "spike-inputs:       $SPIKE_INPUTS"
@@ -931,26 +1031,32 @@ jobs:
             fi
           fi
 
+          # capability-probes carries the SAME docs-only guard as the heavy jobs
+          # (if: docs-only != 'true'), so it is judged by the same rule and rides
+          # in both loops below rather than getting a bespoke clause: skipped is
+          # correct on the docs-only path, and success is mandatory otherwise.
+          # Its non-blocking sibling concurrency-probes is absent here by design
+          # — it is not even in `needs:` (#1158 / #1768; see both job headers).
           if [ "$DOCS_ONLY" = "true" ]; then
             # Docs-only path: the heavy jobs must have been skipped (not run).
             # If any somehow ran and failed, that's still a failure.
-            for pair in "build-jvm:$BUILD_JVM" "build-native:$BUILD_NATIVE" "detekt:$DETEKT"; do
+            for pair in "build-jvm:$BUILD_JVM" "build-native:$BUILD_NATIVE" "detekt:$DETEKT" "capability-probes:$CAPABILITY_PROBES"; do
               name="${pair%%:*}"; result="${pair#*:}"
               if [ "$result" != "skipped" ] && [ "$result" != "success" ]; then
                 echo "::error::docs-only=true but $name had unexpected result: $result."; exit 1
               fi
             done
-            echo "Docs-only change — build correctly skipped. Gate green."
+            echo "Docs-only change — build and capability probes correctly skipped. Gate green."
           else
             # Code-change path: every heavy job MUST have run and succeeded.
             # skipped here means a job was bypassed without a legitimate
             # docs-only classification — the exact race condition being closed.
             # Treat skipped the same as failure.
-            for pair in "build-jvm:$BUILD_JVM" "build-native:$BUILD_NATIVE" "detekt:$DETEKT"; do
+            for pair in "build-jvm:$BUILD_JVM" "build-native:$BUILD_NATIVE" "detekt:$DETEKT" "capability-probes:$CAPABILITY_PROBES"; do
               name="${pair%%:*}"; result="${pair#*:}"
               if [ "$result" != "success" ]; then
                 echo "::error::Non-docs change requires a passing $name (result: $result). skipped is not accepted."; exit 1
               fi
             done
-            echo "build-jvm, build-native and detekt all succeeded. Gate green."
+            echo "build-jvm, build-native, detekt and capability-probes all succeeded. Gate green."
           fi
