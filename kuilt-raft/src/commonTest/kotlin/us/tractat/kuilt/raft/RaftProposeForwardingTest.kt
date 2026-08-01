@@ -132,13 +132,14 @@ class RaftProposeForwardingTest {
         val voterIds = setOf(NodeId("v1"), NodeId("v2"), NodeId("v3"))
         val learnerId = NodeId("learner")
         val clusterConfig = ClusterConfig(voters = voterIds, learners = setOf(learnerId))
+        val config = fastRaftConfig()
         val sim = RaftSimulation(
             nodeIds = voterIds.toList() + learnerId,
             scope = this,
-            raftConfig = FAST_RAFT_CONFIG,
+            raftConfig = config,
             nodeScope = backgroundScope,
             nodeFactory = { _, transport, storage, nodeScope ->
-                nodeScope.raftNode(clusterConfig, transport, storage, FAST_RAFT_CONFIG)
+                nodeScope.raftNode(clusterConfig, transport, storage, config)
             },
         )
         awaitLeader(sim)

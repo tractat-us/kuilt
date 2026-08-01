@@ -70,14 +70,15 @@ class StorageAtomicityTest {
             val ids = listOf(NodeId("a"), NodeId("b"), NodeId("c"))
             val config = ClusterConfig(voters = ids.toSet())
             // Node "a" uses the spy; others use fresh in-memory storage.
+            val raftCfg = fastRaftConfig()
             RaftSimulation(
                 nodeIds = ids,
                 scope = this,
-                raftConfig = FAST_RAFT_CONFIG,
+                raftConfig = raftCfg,
                 nodeScope = backgroundScope,
                 nodeFactory = { id, transport, storage, nodeScope ->
                     val s = if (id == NodeId("a")) spy else storage
-                    nodeScope.raftNode(config, transport, s, FAST_RAFT_CONFIG)
+                    nodeScope.raftNode(config, transport, s, raftCfg)
                 },
             )
 

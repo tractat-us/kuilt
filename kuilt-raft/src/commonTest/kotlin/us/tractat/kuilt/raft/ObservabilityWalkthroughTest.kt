@@ -38,7 +38,7 @@ class ObservabilityWalkthroughTest {
             clusterConfig = cluster,
             transport = network.transport(self),
             storage = InMemoryRaftStorage(),
-            raftConfig = FAST_RAFT_CONFIG.copy(expectVirtualTime = true),
+            raftConfig = fastRaftConfig().copy(expectVirtualTime = true),
             onMetric = { metrics += it }, // channel 1: metrics — synchronous, never misses an event
         )
         // channel 2: traces — launched before awaitLeadership so the collector subscribes as

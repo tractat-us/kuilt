@@ -10,8 +10,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 
-private val fastConfig = FAST_RAFT_CONFIG
-
 class EdgeCaseTest {
 
     /**
@@ -25,6 +23,7 @@ class EdgeCaseTest {
     fun singleVoter_becomesLeaderAndCommitsImmediately() = raftRunTest {
         val id = NodeId("solo")
         val config = ClusterConfig(voters = setOf(id))
+        val fastConfig = fastRaftConfig()
         val sim = RaftSimulation(
             nodeIds = listOf(id),
             scope = backgroundScope,
@@ -48,6 +47,7 @@ class EdgeCaseTest {
     fun largePayload_committedCorrectly() = raftRunTest {
         val ids = listOf(NodeId("x"), NodeId("y"), NodeId("z"))
         val config = ClusterConfig(voters = ids.toSet())
+        val fastConfig = fastRaftConfig()
         val sim = RaftSimulation(ids, backgroundScope, fastConfig) { _, transport, storage, nodeScope ->
             nodeScope.raftNode(config, transport, storage, fastConfig)
         }
@@ -66,6 +66,7 @@ class EdgeCaseTest {
     fun emptyCommand_commitsSuccessfully() = raftRunTest {
         val ids = listOf(NodeId("e1"), NodeId("e2"), NodeId("e3"))
         val config = ClusterConfig(voters = ids.toSet())
+        val fastConfig = fastRaftConfig()
         val sim = RaftSimulation(ids, backgroundScope, fastConfig) { _, transport, storage, nodeScope ->
             nodeScope.raftNode(config, transport, storage, fastConfig)
         }
@@ -82,6 +83,7 @@ class EdgeCaseTest {
     fun proposalIndices_areMonotonicallyIncreasing() = raftRunTest {
         val ids = listOf(NodeId("p1"), NodeId("p2"), NodeId("p3"))
         val config = ClusterConfig(voters = ids.toSet())
+        val fastConfig = fastRaftConfig()
         val sim = RaftSimulation(ids, backgroundScope, fastConfig) { _, transport, storage, nodeScope ->
             nodeScope.raftNode(config, transport, storage, fastConfig)
         }
@@ -106,6 +108,7 @@ class EdgeCaseTest {
     fun voterFollower_propose_forwardsToLeaderAndCommits() = raftRunTest {
         val ids = listOf(NodeId("f1"), NodeId("f2"), NodeId("f3"))
         val config = ClusterConfig(voters = ids.toSet())
+        val fastConfig = fastRaftConfig()
         val sim = RaftSimulation(ids, backgroundScope, fastConfig) { _, transport, storage, nodeScope ->
             nodeScope.raftNode(config, transport, storage, fastConfig)
         }
@@ -124,6 +127,7 @@ class EdgeCaseTest {
     fun twoVoter_crashFollower_noProgress() = raftRunTest {
         val ids = listOf(NodeId("a"), NodeId("b"))
         val config = ClusterConfig(voters = ids.toSet())
+        val fastConfig = fastRaftConfig()
         val sim = RaftSimulation(ids, backgroundScope, fastConfig) { _, transport, storage, nodeScope ->
             nodeScope.raftNode(config, transport, storage, fastConfig)
         }

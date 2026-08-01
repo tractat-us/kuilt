@@ -37,12 +37,12 @@ internal class LeadershipTransferMachineTest {
     fun staleTimeout_fromResolvedTransfer_doesNotAbortSuccessor() = raftRunTest(timeout = 5.seconds) {
         val targetB = NodeId("B")
         val targetC = NodeId("C")
-        val window = FAST_RAFT_CONFIG.electionTimeoutMax + 1.milliseconds
+        val window = fastRaftConfig().electionTimeoutMax + 1.milliseconds
 
         var lastSignaledEpoch: Long? = null
         val machine = LeadershipTransferMachine(
             scope = backgroundScope,
-            raftConfig = FAST_RAFT_CONFIG,
+            raftConfig = fastRaftConfig(),
             signalTimeout = { epoch -> lastSignaledEpoch = epoch },
         )
 
@@ -93,7 +93,7 @@ internal class LeadershipTransferMachineTest {
         val targetB = NodeId("B")
         val machine = LeadershipTransferMachine(
             scope = backgroundScope,
-            raftConfig = FAST_RAFT_CONFIG,
+            raftConfig = fastRaftConfig(),
             signalTimeout = { },
         )
         val d = CompletableDeferred<Unit>()
@@ -126,7 +126,7 @@ internal class LeadershipTransferMachineTest {
         val targetB = NodeId("B")
         val machine = LeadershipTransferMachine(
             scope = backgroundScope,
-            raftConfig = FAST_RAFT_CONFIG,
+            raftConfig = fastRaftConfig(),
             signalTimeout = { },
         )
         val noTransfer = machine.onSelfElected()

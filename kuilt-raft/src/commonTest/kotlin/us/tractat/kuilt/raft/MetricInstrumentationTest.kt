@@ -18,7 +18,7 @@ class MetricInstrumentationTest {
     @Test
     fun proposeEmitsAcceptedThenCommittedThenApplied() = raftRunTest {
         val metrics = mutableListOf<RaftMetric>()
-        val config = FAST_RAFT_CONFIG.copy(expectVirtualTime = true)
+        val config = fastRaftConfig().copy(expectVirtualTime = true)
 
         val self = NodeId("solo")
         val cluster = ClusterConfig(voters = setOf(self))
@@ -53,7 +53,7 @@ class MetricInstrumentationTest {
     @Test
     fun proposeAcceptedCarriesCorrectIndexAndTerm() = raftRunTest {
         val metrics = mutableListOf<RaftMetric>()
-        val config = FAST_RAFT_CONFIG.copy(expectVirtualTime = true)
+        val config = fastRaftConfig().copy(expectVirtualTime = true)
 
         val self = NodeId("solo")
         val cluster = ClusterConfig(voters = setOf(self))
@@ -78,7 +78,7 @@ class MetricInstrumentationTest {
     @Test
     fun noMetricEmittedForNoOpEntry() = raftRunTest {
         val metrics = mutableListOf<RaftMetric>()
-        val config = FAST_RAFT_CONFIG.copy(expectVirtualTime = true)
+        val config = fastRaftConfig().copy(expectVirtualTime = true)
 
         val self = NodeId("solo")
         val cluster = ClusterConfig(voters = setOf(self))
@@ -105,7 +105,7 @@ class MetricInstrumentationTest {
     @Test
     fun electionEmitsStartedThenWon() = raftRunTest {
         val metrics = mutableListOf<RaftMetric>()
-        val config = FAST_RAFT_CONFIG.copy(expectVirtualTime = true)
+        val config = fastRaftConfig().copy(expectVirtualTime = true)
 
         val self = NodeId("solo")
         val cluster = ClusterConfig(voters = setOf(self))
@@ -129,7 +129,7 @@ class MetricInstrumentationTest {
     @Test
     fun electionWonCarresMatchingTerm() = raftRunTest {
         val metrics = mutableListOf<RaftMetric>()
-        val config = FAST_RAFT_CONFIG.copy(expectVirtualTime = true)
+        val config = fastRaftConfig().copy(expectVirtualTime = true)
 
         val self = NodeId("solo")
         val cluster = ClusterConfig(voters = setOf(self))
@@ -153,7 +153,7 @@ class MetricInstrumentationTest {
     @Test
     fun proposeAppliedElapsedIsNonNegative() = raftRunTest {
         val appliedElapsed = mutableListOf<kotlin.time.Duration>()
-        val config = FAST_RAFT_CONFIG.copy(
+        val config = fastRaftConfig().copy(
             expectVirtualTime = true,
             slowProposeThreshold = 0.milliseconds,  // treat everything as slow
         )
@@ -185,7 +185,7 @@ class MetricInstrumentationTest {
 
     @Test
     fun raftNodeWorksWithoutMetricHook() = raftRunTest {
-        val config = FAST_RAFT_CONFIG.copy(expectVirtualTime = true)
+        val config = fastRaftConfig().copy(expectVirtualTime = true)
 
         val self = NodeId("solo")
         val cluster = ClusterConfig(voters = setOf(self))

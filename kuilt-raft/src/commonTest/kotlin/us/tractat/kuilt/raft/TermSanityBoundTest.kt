@@ -238,7 +238,7 @@ internal class TermSanityBoundTest {
             clusterConfig = ClusterConfig(voters = setOf(self)),
             transport = network.transport(self),
             storage = storage,
-            raftConfig = FAST_RAFT_CONFIG,
+            raftConfig = fastRaftConfig(),
             onMetric = { metrics += it },
         )
         delay(50)   // several election timeouts: the condition must report as a level, not once
@@ -302,17 +302,18 @@ internal class TermSanityBoundTest {
         val metricsBy = mutableMapOf<NodeId, MutableList<RaftMetric>>()
         val ids = (1..3).map { NodeId("v$it") }
         val cluster = ClusterConfig(voters = ids.toSet())
+        val raftCfg = fastRaftConfig()
         val sim = RaftSimulation(
             nodeIds = ids,
             scope = this,
-            raftConfig = FAST_RAFT_CONFIG,
+            raftConfig = raftCfg,
             nodeScope = backgroundScope,
             nodeFactory = { id, transport, storage, childScope ->
                 childScope.raftNode(
                     cluster,
                     transport,
                     storage,
-                    FAST_RAFT_CONFIG,
+                    raftCfg,
                     onMetric = { metricsBy.getOrPut(id) { mutableListOf() } += it },
                 )
             },

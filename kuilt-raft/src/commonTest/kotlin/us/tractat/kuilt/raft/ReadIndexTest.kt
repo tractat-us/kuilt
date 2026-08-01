@@ -27,10 +27,15 @@ private fun assertAll(vararg assertions: () -> Unit) = assertions.forEach { it()
  * Config for the stale-ACK BLOCKER 1 test: heartbeat stays at 2 ms (so we can advance
  * heartbeatRound quickly) but the election timeout is 300–400 ms so CheckQuorum does NOT fire
  * during the 10–15 ms window where stale ACKs are injected and the fresh ACK triggers
- * resolveReadsIfQuorumFresh. FAST_RAFT_CONFIG's 5-10 ms election timeout races with that
+ * resolveReadsIfQuorumFresh. fastRaftConfig()'s 5-10 ms election timeout races with that
  * window on slower machines.
+ *
+ * A function, not a `val`, for the reason spelled out on [RAFT_TEST_SEED] (#1952): a shared instance
+ * would make each test's draws depend on how many the earlier tests in this class consumed. Call it
+ * once per test and share the result across that test's nodes — they break election-timeout symmetry
+ * by drawing successive values from one stream.
  */
-private val SLOW_ELECTION_CONFIG = RaftConfig(
+private fun slowElectionConfig(): RaftConfig = RaftConfig(
     electionTimeoutMin = 300.milliseconds,
     electionTimeoutMax = 400.milliseconds,
     heartbeatInterval = 2.milliseconds,
@@ -44,7 +49,7 @@ private val SLOW_ELECTION_CONFIG = RaftConfig(
  * All tests use [raftRunTest] with [StandardTestDispatcher] and virtual [delay] — the
  * standard harness contract for this suite (see [RaftTestFixtures] banner). Tests that need
  * multi-voter quorum confirmation advance virtual time past one heartbeat interval (2 ms in
- * [FAST_RAFT_CONFIG]) so the ACK majority accumulates.
+ * [fastRaftConfig]) so the ACK majority accumulates.
  */
 class ReadIndexTest {
 
@@ -75,7 +80,7 @@ class ReadIndexTest {
         val cluster = ClusterConfig(voters = setOf(voterId), learners = setOf(learner))
         val network = InMemoryRaftNetwork()
         val learnerNode = backgroundScope.raftNode(
-            cluster, network.transport(learner), InMemoryRaftStorage(), FAST_RAFT_CONFIG,
+            cluster, network.transport(learner), InMemoryRaftStorage(), fastRaftConfig(),
         )
         assertFailsWith<NotLeaderException> { learnerNode.readIndex() }
     }
@@ -151,7 +156,7 @@ class ReadIndexTest {
         val leader = awaitLeader(sim)
 
         // readIndex must return only after the no-op commits.
-        // In a 3-voter cluster with FAST_RAFT_CONFIG the no-op commits after one heartbeat (2 ms).
+        // In a 3-voter cluster with fastRaftConfig() the no-op commits after one heartbeat (2 ms).
         val ri = leader.readIndex()
 
         // The no-op is index 1; the readIndex must return an index >= 1 (no-op committed).
@@ -260,7 +265,7 @@ class ReadIndexTest {
         // Only l is a real node; f1/f2 are phantom voters that grant votes but never ACK the no-op.
         val leaderNode = backgroundScope.raftNode(
             ClusterConfig(voters = setOf(l, f1, f2)),
-            network.transport(l), InMemoryRaftStorage(), SLOW_ELECTION_CONFIG,
+            network.transport(l), InMemoryRaftStorage(), slowElectionConfig(),
         )
 
         // Drive the election from injected grants. PreVoteResponse.term must NOT exceed l's currentTerm
@@ -300,7 +305,7 @@ class ReadIndexTest {
                 "gated read must still be parked while the no-op is uncommitted and leadership is held",
             )
 
-            // CheckQuorum fires (300–400 ms in SLOW_ELECTION_CONFIG): contacted = {} → 1 < 2 → step
+            // CheckQuorum fires (300–400 ms in slowElectionConfig()): contacted = {} → 1 < 2 → step
             // down → relinquishToFollower → failAll must complete the GATED read exceptionally. Before
             // the fix, failAll dropped the gated closure and this await() hung to the test timeout.
             delay(1200)
@@ -435,20 +440,21 @@ class ReadIndexTest {
         val f2 = NodeId("f2")
 
         val network = InMemoryRaftNetwork()
+        val slowConfig = slowElectionConfig()
 
         // l bootstraps alone so it wins leadership unconditionally.
         val leaderNode = backgroundScope.raftNode(
             ClusterConfig(voters = setOf(l)),
-            network.transport(l), InMemoryRaftStorage(), SLOW_ELECTION_CONFIG,
+            network.transport(l), InMemoryRaftStorage(), slowConfig,
         )
         val leaderStorage = InMemoryRaftStorage()
         backgroundScope.raftNode(
             ClusterConfig(voters = setOf(l), learners = setOf(f1)),
-            network.transport(f1), leaderStorage, SLOW_ELECTION_CONFIG,
+            network.transport(f1), leaderStorage, slowConfig,
         )
         backgroundScope.raftNode(
             ClusterConfig(voters = setOf(l), learners = setOf(f2)),
-            network.transport(f2), InMemoryRaftStorage(), SLOW_ELECTION_CONFIG,
+            network.transport(f2), InMemoryRaftStorage(), slowConfig,
         )
 
         leaderNode.awaitLeadership()
@@ -472,7 +478,7 @@ class ReadIndexTest {
             delay(1) // let the actor process the ReadIndex command
 
             // Advance heartbeatRound from H to H+1 by waiting for one heartbeat tick.
-            delay(3) // SLOW_ELECTION_CONFIG heartbeat = 2 ms → one tick fires
+            delay(3) // slowElectionConfig() heartbeat = 2 ms → one tick fires
 
             // Inject an ACK from f1 that echoes round H (i.e., it was sent in response to
             // the round-H heartbeat, BEFORE the read was queued). With the round-nonce fix,
@@ -504,7 +510,7 @@ class ReadIndexTest {
      * BLOCKER 1 — a voter ACK that arrived *before* the read was queued must not be
      * counted when checking whether a quorum has responded *after* the read.
      *
-     * Scenario: 5-voter cluster (quorum = 3) using [SLOW_ELECTION_CONFIG] (election timeout
+     * Scenario: 5-voter cluster (quorum = 3) using [slowElectionConfig] (election timeout
      * 300–400 ms; heartbeat 2 ms). After a leader is elected and the no-op commits, the
      * leader is partitioned from all four followers. Two stale ACKs (one each from two
      * follower nodes) are injected at the current heartbeatRound H — *before* the read is
@@ -519,7 +525,7 @@ class ReadIndexTest {
      * (not strictly greater), so they do NOT count. Only freshC (lastAckRound = H+1 > H)
      * counts → reachable = 1 + 1 = 2 < 3 → NOT confirmed.
      *
-     * [SLOW_ELECTION_CONFIG] guarantees QuorumCheck does not fire during the ~10 ms ACK
+     * [slowElectionConfig] guarantees QuorumCheck does not fire during the ~10 ms ACK
      * injection window (election timeout 300–400 ms vs. injection duration < 15 ms).
      *
      * The leader's term is read from its storage after the no-op commits; the injected ACKs
@@ -528,7 +534,7 @@ class ReadIndexTest {
     @Test
     fun staleAckDoesNotConfirmReadIndex() = raftRunTest(timeout = 5.seconds) {
         // Use raftSim so awaitLeader() gets whichever node wins — no need to predict v1.
-        val sim = raftSim(this, backgroundScope, n = 5, config = SLOW_ELECTION_CONFIG)
+        val sim = raftSim(this, backgroundScope, n = 5, config = slowElectionConfig())
         val leader = awaitLeader(sim)
         val leaderId = sim.nodes.entries.first { it.value === leader }.key
         val followerIds = sim.nodeIds.filter { it != leaderId }
@@ -583,7 +589,7 @@ class ReadIndexTest {
                 "read must NOT be confirmed when stale ACKs (same round as sinceRound) inflate the quorum count",
             )
 
-            // Let CheckQuorum fire twice (300–400 ms each in SLOW_ELECTION_CONFIG):
+            // Let CheckQuorum fire twice (300–400 ms each in slowElectionConfig()):
             //   first: recentVoterContacts = {staleA,staleB} (from injections) → 3 ≥ 3 → passes, clears.
             //   second: recentVoterContacts = {} (no new ACKs) → 1 < 3 → step down.
             delay(1200)
@@ -616,20 +622,21 @@ class ReadIndexTest {
         val v3 = NodeId("v3")
 
         val network = InMemoryRaftNetwork()
+        val slowConfig = slowElectionConfig()
 
         // v1 bootstraps alone → guaranteed leader.
         val leaderNode = backgroundScope.raftNode(
             ClusterConfig(voters = setOf(v1)),
-            network.transport(v1), InMemoryRaftStorage(), SLOW_ELECTION_CONFIG,
+            network.transport(v1), InMemoryRaftStorage(), slowConfig,
         )
         // v2 and v3 start as learners so they don't race for leadership.
         backgroundScope.raftNode(
             ClusterConfig(voters = setOf(v1), learners = setOf(v2)),
-            network.transport(v2), InMemoryRaftStorage(), SLOW_ELECTION_CONFIG,
+            network.transport(v2), InMemoryRaftStorage(), slowConfig,
         )
         backgroundScope.raftNode(
             ClusterConfig(voters = setOf(v1), learners = setOf(v3)),
-            network.transport(v3), InMemoryRaftStorage(), SLOW_ELECTION_CONFIG,
+            network.transport(v3), InMemoryRaftStorage(), slowConfig,
         )
 
         leaderNode.awaitLeadership()
@@ -699,25 +706,26 @@ class ReadIndexTest {
         val v4 = NodeId("v4")
 
         val network = InMemoryRaftNetwork()
+        val slowConfig = slowElectionConfig()
 
         // v1 bootstraps alone → guaranteed leader (no election race).
         val leaderNode = backgroundScope.raftNode(
             ClusterConfig(voters = setOf(v1)),
-            network.transport(v1), InMemoryRaftStorage(), SLOW_ELECTION_CONFIG,
+            network.transport(v1), InMemoryRaftStorage(), slowConfig,
         )
         // v2 starts as a learner so it doesn't arm an election timer before being added as voter.
         backgroundScope.raftNode(
             ClusterConfig(voters = setOf(v1), learners = setOf(v2)),
-            network.transport(v2), InMemoryRaftStorage(), SLOW_ELECTION_CONFIG,
+            network.transport(v2), InMemoryRaftStorage(), slowConfig,
         )
         // v3 and v4 start as learners under v1 so they don't arm election timers either.
         backgroundScope.raftNode(
             ClusterConfig(voters = setOf(v1), learners = setOf(v3)),
-            network.transport(v3), InMemoryRaftStorage(), SLOW_ELECTION_CONFIG,
+            network.transport(v3), InMemoryRaftStorage(), slowConfig,
         )
         backgroundScope.raftNode(
             ClusterConfig(voters = setOf(v1), learners = setOf(v4)),
-            network.transport(v4), InMemoryRaftStorage(), SLOW_ELECTION_CONFIG,
+            network.transport(v4), InMemoryRaftStorage(), slowConfig,
         )
 
         // Wait for v1 to become leader (guaranteed because it's the only voter).
@@ -761,7 +769,7 @@ class ReadIndexTest {
                     "consensus: old-majority (v1+v2, need 2/2) is not satisfied because v2 is isolated",
             )
 
-            // Let CheckQuorum fire (300–400 ms with SLOW_ELECTION_CONFIG):
+            // Let CheckQuorum fire (300–400 ms with slowElectionConfig()):
             // recentVoterContacts = {v3,v4} → old-majority (1+0 = 1 < 2) fails → step down.
             delay(750)
             assertFailsWith<LeadershipLostException> { read.await() }

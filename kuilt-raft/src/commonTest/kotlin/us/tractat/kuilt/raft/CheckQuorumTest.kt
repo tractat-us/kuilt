@@ -100,7 +100,7 @@ class CheckQuorumTest {
      * window), then **partition the leader off** so nothing the real peer sends can reach it. The only
      * traffic the leader sees from then on is a hand-injected stream of `success = false` responses at
      * its own term, delivered faster than the check-quorum window (a fresh 5–10 ms draw per tick under
-     * [FAST_RAFT_CONFIG]). `deliverAppendEntriesResponse` bypasses the partition, which is the whole
+     * [fastRaftConfig]). `deliverAppendEntriesResponse` bypasses the partition, which is the whole
      * point: rejections are the *only* contact.
      *
      * Phase 2 is the control, and it is not optional. Stopping the injections must make the leader lose
@@ -188,14 +188,15 @@ class CheckQuorumTest {
             s.appendEntries(listOf(LogEntry(index = 1L, term = 99L, command = byteArrayOf(0xFF.toByte()))))
         }
 
+        val config = fastRaftConfig()
         val customSim = RaftSimulation(
             nodeIds = listOf(v1, v2),
             scope = this,
-            raftConfig = FAST_RAFT_CONFIG,
+            raftConfig = config,
             nodeScope = backgroundScope,
         ) { id, transport, _, childScope ->
             val storage = if (id == v2) conflictingStorage else InMemoryRaftStorage()
-            childScope.raftNode(cluster, transport, storage, FAST_RAFT_CONFIG)
+            childScope.raftNode(cluster, transport, storage, config)
         }
 
         // Collect BEFORE the election so the rejection v1 emits on the very first AppendEntries is seen.

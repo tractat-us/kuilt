@@ -43,8 +43,9 @@
  *   before you produce the event (under FIFO scheduling a launched coroutine does not run until time
  *   advances — this was the lone conversion fix in `CommittedReplayTest`).
  *
- * [FAST_RAFT_CONFIG] sets `expectVirtualTime = true` to suppress the [RaftNode] TestDispatcher
- * guard across the whole suite. If you introduce a new fixture, mirror this config.
+ * [fastRaftConfig] sets `expectVirtualTime = true` to suppress the [RaftNode] TestDispatcher
+ * guard across the whole suite. If you introduce a new fixture, mirror this config — and mint its
+ * seeded RNG per simulation, never as a shared top-level `val` (see [RAFT_TEST_SEED], #1952).
  */
 @file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 
@@ -117,7 +118,7 @@ internal fun singleVoterNode(
     val cluster = ClusterConfig(voters = setOf(self))
     val network = InMemoryRaftNetwork()
     val transport = network.transport(self)
-    val node = scope.raftNode(cluster, transport, storage, FAST_RAFT_CONFIG, identity)
+    val node = scope.raftNode(cluster, transport, storage, fastRaftConfig(), identity)
     return SingleVoterHarness(node, storage)
 }
 
@@ -130,8 +131,19 @@ internal fun singleVoterNode(
  * residual flake of issue #383: a partitioned leader's election timeout occasionally drew below a
  * test's `delay`, stepping it down before the test acted). Seeding pins every draw so the whole
  * engine is reproducible. NEVER seed in production — see [RaftConfig.random].
+ *
+ * **A function, not a `val`, and that is load-bearing** (#1952). Each call mints a *fresh*
+ * `Random(RAFT_TEST_SEED)`, so every simulation starts at the same position in the stream. A shared
+ * top-level instance pins only the stream — see [RAFT_TEST_SEED] for why that is not enough.
+ *
+ * **Call it once per simulation and share the result across that simulation's nodes.** The nodes
+ * break election-timeout symmetry by drawing *successive* values from one stream; give each node its
+ * own `fastRaftConfig()` and they all draw the same first value, so no node's timer fires first and
+ * the cluster can fail to elect. Hoist it to a local `val` at any site that needs the config twice
+ * (the classic shape being `RaftSimulation(raftConfig = …, nodeFactory = { … })`, where the factory
+ * runs once per node).
  */
-internal val FAST_RAFT_CONFIG = RaftConfig(
+internal fun fastRaftConfig(): RaftConfig = RaftConfig(
     electionTimeoutMin = 5.milliseconds,
     electionTimeoutMax = 10.milliseconds,
     heartbeatInterval = 2.milliseconds,
@@ -140,9 +152,22 @@ internal val FAST_RAFT_CONFIG = RaftConfig(
 )
 
 /**
- * Fixed seed for the raft suite's election-timeout RNG — keeps every run identical. Any test fixture
- * that builds its own [RaftConfig] (rather than reusing [FAST_RAFT_CONFIG]) must seed `random` with
- * this so the whole suite stays deterministic.
+ * Fixed seed for the raft suite's election-timeout RNG.
+ *
+ * What a seed buys is the *stream*: a [kotlin.random.Random] built from it yields the same values in
+ * the same order on every run and every host. What it does **not** buy is any given test's *position
+ * in* that stream. A single `Random` instance shared across the module hands out draws in one long
+ * sequence, so where a test lands in it is a function of how many draws every preceding test in the
+ * same process consumed — i.e. of the suite's composition and execution order, not of the code under
+ * test. Adding or deleting one unrelated `@Test` then re-rolls every test after it, and a green suite
+ * says only "this position happened to satisfy the assertions" (#1952).
+ *
+ * So the guarantee this seed underwrites, stated exactly: **each simulation that mints its own
+ * `Random(RAFT_TEST_SEED)` starts from the same position on every run, whatever ran before it.**
+ * Any fixture building its own [RaftConfig] must therefore both seed `random` with this constant and
+ * mint that [kotlin.random.Random] per simulation — never hoist one to a top-level `val`.
+ * [fastRaftConfig] is the canonical example; a `private val` *inside* a test class is fine too, since
+ * the test framework instantiates the class per test method.
  */
 internal const val RAFT_TEST_SEED = 383L
 
@@ -158,7 +183,7 @@ internal fun raftSim(
     scope: CoroutineScope,
     nodeScope: CoroutineScope,
     n: Int = 3,
-    config: RaftConfig = FAST_RAFT_CONFIG,
+    config: RaftConfig = fastRaftConfig(),
     maxPayloadBytes: Int? = null,
 ): RaftSimulation {
     val ids = (1..n).map { NodeId("v$it") }

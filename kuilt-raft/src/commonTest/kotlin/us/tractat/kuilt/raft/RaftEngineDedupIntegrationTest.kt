@@ -48,13 +48,14 @@ class RaftEngineDedupIntegrationTest {
         val ids = listOf(NodeId("v1"), NodeId("v2"))
         val cluster = ClusterConfig(voters = ids.toSet())
         val shared = ClientId("shared")
+        val raftCfg = fastRaftConfig()
         val sim = RaftSimulation(
             nodeIds = ids,
             scope = this,
-            raftConfig = FAST_RAFT_CONFIG,
+            raftConfig = raftCfg,
             nodeScope = nodeScope,
             nodeFactory = { _, transport, storage, childScope ->
-                childScope.raftNode(cluster, transport, storage, FAST_RAFT_CONFIG, ClientIdentity.Durable(shared))
+                childScope.raftNode(cluster, transport, storage, raftCfg, ClientIdentity.Durable(shared))
             },
         )
         val leader = awaitLeader(sim)
