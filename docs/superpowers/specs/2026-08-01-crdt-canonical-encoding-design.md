@@ -14,9 +14,15 @@ invisible to a JVM-only test run.
 
 ## Evidence
 
-Each type was driven through the `CrdtConvergenceHarness` scenario — three replicas, eight random
-ops each, all six delivery permutations, eight seeds — with a CBOR byte-equality check added. Run on
-JVM and on `macosArm64`.
+Two throwaway probes, both run on JVM and on `macosArm64`. The first compared a value built by two
+opposed merge orders (`GSet`, `TwoPhaseSet`, `GCounter`, `PNCounter`, `LWWMap`, `ORSet`,
+`MVRegister`); the second drove the full `CrdtConvergenceHarness` scenario — three replicas, eight
+random ops each, all six delivery permutations, eight seeds — with a CBOR byte-equality check
+(`LWWRegister`, `ORMap`, `Rga`, `Fugue`, `EphemeralMap`, `BoundedCounter`, `MovableTree`).
+
+Only the second probe survives, in the session scratchpad; the first was deleted. Task 2 of the plan
+re-derives the whole set empirically and is the authority — treat this table as the hypothesis it
+must reproduce, not as a settled result.
 
 | Type | JVM | macosArm64 | Root cause |
 |---|---|---|---|
@@ -33,6 +39,14 @@ JVM and on `macosArm64`.
 
 State equality held in every case (`stateMismatch=0`). Convergence is correct; only the *encoding*
 diverges.
+
+`JsonCrdt` was not probed and is expected green — `JsonCrdtSerializer` delegates to
+`ORMap.serializer` and `Rga.wireSerializer`, both canonical once their contents are.
+
+**One violator no test can see.** `MovableTree.kt:210` unions `compactedDots + other.compactedDots`
+— a plain `Set<Dot>`, root cause B. No convergence generator calls `compact()`, so the set is always
+empty and encodes canonically; the harness will go green on `MovableTree` once `seqByReplica` is
+fixed while a compacted tree still diverges. It must be fixed on inspection, not on a red test.
 
 ### Root cause A — `MapMerge` builds a `HashMap`
 
@@ -153,8 +167,10 @@ periodic divergence alarm between live peers.
 `Murmur3` exists at `crdt/internal/Murmur3.kt` but is `internal`. Widening `:kuilt-crdt`'s public API
 for a test-side diagnostic is the wrong trade against ~15 lines of FNV-1a in the module that needs it.
 
-`:kuilt-conformance` gains `kotlinx-serialization-cbor` (`commonTest` for the harness usage;
-`commonMain` if the digest ships in main).
+`:kuilt-conformance` gains `kotlinx-serialization-cbor` in **`commonMain`** — the harness lives in
+`commonMain`, not `commonTest`. It must also apply `alias(libs.plugins.kotlinSerialization)`, which
+it does not today; without the compiler plugin the `@Serializable` fixture the harness change needs
+generates no `serializer()`.
 
 ## Non-goals
 
@@ -181,9 +197,15 @@ seven of the nine violations. Every task must be verified on `macosArm64` at min
 
 ## Risks
 
-- **`MovableTree` and `BoundedCounter` are the least certain.** Their states nest logs and maps, so
-  a single field annotation may not be sufficient. Both are behind root cause A, so start from
-  `seqByReplica` / `transfers` and re-run the sweep rather than assuming.
+- **`MovableTree.compactedDots` is invisible to the enforcement.** See the evidence section — the
+  harness cannot reach it, so it is fixed on inspection. Any future field merged with `+` or through
+  `MapMerge` on a path no generator exercises has the same problem; the enforcement is a strong net,
+  not a complete one.
+- **`PNCounter` has no convergence test today.** Its fix is transitive through `GCounter`, so it
+  would land unpinned unless the plan adds the missing test — which it does.
+- **`BoundedCounter` is the least certain of the map-backed fixes.** Its state nests a map of
+  per-replica rows, so one field annotation may not suffice. Start from `transfers` and re-measure
+  rather than assuming.
 - **Golden vectors are brittle by design.** A deliberate serializer change moves every vector. That
   is the point; the KDoc must say so, as `HeddlePolicyGoldenVectorTest` does.
 - **Fixing a serializer changes bytes on the wire** for the affected types. Pre-1.0 with no

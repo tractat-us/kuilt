@@ -180,7 +180,6 @@ public class CanonicalMapSerializer<K, V>(
     override fun serialize(encoder: Encoder, value: Map<K, V>) {
         val sorted = LinkedHashMap<K, V>(value.size)
         for (key in value.keys.sortedWith(keyComparator)) {
-            @Suppress("UNCHECKED_CAST")
             sorted[key] = value.getValue(key)
         }
         mapSerializer.serialize(encoder, sorted)
@@ -256,9 +255,21 @@ Lands the enforcement. It will go **red** for nine types — that is the expecte
 - Consumes: nothing from Task 1.
 - Produces: `CrdtConvergenceHarness<S>(initial: S, gen: OperationGenerator<S>, serializer: KSerializer<S>, replicaCount: Int = 3, opsPerReplica: Int = 8)` — `serializer` is the **third positional parameter and is required**.
 
-- [ ] **Step 1: Add the CBOR test dependency**
+- [ ] **Step 1: Add the serialization plugin and the CBOR dependency**
 
-In `kuilt-conformance/build.gradle.kts`, inside the `sourceSets` block, add a `commonMain` CBOR dependency next to the existing `api(project(":kuilt-crdt"))` line:
+`:kuilt-conformance` does **not** apply the kotlinx-serialization compiler plugin today — its plugins block is only `kuilt.kmp-library` + kover, and `build-logic/src/main/kotlin/kuilt.kmp-library.gradle.kts` does not apply it either. Every module with `@Serializable` code adds it explicitly (see `kuilt-crdt/build.gradle.kts:5`). Without it, the `@Serializable` annotation this task adds to `IntMax` generates no `serializer()` and the call site is an unresolved reference.
+
+Add it to the plugins block at the top of `kuilt-conformance/build.gradle.kts`:
+
+```kotlin
+plugins {
+    id("kuilt.kmp-library")
+    alias(libs.plugins.kotlinSerialization)
+    alias(libs.plugins.kover)
+}
+```
+
+Then, inside the `sourceSets` block, add a `commonMain` CBOR dependency next to the existing `api(project(":kuilt-crdt"))` line. It must be `commonMain`, not `commonTest` — the harness lives in `commonMain`:
 
 ```kotlin
         commonMain.dependencies {
@@ -354,7 +365,9 @@ Each `*ConvergenceTest.kt` under `kuilt-conformance/src/commonTest/kotlin/us/tra
 
 Each needs `import kotlinx.serialization.builtins.serializer` where `String.serializer()` is used.
 
-`IntMax` in `IntMaxConvergenceTest.kt` (and its twin in `IntMaxConformanceTest.kt`) is a plain `data class`. Add the annotation and import:
+There are **two independent `IntMax` declarations** in different packages — `kuilt-conformance/src/commonTest/kotlin/us/tractat/kuilt/conformance/IntMaxConformanceTest.kt:6` and `.../conformance/convergence/IntMaxConvergenceTest.kt:5`. They are not the same class and one does not import the other.
+
+Annotate **only** the one in `IntMaxConvergenceTest.kt` — that is the one the harness needs a serializer for. Leave the `IntMaxConformanceTest.kt` copy untouched; `QuiltedConformanceSuite` needs no serializer.
 
 ```kotlin
 import kotlinx.serialization.Serializable
@@ -365,17 +378,48 @@ internal data class IntMax(val value: Int) : Quilted<IntMax> {
 }
 ```
 
-If `IntMax` is declared in `IntMaxConformanceTest.kt` and reused, annotate it there only — do not duplicate the declaration.
+- [ ] **Step 4: Create the missing `PNCounterConvergenceTest`**
 
-- [ ] **Step 4: Run and record exactly which types go red**
+`PNCounter` is one of the nine violators but has **no convergence test** — the 13 existing files cover BoundedCounter, EphemeralMap, Fugue, GCounter, IntMax, JsonCrdt, LWWMap, LWWRegister, MovableTree, MVRegister, ORMap, ORSet, Rga. Without this file nothing ever asserts `PNCounter`'s encoding, and its Task 4 fix (transitive through `GCounter`) would be unpinned — a future raw-map field on `PNCounter` would regress silently.
+
+Create `kuilt-conformance/src/commonTest/kotlin/us/tractat/kuilt/conformance/convergence/PNCounterConvergenceTest.kt`:
+
+```kotlin
+package us.tractat.kuilt.conformance.convergence
+
+import us.tractat.kuilt.crdt.PNCounter
+import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.piece
+
+// Mixed increments and decrements populate both backing GCounters, so both are exercised
+// for canonical encoding. Mirrors GCounterConvergenceTest.
+internal class PNCounterConvergenceTest : CrdtConvergenceSuite<PNCounter>() {
+    override fun newHarness(): CrdtConvergenceHarness<PNCounter> = CrdtConvergenceHarness(
+        initial = PNCounter.ZERO,
+        gen = OperationGenerator { state, replicaIndex, random ->
+            val replica = ReplicaId("R$replicaIndex")
+            val amount = random.nextLong(1L, 4L)
+            if (random.nextBoolean()) state.piece(state.increment(replica, amount))
+            else state.piece(state.decrement(replica, amount))
+        },
+        serializer = PNCounter.serializer(),
+        replicaCount = 3,
+        opsPerReplica = 8,
+    )
+}
+```
+
+- [ ] **Step 5: Run and record exactly which types go red**
 
 ```bash
 ./gradlew :kuilt-conformance:macosArm64Test --tests "*Convergence*" --rerun-tasks 2>&1 | tee /tmp/canonical-baseline.txt
 ```
 
-Expected: FAIL. Per the spec's evidence, these nine should fail: `GSet`*, `TwoPhaseSet`*, `GCounter`, `PNCounter`, `LWWMap`, `ORMap`, `EphemeralMap`, `BoundedCounter`, `MovableTree`. (*`GSet`/`TwoPhaseSet` have no convergence test yet — Task 3 adds them.)
+Expected: FAIL. Per the spec's evidence, these should fail: `GCounter`, `PNCounter`, `LWWMap`, `ORMap`, `EphemeralMap`, `BoundedCounter`, `MovableTree`. (`GSet`/`TwoPhaseSet` are also violators but have no convergence test until Task 3.)
 
-Record the actual failing set in the commit message. If it differs from the spec's nine, that is a finding — report it, do not silently adjust.
+Expected to stay **green**: `LWWRegister`, `ORSet`, `MVRegister`, `Rga`, `Fugue`, `IntMax`, and `JsonCrdt` — the last because `JsonCrdtSerializer` delegates to `ORMap.serializer` and `Rga.wireSerializer`, all already canonical. A failure in that set is a surprise worth reporting, not shrugging at.
+
+Record the actual failing set in the commit message. If it differs from the expectation above, that is a finding — report it, do not silently adjust the check.
 
 Also run the JVM suite and note the difference:
 
@@ -385,7 +429,7 @@ Also run the JVM suite and note the difference:
 
 Expected: far fewer failures than macOS. This is the false-green receipt.
 
-- [ ] **Step 5: Commit (red is expected)**
+- [ ] **Step 6: Commit (red is expected)**
 
 ```bash
 git add kuilt-conformance/
@@ -535,15 +579,15 @@ public class GCounter private constructor(
 ) : Quilted<GCounter> {
 ```
 
-- [ ] **Step 3: Check whether `PNCounter` needs its own change**
+- [ ] **Step 3: Confirm `PNCounter` is fixed transitively**
 
-`PNCounter` holds two `GCounter`s (`inc`, `dec`). If both are `GCounter`-typed, fixing `GCounter` fixes it transitively — no edit needed. Verify:
+`PNCounter.kt:35-38` holds two `GCounter`s (`inc`, `dec`) and no raw map, so the Task 4 Step 2 fix should carry it. The test to verify against is the one Task 2 Step 4 created:
 
 ```bash
 ./gradlew :kuilt-conformance:macosArm64Test --tests "*PNCounterConvergence*" --rerun-tasks
 ```
 
-If it passes, make no change to `PNCounter.kt`. If it fails, it holds a raw map — apply the same annotation to that field.
+Expected: PASS, with **no edit to `PNCounter.kt`**. If it still fails, `PNCounter` grew a raw map field — apply the same annotation to it and say so in the commit message.
 
 - [ ] **Step 4: Apply `CanonicalMapSerializer` to `LWWMap`**
 
@@ -610,7 +654,20 @@ For each still-failing type, add the annotation to the map field named in **File
 
 Match the field's real name and type — read the file, do not assume.
 
-`MovableTree` also holds a `log: List<MoveOp<V>>`. **Do not sort it** — a move log is order-bearing and sorting it would change semantics. If `MovableTree` still fails after `seqByReplica` is annotated, stop and report: the log's own ordering is the suspect, and that is a design question, not a mechanical fix.
+`MovableTree` also holds a `log: List<MoveOp<V>>`. **Do not sort it** — a move log is order-bearing and sorting it would change semantics. It is already held in a deterministic `(ts, replicaId)` total order by `mergeDistinctLogs`, so it is not the defect. If `MovableTree` still fails after `seqByReplica` is annotated, stop and report rather than touching the log.
+
+- [ ] **Step 2b: Annotate `MovableTree.compactedDots` — the check cannot see this one**
+
+`MovableTree.kt:210` merges `compactedDots + other.compactedDots` — a plain `Set<Dot>` unioned with `+`, which is root cause B exactly. **No test will catch it:** no convergence generator calls `compact()`, so the set is always empty, and an empty set encodes canonically on every target. Annotating `seqByReplica` alone will turn `MovableTreeConvergenceTest` green while a *compacted* tree still encodes non-canonically — the precise state a #1955 Merkle digest would report as permanent false divergence.
+
+Annotate it regardless of what the test says (`Dot` is `@Serializable` at `Dot.kt:18-19`, so `serialKeyComparator` handles it):
+
+```kotlin
+    @Serializable(with = CanonicalSetSerializer::class)
+    private val compactedDots: Set<Dot>,
+```
+
+Match the field's real name, visibility and type — read the file.
 
 - [ ] **Step 3: Run to verify**
 
@@ -1008,8 +1065,14 @@ git commit -m "docs(crdt): record the canonical-encoding invariant and the diges
 
 ## PR shape
 
-Tasks 1–5 must land **together** — Task 2 lands red by design, and `main` must never be red. Open one PR containing Tasks 1–5, then optionally a second for Tasks 6–9.
+**Two PRs, both required.**
 
-PR body must use `closes #1957` and note that the fix **changes the wire bytes** for the nine affected types (reordered map entries and set elements; structural layout unchanged, so old peers still decode). Pre-1.0 with no cross-version compatibility guarantee, but call it out rather than let a consumer discover it.
+**PR 1 — Tasks 1–5.** These must land together: Task 2 lands red by design and `main` must never be red. Body says **`part of #1957`**, never a closing keyword.
 
-Reference `part of #1955` — this de-risks the Merkle work but does not implement it.
+Note in the body that the fix **changes the wire bytes** for the affected types — map entries and set elements are reordered, structural layout is unchanged. `CanonicalSetSerializer`'s list-vs-set descriptor swap is byte-identical in CBOR and JSON (both encode as arrays), so peers on older versions still decode. Pre-1.0 with no cross-version compatibility guarantee, but call it out rather than let a consumer discover it.
+
+**PR 2 — Tasks 6–9. Not optional.** Body says **`closes #1957`**.
+
+The close keyword belongs here, not on PR 1: #1957's actual asks are the **digest** and the **per-target golden vectors**, which are Tasks 7 and 8. Closing the issue from PR 1 would auto-close it with its headline deliverables unlanded.
+
+Reference `part of #1955` on PR 2 — this de-risks the Merkle work but does not implement it.
