@@ -331,6 +331,9 @@ internal class RaftEngine(
      * enumeration did not count and which raises the term without touching `_leader` at all. A `Pair`
      * or a small holder would read the same; two plain fields just avoid an allocation per election.
      *
+     * The same argument is why the durable record is [LeaderForTerm] and not a bare id, and why it is
+     * written as one unit: these two fields ARE that record, held in memory.
+     *
      * Plain `var`s are correct here: every read and write is on the engine's actor loop, which is
      * single-threaded by construction ([ceilingWarnLogged] and `serial` are the precedent).
      */
@@ -341,26 +344,44 @@ internal class RaftEngine(
 
     /**
      * The node established as leader for the **current** term, or `null` when this term's leader is
-     * genuinely still unknown (a fresh node, a node that just restored durable state, a node that just
-     * bumped its own term to campaign).
+     * genuinely still unknown (a fresh node, or a node that just bumped its own term to campaign).
      *
      * Deliberately **not** the same value as `_leader`, and the two answer different questions:
      *
      * | | Question | Lifecycle |
      * |---|---|---|
      * | `_leader` | who do I believe is a live leader I can **talk to** | cleared on step-down |
-     * | [leaderForTerm] | who was **established** as leader for this term | sticky for the term |
+     * | [leaderForTerm] | who was **established** as leader for this term | sticky for the term, durable |
      *
      * §5.2 Election Safety permits at most one leader per term, so the second answer cannot change
      * once known — which is exactly what makes it usable as an authority, and why [onTimeoutNow]
      * authenticates its sender against this rather than `_leader` (#1900). Proposal forwarding keeps
      * reading `_leader`: it must not route a proposal to a leader that has just stood down.
+     *
+     * **Durable since #1900.** [pinLeaderForTerm] writes through to [RaftStorage.saveLeaderForTerm] and
+     * the `init` restore reads it back, so a node that restarts inside a term comes back holding the
+     * identity it established for it. That is what lets [onTimeoutNow] require a match outright
+     * instead of admitting the whole no-known-leader window; restoring it does **not** weaken the
+     * read-time staleness check below — a restored record for a term other than `currentTerm` is
+     * exactly as invisible as one left over from an earlier term in-process.
      */
     private val leaderForTerm: NodeId?
         get() = leaderForTermId.takeIf { leaderForTermTerm == state.currentTerm }
 
-    /** Record [id] as this term's leader, overwriting any pin left over from an earlier term. */
-    private fun pinLeaderForTerm(id: NodeId) {
+    /**
+     * Record [id] as this term's leader, overwriting any pin left over from an earlier term, and
+     * persist it so a restart inside this term recovers it (#1900).
+     *
+     * **Storage-first**, like [persistTermAndVote]: a crash between the durable write and the
+     * in-memory assignment loses nothing (the restore reads the record back), while the reverse order
+     * would let this node act on a pin it has no memory of after a restart — which is the state this
+     * change exists to remove. Called at most once per term from each of its two sites, so the write
+     * cadence matches [RaftStorage.saveTermAndVotedFor]'s rather than the heartbeat's: the
+     * [adoptLeaderForTerm] caller reaches it only when the term holds no pin yet, and [becomeLeader]
+     * runs once per term by construction.
+     */
+    private suspend fun pinLeaderForTerm(id: NodeId) {
+        storage.saveLeaderForTerm(state.currentTerm, id)
         leaderForTermTerm = state.currentTerm
         leaderForTermId = id
     }
@@ -379,9 +400,14 @@ internal class RaftEngine(
      * **The rule rejects nothing honest**, which is the load-bearing claim and is driven rather than
      * argued (`LeaderForTermPinTest`): a term's pin is set exactly once, on the first leader-contact
      * of that term or on winning it, and a term change invalidates it. So every legitimate `null → L`
-     * adoption still happens — on first contact, in the next term, from a Candidate that lost (a
-     * Candidate at term `T` got there by bumping to `T`, so it holds no pin for `T`), and after a
-     * restart. A mismatch requires two same-term leaders, which Election Safety forbids.
+     * adoption still happens — on first contact, in the next term, and from a Candidate that lost (a
+     * Candidate at term `T` got there by bumping to `T`, so it holds no pin for `T`). A mismatch
+     * requires two same-term leaders, which Election Safety forbids.
+     *
+     * Since #1900 a restart *inside* a term is no longer one of those adoptions: the pin is durable, so
+     * the restarted node comes back holding `L` and takes the `established == from` path instead. That
+     * is the point — it is what lets [onTimeoutNow] require a match outright. A restart across a term
+     * boundary is unchanged: the restored record is for the older term, so it reads as no pin at all.
      *
      * **Disposition: drop the frame.** Not a clamp — an identity has no conservative in-range reading,
      * and clamping one launders a forgery into the most favourable valid value (#1817). Not a throw —
@@ -408,7 +434,7 @@ internal class RaftEngine(
      * Leader — already emits `BecomeFollower(AppendEntriesFromLeader)` on the trace via
      * [demoteToFollowerOnLeaderContact].
      */
-    private fun adoptLeaderForTerm(from: NodeId, rpc: String): Boolean {
+    private suspend fun adoptLeaderForTerm(from: NodeId, rpc: String): Boolean {
         val established = leaderForTerm
         if (established == null) {
             pinLeaderForTerm(from)
@@ -462,6 +488,24 @@ internal class RaftEngine(
             // Restore persisted state
             state.currentTerm = checkedRestoredTerm(storage.term())
             state.votedFor = storage.votedFor()
+            // Recover the per-term leader identity (#1900). Restored RAW, with no comparison to the
+            // term above and no bound of its own: [leaderForTerm] decides relevance at every read, and
+            // a record for any term but this one is invisible there — including a nonsensical one, for
+            // which "not equal to currentTerm" is the whole of the check that matters. The two cases a
+            // bound would have to distinguish are both already harmless: a record for an older term is
+            // the ordinary restart-across-a-term-boundary case, and one for a term this node has not
+            // reached can only come from storage that lost the accompanying term write, where the
+            // engine has already restored a term it must not decrease past.
+            //
+            // Unlike [checkedRestoredTerm] this needs no refuse-to-start bound, because the value is
+            // not §5.1/§5.2 safety state: a wrong pin costs *liveness* for the remainder of one term
+            // (this node refuses the real leader's AppendEntries and campaigns at the next term), where
+            // a wrong term costs a forgotten vote. Storage that can corrupt this can corrupt `votedFor`,
+            // and that is the check worth having.
+            storage.leaderForTerm()?.let { restored ->
+                leaderForTermTerm = restored.term
+                leaderForTermId = restored.leaderId
+            }
             // Recover the snapshot baseline FIRST: a persisted snapshot is by definition committed, so
             // seed snapshotIndex/Term, the compaction floor, and commitIndex from it. This must happen
             // BEFORE the log load so `snapshotIndex` is known when we filter the persisted entries.
@@ -2712,8 +2756,8 @@ internal class RaftEngine(
      * Only valid when this node is a voting follower (not a leader, candidate, or learner), only when
      * [from] is a current voter ([onMessage]'s §5.2/§8 authority gate — TimeoutNow is a leader→peer RPC,
      * so a non-voter sender is a forgery), and only when [from] is the node [leaderForTerm] holds as
-     * this term's established leader — or nobody is, which after a restart is a state an honest
-     * transfer target reaches (#1900, see the guard below).
+     * this term's established leader (#1900 — no exceptions since the pin became durable; see the
+     * guard below).
      * The message must carry **exactly** our current term: a stale one is ignored, and so is one
      * strictly ahead of us (#1889 — see the guard below for why nothing honest is lost).
      *
@@ -2780,16 +2824,31 @@ internal class RaftEngine(
         // is sticky for the term (nothing clears it; staleness is decided at the read), so that node
         // still holds itself as the term's established leader and the frame is refused.
         //
-        // The null carve-out STAYS, and it is not free: [leaderForTerm] is in-memory, so after a restart
-        // it reads null exactly as `_leader` does. An honest §3.10 target that ACKed at term T, restarted,
-        // and came back at T as a caught-up Follower holds no pin — requiring `from == leaderForTerm`
-        // outright would drop its TimeoutNow and fail the transfer on its auto-timeout. So the
-        // restart-window forgery that shares that state is still accepted; closing it needs an authority
-        // signal that survives a restart, which is the open half of #1900 and a design choice, not a
-        // tightening of this predicate.
+        // The match is required OUTRIGHT — there is no `established == null` carve-out any more, and
+        // removing it is the rest of #1900. The carve-out existed because the pin was in-memory: an
+        // honest §3.10 target that ACKed at term T, restarted, and came back at T as a caught-up
+        // Follower held no pin, so requiring a match would have dropped its TimeoutNow and failed the
+        // transfer on its auto-timeout — and admitting that window admitted any voter's forgery with
+        // it, since a node cannot locally tell the two apart. [pinLeaderForTerm] now writes through to
+        // [RaftStorage.saveLeaderForTerm] and the `init` restore reads it back, so that target comes
+        // back holding `L` and this guard passes on the identity rather than on the absence of one.
+        //
+        // Nothing else honest reaches here with no pin. A `TimeoutNow` is emitted only once
+        // `isTargetCaughtUp` holds, i.e. once matchIndex[target] was advanced THIS term, and matchIndex
+        // advances only on [onAppendEntriesResponse] / [onInstallSnapshotResponse] — both of which are
+        // fed by a responder that ran [adoptLeaderForTerm] BEFORE replying. So a matchIndex value
+        // produced this term proves the target pinned this leader for this term, and the pin now
+        // outlives the process. The one exception is the stale-matchIndex hole the higher-term guard
+        // above documents (a peer outside the config at election time keeps its old matchIndex), which
+        // is fail-safe-then-retry in exactly the same way: the frame is dropped with no state touched
+        // and the next heartbeat ACK re-fires [sendTimeoutNow], well inside the transfer's
+        // one-election-timeout auto-abandon window.
         val established = leaderForTerm
-        if (established != null && from != established) {
-            debug { "onTimeoutNow: sender ${from.value} is not term ${state.currentTerm}'s leader (${established.value}) — ignoring" }
+        if (from != established) {
+            debug {
+                "onTimeoutNow: sender ${from.value} is not term ${state.currentTerm}'s established " +
+                    "leader (${established?.value}) — ignoring"
+            }
             return
         }
         // A learner never votes and must never start an election.

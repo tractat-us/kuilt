@@ -17,6 +17,7 @@ package us.tractat.kuilt.raft
 public class InMemoryRaftStorage : RaftStorage {
     private var currentTerm: Long = 0L
     private var currentVotedFor: NodeId? = null
+    private var establishedLeader: LeaderForTerm? = null
     private val log = mutableListOf<LogEntry>()
     private var snapshot: StoredSnapshot? = null
 
@@ -27,6 +28,10 @@ public class InMemoryRaftStorage : RaftStorage {
     override suspend fun saveTermAndVotedFor(term: Long, votedFor: NodeId?) {
         currentTerm = term
         currentVotedFor = votedFor
+    }
+    override suspend fun leaderForTerm(): LeaderForTerm? = establishedLeader
+    override suspend fun saveLeaderForTerm(term: Long, leaderId: NodeId) {
+        establishedLeader = LeaderForTerm(term, leaderId)
     }
     override suspend fun appendEntries(entries: List<LogEntry>) { log.addAll(entries) }
     override suspend fun entries(fromIndex: Long): List<LogEntry> = log.filter { it.index >= fromIndex }

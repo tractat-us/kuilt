@@ -19,11 +19,24 @@ public data class SnapshotMeta(
 public class StoredSnapshot(public val meta: SnapshotMeta, public val state: ByteArray)
 
 /**
+ * The node §5.2 Election Safety established as the leader of [term] — a fact *about that term*, which
+ * is why the two travel together and are meaningless apart.
+ *
+ * A bare [leaderId] would have to be explicitly invalidated at every site that moves the current term,
+ * and would go silently wrong the day one of them was missed. Carrying [term] makes staleness
+ * self-evident to the reader instead: a record whose term is not the current one simply is not this
+ * term's leader.
+ */
+public data class LeaderForTerm(val term: Long, val leaderId: NodeId)
+
+/**
  * Durable state that a Raft node must persist to survive restarts.
  *
  * Raft's safety guarantees depend on two categories of durable state:
  * **vote metadata** (current term and who the node voted for in that term)
  * and the **log** (the ordered sequence of committed and uncommitted entries).
+ * A third, [leaderForTerm], is not a §5.2 safety requirement but a *sender-authority*
+ * one: without it a restarted node cannot tell this term's leader from any other voter.
  *
  * All writes must be synchronised to stable storage before the corresponding
  * RPC reply is sent. In-memory implementations (e.g. [InMemoryRaftStorage])
@@ -78,6 +91,41 @@ public interface RaftStorage {
      * method is required for that pair.
      */
     public suspend fun saveTermAndVotedFor(term: Long, votedFor: NodeId?)
+
+    /**
+     * Returns the leader this node established for some term, or `null` if it has never established
+     * one. See [saveLeaderForTerm].
+     *
+     * The returned [LeaderForTerm.term] is **not** necessarily the current term — the engine compares
+     * it to `currentTerm` at every read and treats a mismatch as "no leader established for this
+     * term". An implementation must return the record it was last given, unchanged; deciding whether
+     * it is still relevant is not the storage's job.
+     */
+    public suspend fun leaderForTerm(): LeaderForTerm?
+
+    /**
+     * Persists [leaderId] as the node §5.2 established as leader of [term], replacing any previously
+     * stored record.
+     *
+     * Written once per term — on this node's first leader-contact of that term, or on winning it — so
+     * the cadence is the same as [saveTermAndVotedFor]'s, not a per-heartbeat cost.
+     *
+     * Why it survives a restart: §3.10 leadership transfer authenticates an incoming `TimeoutNow`
+     * against the leader established for the current term, and that check is only as good as the
+     * node's memory of it. A node that comes back holding no leader for a term it durably restored
+     * cannot tell the real leader's `TimeoutNow` from any other voter's, and must either accept both
+     * or break the honest transfer.
+     *
+     * Implementations MUST write [term] and [leaderId] as **one** record: a crash between two
+     * separate writes would leave an identity paired with a term it was never established for, which
+     * is worse than holding no record at all — the engine's staleness check compares the stored term
+     * to its own and would admit the mismatched identity as authoritative. A single row
+     * (`UPDATE raft_meta SET leader_term=?, leader_id=?`) satisfies this; two independent keys do not.
+     *
+     * It need not be atomic with [saveTerm] / [saveTermAndVotedFor]: the two are written at different
+     * moments by construction, and a self-describing record is exactly what removes the need.
+     */
+    public suspend fun saveLeaderForTerm(term: Long, leaderId: NodeId)
 
     /**
      * Appends [entries] to the end of the persistent log.

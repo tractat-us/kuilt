@@ -25,13 +25,18 @@ import kotlin.time.Duration.Companion.seconds
  * read, by comparing the pinned term to `currentTerm`. A stepped-down leader still holds
  * `leaderForTerm == self`, so reading the pin instead closes that window.
  *
- * **What this does not close, and the reason the `null` carve-out stays.** The pin is in-memory by
- * construction: after a restart it is `-1` / `null`, exactly as `_leader` is. A transfer target that
- * ACKed at term `T`, restarted, and came back at `T` as a caught-up Follower holds neither, so its
- * honest `TimeoutNow` is still accepted — and so is the forgery that shares that window. Requiring
- * `from == leaderForTerm` outright would break the honest half
- * ([timeoutNowSurvivesARestartOfTheTransferTarget] is that regression), which is why the restart
- * residual is left open on #1900 rather than closed here.
+ * **The restart window, and why there is no longer a `null` carve-out.** The pin used to be in-memory
+ * only, so after a restart it read `-1` / `null` exactly as `_leader` did. A transfer target that
+ * ACKed at term `T`, restarted, and came back at `T` as a caught-up Follower held neither — so the
+ * guard had to admit the whole no-known-leader window to keep the honest half working
+ * ([timeoutNowSurvivesARestartOfTheTransferTarget]), and admitting it admitted the forgery that
+ * shares it ([sameTermForgeryFromAnotherVoterIsRefusedAfterARestartOfTheTransferTarget]) — a node
+ * holding no identity for the term cannot locally tell the two apart. Persisting the pin
+ * (`RaftStorage.saveLeaderForTerm`, restored in the engine's `init`) separates them: the honest target
+ * comes back holding `L`, so the guard can require a match outright.
+ *
+ * Those two tests are therefore a **matched pair**, and reading either alone is misleading — one
+ * fails to any tightening that is not backed by recovered state, the other to any loosening.
  *
  * The `timeout` on each test is a **generous wedge backstop, not an assertion**: it is wall-clock
  * over a virtual-time trajectory, so it measures the host rather than the code (#1891). Fast failure
@@ -107,15 +112,17 @@ class TimeoutNowAuthorityPinTest {
     // guard has been tightened past what §3.10 can pay for, not merely re-sourced.
 
     /**
-     * §3.10 across a restart of the transfer target, and the reason the `null` carve-out stays.
+     * §3.10 across a restart of the transfer target — the honest half of the restart window.
      *
      * [RaftSimulation.restart] preserves the storage, so the node comes back at the term it durably
-     * held — but the init-restore path assigns neither `_leader` nor the per-term pin, so both read
-     * `null` at that term. An honest target that ACKed at `T` and restarted is exactly this state,
-     * and its `TimeoutNow` must still be accepted or the transfer fails on its auto-timeout.
+     * held. `_leader` is **not** restored (it is a live-reachability belief, and nothing has been heard
+     * from since the restart), but the per-term pin now is, so the target still recognises `L` as the
+     * leader term `T` established and accepts its `TimeoutNow` — where before the durable pin it was
+     * accepted only because the guard admitted every sender in that window.
      *
-     * Isolated *before* the crash so the sitting leader's heartbeat cannot re-establish either value
-     * between the restart and the injection — which would make the test pass for the wrong reason.
+     * The `_leader == null` assertion is the load-bearing precondition: it is what proves the accept
+     * came from the recovered pin and not from a heartbeat that re-established the belief. Isolated
+     * *before* the crash for the same reason.
      */
     @Test
     fun timeoutNowSurvivesARestartOfTheTransferTarget() = raftRunTest(timeout = 30.seconds) {
