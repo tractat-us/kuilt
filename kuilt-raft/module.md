@@ -88,6 +88,12 @@ because plenty of hostile frames *are* catchable. The line this module draws:
 > **Defend where the recipient can check the claim against state it already holds.
 > Record as accepted where no local check exists.**
 
+That rule says what to do with a frame. What it does not say is what a node is owed once a
+hostile frame has *succeeded* in jamming it — that the wedge be locally detectable, and have
+a documented way back. Those two properties, and the deliberate decision not to pursue a
+third (surviving a liar), are in
+[`docs/raft-wedge-diagnosis-and-recovery.md`](../docs/raft-wedge-diagnosis-and-recovery.md).
+
 ### Where it defends
 
 - **Leader authority (§5.2 / §8).** `AppendEntries`, `InstallSnapshot` and `TimeoutNow`
