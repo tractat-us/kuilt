@@ -152,10 +152,13 @@ because plenty of hostile frames *are* catchable. The line this module draws:
   a term pins itself and the honest leader's frames are the ones dropped for that term. That is
   no worse than the pre-fix behaviour and it is not fixable here: the attack value is also a
   reachable legitimate value, so no predicate over local state separates them. It is an
-  **accepted exposure** pending the authorization mechanism in #1907. The pin is also in-memory,
-  so a restarted node holds none and must still admit a `TimeoutNow` naming nobody — an honest
-  §3.10 target that ACKed and restarted is in exactly that state. That window is **open, not
-  accepted**: it needs an authority signal that survives a restart (#1900).
+  **accepted exposure** pending the authorization mechanism in #1907. The pin is **durable**
+  (`RaftStorage.saveLeaderForTerm`, restored on start-up), which is what closes the restart window
+  the pin used to leave open: a node that establishes a leader for term T and restarts inside T
+  comes back holding that identity, so `TimeoutNow` requires a match outright rather than admitting
+  every sender in a no-known-leader window. Restoring it does not weaken the read-time staleness
+  check — a record for any term but the current one reads as no pin at all, which is exactly the
+  ordinary restart-across-a-term-boundary case (#1900).
 - A **missing** local check is a bug in this class, not an accepted exposure — the
   distinction being whether *any* predicate over the recipient's own state could catch the
   claim, which is what separates this list from the accepted exposures below. Such gaps are

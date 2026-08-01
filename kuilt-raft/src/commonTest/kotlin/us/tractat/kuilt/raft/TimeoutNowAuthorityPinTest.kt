@@ -243,6 +243,78 @@ class TimeoutNowAuthorityPinTest {
         }
 
     /**
+     * Restoring the pin must not weaken the staleness check it is read through: a durable record for
+     * an **older** term is not authority at the current one.
+     *
+     * The target pins `L` at term `T`, then a disrupt-flagged `RequestVote` at `T + 1` walks it to the
+     * next term without any leader contact there — so its storage holds term `T + 1` beside a pin for
+     * `T`, which is exactly the state a crash-restart replays. On restore that record must read as *no
+     * pin*, and `L`'s `TimeoutNow` at `T + 1` must be refused: §5.2 makes `L` the leader of `T`, and
+     * says nothing whatever about `T + 1`.
+     *
+     * This is the assertion that fails if the restore stamps the recovered identity with `currentTerm`
+     * instead of the term it was written for — a mutation the two restart tests above cannot see,
+     * since there the two terms are equal.
+     */
+    @Test
+    fun aRestoredPinFromAnEarlierTermIsNotAuthorityAtTheCurrentTerm() = raftRunTest(timeout = 30.seconds) {
+        val sim = raftSim(this, backgroundScope, n = 3)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
+        val targetId = sim.nodeIds.first { it != leaderId }
+        val otherId = sim.nodeIds.first { it != leaderId && it != targetId }
+
+        sim.awaitTrue("$targetId recognises $leaderId") {
+            sim.nodes.getValue(targetId).leader.value == leaderId
+        }
+        val pinnedTerm = sim.storages.getValue(targetId).term()
+
+        // Walk the target to the next term WITHOUT any leader contact there, so its durable pin stays
+        // attached to `pinnedTerm`. The disrupt flag bypasses leader-stickiness; the term is adopted
+        // whether or not the vote is granted.
+        sim.partitionOff(targetId)
+        sim.deliverRequestVote(
+            to = targetId,
+            from = otherId,
+            term = pinnedTerm + 1,
+            lastLogIndex = Long.MAX_VALUE / 2,
+            lastLogTerm = pinnedTerm,
+            leadershipTransfer = true,
+        )
+        sim.settle()
+        val newTerm = sim.storages.getValue(targetId).term()
+        assertEquals(
+            pinnedTerm + 1, newTerm,
+            "precondition: the target must have adopted the higher term without hearing from a leader in it",
+        )
+
+        sim.crash(targetId)
+        sim.restart(targetId)
+        sim.settle()
+
+        val target = sim.nodes.getValue(targetId)
+        sim.deliverTimeoutNow(to = targetId, from = leaderId, term = newTerm)
+        sim.settle()
+        val termAfter = sim.storages.getValue(targetId).term()
+
+        assertAll(
+            {
+                assertTrue(
+                    target.role.value is RaftRole.Follower,
+                    "$leaderId was term $pinnedTerm's leader, not term $newTerm's — a pin restored for the " +
+                        "older term must not authorise its TimeoutNow — role was ${target.role.value}",
+                )
+            },
+            {
+                assertEquals(
+                    newTerm, termAfter,
+                    "a refused TimeoutNow must not bump the durable term",
+                )
+            },
+        )
+    }
+
+    /**
      * The ordinary transfer path: a follower that has heard from `L` this term must still accept
      * `L`'s own `TimeoutNow`. Here `_leader` and the per-term pin both name `L`, so this is the case
      * where re-sourcing the read must be invisible.
