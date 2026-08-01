@@ -192,7 +192,6 @@ class CheckQuorumTest {
         val customSim = RaftSimulation(
             nodeIds = listOf(v1, v2),
             scope = this,
-            raftConfig = config,
             nodeScope = backgroundScope,
         ) { id, transport, _, childScope ->
             val storage = if (id == v2) conflictingStorage else InMemoryRaftStorage()

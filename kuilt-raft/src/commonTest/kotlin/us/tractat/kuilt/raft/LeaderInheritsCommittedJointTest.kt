@@ -59,7 +59,6 @@ class LeaderInheritsCommittedJointTest {
         val sim = RaftSimulation(
             nodeIds = presentVoters,
             scope = this,
-            raftConfig = raftCfg,
             nodeScope = backgroundScope,
             nodeFactory = { _, transport, storage, nodeScope ->
                 nodeScope.raftNode(oldConfig, transport, storage, raftCfg)

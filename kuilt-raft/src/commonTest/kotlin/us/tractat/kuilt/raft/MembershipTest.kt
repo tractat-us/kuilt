@@ -46,7 +46,6 @@ private fun TestScope.simWithVotersAndBootstrappedLearner(): RaftSimulation {
     return RaftSimulation(
         nodeIds = voterSet.toList() + learnerNode,
         scope = this,
-        raftConfig = raftCfg,
         nodeScope = backgroundScope,
         nodeFactory = { id, transport, storage, nodeScope ->
             val config = if (id == learnerNode) learnerConfig else voterConfig
@@ -73,7 +72,6 @@ private fun TestScope.simWithVotersAndTwoBootstrappedLearners(): RaftSimulation 
     return RaftSimulation(
         nodeIds = voterSet.toList() + learnerNode + learnerNode2,
         scope = this,
-        raftConfig = raftCfg,
         nodeScope = backgroundScope,
         nodeFactory = { id, transport, storage, nodeScope ->
             val config = if (id in twoLearners) learnerConfig else voterConfig

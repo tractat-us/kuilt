@@ -74,7 +74,6 @@ class StorageAtomicityTest {
             RaftSimulation(
                 nodeIds = ids,
                 scope = this,
-                raftConfig = raftCfg,
                 nodeScope = backgroundScope,
                 nodeFactory = { id, transport, storage, nodeScope ->
                     val s = if (id == NodeId("a")) spy else storage

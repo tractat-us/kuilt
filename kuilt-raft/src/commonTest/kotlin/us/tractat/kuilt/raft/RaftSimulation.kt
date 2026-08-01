@@ -36,7 +36,6 @@ import kotlin.time.Duration.Companion.seconds
 class RaftSimulation(
     val nodeIds: List<NodeId>,
     private val scope: CoroutineScope,
-    private val raftConfig: RaftConfig = RaftConfig(),
     /**
      * Scope used to create per-node child scopes. In tests, pass [TestScope.backgroundScope]
      * so that the node coroutines (infinite heartbeat/election loops) are cancelled when the
