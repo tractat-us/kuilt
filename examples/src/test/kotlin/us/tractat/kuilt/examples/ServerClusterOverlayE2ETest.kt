@@ -109,8 +109,9 @@ class ServerClusterOverlayE2ETest {
                 }
                 assertEquals(serverPeerId, attachedTo, "admit records client → server in the overlay directory")
 
-                // Wait until the learner is fully admitted (membership committed) so
-                // admitLearner has passed changeMembership and is parked in awaitCancellation —
+                // Wait until the learner is admitted — the leader has appended the config entry
+                // and adopted it (adopt-on-append; this flow does not wait for the commit) so
+                // admitLearner is at or past changeMembership and settles into awaitCancellation —
                 // only there does a teardown run its evict finally (a cancel mid-changeMembership
                 // rethrows before it, exactly as it would skip the hub's removeSpoke).
                 val learnerId = NodeId(clientId.value)

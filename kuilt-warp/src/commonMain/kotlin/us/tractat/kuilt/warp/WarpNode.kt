@@ -101,7 +101,7 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
  *
  * - [Seam.rosterSnapshot] — derives the roster from [Seam.peers]; cheap and eventually
  *   consistent. Preserves the pre-#826 behavior.
- * - [RaftNode.rosterSnapshot] — derives the roster from Raft's agreed [ClusterConfig];
+ * - [RaftNode.rosterSnapshot] — derives the roster from Raft's replicated [ClusterConfig];
  *   strongly consistent, minimising duplicate executions under stable membership.
  *
  * The roster source is **required** — absence would silently choose a consistency model
@@ -1633,10 +1633,16 @@ public fun Seam.rosterSnapshot(): Flow<Set<PeerId>> = peers
  * Returns a [Flow] of voter [PeerId]s derived from this [RaftNode]'s current
  * [us.tractat.kuilt.raft.ClusterConfig], suitable for passing to [WarpNode] as its [rosterFlow].
  *
- * This is the **strong** roster source: the ring tracks the agreed Raft voter set.
+ * This is the **strong** roster source: the ring tracks Raft's replicated voter set.
  * Under stable membership the ring is identical on every peer, eliminating duplicate
  * executions from ring disagreement. Use [Seam.rosterSnapshot] for a cheaper,
  * eventually-consistent alternative when you don't already have a Raft cluster.
+ *
+ * "Stable" is load-bearing. [us.tractat.kuilt.raft.RaftNode.membership] adopts a config on
+ * append, not on commit, so while a membership change is in flight a peer that has not yet
+ * received the config entry still rings on the old voter set, and an uncommitted config can
+ * be truncated and superseded. The rings converge once the entry has replicated everywhere;
+ * duplicate executions during that window are absorbed by the [Results] backstop as usual.
  *
  * The emitted [PeerId] values are derived from [us.tractat.kuilt.raft.NodeId.value] by
  * wrapping each in a [PeerId] — callers must ensure the [WarpNode.selfId] passed to
