@@ -163,6 +163,79 @@ class TimeoutNowAuthorityPinTest {
     }
 
     /**
+     * The other half of the restart window, and the residual #1900 is scoped to: the *forgery* that
+     * shares [timeoutNowSurvivesARestartOfTheTransferTarget]'s state.
+     *
+     * Identical setup — the target ACKs `L` at term `T`, is isolated, crashes and restarts at `T` —
+     * except the injected `TimeoutNow` comes from a **different voter**. That peer was never term
+     * `T`'s leader, so §5.2 makes its frame a forgery; a restarted node that recovers the identity it
+     * durably established for `T` can say so locally and refuse it.
+     *
+     * The two tests are deliberately a matched pair: any mechanism that refuses this frame by
+     * *widening* the guard rather than by recovering the pin breaks its sibling, and any mechanism
+     * that keeps the sibling green by admitting the whole no-known-leader window leaves this one red.
+     */
+    @Test
+    fun sameTermForgeryFromAnotherVoterIsRefusedAfterARestartOfTheTransferTarget() =
+        raftRunTest(timeout = 30.seconds) {
+            val sim = raftSim(this, backgroundScope, n = 3)
+            val leader = awaitLeader(sim)
+            val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
+            val targetId = sim.nodeIds.first { it != leaderId }
+            val forgerId = sim.nodeIds.first { it != leaderId && it != targetId }
+
+            sim.awaitTrue("$targetId recognises $leaderId") {
+                sim.nodes.getValue(targetId).leader.value == leaderId
+            }
+            val term = sim.storages.getValue(targetId).term()
+
+            sim.partitionOff(targetId)
+            sim.crash(targetId)
+            sim.restart(targetId)
+            sim.settle()
+
+            val target = sim.nodes.getValue(targetId)
+            assertEquals(
+                null, target.leader.value,
+                "precondition: a restarted node holds no live-leader belief for the term it restored",
+            )
+            assertEquals(
+                term, sim.storages.getValue(targetId).term(),
+                "precondition: the durable term survives the restart",
+            )
+
+            val trace = mutableListOf<RaftTraceEvent>()
+            backgroundScope.launch { target.trace.collect { trace += it } }
+            sim.settle()   // let the trace collector subscribe before the frame is injected
+
+            sim.deliverTimeoutNow(to = targetId, from = forgerId, term = term)
+            sim.settle()
+            val termAfter = sim.storages.getValue(targetId).term()
+
+            assertAll(
+                {
+                    assertTrue(
+                        target.role.value is RaftRole.Follower,
+                        "$forgerId was never term $term's leader, so its TimeoutNow must not campaign a " +
+                            "node that restarted at $term — role was ${target.role.value}",
+                    )
+                },
+                {
+                    assertEquals(
+                        term, termAfter,
+                        "a refused TimeoutNow must not bump the durable term",
+                    )
+                },
+                {
+                    assertFalse(
+                        trace.any { it is RaftTraceEvent.RequestVote || it is RaftTraceEvent.Timeout },
+                        "no election round may start from the refused frame: $trace",
+                    )
+                },
+            )
+        }
+
+    /**
      * The ordinary transfer path: a follower that has heard from `L` this term must still accept
      * `L`'s own `TimeoutNow`. Here `_leader` and the per-term pin both name `L`, so this is the case
      * where re-sourcing the read must be invisible.
