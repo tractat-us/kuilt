@@ -53,6 +53,9 @@ class StorageAtomicityTest {
                     calls += "saveTermAndVotedFor($term,$votedFor)"
                     delegate.saveTermAndVotedFor(term, votedFor)
                 }
+                override suspend fun leaderForTerm(): LeaderForTerm? = delegate.leaderForTerm()
+                override suspend fun saveLeaderForTerm(term: Long, leaderId: NodeId) =
+                    delegate.saveLeaderForTerm(term, leaderId)
                 override suspend fun appendEntries(entries: List<LogEntry>) =
                     delegate.appendEntries(entries)
                 override suspend fun entries(fromIndex: Long) = delegate.entries(fromIndex)

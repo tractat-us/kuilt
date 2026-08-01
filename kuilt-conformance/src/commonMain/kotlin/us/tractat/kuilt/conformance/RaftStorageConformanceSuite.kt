@@ -2,6 +2,7 @@ package us.tractat.kuilt.conformance
 
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.raft.LeaderForTerm
 import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftStorage
@@ -31,7 +32,7 @@ import kotlin.test.assertTrue
  * ```
  *
  * [newStorage] must return a **fresh, empty** instance on every call — term `0`,
- * no vote, empty log.
+ * no vote, no established leader, empty log.
  *
  * ## Faithfulness, not validation (#1922)
  *
@@ -54,8 +55,8 @@ public abstract class RaftStorageConformanceSuite {
      * Returns a fresh, empty [RaftStorage] instance.
      *
      * Called once per test — each test drives its own independent storage.
-     * The instance must start with `term() == 0L`, `votedFor() == null`, and
-     * `entries() == emptyList()`.
+     * The instance must start with `term() == 0L`, `votedFor() == null`,
+     * `leaderForTerm() == null`, and `entries() == emptyList()`.
      */
     public abstract fun newStorage(): RaftStorage
 
@@ -274,6 +275,112 @@ public abstract class RaftStorageConformanceSuite {
             { assertEquals(0L, zero, "term 0 must round-trip") },
             { assertEquals(MAX_PLAUSIBLE - 1L, belowCeiling, "term ${MAX_PLAUSIBLE - 1L} must round-trip exactly") },
             { assertEquals(MAX_PLAUSIBLE, ceiling, "term $MAX_PLAUSIBLE must round-trip exactly") },
+        )
+    }
+
+    // ── Per-term leader identity (#1900) ─────────────────────────────────────
+
+    @Test
+    public fun leaderForTermBeforeAnySave_isNull(): TestResult = runTest {
+        assertNull(
+            newStorage().leaderForTerm(),
+            "a storage that has never established a leader must report none, not a zero-term sentinel",
+        )
+    }
+
+    /**
+     * The round trip §3.10 sender-authentication rests on: `RaftEngine` restores this record on start-up
+     * and refuses a `TimeoutNow` from anyone but the [LeaderForTerm.leaderId] it names, so **both** halves
+     * must come back exactly as written.
+     *
+     * The term half is the one an adapter is most likely to lose, and losing it is worse than losing the
+     * whole record: the engine decides relevance by comparing the stored term to its own, so a term that
+     * comes back wrong either hides a live pin (the honest transfer target refuses its own leader) or
+     * exposes a stale one (an identity from an older term is admitted as this term's authority).
+     */
+    @Test
+    public fun savesAndLoadsLeaderForTerm(): TestResult = runTest {
+        val storage = newStorage()
+        storage.saveLeaderForTerm(7L, NodeId("node-a"))
+        val restored = assertNotNull(storage.leaderForTerm(), "the established leader must be readable back")
+        assertAll(
+            { assertEquals(7L, restored.term, "the term the leader was established for must round-trip") },
+            { assertEquals(NodeId("node-a"), restored.leaderId, "the leader identity must round-trip") },
+        )
+    }
+
+    /**
+     * The record is **one** value, not two independent keys. Overwriting it must replace both halves
+     * together: an adapter that writes the term and the identity to separate rows can leave the new term
+     * beside the old identity, which is precisely the mismatched pin
+     * [RaftStorage.saveLeaderForTerm]'s single-write requirement exists to prevent — and the engine has
+     * no way to detect it, since a pin at the current term is exactly what it is looking for.
+     *
+     * Written with both halves changing at once so a per-field write survives neither.
+     */
+    @Test
+    public fun saveLeaderForTerm_replacesBothHalvesTogether(): TestResult = runTest {
+        val storage = newStorage()
+        storage.saveLeaderForTerm(3L, NodeId("node-a"))
+        storage.saveLeaderForTerm(4L, NodeId("node-b"))
+        val restored = assertNotNull(storage.leaderForTerm())
+        assertAll(
+            { assertEquals(4L, restored.term, "the term must be updated") },
+            { assertEquals(NodeId("node-b"), restored.leaderId, "the identity must be updated with it") },
+        )
+    }
+
+    /**
+     * The [savesAndLoadsTerm_atPlausibilityEdges] argument, applied to the pin's term: it is compared
+     * for **equality** with `currentTerm`, which the engine admits anywhere in `0..`[MAX_PLAUSIBLE].
+     * A term column that cannot hold a `Long` therefore does not merely round-trip a slightly different
+     * number — it makes the pin permanently invisible at the one term it was written for, and §3.10
+     * transfer to that node fails on its auto-timeout with nothing to point at.
+     *
+     * `0` is included because it is a real term for this record even though no leader is ever established
+     * at term 0: an adapter that encodes absence as a `0` sentinel fails
+     * [leaderForTermBeforeAnySave_isNull] and this together.
+     */
+    @Test
+    public fun savesAndLoadsLeaderForTerm_atPlausibilityEdges(): TestResult = runTest {
+        val zero = newStorage().also { it.saveLeaderForTerm(0L, NodeId("node-a")) }.leaderForTerm()
+        val belowCeiling = newStorage()
+            .also { it.saveLeaderForTerm(MAX_PLAUSIBLE - 1L, NodeId("node-a")) }
+            .leaderForTerm()
+        val ceiling = newStorage().also { it.saveLeaderForTerm(MAX_PLAUSIBLE, NodeId("node-a")) }.leaderForTerm()
+        assertAll(
+            { assertEquals(LeaderForTerm(0L, NodeId("node-a")), zero, "a pin at term 0 must round-trip") },
+            {
+                assertEquals(
+                    LeaderForTerm(MAX_PLAUSIBLE - 1L, NodeId("node-a")), belowCeiling,
+                    "a pin at term ${MAX_PLAUSIBLE - 1L} must round-trip exactly",
+                )
+            },
+            {
+                assertEquals(
+                    LeaderForTerm(MAX_PLAUSIBLE, NodeId("node-a")), ceiling,
+                    "a pin at term $MAX_PLAUSIBLE must round-trip exactly",
+                )
+            },
+        )
+    }
+
+    /**
+     * The pin and the term/vote pair are **independent** records. The engine writes them at different
+     * moments by construction — the pin on first leader-contact of a term, the term/vote at every
+     * term-advance — so an adapter that stores them in one slot, or that clears one when the other is
+     * written, loses the pin on the very next heartbeat-driven term observation.
+     */
+    @Test
+    public fun saveTermAndVotedFor_doesNotDisturbTheEstablishedLeader(): TestResult = runTest {
+        val storage = newStorage()
+        storage.saveLeaderForTerm(5L, NodeId("node-a"))
+        storage.saveTermAndVotedFor(6L, NodeId("node-b"))
+        val restored = storage.leaderForTerm()
+        val votedFor = storage.votedFor()
+        assertAll(
+            { assertEquals(LeaderForTerm(5L, NodeId("node-a")), restored, "the pin must survive a term/vote write") },
+            { assertEquals(NodeId("node-b"), votedFor, "and the vote must not have been overwritten by the pin") },
         )
     }
 

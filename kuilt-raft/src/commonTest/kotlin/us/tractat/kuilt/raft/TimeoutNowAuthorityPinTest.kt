@@ -25,13 +25,18 @@ import kotlin.time.Duration.Companion.seconds
  * read, by comparing the pinned term to `currentTerm`. A stepped-down leader still holds
  * `leaderForTerm == self`, so reading the pin instead closes that window.
  *
- * **What this does not close, and the reason the `null` carve-out stays.** The pin is in-memory by
- * construction: after a restart it is `-1` / `null`, exactly as `_leader` is. A transfer target that
- * ACKed at term `T`, restarted, and came back at `T` as a caught-up Follower holds neither, so its
- * honest `TimeoutNow` is still accepted — and so is the forgery that shares that window. Requiring
- * `from == leaderForTerm` outright would break the honest half
- * ([timeoutNowSurvivesARestartOfTheTransferTarget] is that regression), which is why the restart
- * residual is left open on #1900 rather than closed here.
+ * **The restart window, and why there is no longer a `null` carve-out.** The pin used to be in-memory
+ * only, so after a restart it read `-1` / `null` exactly as `_leader` did. A transfer target that
+ * ACKed at term `T`, restarted, and came back at `T` as a caught-up Follower held neither — so the
+ * guard had to admit the whole no-known-leader window to keep the honest half working
+ * ([timeoutNowSurvivesARestartOfTheTransferTarget]), and admitting it admitted the forgery that
+ * shares it ([sameTermForgeryFromAnotherVoterIsRefusedAfterARestartOfTheTransferTarget]) — a node
+ * holding no identity for the term cannot locally tell the two apart. Persisting the pin
+ * (`RaftStorage.saveLeaderForTerm`, restored in the engine's `init`) separates them: the honest target
+ * comes back holding `L`, so the guard can require a match outright.
+ *
+ * Those two tests are therefore a **matched pair**, and reading either alone is misleading — one
+ * fails to any tightening that is not backed by recovered state, the other to any loosening.
  *
  * The `timeout` on each test is a **generous wedge backstop, not an assertion**: it is wall-clock
  * over a virtual-time trajectory, so it measures the host rather than the code (#1891). Fast failure
@@ -107,15 +112,17 @@ class TimeoutNowAuthorityPinTest {
     // guard has been tightened past what §3.10 can pay for, not merely re-sourced.
 
     /**
-     * §3.10 across a restart of the transfer target, and the reason the `null` carve-out stays.
+     * §3.10 across a restart of the transfer target — the honest half of the restart window.
      *
      * [RaftSimulation.restart] preserves the storage, so the node comes back at the term it durably
-     * held — but the init-restore path assigns neither `_leader` nor the per-term pin, so both read
-     * `null` at that term. An honest target that ACKed at `T` and restarted is exactly this state,
-     * and its `TimeoutNow` must still be accepted or the transfer fails on its auto-timeout.
+     * held. `_leader` is **not** restored (it is a live-reachability belief, and nothing has been heard
+     * from since the restart), but the per-term pin now is, so the target still recognises `L` as the
+     * leader term `T` established and accepts its `TimeoutNow` — where before the durable pin it was
+     * accepted only because the guard admitted every sender in that window.
      *
-     * Isolated *before* the crash so the sitting leader's heartbeat cannot re-establish either value
-     * between the restart and the injection — which would make the test pass for the wrong reason.
+     * The `_leader == null` assertion is the load-bearing precondition: it is what proves the accept
+     * came from the recovered pin and not from a heartbeat that re-established the belief. Isolated
+     * *before* the crash for the same reason.
      */
     @Test
     fun timeoutNowSurvivesARestartOfTheTransferTarget() = raftRunTest(timeout = 30.seconds) {
@@ -157,6 +164,151 @@ class TimeoutNowAuthorityPinTest {
                 assertEquals(
                     term + 1, termAfter,
                     "and the accepted transfer must campaign at the next term",
+                )
+            },
+        )
+    }
+
+    /**
+     * The other half of the restart window, and the residual #1900 is scoped to: the *forgery* that
+     * shares [timeoutNowSurvivesARestartOfTheTransferTarget]'s state.
+     *
+     * Identical setup — the target ACKs `L` at term `T`, is isolated, crashes and restarts at `T` —
+     * except the injected `TimeoutNow` comes from a **different voter**. That peer was never term
+     * `T`'s leader, so §5.2 makes its frame a forgery; a restarted node that recovers the identity it
+     * durably established for `T` can say so locally and refuse it.
+     *
+     * The two tests are deliberately a matched pair: any mechanism that refuses this frame by
+     * *widening* the guard rather than by recovering the pin breaks its sibling, and any mechanism
+     * that keeps the sibling green by admitting the whole no-known-leader window leaves this one red.
+     */
+    @Test
+    fun sameTermForgeryFromAnotherVoterIsRefusedAfterARestartOfTheTransferTarget() =
+        raftRunTest(timeout = 30.seconds) {
+            val sim = raftSim(this, backgroundScope, n = 3)
+            val leader = awaitLeader(sim)
+            val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
+            val targetId = sim.nodeIds.first { it != leaderId }
+            val forgerId = sim.nodeIds.first { it != leaderId && it != targetId }
+
+            sim.awaitTrue("$targetId recognises $leaderId") {
+                sim.nodes.getValue(targetId).leader.value == leaderId
+            }
+            val term = sim.storages.getValue(targetId).term()
+
+            sim.partitionOff(targetId)
+            sim.crash(targetId)
+            sim.restart(targetId)
+            sim.settle()
+
+            val target = sim.nodes.getValue(targetId)
+            assertEquals(
+                null, target.leader.value,
+                "precondition: a restarted node holds no live-leader belief for the term it restored",
+            )
+            assertEquals(
+                term, sim.storages.getValue(targetId).term(),
+                "precondition: the durable term survives the restart",
+            )
+
+            val trace = mutableListOf<RaftTraceEvent>()
+            backgroundScope.launch { target.trace.collect { trace += it } }
+            sim.settle()   // let the trace collector subscribe before the frame is injected
+
+            sim.deliverTimeoutNow(to = targetId, from = forgerId, term = term)
+            sim.settle()
+            val termAfter = sim.storages.getValue(targetId).term()
+
+            assertAll(
+                {
+                    assertTrue(
+                        target.role.value is RaftRole.Follower,
+                        "$forgerId was never term $term's leader, so its TimeoutNow must not campaign a " +
+                            "node that restarted at $term — role was ${target.role.value}",
+                    )
+                },
+                {
+                    assertEquals(
+                        term, termAfter,
+                        "a refused TimeoutNow must not bump the durable term",
+                    )
+                },
+                {
+                    assertFalse(
+                        trace.any { it is RaftTraceEvent.RequestVote || it is RaftTraceEvent.Timeout },
+                        "no election round may start from the refused frame: $trace",
+                    )
+                },
+            )
+        }
+
+    /**
+     * Restoring the pin must not weaken the staleness check it is read through: a durable record for
+     * an **older** term is not authority at the current one.
+     *
+     * The target pins `L` at term `T`, then a disrupt-flagged `RequestVote` at `T + 1` walks it to the
+     * next term without any leader contact there — so its storage holds term `T + 1` beside a pin for
+     * `T`, which is exactly the state a crash-restart replays. On restore that record must read as *no
+     * pin*, and `L`'s `TimeoutNow` at `T + 1` must be refused: §5.2 makes `L` the leader of `T`, and
+     * says nothing whatever about `T + 1`.
+     *
+     * This is the assertion that fails if the restore stamps the recovered identity with `currentTerm`
+     * instead of the term it was written for — a mutation the two restart tests above cannot see,
+     * since there the two terms are equal.
+     */
+    @Test
+    fun aRestoredPinFromAnEarlierTermIsNotAuthorityAtTheCurrentTerm() = raftRunTest(timeout = 30.seconds) {
+        val sim = raftSim(this, backgroundScope, n = 3)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
+        val targetId = sim.nodeIds.first { it != leaderId }
+        val otherId = sim.nodeIds.first { it != leaderId && it != targetId }
+
+        sim.awaitTrue("$targetId recognises $leaderId") {
+            sim.nodes.getValue(targetId).leader.value == leaderId
+        }
+        val pinnedTerm = sim.storages.getValue(targetId).term()
+
+        // Walk the target to the next term WITHOUT any leader contact there, so its durable pin stays
+        // attached to `pinnedTerm`. The disrupt flag bypasses leader-stickiness; the term is adopted
+        // whether or not the vote is granted.
+        sim.partitionOff(targetId)
+        sim.deliverRequestVote(
+            to = targetId,
+            from = otherId,
+            term = pinnedTerm + 1,
+            lastLogIndex = Long.MAX_VALUE / 2,
+            lastLogTerm = pinnedTerm,
+            leadershipTransfer = true,
+        )
+        sim.settle()
+        val newTerm = sim.storages.getValue(targetId).term()
+        assertEquals(
+            pinnedTerm + 1, newTerm,
+            "precondition: the target must have adopted the higher term without hearing from a leader in it",
+        )
+
+        sim.crash(targetId)
+        sim.restart(targetId)
+        sim.settle()
+
+        val target = sim.nodes.getValue(targetId)
+        sim.deliverTimeoutNow(to = targetId, from = leaderId, term = newTerm)
+        sim.settle()
+        val termAfter = sim.storages.getValue(targetId).term()
+
+        assertAll(
+            {
+                assertTrue(
+                    target.role.value is RaftRole.Follower,
+                    "$leaderId was term $pinnedTerm's leader, not term $newTerm's — a pin restored for the " +
+                        "older term must not authorise its TimeoutNow — role was ${target.role.value}",
+                )
+            },
+            {
+                assertEquals(
+                    newTerm, termAfter,
+                    "a refused TimeoutNow must not bump the durable term",
                 )
             },
         )

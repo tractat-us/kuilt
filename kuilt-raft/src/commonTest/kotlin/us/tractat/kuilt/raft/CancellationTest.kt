@@ -205,6 +205,8 @@ private class DelayedStorage(
     override suspend fun votedFor(): NodeId? { delay(delayMs); return delegate.votedFor() }
     override suspend fun saveVotedFor(nodeId: NodeId?) { delay(delayMs); delegate.saveVotedFor(nodeId) }
     override suspend fun saveTermAndVotedFor(term: Long, votedFor: NodeId?) { delay(delayMs); delegate.saveTermAndVotedFor(term, votedFor) }
+    override suspend fun leaderForTerm(): LeaderForTerm? { delay(delayMs); return delegate.leaderForTerm() }
+    override suspend fun saveLeaderForTerm(term: Long, leaderId: NodeId) { delay(delayMs); delegate.saveLeaderForTerm(term, leaderId) }
     override suspend fun appendEntries(entries: List<LogEntry>) { delay(delayMs); delegate.appendEntries(entries) }
     override suspend fun entries(fromIndex: Long): List<LogEntry> { delay(delayMs); return delegate.entries(fromIndex) }
     override suspend fun truncateFrom(index: Long) { delay(delayMs); delegate.truncateFrom(index) }
