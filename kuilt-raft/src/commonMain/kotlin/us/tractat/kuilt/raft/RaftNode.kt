@@ -122,15 +122,30 @@ public interface RaftNode {
     public val leader: StateFlow<NodeId?>
 
     /**
-     * The effective cluster membership as of the latest committed config entry.
+     * The effective cluster membership this node is currently operating under: the
+     * [ClusterConfig] of the **latest config entry in its log, committed or not**.
      *
-     * Reflects the [ClusterConfig] the node is currently operating under.
-     * During a joint-consensus transition (§6) this is the target C_new; once
-     * C_new is committed the transition is complete and this reflects C_new.
+     * Config entries are **adopted on append**, not on commit — the cardinal §6 rule
+     * (dissertation §4.1): a server always uses the latest configuration in its log,
+     * regardless of whether that entry is committed. During a joint-consensus transition
+     * this flow carries the target C_new, while commit and election still require
+     * majorities of *both* C_old and C_new until the final `Simple(C_new)` entry is
+     * appended and adopted in turn.
      *
-     * Collect this flow to track membership changes — for example, to feed a
-     * [us.tractat.kuilt.warp.WarpNode] with a strongly-consistent roster via
-     * `raftNode.rosterSnapshot()`.
+     * **An observed config can be superseded.** An appended-but-uncommitted config can
+     * still be truncated by a later leader (§5.3); the node re-resolves membership from
+     * what remains of its log and this flow emits the replacing config — as an ordinary
+     * new value, with nothing marking it a rollback. So a consumer can act on a membership
+     * that never appears in any committed log, and (this being a [StateFlow], which
+     * conflates) a short-lived config may never be observed at all.
+     *
+     * That makes this the right feed for whatever must track the config the node is
+     * *acting under* — routing, voter authentication, a hash ring such as
+     * [us.tractat.kuilt.warp.WarpNode]'s via `raftNode.rosterSnapshot()`. It is **not** a
+     * committed-membership surface: config entries are withheld from [committed] /
+     * [committedFrom] and surface there only as payload-free [Committed.Internal] markers,
+     * indistinguishable from the §5.4.2 election no-op. A leader learns that its own change
+     * committed by [changeMembership] returning; a follower has no equivalent signal.
      *
      * The initial value is the bootstrap [ClusterConfig] passed to [CoroutineScope.raftNode].
      */

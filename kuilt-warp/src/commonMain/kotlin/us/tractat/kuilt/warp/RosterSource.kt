@@ -8,9 +8,10 @@ import us.tractat.kuilt.core.PeerId
  * The ring IS the roster — a `RosterSnapshot` is the primitive the ring is built from.
  * Two pluggable sources produce snapshots:
  *
- * - **Raft membership** — the agreed voter set from a [us.tractat.kuilt.raft.RaftNode]'s
+ * - **Raft membership** — the replicated voter set from a [us.tractat.kuilt.raft.RaftNode]'s
  *   current [us.tractat.kuilt.raft.ClusterConfig]; strong consistency, zero duplicate execution
- *   during stable membership. Obtain via [us.tractat.kuilt.raft.RaftNode.rosterSnapshot].
+ *   during stable membership (that config is adopted on append rather than on commit — see
+ *   [us.tractat.kuilt.raft.RaftNode.rosterSnapshot], which is how you obtain this source).
  *
  * - **Session room roster** — the present-peer set from a [us.tractat.kuilt.core.Seam]'s
  *   [us.tractat.kuilt.core.Seam.peers] flow; cheaper, eventually consistent, best for groups
