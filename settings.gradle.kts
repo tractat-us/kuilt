@@ -30,7 +30,7 @@ plugins {
     id("com.gradle.develocity") version "4.5.0"
     // Remote build-cache backend — S3-compatible (Fly Tigris), shared org-wide.
     // No-op when the S3 creds are absent (see the buildCache block below).
-    id("com.github.burrunan.s3-build-cache") version "1.9.7"
+    id("com.github.burrunan.s3-build-cache") version "1.9.8"
 }
 
 develocity {
