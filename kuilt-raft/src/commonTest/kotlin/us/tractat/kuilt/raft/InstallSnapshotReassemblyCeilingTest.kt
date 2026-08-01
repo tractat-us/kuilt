@@ -26,7 +26,7 @@ import kotlin.test.assertTrue
  *    permanent node death (#1818) — the second injection would then never be answered.
  *
  * The victim is **not** partitioned, deliberately: an isolated follower's election timer fires within
- * a few virtual ms under `FAST_RAFT_CONFIG` and bumps its term, after which the injected frame is
+ * a few virtual ms under `fastRaftConfig` and bumps its term, after which the injected frame is
  * stale-term-rejected at the top of `onInstallSnapshot` and acks `0` for entirely the wrong reason —
  * a vacuously green test. Live leader traffic is harmless here because nothing is being corrupted:
  * the assertions read only the victim's own `InstallSnapshotResponse` frames, and no honest
@@ -46,7 +46,7 @@ internal class InstallSnapshotReassemblyCeilingTest {
             this,
             backgroundScope,
             n = 3,
-            config = FAST_RAFT_CONFIG.copy(snapshotTotalCeiling = ceiling),
+            config = fastRaftConfig().copy(snapshotTotalCeiling = ceiling),
         )
         val leaderNode = awaitLeader(sim)
         val leaderId = sim.nodes.entries.first { it.value === leaderNode }.key
@@ -119,7 +119,7 @@ internal class InstallSnapshotReassemblyCeilingTest {
         val metricsBy = mutableMapOf<NodeId, MutableList<RaftMetric>>()
         val ids = (1..3).map { NodeId("v$it") }
         val cluster = ClusterConfig(voters = ids.toSet())
-        val config = FAST_RAFT_CONFIG.copy(snapshotTotalCeiling = ceiling)
+        val config = fastRaftConfig().copy(snapshotTotalCeiling = ceiling)
         val sim = RaftSimulation(
             nodeIds = ids,
             scope = this,

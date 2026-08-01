@@ -21,12 +21,13 @@ class CommittedReplayTest {
     private fun soloSim(scope: kotlinx.coroutines.CoroutineScope): RaftSimulation {
         val id = NodeId("solo")
         val config = ClusterConfig(voters = setOf(id))
+        val raftCfg = fastRaftConfig()
         return RaftSimulation(
             nodeIds = listOf(id),
             scope = scope,
-            raftConfig = FAST_RAFT_CONFIG,
+            raftConfig = raftCfg,
         ) { _, transport, storage, nodeScope ->
-            nodeScope.raftNode(config, transport, storage, FAST_RAFT_CONFIG)
+            nodeScope.raftNode(config, transport, storage, raftCfg)
         }
     }
 

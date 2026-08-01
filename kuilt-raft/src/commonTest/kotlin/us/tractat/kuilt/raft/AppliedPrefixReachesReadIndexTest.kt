@@ -32,12 +32,13 @@ class AppliedPrefixReachesReadIndexTest {
 
     private fun soloSim(scope: CoroutineScope): RaftSimulation {
         val config = ClusterConfig(voters = setOf(solo))
+        val raftCfg = fastRaftConfig()
         return RaftSimulation(
             nodeIds = listOf(solo),
             scope = scope,
-            raftConfig = FAST_RAFT_CONFIG,
+            raftConfig = raftCfg,
         ) { _, transport, storage, nodeScope ->
-            nodeScope.raftNode(config, transport, storage, FAST_RAFT_CONFIG)
+            nodeScope.raftNode(config, transport, storage, raftCfg)
         }
     }
 

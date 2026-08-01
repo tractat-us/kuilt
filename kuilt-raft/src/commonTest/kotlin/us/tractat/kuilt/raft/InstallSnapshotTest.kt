@@ -98,7 +98,7 @@ class InstallSnapshotTest {
      */
     @Test
     fun heartbeatDuringTransfer_resumesInsteadOfRestartingFromOffsetZero() = raftRunTest {
-        val hb = FAST_RAFT_CONFIG.heartbeatInterval.inWholeMilliseconds
+        val hb = fastRaftConfig().heartbeatInterval.inWholeMilliseconds
         val sim = raftSim(this, backgroundScope, n = 3, maxPayloadBytes = 64)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodes.entries.first { it.value === leader }.key
@@ -170,7 +170,7 @@ class InstallSnapshotTest {
      */
     @Test
     fun multiHeartbeatSpanningChunkedTransfer_completesAndFollowerConverges() = raftRunTest {
-        val hbMs = FAST_RAFT_CONFIG.heartbeatInterval.inWholeMilliseconds
+        val hbMs = fastRaftConfig().heartbeatInterval.inWholeMilliseconds
         // maxPayloadBytes budgets HEADER_BUDGET (256 B) for the CBOR envelope → 40 state bytes/chunk.
         val sim = raftSim(this, backgroundScope, n = 3, maxPayloadBytes = 296)
         val leader = awaitLeader(sim)

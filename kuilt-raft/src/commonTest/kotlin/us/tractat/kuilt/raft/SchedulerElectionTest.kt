@@ -23,7 +23,11 @@ private val heartbeatInterval = 50.milliseconds
 // advanceTimeBy calls on that scheduler — proving the engine respects an externally-controlled
 // virtual clock. Folding it into raftRunTest would merge it with VirtualElectionTest and
 // lose the explicit advanceTimeBy witness. Already deterministic; no conversion needed.
-private val schedulerConfig = RaftConfig(
+// A function, not a `val`, for the reason spelled out on [RAFT_TEST_SEED] (#1952): one instance
+// shared across this file's tests would make each test's draws depend on the earlier tests' —
+// schedulerSim calls it once and shares the result across that simulation's nodes, which is how
+// they break election-timeout symmetry.
+private fun schedulerConfig(): RaftConfig = RaftConfig(
     electionTimeoutMin = electionTimeoutMin,
     electionTimeoutMax = electionTimeoutMax,
     heartbeatInterval = heartbeatInterval,
@@ -35,14 +39,15 @@ private fun schedulerSim(scheduler: TestCoroutineScheduler, n: Int = 3): RaftSim
     val ids = (1..n).map { NodeId("s$it") }
     val clusterConfig = ClusterConfig(voters = ids.toSet())
     val testScope = TestScope(StandardTestDispatcher(scheduler))
+    val raftCfg = schedulerConfig()
     return RaftSimulation(
         nodeIds = ids,
         scope = testScope,
-        raftConfig = schedulerConfig,
+        raftConfig = raftCfg,
         nodeScope = testScope.backgroundScope,
         nodeFactory = { id, transport, storage, nodeScope ->
             CoroutineScope(nodeScope.coroutineContext + Job())
-                .raftNode(clusterConfig, transport, storage, schedulerConfig)
+                .raftNode(clusterConfig, transport, storage, raftCfg)
         },
     )
 }

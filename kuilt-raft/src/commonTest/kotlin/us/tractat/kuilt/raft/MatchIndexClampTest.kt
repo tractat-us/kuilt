@@ -18,7 +18,7 @@ import kotlin.time.Duration.Companion.seconds
  * churn), while a fast heartbeat lets the leader promptly send AppendEntries to the tracked
  * learner — the send that would crash on an out-of-range `nextIndex`.
  */
-private val CLAMP_TEST_CONFIG = RaftConfig(
+private fun clampTestConfig(): RaftConfig = RaftConfig(
     electionTimeoutMin = 300.milliseconds,
     electionTimeoutMax = 400.milliseconds,
     heartbeatInterval = 2.milliseconds,
@@ -50,7 +50,7 @@ class MatchIndexClampTest {
         // yet it is not needed for commit — so the leader keeps making progress on its own.
         val leader = backgroundScope.raftNode(
             ClusterConfig(voters = setOf(l), learners = setOf(f1)),
-            network.transport(l), leaderStorage, CLAMP_TEST_CONFIG,
+            network.transport(l), leaderStorage, clampTestConfig(),
         )
         val harness = SingleVoterHarness(leader, leaderStorage)
         leader.awaitLeadership()

@@ -24,13 +24,14 @@ class NoOpEntryTest {
     fun priorTermEntries_commitAfterElection_withoutNewProposal() = raftRunTest {
         val ids = listOf(NodeId("a"), NodeId("b"), NodeId("c"))
         val config = ClusterConfig(voters = ids.toSet())
+        val raftCfg = fastRaftConfig()
         val sim = RaftSimulation(
             nodeIds = ids,
             scope = this,
-            raftConfig = FAST_RAFT_CONFIG,
+            raftConfig = raftCfg,
             nodeScope = backgroundScope,
             nodeFactory = { id, transport, storage, nodeScope ->
-                nodeScope.raftNode(config, transport, storage, FAST_RAFT_CONFIG)
+                nodeScope.raftNode(config, transport, storage, raftCfg)
             },
         )
 
@@ -72,13 +73,14 @@ class NoOpEntryTest {
     fun committedEntry_survivesPartitionAndLeaderChange() = raftRunTest {
         val ids = listOf(NodeId("a"), NodeId("b"), NodeId("c"))
         val config = ClusterConfig(voters = ids.toSet())
+        val raftCfg = fastRaftConfig()
         val sim = RaftSimulation(
             nodeIds = ids,
             scope = this,
-            raftConfig = FAST_RAFT_CONFIG,
+            raftConfig = raftCfg,
             nodeScope = backgroundScope,
             nodeFactory = { id, transport, storage, nodeScope ->
-                nodeScope.raftNode(config, transport, storage, FAST_RAFT_CONFIG)
+                nodeScope.raftNode(config, transport, storage, raftCfg)
             },
         )
 
@@ -130,12 +132,13 @@ class NoOpEntryTest {
     fun committed_doesNotEmitElectionNoOp() = raftRunTest {
         val id = NodeId("solo")
         val config = ClusterConfig(voters = setOf(id))
+        val raftCfg = fastRaftConfig()
         val sim = RaftSimulation(
             nodeIds = listOf(id),
             scope = backgroundScope,
-            raftConfig = FAST_RAFT_CONFIG,
+            raftConfig = raftCfg,
         ) { _, transport, storage, nodeScope ->
-            nodeScope.raftNode(config, transport, storage, FAST_RAFT_CONFIG)
+            nodeScope.raftNode(config, transport, storage, raftCfg)
         }
         val node = sim.nodes.getValue(id)
         val seen = mutableListOf<LogEntry>()
@@ -163,12 +166,13 @@ class NoOpEntryTest {
     fun committed_includesUserProposedEmptyCommand() = raftRunTest {
         val id = NodeId("solo")
         val config = ClusterConfig(voters = setOf(id))
+        val raftCfg = fastRaftConfig()
         val sim = RaftSimulation(
             nodeIds = listOf(id),
             scope = backgroundScope,
-            raftConfig = FAST_RAFT_CONFIG,
+            raftConfig = raftCfg,
         ) { _, transport, storage, nodeScope ->
-            nodeScope.raftNode(config, transport, storage, FAST_RAFT_CONFIG)
+            nodeScope.raftNode(config, transport, storage, raftCfg)
         }
         val node = sim.nodes.getValue(id)
         val seen = mutableListOf<LogEntry>()

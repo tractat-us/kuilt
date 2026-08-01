@@ -33,8 +33,11 @@ class DocumentedUsageTest {
 
         // 2. Wire one node per voter. Production: `SeamRaftTransport(seam)`.
         val network = InMemoryRaftNetwork()
+        // One config for the whole cluster: the voters break election-timeout symmetry by drawing
+        // successive values from its single seeded RNG. See fastRaftConfig / RAFT_TEST_SEED (#1952).
+        val raftCfg = fastRaftConfig()
         val nodes: Map<NodeId, RaftNode> = cluster.voters.associateWith { id ->
-            backgroundScope.raftNode(cluster, network.transport(id), InMemoryRaftStorage(), FAST_RAFT_CONFIG)
+            backgroundScope.raftNode(cluster, network.transport(id), InMemoryRaftStorage(), raftCfg)
         }
 
         // 3. Apply committed entries on every node (documented step 5).

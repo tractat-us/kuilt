@@ -55,13 +55,14 @@ class LeaderInheritsCommittedJointTest {
         // #1247 `:292-295`). crash/seed/restart run at a single virtual instant — under
         // StandardTestDispatcher no restore coroutine executes until awaitLeader advances time, so every
         // node comes up already reading the seeded snapshot.
+        val raftCfg = fastRaftConfig()
         val sim = RaftSimulation(
             nodeIds = presentVoters,
             scope = this,
-            raftConfig = FAST_RAFT_CONFIG,
+            raftConfig = raftCfg,
             nodeScope = backgroundScope,
             nodeFactory = { _, transport, storage, nodeScope ->
-                nodeScope.raftNode(oldConfig, transport, storage, FAST_RAFT_CONFIG)
+                nodeScope.raftNode(oldConfig, transport, storage, raftCfg)
             },
         )
         presentVoters.forEach { sim.crash(it) }

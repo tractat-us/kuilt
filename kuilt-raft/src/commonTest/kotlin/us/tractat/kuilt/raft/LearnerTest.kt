@@ -20,15 +20,18 @@ private val voterIds = setOf(NodeId("v1"), NodeId("v2"), NodeId("v3"))
 private val learnerId = NodeId("learner")
 private val clusterConfig = ClusterConfig(voters = voterIds, learners = setOf(learnerId))
 
-private fun TestScope.simWithLearner(): RaftSimulation = RaftSimulation(
-    nodeIds = voterIds.toList() + learnerId,
-    scope = this,
-    raftConfig = FAST_RAFT_CONFIG,
-    nodeScope = backgroundScope,
-    nodeFactory = { _, transport, storage, nodeScope ->
-        nodeScope.raftNode(clusterConfig, transport, storage, FAST_RAFT_CONFIG)
-    },
-)
+private fun TestScope.simWithLearner(): RaftSimulation {
+    val config = fastRaftConfig()
+    return RaftSimulation(
+        nodeIds = voterIds.toList() + learnerId,
+        scope = this,
+        raftConfig = config,
+        nodeScope = backgroundScope,
+        nodeFactory = { _, transport, storage, nodeScope ->
+            nodeScope.raftNode(clusterConfig, transport, storage, config)
+        },
+    )
+}
 
 class LearnerTest {
 

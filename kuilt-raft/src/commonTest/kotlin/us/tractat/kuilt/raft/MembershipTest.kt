@@ -42,14 +42,15 @@ private val voterSet = setOf(v1, v2, v3)
 private fun TestScope.simWithVotersAndBootstrappedLearner(): RaftSimulation {
     val voterConfig = ClusterConfig(voters = voterSet)
     val learnerConfig = ClusterConfig(voters = voterSet, learners = setOf(learnerNode))
+    val raftCfg = fastRaftConfig()
     return RaftSimulation(
         nodeIds = voterSet.toList() + learnerNode,
         scope = this,
-        raftConfig = FAST_RAFT_CONFIG,
+        raftConfig = raftCfg,
         nodeScope = backgroundScope,
         nodeFactory = { id, transport, storage, nodeScope ->
             val config = if (id == learnerNode) learnerConfig else voterConfig
-            nodeScope.raftNode(config, transport, storage, FAST_RAFT_CONFIG)
+            nodeScope.raftNode(config, transport, storage, raftCfg)
         },
     )
 }
@@ -68,14 +69,15 @@ private val fiveVoters = voterSet + twoLearners
 private fun TestScope.simWithVotersAndTwoBootstrappedLearners(): RaftSimulation {
     val voterConfig = ClusterConfig(voters = voterSet)
     val learnerConfig = ClusterConfig(voters = voterSet, learners = twoLearners)
+    val raftCfg = fastRaftConfig()
     return RaftSimulation(
         nodeIds = voterSet.toList() + learnerNode + learnerNode2,
         scope = this,
-        raftConfig = FAST_RAFT_CONFIG,
+        raftConfig = raftCfg,
         nodeScope = backgroundScope,
         nodeFactory = { id, transport, storage, nodeScope ->
             val config = if (id in twoLearners) learnerConfig else voterConfig
-            nodeScope.raftNode(config, transport, storage, FAST_RAFT_CONFIG)
+            nodeScope.raftNode(config, transport, storage, raftCfg)
         },
     )
 }

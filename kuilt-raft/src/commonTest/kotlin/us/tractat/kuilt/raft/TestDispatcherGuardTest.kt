@@ -13,8 +13,8 @@ class TestDispatcherGuardTest {
         raftRunTest {
             val network = InMemoryRaftNetwork()
             val cluster = ClusterConfig(voters = setOf(NodeId("a")))
-            // expectVirtualTime = false so the guard actually fires; FAST_RAFT_CONFIG defaults to true
-            val config = FAST_RAFT_CONFIG.copy(strictTestGuard = true, expectVirtualTime = false)
+            // expectVirtualTime = false so the guard actually fires; fastRaftConfig() defaults to true
+            val config = fastRaftConfig().copy(strictTestGuard = true, expectVirtualTime = false)
 
             val ex = assertFailsWith<IllegalStateException> {
                 backgroundScope.raftNode(
@@ -40,7 +40,7 @@ class TestDispatcherGuardTest {
         raftRunTest {
             val network = InMemoryRaftNetwork()
             val cluster = ClusterConfig(voters = setOf(NodeId("a")))
-            val config = FAST_RAFT_CONFIG // strictTestGuard defaults to false
+            val config = fastRaftConfig() // strictTestGuard defaults to false
 
             // Must not throw — just emits a warning log
             backgroundScope.raftNode(
@@ -57,7 +57,7 @@ class TestDispatcherGuardTest {
             val network = InMemoryRaftNetwork()
             val cluster = ClusterConfig(voters = setOf(NodeId("a")))
             // strictTestGuard = true would normally throw; expectVirtualTime = true must take precedence
-            val config = FAST_RAFT_CONFIG.copy(strictTestGuard = true, expectVirtualTime = true)
+            val config = fastRaftConfig().copy(strictTestGuard = true, expectVirtualTime = true)
 
             // If expectVirtualTime did NOT take precedence, strictTestGuard = true would throw here
             val node = backgroundScope.raftNode(

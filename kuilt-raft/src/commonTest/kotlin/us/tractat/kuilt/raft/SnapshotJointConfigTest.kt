@@ -60,7 +60,7 @@ class SnapshotJointConfigTest {
         // X boots with bootstrap == `new`, so a regression that ignored the snapshot config and reverted
         // to bootstrap would make X a Learner — the opposite of resuming the joint.
         val network = InMemoryRaftNetwork()
-        val node = backgroundScope.raftNode(new, network.transport(x), storage, FAST_RAFT_CONFIG)
+        val node = backgroundScope.raftNode(new, network.transport(x), storage, fastRaftConfig())
 
         // Init recomputes membership from the snapshot's joint config (no virtual time advanced yet, so
         // the election timer has not fired): X is classified a voter via old.voters → not a Learner.

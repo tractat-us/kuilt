@@ -67,7 +67,7 @@ class CancellationTest {
         // the partitioned leader's 5-10 ms election timeout / 2 ms CheckQuorum step-down window. A
         // larger advance (the old delay(10)) let the isolated leader step down first, so the propose
         // failed with LeadershipLostException instead of unblocking via cancellation — the residual
-        // #383 flake. With the seeded RNG (FAST_RAFT_CONFIG) the timeout draws are fixed, so 1 ms is
+        // #383 flake. With the seeded RNG (fastRaftConfig()) the timeout draws are fixed, so 1 ms is
         // deterministically before any step-down.
         delay(1)
         job.cancel()
@@ -107,7 +107,7 @@ class CancellationTest {
             config,
             network.transport(NodeId("a")),
             InMemoryRaftStorage(),
-            FAST_RAFT_CONFIG,
+            fastRaftConfig(),
         )
         delay(2) // let election timer start
         nodeScope.cancel()
@@ -184,7 +184,7 @@ class CancellationTest {
             config,
             network.transport(NodeId("a")),
             storage,
-            FAST_RAFT_CONFIG,
+            fastRaftConfig(),
         )
         delay(5)
         nodeScope.cancel()

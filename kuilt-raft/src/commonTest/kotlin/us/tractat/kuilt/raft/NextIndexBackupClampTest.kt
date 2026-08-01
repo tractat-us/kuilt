@@ -19,7 +19,7 @@ import kotlin.time.Duration.Companion.seconds
  * learner — the send that would crash (or wedge) on an out-of-range `nextIndex`. Mirrors
  * `MatchIndexClampTest`'s fixture, which pins the *success* branch of the same handler.
  */
-private val BACKUP_CLAMP_CONFIG = RaftConfig(
+private fun backupClampConfig(): RaftConfig = RaftConfig(
     electionTimeoutMin = 300.milliseconds,
     electionTimeoutMax = 400.milliseconds,
     heartbeatInterval = 2.milliseconds,
@@ -83,7 +83,7 @@ internal class NextIndexBackupClampTest {
         // yet it is not needed for commit — so the leader keeps making progress on its own.
         val leader = backgroundScope.raftNode(
             ClusterConfig(voters = setOf(l), learners = setOf(f1)),
-            network.transport(l), leaderStorage, BACKUP_CLAMP_CONFIG,
+            network.transport(l), leaderStorage, backupClampConfig(),
         )
         val harness = SingleVoterHarness(leader, leaderStorage)
         leader.awaitLeadership()
@@ -131,7 +131,7 @@ internal class NextIndexBackupClampTest {
         val leaderStorage = InMemoryRaftStorage()
         val leader = backgroundScope.raftNode(
             ClusterConfig(voters = setOf(l), learners = setOf(f1)),
-            network.transport(l), leaderStorage, BACKUP_CLAMP_CONFIG,
+            network.transport(l), leaderStorage, backupClampConfig(),
         )
         val harness = SingleVoterHarness(leader, leaderStorage)
         leader.awaitLeadership()
