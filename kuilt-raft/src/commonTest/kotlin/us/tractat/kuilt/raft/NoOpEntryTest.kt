@@ -28,7 +28,6 @@ class NoOpEntryTest {
         val sim = RaftSimulation(
             nodeIds = ids,
             scope = this,
-            raftConfig = raftCfg,
             nodeScope = backgroundScope,
             nodeFactory = { id, transport, storage, nodeScope ->
                 nodeScope.raftNode(config, transport, storage, raftCfg)
@@ -77,7 +76,6 @@ class NoOpEntryTest {
         val sim = RaftSimulation(
             nodeIds = ids,
             scope = this,
-            raftConfig = raftCfg,
             nodeScope = backgroundScope,
             nodeFactory = { id, transport, storage, nodeScope ->
                 nodeScope.raftNode(config, transport, storage, raftCfg)
@@ -136,7 +134,6 @@ class NoOpEntryTest {
         val sim = RaftSimulation(
             nodeIds = listOf(id),
             scope = backgroundScope,
-            raftConfig = raftCfg,
         ) { _, transport, storage, nodeScope ->
             nodeScope.raftNode(config, transport, storage, raftCfg)
         }
@@ -170,7 +167,6 @@ class NoOpEntryTest {
         val sim = RaftSimulation(
             nodeIds = listOf(id),
             scope = backgroundScope,
-            raftConfig = raftCfg,
         ) { _, transport, storage, nodeScope ->
             nodeScope.raftNode(config, transport, storage, raftCfg)
         }

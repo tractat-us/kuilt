@@ -27,7 +27,6 @@ class EdgeCaseTest {
         val sim = RaftSimulation(
             nodeIds = listOf(id),
             scope = backgroundScope,
-            raftConfig = fastConfig,
         ) { _, transport, storage, nodeScope ->
             nodeScope.raftNode(config, transport, storage, fastConfig)
         }
@@ -48,7 +47,7 @@ class EdgeCaseTest {
         val ids = listOf(NodeId("x"), NodeId("y"), NodeId("z"))
         val config = ClusterConfig(voters = ids.toSet())
         val fastConfig = fastRaftConfig()
-        val sim = RaftSimulation(ids, backgroundScope, fastConfig) { _, transport, storage, nodeScope ->
+        val sim = RaftSimulation(ids, backgroundScope) { _, transport, storage, nodeScope ->
             nodeScope.raftNode(config, transport, storage, fastConfig)
         }
         val leader = awaitLeader(sim)
@@ -67,7 +66,7 @@ class EdgeCaseTest {
         val ids = listOf(NodeId("e1"), NodeId("e2"), NodeId("e3"))
         val config = ClusterConfig(voters = ids.toSet())
         val fastConfig = fastRaftConfig()
-        val sim = RaftSimulation(ids, backgroundScope, fastConfig) { _, transport, storage, nodeScope ->
+        val sim = RaftSimulation(ids, backgroundScope) { _, transport, storage, nodeScope ->
             nodeScope.raftNode(config, transport, storage, fastConfig)
         }
         val leader = awaitLeader(sim)
@@ -84,7 +83,7 @@ class EdgeCaseTest {
         val ids = listOf(NodeId("p1"), NodeId("p2"), NodeId("p3"))
         val config = ClusterConfig(voters = ids.toSet())
         val fastConfig = fastRaftConfig()
-        val sim = RaftSimulation(ids, backgroundScope, fastConfig) { _, transport, storage, nodeScope ->
+        val sim = RaftSimulation(ids, backgroundScope) { _, transport, storage, nodeScope ->
             nodeScope.raftNode(config, transport, storage, fastConfig)
         }
         val leader = awaitLeader(sim)
@@ -109,7 +108,7 @@ class EdgeCaseTest {
         val ids = listOf(NodeId("f1"), NodeId("f2"), NodeId("f3"))
         val config = ClusterConfig(voters = ids.toSet())
         val fastConfig = fastRaftConfig()
-        val sim = RaftSimulation(ids, backgroundScope, fastConfig) { _, transport, storage, nodeScope ->
+        val sim = RaftSimulation(ids, backgroundScope) { _, transport, storage, nodeScope ->
             nodeScope.raftNode(config, transport, storage, fastConfig)
         }
         awaitLeader(sim)
@@ -128,7 +127,7 @@ class EdgeCaseTest {
         val ids = listOf(NodeId("a"), NodeId("b"))
         val config = ClusterConfig(voters = ids.toSet())
         val fastConfig = fastRaftConfig()
-        val sim = RaftSimulation(ids, backgroundScope, fastConfig) { _, transport, storage, nodeScope ->
+        val sim = RaftSimulation(ids, backgroundScope) { _, transport, storage, nodeScope ->
             nodeScope.raftNode(config, transport, storage, fastConfig)
         }
         val leader = awaitLeader(sim)

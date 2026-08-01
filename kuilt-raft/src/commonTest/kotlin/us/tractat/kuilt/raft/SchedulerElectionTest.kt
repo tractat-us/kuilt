@@ -43,7 +43,6 @@ private fun schedulerSim(scheduler: TestCoroutineScheduler, n: Int = 3): RaftSim
     return RaftSimulation(
         nodeIds = ids,
         scope = testScope,
-        raftConfig = raftCfg,
         nodeScope = testScope.backgroundScope,
         nodeFactory = { id, transport, storage, nodeScope ->
             CoroutineScope(nodeScope.coroutineContext + Job())

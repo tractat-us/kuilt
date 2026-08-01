@@ -52,7 +52,6 @@ class RaftEngineDedupIntegrationTest {
         val sim = RaftSimulation(
             nodeIds = ids,
             scope = this,
-            raftConfig = raftCfg,
             nodeScope = nodeScope,
             nodeFactory = { _, transport, storage, childScope ->
                 childScope.raftNode(cluster, transport, storage, raftCfg, ClientIdentity.Durable(shared))

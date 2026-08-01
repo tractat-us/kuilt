@@ -36,7 +36,6 @@ class AppliedPrefixReachesReadIndexTest {
         return RaftSimulation(
             nodeIds = listOf(solo),
             scope = scope,
-            raftConfig = raftCfg,
         ) { _, transport, storage, nodeScope ->
             nodeScope.raftNode(config, transport, storage, raftCfg)
         }

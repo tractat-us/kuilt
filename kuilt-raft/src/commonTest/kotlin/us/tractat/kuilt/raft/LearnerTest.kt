@@ -25,7 +25,6 @@ private fun TestScope.simWithLearner(): RaftSimulation {
     return RaftSimulation(
         nodeIds = voterIds.toList() + learnerId,
         scope = this,
-        raftConfig = config,
         nodeScope = backgroundScope,
         nodeFactory = { _, transport, storage, nodeScope ->
             nodeScope.raftNode(clusterConfig, transport, storage, config)

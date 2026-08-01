@@ -25,7 +25,6 @@ class CommittedReplayTest {
         return RaftSimulation(
             nodeIds = listOf(id),
             scope = scope,
-            raftConfig = raftCfg,
         ) { _, transport, storage, nodeScope ->
             nodeScope.raftNode(config, transport, storage, raftCfg)
         }

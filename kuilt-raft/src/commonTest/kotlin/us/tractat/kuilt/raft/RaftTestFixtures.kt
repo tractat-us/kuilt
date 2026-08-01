@@ -139,9 +139,9 @@ internal fun singleVoterNode(
  * **Call it once per simulation and share the result across that simulation's nodes.** The nodes
  * break election-timeout symmetry by drawing *successive* values from one stream; give each node its
  * own `fastRaftConfig()` and they all draw the same first value, so no node's timer fires first and
- * the cluster can fail to elect. Hoist it to a local `val` at any site that needs the config twice
- * (the classic shape being `RaftSimulation(raftConfig = …, nodeFactory = { … })`, where the factory
- * runs once per node).
+ * the cluster can fail to elect. Hoist it to a local `val` and close over *that* from the node
+ * factory (the classic shape being `RaftSimulation(nodeFactory = { … raftNode(…, cfg) })`, whose
+ * lambda runs once per node).
  */
 internal fun fastRaftConfig(): RaftConfig = RaftConfig(
     electionTimeoutMin = 5.milliseconds,
@@ -191,7 +191,6 @@ internal fun raftSim(
     return RaftSimulation(
         nodeIds = ids,
         scope = scope,
-        raftConfig = config,
         nodeScope = nodeScope,
         maxPayloadBytes = maxPayloadBytes,
         nodeFactory = { _, transport, storage, childScope ->

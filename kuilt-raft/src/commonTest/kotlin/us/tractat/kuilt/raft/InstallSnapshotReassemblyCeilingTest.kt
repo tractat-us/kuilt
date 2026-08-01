@@ -123,7 +123,6 @@ internal class InstallSnapshotReassemblyCeilingTest {
         val sim = RaftSimulation(
             nodeIds = ids,
             scope = this,
-            raftConfig = config,
             nodeScope = backgroundScope,
             nodeFactory = { id, transport, storage, childScope ->
                 childScope.raftNode(
