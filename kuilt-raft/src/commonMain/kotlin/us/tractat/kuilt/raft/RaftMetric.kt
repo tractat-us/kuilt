@@ -72,6 +72,12 @@ public sealed interface RaftMetric {
      * No election was started, because this node's [term] has reached the engine's term
      * plausibility [ceiling] and the `term + 1` an election must propose would sit above it (#1886).
      *
+     * **What "above the ceiling" costs, after #1897.** Peers no longer refuse that term — term adoption
+     * is bounded by the *jump* now (`RaftConfig.maxTermJump`), and a step of one is admissible at every
+     * term. The ceiling's remaining jobs are local to this node: `currentTerm + 1` must stay clear of
+     * `Long` overflow, and must not persist a term this node's own restore guard would refuse to start
+     * on. So the suppression is stricter than the cluster requires — see `RaftEngine.termPinnedAtCeiling`.
+     *
      * **This node cannot become leader again, and this metric does not mean it will recover.** Honest
      * terms advance once per election and stay some 18 orders of magnitude below the ceiling, and terms
      * never decrease, so the condition is permanent for the lifetime of this node's durable state.
@@ -87,10 +93,10 @@ public sealed interface RaftMetric {
      *    required; kuilt ships no durable `RaftStorage`, so this surface is always consumer code.
      * 2. **A malformed or hostile frame** from a peer, carrying a term at the ceiling.
      *
-     * What this buys is a *name* for a failure that was previously silent: the alternative is
-     * broadcasting a term above the ceiling that every recipient (including this node) drops at the
-     * wire boundary, leaving a cluster that has permanently stopped electing while every node reports
-     * itself healthy. Treat one of these as an operational incident — inspect this node's persisted
+     * What this buys is a *name* for a failure that was previously silent: the alternative is a node
+     * that keeps campaigning while never being able to persist the term it proposes, and so quietly
+     * never wins, while reporting itself healthy. Treat one of these as an operational incident —
+     * inspect this node's persisted
      * term first, then the peer that last raised it, then re-provision from empty state.
      *
      * @see ElectionStarted for the ordinary path this replaces when the ceiling is reached.

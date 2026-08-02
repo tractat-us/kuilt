@@ -41,6 +41,24 @@ internal class TermSanityBoundTest {
     /** Mirrors the engine's plausibility ceiling; anything at or below it must still be honoured. */
     private val maxPlausibleTerm = 1L shl 60
 
+    /**
+     * Put [id] at [term] (the ceiling by default) **durably**, by crashing it, writing the term, and
+     * restarting it onto its own storage.
+     *
+     * The ceiling section below needs a node that actually holds a term at the ceiling, and since #1897
+     * there is exactly one route there that a single frame cannot fake: restore. Adoption is bounded by
+     * the *jump* now, so a heartbeat leaping from term 1 to `2^60` — how these tests used to arrive — is
+     * refused as implausible, and every scenario built on it would quietly fail to be built at all while
+     * the assertions still passed. `checkedRestoredTerm` deliberately still admits exactly `2^60`, so
+     * this route stays open and is also the one a real deployment would take.
+     */
+    private suspend fun RaftSimulation.restoreAtCeiling(id: NodeId, term: Long = maxPlausibleTerm) {
+        crash(id)
+        storages.getValue(id).saveTermAndVotedFor(term, null)
+        restart(id)
+        settle()
+    }
+
     @Test
     fun implausibleTermIsNotAdopted() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 3)
@@ -151,11 +169,17 @@ internal class TermSanityBoundTest {
      * ceiling with a single higher-term `TimeoutNow` from a non-leader; #1889 closed that lane (a
      * `TimeoutNow` strictly ahead of our term now carries no checkable authority and is dropped without
      * adopting), which left the test passing *vacuously* — measured: with the `startRealElection` guard
-     * disabled the assertion still held, because the victim never left term 1. So the vector is now
-     * built from two frames that are each individually **authorised** after #1889: a heartbeat at exactly
-     * the ceiling (the wire bound is inclusive, so it is admitted and also sets `_leader`), then a
-     * same-term `TimeoutNow` from that same recognised leader. Nothing here is spoofed, and a real
-     * cluster reaches this state whenever a leader legitimately sits at the ceiling and transfers away.
+     * disabled the assertion still held, because the victim never left term 1.
+     *
+     * **The vector was rebuilt a second time, for #1897.** Its replacement adopted the ceiling from a
+     * single higher-term heartbeat, which the absolute wire bound admitted because `2^60` was in range.
+     * Term adoption is now bounded by the *jump*, so that frame is a leap of `2^60 - 1` off term 1 and is
+     * refused — which would have made this test vacuous all over again, in the same way and silently. So
+     * the ceiling now arrives by **restore**, the route #1897 leaves open (`checkedRestoredTerm` still
+     * admits exactly `2^60`) and the one a real deployment would reach it by; the two frames that follow
+     * are same-term and individually authorised after #1889 — a heartbeat that sets `_leader`, then a
+     * `TimeoutNow` from that recognised leader. Nothing here is spoofed, and a real cluster reaches this
+     * state whenever a leader legitimately sits at the ceiling and transfers away.
      *
      * The persisted value is the durable half of the defect: `ceiling + 1` is above the ceiling, so
      * `checkedRestoredTerm` refuses to start the node on its next boot — a graceful transfer that bricks
@@ -169,10 +193,12 @@ internal class TermSanityBoundTest {
         val victimId = sim.nodeIds.first { it != leaderId }
         sim.awaitCommit(1L)
 
-        // Adopt the ceiling term from the recognised leader, which also sets `_leader = leaderId` — both
-        // preconditions the same-term TimeoutNow below needs to pass #1889's authority checks.
+        sim.restoreAtCeiling(victimId)
+        // A SAME-TERM heartbeat from the recognised leader sets `_leader = leaderId` — the precondition
+        // the TimeoutNow below needs to pass #1889's authority checks. A jump of zero, so #1897's bound
+        // is not in play.
         sim.deliverAppendEntries(to = victimId, from = leaderId, term = maxPlausibleTerm)
-        delay(10)
+        delay(1)
         sim.deliverTimeoutNow(to = victimId, from = leaderId, term = maxPlausibleTerm)
         delay(20)
 
@@ -188,11 +214,16 @@ internal class TermSanityBoundTest {
      * The liveness half's *containment*: a node pinned at the ceiling must not put a frame on the
      * wire that every recipient — itself included — is contractually obliged to drop.
      *
-     * The poison is delivered at exactly the ceiling and allowed to propagate on ordinary traffic, so
-     * every voter pins itself; then several election timeouts are allowed to fire. Each one computes
-     * `currentTerm + 1 = 2^60 + 1` and, unfixed, broadcasts it as a `PreVote` — a frame with no
-     * possible recipient. Recording the network captures the sender's *decision*, before the drop
+     * One voter is restored at exactly the ceiling and then left to time out several times. Each timeout
+     * computes `currentTerm + 1 = 2^60 + 1` and, unfixed, broadcasts it as a `PreVote` — a frame no
+     * recipient can accept. Recording the network captures the sender's *decision*, before the drop
      * filter, so this sees the emission itself rather than its (non-)delivery.
+     *
+     * **Only one voter pins now, and that is #1897 working.** This test used to reach the state by
+     * delivering the ceiling in one frame and letting it propagate on ordinary traffic until every voter
+     * pinned itself — which is exactly the one-frame cluster-wide poisoning the relative bound removes.
+     * Post-#1897 that frame is refused as an implausible jump, so the state has to be reached the way a
+     * real deployment would: durably, on the one node that holds it.
      */
     @Test
     fun aNodePinnedAtTheCeilingNeverEmitsAFrameAboveIt() = raftRunTest {
@@ -203,8 +234,8 @@ internal class TermSanityBoundTest {
         sim.awaitCommit(1L)
 
         sim.network.recording = true
-        sim.deliverAppendEntries(to = victimId, from = leaderId, term = maxPlausibleTerm)
-        delay(50)   // several election timeouts: every self-pinned voter gets to try to elect
+        sim.restoreAtCeiling(victimId)
+        delay(50)   // several election timeouts: the pinned voter gets to try to elect
 
         val overCeiling = sim.network.sent.filter { (it.message.wireTerm ?: 0L) > maxPlausibleTerm }
         assertTrue(
@@ -287,10 +318,13 @@ internal class TermSanityBoundTest {
      * contradicted by what the suppression metric says about the node.
      *
      * Peers are removed first so the triggered election cannot reach quorum — that is what holds the node
-     * at the ceiling as a Candidate long enough for the guard to see it. The election is triggered through
-     * the same-term `TimeoutNow` lane #1889 leaves open (a heartbeat at `ceiling - 1` establishes both the
-     * term and `_leader` first); a higher-term `TimeoutNow` would now be dropped without adopting, which
-     * is what made an earlier version of this test fail outright rather than exercise the guard.
+     * at the ceiling as a Candidate long enough for the guard to see it. `ceiling - 1` arrives by
+     * **restore**: since #1897 bounds adoption by the jump rather than the value, the single frame this
+     * test used to leap there with is refused, and using it would have left the whole scenario silently
+     * unbuilt. The election is then triggered through the same-term `TimeoutNow` lane #1889 leaves open
+     * (a heartbeat at `ceiling - 1` establishes `_leader` first); a higher-term `TimeoutNow` would be
+     * dropped without adopting, which is what made an earlier version of this test fail outright rather
+     * than exercise the guard.
      *
      * Also pins the metric lifecycle. The guard returns before the `ElectionTimedOut` that
      * `startRealElection` would have emitted, and no `ElectionStarted` can ever follow, so without an
@@ -324,8 +358,9 @@ internal class TermSanityBoundTest {
 
         sim.crash(leaderId)
         sim.crash(otherId)
+        sim.restoreAtCeiling(victimId, term = maxPlausibleTerm - 1L)
         sim.deliverAppendEntries(to = victimId, from = leaderId, term = maxPlausibleTerm - 1L)
-        delay(10)
+        delay(1)
         sim.deliverTimeoutNow(to = victimId, from = leaderId, term = maxPlausibleTerm - 1L)
         delay(50)   // several election timeouts after the one the TimeoutNow forced
 

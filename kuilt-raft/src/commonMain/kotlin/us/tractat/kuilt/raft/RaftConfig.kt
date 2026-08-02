@@ -77,6 +77,34 @@ import kotlin.time.Duration.Companion.milliseconds
  *
  *   The type is [Int], mirroring [snapshotChunkCeiling], which also means the ceiling
  *   can never be configured above what a single `ByteArray` can hold.
+ * @param maxTermJump How far above this node's own term a frame may claim to be and still
+ *   be admitted (#1897). A frame whose term exceeds `currentTerm + maxTermJump` is dropped
+ *   at the dispatch boundary, before any adoption.
+ *
+ *   The bound is **relative**, and that is the whole point. Bounding the term's *value*
+ *   against a constant `A` cannot avoid a cliff: closing it would need `T ≤ A ⟹ T + 1 ≤ A`,
+ *   true only for `A = ∞`, so the one value such a filter admits is the value whose
+ *   successor every peer — including its own author — refuses. Bounding the *jump* admits
+ *   `currentTerm + 1` at every term, so no term has an unrepresentable successor. It is
+ *   also the stronger test: an implausible term is implausible relative to what this node
+ *   has seen, which is a local witness, where a constant is a guess about the deployment.
+ *
+ *   The default is **10 000**, sized between the two failure modes it sits between:
+ *
+ *   1. *Too small breaks rejoin.* A node that was away while the cluster held many
+ *      elections must still be able to adopt the current term. Terms advance once per
+ *      election, so 10 000 covers an absence spanning ten thousand of them — hours of
+ *      pathological churn, and orders of magnitude beyond an ordinary partition, which
+ *      costs a handful.
+ *   2. *Too large weakens the bound.* The value is the attacker's step size: reaching the
+ *      arithmetic danger zone near [Long.MAX_VALUE] costs roughly `2^63 / maxTermJump`
+ *      accepted frames. At 10 000 that is ~10^15 — infeasible — where the absolute ceiling
+ *      it replaces cost exactly one frame.
+ *
+ *   A deployment whose members routinely miss more than 10 000 elections has a liveness
+ *   problem this knob would only hide; the documented route back for a node that has
+ *   genuinely fallen outside the bound is a new identity plus an ordinary membership
+ *   change, never a wiped disk under the same one. See `docs/raft-wedge-diagnosis-and-recovery.md`.
  * @param random Source of randomness for the election-timeout draw. Randomness is a
  *   dependency, like time: under virtual time a [kotlinx.coroutines.test.TestDispatcher]
  *   makes scheduling deterministic, but an unseeded RNG still injects non-determinism into
@@ -97,5 +125,6 @@ public data class RaftConfig(
     val slowProposeThreshold: Duration = 100.milliseconds,
     val snapshotChunkCeiling: Int = 16 * 1024,
     val snapshotTotalCeiling: Int = 64 * 1024 * 1024,
+    val maxTermJump: Long = 10_000L,
     val random: Random = Random.Default,
 )
