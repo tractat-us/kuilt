@@ -20,7 +20,10 @@ private const val FNV_PRIME: Long = 1099511628211L
  *
  *  - **cross-process and real-socket tests**, where shipping one `Long` back for assertion
  *    beats shipping a whole state;
- *  - **a divergence alarm** between live peers, in a harness or in production diagnostics.
+ *  - **a divergence alarm** between live peers, in a harness or test rig.
+ *
+ * **Test- and harness-side only:** `:kuilt-conformance` `api`-exposes `kotlin-test`, so it does
+ * not belong on a production classpath.
  *
  * In-process, `assertEquals(a, b)` is strictly better — exact, no collision risk, and a far
  * better failure message. The convergence harness deliberately compares raw bytes rather than
@@ -32,11 +35,13 @@ private const val FNV_PRIME: Long = 1099511628211L
  * `CanonicalSerializationTest` in `:kuilt-crdt`'s `commonTest` (issue #1957).
  *
  * **The cross-target dimension is pinned as well**, by `CanonicalGoldenVectorTest` in the same
- * source set. It holds checked-in CBOR byte strings for every type whose encoding depends on a
- * canonical serializer, and `commonTest` compiles and runs on JVM, Android, iOS, macOS and wasmJs,
- * so every target is held to the same constants — which is what the cross-process use above needs.
- * A digest mismatch between peers on *different* targets therefore reads as real divergence rather
- * than as an artefact of the encoding.
+ * source set. It holds checked-in CBOR byte strings for ten zoo types, covering every
+ * `Canonical*Serializer` site plus `DotMapSerializer`, and `commonTest` compiles and runs on JVM,
+ * Android, iOS, macOS and wasmJs, so every target is held to the same constants — which is what
+ * the cross-process use above needs. For those ten, a digest mismatch between peers on *different*
+ * targets reads as real divergence rather than as an artefact of the encoding. Types outside them
+ * — `MVRegister`, `ResettableCounter`, `Rga`, `Fugue`, `JsonCrdt` — have no cross-target byte pin;
+ * see that file's KDoc.
  *
  * The caveat there is latency, not coverage: `ci-required`'s build jobs run on Linux, so per-PR
  * only the JVM/Android and wasmJs executions happen — the Apple Kotlin/Native ones live in

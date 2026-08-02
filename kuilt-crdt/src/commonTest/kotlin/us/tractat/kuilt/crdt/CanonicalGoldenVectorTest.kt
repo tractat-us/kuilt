@@ -27,9 +27,10 @@ import kotlin.test.assertEquals
  * seeding the merge from the same source on both sides. Each vector is therefore built by
  * merging replicas that contribute **different** slices, in a deliberately non-sorted order.
  *
- * **Mutation-verified on `jvmTest`: every canonical-serializer site in `:kuilt-crdt` is detected
- * by at least one vector, and no vector is vacuous.** Disabling one site at a time — commenting
- * out the annotation, or deleting the sort from a hand-written serializer — and re-running gives:
+ * **Mutation-verified on `jvmTest`: every canonicalisation site #1957 introduced — the nine
+ * `Canonical*Serializer` annotations — plus `DotMapSerializer`'s sort is detected by at least one
+ * vector, and no vector is vacuous.** Disabling one site at a time — commenting out the
+ * annotation, or deleting the sort from a hand-written serializer — and re-running gives:
  *
  * | site removed | vectors that fail |
  * |---|---|
@@ -43,6 +44,12 @@ import kotlin.test.assertEquals
  * | `MovableTree.seqByReplica` | [MOVABLE_TREE] |
  * | `MovableTree.compactedDots` | [MOVABLE_TREE] |
  * | `DotMapSerializer`'s sort | [ORSET], [ORMAP] |
+ *
+ * **Not pinned here — the older #713 dot-family sorts.** No vector reaches `DotFunSerializer`
+ * (only `MVRegister` and `ResettableCounter` use it), `RgaSerializer`'s or `FugueSerializer`'s op
+ * sort, or `DotContextSerializer`'s `cloud` sort (`cloud` is empty in both [ORSET] and [ORMAP]).
+ * So `MVRegister`, `ResettableCounter`, `Rga`, `Fugue` and `JsonCrdt` have no cross-target byte
+ * pin: adding a type to that family does **not** inherit one from this file — add a vector.
  *
  * **Regenerate only on a deliberate encoding change, and expect every vector to move together.**
  * A single vector changing on one target and not another is the exact defect this file exists to
