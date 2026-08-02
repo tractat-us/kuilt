@@ -1267,8 +1267,12 @@ public class ConnectivitySuite {
      *    only as a "did the blip reach the room at all" gate.
      *
      * So the discriminator is [ResumeLaneProbe], watching the machine's own `resume.*` evidence lines.
+     * It answers **two** questions the old code conflated into one: was the lane *entered*
+     * (`resume.refused`, #1969 — or `membership.unresponsive … branch=resume` as the weaker stand-in
+     * on a build without it), and did it *resolve* (`resume.no-op` / `resume.ok`). "Entered and never
+     * resolved" is a real, distinct, actionable answer, and it is not a PASS.
      *
-     * ## The verdict, which never collapses the three ways a room can survive
+     * ## The verdict, which never collapses the ways a room can survive
      *
      *  - **`HostLost(Refused(code=resume-window-not-yet-open))`** → FAIL. That reject code, and nothing
      *    else, is #1637's signature: a resume the host kept *answering* — retryably, forever — until the
@@ -1286,7 +1290,8 @@ public class ConnectivitySuite {
      *    was the ordinary resume lane. The room recovered; the sub-timeout lane was not tested.
      *  - **neither, and no `HostLost`** → SKIP, **NOT EXERCISED**. The room survived and the resume
      *    lane never resolved. This is the 2026-07-28 run, and reporting it as a PASS is the defect
-     *    being fixed here.
+     *    being fixed here. The prose splits it further, because the two shapes want opposite actions:
+     *    *entered but unresolved* is a bug to file, *never entered* is a blip to re-aim.
      *
      * [seam] is threaded in purely as evidence for the non-#1637 branch: a seam still `Weaving` when the
      * episode closed proves this phone never re-wove, so it never dialled and never sent a Resume —
@@ -1476,16 +1481,26 @@ public class ConnectivitySuite {
             //
             // `resume.no-op` is emitted at exactly one place — the retry loop concluding, after
             // dwelling one HeartbeatConfig.timeout on a persistent ResumeWindowNotYetOpen, that no
-            // window was ever coming. Nothing else in the library writes it. The roster check is not
-            // ceremony: the dwell must leave a LIVE room behind, and `onNoOpResume` → markRecovered is
-            // what is supposed to put the host back to Connected.
+            // window was ever coming. Nothing else in the library writes it, and it is unreachable
+            // except THROUGH the refusals, so it proves both halves at once: the lane was entered and
+            // it resolved the #1637 way. The refusal trail (#1969) is quoted when present because it
+            // shows the retries the dwell sat on; its absence on an older build weakens the report,
+            // never the conclusion. The roster check is not ceremony: the dwell must leave a LIVE room
+            // behind, and `onNoOpResume` → markRecovered is what puts the host back to Connected.
             lane.noOp != null && hostConnected -> ctx.passDetail =
-                "#1637 FIX OBSERVED — the resume lane resolved on the dwell after a " +
+                "#1637 FIX OBSERVED — the resume lane was entered AND resolved on the dwell after a " +
                     "${fmtMs(outage.inWholeMilliseconds)} blip inside ($lo, $hi): '${lane.noOp}' " +
                     "${fmtMs(sinceDrop)} after the radio died, no HostLost through the whole " +
-                    "$OBSERVE_WINDOW observation, host back Connected. This is the mechanism, not an " +
-                    "inference from a healthy-looking room: Recovered(host) alone would prove nothing, " +
-                    "since the detector emits the identical event. (saw ${seen.render()})"
+                    "$OBSERVE_WINDOW observation, host back Connected. " +
+                    (
+                        lane.refused?.let { "Refusal trail: '$it'. " }
+                            ?: "(No resume.refused trail — this build predates #1969; resume.no-op is " +
+                            "still conclusive, since the dwell is only reachable through a persistent " +
+                            "ResumeWindowNotYetOpen.) "
+                        ) +
+                    "This is the mechanism, not an inference from a healthy-looking room: " +
+                    "Recovered(host) alone would prove nothing, since the detector emits the identical " +
+                    "event. (saw ${seen.render()})"
 
             // Same dwell, but the room it left behind is wrong. Not a PASS (the fix did not finish its
             // job) and not the #1637 FAIL (no HostLost, no reject code) — its own anomaly.
@@ -1522,7 +1537,10 @@ public class ConnectivitySuite {
                     "RETRY loop and was never reached. (saw ${seen.render()}, " +
                     "roster=${room.roster.value.render()})"
 
-            !episodeOpened -> ctx.skip =
+            // Only when the lane was not entered either — a lane that DID run while the membership
+            // edges stayed quiet is a contradiction worth reporting as such, and the branch below
+            // quotes both halves.
+            !episodeOpened && !lane.entered -> ctx.skip =
                 "blip: no Partitioned/WindowOpened for ${host.value.take(8)} in ${fmtMs(sinceDrop)} after " +
                     "a ${fmtMs(outage.inWholeMilliseconds)} outage — the blip never reached the room's " +
                     "partition machinery at all, so nothing was tested. Did the path really drop for the " +
@@ -1550,13 +1568,19 @@ public class ConnectivitySuite {
                                 "in this scenario's wiring (the log tee or the level), not in the " +
                                 "library — fix it before reading anything into this run. "
 
-                        lane.entered != null ->
-                            "The room DID hand off to the resume machine ('${lane.entered}'), so the " +
-                                "lane was entered and simply never concluded — worth chasing on its own. "
+                        // ENTERED but not RESOLVED. Distinct from "never entered", and the distinction
+                        // is actionable: the lane really did run, so this is either a genuinely stalled
+                        // episode or an observation window that is STILL too short — both worth a bug,
+                        // neither a reason to re-run and hope.
+                        lane.entered ->
+                            "The resume lane WAS entered ('${lane.entryEvidence}') and simply never " +
+                                "concluded inside the full budget. That is not a mis-aimed blip — it is " +
+                                "either a stalled episode or an observation window that is still too " +
+                                "short, and it is worth filing as its own bug rather than re-running. "
 
                         else ->
-                            "The room never handed off to the resume machine at all (no " +
-                                "'membership.unresponsive … branch=resume'), so the seam never evicted " +
+                            "The resume lane was NEVER entered — no resume.refused (#1969) and no " +
+                                "'membership.unresponsive … branch=resume' — so the seam never evicted " +
                                 "the host: the blip stayed inside the fabric's path grace, or the link " +
                                 "healed before the seam tore. Hold LONGER and re-run. "
                     },

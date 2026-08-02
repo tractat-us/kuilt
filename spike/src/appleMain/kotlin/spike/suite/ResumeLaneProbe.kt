@@ -44,7 +44,8 @@ import kotlinx.atomicfu.locks.withLock
  */
 internal class ResumeLaneProbe {
     private val lock = reentrantLock()
-    private var entered: String? = null
+    private var handedOff: String? = null
+    private var refused: String? = null
     private var noOp: String? = null
     private var ok: String? = null
     private var terminal: String? = null
@@ -57,19 +58,19 @@ internal class ResumeLaneProbe {
      * throw, or it would propagate into the fabric's logging path.
      */
     fun record(loggerName: String, message: String) {
-        // Recorded for EVERY event, matched or not — see [ResumeLane.witness]. Silence from a probe
-        // that was never wired up looks exactly like silence from a machine that never ran, and those
-        // two must not share a verdict.
-        val kind = lock.withLock {
-            if (witness == null) witness = loggerName
-            classify(message)
-        } ?: return
+        val kind = classify(message)
         lock.withLock {
+            // Recorded for EVERY event, matched or not — see [ResumeLane.witness]. Silence from a
+            // probe that was never wired up looks exactly like silence from a machine that never ran,
+            // and those two must not share a verdict.
+            if (witness == null) witness = loggerName
+            if (kind == null) return
             lines.add("$loggerName: $message")
             // First occurrence wins for each kind: a second episode's line must not overwrite the one
             // that decided the verdict, and every line is kept in [lines] anyway.
             when (kind) {
-                Kind.ENTERED -> entered = entered ?: message
+                Kind.HANDED_OFF -> handedOff = handedOff ?: message
+                Kind.REFUSED -> refused = refused ?: message
                 Kind.NO_OP -> noOp = noOp ?: message
                 Kind.OK -> ok = ok ?: message
                 Kind.TERMINAL -> terminal = terminal ?: message
@@ -80,7 +81,8 @@ internal class ResumeLaneProbe {
     /** A consistent read of everything seen so far. */
     fun snapshot(): ResumeLane = lock.withLock {
         ResumeLane(
-            entered = entered,
+            handedOff = handedOff,
+            refused = refused,
             noOp = noOp,
             ok = ok,
             terminal = terminal,
@@ -93,11 +95,12 @@ internal class ResumeLaneProbe {
         message.startsWith(NO_OP) -> Kind.NO_OP
         message.startsWith(OK) -> Kind.OK
         message.startsWith(TERMINAL) -> Kind.TERMINAL
-        message.startsWith(UNRESPONSIVE) && message.contains(RESUME_BRANCH) -> Kind.ENTERED
+        message.startsWith(REFUSED) -> Kind.REFUSED
+        message.startsWith(UNRESPONSIVE) && message.contains(RESUME_BRANCH) -> Kind.HANDED_OFF
         else -> null
     }
 
-    private enum class Kind { ENTERED, NO_OP, OK, TERMINAL }
+    private enum class Kind { HANDED_OFF, REFUSED, NO_OP, OK, TERMINAL }
 
     private companion object {
         /** `JoinerResumeMachine`: the episode completed on the #1637 dwell — the fixed behaviour. */
@@ -110,9 +113,19 @@ internal class ResumeLaneProbe {
         const val TERMINAL = "resume.terminal"
 
         /**
-         * `SeamRoom`: which branch a peer going quiet took. Context, not a verdict — it separates
-         * "the resume machine was entered and did not finish" from "it was never entered at all",
-         * which is the difference between a slow lane and an untested one.
+         * `JoinerResumeMachine`: one host `Reject` inside the retry loop, carrying the code, the
+         * attempt number and the dwell progress — **the** direct evidence that the #1637 lane was
+         * entered and is running. Introduced by #1969; matched here already so this scenario upgrades
+         * itself the moment that lands, and simply finds nothing on a build predating it.
+         */
+        const val REFUSED = "resume.refused"
+
+        /**
+         * `SeamRoom`: which branch a peer going quiet took. The weaker stand-in for [REFUSED] on a
+         * build without #1969 — it proves the room *handed off* to the resume machine, not that the
+         * machine got as far as being refused. Still enough to separate "entered and did not finish"
+         * from "never entered at all", which is the difference between a stalled lane and an
+         * untested one.
          */
         const val UNRESPONSIVE = "membership.unresponsive"
         const val RESUME_BRANCH = "branch=resume"
@@ -122,16 +135,25 @@ internal class ResumeLaneProbe {
 /**
  * What [ResumeLaneProbe] observed, as one immutable read.
  *
- * The three states a *surviving* room can be in, which scenario 7 must never collapse:
+ * Two independent questions, which the 2026-07-28 run could not tell apart and which scenario 7 must
+ * never collapse — **was the lane ENTERED**, and **did it RESOLVE**:
  *
- *  * [noOp] non-null — the resume lane resolved on the #1637 dwell. The fix demonstrably ran.
+ *  * [entered] — the episode reached the resume machine at all ([refused], or [handedOff] as the
+ *    weaker stand-in on a build without #1969).
+ *  * [noOp] non-null — it resolved on the #1637 dwell. The fix demonstrably ran.
  *  * [ok] non-null — it resolved on a real `ResumeAck`, so the host *had* a window open and this was
  *    the ordinary resume lane, not the sub-timeout one. Recovery, but out of band.
- *  * both null — the lane never resolved. The room may look perfectly healthy; nothing was tested.
+ *  * entered and neither — the lane ran and never concluded. An anomaly of its own.
+ *  * not entered — the blip never reached the lane. Nothing was tested, however healthy the room looks.
  */
 internal data class ResumeLane(
     /** The `membership.unresponsive … branch=resume` line, if the room ever handed off to the machine. */
-    val entered: String?,
+    val handedOff: String?,
+    /**
+     * The first `resume.refused` line (#1969) — a host `Reject` inside the retry loop. Direct evidence
+     * the #1637 lane was entered *and* running. Always null on a build predating #1969.
+     */
+    val refused: String?,
     /** The `resume.no-op` line — the #1637 dwell fired. */
     val noOp: String?,
     /** The `resume.ok` line — a real resume was ACKed. */
@@ -151,6 +173,15 @@ internal data class ResumeLane(
     /** Every matched line in arrival order, for the shared report. */
     val lines: List<String>,
 ) {
+    /**
+     * True when the episode reached the resume machine at all — the question that is *not* the same
+     * as [resolved], and whose conflation with it is what let a premature verdict look green.
+     */
+    val entered: Boolean get() = refused != null || handedOff != null
+
+    /** The strongest available evidence that the lane was entered, for quoting in a verdict. */
+    val entryEvidence: String? get() = refused ?: handedOff
+
     /** True when the lane reached a conclusion of its own, either way. */
     val resolved: Boolean get() = noOp != null || ok != null
 
