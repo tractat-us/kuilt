@@ -38,6 +38,7 @@ internal class JsonCrdtConvergenceTest : CrdtConvergenceSuite<JsonCrdt>() {
                 else -> state.withReplica(r).remove(key)
             }
         },
+        serializer = JsonCrdt.serializer(),
         replicaCount = 3,
         opsPerReplica = 8,
     )

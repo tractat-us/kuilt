@@ -12,6 +12,7 @@ internal class GCounterConvergenceTest : CrdtConvergenceSuite<GCounter>() {
             val delta = state.inc(replica, by = random.nextLong(1L, 6L))
             state.piece(delta)
         },
+        serializer = GCounter.serializer(),
         replicaCount = 3,
         opsPerReplica = 8,
     )

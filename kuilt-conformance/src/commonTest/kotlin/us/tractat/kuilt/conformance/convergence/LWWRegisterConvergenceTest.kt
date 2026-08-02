@@ -1,5 +1,6 @@
 package us.tractat.kuilt.conformance.convergence
 
+import kotlinx.serialization.builtins.serializer
 import us.tractat.kuilt.crdt.LWWRegister
 import us.tractat.kuilt.crdt.ReplicaId
 
@@ -16,6 +17,7 @@ internal class LWWRegisterConvergenceTest : CrdtConvergenceSuite<LWWRegister<Str
             val value = "v-${random.nextInt(0, 10)}"
             state.set(replica, timestamp, value)
         },
+        serializer = LWWRegister.serializer(String.serializer()),
         replicaCount = 3,
         opsPerReplica = 8,
     )

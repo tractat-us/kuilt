@@ -1,5 +1,6 @@
 package us.tractat.kuilt.conformance.convergence
 
+import kotlinx.serialization.builtins.serializer
 import us.tractat.kuilt.crdt.EphemeralMap
 import us.tractat.kuilt.crdt.ReplicaId
 
@@ -29,6 +30,7 @@ internal class EphemeralMapConvergenceTest : CrdtConvergenceSuite<EphemeralMap<S
                 state.leave(replica, clock)
             }
         },
+        serializer = EphemeralMap.serializer(String.serializer()),
         replicaCount = 3,
         opsPerReplica = 8,
     )

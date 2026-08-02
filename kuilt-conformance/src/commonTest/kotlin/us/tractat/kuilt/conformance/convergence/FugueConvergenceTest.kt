@@ -1,5 +1,6 @@
 package us.tractat.kuilt.conformance.convergence
 
+import kotlinx.serialization.builtins.serializer
 import us.tractat.kuilt.crdt.Fugue
 import us.tractat.kuilt.crdt.ReplicaId
 
@@ -17,6 +18,7 @@ internal class FugueConvergenceTest : CrdtConvergenceSuite<Fugue<String>>() {
                 state.insertAt(replica, index, "v$replicaIndex.${random.nextInt(100)}").first
             }
         },
+        serializer = Fugue.wireSerializer(String.serializer()),
         replicaCount = 3,
         opsPerReplica = 8,
     )

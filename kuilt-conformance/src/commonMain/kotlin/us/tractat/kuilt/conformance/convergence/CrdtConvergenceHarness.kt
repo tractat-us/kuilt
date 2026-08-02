@@ -1,6 +1,9 @@
 package us.tractat.kuilt.conformance.convergence
 
 import kotlin.random.Random
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.KSerializer
+import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.crdt.Quilted
 
 /** Strategy for generating an operation against a model state, producing the next state. */
@@ -22,13 +25,22 @@ public fun interface OperationGenerator<S> {
  *
  * Multiplatform: uses [Random] (seed constructor) for determinism — the same seed produces the
  * same outcome on JVM, wasmJs, and native.
+ *
+ * Every permutation is additionally asserted to encode to the *same bytes* under [serializer]
+ * (#1957) — see `assertAllPermutationsConverge`.
  */
+@OptIn(ExperimentalSerializationApi::class, ExperimentalStdlibApi::class)
 public class CrdtConvergenceHarness<S : Quilted<S>>(
     public val initial: S,
     public val gen: OperationGenerator<S>,
+    public val serializer: KSerializer<S>,
     public val replicaCount: Int = 3,
     public val opsPerReplica: Int = 8,
 ) {
+    private val cbor = Cbor {}
+
+    private fun encoded(state: S): ByteArray = cbor.encodeToByteArray(serializer, state)
+
     /** Run with a single [seed]; assert convergence. Returns the converged state. */
     public fun run(seed: Long): S {
         val random = Random(seed)
@@ -47,6 +59,7 @@ public class CrdtConvergenceHarness<S : Quilted<S>>(
         }
 
     private fun assertAllPermutationsConverge(replicas: List<S>, canonical: S) {
+        val canonicalBytes = encoded(canonical)
         for (permutation in permutationsOf(replicas.indices.toList())) {
             val result = permutation.fold(initial) { acc, idx -> acc.piece(replicas[idx]) }
             check(result == canonical) {
@@ -54,6 +67,17 @@ public class CrdtConvergenceHarness<S : Quilted<S>>(
                     "  expected $canonical\n" +
                     "  got      $result\n" +
                     "  replicas $replicas"
+            }
+            // Byte-level canonicality (#1957): converged replicas must ENCODE identically,
+            // not merely compare equal. Set/Map equality is order-insensitive exactly where
+            // the encoding is not, so `result == canonical` is structurally blind to a
+            // history- or platform-dependent encoding.
+            val resultBytes = encoded(result)
+            check(resultBytes.contentEquals(canonicalBytes)) {
+                "Canonical-encoding failure under permutation $permutation:\n" +
+                    "  canonical bytes ${canonicalBytes.toHexString()}\n" +
+                    "  permuted  bytes ${resultBytes.toHexString()}\n" +
+                    "  state     $canonical"
             }
         }
     }

@@ -1,7 +1,9 @@
 package us.tractat.kuilt.conformance.convergence
 
+import kotlinx.serialization.Serializable
 import us.tractat.kuilt.crdt.Quilted
 
+@Serializable
 internal data class IntMax(val value: Int) : Quilted<IntMax> {
     override fun piece(other: IntMax): IntMax = IntMax(maxOf(value, other.value))
 }
@@ -12,6 +14,7 @@ internal class IntMaxConvergenceTest : CrdtConvergenceSuite<IntMax>() {
         gen = OperationGenerator { state, _, random ->
             IntMax(state.value + random.nextInt(1, 100))
         },
+        serializer = IntMax.serializer(),
         replicaCount = 3,
         opsPerReplica = 5,
     )

@@ -1,5 +1,6 @@
 package us.tractat.kuilt.conformance.convergence
 
+import kotlinx.serialization.builtins.serializer
 import us.tractat.kuilt.crdt.ORSet
 import us.tractat.kuilt.crdt.ReplicaId
 
@@ -19,6 +20,7 @@ internal class ORSetConvergenceTest : CrdtConvergenceSuite<ORSet<String>>() {
                 state.add(replica, element)
             }
         },
+        serializer = ORSet.serializer(String.serializer()),
         replicaCount = 3,
         opsPerReplica = 8,
     )
