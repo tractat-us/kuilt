@@ -3200,10 +3200,14 @@ internal class RaftEngine(
      *   caller. A refused `PreVote` or `RequestVoteResponse` says nothing about being able to make
      *   progress; a refused `AppendEntries` is exactly the frame that would have carried it.
      * - **[senderTerm] at least ours.** Tested rather than inferred: a frame from *behind* us is an
-     *   ordinary stale straggler, and refusing it is the gate working, not a wedge. The jump bound's
-     *   sibling arm (a negative term) is malformed and lands below us, so it is excluded here even
-     *   though it shares that `return` — and `maxTermJump` carries no validation that would let the
-     *   sign be assumed.
+     *   ordinary stale straggler, and refusing it is the gate working, not a wedge. Neither caller
+     *   establishes the relation on its own. The §5.2 leader-authority gate tests the *sender* and the
+     *   message *type* and says nothing about the term, so its frames arrive at any term at all; and
+     *   the jump bound's sibling arm (a negative term) is malformed and lands below us, so it is
+     *   excluded here even though it shares that `return`. Only the jump bound's other arm implies a
+     *   term above ours — [RaftConfig.maxTermJump] is validated positive since #1972, so
+     *   `wireTerm - currentTerm > maxTermJump` does now put `wireTerm` above `currentTerm` — and one
+     *   arm of one caller is not a relation this function may assume.
      * - **Our commit index standing still.** A node that is committing is making progress, whatever it
      *   is refusing — most concretely a wedged voter that campaigned and won inside its own stale set,
      *   which is a split-brain rather than the silence this reports. The run restarts whenever

@@ -105,6 +105,46 @@ import kotlin.time.Duration.Companion.milliseconds
  *   problem this knob would only hide; the documented route back for a node that has
  *   genuinely fallen outside the bound is a new identity plus an ordinary membership
  *   change, never a wiped disk under the same one. See `docs/raft-wedge-diagnosis-and-recovery.md`.
+ *
+ *   **Validated at construction to `1..2^20` (1 048 576), inclusive (#1972).** A knob whose whole
+ *   job is to bound a safety property must not be settable to a value that defeats it. The two ends
+ *   are **not** the same kind of limit, and reading them as symmetric is the error to avoid:
+ *
+ *   - *The floor is a cliff, and it is at 0.* A jump of exactly one is refused there (`1 > 0`), so
+ *     no candidate's `currentTerm + 1` is ever admitted by anyone and no leader can be elected
+ *     again. Below 0 the subtraction exceeds the bound for **every** frame at or above our own
+ *     term, and the node goes silently deaf — nothing logs above `debug`. This is a property of the
+ *     arithmetic, not a judgement call: 1 is the smallest value that preserves liveness, so it must
+ *     be *admitted* rather than merely non-negative.
+ *   - *The ceiling is a chosen line on a continuum.* There is no cliff at `2^20`. The attack price
+ *     `2^60 / maxTermJump` degrades **continuously** as the knob rises — at `2^20 + 1` the climb
+ *     still costs about `2^40` frames, indistinguishable from the value chosen here — and the guard
+ *     becomes literally vacuous, one frame reinstating #1833's cluster-wide wedge, only as
+ *     `maxTermJump` approaches `2^60` itself. So the ceiling is not where the bound stops bounding;
+ *     it is the largest value at which the price is still *guaranteed* to be at least the `2^40`
+ *     frames derived below, placed where that guarantee costs no honest deployment anything.
+ *
+ *   That guarantee is what the ceiling is chosen to hold, from both directions:
+ *
+ *   1. *Attack cost.* This value is the attacker's step size, so climbing from term 0 to the
+ *      storage-path ceiling `RaftEngine.MAX_PLAUSIBLE_TERM` (`2^60`) costs `2^60 / maxTermJump`
+ *      accepted frames. At `2^20` that is `2^40` ≈ 1.1×10^12 — over twelve days of uninterrupted
+ *      attack even at a sustained million admitted frames per second, a rate far above what any
+ *      real Raft peer processes. Before #1897 the same climb cost exactly one frame.
+ *
+ *      This `2^60` and the `2^63` in the default's derivation above are **different thresholds and
+ *      both are live** — do not reconcile one to the other. `2^60` is where a running node can
+ *      still be *driven* (adoption is relative now, so nothing refuses a term above it) but can no
+ *      longer *restart*, because `checkedRestoredTerm` rejects a durable term past it; the climb
+ *      toward `Long.MAX_VALUE` continues from there, and is where the arithmetic itself breaks.
+ *   2. *Legitimate need.* Terms advance once per election, so `2^20` covers roughly 1.05 million
+ *      missed elections — 100× the default above, and still some 29 hours of absence at a
+ *      pathological ten elections per second. A deployment that genuinely exceeds it has the
+ *      liveness problem described above, which this knob would hide rather than fix.
+ *
+ *   Throwing here is right, and is not in tension with `RaftEngine.onMessage`'s refusal to throw on
+ *   a malformed frame (#1818): this is local, deterministic, consumer-supplied configuration
+ *   evaluated once at construction, not a value a peer controls on the actor loop.
  * @param random Source of randomness for the election-timeout draw. Randomness is a
  *   dependency, like time: under virtual time a [kotlinx.coroutines.test.TestDispatcher]
  *   makes scheduling deterministic, but an unseeded RNG still injects non-determinism into
@@ -127,4 +167,24 @@ public data class RaftConfig(
     val snapshotTotalCeiling: Int = 64 * 1024 * 1024,
     val maxTermJump: Long = 10_000L,
     val random: Random = Random.Default,
-)
+) {
+    init {
+        require(maxTermJump in MIN_TERM_JUMP..MAX_TERM_JUMP) {
+            "maxTermJump must be in $MIN_TERM_JUMP..$MAX_TERM_JUMP, was $maxTermJump. " +
+                "At 0 a jump of exactly one is refused, so no candidate's currentTerm + 1 is ever " +
+                "admitted and no leader can be elected again; below 0 every frame at or above this " +
+                "node's own term is dropped and the node goes silently deaf. Above " +
+                "$MAX_TERM_JUMP nothing breaks at once — the cost of a fabricated climb degrades " +
+                "continuously — but it is no longer guaranteed to exceed the 2^40 accepted frames " +
+                "this ceiling is placed to hold (#1972)."
+        }
+    }
+
+    private companion object {
+        /** Smallest jump that still admits `currentTerm + 1`, and so the smallest that keeps elections possible. */
+        const val MIN_TERM_JUMP = 1L
+
+        /** `2^20`. Derived on the [maxTermJump] KDoc from the attack cost and the largest honest absence. */
+        const val MAX_TERM_JUMP = 1L shl 20
+    }
+}
