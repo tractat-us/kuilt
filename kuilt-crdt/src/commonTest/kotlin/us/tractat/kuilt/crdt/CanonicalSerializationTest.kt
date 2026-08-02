@@ -144,18 +144,38 @@ class CanonicalSerializationTest {
      * non-injective types (Double, ByteArray, etc.).  The String key here is the
      * minimal exercise; the structural-sort property is proven by insertion-order
      * independence (issue #752).
+     *
+     * **The values are deliberately multi-entry *and split across both replicas* (#1957).**
+     * Each side holds both keys, but contributes a different pair of [GCounter] slots, so the
+     * merge runs [GCounter.piece] — and therefore the `HashMap` build inside `mergeMax` — in
+     * *opposite insertion orders* on the two sides. Two weaker shapes were measured and both
+     * are vacuous: a single-entry value has exactly one iteration order, and a multi-entry value
+     * *shared* by both replicas is worse than it looks — a key only one side holds is joined as
+     * `value.piece(value)`, seeding `mergeMax`'s `HashMap` from the identical source on both
+     * sides. Only divergent slices make the value map's order observable.
+     *
+     * Mutation-checked on `macosArm64`: dropping `@Serializable(with = CanonicalMapSerializer::class)`
+     * from `GCounter.counts` makes this fail with the counter slots reordered. (Neither weaker
+     * shape fails under the same mutation.)
      */
     @Test
     fun orMapSerializationIsDeliveryOrderIndependent() {
-        // Replica 1: A puts "alpha", B puts "beta"
-        val m1a = ORMap.empty<String, GCounter>().put(a, "alpha", GCounter.of(a to 1L))
-        val m1b = ORMap.empty<String, GCounter>().put(b, "beta", GCounter.of(b to 2L))
-        val merged1 = m1a.piece(m1b)
+        val c = ReplicaId("C")
+        val d = ReplicaId("D")
 
-        // Replica 2: B puts "beta", A puts "alpha"
-        val m2b = ORMap.empty<String, GCounter>().put(b, "beta", GCounter.of(b to 2L))
-        val m2a = ORMap.empty<String, GCounter>().put(a, "alpha", GCounter.of(a to 1L))
-        val merged2 = m2b.piece(m2a)
+        // Divergent slices of the same two logical values: A knows about {A, C}, B about {B, D}.
+        val alphaFromA = GCounter.of(a to 1L, c to 3L)
+        val alphaFromB = GCounter.of(b to 2L, d to 4L)
+        val betaFromA = GCounter.of(a to 5L, d to 7L)
+        val betaFromB = GCounter.of(b to 6L, c to 8L)
+
+        // A's view puts "alpha" then "beta"; B's view puts them the other way round.
+        val viewA = ORMap.empty<String, GCounter>().put(a, "alpha", alphaFromA).put(a, "beta", betaFromA)
+        val viewB = ORMap.empty<String, GCounter>().put(b, "beta", betaFromB).put(b, "alpha", alphaFromB)
+
+        // Replica 1 hears A first, replica 2 hears B first.
+        val merged1 = viewA.piece(viewB)
+        val merged2 = viewB.piece(viewA)
 
         assertEquals(merged1, merged2)
 
