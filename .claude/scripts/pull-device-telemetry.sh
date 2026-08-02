@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 #
-# pull-device-telemetry.sh — pull the on-device telemetry / durable-log store off one or
-# more tethered iPhones, decode it, and report WHICH container actually covers the window
-# you care about. For post-hoc hardware debugging: nothing needs to be armed in advance and
-# the app need not be running — this is a plain filesystem copy over USB.
+# pull-device-telemetry.sh — pull the on-device telemetry / durable-log store off every
+# tethered iPhone, decode it, and report WHICH container actually covers the window you care
+# about. For post-hoc hardware debugging: nothing needs to be armed in advance and the app
+# need not be running — this is a plain filesystem copy over USB.
+#
+# Devices are DISCOVERED AUTOMATICALLY. Run it with no arguments; you never need to look up
+# a UDID or drive `xcrun devicectl` by hand. `--device` is an override, not a prerequisite.
 #
 # Usage:
 #   .claude/scripts/pull-device-telemetry.sh [options]
@@ -18,6 +21,22 @@
 #
 # Requires Xcode 15+ (`xcrun devicectl`), the phone paired with Developer Mode on, and a
 # development-signed build (a distribution/TestFlight build's data container is not readable).
+#
+# ── Which of the two pullers do you want? ────────────────────────────────────────────────
+#
+#   spike/collect-logs.sh   The spike connectivity-suite runs. Pulls every connected iPhone's
+#                           `suite-*.log` + `nw.log` for us.tractat.spike.nw and merges the
+#                           phones into ONE causally-ordered cross-device timeline — which is
+#                           the artifact, because a suite verdict is an asymmetry BETWEEN two
+#                           phones. Reach for it after a suite run.
+#
+#   this script             An arbitrary app's durable telemetry store, addressed by bundle
+#                           id, with the bundle-discovery fallback below for when you don't
+#                           know the id (or the obvious one is wrong). Decodes the store and
+#                           ranks candidates by time coverage. No cross-device merge.
+#
+# Neither needs a hand-driven devicectl invocation, and both discover the phones themselves.
+# This one deliberately does NOT re-implement the suite merge — use collect-logs.sh for that.
 #
 # ── Three things that cost real time. Read them before trusting the output. ──────────────
 #
@@ -90,7 +109,9 @@ mkdir -p "$OUT_DIR"
 echo "[pull] output: $OUT_DIR"
 
 # ── device discovery ─────────────────────────────────────────────────────────────────────
-# devicectl's JSON is its only supported machine interface; the human table's columns move.
+# Same approach as spike/collect-logs.sh, deliberately: never hardcode device ids, and never
+# scrape the human table — devicectl's JSON is its only supported machine interface and the
+# table's columns move. Keep the two in step if either changes.
 DEV_JSON="$OUT_DIR/devices.json"
 if ! xcrun devicectl list devices --quiet --timeout 60 --json-output "$DEV_JSON" >/dev/null 2>&1; then
   echo "[pull] ERROR: 'xcrun devicectl list devices' failed — is a device paired?" >&2

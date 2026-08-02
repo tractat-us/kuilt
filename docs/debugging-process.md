@@ -56,12 +56,20 @@ model never considered.
 
 ## Pulling device telemetry
 
-Rule 2 needs evidence off the phone. `.claude/scripts/pull-device-telemetry.sh`
-copies a tethered iPhone's app data container over USB (nothing armed in advance,
-the app need not be running), decodes any durable log store it finds, and prints
-each candidate's record count and first/last record time so you can pick the
-container that actually spans the incident — the obvious bundle id is usually the
-wrong one, because an Xcode-built install carries a second, generated id.
+Rule 2 needs evidence off the phone. **The logs pull automatically — run a script,
+don't hand-roll `devicectl`.** Both pullers discover every tethered iPhone
+themselves; you never look up a UDID. Two scripts, no overlap:
+
+- **[`spike/collect-logs.sh`](../spike/collect-logs.sh)** — after a spike
+  connectivity-suite run. Pulls each phone's `suite-*.log` + `nw.log` and merges
+  them into one causally-ordered cross-device timeline, which is the artifact: a
+  suite verdict is an asymmetry *between* the two phones.
+- **[`.claude/scripts/pull-device-telemetry.sh`](../.claude/scripts/pull-device-telemetry.sh)**
+  — an arbitrary app's durable telemetry store, by bundle id. Decodes it and ranks
+  every candidate container by record count and first/last record time, so you take
+  the one that spans the incident. Use it when you don't know the bundle id: an
+  Xcode-built install carries a second, generated id, and that is often the one
+  holding the session.
 
 **The record timestamps in a durable store are write-times, not event-times** —
 the store flushes on a fixed cadence, so record order can never establish that one
