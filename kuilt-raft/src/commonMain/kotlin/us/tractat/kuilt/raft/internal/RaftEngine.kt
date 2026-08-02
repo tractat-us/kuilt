@@ -3120,9 +3120,14 @@ internal class RaftEngine(
         }
 
         // ── §5.2 / §8 leader-authority gate (#1383, #1889) ───────────────────────
-        // AppendEntries, InstallSnapshot and TimeoutNow are leader→peer RPCs, and only a voter can
-        // ever be leader (§5.2: a candidate must win a majority of the voter set). So a
-        // frame of any of those types whose *sender* is not a current voter is a forgery — an
+        // [RaftMessage.isLeaderToPeer] is the type test, and the only place that set is written: an
+        // exhaustive `when` with no `else`, so a new leader→peer RPC cannot compile without deciding
+        // whether this gate applies to it. Until #1973 this site re-enumerated the three types by
+        // hand, and a hand-rolled list compiles perfectly well with a type missing from it — which is
+        // exactly what #1889 was, a `TimeoutNow` this gate did not test.
+        //
+        // Only a voter can ever be leader (§5.2: a candidate must win a majority of the voter set), so
+        // a leader→peer frame whose *sender* is not a current voter is a forgery — an
         // admitted-but-malicious learner/spoke that reached us over the cross-server
         // relay, which preserves the honest origin (`origin == sender` spoof-checking
         // passes) yet cannot vouch for the RPC type. Drop it BEFORE dispatch: the log
@@ -3163,9 +3168,7 @@ internal class RaftEngine(
         // across a voter-set rotation still refuses the current leader's frames forever, and
         // this drop stays. What #1898 added is the report below, so the state has a name.
         val voters = state.membershipState.voters
-        if ((m is RaftMessage.AppendEntries || m is RaftMessage.InstallSnapshot || m is RaftMessage.TimeoutNow) &&
-            voters.isNotEmpty() && from !in voters
-        ) {
+        if (m.isLeaderToPeer && voters.isNotEmpty() && from !in voters) {
             debug { "onMessage: dropped ${m::class.simpleName} from non-voter $from (§5.2 leader-authority gate) membershipState=${state.membershipState}" }
             noteRefusedLeaderFrame(from, m, wireTerm, RaftMetric.WedgeSuspected.Gate.LeaderAuthority)
             return
