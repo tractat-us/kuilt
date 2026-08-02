@@ -104,7 +104,7 @@ public class ConnectivitySuite {
         scope.launch {
             try {
                 log(capture.warning ?: "trace → ${capture.path}")
-                runSuite(role, log, onScenario, onPrompt, complete)
+                runSuite(role, log, onScenario, onPrompt, complete, capture)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -131,6 +131,10 @@ public class ConnectivitySuite {
         onScenario: (ScenarioResult) -> Unit,
         onPrompt: (String) -> Unit,
         onComplete: (String) -> Unit,
+        // Scenario 7 alone needs it: its verdict is decided by watching the resume machine's own log
+        // stream, because no in-process surface distinguishes the two ways a room can recover. See
+        // [ResumeLaneProbe] for the search that established that.
+        capture: SuiteLogCapture,
     ) {
         results.clear()
         // A "-s4" role suffix runs ONLY scenario 4 — the #1467 controlled experiment. Scenario 4's leg1
@@ -191,7 +195,7 @@ public class ConnectivitySuite {
         } else if (s7Only) {
             // Scenario 7 ALONE — the #1637 repro. Additive in exactly the same way scenario 6 was: it
             // renumbers nothing and the automatic battery below is untouched.
-            step { scenarioSubTimeoutBlip(baseRole, onLog, onPrompt) }
+            step { scenarioSubTimeoutBlip(baseRole, onLog, onPrompt, capture) }
             onPrompt("")
         } else {
             step { scenarioRawRoundTrip(baseRole, onLog) }
@@ -1104,9 +1108,11 @@ public class ConnectivitySuite {
      * - **Dropped (Join)** — the phone under test. It measures its own outage off `localFabric`'s
      *   edges and refuses to judge a run that landed outside the band ([Verdict.SKIP], never a FAIL:
      *   an operator who held 8 s or 35 s must be told to retry, not shown a misleading verdict).
-     *   PASS = the room survives (`Recovered(hostId)`, or at least a live host in the roster) with **no
-     *   `HostLost`**. FAIL = `HostLost` **carrying `RejectCode.ResumeWindowNotYetOpen`** — that code is
-     *   the whole signature; any other `HostLost` is a different failure and reports as its own SKIP.
+     *   PASS = the resume lane **observably resolved on the #1637 dwell** ([ResumeLaneProbe]) with no
+     *   `HostLost` and the host back `Connected`. FAIL = `HostLost` **carrying
+     *   `RejectCode.ResumeWindowNotYetOpen`** — that code is the whole signature; any other `HostLost`
+     *   is a different failure and reports as its own SKIP. A room that merely *survives* is not a
+     *   PASS: see [blippedSide] for why "no `HostLost` + host `Connected`" was a false green.
      * - **Stay-up (Host)** — a witness, *and the peer the other phone has to come back to*. By
      *   construction it should observe *nothing at all*, and its PASS says exactly that: it never
      *   partitioned the joiner, so no window ever opened. It reads the same on a fixed and an unfixed
@@ -1118,6 +1124,7 @@ public class ConnectivitySuite {
         role: String,
         onLog: (String) -> Unit,
         onPrompt: (String) -> Unit,
+        capture: SuiteLogCapture,
     ): ScenarioResult = scenario(7, "Sub-timeout blip", onLog) { hop ->
         val amHost = role == "host"
         val t0 = TimeSource.Monotonic.markNow()
@@ -1153,6 +1160,18 @@ public class ConnectivitySuite {
         val seam = instrumentedWeave("s7", loom, hop)
             ?: return@scenario Verdict.FAIL to "weave never established on $SVC7 (blip NOT exercised)"
 
+        // The verdict's only witness to the mechanism under test. Installed before the room exists so
+        // it cannot miss the machine's first line, and torn down after `leave()` below.
+        val lane = ResumeLaneProbe()
+        val unwatch = capture.observe(lane::record)
+        // The resume machine's evidence lines are INFO. The tee deliberately never widens the level
+        // (a soak's RTT distribution must keep measuring the same thing), so scenario 7 — which runs
+        // alone, and whose verdict is unreadable without them — widens it for itself and puts it back.
+        // Narrowing is never done: a diagnostic run already at DEBUG keeps its DEBUG.
+        val previousLevel = KotlinLoggingConfiguration.direct.logLevel
+        if (previousLevel > Level.INFO) KotlinLoggingConfiguration.direct.logLevel = Level.INFO
+        hop("resume-lane probe armed (log level ${KotlinLoggingConfiguration.direct.logLevel.name}, was ${previousLevel.name})")
+
         // Identical wiring to scenario 6, and deliberately so: `reweave = { seam }` on the joiner is
         // what puts the adopt-path resume machine in the loop at all, and #1637 is a defect of that
         // machine. Change this and the scenario stops reproducing the bug.
@@ -1184,7 +1203,7 @@ public class ConnectivitySuite {
                 room.roster.collect { r -> journal.trySend("t=${ms()}ms roster=${r.render()}") }
             }
             establish(ctx, amHost)?.let { peer ->
-                if (amHost) stayUpSide(ctx, peer) else blippedSide(ctx, peer, seam)
+                if (amHost) stayUpSide(ctx, peer) else blippedSide(ctx, peer, seam, lane)
             }
             eventJob.cancel()
             fabricJob.cancel()
@@ -1198,7 +1217,13 @@ public class ConnectivitySuite {
             hop("  ${r.getOrNull()}")
         }
         hop("final mine=${room.localFabric.value.short()} roster=${room.roster.value.render()} t=${ms()}ms")
+        hop("final resume-lane ${lane.snapshot().render()}")
         room.leave()
+        // Ordered after leave() so a line the teardown itself emits still lands in the trace. The
+        // scenario() wrapper's catch-all cannot reach here on a throw, but start()'s `finally`
+        // uninstalls the whole tee, so a leaked observer cannot outlive the run either way.
+        unwatch()
+        KotlinLoggingConfiguration.direct.logLevel = previousLevel
         onPrompt("")
 
         val skip = ctx.skip
@@ -1213,10 +1238,37 @@ public class ConnectivitySuite {
 
     /**
      * The phone whose radio blips. It measures its own outage, refuses to judge one that fell outside
-     * the repro band, and then waits for the episode to close one way or the other.
+     * the repro band, and then watches the resume lane for the **whole** budget the library committed
+     * to before saying anything.
      *
-     * The closing edges are not interchangeable, and telling them apart is what keeps this scenario
-     * honest:
+     * ## Two defects this used to have, both of which produced a green PASS on 2026-07-28
+     *
+     * That run reported `PASS 14.8s … Recovered(441485b2) 8.5s after the radio died, no HostLost, host
+     * Connected` against a build containing the #1637 fix — and the fix had not run at all.
+     *
+     * **1. It stopped watching at the first encouraging event.** #1637 kills the room when the
+     * reconnect window expires, ≈ [S7_WOVEN_PATH_GRACE] + `reconnectWindow` ≈ 63 s after the radio
+     * dies. Returning on the first `Recovered` meant a verdict at ~15 s, with 48 s of the window the
+     * bug lives in never observed. The wait is now a **deadline** ([OBSERVE_WINDOW] from the measured
+     * radio death), not a first-match: a late `HostLost` cannot be missed, and only `HostLost` — which
+     * is terminal, nothing can follow it — ends it early.
+     *
+     * **2. It inferred health instead of observing the mechanism.** "No `HostLost` + host `Connected`"
+     * is satisfied by a room that simply healed on its own, which is exactly what happened: the link
+     * came back before the resume machine's dwell could fire, and the machine was then cancelled by
+     * `leave()` having concluded nothing. Two membership surfaces look identical across the two cases
+     * and neither can discriminate:
+     *
+     *  - **`Recovered(hostId)` is emitted by BOTH** the #1637 no-op path (`onNoOpResume` →
+     *    `markRecovered`) and an ordinary detector-observed recovery (`PeerRecovered` → the same
+     *    `markRecovered`). It is *not* evidence of the fix and is no longer read as any.
+     *  - **`Partitioned`/`WindowOpened` do not prove the resume machine ran either** — the joiner emits
+     *    both from `markPartitioned` on a plain heartbeat `Timeout`, machine untouched. They are kept
+     *    only as a "did the blip reach the room at all" gate.
+     *
+     * So the discriminator is [ResumeLaneProbe], watching the machine's own `resume.*` evidence lines.
+     *
+     * ## The verdict, which never collapses the three ways a room can survive
      *
      *  - **`HostLost(Refused(code=resume-window-not-yet-open))`** → FAIL. That reject code, and nothing
      *    else, is #1637's signature: a resume the host kept *answering* — retryably, forever — until the
@@ -1226,19 +1278,21 @@ public class ConnectivitySuite {
      *    because none was ever sent. The first hardware run produced exactly that and the scenario
      *    reported it as "#1637 confirmed", asserting three mechanisms it had not observed. A verdict
      *    must never claim a mechanism the run did not see.
-     *  - **`Recovered(host)`** → PASS. The joiner concluded no window was ever coming and completed the
-     *    episode as a local no-op resume — the fixed behaviour.
-     *  - **`Resumed`** → SKIP, *not* PASS. `Resumed` is emitted only from the `ResumeAck` handler, so it
-     *    proves the host had a window **open** — i.e. the host did notice, the outage overran its link,
-     *    and this was an ordinary resume rather than the sub-timeout lane. Reading it as a PASS is the
-     *    one false-green this scenario could plausibly produce, since it looks like a healthy recovery
-     *    in every other respect.
+     *  - **`resume.no-op`** → PASS, and the only PASS. The machine dwelled on a persistent
+     *    `WindowNotYetOpen`, concluded no window was ever coming, and completed the episode locally.
+     *    That is the #1637 fix, observed.
+     *  - **`resume.ok`** (or a `Resumed` event, its membership-level twin) → SKIP. A real `ResumeAck`
+     *    proves the host had a window **open** — it did notice, the outage overran its link, and this
+     *    was the ordinary resume lane. The room recovered; the sub-timeout lane was not tested.
+     *  - **neither, and no `HostLost`** → SKIP, **NOT EXERCISED**. The room survived and the resume
+     *    lane never resolved. This is the 2026-07-28 run, and reporting it as a PASS is the defect
+     *    being fixed here.
      *
      * [seam] is threaded in purely as evidence for the non-#1637 branch: a seam still `Weaving` when the
      * episode closed proves this phone never re-wove, so it never dialled and never sent a Resume —
      * which points at the *other* phone having stopped advertising, not at the resume machine.
      */
-    private suspend fun blippedSide(ctx: OutageCtx, host: PeerId, seam: Seam) {
+    private suspend fun blippedSide(ctx: OutageCtx, host: PeerId, seam: Seam, probe: ResumeLaneProbe) {
         val room = ctx.room
         val lo = S7_WOVEN_PATH_GRACE
         val hi = S7_HEARTBEAT.timeout
@@ -1316,18 +1370,58 @@ public class ConnectivitySuite {
         }
         ctx.hop("blip: mine→Available after ${fmtMs(outage.inWholeMilliseconds)} — INSIDE ($lo, $hi) t=${ctx.ms()}ms")
 
+        // ── observe the WHOLE window, not up to the first encouraging event ──
+        //
+        // #1637 kills the room when the reconnect window expires, ≈ grace + window ≈ 63s after the
+        // radio died. A first-match wait rendered its verdict at ~15s and never saw the other 48s, so
+        // a room that looked healthy early passed no matter what the resume lane did afterwards. The
+        // wait is therefore a deadline measured from the observed radio death, and the loop keeps
+        // draining past a `Recovered`/`Resumed` — neither is terminal, and a later `HostLost` outranks
+        // both. `HostLost` IS terminal (the room is dead; nothing follows), so it alone breaks early.
         val seen = mutableListOf<MembershipEvent>()
-        val outcome = awaitEvent(ctx.queue, seen, VERDICT_WAIT) { e ->
-            when (e) {
-                is MembershipEvent.HostLost -> e
-                is MembershipEvent.Recovered -> e.takeIf { it.peerId == host }
-                is MembershipEvent.Resumed -> e
-                else -> null
+        val observeUntilMs = downAt + OBSERVE_WINDOW.inWholeMilliseconds
+        // The banner, not just the trace: the phone is about to sit apparently idle for over a minute
+        // with the room already looking healthy, and an operator who reads that as a hang will kill the
+        // app mid-observation — which is precisely the evidence the verdict is waiting for.
+        ctx.say(
+            "Done — hands off BOTH phones now. This one keeps watching for the full $OBSERVE_WINDOW " +
+                "after the radio died (about " +
+                "${fmtMs((observeUntilMs - ctx.ms()).coerceAtLeast(0))} left) before it will judge " +
+                "anything. It looks idle on purpose: the connection can come back and STILL die a " +
+                "minute later, and that is the whole bug. Do not close the app.",
+        )
+        ctx.hop(
+            "blip: watching the whole window — verdict at t=${fmtMs(observeUntilMs)} " +
+                "($OBSERVE_WINDOW after the radio died; a #1637 HostLost lands ≈" +
+                "${S7_WOVEN_PATH_GRACE + S7_HEARTBEAT.reconnectWindow} after it)",
+        )
+        var outcome: MembershipEvent? = null
+        while (true) {
+            val remaining = (observeUntilMs - ctx.ms()).milliseconds
+            if (remaining <= Duration.ZERO) break
+            val e = awaitEvent(ctx.queue, seen, remaining) { ev ->
+                when (ev) {
+                    is MembershipEvent.HostLost -> ev
+                    is MembershipEvent.Recovered -> ev.takeIf { it.peerId == host }
+                    is MembershipEvent.Resumed -> ev
+                    else -> null
+                }
+            } ?: break
+            ctx.hop("blip: saw ${e.short()} t=${ctx.ms()}ms (still watching to t=${fmtMs(observeUntilMs)})")
+            if (e is MembershipEvent.HostLost) {
+                outcome = e
+                break
             }
+            if (outcome == null) outcome = e
         }
-        // Did the resume machine actually run? `Partitioned`/`WindowOpened` for the host is the joiner's
-        // own record of entering it. Without either, a quiet run proves nothing — the blip never
-        // reached the machine — and calling that a PASS would be the scenario's second false green.
+        // Bound to a val so the verdict below smart-casts, and so the loop's mutation is over.
+        val closing: MembershipEvent? = outcome
+        val lane = probe.snapshot()
+        ctx.hop("blip: resume-lane ${lane.render()}")
+        // Did the blip reach the room's partition machinery at all? Kept as a gate, NOT as evidence
+        // that the resume machine ran: the joiner emits both of these from `markPartitioned` on a
+        // plain heartbeat Timeout, with the machine never entered. `lane.entered` is what says the
+        // room actually handed off to the resume lane.
         val episodeOpened = seen.any {
             (it is MembershipEvent.Partitioned && it.peerId == host) ||
                 (it is MembershipEvent.WindowOpened && it.peerId == host)
@@ -1335,25 +1429,25 @@ public class ConnectivitySuite {
         val hostConnected = room.roster.value.any { it.id == host && it.liveness is Liveness.Connected }
         val sinceDrop = ctx.ms() - downAt
         when {
-            outcome is MembershipEvent.HostLost -> {
+            closing is MembershipEvent.HostLost -> {
                 // #1637 has ONE signature and this is it: Refused, carrying ResumeWindowNotYetOpen. A
                 // verdict must never assert a mechanism the run did not observe — the first hardware run
                 // printed "the host never partitioned me … every Resume was answered WindowNotYetOpen"
                 // over a `HostLost(WindowExpired)` in which the joiner had sent zero Resumes and the host
                 // HAD partitioned it. Every clause of that sentence was false.
-                val reason = outcome.reason
+                val reason = closing.reason
                 val isNotYetOpen = reason is FailureReason.Refused &&
                     reason.code == RejectCode.ResumeWindowNotYetOpen
                 if (isNotYetOpen) {
                     ctx.failures.add(
                         "blip: HostLost ${fmtMs(sinceDrop)} after the radio died, on a " +
                             "${fmtMs(outage.inWholeMilliseconds)} outage that sat INSIDE the ($lo, $hi) repro " +
-                            "interval — reason=${outcome.reason.describe()}, mine=${outcome.localFabric.short()}. " +
+                            "interval — reason=${closing.reason.describe()}, mine=${closing.localFabric.short()}. " +
                             "This IS #1637, discriminated on the reject code: the host never partitioned me " +
                             "(its link never closed), so every Resume was answered WindowNotYetOpen and " +
                             "refreshed its lastSeen, and the whole ${S7_HEARTBEAT.reconnectWindow} budget " +
                             "burned down to a terminal room. EXPECTED on a build without the #1637 fix — " +
-                            "this FAIL is the capture. (saw ${seen.render()})",
+                            "this FAIL is the capture. resume-lane=${lane.render()} (saw ${seen.render()})",
                     )
                 } else {
                     // A DIFFERENT failure, reported as itself. `WindowExpired` in particular means no
@@ -1362,7 +1456,7 @@ public class ConnectivitySuite {
                     // this phone never re-wove, so it never dialled and never sent one.
                     val neverRewove = seam.state.value !is SeamState.Woven
                     ctx.skip = "blip: HostLost ${fmtMs(sinceDrop)} after the radio died with " +
-                        "reason=${outcome.reason.describe()} (mine=${outcome.localFabric.short()}), on a " +
+                        "reason=${closing.reason.describe()} (mine=${closing.localFabric.short()}), on a " +
                         "${fmtMs(outage.inWholeMilliseconds)} outage inside the ($lo, $hi) band. That is " +
                         "**not** the #1637 signature — #1637 is HostLost(Refused(code=" +
                         "${RejectCode.ResumeWindowNotYetOpen.id})), a resume that kept being answered. " +
@@ -1372,51 +1466,114 @@ public class ConnectivitySuite {
                         ". Likely causes, in order: this phone never re-wove (the STAY-UP phone stopped " +
                         "advertising or was closed, or browse never re-found it); the dial was refused; " +
                         "or the host process was gone. CHECK THE STAY-UP PHONE'S REPORT for how long it " +
-                        "stayed up, then re-run. Inconclusive about #1637 either way. (saw ${seen.render()}, " +
+                        "stayed up, then re-run. Inconclusive about #1637 either way. " +
+                        "resume-lane=${lane.render()} (saw ${seen.render()}, " +
                         "roster=${room.roster.value.render()})"
                 }
             }
 
-            outcome is MembershipEvent.Resumed -> ctx.skip =
-                "blip: the host ACKed a real resume (${outcome.short()} after ${fmtMs(sinceDrop)}), which " +
-                    "means it HAD a window open — so it noticed the outage and this was the ordinary " +
-                    "resume lane, not the sub-timeout one. Measured outage " +
+            // ── the ONLY PASS: the fix under test observably ran ──
+            //
+            // `resume.no-op` is emitted at exactly one place — the retry loop concluding, after
+            // dwelling one HeartbeatConfig.timeout on a persistent ResumeWindowNotYetOpen, that no
+            // window was ever coming. Nothing else in the library writes it. The roster check is not
+            // ceremony: the dwell must leave a LIVE room behind, and `onNoOpResume` → markRecovered is
+            // what is supposed to put the host back to Connected.
+            lane.noOp != null && hostConnected -> ctx.passDetail =
+                "#1637 FIX OBSERVED — the resume lane resolved on the dwell after a " +
+                    "${fmtMs(outage.inWholeMilliseconds)} blip inside ($lo, $hi): '${lane.noOp}' " +
+                    "${fmtMs(sinceDrop)} after the radio died, no HostLost through the whole " +
+                    "$OBSERVE_WINDOW observation, host back Connected. This is the mechanism, not an " +
+                    "inference from a healthy-looking room: Recovered(host) alone would prove nothing, " +
+                    "since the detector emits the identical event. (saw ${seen.render()})"
+
+            // Same dwell, but the room it left behind is wrong. Not a PASS (the fix did not finish its
+            // job) and not the #1637 FAIL (no HostLost, no reject code) — its own anomaly.
+            lane.noOp != null -> ctx.skip =
+                "blip: the resume lane DID resolve on the #1637 dwell ('${lane.noOp}') after a " +
+                    "${fmtMs(outage.inWholeMilliseconds)} outage, but ${host.value.take(8)} is NOT " +
+                    "Connected in the roster afterwards (roster=${room.roster.value.render()}, " +
+                    "seam=${seam.state.value.short()}). The dwell is supposed to close the " +
+                    "Partitioned/WindowOpened arc via markRecovered and leave a live room. It did not, " +
+                    "so this is neither the fix working nor #1637 — file it as its own bug. " +
+                    "(saw ${seen.render()})"
+
+            // Recovery, the ordinary way. `resume.ok` and the `Resumed` event are the two faces of one
+            // thing (a real ResumeAck), and either proves the host HAD a window open — i.e. it noticed
+            // the outage, so the run sat above the band and the sub-timeout lane was never entered.
+            // Reading this as a PASS is the false green this scenario could most plausibly produce.
+            lane.ok != null || closing is MembershipEvent.Resumed -> ctx.skip =
+                "blip: the host ACKed a REAL resume (${lane.ok ?: closing?.short()} after " +
+                    "${fmtMs(sinceDrop)}), which means it HAD a window open — so it noticed the outage " +
+                    "and this was the ordinary resume lane, not the sub-timeout one. Measured outage " +
                     "${fmtMs(outage.inWholeMilliseconds)} landed inside ($lo, $hi) and the host STILL " +
                     "noticed — most likely its transport died rather than its detect elapsing (~" +
                     "${fmtMs(OBSERVED_HOST_TRANSPORT_DEATH.inWholeMilliseconds)} on the one run measured). " +
                     "Check the STAY-UP phone's Partitioned reason, and re-run with a shorter hold. " +
-                    "(saw ${seen.render()})"
+                    "resume-lane=${lane.render()} (saw ${seen.render()})"
 
-            outcome is MembershipEvent.Recovered -> ctx.passDetail =
-                "survived a ${fmtMs(outage.inWholeMilliseconds)} blip inside ($lo, $hi): " +
-                    "${outcome.short()} ${fmtMs(sinceDrop)} after the radio died, no HostLost, " +
-                    "host ${if (hostConnected) "Connected" else "NOT Connected"} in the roster"
+            // The machine ran and gave up before it could ever retry — no reweave, no resume token, or
+            // no known host. None of those is #1637; all of them mean the wiring, not the fix, is what
+            // this run measured.
+            lane.terminal != null -> ctx.skip =
+                "blip: the resume machine went terminal before retrying ('${lane.terminal}') after a " +
+                    "${fmtMs(outage.inWholeMilliseconds)} outage. That names a missing precondition " +
+                    "(reweave / resume token / known host), not #1637 — the dwell under test is in the " +
+                    "RETRY loop and was never reached. (saw ${seen.render()}, " +
+                    "roster=${room.roster.value.render()})"
 
             !episodeOpened -> ctx.skip =
                 "blip: no Partitioned/WindowOpened for ${host.value.take(8)} in ${fmtMs(sinceDrop)} after " +
-                    "a ${fmtMs(outage.inWholeMilliseconds)} outage — the blip never reached the resume " +
-                    "machine at all, so nothing was tested. Did the path really drop for the whole hold? " +
-                    "(saw ${seen.render()}, roster=${room.roster.value.render()})"
+                    "a ${fmtMs(outage.inWholeMilliseconds)} outage — the blip never reached the room's " +
+                    "partition machinery at all, so nothing was tested. Did the path really drop for the " +
+                    "whole hold? (saw ${seen.render()}, roster=${room.roster.value.render()})"
 
-            hostConnected -> ctx.passDetail =
-                "survived a ${fmtMs(outage.inWholeMilliseconds)} blip inside ($lo, $hi): the episode " +
-                    "opened and the host is back Connected with no HostLost — but NO explicit " +
-                    "Recovered/Resumed closed the arc within $VERDICT_WAIT. The weaker form of the PASS; " +
-                    "quote this line rather than the headline. (saw ${seen.render()})"
+            // ── NOT EXERCISED: the case that used to be a silent PASS ──
+            //
+            // The room survived the blip and the resume lane never resolved. On 2026-07-28 this
+            // reported `PASS 14.8s … Recovered(441485b2) 8.5s after the radio died, no HostLost, host
+            // Connected` on a build carrying the #1637 fix, while JoinerResumeMachine had logged
+            // nothing whatsoever. SKIP, not FAIL, for the same reason every other non-#1637 outcome is:
+            // a FAIL here is read as "#1637 reproduced" the moment the report is pasted into the issue.
+            else -> ctx.skip = buildString {
+                append("NOT EXERCISED — the room survived a ${fmtMs(outage.inWholeMilliseconds)} blip ")
+                append("inside ($lo, $hi) but the resume lane never resolved in $OBSERVE_WINDOW: no ")
+                append("resume.no-op, no resume.ok, no HostLost. This run says NOTHING about #1637. ")
+                append(
+                    when {
+                        // The probe's own wiring failed, so its silence is not a finding about the
+                        // library at all. Say so first, and loudly: a reader who takes this for
+                        // "the machine never ran" goes hunting the wrong bug entirely.
+                        lane.blind ->
+                            "WARNING: the resume-lane probe saw NO log events whatsoever, so it was " +
+                                "BLIND and its silence says nothing about the machine. That is a defect " +
+                                "in this scenario's wiring (the log tee or the level), not in the " +
+                                "library — fix it before reading anything into this run. "
 
-            // SKIP, not FAIL, and the demotion is deliberate: this scenario's FAIL means exactly one
-            // thing — #1637, discriminated on the reject code — and a report that FAILs for any other
-            // reason gets read as "#1637 reproduced" the moment it is pasted into the issue. A hung
-            // episode is a genuine anomaly worth chasing, but it is a DIFFERENT one, so it says so.
-            else -> ctx.skip =
-                "blip: the resume episode opened and never closed — no Recovered, no Resumed and no " +
-                    "HostLost in $VERDICT_WAIT after a ${fmtMs(outage.inWholeMilliseconds)} outage, and " +
-                    "${host.value.take(8)} is not Connected (roster=${room.roster.value.render()}, " +
-                    "seam=${seam.state.value.short()}, saw ${seen.render()}). The room is neither " +
-                    "recovered nor dead. That is NOT #1637 — #1637 ends in a HostLost — so this run is " +
-                    "inconclusive about it. It is not healthy either: if it repeats, file it as its own bug"
+                        lane.entered != null ->
+                            "The room DID hand off to the resume machine ('${lane.entered}'), so the " +
+                                "lane was entered and simply never concluded — worth chasing on its own. "
+
+                        else ->
+                            "The room never handed off to the resume machine at all (no " +
+                                "'membership.unresponsive … branch=resume'), so the seam never evicted " +
+                                "the host: the blip stayed inside the fabric's path grace, or the link " +
+                                "healed before the seam tore. Hold LONGER and re-run. "
+                    },
+                )
+                append(
+                    "Any Recovered(${host.value.take(8)}) here is NOT evidence of the fix — the " +
+                        "detector emits the identical event on an ordinary recovery. ",
+                )
+                append("host ${if (hostConnected) "IS" else "is NOT"} Connected. ")
+                append("resume-lane=${lane.render()} (saw ${seen.render()}, ")
+                append("roster=${room.roster.value.render()}, seam=${seam.state.value.short()})")
+            }
         }
-        ctx.hop("blip: DONE outage=${fmtMs(outage.inWholeMilliseconds)} events=${seen.render()} t=${ctx.ms()}ms")
+        ctx.hop(
+            "blip: DONE outage=${fmtMs(outage.inWholeMilliseconds)} events=${seen.render()} " +
+                "resume-lane=${lane.render()} t=${ctx.ms()}ms",
+        )
     }
 
     /**
@@ -1458,7 +1615,8 @@ public class ConnectivitySuite {
         ctx.say(
             "Hold still. The other phone goes offline for a few seconds. Do NOT touch this one, and do " +
                 "NOT close the app — it has to stay reachable until the other phone finishes its whole " +
-                "reconnect. Usually about a minute and a half; at most " +
+                "reconnect. That phone now watches for the FULL $OBSERVE_WINDOW after its radio dies " +
+                "before it will say anything, so expect about two minutes; at most " +
                 "${HOST_OBSERVE.inWholeMinutes} minutes.",
         )
         if (!ctx.armOutage("blip")) return
@@ -1864,12 +2022,36 @@ public class ConnectivitySuite {
         val BLIP_MARGIN: Duration = 2.seconds
 
         /**
-         * Path back → the resume episode closes, one way or the other. Must outlast the FAILING lane,
-         * which is the slower of the two: `HostLost` arrives when the window expires, ≈ grace + window
-         * ≈ 70s after the radio *died*, so ≈ 58s after it returns. Doubled for a real radio on a real
-         * network.
+         * Headroom on top of the joiner's whole reconnect budget before a verdict is rendered.
+         *
+         * The budget itself is exact — [S7_WOVEN_PATH_GRACE] before the seam evicts the host, then
+         * `reconnectWindow` before the episode dies — but the instants are not: the seam's eviction
+         * runs off its own path-monitor callback, a real radio does not come back on a schedule, and
+         * `HostLost` is delivered through a buffered event flow. 25 s covers all three without
+         * stretching a normal run, because a normal run does not wait it out (a `HostLost` ends the
+         * observation the moment it lands).
          */
-        val VERDICT_WAIT: Duration = 120.seconds
+        val OBSERVE_SLACK: Duration = 25.seconds
+
+        /**
+         * **How long the dropped phone watches after the radio dies before it is allowed to say
+         * anything.** A deadline, not a first-match wait — that distinction is the whole of this
+         * scenario's first defect.
+         *
+         * #1637 does not kill the room promptly; it kills it when the reconnect window expires,
+         * ≈ [S7_WOVEN_PATH_GRACE] + [S7_HEARTBEAT]`.reconnectWindow` ≈ 63 s after the radio died. The
+         * previous code returned on the first `Recovered`/`Resumed`/`HostLost` it saw, so a room that
+         * looked healthy early was declared PASS at ~15 s with 48 s of the very window the bug lives in
+         * unobserved. The 2026-07-28 hardware run did exactly that, on a build carrying the fix, and
+         * the fix had not run.
+         *
+         * So: watch the whole budget plus [OBSERVE_SLACK] and only then decide. `HostLost` still ends
+         * it early — the room is terminal and nothing can follow — so a genuine #1637 FAIL still
+         * arrives as fast as it ever did; it is the *green* answers that now have to survive the full
+         * window.
+         */
+        val OBSERVE_WINDOW: Duration =
+            S7_WOVEN_PATH_GRACE + S7_HEARTBEAT.reconnectWindow + OBSERVE_SLACK
 
         /**
          * The **ceiling** on how long the stay-up phone keeps its room alive — advertising, admitting,
@@ -1879,12 +2061,14 @@ public class ConnectivitySuite {
          * seconds before the joiner's radio returned, so the joiner's browse found nothing to dial and
          * sent zero Resumes — every such run is invalidated, whatever the joiner reports).
          *
-         * Sized for the worst case the joiner's own gates admit: the operator taking the full
-         * [TOGGLE_WAIT] to find the toggle, plus the hold, plus [RESTORE_LAG], plus a whole episode
-         * ([S7_WOVEN_PATH_GRACE] + `reconnectWindow` ≈ 63s), plus slack. It is a ceiling, not a duration:
-         * the dwell normally ends much sooner, when the joiner leaves.
+         * Sized for the worst case the joiner's own gates admit, and re-derived when [OBSERVE_WINDOW]
+         * replaced the old first-match verdict: [TOGGLE_WAIT] (120s) to find the toggle + [BLIP_HOLD]
+         * + [RECOVER_WAIT] (90s) for the radio + [OBSERVE_WINDOW] (88s) ≈ 299s. At the old 240s this
+         * side could have stopped advertising while the joiner was still inside its observation — the
+         * exact failure the first hardware run had, reintroduced by a longer joiner. It is a ceiling,
+         * not a duration: a normal run ends much sooner (≈2 minutes), when the joiner leaves.
          */
-        val HOST_OBSERVE: Duration = 240.seconds
+        val HOST_OBSERVE: Duration = 300.seconds
 
         /**
          * If the stay-up phone *does* partition the joiner, it stays up at least this much longer past

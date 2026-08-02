@@ -107,8 +107,39 @@ public class SuiteLogCapture private constructor(
 ) {
     private val lock = reentrantLock()
 
+    // Separate from [lock] on purpose: an observer runs on whichever Network.framework dispatch queue
+    // logged, and holding the FILE lock across a foreign callback would couple two unrelated critical
+    // sections. Nothing here touches the file handle.
+    private val observerLock = reentrantLock()
+    private val observers = mutableListOf<(String, String) -> Unit>()
+
     /** True when lines are actually being persisted. */
     public val enabled: Boolean get() = path != null
+
+    /**
+     * Watch the `kotlin-logging` stream *structurally* — [observer] is called with the event's
+     * `loggerName` and `message`, not with the rendered file line — and returns the unregister action.
+     *
+     * **Why this exists.** Some library behaviour has no in-process surface a consumer can subscribe
+     * to; its only externally visible trace is a log line. Scenario 7 is the case that forced it: the
+     * #1637 no-op resume and an ordinary detector-observed recovery emit the *same*
+     * `MembershipEvent.Recovered(hostId)`, so a verdict that needs to tell them apart has nowhere else
+     * to look ([ResumeLaneProbe] explains the search that established that).
+     *
+     * Observers see events regardless of whether the file sink [enabled] — see [installFabricTee].
+     * An observer must be cheap and must not throw: it runs inline on a fabric dispatch queue, ahead
+     * of nothing and behind the delegate appender.
+     */
+    public fun observe(observer: (loggerName: String, message: String) -> Unit): () -> Unit {
+        observerLock.withLock { observers.add(observer) }
+        return { observerLock.withLock { observers.remove(observer) } }
+    }
+
+    /** Fan an event out to [observe]rs. Snapshot under the lock, call outside it. */
+    internal fun notifyObservers(loggerName: String, message: String) {
+        val snapshot = observerLock.withLock { if (observers.isEmpty()) return else observers.toList() }
+        snapshot.forEach { it(loggerName, message) }
+    }
 
     /**
      * Persist one line, stamped with the current UTC time. Total: any failure is swallowed, because a
@@ -147,9 +178,14 @@ public class SuiteLogCapture private constructor(
      * run gains lines, it does not lose them. The configured **level is left alone** — this captures
      * whatever the run was already going to emit and never widens it, so the soak's RTT distribution is
      * measuring the same thing it measured yesterday.
+     *
+     * **Installed even when the file sink is off.** It used to early-return on `!`[enabled], which was
+     * a pure optimisation while the tee's only job was writing bytes. It is not one now: [observe]rs
+     * ride the same appender, and a scenario whose *verdict* depends on watching the log stream must
+     * not silently go blind because a `fopen` failed. A disabled sink's [line] is already a no-op, so
+     * the cost of installing anyway is one delegate call per event.
      */
     public fun installFabricTee(): () -> Unit {
-        if (!enabled) return {}
         val previousFactory: KLoggerFactory = KotlinLoggingConfiguration.loggerFactory
         KotlinLoggingConfiguration.loggerFactory = DirectLoggerFactory
         val previousAppender: Appender = KotlinLoggingConfiguration.direct.appender
@@ -245,7 +281,7 @@ public class SuiteLogCapture private constructor(
 
 /**
  * Forwards every `kotlin-logging` event to the previously-installed appender (so console output is
- * preserved) *and* into the run file.
+ * preserved), into the run file, *and* to any [SuiteLogCapture.observe]r.
  *
  * Deliberately synchronous — no channel, no drain coroutine. `SuiteLogCapture.line` is a guarded
  * `fputs` + `fflush`, and the whole point of this class is that the bytes are on disk **before** the
@@ -254,6 +290,9 @@ public class SuiteLogCapture private constructor(
  *
  * [SuiteLogCapture.line] cannot throw and never itself logs through `kotlin-logging`, so this cannot
  * recurse or propagate a capture failure into the fabric's logging path.
+ *
+ * Observers get `loggerName` and `message` as their own values rather than the rendered line, so a
+ * watcher matches on the *field* it means and never on this class's formatting.
  */
 private class TeeAppender(
     private val sink: SuiteLogCapture,
@@ -261,8 +300,13 @@ private class TeeAppender(
 ) : Appender {
     override fun log(loggingEvent: KLoggingEvent) {
         delegate.log(loggingEvent)
+        // Templated rather than read directly: `KLoggingEvent.message` is nullable, and a watcher
+        // matching on prefixes wants a String either way.
+        val loggerName = "${loggingEvent.loggerName}"
+        val message = "${loggingEvent.message}"
         val cause = loggingEvent.cause
         val suffix = if (cause == null) "" else " | cause=${cause::class.simpleName}: ${cause.message}"
-        sink.line("${loggingEvent.level.name} ${loggingEvent.loggerName} — ${loggingEvent.message}$suffix")
+        sink.line("${loggingEvent.level.name} $loggerName — $message$suffix")
+        sink.notifyObservers(loggerName, message)
     }
 }
