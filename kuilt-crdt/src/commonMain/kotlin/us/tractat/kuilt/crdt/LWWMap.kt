@@ -21,6 +21,7 @@ import kotlinx.serialization.Serializable
  */
 @Serializable
 public class LWWMap<K, V> private constructor(
+    @Serializable(with = CanonicalMapSerializer::class)
     private val cells: Map<K, LWWRegister<V>>,
 ) : Quilted<LWWMap<K, V>> {
 
