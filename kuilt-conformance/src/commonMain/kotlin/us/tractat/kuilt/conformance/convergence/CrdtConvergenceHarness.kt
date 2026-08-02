@@ -31,8 +31,9 @@ public fun interface OperationGenerator<S> {
  *
  * **Scope of the byte assertion — read before trusting a green run.** Every comparison it makes is
  * between two encodings produced in one process on one target, so it proves order-independence
- * *within* a target and nothing more. It does **not** prove two targets agree on the bytes; that
- * dimension is pinned separately by the golden vectors in `:kuilt-crdt`'s `commonTest`.
+ * *within* a target and nothing more. It does **not** prove two targets agree on the bytes. That
+ * dimension is currently unpinned; the plan is to pin it separately with cross-target golden
+ * vectors in `:kuilt-crdt`'s `commonTest` (#1957).
  *
  * More sharply: on JVM and Android this assertion has **near-zero discriminating power**. The map
  * merges underneath most CRDTs return a `HashMap`, and `java.util.HashMap` iterates in bucket

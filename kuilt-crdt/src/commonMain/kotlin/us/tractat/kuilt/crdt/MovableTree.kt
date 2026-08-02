@@ -71,10 +71,6 @@ public class MovableTree<V> private constructor(
      * Merged with `+` in [piece], which yields a `LinkedHashSet` in merge order — so the
      * auto-generated serializer encoded the same logical set differently depending on which side
      * of the join a replica saw first (#1957).
-     *
-     * The convergence suite cannot see this: its generators never call [compact], so the set is
-     * always empty and an empty set encodes canonically everywhere. `MovableTreeCompactedDotsCanonicalTest`
-     * covers it instead, merging two independently-compacted trees in both orders.
      */
     @Serializable(with = CanonicalSetSerializer::class)
     private val compactedDots: Set<Dot>,

@@ -8,6 +8,7 @@ import kotlinx.serialization.json.Json
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
  * Cross-replica byte-stability tests: two replicas that reach the same logical
@@ -337,6 +338,64 @@ class CanonicalSerializationTest {
                 val cbor1 = cbor.encodeToByteArray(ser, normalLamport)
                 val cbor2 = cbor.encodeToByteArray(ser, advancedLamport)
                 assertEquals(cbor1.toList(), cbor2.toList(), "Rga CBOR must be lamport-invariant")
+            },
+        )
+    }
+
+    // ── MovableTree compacted dots (#1957) ────────────────────────────────────
+
+    /**
+     * A tree owned by [replica] with a compaction applied, so `compactedDots` holds exactly the
+     * dot of the superseded `ts=3` move.
+     */
+    private fun compactedTreeFor(replica: ReplicaId, tag: String): MovableTree<String> {
+        val (afterFirst, first) =
+            MovableTree.empty<String>().addNode(replica, ts = 1L, parent = MovableTree.ROOT_ID, value = "${tag}1")
+        val (afterSecond, second) =
+            afterFirst.addNode(replica, ts = 2L, parent = MovableTree.ROOT_ID, value = "${tag}2")
+        val (afterMove, _) = afterSecond.move(replica, ts = 3L, node = first, newParent = second)
+        val (afterSupersede, _) = afterMove.move(replica, ts = 4L, node = first, newParent = MovableTree.ROOT_ID)
+
+        val cut = VersionVector.of(mapOf(replica to 4L))
+        val (compacted, _) = afterSupersede.compact(stableCut = cut, frontierMax = cut, delivered = cut)
+            ?: error("compact() must succeed for $replica — the ts=3 move is stable and superseded")
+        return compacted
+    }
+
+    /**
+     * Two replicas that each compacted their own move-log, then merged with the other in opposite
+     * orders, must serialize to identical bytes.
+     *
+     * The `:kuilt-conformance` convergence suite cannot reach this field: its operation generators
+     * never call [MovableTree.compact], so `compactedDots` is always empty and an empty set encodes
+     * canonically on every target. A *compacted* tree is the state that diverges — `piece` merges the
+     * two sides with `Set.plus`, whose `LinkedHashSet` result is in merge order.
+     *
+     * Mutation-checked: dropping the `@Serializable(with = CanonicalSetSerializer::class)` annotation
+     * on `compactedDots` makes this test fail with `compactedDots` reversed and every other field
+     * byte-identical.
+     */
+    @Test
+    fun movableTreeCompactedDotsAreDeliveryOrderIndependent() {
+        val alice = compactedTreeFor(ReplicaId("alice"), "a")
+        val bob = compactedTreeFor(ReplicaId("bob"), "b")
+
+        val ser = MovableTree.serializer(String.serializer())
+        val aliceFirst = json.encodeToString(ser, alice.piece(bob))
+        val bobFirst = json.encodeToString(ser, bob.piece(alice))
+
+        assertAll(
+            {
+                assertTrue(
+                    aliceFirst.contains("""{"replica":"alice","seq":3}"""),
+                    "the probe is vacuous unless compactedDots is actually populated: $aliceFirst",
+                )
+            },
+            { assertEquals(aliceFirst, bobFirst, "MovableTree JSON must be delivery-order-independent") },
+            {
+                val cbor1 = cbor.encodeToByteArray(ser, alice.piece(bob))
+                val cbor2 = cbor.encodeToByteArray(ser, bob.piece(alice))
+                assertEquals(cbor1.toList(), cbor2.toList(), "MovableTree CBOR must be delivery-order-independent")
             },
         )
     }
