@@ -6,6 +6,7 @@ import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 
 @OptIn(ExperimentalSerializationApi::class)
 class CanonicalCollectionSerializersTest {
@@ -15,9 +16,17 @@ class CanonicalCollectionSerializersTest {
     @Test
     fun mapEncodingIsInsertionOrderIndependent() {
         val ser = CanonicalMapSerializer(String.serializer(), Long.serializer())
-        // HashMap so iteration order is neither insertion nor sorted — the real defect shape.
-        val forward = HashMap<String, Long>().apply { put("a", 1L); put("b", 2L); put("c", 3L) }
-        val reverse = HashMap<String, Long>().apply { put("c", 3L); put("b", 2L); put("a", 1L) }
+        // linkedMapOf, not HashMap: a LinkedHashMap iterates in insertion order on EVERY target,
+        // so the two inputs are guaranteed to differ. A HashMap does not work here — on the JVM
+        // its iteration order is a function of the key set and capacity, not of insertion, so
+        // both maps iterate identically and this test passes even with the sort removed.
+        val forward = linkedMapOf("a" to 1L, "b" to 2L, "c" to 3L)
+        val reverse = linkedMapOf("c" to 3L, "b" to 2L, "a" to 1L)
+        assertNotEquals(
+            forward.keys.toList(),
+            reverse.keys.toList(),
+            "precondition: inputs must iterate differently",
+        )
 
         assertEquals(
             cbor.encodeToByteArray(ser, forward).toList(),
@@ -40,8 +49,15 @@ class CanonicalCollectionSerializersTest {
     @Test
     fun setEncodingIsInsertionOrderIndependent() {
         val ser = CanonicalSetSerializer(String.serializer())
+        // linkedSetOf iterates in insertion order on every target — see the note in
+        // mapEncodingIsInsertionOrderIndependent for why a plain HashSet would be unsound here.
         val forward = linkedSetOf("alpha", "beta", "gamma")
         val reverse = linkedSetOf("gamma", "beta", "alpha")
+        assertNotEquals(
+            forward.toList(),
+            reverse.toList(),
+            "precondition: inputs must iterate differently",
+        )
 
         assertEquals(
             cbor.encodeToByteArray(ser, forward).toList(),
@@ -63,18 +79,38 @@ class CanonicalCollectionSerializersTest {
 
     @Test
     fun compoundKeysSortStructurallyNotByToString() {
-        // Dot is a data class with (replica, seq) — serialKeyComparator must order it by
-        // serialized leaves, so this works without any Comparable bound on the key.
+        // The two keys differ only in the numeric `seq` leaf, and differ there in the one way that
+        // discriminates the two candidate orders: structurally 2 < 10, but as text "10" < "2".
+        // A toString-based comparator therefore emits [10, 2] and fails the order assertion below.
+        // That is what pins serialKeyComparator as load-bearing rather than incidental — keys whose
+        // toString order happens to agree with their structural order cannot tell the two apart.
         val ser = CanonicalMapSerializer(Dot.serializer(), Long.serializer())
-        val a = Dot(ReplicaId("A"), 2L)
-        val b = Dot(ReplicaId("B"), 1L)
-        val forward = HashMap<Dot, Long>().apply { put(a, 1L); put(b, 2L) }
-        val reverse = HashMap<Dot, Long>().apply { put(b, 2L); put(a, 1L) }
+        val low = Dot(ReplicaId("A"), 2L)
+        val high = Dot(ReplicaId("A"), 10L)
+        val forward = linkedMapOf(low to 1L, high to 2L)
+        val reverse = linkedMapOf(high to 2L, low to 1L)
+        assertNotEquals(
+            forward.keys.toList(),
+            reverse.keys.toList(),
+            "precondition: inputs must iterate differently",
+        )
 
-        assertEquals(
-            cbor.encodeToByteArray(ser, forward).toList(),
-            cbor.encodeToByteArray(ser, reverse).toList(),
-            "compound keys must sort structurally",
+        val decoded = cbor.decodeFromByteArray(ser, cbor.encodeToByteArray(ser, forward))
+        assertAll(
+            {
+                assertEquals(
+                    cbor.encodeToByteArray(ser, forward).toList(),
+                    cbor.encodeToByteArray(ser, reverse).toList(),
+                    "compound keys must sort structurally",
+                )
+            },
+            {
+                assertEquals(
+                    listOf(2L, 10L),
+                    decoded.keys.map { it.seq },
+                    "seq must sort numerically, not by toString",
+                )
+            },
         )
     }
 }
