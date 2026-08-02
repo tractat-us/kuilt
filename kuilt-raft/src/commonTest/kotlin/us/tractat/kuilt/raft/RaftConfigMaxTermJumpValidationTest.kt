@@ -13,8 +13,9 @@ import kotlin.test.assertFailsWith
  * before this it was a knob whose safe range lived nowhere executable. Two settings quietly undid the
  * fix the knob belongs to:
  *
- * - **Too large** makes `onMessage`'s `wireTerm - currentTerm > maxTermJump` vacuous, so a single frame
- *   carrying an arbitrary term is adopted again and #1833's cluster-wide wedge returns in full.
+ * - **`Long.MAX_VALUE`** (or anything near `2^60`) makes `onMessage`'s
+ *   `wireTerm - currentTerm > maxTermJump` vacuous, so a single frame carrying an arbitrary term is
+ *   adopted again and #1833's cluster-wide wedge returns in full.
  * - **Negative** makes it true for every frame at or above our own term, so the node drops all of them
  *   and goes silently deaf — nothing logs above `debug`.
  *
@@ -27,9 +28,12 @@ import kotlin.test.assertFailsWith
  *   `currentTerm + 1` is ever admitted and the cluster can never elect again — a liveness break, not a
  *   tight bound. Below `0` the node refuses everything at or above its term. `1` is the smallest value
  *   that keeps elections possible, so it must be *admitted*, not merely non-negative.
- * - **Ceiling at 2^20.** The bound is the attacker's step size: climbing to `RaftEngine.MAX_PLAUSIBLE_TERM`
- *   (`2^60`) costs `2^60 / maxTermJump` accepted frames, which at `2^20` is `2^40` ≈ 1.1×10^12. Its
- *   successor must be refused, or the ceiling is decoration.
+ * - **Ceiling at 2^20 — a chosen line, not a cliff.** The bound is the attacker's step size, so
+ *   climbing to `RaftEngine.MAX_PLAUSIBLE_TERM` (`2^60`) costs `2^60 / maxTermJump` accepted frames:
+ *   `2^40` ≈ 1.1×10^12 at this value. That price degrades *continuously* above it, so
+ *   [aMaxTermJumpAboveTheCeilingIsRefused] asserting `2^20 + 1` is not a claim that `2^20 + 1` is
+ *   dangerous — it is a claim that the line is enforced where it was drawn. A ceiling whose successor
+ *   is admitted is decoration.
  *
  * Both edges are asserted from *both* sides — the admitted value and its neighbour — because a bound
  * tested on one side only is satisfied by a bound in the wrong place.

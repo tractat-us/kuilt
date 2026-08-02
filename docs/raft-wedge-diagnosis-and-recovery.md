@@ -56,19 +56,26 @@ m.term > currentTerm + maxTermJump   →  refuse
 There is no boundary any more. A device sitting at exactly the old ceiling proposes
 one more, and every peer at that same number accepts it, because the step is small.
 The check refuses a jump no honest election sequence could have produced, which is
-the property that was actually wanted all along. `maxTermJump` defaults to `10_000`
-on `RaftConfig`; where it is consumed it is a **required** constructor parameter, not
-a defaulted knob — the precedent set by the snapshot ceiling. The existing
-"a negative term is malformed" guard is unaffected and stays.
+the property that was actually wanted all along. `maxTermJump` is a setting on
+`RaftConfig`, defaulting to `10_000`, and its safe range is checked when the config is
+built — see just below. The existing "a negative term is malformed" guard is
+unaffected and stays.
 
-The knob has a validated range — `1..2^20`, checked when the config is constructed —
-because both ends of it turn the safeguard off. Set to zero it refuses a step of
-exactly one, so no device can ever be told about a new election and the group stops
-electing; set high enough it stops refusing anything, and the single hostile frame is
-back. One is the smallest setting that still lets the group elect; the ceiling is
-where a fabricated climb to the top of the number range still costs more than a
-trillion accepted frames, while remaining a hundred times the largest absence anyone
-would call recoverable. The derivation, in numbers, is on `RaftConfig.maxTermJump`.
+The permitted range is `1..2^20`, and its two ends are different kinds of limit.
+
+**The bottom is a cliff.** Set to zero, the check refuses a step of exactly one, so no
+device can ever be told about a new election and the group stops electing altogether;
+set below zero, a device refuses everything at or above its own number and goes deaf.
+One is the smallest setting that still lets the group elect, so it has to be allowed
+rather than merely tolerated.
+
+**The top is a chosen line, not a discovered edge.** Raising the setting does not
+switch the safeguard off at some particular point; it makes a fabricated climb
+steadily cheaper, and only a setting close to the restart limit itself brings back the
+original one-frame attack. `2^20` is the highest value that still guarantees such a
+climb costs more than a trillion accepted frames before a device reaches the number
+past which it can never restart — while staying a hundred times the longest absence
+anyone would call recoverable. The numbers are on `RaftConfig.maxTermJump`.
 
 ### The absolute ceiling keeps a different job
 

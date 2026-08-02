@@ -107,25 +107,36 @@ import kotlin.time.Duration.Companion.milliseconds
  *   change, never a wiped disk under the same one. See `docs/raft-wedge-diagnosis-and-recovery.md`.
  *
  *   **Validated at construction to `1..2^20` (1 048 576), inclusive (#1972).** A knob whose whole
- *   job is to bound a safety property must not be settable to a value that disables it, and both
- *   ends of this one do:
+ *   job is to bound a safety property must not be settable to a value that defeats it. The two ends
+ *   are **not** the same kind of limit, and reading them as symmetric is the error to avoid:
  *
- *   - *At 0, elections stop.* A jump of exactly one is then refused (`1 > 0`), so no candidate's
- *     `currentTerm + 1` is ever admitted by anyone and no leader can be elected again. Below 0 the
- *     subtraction exceeds the bound for **every** frame at or above our own term, and the node
- *     goes silently deaf — nothing logs above `debug`. So 1, not 0, is the floor: it is the
- *     smallest value that preserves liveness, and it must be admitted rather than merely
- *     non-negative.
- *   - *Above 2^20, the bound stops bounding.* Large enough and the guard is vacuous, one frame
- *     carrying an arbitrary term is adopted again, and #1833's cluster-wide wedge returns in full.
+ *   - *The floor is a cliff, and it is at 0.* A jump of exactly one is refused there (`1 > 0`), so
+ *     no candidate's `currentTerm + 1` is ever admitted by anyone and no leader can be elected
+ *     again. Below 0 the subtraction exceeds the bound for **every** frame at or above our own
+ *     term, and the node goes silently deaf — nothing logs above `debug`. This is a property of the
+ *     arithmetic, not a judgement call: 1 is the smallest value that preserves liveness, so it must
+ *     be *admitted* rather than merely non-negative.
+ *   - *The ceiling is a chosen line on a continuum.* There is no cliff at `2^20`. The attack price
+ *     `2^60 / maxTermJump` degrades **continuously** as the knob rises — at `2^20 + 1` the climb
+ *     still costs about `2^40` frames, indistinguishable from the value chosen here — and the guard
+ *     becomes literally vacuous, one frame reinstating #1833's cluster-wide wedge, only as
+ *     `maxTermJump` approaches `2^60` itself. So the ceiling is not where the bound stops bounding;
+ *     it is the largest value at which the price is still *guaranteed* to be at least the `2^40`
+ *     frames derived below, placed where that guarantee costs no honest deployment anything.
  *
- *   The ceiling is derived from both directions rather than rounded:
+ *   That guarantee is what the ceiling is chosen to hold, from both directions:
  *
  *   1. *Attack cost.* This value is the attacker's step size, so climbing from term 0 to the
  *      storage-path ceiling `RaftEngine.MAX_PLAUSIBLE_TERM` (`2^60`) costs `2^60 / maxTermJump`
  *      accepted frames. At `2^20` that is `2^40` ≈ 1.1×10^12 — over twelve days of uninterrupted
  *      attack even at a sustained million admitted frames per second, a rate far above what any
  *      real Raft peer processes. Before #1897 the same climb cost exactly one frame.
+ *
+ *      This `2^60` and the `2^63` in the default's derivation above are **different thresholds and
+ *      both are live** — do not reconcile one to the other. `2^60` is where a running node can
+ *      still be *driven* (adoption is relative now, so nothing refuses a term above it) but can no
+ *      longer *restart*, because `checkedRestoredTerm` rejects a durable term past it; the climb
+ *      toward `Long.MAX_VALUE` continues from there, and is where the arithmetic itself breaks.
  *   2. *Legitimate need.* Terms advance once per election, so `2^20` covers roughly 1.05 million
  *      missed elections — 100× the default above, and still some 29 hours of absence at a
  *      pathological ten elections per second. A deployment that genuinely exceeds it has the
@@ -163,7 +174,9 @@ public data class RaftConfig(
                 "At 0 a jump of exactly one is refused, so no candidate's currentTerm + 1 is ever " +
                 "admitted and no leader can be elected again; below 0 every frame at or above this " +
                 "node's own term is dropped and the node goes silently deaf. Above " +
-                "$MAX_TERM_JUMP the bound stops pricing the attack it exists to price (#1972)."
+                "$MAX_TERM_JUMP nothing breaks at once — the cost of a fabricated climb degrades " +
+                "continuously — but it is no longer guaranteed to exceed the 2^40 accepted frames " +
+                "this ceiling is placed to hold (#1972)."
         }
     }
 
