@@ -262,11 +262,18 @@ exceptions to it. The local witness is local, and it is also possibly out of dat
   entirely and forced an immediate, pre-vote-less election. Both halves closed in #1889 —
   `TimeoutNow` joined the type test, and a `TimeoutNow` ahead of our term is now refused
   rather than adopted.
-- **Too strict.** The gate keys on the *recipient's* currently-adopted voter set, which
-  may be stale. A node absent across a full rotation of that set may be unable to accept
-  the current leader's frames at all — and those frames are the only thing that could
-  teach it the new set. Reported from a code reading and not yet reproduced; the
-  reachability step is the part still to verify (#1898).
+- **Too strict, and accepted as such.** The gate keys on the *recipient's* currently-adopted
+  voter set, which may be stale. A node absent across a full rotation of that set cannot
+  accept the current leader's frames at all — and those frames are the only thing that could
+  teach it the new set. This is reproduced, not inferred: a driven run rotates the voter set
+  past an absent node through five legal §6 changes, and it then drops 500 consecutive
+  `AppendEntries` from the sitting leader across two restarts (#1898).
+  The gate is **unchanged** in response. Relaxing it on suspicion of being wedged was
+  considered and rejected, because an honest long absence and a hostile peer produce the same
+  local symptom, so the relaxation would fire for both. What the node gets instead is a name
+  for the state — `RaftMetric.WedgeSuspected` — and a documented route back: a fresh `NodeId`
+  over empty storage, re-admitted by an ordinary §4 change, never a wiped disk under the same
+  id. See [the wedge design doc](../docs/raft-wedge-diagnosis-and-recovery.md).
 
 ### Out of scope
 
