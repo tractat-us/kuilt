@@ -33,7 +33,7 @@ import us.tractat.kuilt.crdt.internal.serialLeaves
  * those keys the encoding is history-dependent again.
  *
  * **Precondition — this class canonicalises the key ORDER, nothing else.** The bytes are
- * canonical only if [K] and [V] each serialize canonically in their own right. Two traps:
+ * canonical only if [K] and [V] each serialize canonically in their own right. Three traps:
  *
  * - A key or value reaching an unordered [Set] or [Map] field through a non-canonical
  *   serializer is not canonical, and neither is the whole. Two *equal* keys of a type like
@@ -41,6 +41,10 @@ import us.tractat.kuilt.crdt.internal.serialLeaves
  * - **Values are passed through `vSerializer` untouched.** A `Map<String, GCounter>` is
  *   canonical here only once `GCounter` itself encodes canonically; wrapping the outer map is
  *   not sufficient.
+ * - **[K] must be serializable without a `SerializersModule`.** The sort runs each key through
+ *   an internal encoder whose module is empty, so a `@Contextual` or open-polymorphic key that
+ *   the *format's* module would have resolved throws at encode time here instead. (Threading the
+ *   real module through is tracked as #1964.)
  *
  * Wire format is unchanged — the same map layout, with entries reordered.
  */
@@ -82,10 +86,15 @@ public class CanonicalMapSerializer<K, V>(
  *
  * Sort order, and its total-preorder caveat, are as described on [CanonicalMapSerializer].
  *
- * **Precondition — this class canonicalises the element ORDER, nothing else.** The bytes are
- * canonical only if [E] itself serializes canonically: an [E] that reaches an unordered [Set] or
- * [Map] field through a non-canonical serializer makes the whole encoding non-canonical, however
- * this class orders the elements around it.
+ * **Precondition — this class canonicalises the element ORDER, nothing else.** Two traps:
+ *
+ * - The bytes are canonical only if [E] itself serializes canonically: an [E] that reaches an
+ *   unordered [Set] or [Map] field through a non-canonical serializer makes the whole encoding
+ *   non-canonical, however this class orders the elements around it.
+ * - **[E] must be serializable without a `SerializersModule`.** The sort runs each element
+ *   through an internal encoder whose module is empty, so a `@Contextual` or open-polymorphic
+ *   element that the *format's* module would have resolved throws at encode time here instead.
+ *   (Threading the real module through is tracked as #1964.)
  */
 @OptIn(ExperimentalSerializationApi::class)
 public class CanonicalSetSerializer<E>(

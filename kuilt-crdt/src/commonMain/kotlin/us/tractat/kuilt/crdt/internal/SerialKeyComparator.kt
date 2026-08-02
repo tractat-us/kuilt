@@ -12,9 +12,10 @@ import kotlinx.serialization.modules.SerializersModule
  * Returns a [Comparator] that orders values of type [K] by their canonical serialized form.
  *
  * Each key is serialized to a [List] of primitive leaf values via [PrimitiveLeafEncoder]
- * and the lists are compared lexicographically.  This produces a total, stable, structural
- * order for any [K] that serializes to a finite, deterministic sequence of primitives —
- * which includes every data class, value class, and primitive key used in this module.
+ * and the lists are compared lexicographically.  This produces a structural total
+ * **preorder** — not a total order; see [leafListComparator] for what that costs a caller —
+ * for any [K] that serializes to a finite, deterministic sequence of primitives, which
+ * includes every data class, value class, and primitive key used in this module.
  *
  * This is the correct replacement for a `.sortedBy { key.toString() }` comparator whose
  * correctness depended on `toString` being injective and platform-stable — a guarantee

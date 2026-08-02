@@ -37,9 +37,13 @@ public fun interface OperationGenerator<S> {
  *
  * More sharply: on JVM and Android this assertion has **near-zero discriminating power**. The map
  * merges underneath most CRDTs return a `HashMap`, and `java.util.HashMap` iterates in bucket
- * order — a function of the key set and table capacity, both invariant under the fold order — so
- * every permutation emits identically whether or not the type is canonical. Kotlin/Native and
- * Kotlin/Wasm preserve insertion order, which *is* the fold order, so only they see the defect.
+ * order — largely a function of the key set and table capacity, both invariant under the fold
+ * order — so a permutation almost always emits identically whether or not the type is canonical.
+ * Only *largely*: `putVal` appends to the tail of a bin and iteration walks each bin head→tail, so
+ * keys that collide into one bucket iterate in **insertion** order, and there the fold order does
+ * show through. A few short `ReplicaId` keys in a 16-slot table collide rarely enough that this is
+ * not something to count on in either direction. Kotlin/Native and Kotlin/Wasm preserve insertion
+ * order throughout, which *is* the fold order, so they see the defect reliably.
  * When you bind a new CRDT to this suite, **verify on `macosArm64Test` or `wasmJsTest`** — a green
  * `jvmTest` is not evidence of canonicality. (Types whose merge yields a `LinkedHashSet`, e.g. via
  * `Set.plus`, are insertion-ordered on the JVM too and do fail there — so a JVM red is meaningful
