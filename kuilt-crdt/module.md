@@ -45,6 +45,50 @@ and converges any `Quilted` state across peers automatically.
 `MuxSeam` (`:kuilt-core`) multiplexes several CRDTs over one underlying `Seam`,
 routing frames by channel tag.
 
+## Same value, same bytes
+
+Two devices that have received the same updates — in whatever order, from whatever
+peers — should not merely *agree* about what they hold. They should hold it in
+byte-for-byte identical form. That is what lets a phone and a laptop compare a short
+fingerprint of a shared shopping list and know whether they are still in sync,
+without either of them sending the list.
+
+It does not come for free. A shopping list is a set, and a set has no order. When
+two devices merge the same three items in different orders, the ordinary machinery
+writes them out in different orders too — same list, different bytes. A fingerprint
+taken over those bytes then reports "you have diverged", forever, about two devices
+that never did.
+
+So the zoo holds a property stricter than convergence: **a state's serialized form
+is a function of its logical value alone** — not of merge history, and not of the
+platform it runs on. `GSet.of("a").piece(GSet.of("b"))` and
+`GSet.of("b").piece(GSet.of("a"))` encode to the same bytes, on the JVM, on
+Kotlin/Native, and in the browser.
+
+`CanonicalMapSerializer` and `CanonicalSetSerializer` are how map- and set-backed
+states hold it. Each sorts entries or elements by the structural encoding of the
+key/element before writing them, so the unspecified iteration order of the backing
+`HashMap`/`LinkedHashSet` never reaches the wire (it differs by platform in kind,
+not merely in detail: hash-bucket order on the JVM, insertion order on
+Kotlin/Native). **A new zoo type must use them for every unordered `Map` or `Set`
+field**, or hand-write a serializer that sorts equivalently — `DotMapSerializer` and
+`DotSetSerializer` are the in-tree examples of the latter.
+
+**Precondition — they canonicalise the collection's *order*, nothing else.** The
+bytes are canonical only if the key, element and value types themselves serialize
+canonically. A key type carrying an unordered `Set` or `Map` field breaks it: two
+*equal* keys of a `data class Key(val tags: Set<String>)` encode differently, and no
+sorting around them helps. Values are passed straight through, so a
+`Map<String, GCounter>` is canonical only once `GCounter` itself is.
+
+Two checks hold the invariant, along different axes. `CrdtConvergenceHarness`
+(`:kuilt-conformance`) asserts that every merge permutation of a value encodes
+identically — the within-target axis. `CanonicalGoldenVectorTest` pins checked-in
+CBOR byte strings, and because `commonTest` runs on JVM, Android, iOS, macOS and
+wasmJs, that file *is* the cross-target axis. Add a vector for a new type rather
+than assuming the harness covers it: the harness only ever compares a target
+against itself.
+
 ## Minimal sparse fragment idiom
 
 Array-backed CRDTs should ship deltas as the **smallest possible fragment** of
