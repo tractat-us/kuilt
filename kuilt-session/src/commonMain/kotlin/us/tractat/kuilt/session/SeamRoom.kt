@@ -52,6 +52,7 @@ import us.tractat.kuilt.session.partition.JoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectEvent
 import us.tractat.kuilt.session.partition.JoinerResumeHost
 import us.tractat.kuilt.session.partition.JoinerResumeMachine
+import us.tractat.kuilt.session.partition.ResumeRefusal
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
@@ -1609,6 +1610,18 @@ internal class SeamRoom(
      * internal auto-reconnect's own resume (#1280). No production caller reads this.
      */
     internal fun hasPendingResume(): Boolean = resumeMachine?.hasPendingFlight() ?: false
+
+    /**
+     * Test-visibility: the current reconnect episode's most recent host `Reject` of a resume, or
+     * null when this joiner has not been refused.
+     *
+     * Exposed for [us.tractat.kuilt.session] tests that assert a refusal *loop* describes itself —
+     * the joiner retries every [us.tractat.kuilt.liveness.HeartbeatConfig.interval] for the whole
+     * reconnect window, and before #1637's post-mortem that burned its entire budget silently. No
+     * production caller reads this; production observes the same record as the `resume.refused`
+     * INFO line the machine logs alongside it.
+     */
+    internal fun lastResumeRefusal(): ResumeRefusal? = resumeMachine?.lastRefusal()
 
     private suspend fun handlePartitionEvent(event: PartitionEvent) {
         when (event) {
