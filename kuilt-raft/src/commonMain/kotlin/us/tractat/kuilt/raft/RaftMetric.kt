@@ -150,4 +150,104 @@ public sealed interface RaftMetric {
      * sum can overflow negative and sail under the very ceiling this reports.
      */
     public data class SnapshotRejectedSizeCeiling(val attemptedTotal: Long, val ceiling: Int) : RaftMetric
+
+    // ── Wedge detection ────────────────────────────────────────────────────────
+
+    /**
+     * This node has been refusing leader→peer frames for a sustained run while its own commit index
+     * stood still — the local signature of a node that has argued itself out of the conversation
+     * (#1898, and the honest-jump case of #1897).
+     *
+     * Design: [`docs/raft-wedge-diagnosis-and-recovery.md`](https://github.com/tractat-us/kuilt/blob/main/docs/raft-wedge-diagnosis-and-recovery.md).
+     *
+     * **This changes no decision.** Both gates that can feed it are unchanged and still drop the
+     * frame; the emission is the only thing added. That is deliberate and is the reason detection is
+     * safe: an honest long absence and a hostile peer produce the *same* local symptom, so a gate
+     * relaxed on this predicate would relax for both. Read this as "I am jammed", never as "the
+     * sender is hostile" — the cause is **not** locally determinable.
+     *
+     * ### The predicate
+     *
+     * A run of [Gate]-dropped frames of a leader→peer type (`AppendEntries` / `InstallSnapshot` /
+     * `TimeoutNow`) from a sender claiming a term **at least as high as ours**, during which
+     * [RaftNode.commitIndex] does not advance. Neither half alone is interesting: dropping frames is
+     * normal, and a stalled commit index is normal. The run is reset by our own commit index moving,
+     * and by any leader→peer frame that *passes* both gates — a node being fed by a leader it accepts
+     * is not jammed, whatever else is being refused alongside.
+     *
+     * ### Latched once per node, per voter-set epoch
+     *
+     * Unlike [SnapshotRejectedSizeCeiling], this is an **edge, not a level**: it is emitted once for
+     * as long as [ourVoters] stays the same, and re-arms when this node's voter set changes. Two
+     * reasons, and the second is the load-bearing one:
+     *
+     * 1. Everything it reports is a function of the voter set, so a second emission under the same
+     *    one carries no new information.
+     * 2. A finer latch — per sender, say — is a log-amplification lever. A peer alternating between
+     *    two identities would mint a fresh emission per alternation, handing unbounded volume to the
+     *    exact sender the §5.2 gate exists to contain. It cannot change our voter set, so it cannot
+     *    re-arm this.
+     *
+     * A consumer that wants a *level* has one already: this node's [RaftNode.commitIndex] is not
+     * advancing, which is what "still jammed" means and is observable without any help from here.
+     *
+     * ### What to do about one
+     *
+     * Bring the node back as a **genuinely new member — a fresh [NodeId] and empty storage — admitted
+     * by an ordinary single-server membership change.** Nothing in the library self-heals; this is an
+     * operator (or supervisor) action, and the existing membership machinery does the rest.
+     *
+     * ⚠ **Never wipe storage under the same [NodeId].** It looks like the same fix and it is the
+     * opposite of it: the node returns with no memory of a term it already voted in and votes again,
+     * which is a §5.2 Election Safety violation — two leaders in one term. The identity change is not
+     * cosmetic; it is the entire reason the recovery is safe.
+     *
+     * The residual, stated plainly: admitting a new member needs a quorum of the existing ones, so
+     * this recovers nodes one at a time against a cluster that still works. A *majority* jammed at
+     * once has no route back but re-bootstrapping the cluster.
+     *
+     * @property sender the peer whose frame was dropped — the true origin, already unwrapped from any
+     *   relay envelope. Under [Gate.LeaderAuthority] on an honest wedge this is the **current
+     *   leader**, which is the single most useful identity in the report: it is a node [ourVoters]
+     *   does not contain and therefore names the rotation this node slept through.
+     * @property senderTerm the term that frame claimed.
+     * @property ourTerm this node's own term when the run was reported.
+     * @property ourVoters the voter set this node is holding — the possibly-stale state that, under
+     *   [Gate.LeaderAuthority], is doing the refusing. Also the latch key.
+     * @property gate which gate dropped the frame.
+     */
+    public data class WedgeSuspected(
+        val sender: NodeId,
+        val senderTerm: Long,
+        val ourTerm: Long,
+        val ourVoters: Set<NodeId>,
+        val gate: Gate,
+    ) : RaftMetric {
+
+        /** Which of `RaftEngine.onMessage`'s two dispatch-boundary gates dropped the frame. */
+        public enum class Gate {
+            /**
+             * The §5.2/§8 leader-authority gate (#1383, #1889): the sender is not in [ourVoters], and
+             * only a voter can be leader, so a leader→peer RPC from it is treated as a forgery.
+             *
+             * On an honest wedge (#1898) [ourVoters] is simply **stale** — this node was absent across
+             * a voter-set rotation, and the frames that would teach it the new set are precisely the
+             * ones it refuses, because they come from senders the old set does not contain. The stale
+             * set is the thing preventing its own repair, and it is persisted, so restarting does not
+             * clear it.
+             */
+            LeaderAuthority,
+
+            /**
+             * The relative term-jump bound (#1897): the frame's term is more than
+             * [RaftConfig.maxTermJump] above ours.
+             *
+             * On an honest wedge this is a node that was away for more than that many elections, so
+             * the cluster's term legitimately ran beyond what a jump bound will admit in one step.
+             * (The bound's other job — refusing a fabricated term near [Long.MAX_VALUE] — produces
+             * this same gate, which is exactly why the cause is not locally determinable.)
+             */
+            TermJump,
+        }
+    }
 }

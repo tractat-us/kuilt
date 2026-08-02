@@ -68,6 +68,30 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.raft.RaftEngine")
  */
 private val raftCbor = Cbor { ignoreUnknownKeys = true }
 
+/**
+ * How long a run of refused leader→peer frames has to get before [noteRefusedLeaderFrame]
+ * calls it a wedge (#1898).
+ *
+ * It has to clear the longest *benign* run, which is the leader-removal transient: a leader
+ * this node has already stopped counting as a voter (membership is adopt-on-append, so an
+ * uncommitted config entry already arms the §5.2 gate) keeps heartbeating until it learns it
+ * is out, and every one of those frames is refused. That window is bounded by an election
+ * timeout and the frames arrive at `heartbeatInterval`, so its length is
+ * `electionTimeoutMax / heartbeatInterval` — 6 at [RaftConfig]'s defaults (300 ms / 50 ms),
+ * and 5 under the raft suite's `fastRaftConfig` (10 ms / 2 ms).
+ *
+ * 64 is an order of magnitude clear of both, which is the right shape of margin for a
+ * threshold whose false positive is a misleading operator diagnosis. It costs nothing at the
+ * other end: a genuine wedge refuses a frame per heartbeat *forever*, so the report is late by
+ * `64 × heartbeatInterval` — about 3 s at the defaults — against a condition that never clears.
+ *
+ * A count rather than a duration, deliberately: it scales with the leader's own retry cadence,
+ * which is the cadence "sustained" is measured in. Not on [RaftConfig] because there is no
+ * deployment for which a different value is right — the quantity it is calibrated against is
+ * itself derived from the config.
+ */
+internal const val WEDGE_SUSPECTED_RUN: Int = 64
+
 internal class RaftEngine(
     private val bootstrapConfig: ClusterConfig,
     private val transport: RaftTransport,
@@ -315,6 +339,34 @@ internal class RaftEngine(
      * `snapshotTotalCeiling` is read when the node is built, so raising it means a restart anyway.
      */
     private var snapshotSizeRejectionWarnLogged: Boolean = false
+
+    // ── Wedge detection (#1898) ───────────────────────────────────────────────
+    /**
+     * How many leader→peer frames this node has refused in a row, without accepting one and without
+     * its own commit index moving. Reset by both of those; read by [noteRefusedLeaderFrame].
+     *
+     * Deliberately **not** per sender. A per-sender run would let a peer alternating between two
+     * identities keep every individual run below the threshold and suppress the report entirely —
+     * the mirror image of the amplification the latch prevents.
+     */
+    private var refusedLeaderFrameRun: Int = 0
+
+    /**
+     * The commit index the current [refusedLeaderFrameRun] was accumulated at. A change means this
+     * node made progress of its own, so the run restarts.
+     */
+    private var refusedLeaderFrameRunCommitIndex: Long = 0L
+
+    /**
+     * The voter set held when [noteRefusedLeaderFrame] last emitted, or `null` if it never has —
+     * the latch key, giving one report per voter-set epoch.
+     *
+     * The set itself rather than a counter, because it is also what the report *says*: a second
+     * report under the same voter set would carry the same diagnosis. A node whose voter set changes
+     * has, by definition, accepted a frame carrying a config, which is precisely the thing that ends
+     * this wedge and is worth reporting again if it recurs.
+     */
+    private var wedgeReportedAtVoters: Set<NodeId>? = null
 
     // ── Per-term leader identity (#1906) ──────────────────────────────────────
     /**
@@ -3057,6 +3109,7 @@ internal class RaftEngine(
                 "onMessage: dropped ${m::class.simpleName} from $from — implausible term=$wireTerm " +
                     "(currentTerm=${state.currentTerm}, maxTermJump=${raftConfig.maxTermJump})"
             }
+            noteRefusedLeaderFrame(from, m, wireTerm, RaftMetric.WedgeSuspected.Gate.TermJump)
             return
         }
 
@@ -3098,18 +3151,127 @@ internal class RaftEngine(
         // witness" half of its trust policy; the accepted, unauthenticated exposures on the
         // other half are listed under "Trust between peers" in kuilt-raft/module.md. That
         // section also records where this same predicate has failed in BOTH directions — too
-        // narrow (#1889, fixed above) and too strict (#1898, open) — i.e. that the witness
-        // being local and the witness being possibly stale are one property, and the cost of
-        // the rule.
+        // narrow (#1889, fixed above) and too strict (#1898) — i.e. that the witness being
+        // local and the witness being possibly stale are one property, and the cost of the
+        // rule. The too-strict direction is CLOSED-AS-ACCEPTED, not fixed: a node absent
+        // across a voter-set rotation still refuses the current leader's frames forever, and
+        // this drop stays. What #1898 added is the report below, so the state has a name.
         val voters = state.membershipState.voters
         if ((m is RaftMessage.AppendEntries || m is RaftMessage.InstallSnapshot || m is RaftMessage.TimeoutNow) &&
             voters.isNotEmpty() && from !in voters
         ) {
             debug { "onMessage: dropped ${m::class.simpleName} from non-voter $from (§5.2 leader-authority gate) membershipState=${state.membershipState}" }
+            noteRefusedLeaderFrame(from, m, wireTerm, RaftMetric.WedgeSuspected.Gate.LeaderAuthority)
             return
         }
+        // A leader→peer frame that clears both gates AT OR ABOVE our term ends any refusal run: whatever
+        // else is being dropped alongside, a node a current leader is successfully reaching is not
+        // jammed. The term condition mirrors the one in [noteRefusedLeaderFrame] and is load-bearing in
+        // the same direction: a frame from BEHIND our term is a straggler from a deposed leader, which
+        // neither counts toward a run nor should clear one — an ex-voter still in our stale set, still
+        // heartbeating at its old term, would otherwise suppress the report for exactly the node this
+        // exists to name.
+        if (m.isLeaderToPeer && wireTerm != null && wireTerm >= state.currentTerm) refusedLeaderFrameRun = 0
         onValidatedMessage(from, m)
     }
+
+    /**
+     * Observe one leader→peer frame that a dispatch-boundary gate just dropped, and name the wedge if
+     * this node has been doing that for a sustained run while making no progress of its own (#1898).
+     *
+     * **Changes no decision.** The caller has already returned the frame to the floor and that stays
+     * correct either way; all this adds is the signal. That is what makes detection safe: an honest
+     * long absence and a hostile peer produce the same local symptom, so a gate *relaxed* on this
+     * predicate would relax for both (`docs/raft-wedge-diagnosis-and-recovery.md`).
+     *
+     * ### The predicate, and why each clause is there
+     *
+     * - **A leader→peer type.** [RaftMessage.isLeaderToPeer] — the same three types the §5.2 gate
+     *   tests. The jump bound has no type test of its own, so this is where the filter lives for that
+     *   caller. A refused `PreVote` or `RequestVoteResponse` says nothing about being able to make
+     *   progress; a refused `AppendEntries` is exactly the frame that would have carried it.
+     * - **[senderTerm] at least ours.** Tested rather than inferred: a frame from *behind* us is an
+     *   ordinary stale straggler, and refusing it is the gate working, not a wedge. The jump bound's
+     *   sibling arm (a negative term) is malformed and lands below us, so it is excluded here even
+     *   though it shares that `return` — and `maxTermJump` carries no validation that would let the
+     *   sign be assumed.
+     * - **Our commit index standing still.** A node that is committing is making progress, whatever it
+     *   is refusing — most concretely a wedged voter that campaigned and won inside its own stale set,
+     *   which is a split-brain rather than the silence this reports. The run restarts whenever
+     *   [_commitIndex] moves.
+     * - **Nothing accepted in between.** [onMessage] zeroes the run on any leader→peer frame that
+     *   passes both gates. Without that, a sustained forged stream arriving alongside honest traffic
+     *   would report a healthy node as jammed.
+     *
+     * ### Latched per voter-set epoch
+     *
+     * The report is emitted once for as long as [MembershipState.voters] stays the same. Everything in
+     * it is a function of that set, so a second emission under the same one carries no information —
+     * and a finer latch would be a log-amplification lever: a peer alternating between two identities
+     * would mint a fresh report per alternation, handed to the exact sender the §5.2 gate exists to
+     * contain. It cannot change our voter set, so it cannot re-arm this. Contrast
+     * [RaftMetric.SnapshotRejectedSizeCeiling], which is deliberately *un*latched because "is this
+     * still happening?" separates its two cases; here that question is already answered by
+     * [RaftNode.commitIndex], which a consumer can watch without any help from this engine.
+     *
+     * Never throws: reached from the actor loop on a path a remote frame controls, so a `require` here
+     * would convert one hostile frame into permanent node death (#1818).
+     */
+    private fun noteRefusedLeaderFrame(
+        from: NodeId,
+        m: RaftMessage,
+        senderTerm: Long?,
+        gate: RaftMetric.WedgeSuspected.Gate,
+    ) {
+        if (!m.isLeaderToPeer) return
+        if (senderTerm == null || senderTerm < state.currentTerm) return
+
+        val commit = _commitIndex.value
+        if (commit != refusedLeaderFrameRunCommitIndex) {
+            refusedLeaderFrameRunCommitIndex = commit
+            refusedLeaderFrameRun = 0
+        }
+        refusedLeaderFrameRun++
+        if (refusedLeaderFrameRun < WEDGE_SUSPECTED_RUN) return
+
+        val voters = state.membershipState.voters
+        if (voters == wedgeReportedAtVoters) return
+        wedgeReportedAtVoters = voters
+
+        emitMetric(RaftMetric.WedgeSuspected(from, senderTerm, state.currentTerm, voters, gate))
+        logger.warn { "[raft:${transport.selfId}] ${wedgeDiagnostic(from, m, senderTerm, voters, gate)}" }
+    }
+
+    /**
+     * The operator-facing diagnostic for [noteRefusedLeaderFrame].
+     *
+     * Built by a function rather than inlined so the `warn` stays lazy, mirroring [ceilingDiagnostic]
+     * and [snapshotCeilingDiagnostic].
+     *
+     * **Says what to do, and says the one thing not to do.** The route back is a *new identity* — a
+     * fresh [NodeId] over empty storage, re-admitted by an ordinary §4 membership change. Wiping
+     * storage under the same id looks like the same fix and is the opposite of it: the node returns
+     * with no memory of a term it already voted in and votes again, which is two leaders in one term.
+     * A reader who is told only "re-provision this node" will reach for the wipe, so the warning is
+     * part of the line rather than a footnote elsewhere.
+     */
+    private fun wedgeDiagnostic(
+        from: NodeId,
+        m: RaftMessage,
+        senderTerm: Long,
+        voters: Set<NodeId>,
+        gate: RaftMetric.WedgeSuspected.Gate,
+    ): String =
+        "WEDGE SUSPECTED — refused $refusedLeaderFrameRun leader→peer frames in a row at or above our " +
+            "own term (threshold $WEDGE_SUSPECTED_RUN), accepting none and committing nothing in " +
+            "between (latest: ${m::class.simpleName} from $from at term=$senderTerm; " +
+            "currentTerm=${state.currentTerm}, commitIndex=${_commitIndex.value}, voters=$voters, " +
+            "gate=$gate). This node can no longer be caught up in place, and nothing recovers on its " +
+            "own. Bring it back as a NEW member — a fresh NodeId over EMPTY storage — admitted by an " +
+            "ordinary single-server membership change. Do NOT wipe storage under the same NodeId: it " +
+            "returns having forgotten a term it already voted in and votes again, which is a §5.2 " +
+            "Election Safety violation (two leaders in one term). See " +
+            "docs/raft-wedge-diagnosis-and-recovery.md (#1898)."
 
     private suspend fun onValidatedMessage(from: NodeId, m: RaftMessage) = when (m) {
         is RaftMessage.RequestVote             -> onRequestVote(from, m)
