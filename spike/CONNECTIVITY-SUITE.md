@@ -10,9 +10,11 @@ off and back on. They are the only ones that need you to do something mid-run.
 [Scenario 6](#scenario-6-the-airplane-mode-run-1712) checks that a phone which loses its own network says
 *"I went offline"* rather than blaming the other phone.
 [Scenario 7](#scenario-7-the-blip-the-other-phone-never-notices-1637) checks something narrower and
-nastier: a drop so brief the other phone never even notices it — which today kills the connection stone
-dead. **Scenario 7 is expected to FAIL**, and catching that failure on real phones is the whole reason
-it exists.
+nastier: a drop so brief the other phone never even notices it — which used to kill the connection stone
+dead. A fix for that has since landed, but **no hardware run has yet caught the fix actually working**,
+and until one does the bug is not closed. Scenario 7 is how that gets settled either way, so its verdict
+is unusually strict: it says PASS only when it *watched the fix run*, and says so in plain words when a
+run proved nothing.
 
 It works. Its first real two-phone run found a bug that made roughly **one room in eight permanently
 unable to connect** — silently, with no error — that every automated test had passed straight over.
@@ -27,9 +29,10 @@ unable to connect** — silently, with no error — that every automated test ha
 4. Watch the matrix fill in. The soak (scenario 5) takes ~2 minutes, so the whole run is ~3–4 min.
 5. When it finishes, tap **Share report** (or **Copy**) and send the text back.
 
-That's it. There is no Mac in the loop. Then, if you have another three minutes and a free hand,
-run [scenario 6](#scenario-6-the-airplane-mode-run-1712) — it is a separate pair of buttons — and
-[scenario 7](#scenario-7-the-blip-the-other-phone-never-notices-1637), which is another pair below it.
+That's it. There is no Mac in the loop. Then, if you have another few minutes and a free hand,
+run [scenario 6](#scenario-6-the-airplane-mode-run-1712) — it is a separate pair of buttons, about three
+minutes — and [scenario 7](#scenario-7-the-blip-the-other-phone-never-notices-1637), which is another
+pair below it and takes about four (most of it spent waiting, deliberately).
 
 ## What each scenario proves
 
@@ -41,7 +44,7 @@ run [scenario 6](#scenario-6-the-airplane-mode-run-1712) — it is a separate pa
 | 4 | Teardown + reconnect | The host drops the link. The **host** sees its own `close()` latch `Torn`; the **joiner** sees the recoverable re-form — `Woven → Weaving` *and* `peers` collapsing to just itself ([why they differ](#scenario-4-the-two-sides-expect-different-things)). Both then re-weave on a second service type. |
 | 5 | Soak (~2 min) | Continuous round-trip stays healthy: RTT distribution (min/p50/p95/max) with few/no stalls. This is where an AWDL data-path stall (the MC failure mode) would show up as a FAIL. |
 | 6 | Local-fabric outage *(separate buttons — you toggle Airplane Mode)* | **The same outage read two opposite ways.** The phone you switched off says *my* network died: `localFabric` → `Unavailable`, a `LocalFabricLost`, and every `Partitioned`/`HostLost` it emits tagged `Unavailable`. The phone you left alone says *they* went away: its own `localFabric` stays `Available` and the `Partitioned` it emits for the vanished peer carries that `Available` tag. A short outage keeps the seat; a long one expires it, and the switched-off phone *still* blames itself. |
-| 7 | Sub-timeout blip *(separate buttons — one Airplane Mode toggle)* | **A drop too brief for the other phone to notice must still recover.** The outage has to land between 3 and 15 seconds: long enough that the offline phone's own connection dies, short enough that the other phone never sees a gap. You flick the toggle on and straight back off — the radio supplies the rest. PASS = the room survives. **On today's build this FAILs** — the connection dies about a minute later — and that failure is what the scenario is for ([#1637](https://github.com/tractat-us/kuilt/issues/1637)). The bottom of that band is a [deliberate test setting](#how-the-band-was-widened) (the shipping value is 10s). |
+| 7 | Sub-timeout blip *(separate buttons — one Airplane Mode toggle)* | **A drop too brief for the other phone to notice must still recover.** The outage has to land between 3 and 15 seconds: long enough that the offline phone's own connection dies, short enough that the other phone never sees a gap. You flick the toggle on and straight back off — the radio supplies the rest. PASS = the **recovery machinery visibly did the thing under test**, not merely that the room looked fine ([why that distinction is the whole scenario](#what-the-results-mean)); a FAIL is the connection dying about a minute later, which is [#1637](https://github.com/tractat-us/kuilt/issues/1637) itself. After the flick, **leave both phones alone for about another minute and a half** — the phone watches its entire reconnect budget before it will judge anything. The bottom of the band is a [deliberate test setting](#how-the-band-was-widened) (the shipping value is 10s). |
 
 Every report is prefixed with the **environment** captured from `nw_path_monitor`
 (`path=satisfied ifaces=[wifi,cell,…] expensive=… constrained=…`) so a failing report is
@@ -274,12 +277,12 @@ softening the test.
 
 ### What to tap, and how long to hold
 
-You need two phones and about three minutes. Decide up front which phone is going offline.
+You need two phones and about four minutes. Decide up front which phone is going offline.
 
 1. On the phone you want to **keep online**, tap **Host · S7 stay up**. Then leave it completely alone —
    don't touch it, and **don't close the app**. It has to stay reachable the entire time, because the
    other phone's whole test is coming *back* to it. It ends by itself as soon as the other phone
-   finishes (usually about a minute and a half), and gives up after four minutes at the outside; both
+   finishes (usually about two minutes), and gives up after five minutes at the outside; both
    are normal, not a hang.
 2. On the phone that will **go offline**, tap **Join · S7 go offline**. (Bottom row of buttons.)
    *Both phones must use the matching button* — one Host, one Join.
@@ -288,8 +291,11 @@ You need two phones and about three minutes. Decide up front which phone is goin
    your thumb there.
 5. **About a second later** it says **"AIRPLANE MODE OFF — NOW"**. Turn it straight back off. It really
    is that quick: on, then immediately off, one flick. That's your only job.
-6. Wait. The phone now needs up to another minute to reach its verdict — leave both phones alone until
-   the matrix row appears on each.
+6. Wait — **about another minute and a half**, and it will look like nothing is happening. That is
+   deliberate. The connection usually comes back within seconds, and the bug this scenario is about
+   kills it *a minute after that*, so a phone that stopped watching early would call every run a
+   success. The banner tells you how long is left. Leave both phones alone until the matrix row
+   appears on each, and **don't close either app** — closing one mid-wait destroys the run.
 7. **Share or Copy the report from BOTH phones.**
 
 **Why such a short hold?** The outage is much longer than your thumb is. Turning Airplane Mode off
@@ -347,11 +353,50 @@ If it still misses too often, in rough order of cost:
 **That FAIL is the expected result on a build without the #1637 fix, and it is the point of the
 scenario.** It is not a broken test and not a bad run — it is the bug, caught on real hardware, with
 the measured outage and the exact failure reason attached so the report can be pasted straight into
-the issue. Once #1637 is fixed the same run should read:
+the issue. On a build *with* the fix, a PASS looks like this — and note what it quotes:
 
 ```
-[7] Sub-timeout blip       PASS   61.7s  survived a 10.2s blip inside (3s, 15s): Recovered(a91f2c04) 44.2s after the radio died, no HostLost, host Connected in the roster
+[7] Sub-timeout blip       PASS  104.3s  #1637 FIX OBSERVED — the resume lane resolved on the dwell after a 10.2s blip inside (3s, 15s): 'resume.no-op host=a91f2c04 roomId=… reason=host-never-partitioned dwellMs=15000' 27.4s after the radio died, no HostLost through the whole 1m 28s observation, host back Connected …
 ```
+
+#### The PASS quotes the machinery, not the mood
+
+That is not decoration. A verdict here has to survive one specific trap, and the suite fell into it on
+2026-07-28: it reported a clean `PASS 14.8s … Recovered(…) 8.5s after the radio died, no HostLost, host
+Connected` on a build that *contained* the fix — and the fix had never run. The connection had simply
+healed on its own before the recovery machinery got anywhere, and the phone stopped watching the moment
+things looked fine.
+
+Two things were wrong, and both are fixed:
+
+- **It stopped watching too early.** The failure this scenario hunts does not arrive promptly; it
+  arrives when the reconnect budget runs out, about a minute after the radio died. Judging at fifteen
+  seconds meant most of the dangerous minute went unwatched. The phone now watches the **whole** budget
+  (about a minute and a half) before saying anything — which is why step 6 asks you to wait, and why a
+  PASS row now takes ~100 s instead of ~15 s. A genuine FAIL still arrives as fast as it ever did.
+- **"Nothing went wrong" is not evidence that anything went right.** The event a healthy room emits
+  when the *fix* completes and the event it emits when the connection merely came back on its own are
+  **the same event** — there is no way to tell them apart from the outside. So the scenario now watches
+  the recovery machinery's own trace instead, and a PASS is granted only when it saw the fix conclude.
+
+It also now asks two separate questions where it used to ask one: **did the recovery machinery start**,
+and **did it finish**. Those are not the same, and running them together is what let a run that never
+started look like one that finished. A run where the room survived but the machinery never concluded is
+reported as **SKIP — NOT EXERCISED**, not as a PASS:
+
+```
+[7] Sub-timeout blip       SKIP  104.1s  NOT EXERCISED — the room survived a 6.2s blip inside (3s, 15s) but the resume lane never resolved in 1m 28s: no resume.no-op, no resume.ok, no HostLost. This run says NOTHING about #1637. The resume lane was NEVER entered … Hold LONGER and re-run. Any Recovered(441485b2) here is NOT evidence of the fix — the detector emits the identical event on an ordinary recovery …
+```
+
+and the two shapes of that ask for opposite things, so the report says which:
+
+- **never entered** — the blip was mis-aimed (too short, or the link healed before the connection was
+  torn down). Hold longer and re-run.
+- **entered but never finished** — the machinery genuinely ran and did not conclude inside its whole
+  budget. Do *not* just re-run: that is a bug worth filing on its own.
+
+Either way it is honest, it is actionable, and it is **not** a validation of the fix. #1637 stays open
+until a run produces the PASS above.
 
 **Only one shape of failure is #1637**, and the scenario checks for it precisely: a `HostLost` whose
 reason is `Refused` carrying the code `resume-window-not-yet-open`. That code means the other phone was
@@ -383,15 +428,20 @@ the other phone said.
 One result to watch for on the offline phone, because it looks like success and isn't:
 
 ```
-[7] Sub-timeout blip       SKIP   54.2s  blip: the host ACKed a real resume (Resumed(…) after 34.8s), which means it HAD a window open — so it noticed the outage and this was the ordinary resume lane, not the sub-timeout one…
+[7] Sub-timeout blip       SKIP  104.2s  blip: the host ACKed a REAL resume (resume.ok host=… after 34.8s), which means it HAD a window open — so it noticed the outage and this was the ordinary resume lane, not the sub-timeout one…
 ```
 
 The connection *did* recover — but the ordinary way, because the other phone noticed after all. That
 says nothing about #1637, so it is honestly a SKIP rather than a PASS. Hold shorter and re-run.
 
+**So a surviving room has three different endings and the report never blurs them**: the machinery
+concluded the way the fix intends (PASS), it recovered the ordinary way because the other phone did
+notice (SKIP), or nothing conclusive happened at all (SKIP — NOT EXERCISED). Only the first says
+anything about #1637.
+
 ### Why the timings are what they are
 
-Four numbers, and every one of them is doing something:
+Five numbers, and every one of them is doing something:
 
 - **3 seconds** is how long the fabric gives a connection whose network vanished to come back before
   tearing it down. Below that, nothing happens and there is nothing to test. It is the one number here
@@ -405,11 +455,17 @@ Four numbers, and every one of them is doing something:
   above it is unreachable, which is why the notice setting was brought back under it.
 - **60 seconds of window** is the budget the bug burns through. It is why a FAIL takes about a minute
   to arrive after the radio dies, and why you are asked to leave both phones alone at step 6.
+- **~1 minute 28 seconds of watching** is the previous number plus the 3-second fuse plus 25 seconds of
+  slack — i.e. the *entire* budget, measured from the moment the radio actually died, and it is how
+  long the offline phone now waits before it will render any verdict at all. Anything shorter can
+  declare victory during the stretch where the bug hasn't struck yet, which is precisely what happened
+  on 2026-07-28. A `HostLost` cuts the wait short, so a real failure is never slowed down by it.
 
 And one more that isn't a timing but is just as load-bearing: **the stay-up phone must outlive the
 whole episode.** It stops advertising the moment its scenario ends, and a phone that comes back to find
 nothing to dial can't resume no matter how the library behaves — so its dwell is sized to cover the
-other phone's entire reconnect (up to four minutes) and it ends early only when the other phone leaves.
+other phone's entire reconnect (up to five minutes, raised from four when the watching window above was
+added) and it ends early only when the other phone leaves.
 The first hardware run got this wrong: the stay-up side decided its verdict on the first `Partitioned`
 and exited at t=25.4s, **4.1 seconds before** the other phone's radio came back. That phone then found
 only itself in its browse, got `ECONNREFUSED`, and sent zero Resumes. Both reports looked plausible;
@@ -580,7 +636,7 @@ the offline phone on USB, or just read the report off the phone.
 - **Scenarios 2–7 drive the shipping API** — `appleNwLoom`, `SeamRoomFactory.electLobby`,
   `ElectionLobby.start`/`awaitRoom`, `SeamRoomFactory.adopt`, `Room.localFabric`, the adopt-path
   resume machine, `Seam`/`Room` lifecycle. A FAIL here is a real `kuilt-nw`/`kuilt-session` field
-  failure — **except scenario 7, whose FAIL is the known, expected #1637 defect** until that lands.
+  failure — **except scenario 7, whose FAIL is #1637 itself**, the defect it exists to capture.
 - **Scenario 1 is the raw transport control** (`spike.nw.SpikeNw`) — if it passes but scenario 2 fails,
   the fabric layer is at fault, not the radio.
 
@@ -699,7 +755,37 @@ anything. `appleNwLoom` now exposes the fabric's path grace, and scenario 7 — 
 drops its own floor to 3 s, making the band `(3s, 15s)` and the hold a single flick. See
 [how the band was widened](#how-the-band-was-widened).
 
-**The scenario has therefore still never produced a verdict about #1637.** When it next runs, check
-three things before believing either report: the offline phone's measured outage is inside 3–15 s, the
-online phone says it never partitioned *and* names how long it stayed up, and a FAIL quotes
-`code=resume-window-not-yet-open`. Without all three the run says nothing.
+**Scenario 7: run again on hardware (2026-07-28) against a build containing the #1637 fix — reported
+PASS, and the fix had not run.** `PASS 14.8s survived a 7.1s blip inside (3s, 15s): Recovered(441485b2)
+8.5s after the radio died, no HostLost, host Connected`. The trace says otherwise: the resume machine
+emitted **no log line of any kind** for the whole run — not `resume.ok`, not `resume.no-op`, not
+`resume.terminal` — and no `WindowNotYetOpen` appeared anywhere. The link healed on its own at 25.9 s,
+`Recovered` landed at 27.3 s, and the scenario declared victory and tore the room down while the
+machinery it exists to test had concluded nothing. (Not a logging gap: the run file's tee forwards every
+event unfiltered and five other kuilt loggers were captured.) Two more defects in the scenario, both now
+fixed:
+
+5. **It stopped watching at the first encouraging event.** #1637 does not kill the room promptly — it
+   kills it when the reconnect window expires, ≈63 s after the radio dies. Returning on the first
+   `Recovered` produced a verdict at ~15 s with 48 s of the window the bug lives in never observed. The
+   wait is now a **deadline** — the whole budget plus slack, ≈1 m 28 s from the measured radio death —
+   and only a `HostLost`, which is terminal, ends it early.
+6. **It inferred health instead of observing the mechanism.** "No `HostLost` + host `Connected`" is
+   satisfied by a room that merely healed on its own. Worse, the two obvious membership signals cannot
+   discriminate at all: `Recovered(hostId)` is emitted *identically* by the fix's no-op path
+   (`onNoOpResume` → `markRecovered`) and by an ordinary detector-observed recovery (`PeerRecovered` →
+   the same `markRecovered`), and `Partitioned`/`WindowOpened` are emitted by `markPartitioned` on a
+   plain heartbeat `Timeout` with the resume machine never entered. `Room` exposes nothing else. The
+   verdict is therefore keyed to the machine's own `resume.*` evidence lines, watched through a
+   structural `(loggerName, message)` observer on the run-file tee, and it now separates **entered**
+   (`resume.refused` once #1969 lands; `membership.unresponsive … branch=resume` until then) from
+   **resolved** (`resume.no-op` / `resume.ok`). A surviving room reports three distinct endings —
+   `resume.no-op` (PASS, the fix observed), `resume.ok` (SKIP, the ordinary resume lane), or neither
+   (SKIP, **NOT EXERCISED**, sub-split into never-entered vs entered-and-stalled).
+
+**The scenario has therefore still never produced a verdict about #1637** — one run was inconclusive and
+one was a false green. When it next runs, check four things before believing either report: the offline
+phone's measured outage is inside 3–15 s, the online phone says it never partitioned *and* names how
+long it stayed up, a FAIL quotes `code=resume-window-not-yet-open`, and a **PASS quotes a
+`resume.no-op` line**. Without all four the run says nothing. Neither a `Recovered` nor the absence of a
+`HostLost` counts as validation — that is exactly the ambiguity the false green rode in on.
