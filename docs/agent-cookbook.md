@@ -24,6 +24,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | a last-write-wins register, a grow-only set/counter, an add/remove set, a version vector, "merge these two states" | the CRDT zoo (`LWWRegister`, `GSet`, `PNCounter`, `ORSet`, …) | [Replicated data](#replicated-data) |
 | replicating a CRDT over a connection by hand | `Quilter` | [Replicated data](#replicated-data) |
 | averaging model updates from many devices without collecting their data — federated learning / federated analytics, "train locally, share only the update" | `FedAvg` + `TrainingUpdate` | [Replicated data](#replicated-data) |
+| checking two peers hold the same state across a process/socket boundary — hand-hashing a replicated state so you can compare it as one number | `canonicalDigest` | [Replicated data](#replicated-data) |
 | a `seenIds` set to skip already-handled messages | `GSet` / kuilt dedup | [Dedup](#dedup) |
 | merging several mDNS/Multipeer discovery feeds into one lobby roster | `discoveryRoster` | [Discovery](#discovery) |
 | a weighted / fair-share scheduler — "give this group 3× the share", "who runs the next quantum", a hoarder-proof round-robin | `HeddlePolicy` + `HeddleNode` | [Fair share & placement](#fair-share--placement) |
@@ -308,6 +309,37 @@ content-addressed WebAssembly kernel shipped through [Code mobility](#code-mobil
 `ReferenceTrainer` is the Kotlin oracle it is held bit-for-bit equal to. See
 [`kuilt-warp-ml/module.md`](../kuilt-warp-ml/module.md) — including the honest seam on lane
 costing if you gate the workload with `HeddleAdmissionControl`.
+
+**Intent:** check that two peers hold the same state when you *can't* compare the objects — a cross-process or real-socket test where shipping a whole state back to assert on is impractical, or a divergence alarm between live peers.
+**Primitive:** `canonicalDigest(serializer, value)` (`:kuilt-conformance`, `us.tractat.kuilt.conformance`). A 64-bit FNV-1a hash over the value's canonical CBOR encoding — converged replicas share a digest, diverged ones almost certainly don't, and one `Long` crosses the boundary instead of a whole state.
+
+**In-process, don't use it.** `assertEquals(a, b)` on the states themselves is strictly better:
+exact, no collision risk, and a far better failure message. `CrdtConvergenceHarness` deliberately
+compares raw bytes rather than digests for that reason. Reach for `canonicalDigest` only where the
+comparison has to cross a process, a socket, or a live-peer boundary. And it is **not
+cryptographic** — a 64-bit non-keyed hash is fine against accidental divergence and no defence at
+all against a peer that forges a matching digest.
+
+It also inherits the [canonical-encoding invariant](../kuilt-crdt/module.md): a digest over a state
+that encodes non-canonically reports *permanent* false divergence between replicas that agree. The
+zoo holds that invariant; a bespoke state of your own has to earn it.
+
+<!-- verbatim from kuilt-conformance/src/commonTest/kotlin/us/tractat/kuilt/conformance/CanonicalDigestTest.kt#convergedReplicasShareADigest -->
+```kotlin
+val ser = GSet.serializer(String.serializer())
+val forward = GSet.of("alpha").piece(GSet.of("beta")).piece(GSet.of("gamma"))
+val reverse = GSet.of("gamma").piece(GSet.of("beta")).piece(GSet.of("alpha"))
+assertAll(
+    { assertEquals(forward, reverse, "sanity: same logical state") },
+    {
+        assertEquals(
+            canonicalDigest(ser, forward),
+            canonicalDigest(ser, reverse),
+            "converged replicas must share a digest",
+        )
+    },
+)
+```
 
 ## Liveness & presence
 

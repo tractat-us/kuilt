@@ -32,6 +32,7 @@ If you're about to write any of these, STOP and open the cookbook:
 - a last-write-wins register, grow-only set/counter, add/remove set, "merge two states" → the CRDT zoo
 - replicating a CRDT over a connection by hand → `Quilter`
 - averaging model updates from many devices without collecting their data — federated learning/analytics, a `(Σweights, Σcount)` accumulator, a training-round barrier → `FedAvg` + `TrainingUpdate`
+- hashing a replicated state by hand so two peers can compare it as one number — "are we in sync?" across a process/socket boundary, a divergence alarm → `canonicalDigest` (and in-process, just `assertEquals` the states)
 - a `seenIds` set → `GSet` / kuilt dedup
 - a fixed/exponential retry back-off → `ExponentialBackoff`
 - merging mDNS/Multipeer discovery feeds into one lobby roster → `discoveryRoster`
