@@ -1,5 +1,6 @@
 package us.tractat.kuilt.conformance.convergence
 
+import kotlinx.serialization.builtins.serializer
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ORMap
 import us.tractat.kuilt.crdt.ReplicaId
@@ -18,6 +19,7 @@ internal class ORMapConvergenceTest : CrdtConvergenceSuite<ORMap<String, GCounte
                 else -> state.put(r, key, GCounter.of(r to random.nextLong(1L, 4L)))
             }
         },
+        serializer = ORMap.serializer(String.serializer(), GCounter.serializer()),
         replicaCount = 3,
         opsPerReplica = 8,
     )

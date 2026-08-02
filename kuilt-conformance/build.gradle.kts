@@ -1,5 +1,6 @@
 plugins {
     id("kuilt.kmp-library")
+    alias(libs.plugins.kotlinSerialization)
     alias(libs.plugins.kover)
 }
 
@@ -16,6 +17,13 @@ kotlin {
             api(project(":kuilt-raft"))
             api(project(":kuilt-crdt"))
             api(project(":kuilt-test"))
+            // The convergence harness asserts byte-level canonicality of encoded CRDT
+            // states (#1957), so it needs a concrete BinaryFormat. CBOR matches Quilter's
+            // default wire format. `implementation`, not `api`: Cbor appears only inside
+            // CrdtConvergenceHarness's private members, so no consumer of this module needs
+            // it on their compile classpath (KSerializer itself comes from
+            // serialization-core, already api-transitive via :kuilt-crdt).
+            implementation(libs.kotlinx.serialization.cbor)
             // This module intentionally ships a kotlin-test-based suite in MAIN
             // (not commonTest) so other modules' tests can subclass it. That means
             // each platform's main compilation needs the kotlin.test framework

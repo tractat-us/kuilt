@@ -1,5 +1,6 @@
 package us.tractat.kuilt.conformance.convergence
 
+import kotlinx.serialization.builtins.serializer
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.Rga
 
@@ -17,6 +18,7 @@ internal class RgaConvergenceTest : CrdtConvergenceSuite<Rga<String>>() {
                 state.insertAt(replica, index, "v$replicaIndex.${random.nextInt(100)}").first
             }
         },
+        serializer = Rga.wireSerializer(String.serializer()),
         replicaCount = 3,
         opsPerReplica = 8,
     )

@@ -1,5 +1,6 @@
 package us.tractat.kuilt.conformance.convergence
 
+import kotlinx.serialization.builtins.serializer
 import us.tractat.kuilt.crdt.MovableTree
 import us.tractat.kuilt.crdt.ReplicaId
 
@@ -26,6 +27,7 @@ internal class MovableTreeConvergenceTest : CrdtConvergenceSuite<MovableTree<Str
                 state.addNode(replica, ts, parent, "n$replicaIndex.${random.nextInt(100)}").tree
             }
         },
+        serializer = MovableTree.serializer(String.serializer()),
         replicaCount = 3,
         opsPerReplica = 8,
     )

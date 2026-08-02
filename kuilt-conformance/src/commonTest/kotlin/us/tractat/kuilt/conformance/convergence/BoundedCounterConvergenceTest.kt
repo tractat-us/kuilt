@@ -30,6 +30,7 @@ internal class BoundedCounterConvergenceTest : CrdtConvergenceSuite<BoundedCount
                 }
             }
         },
+        serializer = BoundedCounter.serializer(),
         replicaCount = 3,
         opsPerReplica = 8,
     )

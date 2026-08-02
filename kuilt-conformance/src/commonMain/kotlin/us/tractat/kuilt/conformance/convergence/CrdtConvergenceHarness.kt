@@ -1,6 +1,9 @@
 package us.tractat.kuilt.conformance.convergence
 
 import kotlin.random.Random
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.KSerializer
+import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.crdt.Quilted
 
 /** Strategy for generating an operation against a model state, producing the next state. */
@@ -22,13 +25,42 @@ public fun interface OperationGenerator<S> {
  *
  * Multiplatform: uses [Random] (seed constructor) for determinism — the same seed produces the
  * same outcome on JVM, wasmJs, and native.
+ *
+ * Every permutation is additionally asserted to encode to the *same bytes* under [serializer]
+ * (#1957) — see `assertAllPermutationsConverge`.
+ *
+ * **Scope of the byte assertion — read before trusting a green run.** Every comparison it makes is
+ * between two encodings produced in one process on one target, so it proves order-independence
+ * *within* a target and nothing more. It does **not** prove two targets agree on the bytes. That
+ * dimension is currently unpinned; the plan is to pin it separately with cross-target golden
+ * vectors in `:kuilt-crdt`'s `commonTest` (#1957).
+ *
+ * More sharply: on JVM and Android this assertion has **near-zero discriminating power**. The map
+ * merges underneath most CRDTs return a `HashMap`, and `java.util.HashMap` iterates in bucket
+ * order — largely a function of the key set and table capacity, both invariant under the fold
+ * order — so a permutation almost always emits identically whether or not the type is canonical.
+ * Only *largely*: `putVal` appends to the tail of a bin and iteration walks each bin head→tail, so
+ * keys that collide into one bucket iterate in **insertion** order, and there the fold order does
+ * show through. A few short `ReplicaId` keys in a 16-slot table collide rarely enough that this is
+ * not something to count on in either direction. Kotlin/Native and Kotlin/Wasm preserve insertion
+ * order throughout, which *is* the fold order, so they see the defect reliably.
+ * When you bind a new CRDT to this suite, **verify on `macosArm64Test` or `wasmJsTest`** — a green
+ * `jvmTest` is not evidence of canonicality. (Types whose merge yields a `LinkedHashSet`, e.g. via
+ * `Set.plus`, are insertion-ordered on the JVM too and do fail there — so a JVM red is meaningful
+ * even though a JVM green is not.)
  */
+@OptIn(ExperimentalSerializationApi::class, ExperimentalStdlibApi::class)
 public class CrdtConvergenceHarness<S : Quilted<S>>(
     public val initial: S,
     public val gen: OperationGenerator<S>,
+    public val serializer: KSerializer<S>,
     public val replicaCount: Int = 3,
     public val opsPerReplica: Int = 8,
 ) {
+    private val cbor = Cbor {}
+
+    private fun encoded(state: S): ByteArray = cbor.encodeToByteArray(serializer, state)
+
     /** Run with a single [seed]; assert convergence. Returns the converged state. */
     public fun run(seed: Long): S {
         val random = Random(seed)
@@ -47,6 +79,7 @@ public class CrdtConvergenceHarness<S : Quilted<S>>(
         }
 
     private fun assertAllPermutationsConverge(replicas: List<S>, canonical: S) {
+        val canonicalBytes = encoded(canonical)
         for (permutation in permutationsOf(replicas.indices.toList())) {
             val result = permutation.fold(initial) { acc, idx -> acc.piece(replicas[idx]) }
             check(result == canonical) {
@@ -54,6 +87,17 @@ public class CrdtConvergenceHarness<S : Quilted<S>>(
                     "  expected $canonical\n" +
                     "  got      $result\n" +
                     "  replicas $replicas"
+            }
+            // Byte-level canonicality (#1957): converged replicas must ENCODE identically,
+            // not merely compare equal. Set/Map equality is order-insensitive exactly where
+            // the encoding is not, so `result == canonical` is structurally blind to a
+            // history-dependent encoding.
+            val resultBytes = encoded(result)
+            check(resultBytes.contentEquals(canonicalBytes)) {
+                "Canonical-encoding failure under permutation $permutation:\n" +
+                    "  canonical bytes ${canonicalBytes.toHexString()}\n" +
+                    "  permuted  bytes ${resultBytes.toHexString()}\n" +
+                    "  state     $canonical"
             }
         }
     }

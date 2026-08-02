@@ -12,24 +12,49 @@ import kotlinx.serialization.modules.SerializersModule
  * Returns a [Comparator] that orders values of type [K] by their canonical serialized form.
  *
  * Each key is serialized to a [List] of primitive leaf values via [PrimitiveLeafEncoder]
- * and the lists are compared lexicographically.  This produces a total, stable, structural
- * order for any [K] that serializes to a finite, deterministic sequence of primitives —
- * which includes every data class, value class, and primitive key used in this module.
+ * and the lists are compared lexicographically.  This produces a structural total
+ * **preorder** — not a total order; see [leafListComparator] for what that costs a caller —
+ * for any [K] that serializes to a finite, deterministic sequence of primitives, which
+ * includes every data class, value class, and primitive key used in this module.
  *
  * This is the correct replacement for a `.sortedBy { key.toString() }` comparator whose
  * correctness depended on `toString` being injective and platform-stable — a guarantee
  * that does not hold for [Double] (`-0.0`/`NaN`), [ByteArray] (identity hash), or any
  * compound type whose `toString` omits fields (issue #752).
+ *
+ * **Cost — prefer [serialLeaves] + [leafListComparator] when sorting.**  This comparator
+ * re-serializes *both* operands on every call, so a `sortedWith` over n keys performs
+ * ~2·n·log n serializations rather than n.  Callers that sort should decorate each element
+ * with its [serialLeaves] once, sort on the decoration with [leafListComparator], and drop
+ * it — which is what [us.tractat.kuilt.crdt.CanonicalSetSerializer] and
+ * [us.tractat.kuilt.crdt.CanonicalMapSerializer] do.  This form remains for callers that
+ * genuinely need a `Comparator<K>` (see `DotMapSerializer`, and issue #1964 for collapsing
+ * those onto the decorated path).
  */
 @OptIn(ExperimentalSerializationApi::class)
 internal fun <K> serialKeyComparator(kSerializer: KSerializer<K>): Comparator<K> =
-    Comparator { a, b -> compareSerialKeys(serialLeaves(a, kSerializer), serialLeaves(b, kSerializer)) }
+    Comparator { a, b -> leafListComparator.compare(serialLeaves(a, kSerializer), serialLeaves(b, kSerializer)) }
 
-private fun <K> serialLeaves(key: K, kSerializer: KSerializer<K>): List<Any?> {
+/**
+ * Serializes [key] to its sequence of primitive leaf values — the decoration half of a
+ * decorate-sort-undecorate over [leafListComparator].
+ */
+internal fun <K> serialLeaves(key: K, kSerializer: KSerializer<K>): List<Any?> {
     val encoder = PrimitiveLeafEncoder()
     kSerializer.serialize(encoder, key)
     return encoder.leaves
 }
+
+/**
+ * Lexicographic order over the leaf sequences produced by [serialLeaves]; shorter sequences
+ * sort first when one is a prefix of the other.
+ *
+ * A total **preorder**, not a total order: two distinct keys with identical leaf sequences
+ * compare equal.  Both `sortedWith` and `sortedBy` are stable, so such keys retain their
+ * input order — the property that keeps the decorated sort byte-identical to the
+ * comparator-based one it replaced.
+ */
+internal val leafListComparator: Comparator<List<Any?>> = Comparator(::compareSerialKeys)
 
 @Suppress("UNCHECKED_CAST")
 private fun compareSerialKeys(a: List<Any?>, b: List<Any?>): Int {
