@@ -1152,10 +1152,13 @@ internal class RaftEngine(
         // A re-timing-out Candidate (probe didn't gather quorum) drops back to follower role
         // for the probe phase so the role accurately reflects "not yet a candidate".
         _role.value = followerRole
-        // #1886: the PreVote below would carry `currentTerm + 1`, above the ceiling every peer
-        // enforces. Report it and re-arm rather than broadcast a frame with no possible recipient —
-        // re-arming keeps the metric repeating so the condition reads as a level (the log is latched
-        // separately). See termPinnedAtCeiling: this contains, it does not fix.
+        // #1886/#1897: the PreVote below would carry `currentTerm + 1`, above the ceiling. Peers no
+        // longer refuse that term — #1897 made adoption bound the JUMP, so a peer at our term admits a
+        // step of one — but this node must still not reach it: `checkedRestoredTerm` refuses a durable
+        // term above the ceiling, so campaigning there ends in a node that cannot boot. Report it and
+        // re-arm rather than campaign toward that state — re-arming keeps the metric repeating so the
+        // condition reads as a level (the log is latched separately). See termPinnedAtCeiling: this
+        // contains, it does not fix.
         //
         // Deliberately placed AFTER the role write, not before it. A node can land exactly ON the
         // ceiling and become a Candidate there (an election from `2^60 - 1` persists `2^60`, which the
@@ -1192,11 +1195,14 @@ internal class RaftEngine(
      * believe is alive. A normal (pre-vote-gated) election leaves it `false` so leader-stickiness holds.
      */
     private suspend fun startRealElection(leadershipTransfer: Boolean = false) {
-        // #1886: `persistTermAndVote(currentTerm + 1, …)` below would write a term above the ceiling to
-        // DURABLE storage, which [checkedRestoredTerm] then refuses to restart on (#1855) — so one
-        // hostile frame would brick the next boot — and the RequestVote carrying it is dropped by every
-        // peer anyway. Reached from [onTimeoutNow] without passing [onElectionTimeout]'s guard, so this
-        // is a second, independent check rather than a redundant one. See [termPinnedAtCeiling].
+        // #1886/#1897: `persistTermAndVote(currentTerm + 1, …)` below would write a term above the
+        // ceiling to DURABLE storage, which [checkedRestoredTerm] then refuses to restart on (#1855),
+        // bricking the next boot. That is now the WHOLE reason, and it is enough on its own: #1897 made
+        // adoption bound the jump, so the RequestVote carrying that term is NOT refused by a peer at the
+        // same term — it is admitted, and every voter that receives it persists the term too via
+        // `stepDown`, spreading the unbootable state rather than containing it. Reached from
+        // [onTimeoutNow] without passing [onElectionTimeout]'s guard, so this is a second, independent
+        // check rather than a redundant one. See [termPinnedAtCeiling].
         if (termPinnedAtCeiling()) {
             preVoteTerm = null
             reportTermPinnedAtCeiling("election")
