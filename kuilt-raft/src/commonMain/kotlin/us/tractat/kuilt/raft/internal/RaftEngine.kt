@@ -3122,8 +3122,9 @@ internal class RaftEngine(
         // ── §5.2 / §8 leader-authority gate (#1383, #1889) ───────────────────────
         // [RaftMessage.isLeaderToPeer] is the type test, and the only place that set is written: an
         // exhaustive `when` with no `else`, so a new leader→peer RPC cannot compile without deciding
-        // whether this gate applies to it. This site used to re-enumerate the types instead, which
-        // could — and #1889 is what that cost, a `TimeoutNow` left off a list nothing checked (#1973).
+        // whether this gate applies to it. Until #1973 this site re-enumerated the three types by
+        // hand, and a hand-rolled list compiles perfectly well with a type missing from it — which is
+        // exactly what #1889 was, a `TimeoutNow` this gate did not test.
         //
         // Only a voter can ever be leader (§5.2: a candidate must win a majority of the voter set), so
         // a leader→peer frame whose *sender* is not a current voter is a forgery — an

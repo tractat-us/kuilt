@@ -579,14 +579,35 @@ internal class LeadershipTransferTest {
      * reached a voter over the cross-server relay. It belongs in the same §5.2/§8 authority gate as
      * `AppendEntries`/`InstallSnapshot` (#1383), and before #1889 it was outside it.
      *
-     * The lane probed here is deliberately the one *neither* term-based guard defends: a **same-term**
-     * frame delivered to a node that has not yet heard from a leader this term (`_leader == null`), where
-     * the same-term leader check has nothing to compare against and accepts. The target is walked into
-     * that state by a disrupt-flagged higher-term `RequestVote` from a real voter — `stepDown` adopts the
-     * term and clears `_leader`. Only the sender-membership gate can drop what follows.
+     * The target is walked to a fresh term with no leader belief by a disrupt-flagged higher-term
+     * `RequestVote` from a real voter — `stepDown` adopts the term and clears `_leader`.
+     *
+     * ### What this test attributes, and what it no longer can (#1973)
+     *
+     * It was written for the gate, and said so in its name, on the reading that a node with no leader
+     * for the term had nothing to authenticate a same-term frame against and would accept it. That
+     * stopped being true at #1900. **Two** guards now refuse this frame, and the assertions below
+     * cannot tell them apart:
+     *
+     * - `RaftEngine.onMessage`'s §5.2/§8 gate — the sender is not in `voters`.
+     * - `RaftEngine.onTimeoutNow`'s leader-identity check. The frame carries exactly the target's term,
+     *   so the stale-term and future-term guards both pass it along, and it then meets
+     *   `from != leaderForTerm`. `leaderForTerm` is by construction a fact about `currentTerm` and
+     *   reads `null` once the term moves past the one it was pinned for — which is this target, having
+     *   reached its term through the `RequestVote` rather than through a leader. Since #1900 removed
+     *   the no-pin carve-out, a `null` pin refuses **every** sender instead of admitting any.
+     *
+     * Both outcomes are a Follower at an unbumped term with no election started, which is all this
+     * test observes. Mutation-verified: deleting `TimeoutNow` from `RaftMessage.isLeaderToPeer` —
+     * removing it from the gate outright, the state #1889 fixed — leaves this test green.
+     *
+     * So what it pins is the **state effect**, and that is worth pinning: it fails if any acceptance
+     * lane opens for this frame, through either guard. What discriminates the gate is
+     * [VoterRpcAuthorityGateTest.timeoutNowFromNonVoter_isDroppedByThisGate_notByTheDownstreamLeaderIdentityCheck],
+     * which reads the `RaftMetric.WedgeSuspected` report only the gate emits. The pair is deliberate.
      */
     @Test
-    fun timeoutNow_fromNonVoter_atCurrentTerm_isDroppedByAuthorityGate() = raftRunTest(timeout = 10.seconds) {
+    fun timeoutNow_fromNonVoter_atCurrentTerm_isIgnored() = raftRunTest(timeout = 10.seconds) {
         val sim = raftSim(this, backgroundScope, n = 3)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -614,7 +635,8 @@ internal class LeadershipTransferTest {
         val baselineTerm = targetStore.term()
         assertEquals(
             null, sim.nodes.getValue(target).leader.value,
-            "pre-condition: the target must have no known leader, so the same-term leader check cannot fire",
+            "pre-condition: the target must have heard from no leader at this term, so it holds " +
+                "neither a `_leader` belief nor a `leaderForTerm` pin for it",
         )
 
         val targetTrace = mutableListOf<RaftTraceEvent>()
@@ -629,13 +651,13 @@ internal class LeadershipTransferTest {
             {
                 assertEquals(
                     RaftRole.Follower, sim.nodes.getValue(target).role.value,
-                    "a TimeoutNow from a non-voter must be dropped by the §5.2 authority gate, not start an election",
+                    "a same-term TimeoutNow from a non-voter must not start an election",
                 )
             },
             {
                 assertEquals(
                     baselineTerm, afterTerm,
-                    "a dropped TimeoutNow must not bump the target's durable term",
+                    "a refused TimeoutNow must not bump the target's durable term",
                 )
             },
             {

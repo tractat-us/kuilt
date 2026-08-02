@@ -136,7 +136,8 @@ class VoterRpcAuthorityGateTest {
      * The gate's third leader→peer type — and the one whose coverage had quietly gone to zero.
      *
      * `TimeoutNow` joined the gate in #1889, pinned by
-     * [LeadershipTransferTest.timeoutNow_fromNonVoter_atCurrentTerm_isDroppedByAuthorityGate], which
+     * [LeadershipTransferTest.timeoutNow_fromNonVoter_atCurrentTerm_isIgnored] (renamed on #1973 from
+     * `…_isDroppedByAuthorityGate`, which is the attribution it can no longer make), which
      * asserts the target stays a Follower at an unbumped term. #1900 then made
      * `RaftEngine.onTimeoutNow` require `from == leaderForTerm` **outright** (no null carve-out, since
      * #1938 made the pin durable). A non-voter is never any term's established leader, so from that
