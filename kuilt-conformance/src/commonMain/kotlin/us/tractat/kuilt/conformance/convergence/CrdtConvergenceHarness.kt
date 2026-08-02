@@ -28,6 +28,21 @@ public fun interface OperationGenerator<S> {
  *
  * Every permutation is additionally asserted to encode to the *same bytes* under [serializer]
  * (#1957) — see `assertAllPermutationsConverge`.
+ *
+ * **Scope of the byte assertion — read before trusting a green run.** Every comparison it makes is
+ * between two encodings produced in one process on one target, so it proves order-independence
+ * *within* a target and nothing more. It does **not** prove two targets agree on the bytes; that
+ * dimension is pinned separately by the golden vectors in `:kuilt-crdt`'s `commonTest`.
+ *
+ * More sharply: on JVM and Android this assertion has **near-zero discriminating power**. The map
+ * merges underneath most CRDTs return a `HashMap`, and `java.util.HashMap` iterates in bucket
+ * order — a function of the key set and table capacity, both invariant under the fold order — so
+ * every permutation emits identically whether or not the type is canonical. Kotlin/Native and
+ * Kotlin/Wasm preserve insertion order, which *is* the fold order, so only they see the defect.
+ * When you bind a new CRDT to this suite, **verify on `macosArm64Test` or `wasmJsTest`** — a green
+ * `jvmTest` is not evidence of canonicality. (Types whose merge yields a `LinkedHashSet`, e.g. via
+ * `Set.plus`, are insertion-ordered on the JVM too and do fail there — so a JVM red is meaningful
+ * even though a JVM green is not.)
  */
 @OptIn(ExperimentalSerializationApi::class, ExperimentalStdlibApi::class)
 public class CrdtConvergenceHarness<S : Quilted<S>>(
@@ -71,7 +86,7 @@ public class CrdtConvergenceHarness<S : Quilted<S>>(
             // Byte-level canonicality (#1957): converged replicas must ENCODE identically,
             // not merely compare equal. Set/Map equality is order-insensitive exactly where
             // the encoding is not, so `result == canonical` is structurally blind to a
-            // history- or platform-dependent encoding.
+            // history-dependent encoding.
             val resultBytes = encoded(result)
             check(resultBytes.contentEquals(canonicalBytes)) {
                 "Canonical-encoding failure under permutation $permutation:\n" +
