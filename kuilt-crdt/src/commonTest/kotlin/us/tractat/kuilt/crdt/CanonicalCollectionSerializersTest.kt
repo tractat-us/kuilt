@@ -1,12 +1,57 @@
 package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.cbor.Cbor
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.descriptors.buildClassSerialDescriptor
+import kotlinx.serialization.descriptors.element
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.encoding.decodeStructure
+import kotlinx.serialization.encoding.encodeStructure
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
+
+/**
+ * A tie: [SparseSerializer] emits the *same primitive leaf* for both `Sparse("x", null)` and
+ * `Sparse(null, "x")` — only the element **index** differs, and the leaf encoder behind the
+ * canonical sort records primitives, not indices. So the two compare equal and the sort's
+ * stability decides their order, while CBOR writes the field name and so makes that decision
+ * visible in the bytes.
+ */
+private data class Sparse(val a: String?, val b: String?)
+
+@OptIn(ExperimentalSerializationApi::class)
+private object SparseSerializer : KSerializer<Sparse> {
+    override val descriptor: SerialDescriptor = buildClassSerialDescriptor("Sparse") {
+        element<String>("a", isOptional = true)
+        element<String>("b", isOptional = true)
+    }
+
+    override fun serialize(encoder: Encoder, value: Sparse) {
+        encoder.encodeStructure(descriptor) {
+            if (value.a != null) encodeStringElement(descriptor, 0, value.a)
+            if (value.b != null) encodeStringElement(descriptor, 1, value.b)
+        }
+    }
+
+    override fun deserialize(decoder: Decoder): Sparse = decoder.decodeStructure(descriptor) {
+        var a: String? = null
+        var b: String? = null
+        while (true) {
+            when (val index = decodeElementIndex(descriptor)) {
+                0 -> a = decodeStringElement(descriptor, 0)
+                1 -> b = decodeStringElement(descriptor, 1)
+                else -> break
+            }
+        }
+        Sparse(a, b)
+    }
+}
 
 @OptIn(ExperimentalSerializationApi::class)
 class CanonicalCollectionSerializersTest {
@@ -74,6 +119,41 @@ class CanonicalCollectionSerializersTest {
         assertAll(
             { assertEquals(value, decoded, "round-trip must preserve the set") },
             { assertEquals(listOf("alpha", "beta", "gamma"), decoded.toList(), "decoded order must be sorted") },
+        )
+    }
+
+    @Test
+    fun tiedElementsKeepInputOrder() {
+        // The sort is a total PREORDER, so tied elements are ordered by the sort's stability
+        // alone. That makes stability load-bearing for the bytes, not an implementation detail:
+        // the serializers sort by a pre-computed leaf list rather than by a comparator that
+        // re-serializes each operand, and only a stable sort keeps those two byte-identical.
+        val ser = CanonicalSetSerializer(SparseSerializer)
+        val aFirst = cbor.encodeToByteArray(ser, linkedSetOf(Sparse("x", null), Sparse(null, "x")))
+        val bFirst = cbor.encodeToByteArray(ser, linkedSetOf(Sparse(null, "x"), Sparse("x", null)))
+
+        assertAll(
+            {
+                assertNotEquals(
+                    aFirst.toList(),
+                    bFirst.toList(),
+                    "precondition: the tie must be observable in the bytes, else this proves nothing",
+                )
+            },
+            {
+                assertEquals(
+                    listOf(Sparse("x", null), Sparse(null, "x")),
+                    cbor.decodeFromByteArray(ser, aFirst).toList(),
+                    "a tie must retain input order",
+                )
+            },
+            {
+                assertEquals(
+                    listOf(Sparse(null, "x"), Sparse("x", null)),
+                    cbor.decodeFromByteArray(ser, bFirst).toList(),
+                    "a tie must retain input order under the opposite input too",
+                )
+            },
         )
     }
 
