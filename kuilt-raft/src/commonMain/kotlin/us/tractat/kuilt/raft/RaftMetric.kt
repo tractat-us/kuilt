@@ -72,6 +72,21 @@ public sealed interface RaftMetric {
      * No election was started, because this node's [term] has reached the engine's term
      * plausibility [ceiling] and the `term + 1` an election must propose would sit above it (#1886).
      *
+     * **What "above the ceiling" costs, after #1897.** Term adoption is bounded by the *jump* now
+     * (`RaftConfig.maxTermJump`), not by this constant, so whether a peer would refuse the `term + 1`
+     * this node wanted to propose depends on where that peer sits: a peer at the same term sees a step
+     * of one and admits it; a peer far below sees a leap of nearly `2^60` and drops it. The ceiling's
+     * remaining jobs are local to this node: `currentTerm + 1` must stay clear of `Long` overflow, and
+     * the node must not *write* a durable term its own restore guard will refuse on the next start —
+     * the write itself is unbounded, so suppressing the election is what prevents it.
+     *
+     * So the suppression is stricter than the cluster requires **only when this node's peers are at the
+     * ceiling too** — only then would they admit the `term + 1` it wanted to propose. Note that neither
+     * origin below puts them there: both describe how *this* node reached the ceiling, and say nothing
+     * about where anyone else sits. Whenever the peers are at an ordinary term they refuse this node's
+     * frames on their own jump bound and it could not have won anyway, so the suppression costs no
+     * liveness at all and buys the bootability outright. See `RaftEngine.termPinnedAtCeiling`.
+     *
      * **This node cannot become leader again, and this metric does not mean it will recover.** Honest
      * terms advance once per election and stay some 18 orders of magnitude below the ceiling, and terms
      * never decrease, so the condition is permanent for the lifetime of this node's durable state.
@@ -85,13 +100,21 @@ public sealed interface RaftMetric {
      * 1. **This node's own durable storage** — a `RaftStorage` adapter that returned a corrupt term (a
      *    truncated column, a sign-extended `Int`, a torn read). No attacker and no malformed frame
      *    required; kuilt ships no durable `RaftStorage`, so this surface is always consumer code.
-     * 2. **A malformed or hostile frame** from a peer, carrying a term at the ceiling.
+     * 2. **A malformed or hostile frame** from a peer, carrying a term at the ceiling — but since #1897
+     *    only if this node was within `RaftConfig.maxTermJump` of the ceiling *already*. Such a frame
+     *    aimed at a node at an ordinary term is a jump of nearly `2^60`, and the same bound refuses it.
+     *    So this route can no longer carry a node here from an ordinary term, which leaves origin 1
+     *    effectively the only one that can.
      *
-     * What this buys is a *name* for a failure that was previously silent: the alternative is
-     * broadcasting a term above the ceiling that every recipient (including this node) drops at the
-     * wire boundary, leaving a cluster that has permanently stopped electing while every node reports
-     * itself healthy. Treat one of these as an operational incident — inspect this node's persisted
-     * term first, then the peer that last raised it, then re-provision from empty state.
+     * What this buys is a *name* for a failure that would otherwise stay invisible until a restart. The
+     * durable half is unconditional and is the point: absent the suppression, `term + 1` is written to
+     * durable storage — nothing bounds that write — and this node is permanently unbootable the moment
+     * it next restarts. What varies is how visible that is beforehand, and it turns on where the *peers*
+     * sit rather than on how this node got here. Peers at the ceiling too see a jump of one, admit it,
+     * and this node campaigns and **wins normally** — nothing looks wrong at all until the restart.
+     * Peers at an ordinary term refuse its frames on their own jump bound, so it simply never wins.
+     * Treat one of these as an operational incident — inspect this node's persisted term first, then
+     * the peer that last raised it, then re-provision from empty state.
      *
      * @see ElectionStarted for the ordinary path this replaces when the ceiling is reached.
      */

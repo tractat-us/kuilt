@@ -683,24 +683,31 @@ internal class RaftEngine(
      * permanently and *silently* isolated, strictly worse than a loud failure that names the state. What
      * needs fixing is the remote *cause*, and it is not here. #1889 has since closed the TimeoutNow route
      * specifically: a TimeoutNow whose sender is not a voter, or whose term is strictly ahead of ours, is
-     * now dropped without adopting its term. The general shape survives it — the ceiling still admits a
-     * term with no headroom for the `+ 1` that necessarily follows on *any* term-adopting path (#1886) —
-     * so this guard stays the backstop, not the fix.
+     * now dropped without adopting its term. The general shape survives it — a node can still come to hold
+     * a term whose `+ 1` this engine refuses to perform ([termPinnedAtCeiling]) — so this guard stays the
+     * backstop, not the fix.
      *
-     * ### Why this bound stays inclusive after #1886
+     * ### Why this bound stays inclusive, and why it no longer agrees with [onMessage] by definition
      *
      * #1886 was expected to make this bound exclusive in lockstep with [onMessage]'s. It does not:
      * measurement showed an exclusive ceiling only relocates the boundary by one (see
      * [termPinnedAtCeiling]), so neither bound moved. The containment went in at the *increment* instead.
      *
-     * The two bounds stay consistent for the simplest possible reason — **they are the same constant**, so
-     * every term [onMessage] admits is a term this site admits, by definition. No argument about where a
-     * durable term came from is needed, and none would hold: `storage.term()` is third-party input, which
-     * is the entire premise above. A durable term **above** the ceiling therefore remains reachable, by at
-     * least two routes this engine cannot police — a **pre-#1886 binary** that persisted `2^60 + 1` through
+     * The two bounds used to stay consistent for the simplest possible reason — they were the same
+     * constant. **#1897 ended that.** [onMessage] now bounds the JUMP (`term - currentTerm > maxTermJump`)
+     * rather than the value, so it can admit a term this site would refuse: a node at exactly `2^60`
+     * adopts `2^60 + 1` off the wire, persists it, and its own next boot lands here. The asymmetry is
+     * real and deliberate — it costs an *unreachable* case (reaching `2^60` at all now takes ~10^14
+     * accepted frames rather than one) to remove a cliff that was reachable in a single frame, and this
+     * site's job is unchanged: an out-of-range durable term surfaces here, loudly, whatever produced it.
+     *
+     * No argument about where a durable term came from is needed, and none would hold: `storage.term()`
+     * is third-party input, which is the entire premise above. A durable term **above** the ceiling
+     * therefore remains reachable, by at least three routes this engine cannot police — the #1897
+     * asymmetry just described, a **pre-#1886 binary** that persisted `2^60 + 1` through
      * the escalation described above and then upgrades onto this refusal (snapshots publish on every push
-     * to `main`), and a storage adapter that simply returns a corrupt value. Both land here, loudly, which
-     * is the design: this guard is where an out-of-range durable term is *supposed* to surface.
+     * to `main`), and a storage adapter that simply returns a corrupt value. All three land here, loudly,
+     * which is the design: this guard is where an out-of-range durable term is *supposed* to surface.
      *
      * That escalation is now closed **twice over, at different layers**, and the division of labour is worth
      * being precise about because only one half generalises:
@@ -977,54 +984,50 @@ internal class RaftEngine(
     // ── Election ──────────────────────────────────────────────────────────────
 
     /**
-     * `true` when [state]`.currentTerm` has reached [MAX_PLAUSIBLE_TERM], so the `currentTerm + 1` an
-     * election necessarily proposes would sit *above* the ceiling every peer — this node included —
-     * enforces at [onMessage] (#1886).
+     * `true` when [state]`.currentTerm` has reached [MAX_PLAUSIBLE_TERM], so an election's
+     * `currentTerm + 1` is refused rather than performed.
      *
      * Written as `>=` against the ceiling rather than `currentTerm + 1 > MAX_PLAUSIBLE_TERM` so the
      * guard against an overflowing increment does not itself compute one.
      *
-     * ### Why this is a separate check and not a tighter wire bound
+     * ### What it is for, after #1897
      *
-     * The #1886 proposal was to make [onMessage]'s bound exclusive, on the principle that "the
-     * adoption ceiling must sit strictly below the emission ceiling". The principle is right; an
-     * exclusive bound does not implement it, because *one* constant serves both ends — the ceiling
-     * limiting what we adopt is the same ceiling our own `+ 1` must clear. Measured: with the bound at
-     * `>=`, one frame at `2^60 - 1` propagates on ordinary traffic exactly as `2^60` does today, and
-     * every election then proposes `2^60`, which every recipient drops. The boundary moved down by
-     * one; nothing else changed.
+     * This predicate was introduced under #1886 with a second justification that **#1897 retired**: that
+     * the proposed `currentTerm + 1` *"would be dropped as implausible by every peer including this
+     * node"*. [onMessage] no longer bounds a term's value against this constant — it bounds the JUMP —
+     * so a step of one is admissible at every term, `2^60 + 1` included. That half of the argument is
+     * gone, and with it the boundary the #1886 analysis below was written about.
      *
-     * Closing the chain would need `T ≤ A ⟹ T + 1 ≤ A` for the adoption ceiling `A`, which holds only
-     * for `A = ∞`. A two-constant split (admit up to `E`, adopt up to `A = E - 1`) fails the same way:
-     * the emitted `A + 1 = E` is admitted but not *adoptable*, so voters deny the candidate while
-     * having already adopted `A` off its responses. The boundary is inherent to bounding an
-     * incremented value against a constant. It can be made loud or made unreachable — not moved.
+     * Two reasons survive, and they are now the whole justification:
      *
-     * ### What this buys, and what it does not
+     * 1. **Overflow headroom.** `currentTerm + 1` on a `Long` wraps near [Long.MAX_VALUE]. Since #1897
+     *    made adoption relative, nothing else bounds `currentTerm` above, so this predicate is the
+     *    *sole* reason the two increment sites cannot wrap. That is a stronger role than it had.
+     * 2. **Never persist a term this node cannot restore.** [checkedRestoredTerm] still refuses a
+     *    durable term above [MAX_PLAUSIBLE_TERM], so incrementing past it would brick the next boot.
      *
-     * It is **loud containment, not a fix.** It does not preserve liveness: a node at the ceiling
-     * still cannot become leader, and if the term propagated cluster-wide the cluster still cannot
-     * elect. What it removes is #1833's headline complaint — *"no exception, no log line, every node
-     * reports itself healthy"*. Instead of broadcasting a frame with no possible recipient, the node
-     * emits [RaftMetric.ElectionSuppressedTermCeiling] on every attempt (and warn-logs once), and never
-     * drives its own durable term above the ceiling (which #1855's [checkedRestoredTerm] would then
-     * refuse to restart on — one hostile frame otherwise bricks the next boot).
+     * ### The liveness cost, which #1897 changed the shape of
+     *
+     * It remains **containment, not a fix**, and the containment is now stricter than the surrounding
+     * mechanism requires: a node pinned here still cannot become leader, but its peers would no longer
+     * refuse the term it wanted to propose. So this suppresses an election that could otherwise have
+     * succeeded, in exchange for reasons (1) and (2) above. Reaching the state at all now costs ~10^14
+     * accepted frames rather than one, which is why it is contained rather than redesigned; whether the
+     * trade is still the right one is open, and deliberately not decided here.
+     *
+     * What it does buy is the removal of #1833's headline complaint — *"no exception, no log line, every
+     * node reports itself healthy"*: the node emits [RaftMetric.ElectionSuppressedTermCeiling] on every
+     * attempt and warn-logs once.
      *
      * ### The state this does not warn about: a healthy leader sitting *on* the ceiling
      *
-     * `2^60` is admissible, so a cluster can legitimately be serving with a leader whose term is exactly
-     * the ceiling — an election from `2^60 - 1` persists `2^60` and wins. Nothing is suppressed there and
-     * nothing should be: a leader never increments its own term, so it replicates normally and every frame
-     * it sends is in range. But that cluster is **one leader-lifetime from permanent wedge**: the moment
-     * that leader dies, is partitioned, or is stepped down by `CheckQuorum`, every voter is pinned at the
-     * ceiling and no election can ever succeed again. The guard fires only at that transition, which is
-     * the earliest point at which anything is actually wrong — but it means a green cluster can already
-     * be one failure away, and no metric here says so.
-     *
-     * The real fix is to bound the *jump* (`m.term > currentTerm + MAX_TERM_JUMP`) rather than the
-     * value, which admits `+ 1` at every term and so has no boundary at all; it costs rejoin liveness
-     * for a node absent across more than `MAX_TERM_JUMP` elections and needs a catch-up path. Tracked
-     * as design work on #1886.
+     * A cluster can legitimately be serving with a leader whose term is exactly the ceiling — an election
+     * from `2^60 - 1` persists `2^60` and wins. Nothing is suppressed there and nothing should be: a
+     * leader never increments its own term, so it replicates normally. But that cluster is **one
+     * leader-lifetime from being unable to elect**: the moment that leader dies, is partitioned, or is
+     * stepped down by `CheckQuorum`, every voter is pinned and no election can succeed. The guard fires
+     * only at that transition — the earliest point at which anything is actually wrong — so a green
+     * cluster can already be one failure away with no metric saying so.
      *
      * ### Placement
      *
@@ -1055,8 +1058,11 @@ internal class RaftEngine(
      */
     private fun ceilingDiagnostic(attempt: String): String =
         "suppressed $attempt: currentTerm=${state.currentTerm} has reached the plausibility ceiling " +
-            "$MAX_PLAUSIBLE_TERM, so the term this election must propose would be dropped as implausible by " +
-            "every peer including this node (#1886). This node can no longer be elected and will not " +
+            "$MAX_PLAUSIBLE_TERM, so the term this election must propose would be written to durable " +
+            "storage successfully and then REFUSED BY THIS NODE'S OWN RESTORE GUARD ON ITS NEXT START, " +
+            "leaving it permanently unbootable. The election is suppressed to keep this node startable, " +
+            "and to keep the increment clear of Long overflow (#1886). This node can no longer be " +
+            "elected and will not " +
             "recover. A term this high has two possible origins: this node's own durable storage (a " +
             "RaftStorage adapter that returned a corrupt term — no attacker required), or a malformed or " +
             "hostile frame from a peer. Inspect this node's persisted term first, then the peer that last " +
@@ -1598,8 +1604,8 @@ internal class RaftEngine(
      * snapshot metadata (issue #1868) — the sibling of [isWellFormedBatch] on the snapshot lane.
      *
      * `lastIncludedIndex` / `lastIncludedTerm` were inspected by nothing. [isWellFormedBatch] guards
-     * [RaftMessage.AppendEntries] and nothing else, and [onMessage]'s `MAX_PLAUSIBLE_TERM` bound
-     * guards a frame's own `term` and nothing else — so a single frame carrying the recipient's *own*
+     * [RaftMessage.AppendEntries] and nothing else, and [onMessage]'s term bound guards a frame's own
+     * `term` and nothing else — so a single frame carrying the recipient's *own*
      * current term (honest enough to clear both the stale-term check and the §5.2 leader-authority
      * gate) reached [finalizeInstalledSnapshot] with arbitrary metadata:
      *
@@ -1620,8 +1626,9 @@ internal class RaftEngine(
      * is the term of a log entry the sender held, and a node's log never carries a term above its own
      * `currentTerm`, which is what the frame states as `term`. So `lastIncludedTerm <= term` — the
      * identical §5.3 argument [isWellFormedBatch] makes about entry terms. The `MAX_PLAUSIBLE_TERM`
-     * ceiling is folded into the same bound; it is implied today by [onMessage]'s bound on `term`,
-     * and is restated here so this check's correctness is local rather than inherited.
+     * ceiling is folded into the same bound, and is enforced *here* rather than inherited — which is
+     * what makes this check survive #1897 unchanged, since [onMessage] no longer bounds `term` against
+     * that constant at all.
      *
      * **Both halves of the position are bounded, because §5.4.1 needs only one of them.**
      * [LogPosition] orders by `(term, index)` lexicographically and [isLogUpToDate] is
@@ -1943,8 +1950,7 @@ internal class RaftEngine(
      *   must — and committed entries can be overwritten.
      *
      * **Scope — the AppendEntries lane.** This check guards [RaftMessage.AppendEntries] and nothing
-     * else, and [onMessage]'s `MAX_PLAUSIBLE_TERM` bound guards a frame's own `term` and nothing
-     * else. [RaftMessage.InstallSnapshot]'s `lastIncludedTerm` / `lastIncludedIndex` are seen by
+     * else, and [onMessage]'s term bound guards a frame's own `term` and nothing else. [RaftMessage.InstallSnapshot]'s `lastIncludedTerm` / `lastIncludedIndex` are seen by
      * neither and reach the same §5.4.1 domination (plus a wiped log) through a sibling frame; that
      * lane has its own [isWellFormedSnapshotChunk] (issue #1868), which bounds **both** halves of the
      * position. Note this lane needs no index ceiling and that one does: here `entries[i].index` is
@@ -2968,7 +2974,7 @@ internal class RaftEngine(
     // ── Message dispatcher ────────────────────────────────────────────────────
 
     private suspend fun onMessage(from: NodeId, m: RaftMessage) {
-        // ── Term plausibility bound (#1833) ──────────────────────────────────────
+        // ── Term jump bound (#1833, made relative by #1897) ──────────────────────
         // Term adoption had no upper bound: any message carrying a higher term was adopted wholesale
         // via `stepDown(m.term, HigherTermObserved)`, and the election increment is a bare
         // `currentTerm + 1` on a `Long`, which wraps silently. One frame carrying
@@ -2980,11 +2986,12 @@ internal class RaftEngine(
         // log line, no crashed node: the cluster silently stops making progress while every node
         // reports itself healthy.
         //
-        // Honest terms increment once per election, so a real deployment stays many orders of
-        // magnitude below MAX_PLAUSIBLE_TERM (~10^18 elections of headroom). A term outside
-        // `0..MAX_PLAUSIBLE_TERM` is therefore proof of a malformed or foreign frame, and — the
-        // #1817 nonce reasoning — admits no conservative in-range reading to clamp to, so the frame
-        // is DROPPED. Negative terms are already nonsense: terms start at 0 and only increase.
+        // Honest terms increment ONCE PER ELECTION, so what makes a term implausible is not its
+        // magnitude but its DISTANCE from what this node has already seen. A frame claiming a term
+        // more than `maxTermJump` above ours asserts a run of elections that cannot have happened
+        // while we were reachable, so it is proof of a malformed or foreign frame — and, the #1817
+        // nonce reasoning, it admits no conservative in-range reading to clamp to, so the frame is
+        // DROPPED. Negative terms are already nonsense: terms start at 0 and only increase.
         //
         // Placed at the dispatch boundary, before any handler and therefore before any adoption, so
         // one check covers every path on which a FRAME can raise `currentTerm`.
@@ -2993,32 +3000,63 @@ internal class RaftEngine(
         // engine's actor loop, whose `try`/`finally` has no `catch`, so a `require` would convert a
         // malformed frame into permanent node death (#1818).
         //
-        // `currentTerm` has exactly three writers, and the `currentTerm + 1` increment sites are
-        // overflow-free only because ALL THREE are bounded: this one, the self-increment (bounded by
-        // its input), and the init-restore `storage.term()`, which is bounded by [checkedRestoredTerm]
-        // (#1855). The restore was originally left out on the reading that a poisoned durable term only
-        // costs that node's liveness — wrong on both halves: a one-voter cluster reaches the wrap from
-        // there and PERSISTS `Long.MIN_VALUE`, and since kuilt ships no durable RaftStorage the
-        // out-of-range value is an ordinary third-party storage bug, not a migration artefact. See
-        // [checkedRestoredTerm] for why that site refuses to start instead of dropping (there is no
-        // frame to drop) or clamping (§5.2).
+        // `currentTerm` has exactly three writers — this one, the self-increment, and the init-restore
+        // `storage.term()` — and NON-NEGATIVITY, which the subtraction below relies on, needs all three:
+        // this check refuses a negative wire term, the self-increment cannot go down, and the restore is
+        // bounded by [checkedRestoredTerm] (#1855). The restore was originally left out on the reading
+        // that a poisoned durable term only costs that node's liveness — wrong on both halves: a
+        // one-voter cluster reaches the wrap from there and PERSISTS `Long.MIN_VALUE`, and since kuilt
+        // ships no durable RaftStorage the out-of-range value is an ordinary third-party storage bug,
+        // not a migration artefact. See [checkedRestoredTerm] for why that site refuses to start
+        // instead of dropping (there is no frame to drop) or clamping (§5.2).
         //
-        // "Overflow-free" here means free of Long wrap, and nothing stronger. The bound is INCLUSIVE, so
-        // a term admitted at exactly MAX_PLAUSIBLE_TERM still increments to `2^60 + 1` — no wrap, but
-        // above the ceiling, and therefore dropped by every peer including its author. One frame at the
-        // boundary reproduces #1833's symptom cluster-wide through the one value this check lets past.
+        // What keeps the `currentTerm + 1` INCREMENT sites free of Long wrap is no longer this check —
+        // it is [termPinnedAtCeiling], which refuses to increment at or above `MAX_PLAUSIBLE_TERM` and
+        // so is now the sole carrier of that guarantee. See the note on it there.
         //
-        // The boundary CANNOT be closed by moving this constant, and #1886 measured that: an exclusive
-        // `>=` simply relocates it to `2^60 - 1`. Closing it needs `T <= A ==> T + 1 <= A`, true only for
-        // an infinite ceiling. So the bound deliberately stays where it is and the increment is guarded
-        // at the two sites that perform it — see [termPinnedAtCeiling], which contains the condition
-        // loudly rather than pretending to fix it. [checkedRestoredTerm]'s bound stays inclusive too and
-        // is THE SAME CONSTANT as this one, so the two agree by definition — every term admitted here is
-        // restorable, and a durable term above the ceiling (which third-party storage can still produce)
-        // lands on that site's loud refusal by design.
+        // ── Why the bound is RELATIVE and not an absolute ceiling (#1897) ────────
+        // This check used to compare against a constant, MAX_PLAUSIBLE_TERM (`2^60`), and no constant
+        // can work. Any absolute ceiling `A` has a cliff AT `A`: the value it admits is the value
+        // whose successor it refuses, so a single frame at `A` propagates on ordinary traffic, every
+        // voter pins there, and the `currentTerm + 1` every election must propose is then dropped by
+        // every recipient INCLUDING ITS AUTHOR — #1833's symptom reached through the one value the
+        // filter let past. #1886 measured that moving the constant does not help: an exclusive `>=`
+        // relocated the cliff to `2^60 - 1` and wedged identically. Closing it would need
+        // `T <= A ==> T + 1 <= A`, true only for `A = infinity`.
+        //
+        // Bounding the JUMP has no such value. `currentTerm + 1` is admissible at every term, so no
+        // term has an unrepresentable successor and there is no boundary left to contain. It is also
+        // the stronger test — implausibility measured against this node's own progress is a local
+        // witness, where a constant is a guess about the deployment — and it converts a one-frame
+        // attack into an infeasible one: reaching the arithmetic danger zone now costs
+        // ~`2^63 / maxTermJump` accepted frames rather than a single frame.
+        //
+        // Written as a SUBTRACTION rather than `wireTerm > state.currentTerm + maxTermJump` so the
+        // guard against an overflowing term cannot itself overflow. `currentTerm` is no longer bounded
+        // above by a constant (adoption is relative now), so the additive form could wrap negative near
+        // `Long.MAX_VALUE` and then refuse everything. Both operands here are non-negative — `wireTerm`
+        // by the short-circuiting test to its left, `currentTerm` by [checkedRestoredTerm] and by only
+        // ever being raised from an admitted non-negative term — so the difference is representable.
+        //
+        // ### What MAX_PLAUSIBLE_TERM still does, and the asymmetry that opens
+        //
+        // It is unchanged at `2^60` and keeps its other jobs: [checkedRestoredTerm],
+        // [checkedRestoredSnapshotMeta] and [isWellFormedSnapshotChunk], where a value is read back off
+        // a disk or unpacked from a frame rather than compared against our own progress. It also still
+        // supplies the OVERFLOW HEADROOM this comment's `currentTerm + 1` argument rests on — but now
+        // via [termPinnedAtCeiling] guarding the two increment sites, not via this check.
+        //
+        // The consequence, stated rather than left to be rediscovered: the two constants no longer
+        // agree by definition. `2^60 + 1` is now ADOPTABLE here but still not RESTORABLE, so a node
+        // that adopted it would persist a term its own next boot refuses to start on. That requires
+        // first reaching `2^60`, which after this change costs ~10^14 accepted frames instead of one —
+        // unreachable in practice, and the price of removing a cliff that was reachable in one.
         val wireTerm = m.wireTerm
-        if (wireTerm != null && (wireTerm < 0L || wireTerm > MAX_PLAUSIBLE_TERM)) {
-            debug { "onMessage: dropped ${m::class.simpleName} from $from — implausible term=$wireTerm (outside 0..$MAX_PLAUSIBLE_TERM)" }
+        if (wireTerm != null && (wireTerm < 0L || wireTerm - state.currentTerm > raftConfig.maxTermJump)) {
+            debug {
+                "onMessage: dropped ${m::class.simpleName} from $from — implausible term=$wireTerm " +
+                    "(currentTerm=${state.currentTerm}, maxTermJump=${raftConfig.maxTermJump})"
+            }
             return
         }
 
@@ -3113,11 +3151,22 @@ internal class RaftEngine(
         const val HEADER_BUDGET = 256
 
         /**
-         * Upper sanity bound on any term arriving off the wire (issue #1833) — see [onMessage].
+         * Upper sanity bound on a term this node **stores or unpacks** — [checkedRestoredTerm],
+         * [checkedRestoredSnapshotMeta], [isWellFormedSnapshotChunk] — and the ceiling
+         * [termPinnedAtCeiling] refuses to increment past (issue #1833).
          *
-         * `2^60` leaves roughly 10^18 elections of headroom, which no real deployment approaches
-         * (terms advance once per election), while keeping `currentTerm + 1` three orders of
-         * magnitude clear of the `Long` overflow that would otherwise wrap an election term to
+         * **It is no longer the term-adoption rule.** #1897 replaced that with a relative bound on the
+         * *jump* (`RaftConfig.maxTermJump`, enforced in [onMessage]), because no absolute ceiling can
+         * avoid a cliff at its own value: the term it admits is the term whose successor it refuses.
+         * What survives here is the job a constant is actually good for — a range check on a value read
+         * back off a disk or unpacked from a frame, where there is no local progress to compare against.
+         *
+         * `2^60` deliberately stays where it is. The obvious tightening — a lower ceiling to catch a
+         * storage adapter that loses precision — does not work: `2^60` is a power of two, so a `Double`
+         * column round-trips it *exactly* and a ceiling-only test passes the very adapter the tightening
+         * was meant to catch (which is why the conformance suite pins a full-mantissa value beside it
+         * instead). What the constant is genuinely for is **overflow headroom**: it keeps `currentTerm + 1`
+         * a factor of eight clear of the `Long` overflow that would wrap an election term to
          * `Long.MIN_VALUE` and wedge the cluster permanently.
          */
         const val MAX_PLAUSIBLE_TERM = 1L shl 60
