@@ -54,6 +54,20 @@ contract-violation (a node registered itself as its own remote), not a
 measurement artifact — and the missing mutation site was the self-connection the
 model never considered.
 
+## Pulling device telemetry
+
+Rule 2 needs evidence off the phone. `.claude/scripts/pull-device-telemetry.sh`
+copies a tethered iPhone's app data container over USB (nothing armed in advance,
+the app need not be running), decodes any durable log store it finds, and prints
+each candidate's record count and first/last record time so you can pick the
+container that actually spans the incident — the obvious bundle id is usually the
+wrong one, because an Xcode-built install carries a second, generated id.
+
+**The record timestamps in a durable store are write-times, not event-times** —
+the store flushes on a fixed cadence, so record order can never establish that one
+event preceded another; read the `at=` / `expiresAt=` fields in the event bodies
+instead. Assuming otherwise produced a wrong root-cause diagnosis on #1637.
+
 ---
 
 *See also [`testing-coroutine-determinism.md`](testing-coroutine-determinism.md)
