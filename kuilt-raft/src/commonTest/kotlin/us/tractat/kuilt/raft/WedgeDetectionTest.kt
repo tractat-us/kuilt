@@ -238,6 +238,14 @@ internal class WedgeDetectionTest {
         val victimId = sim.nodeIds.first { it != leaderId }
         val stranger = NodeId("stranger")
         sim.awaitCommit(1L)
+
+        // Isolate the victim before injecting. Not to reproduce anything — purely so the *leader's own*
+        // heartbeats stop arriving, since each one legitimately clears the run and would otherwise race
+        // every injected frame. (That reset is the healthy-node protection, asserted separately below
+        // and in `aHealthyClusterNeverReportsAWedge`; here it is noise.) PreVote keeps an isolated node
+        // from inflating its term, so the term read next stays valid for the whole burst.
+        sim.partitionOff(victimId)
+        sim.settle()
         val term = sim.storages.getValue(victimId).term()
 
         // Below our term: an ordinary stale straggler. Never counts, however many arrive.
@@ -253,6 +261,14 @@ internal class WedgeDetectionTest {
         }
         sim.settle()
         val oneFrameShort = wedges(metricsBy, victimId).size
+
+        // A straggler from a REAL voter. Unlike the stranger's frames it clears both gates, so it
+        // reaches the run's reset — and must not clear it, being behind our term. The reset condition
+        // has to mirror the counting one; when it did not, a deposed ex-voter still heartbeating at its
+        // old term suppressed the report indefinitely, for exactly the node this exists to name.
+        sim.deliverAppendEntries(to = victimId, from = leaderId, term = term - 1)
+        sim.settle()
+        val afterVoterStraggler = wedges(metricsBy, victimId).size
 
         sim.deliverAppendEntries(to = victimId, from = stranger, term = term)
         sim.awaitTrue("the victim reported once the run reached $WEDGE_SUSPECTED_RUN") {
@@ -271,6 +287,13 @@ internal class WedgeDetectionTest {
                     0, oneFrameShort,
                     "${WEDGE_SUSPECTED_RUN - 1} refusals is one short of the run — reporting here would " +
                         "misname an ordinary leader-removal transient",
+                )
+            },
+            {
+                assertEquals(
+                    0, afterVoterStraggler,
+                    "a stale-term frame from a current voter clears both gates but is still a " +
+                        "straggler: it must neither count toward the run nor reset it",
                 )
             },
             {
