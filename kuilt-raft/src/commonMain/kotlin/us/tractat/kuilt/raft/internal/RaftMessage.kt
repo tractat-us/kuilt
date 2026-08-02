@@ -227,6 +227,33 @@ internal val RaftMessage.wireTerm: Long?
         is RaftMessage.ForwardResponse         -> null
     }
 
+/**
+ * `true` for the three RPCs only a leader ever sends to a peer.
+ *
+ * §5.2 makes this set special: a candidate needs a majority of the voter set to win, so the sender of
+ * one of these is claiming to be leader and therefore claiming to be a voter. That is what
+ * `RaftEngine.onMessage`'s §5.2/§8 leader-authority gate (#1383, #1889) tests, and — since these are
+ * also the only frames that can carry a config or advance a follower's commit index — what makes a
+ * *refused* one, unlike a refused vote frame, evidence of a node that cannot make progress (#1898).
+ *
+ * Exhaustive `when` (no `else`) for the same reason as [wireTerm]: a new [RaftMessage] variant must
+ * decide explicitly which side of this it is on.
+ */
+internal val RaftMessage.isLeaderToPeer: Boolean
+    get() = when (this) {
+        is RaftMessage.AppendEntries           -> true
+        is RaftMessage.InstallSnapshot         -> true
+        is RaftMessage.TimeoutNow              -> true
+        is RaftMessage.RequestVote             -> false
+        is RaftMessage.RequestVoteResponse     -> false
+        is RaftMessage.AppendEntriesResponse   -> false
+        is RaftMessage.InstallSnapshotResponse -> false
+        is RaftMessage.PreVote                 -> false
+        is RaftMessage.PreVoteResponse         -> false
+        is RaftMessage.Forward                 -> false
+        is RaftMessage.ForwardResponse         -> false
+    }
+
 /** Outcome of a forwarded proposal, carried in [RaftMessage.ForwardResponse]. */
 @Serializable
 internal sealed interface ForwardOutcome {
