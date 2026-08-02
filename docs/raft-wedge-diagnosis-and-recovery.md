@@ -61,6 +61,15 @@ on `RaftConfig`; where it is consumed it is a **required** constructor parameter
 a defaulted knob — the precedent set by the snapshot ceiling. The existing
 "a negative term is malformed" guard is unaffected and stays.
 
+The knob has a validated range — `1..2^20`, checked when the config is constructed —
+because both ends of it turn the safeguard off. Set to zero it refuses a step of
+exactly one, so no device can ever be told about a new election and the group stops
+electing; set high enough it stops refusing anything, and the single hostile frame is
+back. One is the smallest setting that still lets the group elect; the ceiling is
+where a fabricated climb to the top of the number range still costs more than a
+trillion accepted frames, while remaining a hundred times the largest absence anyone
+would call recoverable. The derivation, in numbers, is on `RaftConfig.maxTermJump`.
+
 ### The absolute ceiling keeps a different job
 
 It does not disappear; it stops being the *adoption* rule and stays where it always
