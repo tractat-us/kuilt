@@ -16,7 +16,9 @@ import kotlinx.serialization.Serializable
  */
 @Serializable
 public class TwoPhaseSet<E> private constructor(
+    @Serializable(with = CanonicalSetSerializer::class)
     public val added: Set<E>,
+    @Serializable(with = CanonicalSetSerializer::class)
     public val removed: Set<E>,
 ) : Quilted<TwoPhaseSet<E>> {
 

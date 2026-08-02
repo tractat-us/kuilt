@@ -10,7 +10,10 @@ import kotlinx.serialization.Serializable
  * @sample us.tractat.kuilt.crdt.sampleGSet
  */
 @Serializable
-public class GSet<E> private constructor(public val elements: Set<E>) : Quilted<GSet<E>> {
+public class GSet<E> private constructor(
+    @Serializable(with = CanonicalSetSerializer::class)
+    public val elements: Set<E>,
+) : Quilted<GSet<E>> {
 
     /** True if [element] is in this set. */
     public fun contains(element: E): Boolean = element in elements
