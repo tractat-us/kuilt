@@ -72,12 +72,19 @@ public sealed interface RaftMetric {
      * No election was started, because this node's [term] has reached the engine's term
      * plausibility [ceiling] and the `term + 1` an election must propose would sit above it (#1886).
      *
-     * **What "above the ceiling" costs, after #1897.** Peers no longer refuse that term — term adoption
-     * is bounded by the *jump* now (`RaftConfig.maxTermJump`), and a step of one is admissible at every
-     * term. The ceiling's remaining jobs are local to this node: `currentTerm + 1` must stay clear of
-     * `Long` overflow, and the node must not *write* a durable term its own restore guard will refuse on
-     * the next start — the write itself is unbounded, so suppressing the election is what prevents it.
-     * So the suppression is stricter than the cluster requires — see `RaftEngine.termPinnedAtCeiling`.
+     * **What "above the ceiling" costs, after #1897.** Term adoption is bounded by the *jump* now
+     * (`RaftConfig.maxTermJump`), not by this constant, so whether a peer would refuse the `term + 1`
+     * this node wanted to propose depends on where that peer sits: a peer at the same term sees a step
+     * of one and admits it; a peer far below sees a leap of nearly `2^60` and drops it. The ceiling's
+     * remaining jobs are local to this node: `currentTerm + 1` must stay clear of `Long` overflow, and
+     * the node must not *write* a durable term its own restore guard will refuse on the next start —
+     * the write itself is unbounded, so suppressing the election is what prevents it.
+     *
+     * So the suppression is stricter than the cluster requires **only when the peers are at the ceiling
+     * too** (origin 2 below) — the case that takes ~10^14 accepted frames to reach. Under the likelier
+     * origin 1 the peers are far below, refuse this node's frames on their own jump bound, and it could
+     * not have won anyway: there the suppression costs no liveness at all and buys the bootability
+     * outright. See `RaftEngine.termPinnedAtCeiling`.
      *
      * **This node cannot become leader again, and this metric does not mean it will recover.** Honest
      * terms advance once per election and stay some 18 orders of magnitude below the ceiling, and terms
@@ -94,13 +101,15 @@ public sealed interface RaftMetric {
      *    required; kuilt ships no durable `RaftStorage`, so this surface is always consumer code.
      * 2. **A malformed or hostile frame** from a peer, carrying a term at the ceiling.
      *
-     * What this buys is a *name* for a failure that would otherwise stay invisible until a restart —
-     * and, since #1897, would look entirely healthy right up to it. Without the suppression every step
-     * succeeds: `term + 1` is written to durable storage (nothing bounds that write), peers admit it
-     * because it is a jump of one, and the node campaigns and **wins normally**. The damage lands only
-     * when it next restarts, at which point its own restore guard refuses the durable term and the node
-     * is permanently unbootable. Treat one of these as an operational incident — inspect this node's
-     * persisted term first, then the peer that last raised it, then re-provision from empty state.
+     * What this buys is a *name* for a failure that would otherwise stay invisible until a restart. The
+     * durable half is unconditional and is the point: absent the suppression, `term + 1` is written to
+     * durable storage — nothing bounds that write — and this node is permanently unbootable the moment
+     * it next restarts. What varies is how visible that is beforehand. Under origin 2 the peers are at
+     * the ceiling too, see a jump of one, admit it, and this node campaigns and **wins normally**, so
+     * nothing looks wrong at all until the restart. Under origin 1 the peers are far below and their own
+     * jump bound refuses the frames, so it simply never wins. Treat one of these as an operational
+     * incident — inspect this node's persisted term first, then the peer that last raised it, then
+     * re-provision from empty state.
      *
      * @see ElectionStarted for the ordinary path this replaces when the ceiling is reached.
      */
