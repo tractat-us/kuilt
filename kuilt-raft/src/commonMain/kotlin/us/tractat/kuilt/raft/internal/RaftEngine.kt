@@ -3257,9 +3257,10 @@ internal class RaftEngine(
         voters: Set<NodeId>,
         gate: RaftMetric.WedgeSuspected.Gate,
     ): String =
-        "WEDGE SUSPECTED — refused $WEDGE_SUSPECTED_RUN consecutive leader→peer frames (latest: " +
-            "${m::class.simpleName} from $from at term=$senderTerm) with no commit progress of our own " +
-            "(currentTerm=${state.currentTerm}, commitIndex=${_commitIndex.value}, voters=$voters, " +
+        "WEDGE SUSPECTED — refused $refusedLeaderFrameRun leader→peer frames in a row at or above our " +
+            "own term (threshold $WEDGE_SUSPECTED_RUN), accepting none and committing nothing in " +
+            "between (latest: ${m::class.simpleName} from $from at term=$senderTerm; " +
+            "currentTerm=${state.currentTerm}, commitIndex=${_commitIndex.value}, voters=$voters, " +
             "gate=$gate). This node can no longer be caught up in place, and nothing recovers on its " +
             "own. Bring it back as a NEW member — a fresh NodeId over EMPTY storage — admitted by an " +
             "ordinary single-server membership change. Do NOT wipe storage under the same NodeId: it " +
