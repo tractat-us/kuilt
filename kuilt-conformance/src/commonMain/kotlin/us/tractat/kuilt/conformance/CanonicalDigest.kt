@@ -31,11 +31,17 @@ private const val FNV_PRIME: Long = 1099511628211L
  * in `CrdtConvergenceHarness` (every merge order must encode identically) and, per CRDT type, by
  * `CanonicalSerializationTest` in `:kuilt-crdt`'s `commonTest` (issue #1957).
  *
- * **The cross-target dimension is not pinned yet.** Both of those compare encodings produced in
- * one process on one target, so nothing currently proves a JVM peer and a Kotlin/Native peer
- * derive the same digest from the same logical state — which is precisely what the cross-process
- * use above assumes. Until cross-target golden vectors land (#1957), read a digest mismatch
- * between peers on *different* targets as inconclusive rather than as divergence.
+ * **The cross-target dimension is pinned as well**, by `CanonicalGoldenVectorTest` in the same
+ * source set. It holds checked-in CBOR byte strings for every type whose encoding depends on a
+ * canonical serializer, and `commonTest` compiles and runs on JVM, Android, iOS, macOS and wasmJs,
+ * so every target is held to the same constants — which is what the cross-process use above needs.
+ * A digest mismatch between peers on *different* targets therefore reads as real divergence rather
+ * than as an artefact of the encoding.
+ *
+ * The caveat there is latency, not coverage: `ci-required`'s build jobs run on Linux, so per-PR
+ * only the JVM/Android and wasmJs executions happen — the Apple Kotlin/Native ones live in
+ * `apple-nightly.yml`, which is not a required check. JVM-vs-wasm agreement is gated on every PR,
+ * JVM-vs-Apple agreement nightly.
  *
  * Not cryptographic — do not use it to authenticate state. It is a 64-bit non-keyed hash: fine
  * against accidental divergence, no defence against a peer that forges a matching digest.
