@@ -19,6 +19,7 @@ import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.FailureReason
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.RejectCode
+import kotlin.time.Duration
 import kotlin.time.Instant
 
 private val logger = KotlinLogging.logger("us.tractat.kuilt.session.partition.JoinerResumeMachine")
@@ -88,6 +89,58 @@ internal interface JoinerResumeHost {
      * see [FailureReason].
      */
     suspend fun onReconnectFailed(at: Instant, reason: FailureReason)
+}
+
+/**
+ * One host `Reject` of a resume, carrying the episode context that makes a *refusal loop* legible.
+ *
+ * A refused joiner retries every [HeartbeatConfig.interval] for the whole
+ * [HeartbeatConfig.reconnectWindow]; before #1637's post-mortem that loop emitted nothing at all,
+ * so the only observable of an episode was the terminal `HostLost` a minute later — long after the
+ * mechanism that produced it had gone. This record is what [JoinerResumeMachine] logs on each
+ * refusal (`resume.refused`) and keeps for the episode, so one log pull answers *was this joiner
+ * being refused, by whom, with what code, how many times, and how far through its budget did it
+ * get?*
+ *
+ * Everything here is an identity or a state, never a size: a count on its own says only *that*
+ * something happened, whereas [host] + [code] + [dwell] say *what*.
+ *
+ * @property host the peer that refused us — the host whose window we are trying to land on.
+ * @property roomId the room the presented [ResumeToken] names.
+ * @property code the structured refusal ([RejectCode.retryable] decides whether the loop goes on).
+ * @property reason the host's free text, verbatim.
+ * @property attempt 1-based index of this refusal within the current reconnect episode.
+ * @property elapsed time since the episode began, against [budget].
+ * @property budget the [HeartbeatConfig.reconnectWindow] the whole episode is spending.
+ * @property dwell time spent so far in the #1637 dwell (consecutive [RejectCode.ResumeWindowNotYetOpen]
+ *   refusals), or null when this refusal is not part of one. Zero on the refusal that starts it.
+ * @property dwellTarget how long the dwell must reach before the episode completes as a no-op
+ *   resume — the host's own [HeartbeatConfig.timeout].
+ */
+internal data class ResumeRefusal(
+    val host: PeerId,
+    val roomId: String,
+    val code: RejectCode,
+    val reason: String,
+    val attempt: Int,
+    val elapsed: Duration,
+    val budget: Duration,
+    val dwell: Duration?,
+    val dwellTarget: Duration,
+) {
+    /**
+     * The `resume.refused` log line, in the flat `key=value` shape the rest of the session layer
+     * emits (`room.event`, `resume.ok`, `resume.no-op`) so one grep spans them all. The two
+     * progress fields render as `elapsed/limit` because neither number means anything alone:
+     * "8 s in" is only alarming against a 60 s budget, and a dwell is only nearly-over against the
+     * host's own timeout.
+     */
+    fun render(): String =
+        "resume.refused host=${host.value} roomId=$roomId code=${code.id} " +
+            "retryable=${code.retryable} attempt=$attempt " +
+            "elapsedMs=${elapsed.inWholeMilliseconds}/${budget.inWholeMilliseconds} " +
+            "dwellMs=${dwell?.inWholeMilliseconds ?: "none"}/${dwellTarget.inWholeMilliseconds} " +
+            "reason=$reason"
 }
 
 /**
@@ -171,8 +224,36 @@ internal class JoinerResumeMachine(
      */
     private var refusal: Refusal? = null
 
-    /** A host `Reject` observed during a reconnect episode: its free text and its structured code. */
-    private data class Refusal(val message: String, val code: RejectCode)
+    /**
+     * A host `Reject` observed during a reconnect episode: its free text, its structured code, and
+     * its 1-based index within the episode.
+     *
+     * [attempt] is what lets [runReconnect] tell a *fresh* refusal from the one it already reported:
+     * [refusal] is sticky (it survives until the episode ends, because the terminal label needs it),
+     * so "is `refusal` non-null?" would re-report the same reject on every subsequent iteration —
+     * including iterations whose flight failed for reasons that never reached the host at all.
+     */
+    private data class Refusal(val message: String, val code: RejectCode, val attempt: Int)
+
+    /**
+     * The most recent [ResumeRefusal] of the current episode, or null when this joiner has not been
+     * refused since the last episode began.
+     *
+     * Kept (not cleared on success) so it survives as post-mortem evidence of an episode that
+     * *recovered through* refusals — the #1637 no-op path ends on the success branch, and a record
+     * cleared there would erase the very loop the log line exists to describe. Reset only when a
+     * new episode starts. Guarded by [lock]; read by tests via `SeamRoom.lastResumeRefusal()`.
+     */
+    private var lastRefusal: ResumeRefusal? = null
+
+    /**
+     * Test-visibility: the current episode's most recent refusal, or null.
+     *
+     * Exposed for `:kuilt-session` tests that assert the refusal loop reports itself with the right
+     * identities. No production caller reads it — production observes the same data through the
+     * `resume.refused` log line.
+     */
+    fun lastRefusal(): ResumeRefusal? = lock.withLock { lastRefusal }
 
     /**
      * Guards the single in-flight reconnect attempt so the two racing tear-detection paths —
@@ -248,7 +329,8 @@ internal class JoinerResumeMachine(
     fun rejectFlight(message: String, code: RejectCode): Boolean = lock.withLock {
         val d = pendingResume
         pendingResume = null
-        if (d != null) refusal = Refusal(message, code)
+        // Count within the episode, so runReconnect can report each reject exactly once.
+        if (d != null) refusal = Refusal(message, code, attempt = (refusal?.attempt ?: 0) + 1)
         d?.complete(ResumeResult.WindowClosed)
         d != null
     }
@@ -354,8 +436,12 @@ internal class JoinerResumeMachine(
             return
         }
 
-        // Fresh episode: forget any reject recorded by a prior reconnect on this machine.
-        lock.withLock { refusal = null }
+        // Fresh episode: forget any reject recorded by a prior reconnect on this machine, and the
+        // refusal record that described it (attempt numbers are per-episode).
+        lock.withLock {
+            refusal = null
+            lastRefusal = null
+        }
 
         // Silence the host-liveness detector: for the reconnect's duration WE decide
         // host-liveness, so a late PeerLost can't tear down an in-flight resume.
@@ -379,6 +465,9 @@ internal class JoinerResumeMachine(
             // attempt produced anything else. Local to the retry loop, which runs inline on this
             // coroutine.
             var windowNotYetOpenSince: Instant? = null
+            // The last refusal this loop has already reported, by its per-episode index. [refusal] is
+            // sticky, so without this a single reject would be re-reported on every later iteration.
+            var reportedRefusals = 0
             while (!ok) {
                 // Bail the instant the room goes terminal (e.g. leave() mid-window), even if
                 // the cancellation of this job hasn't propagated yet — so we never re-weave
@@ -414,12 +503,11 @@ internal class JoinerResumeMachine(
                     logger.info { "resume.ok host=$hostId roomId=${token.roomId.value}" }
                     ok = true
                 } else {
-                    // Fail fast ONLY on a code the host declared terminal (#1572). Everything
-                    // else — a not-yet-open window, an unrecognised code, a host too old to send
-                    // one — keeps retrying to the deadline, which is what recovers the
-                    // fast-reconnect race.
-                    val code = lock.withLock { refusal }?.code
-                    if (code?.retryable == false) return@withTimeoutOrNull false
+                    // The refusal recorded for this episode, if the host answered at all. It is
+                    // *sticky* — kept until the episode ends, because the terminal label needs it —
+                    // so [Refusal.attempt] is what distinguishes a NEW reject from the last one.
+                    val refusalNow = lock.withLock { refusal }
+                    val code = refusalNow?.code
 
                     // #1637: the host says no window has EVER opened for us. Only two things produce
                     // that answer — the #1572 fast-reconnect race (a window IS coming, because the
@@ -446,20 +534,63 @@ internal class JoinerResumeMachine(
                     // refusal's dwell running.
                     val refusedNotYetOpen =
                         result is ResumeResult.WindowClosed && code == RejectCode.ResumeWindowNotYetOpen
-                    if (refusedNotYetOpen) {
-                        val since = windowNotYetOpenSince ?: clock().also { windowNotYetOpenSince = it }
-                        if (clock() - since >= heartbeatConfig.timeout) {
-                            logger.info {
-                                "resume.no-op host=$hostId roomId=${token.roomId.value} " +
-                                    "reason=host-never-partitioned " +
-                                    "dwellMs=${heartbeatConfig.timeout.inWholeMilliseconds}"
-                            }
-                            noOpResume = true
-                            ok = true
-                            continue
-                        }
+                    // Dwell bookkeeping is hoisted above the terminal short-circuit and the refusal
+                    // report so a report can say how far into the dwell it landed. Nothing observable
+                    // moves: a terminal code is never ResumeWindowNotYetOpen, so the short-circuit
+                    // path only ever clears a loop-local that dies with the block.
+                    val dwellSince = if (refusedNotYetOpen) {
+                        windowNotYetOpenSince ?: clock().also { windowNotYetOpenSince = it }
                     } else {
                         windowNotYetOpenSince = null
+                        null
+                    }
+
+                    // #1637 evidence capture: a refusal loop that says nothing is, from a log,
+                    // indistinguishable from a joiner that never tried — the whole episode used to
+                    // surface only as the terminal HostLost a minute later, which is why a real
+                    // hardware capture was misdiagnosed twice. Report each reject with the identities
+                    // and state a diagnosis needs (who refused, which code, which attempt, how far
+                    // through the budget and the dwell) rather than a bare count.
+                    //
+                    // INFO, not DEBUG, deliberately: the on-device captures collect INFO, so a DEBUG
+                    // line would be invisible on exactly the hardware this exists to diagnose.
+                    //
+                    // Bounded by the retry cadence, not by traffic: at most one line per
+                    // [HeartbeatConfig.interval] of the [HeartbeatConfig.reconnectWindow] budget (12
+                    // at the defaults), and only when the host actually *answered* — a healthy
+                    // session, a transient re-weave failure, and a silent host all add nothing.
+                    if (refusalNow != null && refusalNow.attempt > reportedRefusals) {
+                        reportedRefusals = refusalNow.attempt
+                        val report = ResumeRefusal(
+                            host = hostId,
+                            roomId = token.roomId.value,
+                            code = refusalNow.code,
+                            reason = refusalNow.message,
+                            attempt = refusalNow.attempt,
+                            elapsed = clock() - at,
+                            budget = heartbeatConfig.reconnectWindow,
+                            dwell = dwellSince?.let { clock() - it },
+                            dwellTarget = heartbeatConfig.timeout,
+                        )
+                        lock.withLock { lastRefusal = report }
+                        logger.info { report.render() }
+                    }
+
+                    // Fail fast ONLY on a code the host declared terminal (#1572). Everything
+                    // else — a not-yet-open window, an unrecognised code, a host too old to send
+                    // one — keeps retrying to the deadline, which is what recovers the
+                    // fast-reconnect race.
+                    if (code?.retryable == false) return@withTimeoutOrNull false
+
+                    if (dwellSince != null && clock() - dwellSince >= heartbeatConfig.timeout) {
+                        logger.info {
+                            "resume.no-op host=$hostId roomId=${token.roomId.value} " +
+                                "reason=host-never-partitioned " +
+                                "dwellMs=${heartbeatConfig.timeout.inWholeMilliseconds}"
+                        }
+                        noOpResume = true
+                        ok = true
+                        continue
                     }
                     delay(heartbeatConfig.interval)
                 }
