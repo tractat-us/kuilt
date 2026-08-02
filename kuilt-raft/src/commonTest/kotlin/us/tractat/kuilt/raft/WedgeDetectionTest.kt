@@ -2,8 +2,11 @@
 
 package us.tractat.kuilt.raft
 
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.test.TestScope
+import us.tractat.kuilt.raft.RaftMetric.WedgeSuspected.Gate
 import us.tractat.kuilt.raft.internal.RaftMessage
+import us.tractat.kuilt.raft.internal.WEDGE_SUSPECTED_RUN
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -110,6 +113,15 @@ internal class WedgeDetectionTest {
         sim.network.recording = true
         sim.restart(x)
         sim.awaitTrue("x reported that it is refusing the leader's frames") { wedges(metricsBy).isNotEmpty() }
+
+        // Keep the refusal running well past the first report, so the latch assertion below is not
+        // vacuous. Without this the await returns on the very tick the report lands, and an UNLATCHED
+        // implementation passes — verified by mutation: deleting the latch is green against the naive
+        // shape of this test and red against this one.
+        val atReport = leaderAppendEntriesToX(sim, leaderId)
+        sim.awaitTrue("the leader kept retrying long past the report") {
+            leaderAppendEntriesToX(sim, leaderId) >= atReport + SUSTAINED_RETRIES
+        }
         sim.network.recording = false
 
         val victim = sim.nodes.getValue(x)
@@ -121,15 +133,12 @@ internal class WedgeDetectionTest {
             "x must report the wedge on the metric hook; metrics=${metricsBy[x].orEmpty()}",
         )
         val report = reports.first()
-        val droppedFromLeader = sim.network.sent.count {
-            it.to == x && it.from == leaderId && it.message is RaftMessage.AppendEntries
-        }
 
         assertAll(
             {
                 assertTrue(
-                    droppedFromLeader > 0,
-                    "the premise: the leader must actually be sending AppendEntries to x",
+                    leaderAppendEntriesToX(sim, leaderId) >= SUSTAINED_RETRIES,
+                    "the premise: the leader must keep sending AppendEntries to x, long past the report",
                 )
             },
             {
@@ -204,9 +213,119 @@ internal class WedgeDetectionTest {
         )
     }
 
+    /**
+     * The run threshold and the "term at least ours" clause, pinned directly.
+     *
+     * The rotation test above cannot see either: on that trajectory the leader retries forever, so any
+     * threshold is eventually crossed, and the healthy test has no power over the constant either —
+     * a converging cluster produces *zero* qualifying drops, not merely fewer than the threshold
+     * (mutation-verified: `WEDGE_SUSPECTED_RUN = 1` leaves both of them green). So the constant is
+     * pinned here, by injecting exactly the frames the predicate counts.
+     *
+     * Both halves matter. Reporting **early** would misname an ordinary transient — most concretely the
+     * leader-removal window, where a leader this node has already dropped from its voter set keeps
+     * heartbeating until it learns it is out, and every one of those frames is legitimately refused.
+     * Reporting on a **stale-term** frame would misname an ordinary straggler: refusing one is the gate
+     * working, not a wedge, which is why the clause is tested on the observed term rather than inferred
+     * from the gate that fired.
+     */
+    @Test
+    fun theRunThresholdAndTheTermClauseAreBothRequired() = raftRunTest(timeout = 30.seconds) {
+        val metricsBy = mutableMapOf<NodeId, MutableList<RaftMetric>>()
+        val sim = raftSimWithMetrics(this, backgroundScope, metricsBy)
+        val leaderNode = sim.awaitLeader()
+        val leaderId = sim.nodes.entries.first { it.value === leaderNode }.key
+        val victimId = sim.nodeIds.first { it != leaderId }
+        val stranger = NodeId("stranger")
+        sim.awaitCommit(1L)
+        val term = sim.storages.getValue(victimId).term()
+
+        // Below our term: an ordinary stale straggler. Never counts, however many arrive.
+        repeat(WEDGE_SUSPECTED_RUN * 2) {
+            sim.deliverAppendEntries(to = victimId, from = stranger, term = term - 1)
+        }
+        sim.settle()
+        val afterStaleTermFrames = wedges(metricsBy, victimId).size
+
+        // At our term, from a non-voter: counts — but only the run's last frame may report.
+        repeat(WEDGE_SUSPECTED_RUN - 1) {
+            sim.deliverAppendEntries(to = victimId, from = stranger, term = term)
+        }
+        sim.settle()
+        val oneFrameShort = wedges(metricsBy, victimId).size
+
+        sim.deliverAppendEntries(to = victimId, from = stranger, term = term)
+        sim.awaitTrue("the victim reported once the run reached $WEDGE_SUSPECTED_RUN") {
+            wedges(metricsBy, victimId).isNotEmpty()
+        }
+
+        assertAll(
+            {
+                assertEquals(
+                    0, afterStaleTermFrames,
+                    "a frame from behind our term is a straggler, not a wedge, at any volume",
+                )
+            },
+            {
+                assertEquals(
+                    0, oneFrameShort,
+                    "${WEDGE_SUSPECTED_RUN - 1} refusals is one short of the run — reporting here would " +
+                        "misname an ordinary leader-removal transient",
+                )
+            },
+            {
+                assertEquals(
+                    listOf(RaftMetric.WedgeSuspected(stranger, term, term, sim.nodeIds.toSet(), Gate.LeaderAuthority)),
+                    wedges(metricsBy, victimId),
+                    "the report names the sender, both terms, our voter set and the gate — identities " +
+                        "and state, never a count",
+                )
+            },
+        )
+    }
+
+    private fun raftSimWithMetrics(
+        scope: TestScope,
+        nodeScope: CoroutineScope,
+        metricsBy: MutableMap<NodeId, MutableList<RaftMetric>>,
+    ): RaftSimulation {
+        val ids = (1..3).map { NodeId("v$it") }
+        val cluster = ClusterConfig(voters = ids.toSet())
+        val raftCfg = fastRaftConfig()
+        return RaftSimulation(
+            nodeIds = ids,
+            scope = scope,
+            nodeScope = nodeScope,
+            nodeFactory = { id, transport, storage, childScope ->
+                childScope.raftNode(
+                    cluster,
+                    transport,
+                    storage,
+                    raftCfg,
+                    onMetric = { metricsBy.getOrPut(id) { mutableListOf() } += it },
+                )
+            },
+        )
+    }
+
     private fun wedges(
         metricsBy: Map<NodeId, List<RaftMetric>>,
         id: NodeId = x,
     ): List<RaftMetric.WedgeSuspected> =
         metricsBy[id].orEmpty().filterIsInstance<RaftMetric.WedgeSuspected>()
+
+    private fun leaderAppendEntriesToX(sim: RaftSimulation, leaderId: NodeId): Int =
+        sim.network.sent.count { it.to == x && it.from == leaderId && it.message is RaftMessage.AppendEntries }
+
+    private companion object {
+        /**
+         * How far past the first report the leader must keep retrying before the "latched once"
+         * assertion is read.
+         *
+         * Comfortably more than the `WEDGE_SUSPECTED_RUN` that produced the first report, so an
+         * unlatched implementation has room for several more, and — at `fastRaftConfig`'s 2 ms
+         * heartbeat — ~400 ms of virtual time, well inside `RaftSimulation.DEFAULT_AWAIT`.
+         */
+        const val SUSTAINED_RETRIES = 200
+    }
 }

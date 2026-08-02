@@ -68,6 +68,30 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.raft.RaftEngine")
  */
 private val raftCbor = Cbor { ignoreUnknownKeys = true }
 
+/**
+ * How long a run of refused leader→peer frames has to get before [noteRefusedLeaderFrame]
+ * calls it a wedge (#1898).
+ *
+ * It has to clear the longest *benign* run, which is the leader-removal transient: a leader
+ * this node has already stopped counting as a voter (membership is adopt-on-append, so an
+ * uncommitted config entry already arms the §5.2 gate) keeps heartbeating until it learns it
+ * is out, and every one of those frames is refused. That window is bounded by an election
+ * timeout and the frames arrive at `heartbeatInterval`, so its length is
+ * `electionTimeoutMax / heartbeatInterval` — 6 at [RaftConfig]'s defaults (300 ms / 50 ms),
+ * and 5 under the raft suite's `fastRaftConfig` (10 ms / 2 ms).
+ *
+ * 64 is an order of magnitude clear of both, which is the right shape of margin for a
+ * threshold whose false positive is a misleading operator diagnosis. It costs nothing at the
+ * other end: a genuine wedge refuses a frame per heartbeat *forever*, so the report is late by
+ * `64 × heartbeatInterval` — about 3 s at the defaults — against a condition that never clears.
+ *
+ * A count rather than a duration, deliberately: it scales with the leader's own retry cadence,
+ * which is the cadence "sustained" is measured in. Not on [RaftConfig] because there is no
+ * deployment for which a different value is right — the quantity it is calibrated against is
+ * itself derived from the config.
+ */
+internal const val WEDGE_SUSPECTED_RUN: Int = 64
+
 internal class RaftEngine(
     private val bootstrapConfig: ClusterConfig,
     private val transport: RaftTransport,
@@ -3300,30 +3324,6 @@ internal class RaftEngine(
          * `Long.MIN_VALUE` and wedge the cluster permanently.
          */
         const val MAX_PLAUSIBLE_TERM = 1L shl 60
-
-        /**
-         * How long a run of refused leader→peer frames has to get before [noteRefusedLeaderFrame]
-         * calls it a wedge (#1898).
-         *
-         * It has to clear the longest *benign* run, which is the leader-removal transient: a leader
-         * this node has already stopped counting as a voter (membership is adopt-on-append, so an
-         * uncommitted config entry already arms the §5.2 gate) keeps heartbeating until it learns it
-         * is out, and every one of those frames is refused. That window is bounded by an election
-         * timeout and the frames arrive at `heartbeatInterval`, so its length is
-         * `electionTimeoutMax / heartbeatInterval` — 6 at [RaftConfig]'s defaults (300 ms / 50 ms),
-         * and 5 under the raft suite's `fastRaftConfig` (10 ms / 2 ms).
-         *
-         * 64 is an order of magnitude clear of both, which is the right shape of margin for a
-         * threshold whose false positive is a misleading operator diagnosis. It costs nothing at the
-         * other end: a genuine wedge refuses a frame per heartbeat *forever*, so the report is late by
-         * `64 × heartbeatInterval` — about 3 s at the defaults — against a condition that never clears.
-         *
-         * A count rather than a duration, deliberately: it scales with the leader's own retry cadence,
-         * which is the cadence "sustained" is measured in. Not on [RaftConfig] because there is no
-         * deployment for which a different value is right — the quantity it is calibrated against is
-         * itself derived from the config.
-         */
-        const val WEDGE_SUSPECTED_RUN = 64
 
         /**
          * Upper sanity bound on a snapshot's `lastIncludedIndex` arriving off the wire (issue #1868) —
