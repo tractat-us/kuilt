@@ -3,6 +3,7 @@
 package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.TestScope
 import us.tractat.kuilt.raft.RaftMetric.WedgeSuspected.Gate
 import us.tractat.kuilt.raft.internal.RaftMessage
@@ -11,6 +12,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 private val a = NodeId("a")
@@ -239,27 +241,30 @@ internal class WedgeDetectionTest {
         val stranger = NodeId("stranger")
         sim.awaitCommit(1L)
 
-        // Isolate the victim before injecting. Not to reproduce anything — purely so the *leader's own*
-        // heartbeats stop arriving, since each one legitimately clears the run and would otherwise race
-        // every injected frame. (That reset is the healthy-node protection, asserted separately below
-        // and in `aHealthyClusterNeverReportsAWedge`; here it is noise.) PreVote keeps an isolated node
-        // from inflating its term, so the term read next stays valid for the whole burst.
-        sim.partitionOff(victimId)
-        sim.settle()
+        // Silence the rest of the cluster before injecting. Not to reproduce anything — purely so the
+        // *leader's own* heartbeats stop arriving, since each one legitimately clears the run and would
+        // otherwise race every injected frame. (That reset is the healthy-node protection, asserted
+        // separately below and in `aHealthyClusterNeverReportsAWedge`; here it is noise.) Crashing
+        // rather than partitioning: a partition still leaves the peers *sending*, and this test cares
+        // only that the victim receives nothing it did not inject. PreVote keeps the now-alone victim
+        // from moving its own term, so the term read next stays valid for the whole burst — and if that
+        // ever stopped holding, the exact-value assertion at the end names the term it actually saw.
+        sim.nodeIds.filter { it != victimId }.forEach { sim.crash(it) }
+        sim.drainInjections()
         val term = sim.storages.getValue(victimId).term()
 
         // Below our term: an ordinary stale straggler. Never counts, however many arrive.
         repeat(WEDGE_SUSPECTED_RUN * 2) {
             sim.deliverAppendEntries(to = victimId, from = stranger, term = term - 1)
         }
-        sim.settle()
+        sim.drainInjections()
         val afterStaleTermFrames = wedges(metricsBy, victimId).size
 
         // At our term, from a non-voter: counts — but only the run's last frame may report.
         repeat(WEDGE_SUSPECTED_RUN - 1) {
             sim.deliverAppendEntries(to = victimId, from = stranger, term = term)
         }
-        sim.settle()
+        sim.drainInjections()
         val oneFrameShort = wedges(metricsBy, victimId).size
 
         // A straggler from a REAL voter. Unlike the stranger's frames it clears both gates, so it
@@ -267,7 +272,7 @@ internal class WedgeDetectionTest {
         // has to mirror the counting one; when it did not, a deposed ex-voter still heartbeating at its
         // old term suppressed the report indefinitely, for exactly the node this exists to name.
         sim.deliverAppendEntries(to = victimId, from = leaderId, term = term - 1)
-        sim.settle()
+        sim.drainInjections()
         val afterVoterStraggler = wedges(metricsBy, victimId).size
 
         sim.deliverAppendEntries(to = victimId, from = stranger, term = term)
@@ -336,6 +341,22 @@ internal class WedgeDetectionTest {
         id: NodeId = x,
     ): List<RaftMetric.WedgeSuspected> =
         metricsBy[id].orEmpty().filterIsInstance<RaftMetric.WedgeSuspected>()
+
+    /**
+     * Drain an injected burst on the (isolated) victim.
+     *
+     * `settle()` alone is **not** enough and was an Android-variant-only red: it yields without
+     * advancing virtual time, and a burst of ~64 injected frames is not reliably drained by the time
+     * the next assertion reads the metric list. Advancing bounded virtual time as well is safe here
+     * *only because every other node has been crashed* — no honest leader frame can arrive to clear the
+     * run, and PreVote keeps the surviving node from moving its own term. Do not copy this into a test
+     * whose victim still has live peers.
+     */
+    private suspend fun RaftSimulation.drainInjections() {
+        settle()
+        delay(20.milliseconds)
+        settle()
+    }
 
     private fun leaderAppendEntriesToX(sim: RaftSimulation, leaderId: NodeId): Int =
         sim.network.sent.count { it.to == x && it.from == leaderId && it.message is RaftMessage.AppendEntries }

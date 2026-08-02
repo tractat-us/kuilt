@@ -3164,9 +3164,14 @@ internal class RaftEngine(
             noteRefusedLeaderFrame(from, m, wireTerm, RaftMetric.WedgeSuspected.Gate.LeaderAuthority)
             return
         }
-        // Accepting a leader→peer frame ends any refusal run: whatever else is being dropped alongside,
-        // a node a leader is successfully feeding is not jammed. See [noteRefusedLeaderFrame].
-        if (m.isLeaderToPeer) refusedLeaderFrameRun = 0
+        // A leader→peer frame that clears both gates AT OR ABOVE our term ends any refusal run: whatever
+        // else is being dropped alongside, a node a current leader is successfully reaching is not
+        // jammed. The term condition mirrors the one in [noteRefusedLeaderFrame] and is load-bearing in
+        // the same direction: a frame from BEHIND our term is a straggler from a deposed leader, which
+        // neither counts toward a run nor should clear one — an ex-voter still in our stale set, still
+        // heartbeating at its old term, would otherwise suppress the report for exactly the node this
+        // exists to name.
+        if (m.isLeaderToPeer && wireTerm != null && wireTerm >= state.currentTerm) refusedLeaderFrameRun = 0
         onValidatedMessage(from, m)
     }
 
