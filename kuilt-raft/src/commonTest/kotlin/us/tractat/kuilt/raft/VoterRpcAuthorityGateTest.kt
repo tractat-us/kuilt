@@ -1,6 +1,7 @@
 @file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 package us.tractat.kuilt.raft
 
+import us.tractat.kuilt.raft.internal.RaftMessage
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -22,12 +23,18 @@ import kotlin.test.assertTrue
  * *log corruption*, and a forged `InstallSnapshot` an outright state overwrite — not
  * the mere term-inflation a spoof-only view suggests.
  *
- * Both tests inject a forged frame from a non-voter `attacker` into a partitioned
- * follower and only [RaftSimulation.settle] (never advancing the clock), so the
- * follower's own election timer never fires and the injected frame is the ONLY thing
- * that can move its state at that instant. With the gate in place the frame is dropped
- * and the follower's term / leader / log are untouched; without it, each assertion
- * fails on the corrupted state — so the revert-verify is honest and never hangs.
+ * Every test here injects one frame from the same non-voter `attacker` into a
+ * partitioned follower and only [RaftSimulation.settle]s (never advancing the clock),
+ * so the follower's own election timer never fires and the injected frame is the ONLY
+ * thing that can move its state at that instant. That is what makes a revert-verify
+ * honest instead of racy, and what makes it fail rather than hang.
+ *
+ * Two of them are forgeries the gate must drop; the third
+ * ([requestVoteFromNonVoter_isNotDroppedByTheGate_termAdoptedAndAnswered]) is the same
+ * sender sending a type the gate must **not** touch. The gate's third leader→peer type,
+ * `TimeoutNow`, is pinned in
+ * [LeadershipTransferTest.timeoutNow_fromNonVoter_atCurrentTerm_isDroppedByAuthorityGate] —
+ * it needs a `_leader == null` follower, which this suite's setup does not produce.
  */
 class VoterRpcAuthorityGateTest {
 
@@ -83,6 +90,74 @@ class VoterRpcAuthorityGateTest {
                     baselineLog.map { it.index to it.term },
                     afterLog.map { it.index to it.term },
                     "the follower's committed log must be untouched by the forged frame",
+                )
+            },
+        )
+    }
+
+    /**
+     * The direction the two forgeries above cannot see: the gate is scoped to **leader→peer types**,
+     * not to "any frame from a non-voter".
+     *
+     * §4.1 requires a voter to answer a `RequestVote` from a server outside its own committed
+     * configuration — that is how a node added by a config change this voter has not yet applied ever
+     * wins an election — so dropping one here would be a liveness bug, not extra safety. Nothing above
+     * says so: every assertion in this suite so far is satisfied by a gate that drops *everything*
+     * `attacker` sends.
+     *
+     * Same sender, same armed gate (`voters` non-empty, `attacker` outside it); only the RPC type
+     * differs. That makes this a discriminator for the *shape* of [RaftMessage.isLeaderToPeer] rather
+     * than for three of its branches — a widening that pulled `RequestVote` onto the `true` side keeps
+     * every other test in the module green and fails only this one.
+     *
+     * `leadershipTransfer` is set solely to clear §4.2.3 leader-stickiness: the follower has just heard
+     * from the leader, and the stickiness deny returns *before* the term is adopted, which would make
+     * the observable indistinguishable from the gate's own drop. The `RequestVoteResponse` assertion is
+     * the type-independent half — it says the frame reached a handler at all, whatever Raft then
+     * decided about the vote.
+     */
+    @Test
+    fun requestVoteFromNonVoter_isNotDroppedByTheGate_termAdoptedAndAnswered() = raftRunTest {
+        val sim = raftSim(this, backgroundScope, n = 3)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
+        val followerId = sim.nodeIds.first { it != leaderId }
+
+        val committed = sim.proposeOnLeader("legit".encodeToByteArray())
+        sim.awaitCommit(committed.index, on = setOf(followerId))
+
+        sim.partitionOff(followerId)
+        val followerStore = sim.storages.getValue(followerId)
+        val baselineTerm = followerStore.term()
+
+        // Tap the follower's sends so a reply to a peer that is not on the network is still observable.
+        sim.network.recording = true
+        sim.deliverRequestVote(
+            to = followerId,
+            from = attacker,
+            term = baselineTerm + 1,
+            lastLogIndex = committed.index,
+            lastLogTerm = committed.term,
+            leadershipTransfer = true,
+        )
+        sim.settle()
+
+        val afterTerm = followerStore.term()
+        val replies = sim.network.sent.filter { it.from == followerId && it.to == attacker }
+
+        assertAll(
+            {
+                assertEquals(
+                    baselineTerm + 1, afterTerm,
+                    "a RequestVote is not a leader→peer RPC, so the §5.2 gate must not drop it — the " +
+                        "higher term must still be adopted",
+                )
+            },
+            {
+                assertTrue(
+                    replies.any { it.message is RaftMessage.RequestVoteResponse },
+                    "the frame must reach onRequestVote and be answered, whichever way the vote goes — " +
+                        "sends to $attacker were $replies",
                 )
             },
         )
