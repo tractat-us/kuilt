@@ -109,6 +109,7 @@ public class EphemeralEntry<V>(
 @Serializable
 public class EphemeralMap<V> private constructor(
     /** Per-replica latest entry. Null value = departed; null key = never heard of. */
+    @Serializable(with = CanonicalMapSerializer::class)
     public val entries: Map<ReplicaId, EphemeralEntry<V>>,
 ) : Quilted<EphemeralMap<V>> {
 

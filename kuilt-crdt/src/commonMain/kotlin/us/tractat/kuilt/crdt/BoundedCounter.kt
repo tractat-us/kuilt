@@ -38,6 +38,7 @@ import kotlinx.serialization.Serializable
 @Serializable
 public class BoundedCounter private constructor(
     private val initial: GCounter,
+    @Serializable(with = CanonicalMapSerializer::class)
     private val transfers: Map<ReplicaId, GCounter>,
     private val spent: GCounter,
 ) : Quilted<BoundedCounter> {

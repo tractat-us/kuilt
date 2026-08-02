@@ -61,12 +61,22 @@ public class MovableTree<V> private constructor(
      * Bumped at op-creation time (addNode / move); merged (max) on piece().
      * Monotonically non-decreasing — never resets after compaction.
      */
+    @Serializable(with = CanonicalMapSerializer::class)
     private val seqByReplica: Map<ReplicaId, Long>,
     /**
      * Dots of ops that have been garbage-collected by a [MoveTreeCompact].
      * Re-emitted in [causalDots] to keep the Quilter's contiguous delivered frontier gap-free
      * after GC removes raw ops from the log.
+     *
+     * Merged with `+` in [piece], which yields a `LinkedHashSet` in merge order — so the
+     * auto-generated serializer encoded the same logical set differently depending on which side
+     * of the join a replica saw first (#1957).
+     *
+     * The convergence suite cannot see this: its generators never call [compact], so the set is
+     * always empty and an empty set encodes canonically everywhere. `MovableTreeCompactedDotsCanonicalTest`
+     * covers it instead, merging two independently-compacted trees in both orders.
      */
+    @Serializable(with = CanonicalSetSerializer::class)
     private val compactedDots: Set<Dot>,
     /**
      * Pre-computed effective parent map, or `null` if this instance was constructed
