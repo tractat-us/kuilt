@@ -75,8 +75,9 @@ public sealed interface RaftMetric {
      * **What "above the ceiling" costs, after #1897.** Peers no longer refuse that term — term adoption
      * is bounded by the *jump* now (`RaftConfig.maxTermJump`), and a step of one is admissible at every
      * term. The ceiling's remaining jobs are local to this node: `currentTerm + 1` must stay clear of
-     * `Long` overflow, and must not persist a term this node's own restore guard would refuse to start
-     * on. So the suppression is stricter than the cluster requires — see `RaftEngine.termPinnedAtCeiling`.
+     * `Long` overflow, and the node must not *write* a durable term its own restore guard will refuse on
+     * the next start — the write itself is unbounded, so suppressing the election is what prevents it.
+     * So the suppression is stricter than the cluster requires — see `RaftEngine.termPinnedAtCeiling`.
      *
      * **This node cannot become leader again, and this metric does not mean it will recover.** Honest
      * terms advance once per election and stay some 18 orders of magnitude below the ceiling, and terms
@@ -93,11 +94,13 @@ public sealed interface RaftMetric {
      *    required; kuilt ships no durable `RaftStorage`, so this surface is always consumer code.
      * 2. **A malformed or hostile frame** from a peer, carrying a term at the ceiling.
      *
-     * What this buys is a *name* for a failure that was previously silent: the alternative is a node
-     * that keeps campaigning while never being able to persist the term it proposes, and so quietly
-     * never wins, while reporting itself healthy. Treat one of these as an operational incident —
-     * inspect this node's persisted
-     * term first, then the peer that last raised it, then re-provision from empty state.
+     * What this buys is a *name* for a failure that would otherwise stay invisible until a restart —
+     * and, since #1897, would look entirely healthy right up to it. Without the suppression every step
+     * succeeds: `term + 1` is written to durable storage (nothing bounds that write), peers admit it
+     * because it is a jump of one, and the node campaigns and **wins normally**. The damage lands only
+     * when it next restarts, at which point its own restore guard refuses the durable term and the node
+     * is permanently unbootable. Treat one of these as an operational incident — inspect this node's
+     * persisted term first, then the peer that last raised it, then re-provision from empty state.
      *
      * @see ElectionStarted for the ordinary path this replaces when the ceiling is reached.
      */

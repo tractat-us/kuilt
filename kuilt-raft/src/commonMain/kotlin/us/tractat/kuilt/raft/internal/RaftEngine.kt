@@ -1058,9 +1058,11 @@ internal class RaftEngine(
      */
     private fun ceilingDiagnostic(attempt: String): String =
         "suppressed $attempt: currentTerm=${state.currentTerm} has reached the plausibility ceiling " +
-            "$MAX_PLAUSIBLE_TERM, so the term this election must propose cannot be persisted — this node's " +
-            "own restore guard refuses a durable term above the ceiling, and the increment must stay clear " +
-            "of Long overflow (#1886). This node can no longer be elected and will not " +
+            "$MAX_PLAUSIBLE_TERM, so the term this election must propose would be written to durable " +
+            "storage successfully and then REFUSED BY THIS NODE'S OWN RESTORE GUARD ON ITS NEXT START, " +
+            "leaving it permanently unbootable. The election is suppressed to keep this node startable, " +
+            "and to keep the increment clear of Long overflow (#1886). This node can no longer be " +
+            "elected and will not " +
             "recover. A term this high has two possible origins: this node's own durable storage (a " +
             "RaftStorage adapter that returned a corrupt term — no attacker required), or a malformed or " +
             "hostile frame from a peer. Inspect this node's persisted term first, then the peer that last " +
