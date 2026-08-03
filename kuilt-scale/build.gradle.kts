@@ -39,10 +39,6 @@ dependencies {
 tasks.test {
     useJUnitPlatform()
 
-    // The #1955 cost model encodes 100k-entry CRDTs, and CanonicalMapSerializer materializes a
-    // sorted key-bytes view on top of the state itself. Gradle's 512m default OOMs on that.
-    maxHeapSize = "2g"
-
     // Forward -Pscale.tcp.tests=true to the test process as a system property.
     // Tests guarded by ScaleTcpTests.assumeEnabled() only run when this is present,
     // matching the -Pmdns.multicast.tests pattern from :kuilt-mdns.
