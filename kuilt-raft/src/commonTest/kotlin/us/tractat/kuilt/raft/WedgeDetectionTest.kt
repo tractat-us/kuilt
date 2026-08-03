@@ -315,13 +315,16 @@ internal class WedgeDetectionTest {
     /**
      * The **other** gate's attribution, pinned directly (#1980).
      *
-     * `RaftEngine.onMessage` has two dispatch-boundary gates and both report through the same
+     * `RaftEngine.onMessage`'s dispatch-boundary gates all report through the same
      * `noteRefusedLeaderFrame`, each naming which one refused. Every other assertion on
      * [RaftMetric.WedgeSuspected.gate] in this module — the two above and the one in
      * `VoterRpcAuthorityGateTest` — reads [Gate.LeaderAuthority], so the term-jump arm of that
-     * switch carried no coverage at all: passing [Gate.LeaderAuthority] from the term-jump call
-     * site, i.e. making every one of *those* reports name the wrong guard, left the whole module
-     * green. A report whose `gate` is decorative is worse than no `gate`, because the operator
+     * switch carried no coverage at all: making the term-jump refusal report
+     * [Gate.LeaderAuthority] instead — i.e. making every one of *those* reports name the wrong guard
+     * — left the whole module green. (Since #1989 that mapping is
+     * [RefusalGate.wedgeGate]'s exhaustive `when` rather than a hard-coded argument at the gate, so
+     * the mutation this pins now lives there; what it kills is unchanged.) A report whose `gate` is
+     * decorative is worse than no `gate`, because the operator
      * runbook it points into differs per gate — a stale voter set is repaired by re-admitting a new
      * identity, a term jump is not.
      *
