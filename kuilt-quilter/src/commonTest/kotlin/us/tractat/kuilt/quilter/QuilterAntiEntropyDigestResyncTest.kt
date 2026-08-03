@@ -14,13 +14,13 @@ import us.tractat.kuilt.crdt.GSet
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.test.FakeSeam
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * A **matched** anti-entropy round must still resync the receiver's delta cursor (#1266, #1955).
@@ -53,7 +53,7 @@ class QuilterAntiEntropyDigestResyncTest {
     )
 
     @Test
-    fun matchedRootStillAcksSoSenderCanGc() = runTest(UnconfinedTestDispatcher(), timeout = 30.seconds) {
+    fun matchedRootStillAcksSoSenderCanGc() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val seam = FakeSeam(selfId = self, initialPeers = setOf(self, peer))
         val quilter = Quilter(
             replica = ReplicaId(self.value),
@@ -103,7 +103,7 @@ class QuilterAntiEntropyDigestResyncTest {
      * fabricates its input.
      */
     @Test
-    fun emittedDigestCarriesOwnDeltaHighWater() = runTest(UnconfinedTestDispatcher(), timeout = 30.seconds) {
+    fun emittedDigestCarriesOwnDeltaHighWater() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val interval = 50.milliseconds
         val seam = FakeSeam(selfId = self, initialPeers = setOf(self, peer))
         val quilter = Quilter(

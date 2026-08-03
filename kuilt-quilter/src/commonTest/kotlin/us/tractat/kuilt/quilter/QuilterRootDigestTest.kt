@@ -13,11 +13,11 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.crdt.GSet
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.test.FakeSeam
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Receive-side behaviour of the #1955 digest exchange, driven by injecting frames into a
@@ -81,7 +81,7 @@ class QuilterRootDigestTest {
      * carries `upThrough` (#1266). No state and no request ship.
      */
     @Test
-    fun matchingRootAcksAndShipsNoState() = runTest(UnconfinedTestDispatcher(), timeout = 30.seconds) {
+    fun matchingRootAcksAndShipsNoState() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val seam = FakeSeam(selfId = self, initialPeers = setOf(self, peer))
         quilterOn(seam, backgroundScope, GSet.of("x"))
         testScheduler.runCurrent()
@@ -127,7 +127,7 @@ class QuilterRootDigestTest {
      * deltas covering it. The no-ack half is what forbids hoisting the resync above the comparison.
      */
     @Test
-    fun mismatchedRootRequestsFullStateWithoutAcking() = runTest(UnconfinedTestDispatcher(), timeout = 30.seconds) {
+    fun mismatchedRootRequestsFullStateWithoutAcking() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val seam = FakeSeam(selfId = self, initialPeers = setOf(self, peer))
         quilterOn(seam, backgroundScope, GSet.of("x"))
         testScheduler.runCurrent()
@@ -153,7 +153,7 @@ class QuilterRootDigestTest {
 
     @Test
     fun solicitedRequestShipsStateAndUnsolicitedDoesNot() =
-        runTest(UnconfinedTestDispatcher(), timeout = 30.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val seam = FakeSeam(selfId = self, initialPeers = setOf(self, peer))
             val quilter = quilterOn(seam, backgroundScope, GSet.of("x"))
             testScheduler.runCurrent()
@@ -189,7 +189,7 @@ class QuilterRootDigestTest {
      * amplification lever the guard exists to close.
      */
     @Test
-    fun grantIsConsumedSoASecondRequestShipsNothing() = runTest(UnconfinedTestDispatcher(), timeout = 30.seconds) {
+    fun grantIsConsumedSoASecondRequestShipsNothing() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val seam = FakeSeam(selfId = self, initialPeers = setOf(self, peer))
         val quilter = quilterOn(seam, backgroundScope, GSet.of("x"))
         testScheduler.runCurrent()
@@ -217,7 +217,7 @@ class QuilterRootDigestTest {
      */
     @Test
     fun requestNamingAnotherReplicaShipsNothingAndLeavesGrantIntact() =
-        runTest(UnconfinedTestDispatcher(), timeout = 30.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val seam = FakeSeam(selfId = self, initialPeers = setOf(self, peer))
             val quilter = quilterOn(seam, backgroundScope, GSet.of("x"))
             testScheduler.runCurrent()
