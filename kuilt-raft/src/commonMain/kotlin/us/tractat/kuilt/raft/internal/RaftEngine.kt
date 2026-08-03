@@ -2869,6 +2869,24 @@ internal class RaftEngine(
             refuseFrame(from, m, RefusalGate.TimeoutNowStaleTerm)
             return
         }
+        // The `Candidate` disjunct is currently dead as a *decision*, and is deliberately retained
+        // anyway. Deleting it leaves the module green, and #1980's survey traced that to an equivalent
+        // mutant rather than a coverage gap: three invariants together make a Candidate hold no pin for
+        // its own term, so the leader-identity guard below would refuse every sender this arm could
+        // ever see. (1) [RaftRole.Candidate] is assigned at exactly one site, in [startRealElection],
+        // after `persistTermAndVote(currentTerm + 1, …)` has already invalidated the previous term's
+        // pin; (2) the pre-vote phase does not set the role — [onElectionTimeout] writes `followerRole`
+        // — so a probing node is not a Candidate; (3) [adoptLeaderForTerm], the only pin site a peer
+        // can drive, runs only after [demoteToFollowerOnLeaderContact] has cleared `Candidate`, in both
+        // [onAppendEntries] and [onInstallSnapshot]. [adoptLeaderForTerm]'s KDoc argues the same thing
+        // from the other side. It is additionally conditional on storage honouring its own writes: the
+        // `init` restore seeds the pin RAW, so a record for a term above the restored `currentTerm` —
+        // the torn write that restore's KDoc contemplates — would put a Candidate on a live pin.
+        //
+        // Retained precisely because it rests on none of that. An unreachability argument is a smell
+        // here (#1965, #1886): a guard that holds regardless outlives the invariants it would otherwise
+        // lean on, at the cost of one `is` check on a path that already refuses the frame. If any of
+        // the three moves, this arm becomes live — rather than becoming a bug found the hard way.
         if (_role.value is RaftRole.Leader || _role.value is RaftRole.Candidate) {
             debug { "onTimeoutNow: already ${_role.value} — ignoring" }
             refuseFrame(from, m, RefusalGate.TimeoutNowSelfLeaderOrCandidate)

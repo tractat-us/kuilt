@@ -29,6 +29,25 @@ import kotlin.time.Duration.Companion.seconds
  * the re-pinning of #1980's un-pinned invariants (D3–D6, A4, C2); those assert that a *specific
  * mutation* changes which gate fires, and land separately on top of this mechanism.
  *
+ * ### Deletion is pinned by construction; weakening rests on two literals
+ *
+ * Pinning a guard's **deletion** is free here: remove a guard and its `refuseFrame` goes with it, so
+ * the gate stops being emitted and both the test naming it and [everyRefusalGateIsReachable] go red.
+ *
+ * Pinning a **weakening** is not free, and the coverage this suite has is thinner than it looks.
+ * #1980's survey shifted `RaftEngine.onTimeoutNow`'s future-term guard by one — `m.term >
+ * state.currentTerm` to `m.term > state.currentTerm + 1` — and this suite caught it. It caught it
+ * only because [aFutureTermTimeoutNow_isRefusedAs_TimeoutNowFutureTerm] feeds `term + 1`, the
+ * boundary value: moving the threshold by one walks that test's own input straight through the hole
+ * it opens. [aStaleTermTimeoutNow_isRefusedAs_TimeoutNowStaleTerm] is written the same way
+ * (`term - 1`) and gives its own guard the same thin cover.
+ *
+ * So weakening-coverage is a property of **how those two tests were written**, not something the
+ * emit-site mechanism guarantees, and nothing in the build asserts it. An edit that moves either
+ * input off the boundary — `term + 5` reads just as natural — silently drops it with the suite still
+ * green. Keep `term + 1` and `term - 1` exactly as they are; if some other assertion wants a
+ * differently-distant term, add a case rather than retuning these.
+ *
  * [everyRefusalGateIsReachable] is the structural half. `RefusalGate.wedgeGate`'s exhaustive `when`
  * makes a new entry impossible to *add* without deciding how it relates to the wedge metric, but no
  * compiler can insist the engine ever emits it. That test drives all eight sites in one simulation
@@ -56,7 +75,7 @@ class FrameRefusedTest {
 
     /**
      * Three voters plus a learner. The learner is inert for the voter-targeted scenarios and is the
-     * target for exactly one of them ([timeoutNowAtALearner_isRefusedAs_TimeoutNowSelfLearner]),
+     * target for exactly one of them ([aTimeoutNowAtALearner_isRefusedAs_TimeoutNowSelfLearner]),
      * which needs a node that holds a leader pin and still may not campaign.
      */
     private fun TestScope.simWithLearner(): RaftSimulation {
@@ -198,6 +217,10 @@ class FrameRefusedTest {
      * Guard 1. Reachable with no attacker at all: a delayed `TimeoutNow(T)` from the node's own
      * leader, landing after that leader has won `T + 1` and been re-pinned, clears guard 4 — so this
      * is the only thing refusing it, and each replay would otherwise be a pre-vote-less election.
+     *
+     * `term - 1` is the **boundary value, and load-bearing**: it is the whole of this test's cover
+     * against an off-by-one *weakening* of the guard, as opposed to its deletion. See the class KDoc
+     * — do not move it.
      */
     @Test
     fun aStaleTermTimeoutNow_isRefusedAs_TimeoutNowStaleTerm() = raftRunTest(timeout = 30.seconds) {
@@ -252,6 +275,10 @@ class FrameRefusedTest {
      * Guard 3 (#1889). A `TimeoutNow` above our term carries no authority we can check — the per-term
      * leader identity guard 4 reads is meaningful only at our own term — so it is refused **without**
      * adopting the term. #1980's D3 found this deletable with the module green.
+     *
+     * `term + 1` is the **boundary value, and load-bearing**: the survey's `> currentTerm + 1`
+     * weakening is caught here only because this input sits exactly on the threshold it moves. See
+     * the class KDoc — do not move it.
      */
     @Test
     fun aFutureTermTimeoutNow_isRefusedAs_TimeoutNowFutureTerm() = raftRunTest(timeout = 30.seconds) {
