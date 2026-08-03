@@ -276,9 +276,26 @@ previous run's verdict.
 
 ## Non-goals
 
-- `TieredSeam.sendTo` silently drops a peer owned by neither tier — the worst #1576 variant, and the
-  one an exception-keyed check cannot see. Follow-up.
-- Relay payload budgeting / throttling (see the asymmetries above). Follow-up.
+- Relay payload budgeting / throttling (see the asymmetries above). Follow-up, and only meaningful
+  once the relay lands.
+
+### Withdrawn: the `TieredSeam` follow-up already shipped
+
+Revision 1 listed "`TieredSeam.sendTo` silently drops a peer owned by neither tier" as a follow-up. It
+is **already fixed** — [#1935](https://github.com/tractat-us/kuilt/issues/1935) is closed and
+`TieredSeam.kt:236` now `throw PeerNotConnected(peer)`. Three places still assert the old behaviour and
+must be corrected as part of this track's docs task, because each one currently reads as a live hazard:
+
+- `docs/fabric-peer-routing.md:47` — "an id owned by **neither** tier is discarded with no
+  `PeerNotConnected`. The worst variant for #1576: even a caller that handles the exception sees
+  nothing."
+- `startDetector`'s KDoc in `SeamRoom.kt` — "The gate must not be keyed off catching
+  `PeerNotConnected`: `TieredSeam.sendTo` silently *drops* …". The gate's design is still right; its
+  stated *reason* is now false.
+- #1994's own body — "`TieredSeam` is worse — it drops silently rather than throwing."
+
+This is the stale-citation hazard in its usual form: a claim tied to an issue number silently inverts
+when that issue is fixed. Verify such a claim before resting an argument on it.
 - Migrating `:kuilt-cluster`. **Withdrawn as a goal**, not deferred: with `resolveRecipients` staying
   session-local there is nothing left to migrate beyond `validFirstHop`, which the cluster keeps its
   own call to.
