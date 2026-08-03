@@ -1370,7 +1370,12 @@ internal class RaftEngine(
         heartbeatJob = scope.launch {
             while (true) {
                 cmd.trySend(EngineCommand.HeartbeatTick)
-                delay(raftConfig.heartbeatInterval.inWholeMilliseconds)
+                // The Duration overload, NOT `inWholeMilliseconds` (#1991). That floors, so any interval
+                // under a millisecond became delay(0) and this loop spun as fast as the dispatcher would
+                // schedule it — a hot loop on the leader in production, and under virtual time a loop that
+                // never yields the clock, so a test hangs rather than fails. delay(Duration) quantises to
+                // the same millisecond grid but rounds *up*, so it has no zero to fall into.
+                delay(raftConfig.heartbeatInterval)
             }
         }
         recentVoterContacts.clear()
