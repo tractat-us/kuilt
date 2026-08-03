@@ -30,9 +30,10 @@ import kotlin.test.assertEquals
  * merging replicas that contribute **different** slices, in a deliberately non-sorted order.
  *
  * **Mutation-verified on `jvmTest`: every canonicalisation site #1957 introduced — the nine
- * `Canonical*Serializer` annotations — plus `DotMapSerializer`'s sort is detected by at least one
- * vector, and no vector is vacuous.** Disabling one site at a time — commenting out the
- * annotation, or deleting the sort from a hand-written serializer — and re-running gives:
+ * `Canonical*Serializer` annotations — plus the three hand-written dot-family sorts the vectors do
+ * reach is detected by at least one vector, and no vector is vacuous.** Disabling one site at a
+ * time — commenting out the annotation, or deleting the sort from a hand-written serializer — and
+ * re-running gives:
  *
  * | site removed | vectors that fail |
  * |---|---|
@@ -46,10 +47,13 @@ import kotlin.test.assertEquals
  * | `MovableTree.seqByReplica` | [MOVABLE_TREE] |
  * | `MovableTree.compactedDots` | [MOVABLE_TREE] |
  * | `DotMapSerializer`'s sort | [ORSET], [ORMAP] |
+ * | `DotSetSerializer`'s sort | [ORMAP] |
+ * | `DotContextSerializer`'s `vv` sort | [ORSET], [ORMAP] |
  *
- * **Not pinned here — the older #713 dot-family sorts.** No vector reaches `DotFunSerializer`
- * (only `MVRegister` and `ResettableCounter` use it), `RgaSerializer`'s or `FugueSerializer`'s op
- * sort, or `DotContextSerializer`'s `cloud` sort (`cloud` is empty in both [ORSET] and [ORMAP]).
+ * **Not pinned here — the rest of the older #713 dot-family sorts.** No vector reaches
+ * `DotFunSerializer` (only `MVRegister` and `ResettableCounter` use it), `RgaSerializer`'s or
+ * `FugueSerializer`'s op sort, or `DotContextSerializer`'s `cloud` sort (`cloud` is empty in both
+ * [ORSET] and [ORMAP]).
  * So `MVRegister`, `ResettableCounter`, `Rga`, `Fugue` and `JsonCrdt` have no cross-target byte
  * pin: adding a type to that family does **not** inherit one from this file — add a vector.
  *
@@ -116,9 +120,19 @@ class CanonicalGoldenVectorTest {
     }
 
     /**
-     * A guard against the whole file going vacuous: a construction that collapsed to an empty
-     * or single-entry collection would still pin *some* byte string, so the vectors would stay
-     * green while proving nothing. Every construction must stay multi-entry.
+     * A guard against the whole file going vacuous — specifically, against a **re-record**
+     * laundering a collapse.
+     *
+     * Editing a construction on its own does not slip past anything: the bytes change, and
+     * [everyVectorMatchesOnEveryTarget] goes red first. The dangerous sequence is the one the
+     * class KDoc warns against — someone collapses a construction, sees the byte assertion fail,
+     * reads it as "the encoding moved", and re-records the constant. That re-record makes the
+     * vectors green again around a construction that now pins nothing, and no other assertion in
+     * this file would notice. **This test is what notices**: it names the shape each construction
+     * must keep, so a collapse has to be argued with rather than re-recorded away.
+     *
+     * Each assertion therefore pins *cardinality* (or a per-replica read standing in for it) —
+     * never a total, which a single-entry collapse can reproduce.
      */
     @Test
     fun everyConstructionIsMultiEntry() {
@@ -128,17 +142,55 @@ class CanonicalGoldenVectorTest {
             { assertEquals(2, twoPhaseSet().removed.size, "TwoPhaseSet removed") },
             { assertEquals(4, gCounter().replicas().size, "GCounter slots") },
             { assertEquals(15L, pnCounter().totalIncrement, "PNCounter increments") },
+            { assertEquals(0L, pnCounter().incrementShortfall(zulu, 5L), "PNCounter increment slot zulu") },
+            { assertEquals(0L, pnCounter().incrementShortfall(alpha, 7L), "PNCounter increment slot alpha") },
+            { assertEquals(0L, pnCounter().incrementShortfall(mike, 3L), "PNCounter increment slot mike") },
             { assertEquals(7L, pnCounter().totalDecrement, "PNCounter decrements") },
+            { assertEquals(0L, pnCounter().decrementShortfall(mike, 2L), "PNCounter decrement slot mike") },
+            { assertEquals(0L, pnCounter().decrementShortfall(zulu, 1L), "PNCounter decrement slot zulu") },
+            { assertEquals(0L, pnCounter().decrementShortfall(alpha, 4L), "PNCounter decrement slot alpha") },
             { assertEquals(3, lwwMap().entries.size, "LWWMap live entries") },
             { assertEquals(4, orSet().elements.size, "ORSet elements") },
             { assertEquals(2, orMap().keys.size, "ORMap keys") },
             { assertEquals(4, orMap()["zulu"]?.replicas()?.size, "ORMap nested GCounter slots") },
             { assertEquals(4, orMap()["alpha"]?.replicas()?.size, "ORMap nested GCounter slots") },
+            { assertEquals(83L, boundedCounter().quota(zulu), "BoundedCounter zulu row") },
+            { assertEquals(49L, boundedCounter().quota(mike), "BoundedCounter mike row") },
+            { assertEquals(28L, boundedCounter().quota(alpha), "BoundedCounter alpha row") },
             { assertEquals(2L, boundedCounter().quota(delta), "BoundedCounter transfers reached delta") },
             { assertEquals(4, ephemeralMap().entries.size, "EphemeralMap slots") },
             { assertEquals(2, movableTree().compactedDotCount(), "MovableTree compactedDots") },
         )
     }
+
+    /**
+     * How far the increment half is *short* of carrying `replica → by`: zero when the slot is
+     * already there at (at least) `by`, and the missing amount when it is absent or smaller.
+     *
+     * This is the only per-replica read `PNCounter`'s public API allows — it exposes the two
+     * halves' totals and nothing else — and widening that API so a test can look inside is not a
+     * trade worth making. `piece` is an idempotent max-join, so absorbing a slot the state already
+     * dominates cannot move the total; a total that *does* move is measuring exactly what was
+     * missing.
+     *
+     * The three shortfalls and the [PNCounter.totalIncrement] assertion beside them are a pair,
+     * and **neither half is redundant** — they fail on disjoint mutations:
+     *
+     * | mutation | total | shortfalls |
+     * |---|---|---|
+     * | collapse both halves to `zulu` | green | **red** (`alpha`, `mike`) |
+     * | add a fourth slot `delta → 100` | **red** | green |
+     *
+     * The shortfalls say the state dominates all three named slots; the total says it weighs no
+     * more than those three. Together they admit exactly one state. Same construction for
+     * [decrementShortfall] on the decrement half.
+     */
+    private fun PNCounter.incrementShortfall(replica: ReplicaId, by: Long): Long =
+        piece(PNCounter.ZERO.increment(replica, by)).totalIncrement - totalIncrement
+
+    /** The decrement-half mirror of [incrementShortfall]. */
+    private fun PNCounter.decrementShortfall(replica: ReplicaId, by: Long): Long =
+        piece(PNCounter.ZERO.decrement(replica, by)).totalDecrement - totalDecrement
 
     private fun <S> hex(ser: KSerializer<S>, value: S): String =
         cbor.encodeToByteArray(ser, value).joinToString("") { byte ->
@@ -209,9 +261,13 @@ class CanonicalGoldenVectorTest {
      * Two replicas contribute disjoint element slices; one element is added and then removed,
      * so the `DotContext` carries a dot the `DotMap` does not.
      *
-     * This is the one vector whose canonicality comes from the hand-written `DotMapSerializer` /
-     * `DotSetSerializer` / `DotContextSerializer` rather than a `Canonical*Serializer` annotation
-     * — hence its own row in the mutation table.
+     * Canonicality here comes from the hand-written dot-family serializers rather than a
+     * `Canonical*Serializer` annotation — but only two of the three are load-bearing: the
+     * `DotMapSerializer` sort over the four element keys, and the `DotContextSerializer` sort
+     * over `vv`, which the merge reaches in insertion order `zulu, alpha`. **`DotSetSerializer`
+     * is not exercised by this vector** — every element here is added by exactly one replica
+     * exactly once, so every `DotSet` on the wire is a singleton and has only one order. See
+     * [orMap] for the vector that does pin it.
      */
     private fun orSet(): ORSet<String> {
         val fromZulu = ORSet.empty<String>().add(zulu, "zulu").add(zulu, "mike").add(zulu, "gone")
@@ -224,6 +280,12 @@ class CanonicalGoldenVectorTest {
      * of `GCounter` slots for each, so the merge runs `GCounter.piece` — and therefore the
      * `HashMap` build inside `mergeMax` — in opposite insertion orders on the two sides. A
      * value both sides held identically would merge as `value.piece(value)` and be vacuous.
+     *
+     * This is also the vector that pins `DotSetSerializer`. Because both replicas write both
+     * keys, each key's `tags` is a **two-dot** `DotSet` — key `"alpha"` carries `zulu`'s dot and
+     * `alpha`'s — and the merge reaches it in insertion order `zulu` first against a canonical
+     * order of `alpha, zulu`. [orSet]'s dot sets are all singletons, so this is the only place
+     * that sort is load-bearing.
      */
     private fun orMap(): ORMap<String, GCounter> {
         val viewZulu = ORMap.empty<String, GCounter>()
@@ -239,6 +301,14 @@ class CanonicalGoldenVectorTest {
      * `transfers` is a map of maps: three donor rows absorbed out of order, and `zulu`'s own
      * row holds two receivers absorbed out of order — so both the outer
      * `CanonicalMapSerializer` and the nested `GCounter` one are load-bearing.
+     *
+     * `transfers` is private, so the guard reads the matrix back through [quota], which nets
+     * `initial + received − given − spent` per replica. Four reads cover it: `zulu`'s and
+     * `mike`'s pin their own rows, `alpha`'s pins the second receiver in `zulu`'s nested row,
+     * and `delta`'s — which holds nothing else — pins that `alpha`'s row still points at `delta`.
+     * That last one is not shadowed by the other three: the four quotas sum to a fixed
+     * `totalBudget`, but only while every quota-holding replica is one of the four, so
+     * re-pointing `alpha`'s transfer at a fifth replica moves `delta`'s read alone.
      */
     private fun boundedCounter(): BoundedCounter {
         val seeded = BoundedCounter.init(mapOf(zulu to 100L, mike to 50L, alpha to 25L))
@@ -292,8 +362,9 @@ class CanonicalGoldenVectorTest {
 
     /**
      * `compactedDots` is private, but every compacted dot is re-emitted through [Quilted.causalDots]
-     * alongside the surviving log ops — so the compacted count is the total minus the four ops each
-     * replica's log still carries after its own compaction.
+     * alongside the surviving log ops — so the compacted count is the total minus [moveLogSize],
+     * the merged log. Each replica records four ops (`ts=1, 2, 3, 4`) and its own compaction drops
+     * the superseded `ts=3`, leaving **three** per replica and six in the merge.
      */
     private fun MovableTree<String>.compactedDotCount(): Int = causalDots().size - moveLogSize
 
