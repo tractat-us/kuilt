@@ -851,18 +851,26 @@ with:
 
 The existing KDoc ends "Full-state-first is always correct; a version-vector or digest diff is a later optimization for large CRDTs." That sentence is now false. Replace the KDoc's last two paragraphs with:
 
+> **Refined after this plan ran.** The final review found the acceptance harness never metered the
+> `Ack` a matched round sends back, so the figures below were the sender's half only. The block is
+> shown with the corrected numbers (94–103 b per round, ~1.7 B/s, ~34,000×) and the corrected
+> collision bound; see Task 5 and Task 8 for what changed and why.
+
 ```kotlin
      * Sends a [QuiltMessage.RootDigest] — a hash of the state, not the state (#1955). The peer
      * replies with a [QuiltMessage.FullStateRequest] only if its own root differs, so a converged
-     * round costs one small frame instead of the whole CRDT. Measured: a converged 100k-entry
-     * `GSet` node drops from ~58 KB/s of steady-state egress to roughly 1 B/s — a ~58,000×
-     * reduction. That figure is a floor, not an exact constant: the frame is flat in state
-     * size, but CBOR encodes `root` and `upThrough` at minimal width, so a few bytes move
-     * with the values and with the replica id's length.
+     * round costs two small frames instead of the whole CRDT: the digest out (~54–57 b) and the
+     * matched peer's [QuiltMessage.Ack] of `upThrough` back (~40–46 b). Measured: a converged
+     * 100k-entry `GSet` node drops from ~58 KB/s of steady-state egress to roughly 1.7 B/s — a
+     * ~34,000× reduction. Both frames are flat in state size, which is the claim that matters;
+     * the constant is not exact, because CBOR encodes `root`, `seq` and `upThrough` at minimal
+     * width, so a few bytes move with the values and with the replica id's length.
      *
      * [QuiltMessage.FullState] remains the always-correct fallback and every convergence
      * guarantee still traces to it — a root collision or a digest a peer cannot parse costs a
-     * missed heal, never divergence that outlives the next round. The digest also carries
+     * missed heal, never divergence that survives a [QuiltMessage.FullState]. That missed heal is
+     * not bounded by the next round: between two quiescent peers the same roots collide again
+     * every round in both directions, so recovery waits on a change. The digest also carries
      * `upThrough`, because on a *matched* round no state ships and nothing else would resync the
      * recipient's receive cursor (#1266). On a mismatch the requested [QuiltMessage.FullState]
      * carries its own, so the digest handler deliberately leaves the cursor alone there rather
@@ -997,7 +1005,7 @@ git commit -m "feat(quilter): gate anti-entropy on a root hash instead of shippi
 
 The tick now sends RootDigest; the peer asks for state only when its root differs.
 Measured basis: a converged 100k-entry GSet node drops from ~58 KB/s of steady-state
-egress to roughly 1 B/s.
+egress to roughly 1.7 B/s.
 
 RootDigest carries upThrough because the old FullState did two jobs — moving state and
 resyncing the receiver's delta cursor. Mutation-verified: upThrough = 0L turns
@@ -1014,7 +1022,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ### Task 5: Turn the Phase-0 model into a measured acceptance test
 
-Phase 0 predicted 58.1 KB/s → 0.52 B/s. Measure the real thing and assert it, so the prediction is verified rather than left standing. (**Outcome:** 58.1 KB/s → ~1 B/s. The *before* is confirmed exactly; the *after* is ~1.8× worse than modelled, because the Phase-0 model omitted `RootDigest.upThrough` and priced `root` as the placeholder `-1L`, which CBOR stores in one byte where a real FNV-1a 64 root costs nine.)
+Phase 0 predicted 58.1 KB/s → 0.52 B/s. Measure the real thing and assert it, so the prediction is verified rather than left standing. (**Outcome, as finally measured:** 58.1 KB/s → **~1.7 B/s**, a ~34,000× saving. The *before* is confirmed exactly; the *after* is ~3× worse than modelled, for three reasons — the Phase-0 model omitted `RootDigest.upThrough`, priced `root` as the placeholder `-1L` (which CBOR stores in one byte where a real FNV-1a 64 root costs nine), and treated the round as the digest alone with nothing coming back. **The third was found only in the final whole-branch review**, and this note read `~1 B/s` until then: the acceptance harness built every `Quilter` with `initial = state` and never called `apply`, so every node sat at `nextSeq == 0`, shipped `upThrough = 0`, and `resyncReceiveCursor` returned at its `upThrough <= 0` guard before acking. No `Ack` was ever emitted in the metered window. The harness now makes each node write once and re-agree before the meter opens.)
 
 **Files:**
 - Modify: `kuilt-scale/src/test/kotlin/us/tractat/kuilt/scale/MerkleDigestCostModelTest.kt`
@@ -1169,7 +1177,7 @@ Its "What is modelled" paragraph says the digest protocol "does not exist yet" a
 ./gradlew :kuilt-scale:test --tests "*MerkleDigestCostModelTest" --rerun-tasks
 ```
 
-Expected: PASS. Read the printed reduction factor. Phase 0 predicted the converged round becomes a ~31-byte frame; if the measured per-node round is wildly larger (say >200 b), something else is riding the tick — investigate before accepting, and record the number either way. (**Recorded:** 54 b metered, 54 b independently encoded from the shipped `RootDigest` — agreeing to the byte, so nothing else rides the tick. The >200 b tripwire was never approached; the gap to Phase 0's ~31 b is the two model pricing bugs, not an extra frame.)
+Expected: PASS. Read the printed reduction factor. Phase 0 predicted the converged round becomes a ~31-byte frame; if the measured per-node round is wildly larger (say >200 b), something else is riding the tick — investigate before accepting, and record the number either way. (**Recorded:** 54 b metered, 54 b independently encoded from the shipped `RootDigest` — agreeing to the byte, so nothing else rides the tick. The >200 b tripwire was never approached; the gap to Phase 0's ~31 b is the two model pricing bugs, not an extra frame. **Refined in the final review:** that 54 b was right as far as it went — it is the digest *out*, and the model-vs-wire agreement did rule out an extra frame — but the harness had every node at `nextSeq == 0`, so the matched peer's `Ack` back was never emitted and never counted. With each node writing once first, the round meters **94 b**, again agreeing to the byte with an independently encoded digest + `Ack`. The conclusion survives intact: nothing else rides the tick; there is simply one more frame *in* the round than the note first recorded.)
 
 - [ ] **Step 6: Commit**
 
@@ -1209,7 +1217,7 @@ Any sentence saying the anti-entropy backstop ships full state, or that a digest
 
 - [ ] **Step 2: Rewrite the stale sentences**
 
-Keep the existing accessible-first structure: plain language up top, mechanism deeper down. State that the tick sends a hash and ships state only on disagreement, that `FullState` is still the fallback every guarantee rests on, and give the measured figures (58.1 KB/s → **roughly 1 B/s** at 100k entries, a ~58,000× reduction). Publish a rounded figure, not a precise one: the digest frame is flat in state size but CBOR encodes `root` and `upThrough` at minimal width, so ~1 B/s is a floor rather than a constant. Do not introduce "Merkle" — no tree was built, and saying otherwise would mislead the next reader.
+Keep the existing accessible-first structure: plain language up top, mechanism deeper down. State that the tick sends a hash and ships state only on disagreement, that `FullState` is still the fallback every guarantee rests on, and give the measured figures (58.1 KB/s → **roughly 1.7 B/s** at 100k entries, a ~34,000× reduction; a converged round is the digest out *plus* the matched peer's `Ack` back, 94–103 b). Publish a rounded figure, not a precise one, and round in the direction least flattering to kuilt: the two frames are flat in state size but CBOR encodes `root`, `seq` and `upThrough` at minimal width, so ~1.7 B/s is the top of the measured range and ~34,000× its floor. Do not introduce "Merkle" — no tree was built, and saying otherwise would mislead the next reader.
 
 - [ ] **Step 3: Verify citations still resolve**
 

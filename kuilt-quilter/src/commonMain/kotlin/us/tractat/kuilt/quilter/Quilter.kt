@@ -526,10 +526,13 @@ public class Quilter<S : Quilted<S>>(
      * round costs two small frames instead of the whole CRDT: the digest out (~54–57 b) and the
      * matched peer's [QuiltMessage.Ack] of `upThrough` back (~40–46 b), ~94–103 b in total.
      * Measured: a converged 100k-entry `GSet` node drops from ~58 KB/s of steady-state egress to
-     * roughly 1.6 B/s — a ~36,000× reduction. Both frames are flat in state size, which is the
+     * roughly 1.7 B/s — a ~34,000× reduction. Both frames are flat in state size, which is the
      * claim that matters; the constant is not exact, because CBOR encodes `root`, `seq` and
      * `upThrough` at minimal width, so a few bytes move with the values and with the replica id's
-     * length. Quote it rounded.
+     * length. The published pair is the **conservative** end of the measured range (94–103 b per
+     * round), so the real saving is this or better. These are encoded-frame bytes and exclude
+     * whatever the transport adds on top — WebSocket framing, TLS records, IP headers — but so is
+     * the "before" side, so the ratio holds.
      *
      * The merge at the receiver is idempotent and order-independent (every delta-state CRDT
      * is a join-semilattice), so the same full state can be sent any number of times safely.

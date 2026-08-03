@@ -19,17 +19,19 @@ behaviour through the real codec and grounded the model against bytes actually c
 
 | `GSet` entries | full state | steady-state egress/node @60 s | with a digest † |
 |---|---|---|---|
-| 1,000 | 32.9 KB | 549 B/s | ~1.6 B/s |
-| 10,000 | 339 KB | 5.6 KB/s | ~1.6 B/s |
-| 100,000 | 3.49 MB | **58.1 KB/s** | ~1.6 B/s |
+| 1,000 | 32.9 KB | 549 B/s | ~1.7 B/s |
+| 10,000 | 339 KB | 5.6 KB/s | ~1.7 B/s |
+| 100,000 | 3.49 MB | **58.1 KB/s** | ~1.7 B/s |
 
 † The digest column is **state-size-independent by design** — that constancy is the whole
 optimization, and it is the only part of this column that is exact — so it is one value at every
 row. The constant itself is rounded. A converged round is **two** frames, not one: the `RootDigest`
 out (54–57 b, by replica-id length) plus the matched peer's `Ack` of `upThrough` back (40–46 b),
 so 94–103 b, i.e. 1.57–1.72 B/s over a 60 s interval. CBOR also encodes integers at minimal width, so
-a node whose own-delta high-water has reached six figures pays a few bytes more. `~1.6 B/s` is the
-honest rounding; do not quote a more precise number as if it held at every state size.
+a node whose own-delta high-water has reached six figures pays a few bytes more. `~1.7 B/s` is the
+figure to publish: it is the **top** of the measured range, so the saving it implies is the smallest
+one consistent with the data. Round a cost claim up and a savings claim down — a performance number
+that errs low is defensible forever; one that errs high gets corrected in public.
 
 > **The ack is easy to measure away, and was.** `resyncReceiveCursor` returns at its `upThrough <= 0`
 > guard, and `upThrough` is `nextSeq`, which starts at `0` and pre-increments — so a harness whose
@@ -38,8 +40,12 @@ honest rounding; do not quote a more precise number as if it held at every state
 > write once before the meter opens. Any replica that has ever mutated locally pays the ack.
 
 The full-state egress is what a **fully converged** node pays, forever, to tell a peer something it
-already knows. At 100k entries it is ≈5 GB/day/node — so the saving is ~36,000×. Below ~1k entries
+already knows. At 100k entries it is ≈5 GB/day/node — so the saving is ~34,000×. Below ~1k entries
 it is noise.
+
+Every byte here is counted on an in-memory `MeteredSeam`, so these are **codec** costs: they exclude
+whatever a real transport adds on top (WebSocket framing, TLS record overhead, TCP/IP headers). That
+is the same basis as the "before" column, so the *ratio* is sound; the absolute B/s is a floor.
 
 > **Phase 0 predicted 0.52 B/s and was wrong by ~3×.** The model omitted `RootDigest.upThrough`
 > entirely, priced `root` as the placeholder `-1L` (which CBOR stores in **one** byte where a real
@@ -364,7 +370,7 @@ never a red test — abort on a non-zero build exit before reading any results X
 grounding approach. This makes the Phase-0 model the acceptance criterion rather than a standing
 claim — and if the real saving misses the prediction, that is a finding, not a surprise.
 
-**It did, and it is.** Measured: 58.1 KB/s → **~1.6 B/s**, not 0.52 — the *before* confirmed
+**It did, and it is.** Measured: 58.1 KB/s → **~1.7 B/s**, not 0.52 — the *before* confirmed
 exactly, the *after* ~3× worse than modelled, for the three pricing bugs named under the table
 above. The model was corrected to encode the shipped `QuiltMessage.RootDigest` and its answering
 `QuiltMessage.Ack` directly rather than a probe class, and the metered mesh was corrected to make

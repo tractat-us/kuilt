@@ -205,10 +205,12 @@ a receiver whose own root differs answers `QuiltMessage.FullStateRequest` and th
 sender ships `FullState` exactly as before. Measured: a converged round drops to two
 small frames — the 54–57 b digest out, plus the matched peer's 40–46 b `Ack` of
 `upThrough` back, ~94–103 b in all — both flat in state size, so steady-state egress
-at 100k entries falls to **roughly 1.6 B/s**, a ~36,000× reduction. (Treat the
-constant as rounded: CBOR encodes `root`, `seq` and `upThrough` at minimal width, so
-a few bytes move with the values and with the replica id's length. The flatness, not
-the constant, is the result.)
+at 100k entries falls to **roughly 1.7 B/s**, a ~34,000× reduction. (Treat the
+constant as rounded, and note the published pair is the *conservative* end of the
+measured range: CBOR encodes `root`, `seq` and `upThrough` at minimal width, so a few
+bytes move with the values and with the replica id's length. The flatness, not the
+constant, is the result. Counts are encoded-frame bytes; transport framing and TLS
+sit on top of both the before and after columns alike.)
 
 The ack is easy to measure away and was, once: a harness whose replicas have never
 applied a local mutation sits at `nextSeq == 0`, ships `upThrough = 0`, and

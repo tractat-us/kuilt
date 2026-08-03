@@ -59,15 +59,17 @@ case is the same size whatever the data holds:
 |---|---|---|
 | one round, 200-element shared set | ~6.5 KB | ~94 bytes |
 | one round, 100,000-element shared set | ~3.5 MB | ~94 bytes |
-| ongoing traffic per peer, 100,000 entries | ~58 KB/s | roughly 1.6 B/s |
+| ongoing traffic per peer, 100,000 entries | ~58 KB/s | roughly 1.7 B/s |
 
-That last row is a **~36,000×** drop. What the table is really claiming is the two rows
+That last row is a **~34,000×** drop. What the table is really claiming is the two rows
 above it: the settled round is the *same size* at 100,000 entries as at 200 — and that
 holds because both messages are short and neither carries the data. Treat the exact
 numbers as rounded rather than fixed: a few bytes move with the particular values a
 message happens to carry and with how long a peer's name is, so a round is more precisely
-~94–103 bytes. Reproduced by the `:kuilt-scale` cost-model and anti-entropy measurement
-tests.
+~94–103 bytes. Where a range exists, the table publishes the end least flattering to
+kuilt, so the real saving is this or better. These counts are the messages themselves;
+sending anything over a real network adds its own wrapping on top, the same for both
+columns. Reproduced by the `:kuilt-scale` cost-model and anti-entropy measurement tests.
 
 Sending the whole picture is still the fallback every guarantee rests on. Two peers whose
 fingerprints coincide by accident lose a repair — never their eventual agreement. If
