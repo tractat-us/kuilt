@@ -1,5 +1,26 @@
 # Star Relay Implementation Plan
 
+> # ⛔ SUPERSEDED — DO NOT IMPLEMENT
+>
+> **This revision contains a remotely-triggerable security defect.** A Fable design review
+> (2026-08-03) found that Task 4's `deliverRelayed` re-enters the **full** `dispatchIncoming`, which
+> routes any `0x61` payload to `handleAdmitFrame`. Because `handleWelcome` is host-authoritative only
+> *after* a host exists (`SeamRoom.kt:1350-1363`), any admitted joiner could relay a crafted `Welcome`
+> naming itself and permanently capture a co-joiner's `hostPeerId` during the window `admitPeer`
+> leaves open. #1180 hardened this on a flat loom; the four star fabrics were protected by *topology*,
+> and this plan's relay removes that protection.
+>
+> Five further blocking defects: the fan-out suspends inside the single inbound collector (Task 4);
+> Task 3's decision gate compares an expression to itself and cannot fail; `isSupported(null)` is left
+> permissive, re-admitting exactly the population Task 6 exists to exclude; the two security-critical
+> tests are `none { … }` assertions that are green *before* the fix exists; and Task 1 certifies a
+> false CBOR invariant (the real hazard band is `0x60..0x7f`, which collides with all five prefixes).
+>
+> **Read `docs/superpowers/specs/2026-08-03-star-relay-design.md` (revision 2) instead** — its "What
+> revision 1 got wrong" table lists all twelve corrections. A corrected plan supersedes this file;
+> until it exists, this plan is reference material for the *shape* of the work only, and none of its
+> code should be copied.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make a room's roster genuinely routable on a star fabric, so a `Quilter` on two spokes converges — closing [#1994](https://github.com/tractat-us/kuilt/issues/1994).
