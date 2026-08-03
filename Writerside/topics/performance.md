@@ -46,17 +46,55 @@ This is verified in CI (`GossipBroadcastScalingTest`, `GossipQuilterScalingTest`
 relay seen-set used for flood deduplication is itself bounded to O(origins), not O(total
 broadcasts), via a per-origin high-water mark (`GossipDedup`).
 
+### The background check costs a fingerprint, not a copy
+
+The safety net that catches anything the fast path drops used to re-send a peer's whole
+picture every round, whether or not anything had changed — so its cost grew with the
+amount of data being shared. It now sends a short **fingerprint** of that picture
+instead, and ships the data only when two fingerprints disagree. A settled round is two
+short messages: the fingerprint out, and a brief "yes, I'm up to date" back. The routine
+case is the same size whatever the data holds:
+
+| A settled peer's background check | before | after |
+|---|---|---|
+| one round, 200-element shared set | ~6.5 KB | ~94 bytes |
+| one round, 100,000-element shared set | ~3.5 MB | ~94 bytes |
+| ongoing traffic per peer, 100,000 entries | ~58 KB/s | roughly 1.7 B/s |
+
+That last row is a **~34,000×** drop. What the table is really claiming is the two rows
+above it: the settled round is the *same size* at 100,000 entries as at 200 — and that
+holds because both messages are short and neither carries the data. Treat the exact
+numbers as rounded rather than fixed: a few bytes move with the particular values a
+message happens to carry and with how long a peer's name is, so a round is more precisely
+~94–103 bytes. Where a range exists, the table publishes the end least flattering to
+kuilt, so the real saving is this or better. These counts are the messages themselves;
+sending anything over a real network adds its own wrapping on top, the same for both
+columns. Reproduced by the `:kuilt-scale` cost-model and anti-entropy measurement tests.
+
+Sending the whole picture is still the fallback every guarantee rests on. Two peers whose
+fingerprints coincide by accident lose a repair — never their eventual agreement. If
+either of them then changes anything, the fingerprints move apart and the next round
+repairs; but if both are simply sitting still, the same two fingerprints keep matching, so
+the wait is until *something* changes, not until the next round. (The odds are about one
+in eighteen quintillion per pair, so this is worth knowing rather than worth planning
+for.) A peer running a version too old to recognise the check is a larger gap: it ignores
+every check sent to it, so those are all wasted, not just one. It still runs its *own*
+background checks the old way, though, and those repair in both directions — so the two
+peers still agree in the end, just more slowly. Keeping every peer on the same version
+avoids this entirely.
+
 ### Deferred optimizations (measured, not yet needed)
 
-Two gossip optimizations are intentionally **not** built — measured to be unnecessary at
+Two further optimizations are intentionally **not** built — measured to be unnecessary at
 the target scale, with the trigger to revisit recorded:
 
 | Optimization | Measured today | Trigger to build it |
 |--------------|----------------|---------------------|
-| **Digest-gated reconcile** | Anti-entropy ships full state every round: ~78 B/round for a 1-element CRDT, ~6.5 KB for 200 elements (cost ∝ state size, not change size) | Average CRDT state reaches the multi-KB range |
+| **Splitting the fingerprint into shards**, so a mismatch ships only the differing part rather than the whole picture | The advantage collapses as peers drift further apart: at 100,000 entries across 256 shards, one differing entry is 245× cheaper than sending everything, but a thousand differing entries is **1.0×** — no saving at all. Since the check is a backstop and rounds are overwhelmingly quiet, a single whole-picture fingerprint already captures nearly all the benefit | Rounds stop being overwhelmingly quiet, i.e. mismatches become common *and* typically small |
 | **Anti-entropy fanout > 1** | First-contact latency with fanout=1 follows the coupon-collector tail ≈ N·H(N): 29 / 80 / 166 rounds at N = 10 / 20 / 40 — but only on the backstop path; the flood reaches everyone in O(k) immediately | Large membership where backstop latency matters and flood drops are non-trivial |
 
-Numbers are reproduced by `GossipAntiEntropyMeasurementTest`. The full design rationale —
+The fanout numbers are reproduced by `GossipAntiEntropyMeasurementTest`; the sharding
+numbers by the `:kuilt-scale` cost-model test. The full design rationale —
 including why kuilt uses simpler variants than HyParView and Plumtree — is in
 [`docs/gossip-mesh-design.md`](https://github.com/tractat-us/kuilt/blob/main/docs/gossip-mesh-design.md).
 

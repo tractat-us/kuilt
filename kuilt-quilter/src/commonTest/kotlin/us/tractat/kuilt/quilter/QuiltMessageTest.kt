@@ -63,6 +63,25 @@ class QuiltMessageTest {
     }
 
     @Test
+    fun rootDigestRoundTripsThroughCbor() {
+        val msg = QuiltMessage.RootDigest<GCounter>(sender = a, root = -0x0123456789ABCDEFL, upThrough = 9L)
+        val bytes = Cbor.encodeToByteArray(msgSerializer, msg)
+        val decoded = Cbor.decodeFromByteArray(msgSerializer, bytes) as QuiltMessage.RootDigest
+        assertEquals(msg.sender, decoded.sender)
+        assertEquals(msg.root, decoded.root)
+        assertEquals(msg.upThrough, decoded.upThrough)
+    }
+
+    @Test
+    fun fullStateRequestRoundTripsThroughCbor() {
+        val msg = QuiltMessage.FullStateRequest<GCounter>(requester = a, sender = ReplicaId("B"))
+        val bytes = Cbor.encodeToByteArray(msgSerializer, msg)
+        val decoded = Cbor.decodeFromByteArray(msgSerializer, bytes) as QuiltMessage.FullStateRequest
+        assertEquals(msg.requester, decoded.requester)
+        assertEquals(msg.sender, decoded.sender)
+    }
+
+    @Test
     fun deliveredRoundTripsThroughCbor() {
         val b = ReplicaId("B")
         val msg = QuiltMessage.Delivered<GCounter>(

@@ -6,7 +6,7 @@
 
 A replicated session that runs for a long time — a shared document that people edit for days, a task hierarchy that a team rearranges over weeks — keeps growing in the background even when it looks idle to users. Every insert, every move, every delete is recorded as an operation and kept in an op-log. The log is never trimmed.
 
-This is invisible at first. But it compounds: every time a new peer joins, they receive the **entire op-log** as their starting state. Every anti-entropy round — the background sync that keeps replicas from drifting apart — sends the full log again. A session with M operations costs O(M) per sync, and M grows without bound.
+This is invisible at first. But it compounds: every time a new peer joins, they receive the **entire op-log** as their starting state. And whenever the background sync — the process that keeps replicas from drifting apart — finds two replicas out of step, closing that gap sends the full log again. A session with M operations costs O(M) every time a repair is needed, and M grows without bound. (Since #1955 the background sync only pays that cost when it detects a difference; a check between replicas that already agree is a small fixed size. That removes the cost of the *idle* case, not of the repair this note is about.)
 
 Three types in `:kuilt-crdt` accumulate ops this way: `Rga`, `Fugue`, and `MovableTree`. They are the **op-log CRDTs** — their state *is* the log. (The other types in the module — `ORSet`, `MVRegister`, `ORMap`, `ResettableCounter` — carry a compact dot-context that self-trims; they are not discussed here.)
 

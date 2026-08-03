@@ -59,6 +59,15 @@ grows, while Quilter's anti-entropy reconcile still converges every peer. See
 `Quilter` serialises messages with CBOR by default (via `Cbor` from `kotlinx-serialization`). Messages are `QuiltMessage<S>`:
 
 - `Delta(seq, patch)` — an incremental update.
-- `FullState(state)` — the complete current state, sent to new peers and as a retry on gap detection.
-- `Ack(seq)` — acknowledgement, used to clear the pending-delta buffer.
+- `FullState(state)` — the complete current state, sent to new peers, as a retry on gap
+  detection, and in reply to a `FullStateRequest`.
+- `Ack(seq)` — acknowledgement, used to clear the pending-delta buffer. Also what a peer
+  sends back when a `RootDigest` matches its own state.
 - `Resend(fromSeq)` — request to re-send deltas from `fromSeq` when a gap is detected.
+- `RootDigest(root, upThrough)` — the background reconcile tick: a 64-bit hash of the
+  state rather than the state itself, so a round between peers that already agree costs
+  two small frames — this one out, and an `Ack` back.
+- `FullStateRequest` — the reply a peer sends when its own hash differs, asking for the
+  state it is missing.
+- `Delivered(vector)` — a peer's own summary of what it has applied from everyone, gossiped
+  so the group can agree on which history is safely behind everybody and can be discarded.

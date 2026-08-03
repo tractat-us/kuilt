@@ -11,7 +11,9 @@ import us.tractat.kuilt.crdt.VersionVector
  * [Delta] carries a lattice fragment tagged with the sender's monotonic sequence
  * number. [Ack] tells the sender that the acker has absorbed all deltas through
  * [seq], enabling GC of the delta buffer. [FullState] ships the entire current
- * state and is sent once on first contact with a new peer.
+ * state — on first contact with a new peer, and in reply to a [FullStateRequest].
+ * [RootDigest] is what the anti-entropy tick sends instead of the state: a hash of
+ * it, answered with a [FullStateRequest] only when the recipient's own hash differs.
  *
  * @param S the [us.tractat.kuilt.crdt.Quilted] state type.
  */
@@ -59,6 +61,58 @@ public sealed class QuiltMessage<S> {
         public val sender: ReplicaId,
         public val state: S,
         public val upThrough: Long = 0L,
+    ) : QuiltMessage<S>()
+
+    /**
+     * A hash of [sender]'s whole state, sent on the anti-entropy tick in place of the state
+     * itself (#1955). The recipient compares it with its own root and replies with a
+     * [FullStateRequest] only if they differ, so a converged round costs one small frame
+     * instead of the entire CRDT.
+     *
+     * [upThrough] carries the same own-delta high-water as [FullState.upThrough], and for the
+     * same reason: an anti-entropy round must resync the recipient's receive cursor whether or
+     * not it ships state. Omitting it here would reintroduce the #1266 livelock for a peer
+     * whose state matches while its delta cursor lags.
+     *
+     * [upThrough] deliberately has **no default**: omitting it must be a compile error, not a
+     * silent `0L` that disables the resync. ([FullState.upThrough] carries a default only because
+     * it predates its callers.)
+     *
+     * [root] is advisory, and a collision costs more than a missed heal: the recipient takes the
+     * **match** branch, so it also fast-forwards its receive cursor to [upThrough], acks it, and
+     * drops buffered inbound deltas at or below it — the exact harm the mismatch branch refuses to
+     * risk, inflicted here on a false match. It stays recoverable: the next state mutation on
+     * either side changes both roots, and any [FullState] — from a third peer, the first-contact
+     * path, or a later round whose roots then differ — re-merges the state and re-resyncs the
+     * cursor. So a stall, never divergence that survives a [FullState].
+     *
+     * That stall is **not** bounded by the next round, though. Between two *quiescent* peers
+     * neither state changes, so the same two roots collide again identically on every subsequent
+     * round, in both directions; recovery needs a local mutation or a [FullState] from a third
+     * peer. At 2⁻⁶⁴ per pair this is worth recording, not engineering around — but the bound is
+     * "until something changes", not "one round".
+     */
+    @Serializable
+    @SerialName("rootDigest")
+    public class RootDigest<S>(
+        public val sender: ReplicaId,
+        public val root: Long,
+        public val upThrough: Long,
+    ) : QuiltMessage<S>()
+
+    /**
+     * Sent by [requester] when a [RootDigest] from [sender] disagreed with its own root: please
+     * ship the state. The recipient answers with a [FullState].
+     *
+     * Honored only when the recipient has sent [requester] a [RootDigest] since the last request
+     * it honored, which caps delivery at one full state per peer per anti-entropy interval —
+     * exactly the pre-#1955 ceiling — and makes an unsolicited request a no-op.
+     */
+    @Serializable
+    @SerialName("fullStateRequest")
+    public class FullStateRequest<S>(
+        public val requester: ReplicaId,
+        public val sender: ReplicaId,
     ) : QuiltMessage<S>()
 
     /**

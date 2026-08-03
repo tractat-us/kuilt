@@ -115,6 +115,11 @@ private object SystemMonotonicMillis : MonotonicMillis {
  *   known peer has acked through a seq, all deltas at or below that seq are GC'd.
  * - On first contact with a new peer, a [QuiltMessage.FullState] is sent so the
  *   late joiner converges immediately without waiting for a delta replay.
+ * - On the anti-entropy tick, a [QuiltMessage.RootDigest] — a hash of the state, not the
+ *   state — goes to one random peer, which replies with a [QuiltMessage.FullStateRequest]
+ *   only when its own root differs; that request is answered with a [QuiltMessage.FullState].
+ * - A [QuiltMessage.Delivered] gossips this replica's contiguous delivered version vector,
+ *   the matrix-clock row that drives causal-stability GC for dot-carrying CRDTs.
  *
  * ## Gap detection (Rung 12b)
  * Per-sender receive-sequence tracking detects dropped or reordered deltas:
@@ -172,16 +177,19 @@ public class Quilter<S : Quilted<S>>(
      * Supply a sparse selector (e.g. the ~k active neighbours from a `GossipSeam`) to
      * reduce the GC watermark from `min over N` to `min over k`. Peers excluded from this
      * set never pin the pending-delta buffer; they still converge because the anti-entropy
-     * backstop ([reconcileWithRandomPeer]) periodically merges the full state into every
-     * peer in full membership. Convergence no longer depends on every peer acking every
-     * delta.
+     * backstop ([reconcileWithRandomPeer]) sends a [QuiltMessage.RootDigest] to a peer drawn
+     * from the **full** membership every round, and a peer that is behind necessarily has a
+     * different root, so it asks for and merges the full state. State ships only when it is
+     * needed, but the backstop still reaches every peer in full membership. Convergence no
+     * longer depends on every peer acking every delta.
      */
     private val deltaTargets: (Set<PeerId>) -> Set<PeerId> = { it },
     /**
      * RNG for anti-entropy peer selection. Each reconcile round picks one random peer from
-     * the full membership and pushes the current post-merge full state to it. The merge is
-     * idempotent (join-semilattice), so the order or frequency of reconcile rounds does
-     * not affect the final converged value.
+     * the full membership and sends it a [QuiltMessage.RootDigest]; the current post-merge full
+     * state follows only if that peer's root differs. The merge is idempotent
+     * (join-semilattice), so the order or frequency of reconcile rounds does not affect the
+     * final converged value.
      *
      * Defaults to [kotlin.random.Random.Default] in production. Inject a **seeded**
      * [kotlin.random.Random] in tests so the peer-selection sequence is reproducible under
@@ -310,6 +318,13 @@ public class Quilter<S : Quilted<S>>(
      */
     private val pendingFullStateJobs: MutableMap<PeerId, Job> = mutableMapOf()
 
+    /**
+     * Peers we have sent a [QuiltMessage.RootDigest] to and not yet answered a
+     * [QuiltMessage.FullStateRequest] for. Gates the amplification lever: an unsolicited request
+     * finds no entry and is dropped.
+     */
+    private val digestOutstanding: MutableSet<PeerId> = mutableSetOf()
+
     /** Counts anti-entropy iterations; logged each tick so virtual-time cycling is visible. */
     private var antiEntropyCount = 0L
 
@@ -325,6 +340,9 @@ public class Quilter<S : Quilted<S>>(
 
     /** Exposed internally so tests can verify [close] cancels every background job. */
     internal val backgroundJobsForTest: List<Job> get() = backgroundJobs
+
+    /** Sends one [QuiltMessage.RootDigest] to [peer], arming the solicited-request flag. Test-only. */
+    internal fun sendRootDigestForTest(peer: PeerId): Unit = lock.withLock { sendRootDigestTo(peer) }
 
     init {
         // `scope` here is the constructor parameter (the original parent scope).
@@ -497,27 +515,84 @@ public class Quilter<S : Quilted<S>>(
     }
 
     /**
-     * Picks one peer at random from the full membership and sends it the current merged
-     * state. This is the convergence backstop: a peer that missed a delta — it sat outside
-     * [deltaTargets], or a relayed delivery was dropped — merges the full state on the next
-     * round and converges without replaying the missing deltas.
+     * Picks one peer at random from the full membership and reconciles with it. This is the
+     * convergence backstop: a peer that missed a delta — it sat outside [deltaTargets], or a
+     * relayed delivery was dropped — requests and merges the full state on the next round that
+     * *selects* it, and converges without replaying the missing deltas. One peer is drawn per
+     * tick, so that is a coupon-collector wait rather than the very next tick.
+     *
+     * Sends a [QuiltMessage.RootDigest] — a hash of the state, not the state (#1955). The peer
+     * replies with a [QuiltMessage.FullStateRequest] only if its own root differs, so a converged
+     * round costs two small frames instead of the whole CRDT: the digest out (~54–57 b) and the
+     * matched peer's [QuiltMessage.Ack] of `upThrough` back (~40–46 b), ~94–103 b in total.
+     * Measured: a converged 100k-entry `GSet` node drops from ~58 KB/s of steady-state egress to
+     * roughly 1.7 B/s — a ~34,000× reduction. Both frames are flat in state size, which is the
+     * claim that matters; the constant is not exact, because CBOR encodes `root`, `seq` and
+     * `upThrough` at minimal width, so a few bytes move with the values and with the replica id's
+     * length. The published pair is the **conservative** end of the measured range (94–103 b per
+     * round), so the real saving is this or better. These are encoded-frame bytes and exclude
+     * whatever the transport adds on top — WebSocket framing, TLS records, IP headers — but so is
+     * the "before" side, so the ratio holds.
      *
      * The merge at the receiver is idempotent and order-independent (every delta-state CRDT
      * is a join-semilattice), so the same full state can be sent any number of times safely.
      * This is what makes GC against a sparse [deltaTargets] set correct: convergence does
-     * not depend on every peer acking every delta. Full-state-first is always correct; a
-     * version-vector or digest diff is a later optimization for large CRDTs.
+     * not depend on every peer acking every delta.
      *
-     * The send is fire-and-forget — the next anti-entropy round is the natural retry. Must
-     * be called under [lock]; the actual `seam.sendTo` is launched on [scope] outside it.
+     * [QuiltMessage.FullState] remains the always-correct fallback and every convergence
+     * guarantee still traces to it — a root collision or a digest a peer cannot parse costs a
+     * missed heal, never divergence that survives a [QuiltMessage.FullState].
+     *
+     * That missed heal is **not** bounded by the next round, though. Between two *quiescent* peers
+     * neither state changes, so the same pair of colliding roots recurs identically on every
+     * subsequent round in both directions; recovery waits on a local mutation or a
+     * [QuiltMessage.FullState] from a third peer. At 2⁻⁶⁴ per pair that is a risk to record, not to
+     * engineer around — but the bound is "until something changes", not "one round".
+     *
+     * The digest also carries `upThrough`, because on a *matched* round no state ships and nothing
+     * else would resync the recipient's receive cursor (#1266). On a mismatch the requested
+     * [QuiltMessage.FullState] carries its own, so the digest handler deliberately leaves the
+     * cursor alone there rather than acking history it has not yet received.
+     *
+     * The send is fire-and-forget — a later round that draws the same peer is the natural retry.
+     * Must be called under [lock]; the actual `seam.sendTo` is launched on [scope] outside it.
      */
     private fun reconcileWithRandomPeer() {
         if (knownPeers.isEmpty()) return
-        val peer = knownPeers.elementAt(random.nextInt(knownPeers.size))
-        val bytes = encode(QuiltMessage.FullState(sender = replica, state = _state.value, upThrough = nextSeq))
+        sendRootDigestTo(knownPeers.elementAt(random.nextInt(knownPeers.size)))
+    }
+
+    /**
+     * FNV-1a 64 over the state as it would appear on the wire. Must be called under [lock].
+     *
+     * There is no `KSerializer<S>` on this class — the primary constructor takes only
+     * [messageSerializer], and the top-level factory's `valueSerializer` is not retained — so the
+     * state is encoded inside a fixed synthetic [QuiltMessage.FullState]. [ReplicaId.Bottom] and
+     * `upThrough = 0L` are constants, so the *envelope* is identical on every peer.
+     *
+     * Equal states then yield equal roots **provided `S`'s serializer is encoding-canonical** —
+     * equal values must encode to identical bytes, which requires a deterministic order for any
+     * set- or map-valued field. Every CRDT in the in-tree zoo satisfies this (they serialize
+     * through sorted, canonical forms), but [Quilter] is generic over consumer state types: an `S`
+     * carrying a plain unordered `Set`/`Map` can encode one value two ways on two peers. The
+     * failure mode is benign and self-limiting — the roots never match, so every round falls back
+     * to the [QuiltMessage.FullState] path that predates #1955 and the optimization simply never
+     * engages for that pair. It is never divergence.
+     */
+    private fun stateRoot(): Long = fnv1a64(
+        binaryFormat.encodeToByteArray(
+            messageSerializer,
+            QuiltMessage.FullState(sender = ReplicaId.Bottom, state = _state.value, upThrough = 0L),
+        ),
+    )
+
+    /** Ships a [QuiltMessage.RootDigest] to [peer] and arms the solicited-request flag. Under [lock]. */
+    private fun sendRootDigestTo(peer: PeerId) {
+        val bytes = encode(QuiltMessage.RootDigest(sender = replica, root = stateRoot(), upThrough = nextSeq))
+        digestOutstanding.add(peer)
         scope.launch {
             runCatchingCancellable { seam.sendTo(peer, bytes) }
-                .onFailure { logger.debug { "antiEntropy reconcile to $peer failed: ${it.message}" } }
+                .onFailure { logger.debug { "rootDigest to $peer failed: ${it.message}" } }
         }
     }
 
@@ -544,6 +619,7 @@ public class Quilter<S : Quilted<S>>(
             ackedThrough.remove(peer)
             lastSeenAt.remove(peer)
             cancelFullStateRetry(peer)
+            digestOutstanding.remove(peer)
         }
         recomputeUniversalAck()
         recomputeCut()
@@ -609,13 +685,20 @@ public class Quilter<S : Quilted<S>>(
 
     private fun dispatch(sender: PeerId, swatch: Swatch): Unit = lock.withLock {
         cancelFullStateRetry(sender)
-        val msg = runCatchingCancellable { swatch.decode(binaryFormat, messageSerializer) }.getOrNull() ?: return@withLock
+        // Log the drop. A peer running a build that predates #1955 cannot decode `rootDigest` or
+        // `fullStateRequest`, and silence is then the *only* symptom of a mixed-version rollout
+        // (#2006) — every send site in this file already logs its failure; so does this one.
+        val msg = runCatchingCancellable { swatch.decode(binaryFormat, messageSerializer) }
+            .onFailure { failure -> logger.debug { "undecodable frame from $sender dropped: $failure" } }
+            .getOrNull() ?: return@withLock
         when (msg) {
             is QuiltMessage.Delta -> onDelta(sender, msg)
             is QuiltMessage.Ack -> onAck(sender, msg)
             is QuiltMessage.FullState -> onFullState(sender, msg)
             is QuiltMessage.Resend -> onResend(sender, msg)
             is QuiltMessage.Delivered -> onDelivered(sender, msg)
+            is QuiltMessage.RootDigest -> onRootDigest(sender, msg)
+            is QuiltMessage.FullStateRequest -> onFullStateRequest(sender, msg)
         }
     }
 
@@ -798,35 +881,90 @@ public class Quilter<S : Quilted<S>>(
             // avoiding a FullState storm when all peers are already equal.
             sendFullStateTo(sender)
         }
-        resyncReceiveCursor(sender, msg)
+        resyncReceiveCursor(sender, msg.sender, msg.upThrough)
     }
 
     /**
-     * Fast-forwards the per-sender receive cursor past the history a just-absorbed
-     * [QuiltMessage.FullState] already covers (#1266). Without this, a receiver whose gap
+     * An inbound anti-entropy digest.
+     *
+     * On a **match** the roots agree, so the states agree, so resyncing the receive cursor and
+     * acking [QuiltMessage.RootDigest.upThrough] is honest — and it is the #1266 obligation this
+     * frame exists to carry, since no state ships.
+     *
+     * On a **mismatch** it deliberately does **not** resync. `resyncReceiveCursor` acks, and today
+     * that ack is only ever issued after the state was merged ([onFullState] merges, then resyncs).
+     * Acking here would claim absorption of history we have not received and drop buffered deltas
+     * covering it; if the request or its reply were then lost we would be stale *and* cut off from
+     * that history via the delta path. The requested [QuiltMessage.FullState] carries its own
+     * `upThrough` and resyncs exactly as it does today.
+     */
+    private fun onRootDigest(sender: PeerId, msg: QuiltMessage.RootDigest<S>) {
+        if (msg.root == stateRoot()) {
+            resyncReceiveCursor(sender, msg.sender, msg.upThrough)
+            return
+        }
+        val bytes = encode(QuiltMessage.FullStateRequest<S>(requester = replica, sender = msg.sender))
+        scope.launch {
+            runCatchingCancellable { seam.sendTo(sender, bytes) }
+                .onFailure { logger.debug { "fullStateRequest to $sender failed: ${it.message}" } }
+        }
+    }
+
+    /**
+     * A peer's reply to our digest, asking for the state. Ships it directly rather than via
+     * [sendFullStateTo]: that helper arms [scheduleFullStateRetry], which exists for the
+     * first-contact path, and running it here would put two independent retry machines on one
+     * peer.
+     *
+     * No retry is armed instead, because the **requester** re-drives the exchange: it asks again
+     * on the next digest whose root disagrees with its own. Note this is not "anti-entropy retries
+     * every interval" — [reconcileWithRandomPeer] draws **one** peer uniformly per tick, so any
+     * given peer is re-digested at rate 1/N, a coupon-collector wait rather than the next round.
+     * That is the same tail every heal on this path already has, so it costs nothing extra here.
+     */
+    private fun onFullStateRequest(sender: PeerId, msg: QuiltMessage.FullStateRequest<S>) {
+        if (msg.sender != replica) return // mirrors onResend's guard — not our state being asked for
+        if (!digestOutstanding.remove(sender)) {
+            logger.debug { "unsolicited fullStateRequest from $sender — ignored" }
+            return
+        }
+        val bytes = encode(QuiltMessage.FullState(sender = replica, state = _state.value, upThrough = nextSeq))
+        scope.launch {
+            runCatchingCancellable { seam.sendTo(sender, bytes) }
+                .onFailure { logger.debug { "fullState reply to $sender failed: ${it.message}" } }
+        }
+    }
+
+    /**
+     * Fast-forwards the per-sender receive cursor past the history [upThrough] already covers
+     * (#1266). Called from both [onFullState] and [onRootDigest] — an anti-entropy round must
+     * resync the cursor whether or not it ships state. Without this, a receiver whose gap
      * range outlives the sender's GC — the late-joiner case — livelocks: every subsequent
      * delta is buffered against a cursor that can never advance, each one costs a
      * Resend → FullState round-trip, the receiver never acks via the delta path, and the
      * sender's [pendingDeltas] (plus this side's [pendingInbound]) grow without bound.
      *
-     * Drops buffered inbound deltas at or below the snapshot's high-water (their effects
+     * Drops buffered inbound deltas at or below the sender's high-water (their effects
      * are already merged), acks the high-water so the sender's watermark can advance,
      * drains anything now contiguous, and cancels the Resend retry once no gap remains.
+     *
+     * Returns immediately at `upThrough <= 0`, which is the floor for a sender that has never
+     * applied a local mutation ([nextSeq] starts at `0`): there is no history to fast-forward
+     * past and nothing to ack.
      */
-    private fun resyncReceiveCursor(sender: PeerId, msg: QuiltMessage.FullState<S>) {
-        if (msg.upThrough <= 0L) return
-        val senderReplica = msg.sender
+    private fun resyncReceiveCursor(sender: PeerId, senderReplica: ReplicaId, upThrough: Long) {
+        if (upThrough <= 0L) return
         val expected = expectedReceiveSeq[senderReplica] ?: 1L
-        if (msg.upThrough >= expected) {
-            expectedReceiveSeq[senderReplica] = msg.upThrough + 1
+        if (upThrough >= expected) {
+            expectedReceiveSeq[senderReplica] = upThrough + 1
             pendingInbound[senderReplica]?.let { buffer ->
-                buffer.keys.removeAll { it <= msg.upThrough }
+                buffer.keys.removeAll { it <= upThrough }
                 if (buffer.isEmpty()) pendingInbound.remove(senderReplica)
             }
         }
         // Ack the snapshot's high-water even when no fast-forward was needed: the ack is
         // idempotent at the sender (it keeps the max) and heals a previously-lost ack.
-        sendAck(to = sender, originalSender = senderReplica, seq = msg.upThrough)
+        sendAck(to = sender, originalSender = senderReplica, seq = upThrough)
         drainPendingInbound(senderReplica, sender)
         if (senderReplica !in pendingInbound) cancelResendRetry(senderReplica)
     }

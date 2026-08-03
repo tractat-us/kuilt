@@ -24,22 +24,26 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Instant
 
 /**
- * Read-only measurement pass for the two **trigger-gated** anti-entropy follow-ups
- * (`docs/gossip-mesh-design.md`; gossip epic). Neither is implemented yet by design — the
- * simple versions are correct at the tens–low-hundreds target scale. These measurements
- * quantify *when* each would start to pay for itself, so the number justifies the work
- * before it is built (and so a future regression past the trigger is visible).
+ * Read-only measurement pass for two **trigger-gated** anti-entropy follow-ups
+ * (`docs/gossip-mesh-design.md`; gossip epic). These measurements quantify *when* each starts to
+ * pay for itself, so a number justifies the work before it is built — and so a future regression
+ * past the trigger stays visible.
  *
- * **#663 — digest-gated reconcile.** [Quilter]'s anti-entropy backstop ships the **entire**
- * CRDT state (`QuiltMessage.FullState`) to one random peer every round, regardless of how
- * little changed. [reconcileBytesPerRoundTrackFullStateSize] measures that steady-state cost
- * as the CRDT grows: bytes/round scale with *state* size, not *delta* size. The wall is when
- * full-state-per-round dwarfs the change a digest/version-vector diff would ship.
+ * **#663 — digest-gated reconcile: SHIPPED as #1955.** [Quilter]'s anti-entropy backstop used to
+ * ship the **entire** CRDT state (`QuiltMessage.FullState`) to one random peer every round,
+ * regardless of how little changed, and this suite is where that cost was quantified: bytes/round
+ * scaled with *state* size, not *delta* size. The tick now ships a `QuiltMessage.RootDigest` — a
+ * 64-bit hash of the state plus the sender's own-delta high-water — and the recipient asks for the
+ * state only when the roots differ. [reconcileBytesPerRoundStayFlatAsStateGrows] measures what that
+ * leaves — the same sweep over state size, now asserting the *inversion*: the frame the tick emits
+ * does not track state size at all. It measures the **sender's half** only (see
+ * [singleReconcilerMesh]); the whole round adds the matched peer's ack.
  *
- * **#664 — anti-entropy fanout / scheduling.** Reconcile picks **one** uniform-random peer
- * per round (fanout = 1), so a node's worst-case time to make first contact with *every* peer
- * is a coupon-collector tail ≈ `(N-1)·H(N-1) ≈ N ln N` rounds.
- * [firstContactLatencyIsCouponCollectorTail] measures that round count as N grows.
+ * **#664 — anti-entropy fanout / scheduling.** Still unbuilt by design: fanout = 1 is correct at
+ * the tens–low-hundreds target scale. Reconcile picks **one** uniform-random peer per round, so a
+ * node's worst-case time to make first contact with *every* peer is a coupon-collector tail
+ * ≈ `(N-1)·H(N-1) ≈ N ln N` rounds. [firstContactLatencyIsCouponCollectorTail] measures that round
+ * count as N grows.
  *
  * Determinism mirrors the sibling scaling tests: [UnconfinedTestDispatcher], per-peer seeded
  * RNG, heartbeats pushed past the window, `jitter = ZERO` for synchronous view convergence,
@@ -55,9 +59,21 @@ class GossipAntiEntropyMeasurementTest {
     /**
      * Builds N gossip nodes over a metered full mesh and gives **only node 0** a [Quilter]
      * (initialised to [initialState]). With a single replicator the only point-to-point
-     * traffic is that node's anti-entropy reconciles — one [QuiltMessage.FullState] to one
+     * traffic is that node's anti-entropy reconciles — one `QuiltMessage.RootDigest` to one
      * random peer per round — so the metered seams isolate exactly the reconcile cost and
      * contact pattern.
+     *
+     * The peers hold no replica, so none of them ever answers: no `QuiltMessage.FullStateRequest`
+     * when the roots differ, and no `QuiltMessage.Ack` when they match. What the meter reads is
+     * therefore the **sender's half** of a round — one digest out, nothing back.
+     *
+     * That is exactly the quantity #663 was about (reconcile cost as a function of state size), and
+     * it is what this suite asserts on. It is **not** the whole cost of a converged round: in
+     * production a matched peer acks the digest's `upThrough`, so a real round is digest-out *plus*
+     * ack-back, ~2x this figure. `MerkleDigestCostModelTest.convergedRoundShipsADigestNotTheState`
+     * meters the whole round on a mesh whose nodes have all written; quote that one for a total.
+     * Giving these peers replicas would answer the same question at more moving parts, so the
+     * division of labour stands.
      */
     private suspend fun TestScope.singleReconcilerMesh(
         n: Int,
@@ -92,7 +108,7 @@ class GossipAntiEntropyMeasurementTest {
     }
 
     @Test
-    fun reconcileBytesPerRoundTrackFullStateSize() = runTest(UnconfinedTestDispatcher()) {
+    fun reconcileBytesPerRoundStayFlatAsStateGrows() = runTest(UnconfinedTestDispatcher()) {
         val n = 20
         val rounds = 20
         val sizes = listOf(1, 50, 200)
@@ -107,19 +123,23 @@ class GossipAntiEntropyMeasurementTest {
             Row(stateSize, perRound)
         }
 
-        println("\n=== #663: anti-entropy reconcile bytes/round vs CRDT state size (N=$n, full-state push) ===")
-        results.forEach { println("  GSet(${it.stateSize} elems): ${it.bytesPerRound} bytes/round (full state shipped, change was 0)") }
+        println("\n=== #663 (shipped as #1955): anti-entropy reconcile bytes/round vs CRDT state size (N=$n, digest push) ===")
+        println("  (sender's half only — these peers hold no replica, so nothing is acked back)")
+        results.forEach { println("  GSet(${it.stateSize} elems): ${it.bytesPerRound} bytes/round out (root digest shipped, change was 0)") }
         val small = results.first { it.stateSize == 1 }
         val large = results.first { it.stateSize == 200 }
-        println("  ratio 200:1 elems = ${large.bytesPerRound.toDouble() / small.bytesPerRound} (digest-gated would ship ~O(diff), here diff=0)")
+        println("  ratio 200:1 elems = ${large.bytesPerRound.toDouble() / small.bytesPerRound} (~200x before #1955; the round no longer carries the state)")
 
-        // Confirms the mechanism #663 targets: cost is driven by state size, not change size —
-        // at quiescence (zero change) a 200-element CRDT still ships ~200x the bytes a 1-element
-        // one does, every round. The trigger ("average CRDT state exceeds a threshold") is a
-        // judgement on absolute bytes/round above; this only proves the scaling is O(state).
+        // The inversion #1955 bought, and the reason this assertion reads the way it does. It used
+        // to be `large > small * 10`, and it held: at quiescence (zero change) a 200-element CRDT
+        // shipped ~200x the bytes a 1-element one did, *every round*, because the round carried the
+        // whole state. A round now carries a 64-bit root hash plus a sequence number, so cost is
+        // driven by neither state size nor change size — the peer asks for the state only when the
+        // roots disagree. #663's trigger ("average CRDT state exceeds a threshold") is retired with
+        // it: there is no longer a state size at which a *converged* round gets expensive.
         assertTrue(
-            large.bytesPerRound > small.bytesPerRound * 10,
-            "reconcile cost must scale with state size (200-elem=${large.bytesPerRound} vs 1-elem=${small.bytesPerRound} bytes/round)",
+            large.bytesPerRound < small.bytesPerRound * 2,
+            "a converged reconcile must not scale with state size (200-elem=${large.bytesPerRound} vs 1-elem=${small.bytesPerRound} bytes/round)",
         )
     }
 

@@ -17,9 +17,11 @@ This design lets each device connect to only a **handful** of others and still
 have every update reach everyone, the way news spreads through a crowd rather than
 everyone shouting to everyone. Two things move between devices: small **updates**
 go to your handful of direct neighbours, and, in the background, devices
-occasionally compare their **full picture** with a random other device to catch
-anything that didn't make it. The first keeps things fast; the second guarantees
-everyone eventually agrees.
+occasionally **check with a random other device** that nothing was missed. That
+background check doesn't send a device's picture — it sends a short **fingerprint**
+of it, and the picture itself follows only if the two fingerprints disagree. The
+first keeps things fast; the second guarantees everyone eventually agrees, without
+costing much when there is nothing to fix.
 
 This applies only to the **shared-data** path (CRDT replication). The
 **agreement** path (consensus) is left alone — it keeps its small, fully-connected
@@ -38,7 +40,9 @@ showed that's backwards:
   `min(ackedThrough)` over the **full membership** (`seam.peers`). There is **no**
   anti-entropy digest fallback for the delta-state zoo — `gossipDelivered` is
   RGA-only. So "drop acks" is an unbounded memory leak, not graceful eventual
-  consistency.
+  consistency. (#1955 has since put a root digest on the anti-entropy *tick*, but
+  that gates when full state ships; it does not give GC an alternative to acks, so
+  this argument stands unchanged.)
 - **That full-membership, per-delta ack is the actual O(N²) driver** for the
   delta-state zoo — not the broadcast fan-out. A partial-mesh *broadcast* on its
   own changes nothing about it.
@@ -60,8 +64,9 @@ into two channels:
    order-independent, so a peer that missed a relayed delta **still converges** on
    the next reconcile. Anti-entropy is the *convergence guarantee*; the delta push
    is just the fast path. Start with full-state transfer (simple, correct, great
-   for counters/small sets); a version-vector/digest diff is the later
-   optimization for large CRDTs (RGA, big maps).
+   for counters/small sets); gating the round on a digest is the later
+   optimization for large CRDTs (RGA, big maps) — **shipped as #1955**, see
+   "Digest-gated reconcile" below.
 
 This is the standard delta-state-CRDT + anti-entropy pairing. It has three nice
 consequences:
@@ -148,33 +153,86 @@ delta-buffer growth that prevented sparse-mesh deployment.
 ### Anti-entropy backstop
 
 `runAntiEntropy()` now calls `reconcileWithRandomPeer()` each tick. It picks one
-peer uniformly at random from the full membership (`knownPeers`) and sends the
-current post-merge full state via `sendTo`. The receiver merges idempotently
-(join-semilattice), so delivery is order-independent and the send may safely be
-repeated. This is full-state-first reconcile — a version-vector or Merkle-digest
-diff is a later optimization.
+peer uniformly at random from the full membership (`knownPeers`) and reconciles
+with it via `sendTo`. The receiver merges idempotently (join-semilattice), so
+delivery is order-independent and a reconcile may safely be repeated.
+
+As shipped in Phase 1 this pushed the current post-merge **full state** every
+round, whatever the peer already had. Since **#1955** it sends a
+`QuiltMessage.RootDigest` instead — a 64-bit FNV-1a hash of the encoded state,
+plus the sender's own-delta high-water — and the receiver replies with a
+`QuiltMessage.FullStateRequest` only when its own root differs. `FullState` is
+untouched and remains the fallback; see "Digest-gated reconcile" below for the
+measured effect and for why the digest has to carry that high-water.
 
 ### GC safety contract
 
 GC'ing a delta once only the k delta-target neighbours have acked is safe because
-the anti-entropy backstop guarantees every peer eventually receives the post-merge
-full state. Convergence for peers outside the delta-target set no longer depends on
-those peers acking every delta; they converge within one anti-entropy round after
-a missed delivery. The backstop also heals dropped deltas within the neighbour set:
-the next reconcile re-delivers the merged result regardless of what was lost.
+the anti-entropy backstop guarantees every peer that is *behind* eventually receives
+the post-merge full state. Convergence for peers outside the delta-target set no
+longer depends on those peers acking every delta; they converge within one
+anti-entropy round after a missed delivery. The backstop also heals dropped deltas
+within the neighbour set: the next reconcile re-delivers the merged result regardless
+of what was lost.
+
+The digest gate (#1955) preserves this, with one honest qualification. A peer that is
+behind has a different root, so it still receives the full state on the round that
+*selects* it — anti-entropy picks one random peer per tick, so that is a coupon-collector
+wait, not the next tick (follow-up (ii) below quantifies the tail). And barring a root
+collision — which costs a missed heal, not divergence — a peer whose root matches is not
+missing anything, so skipping the shipment to it is exactly the waste the gate exists to
+remove.
+
+What the gate does change is the *shape* of a heal: it now takes three frames (digest →
+request → state) where it took one, so a frame lost mid-exchange costs a further round
+that the unconditional push did not. Eventual convergence is unaffected — the next round
+that selects the peer starts over — but heal latency has a longer tail than before.
 
 ### Named follow-ups
 
-**(i) Digest-gated reconcile** (trigger: avg CRDT state exceeds a practical
-threshold, e.g. >10 KB per round-trip). Full-state-every-round is O(state size)
-per anti-entropy tick. The standard path — taken by mature anti-entropy systems
-(Riak AAE, Cassandra repair) — is to send a compact version-vector or Merkle
-digest first and ship only the diff. Add a `QuiltMessage.Digest` message and a
-matching `onDigest` handler in `Quilter`; keep the full-state fallback for peers
-that don't support the new message type. Tracked as #663 (act when CRDT sizes in
-production justify the work). **Measured & deferred** (`GossipAntiEntropyMeasurementTest`,
-#679): reconcile cost is O(state), not O(change) — ~78 B/round for a 1-element CRDT,
-~6.5 KB for 200 elements; negligible at the small-CRDT target scale, so deferred.
+**(i) Digest-gated reconcile** — **SHIPPED as #1955.** Originally tracked as #663
+and deferred: full-state-every-round is O(state size) per anti-entropy tick, and
+`GossipAntiEntropyMeasurementTest` (#679) confirmed reconcile cost is O(state),
+not O(change) — ~78 B/round for a 1-element CRDT, ~6.5 KB for 200 elements —
+negligible at the small-CRDT target scale. Re-pricing it at the scales `:kuilt-scale`
+can reach flipped that verdict: a converged 100k-entry `GSet` node was paying
+**58.1 KB/s** of steady-state egress, ≈5 GB/day, purely to tell peers things they
+already knew.
+
+What shipped is a **bare root hash, not a tree.** `QuiltMessage.RootDigest(sender,
+root, upThrough)` carries a 64-bit FNV-1a hash of the `binaryFormat`-encoded state;
+a receiver whose own root differs answers `QuiltMessage.FullStateRequest` and the
+sender ships `FullState` exactly as before. Measured: a converged round drops to two
+small frames — the 54–57 b digest out, plus the matched peer's 40–46 b `Ack` of
+`upThrough` back, ~94–103 b in all — both flat in state size, so steady-state egress
+at 100k entries falls to **roughly 1.7 B/s**, a ~34,000× reduction. (Treat the
+constant as rounded, and note the published pair is the *conservative* end of the
+measured range: CBOR encodes `root`, `seq` and `upThrough` at minimal width, so a few
+bytes move with the values and with the replica id's length. The flatness, not the
+constant, is the result. Counts are encoded-frame bytes; transport framing and TLS
+sit on top of both the before and after columns alike.)
+
+The ack is easy to measure away and was, once: a harness whose replicas have never
+applied a local mutation sits at `nextSeq == 0`, ships `upThrough = 0`, and
+`resyncReceiveCursor` returns before acking — so the round reads as digest-only and
+the published cost halves. `MerkleDigestCostModelTest.meterConvergedRounds` makes
+every node write before it opens the meter for exactly that reason.
+
+Two design notes worth keeping, because both are counter-intuitive:
+
+- **No sharding or tree.** The obvious next step — split the digest into S shards and
+  ship only the differing shard — was measured and rejected: its advantage collapses
+  as divergence grows (at n=100k, S=256, one differing key is 245× cheaper than full
+  state, but a thousand differing keys is **1.0×**). Anti-entropy is a *backstop*, so
+  rounds are overwhelmingly quiescent and the bare root captures nearly all the
+  benefit for a fraction of the design surface. The sharded variant remains a separate,
+  independently-measured decision.
+- **The digest must carry `upThrough`.** The old anti-entropy `FullState` did two jobs:
+  it shipped state *and* resynced the receiver's delta cursor (#1266). A gate that sent
+  *nothing* on a match would reintroduce that livelock. The receiver therefore resyncs
+  from `upThrough` — but **only on the match branch**, since `resyncReceiveCursor` acks,
+  and acking on a mismatch would claim history not yet received and drop the buffered
+  deltas covering it. On a mismatch the requested `FullState` carries its own.
 
 **(ii) Anti-entropy fanout / scheduling** (trigger: room sizes where tail
 convergence latency matters at scale). With fanout=1 and N peers, a single peer
@@ -381,8 +439,9 @@ Quilter(seam = gossipSeam, deltaTargets = { gossipSeam.activePeers.value }, …)
   full-mesh base, each wrapped in a `GossipSeam`; each runs a `GCounter` `Quilter`
   GCing only against its ~k neighbours. Every peer applies one increment and **all
   converge** to the full sum — deltas ride `gossipSeam.broadcast` (eager-flood +
-  relay across the k-regular overlay), acks and the anti-entropy full-state backstop
-  ride `sendTo`. Each origin's GC watermark clears from only k neighbour acks (k=5,
+  relay across the k-regular overlay), acks and the anti-entropy backstop ride
+  `sendTo` — a full state when this test was written, a root digest since #1955,
+  with full state on a mismatch. Each origin's GC watermark clears from only k neighbour acks (k=5,
   a strict subset of N−1=15).
 - **GC ack-set is O(k), not O(N)** (`GossipQuilterScalingTest`). Across N=10/20/40
   the GC ack-set (`deltaTargets`) stays ≈ k — **5/5/6** — while full membership grows
@@ -405,6 +464,8 @@ re-arm forever).
 ## Out of scope / deferred
 
 - Next-hop unicast routing over the overlay (flood-with-filter suffices).
-- Digest/version-vector anti-entropy diff (full-state first; diff is the Phase-1.5
-  optimization for large CRDTs).
+- Digest-*gated* anti-entropy was out of scope here and **shipped separately as
+  #1955** (a bare root hash — see "Digest-gated reconcile" above). A digest *diff* —
+  sharded digests that ship only the differing part — remains out of scope: measured,
+  and its advantage collapses as divergence grows.
 - Gossip for the consensus path (Raft stays complete-graph).
