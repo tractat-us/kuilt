@@ -798,12 +798,13 @@ public class Quilter<S : Quilted<S>>(
             // avoiding a FullState storm when all peers are already equal.
             sendFullStateTo(sender)
         }
-        resyncReceiveCursor(sender, msg)
+        resyncReceiveCursor(sender, msg.sender, msg.upThrough)
     }
 
     /**
-     * Fast-forwards the per-sender receive cursor past the history a just-absorbed
-     * [QuiltMessage.FullState] already covers (#1266). Without this, a receiver whose gap
+     * Fast-forwards the per-sender receive cursor past the history [upThrough] already covers
+     * (#1266). Called from both [onFullState] and [onRootDigest] — an anti-entropy round must
+     * resync the cursor whether or not it ships state. Without this, a receiver whose gap
      * range outlives the sender's GC — the late-joiner case — livelocks: every subsequent
      * delta is buffered against a cursor that can never advance, each one costs a
      * Resend → FullState round-trip, the receiver never acks via the delta path, and the
@@ -813,20 +814,19 @@ public class Quilter<S : Quilted<S>>(
      * are already merged), acks the high-water so the sender's watermark can advance,
      * drains anything now contiguous, and cancels the Resend retry once no gap remains.
      */
-    private fun resyncReceiveCursor(sender: PeerId, msg: QuiltMessage.FullState<S>) {
-        if (msg.upThrough <= 0L) return
-        val senderReplica = msg.sender
+    private fun resyncReceiveCursor(sender: PeerId, senderReplica: ReplicaId, upThrough: Long) {
+        if (upThrough <= 0L) return
         val expected = expectedReceiveSeq[senderReplica] ?: 1L
-        if (msg.upThrough >= expected) {
-            expectedReceiveSeq[senderReplica] = msg.upThrough + 1
+        if (upThrough >= expected) {
+            expectedReceiveSeq[senderReplica] = upThrough + 1
             pendingInbound[senderReplica]?.let { buffer ->
-                buffer.keys.removeAll { it <= msg.upThrough }
+                buffer.keys.removeAll { it <= upThrough }
                 if (buffer.isEmpty()) pendingInbound.remove(senderReplica)
             }
         }
         // Ack the snapshot's high-water even when no fast-forward was needed: the ack is
         // idempotent at the sender (it keeps the max) and heals a previously-lost ack.
-        sendAck(to = sender, originalSender = senderReplica, seq = msg.upThrough)
+        sendAck(to = sender, originalSender = senderReplica, seq = upThrough)
         drainPendingInbound(senderReplica, sender)
         if (senderReplica !in pendingInbound) cancelResendRetry(senderReplica)
     }
