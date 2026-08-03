@@ -668,10 +668,166 @@ internal class WedgeDetectionTest {
         )
     }
 
+    /**
+     * The **accepted-frame reset**, pinned directly (#1980).
+     *
+     * `RaftEngine.onMessage` ends the refusal run on any leader→peer frame that clears *both*
+     * dispatch-boundary gates at or above our term — `refusedLeaderFrameRun = 0`, one line before the
+     * dispatch itself. It is the "nothing accepted in between" clause of `noteRefusedLeaderFrame`'s
+     * predicate, and deleting it left this whole module green.
+     *
+     * Every other test here freezes some *other* part of the predicate instead, so none of them has any
+     * power over this line. The three that inject a burst crash every peer first, and
+     * [aCommittingNodeIsNeverAWedgeHoweverLongItRefuses] is a cluster of one, so in all four the victim
+     * never receives an accepted leader→peer frame at all;
+     * [aVoterSetRotationPastAnAbsentNodeIsReportedOnTheMetricHook] wants its victim to report, so an
+     * accepted frame is the last thing it arranges; and [aHealthyClusterNeverReportsAWedge] reads like
+     * the false-positive guard and is not one — a converging cluster accumulates no qualifying run at
+     * all, so it stays green with the reset deleted. The name carries the property, the trajectory does
+     * not.
+     *
+     * What the clause prevents is a **hostile-mintable false destructive-remedy diagnosis**. The `warn`
+     * this report carries tells an operator that the node can no longer be caught up in place and must
+     * come back as a fresh [NodeId] over empty storage. Without the reset, a peer that merely sustains
+     * refused leader→peer frames — any admitted non-voter can, and needs no forged content beyond the
+     * RPC type — drives that line against a node the real leader is reaching perfectly well, and the
+     * remedy discards a healthy log. The report even contradicts itself in its own body, printing
+     * "accepting none … in between" for a node that just accepted one.
+     *
+     * ### The trajectory
+     *
+     * The victim is isolated and then fed both streams by hand, so their interleaving is exact rather
+     * than raced: `WEDGE_SUSPECTED_RUN - 1` frames from a non-voter (refused at the §5.2 gate, counted)
+     * and then one from the real leader (accepted, and so resetting), repeated [INTERLEAVED_ROUNDS]
+     * times. That is `INTERLEAVED_ROUNDS * (WEDGE_SUSPECTED_RUN - 1)` refusals in total; with the reset
+     * deleted the run crosses the threshold on the second round's very first frame.
+     *
+     * The honest frames are **heartbeats** — no entries, `leaderCommit = 0` — and that is load-bearing.
+     * The commit-index progress clause that [aCommittingNodeIsNeverAWedgeHoweverLongItRefuses] pins
+     * *also* restarts the run, so an interleaved frame that moved the victim's commit index would leave
+     * this test pinning the disjunction of the two rather than the reset. A premise below asserts the
+     * commit index does not move across the whole interleave (mutation-verified both ways, mirroring
+     * that test's own check from the other side: deleting the progress clause alone leaves this test
+     * green, deleting the reset alone reddens it).
+     *
+     * "No metric" is also what a frame that never arrived produces, so the negative rests on three
+     * premises and one control, labelled below the way the assertions label them:
+     *
+     * - *premise* — every interleaved leader frame is **answered**, proving it cleared both gates and
+     *   reached `onAppendEntries`, which replies to every AppendEntries it dispatches;
+     * - *premise* — the non-voter's frames are answered by **nothing**, proving each was dropped at the
+     *   §5.2 gate, whose only actions are that `debug`, the call into `noteRefusedLeaderFrame`, and
+     *   `return`;
+     * - *premise* — the victim's commit index is **unmoved** across the interleave, so the progress
+     *   clause is inert and the reset is the only thing that can have held the run down;
+     * - *control* — one more run of the identical refused frames, this time with nothing accepted under
+     *   them, **does** report. The counting machinery is live at this term and this sender, so the
+     *   silence above is the reset and nothing else.
+     */
+    @Test
+    fun aForgedStreamInterleavedWithHonestTrafficIsNeverAWedge() = raftRunTest(timeout = 30.seconds) {
+        val metricsBy = mutableMapOf<NodeId, MutableList<RaftMetric>>()
+        val sim = raftSimWithMetrics(this, backgroundScope, metricsBy)
+        val leaderNode = sim.awaitLeader()
+        val leaderId = sim.nodes.entries.first { it.value === leaderNode }.key
+        val victimId = sim.nodeIds.first { it != leaderId }
+        val stranger = NodeId("stranger")
+        sim.awaitCommit(1L)
+
+        // Isolate the victim, as the tests above do — but here for the opposite reason. They want the
+        // leader's heartbeats gone because each one legitimately clears the run; this test wants
+        // exactly those frames, and injects them by hand so their position in the burst is fixed rather
+        // than raced against a live heartbeat loop. PreVote keeps the now-alone victim from moving its
+        // own term, so the term read next stays valid for the whole trajectory.
+        sim.nodeIds.filter { it != victimId }.forEach { sim.crash(it) }
+        sim.drainInjections()
+        val victim = sim.nodes.getValue(victimId)
+        val term = sim.storages.getValue(victimId).term()
+        val commitBeforeInterleave = victim.commitIndex.value
+        sim.network.recording = true
+
+        repeat(INTERLEAVED_ROUNDS) {
+            // One frame short of the run, from a peer no voter set contains: refused at the §5.2 gate.
+            repeat(WEDGE_SUSPECTED_RUN - 1) {
+                sim.deliverAppendEntries(to = victimId, from = stranger, term = term)
+            }
+            // The real leader's heartbeat, at our own term: clears both gates, and — no entries,
+            // `leaderCommit = 0` — moves neither the log nor the commit index. The frame under test.
+            sim.deliverAppendEntries(to = victimId, from = leaderId, term = term)
+            sim.drainInjections()
+        }
+        val afterInterleave = wedges(metricsBy, victimId).size
+        val repliesToHonestFrames = appendRepliesTo(sim, leaderId, victimId)
+        val repliesToRefusedFrames = appendRepliesTo(sim, stranger, victimId)
+        val commitAfterInterleave = victim.commitIndex.value
+
+        // Control: the identical refused frames one more time, with no accepted frame under them.
+        repeat(WEDGE_SUSPECTED_RUN) {
+            sim.deliverAppendEntries(to = victimId, from = stranger, term = term)
+        }
+        sim.awaitTrue("the victim reported once a run of $WEDGE_SUSPECTED_RUN spanned nothing accepted") {
+            wedges(metricsBy, victimId).isNotEmpty()
+        }
+        sim.network.recording = false
+
+        assertAll(
+            {
+                assertEquals(
+                    INTERLEAVED_ROUNDS, repliesToHonestFrames,
+                    "the premise: each interleaved leader frame clears both gates and reaches " +
+                        "onAppendEntries, which answers every AppendEntries it dispatches",
+                )
+            },
+            {
+                assertEquals(
+                    0, repliesToRefusedFrames,
+                    "the premise: every frame from the non-voter is dropped at the §5.2 gate — which " +
+                        "answers nothing and calls noteRefusedLeaderFrame",
+                )
+            },
+            {
+                assertEquals(
+                    commitBeforeInterleave, commitAfterInterleave,
+                    "the premise: the victim commits nothing across the interleave, so the " +
+                        "commit-index progress clause is inert and cannot be what held the run down",
+                )
+            },
+            {
+                assertEquals(
+                    0, afterInterleave,
+                    "${INTERLEAVED_ROUNDS * (WEDGE_SUSPECTED_RUN - 1)} refusals broken up by " +
+                        "$INTERLEAVED_ROUNDS accepted leader frames are not a wedge at any volume: a " +
+                        "node a current leader is reaching is not jammed, and reporting here would let " +
+                        "any admitted non-voter mint a rebuild-this-node diagnosis against a healthy " +
+                        "node and have its live log discarded",
+                )
+            },
+            {
+                assertEquals(
+                    listOf(RaftMetric.WedgeSuspected(stranger, term, term, sim.nodeIds.toSet(), Gate.LeaderAuthority)),
+                    wedges(metricsBy, victimId),
+                    "the control: the same refused frames with nothing accepted under them do report, " +
+                        "so the silence above is the reset and not a frame that never arrived",
+                )
+            },
+        )
+    }
+
     /** PreVoteResponses [victimId] sent to [leaderId] — one per PreVote that reached `onPreVote`. */
     private fun preVoteRepliesTo(sim: RaftSimulation, leaderId: NodeId, victimId: NodeId): Int =
         sim.network.sent.count {
             it.to == leaderId && it.from == victimId && it.message is RaftMessage.PreVoteResponse
+        }
+
+    /**
+     * AppendEntriesResponses [victimId] sent to [peer] — one per AppendEntries from [peer] that
+     * reached `onAppendEntries`, which replies on every path it dispatches (accept, log-conflict
+     * reject, and stale-term reject alike). Zero therefore means the frames never got past
+     * `onMessage`'s dispatch-boundary gates.
+     */
+    private fun appendRepliesTo(sim: RaftSimulation, peer: NodeId, victimId: NodeId): Int =
+        sim.network.sent.count {
+            it.to == peer && it.from == victimId && it.message is RaftMessage.AppendEntriesResponse
         }
 
     private fun raftSimWithMetrics(
@@ -743,10 +899,11 @@ internal class WedgeDetectionTest {
      * the next assertion reads the metric list. Advancing bounded virtual time as well is safe here
      * *only because the victim has no live peer* — either every other node has been crashed, or (in
      * [aCommittingNodeIsNeverAWedgeHoweverLongItRefuses]) the cluster is a sole voter and never had
-     * one. No honest leader frame can arrive to clear the run, and the surviving node cannot move its
-     * own term: PreVote holds it down where the victim is a follower, and a sole voter that has
-     * elected itself runs no election timeout at all. Do not copy this into a test whose victim still
-     * has live peers.
+     * one. No **unbidden** leader frame can arrive to clear the run, and the surviving node cannot move
+     * its own term: PreVote holds it down where the victim is a follower, and a sole voter that has
+     * elected itself runs no election timeout at all. The one test that wants such a frame,
+     * [aForgedStreamInterleavedWithHonestTrafficIsNeverAWedge], injects it by hand at the exact
+     * position it means. Do not copy this into a test whose victim still has live peers.
      */
     private suspend fun RaftSimulation.drainInjections() {
         settle()
@@ -767,5 +924,15 @@ internal class WedgeDetectionTest {
          * heartbeat — ~400 ms of virtual time, well inside `RaftSimulation.DEFAULT_AWAIT`.
          */
         const val SUSTAINED_RETRIES = 200
+
+        /**
+         * How many `WEDGE_SUSPECTED_RUN - 1`-frame bursts, each closed by one accepted leader frame,
+         * [aForgedStreamInterleavedWithHonestTrafficIsNeverAWedge] delivers.
+         *
+         * Three is the smallest count that says more than "the reset fires once": the run has to be
+         * cleared, re-accumulated to one frame short, and cleared again. With the reset deleted the
+         * threshold is crossed on round 2's first frame, so the third round is pure margin.
+         */
+        const val INTERLEAVED_ROUNDS = 3
     }
 }
