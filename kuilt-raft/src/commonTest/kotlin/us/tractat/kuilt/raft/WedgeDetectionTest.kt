@@ -21,6 +21,9 @@ private val x = NodeId("x")
 private val c = NodeId("c")
 private val d = NodeId("d")
 
+/** The sole voter of [WedgeDetectionTest.aCommittingNodeIsNeverAWedgeHoweverLongItRefuses]. */
+private val solo = NodeId("solo")
+
 /** The voter set `x` bootstraps into, and — because it is persisted — never leaves once wedged. */
 private val originalVoters = setOf(a, b, x)
 
@@ -540,6 +543,131 @@ internal class WedgeDetectionTest {
         )
     }
 
+    /**
+     * The **commit-index progress** clause, pinned directly (#1980).
+     *
+     * `RaftEngine.noteRefusedLeaderFrame` restarts its run whenever `_commitIndex` has moved since the
+     * run began — `if (commit != refusedLeaderFrameRunCommitIndex) { refusedLeaderFrameRunCommitIndex =
+     * commit; refusedLeaderFrameRun = 0 }`. Deleting that block left this module green, and
+     * `:kuilt-game` and `:kuilt-cluster` with it. Every other test that drives a refusal run freezes
+     * the victim's commit index by construction: the three above crash every other node before
+     * injecting, so an isolated victim *cannot* commit, and
+     * [aVoterSetRotationPastAnAbsentNodeIsReportedOnTheMetricHook] positively asserts that its victim
+     * never commits. [aHealthyClusterNeverReportsAWedge] reads like the false-positive guard and is
+     * not one for this clause either: a converging cluster never accumulates a qualifying run at all,
+     * so it is green with the block deleted — the name carries the property, the trajectory does not.
+     *
+     * What the clause prevents is a **false destructive-remedy diagnosis**. The `warn` this report
+     * carries tells an operator the node can no longer be caught up in place and must come back as a
+     * fresh [NodeId] over empty storage. Raised against a node that is committing, that is wrong
+     * twice: it answers a *split-brain* with a wedge remedy — the case the function's own KDoc names,
+     * a stale-config island that elected inside its own stale voter set and commits there while the
+     * real cluster's leader keeps reaching it and is refused at the §5.2 gate, whose frames never trip
+     * the accepted-frame reset either because that leader is not in the island's voter set — and it
+     * discards a live committed log to do it. The line even contradicts itself in its own body,
+     * asserting "committing nothing in between" while printing a moving `commitIndex=`.
+     *
+     * ### Why a one-voter cluster
+     *
+     * The clause is observable only on a **second** commit-index movement within a run:
+     * `refusedLeaderFrameRunCommitIndex` starts at `0L`, so the first qualifying frame in a node's
+     * life resets a run that is already `0`. The victim therefore has to commit *and* refuse, twice
+     * over. A sole voter that has elected itself does exactly that and nothing else: it is the leader,
+     * so no leader→peer frame ever arrives to trip `onMessage`'s accepted-frame reset — which makes
+     * that reset inert here rather than merely unlikely, and is what stops this test pinning the
+     * disjunction of the two rather than this clause (mutation-verified both ways: deleting the reset
+     * alone leaves this test green, deleting this clause alone reddens it) — and it commits a proposal
+     * with no peer to wait on.
+     *
+     * `WEDGE_SUSPECTED_RUN - 1` frames on each side of the commit is `2 * (WEDGE_SUSPECTED_RUN - 1)`
+     * refusals in total, comfortably past the threshold: absorbing that is the whole job of the clause.
+     *
+     * "No metric" is also what a frame that never arrived produces, so the negative rests on two
+     * premises and one control, labelled below the way the assertions label them:
+     *
+     * - *premise* — the commit index really moves between the two bursts, so the second burst is a
+     *   fresh run rather than a continuation;
+     * - *premise* — the first burst, one frame short of the run, is silent, so the counter enters the
+     *   second burst exactly where the threshold argument assumes;
+     * - *control* — one further frame, with nothing committed since the second burst began, **does**
+     *   report. The counting machinery is live at this term and this sender, so the silence above is
+     *   the progress clause and nothing else.
+     */
+    @Test
+    fun aCommittingNodeIsNeverAWedgeHoweverLongItRefuses() = raftRunTest(timeout = 30.seconds) {
+        val metricsBy = mutableMapOf<NodeId, MutableList<RaftMetric>>()
+        val sim = soloSimWithMetrics(this, backgroundScope, metricsBy)
+        val victim = sim.awaitLeader()
+        sim.awaitCommit(1L)
+        val stranger = NodeId("stranger")
+        // The victim is the leader of a cluster it is the whole of, so its term cannot move: it runs no
+        // election timeout, and CheckQuorum credits self. The exact-value assertions below name the
+        // term actually observed if that ever stops holding.
+        val term = sim.storages.getValue(solo).term()
+
+        // Burst 1: one frame short of the run, refused at the §5.2 gate (the stranger is not a voter).
+        repeat(WEDGE_SUSPECTED_RUN - 1) {
+            sim.deliverAppendEntries(to = solo, from = stranger, term = term)
+        }
+        sim.drainInjections()
+        val afterFirstBurst = wedges(metricsBy, solo).size
+        val commitBeforeProgress = victim.commitIndex.value
+
+        // The progress the clause is about. Nothing else in this trajectory moves the commit index.
+        val committed = sim.proposeOnLeader("progress".encodeToByteArray())
+        sim.awaitCommit(committed.index)
+        val commitAfterProgress = victim.commitIndex.value
+
+        // Burst 2: the same frames again. Without the clause the two bursts are one run of
+        // 2 * (WEDGE_SUSPECTED_RUN - 1) and the node reports itself wedged while committing.
+        repeat(WEDGE_SUSPECTED_RUN - 1) {
+            sim.deliverAppendEntries(to = solo, from = stranger, term = term)
+        }
+        sim.drainInjections()
+        val afterSecondBurst = wedges(metricsBy, solo).size
+
+        // Control: nothing has committed since burst 2 began, so this frame carries that run to
+        // WEDGE_SUSPECTED_RUN and must report.
+        sim.deliverAppendEntries(to = solo, from = stranger, term = term)
+        sim.awaitTrue("the victim reported once a run of $WEDGE_SUSPECTED_RUN spanned no commit") {
+            wedges(metricsBy, solo).isNotEmpty()
+        }
+
+        assertAll(
+            {
+                assertEquals(
+                    commitBeforeProgress + 1, commitAfterProgress,
+                    "the premise: the victim commits between the bursts, so the second burst opens a " +
+                        "fresh run rather than continuing the first",
+                )
+            },
+            {
+                assertEquals(
+                    0, afterFirstBurst,
+                    "the premise: ${WEDGE_SUSPECTED_RUN - 1} refusals is one short of the run, so the " +
+                        "counter enters the second burst at WEDGE_SUSPECTED_RUN - 1",
+                )
+            },
+            {
+                assertEquals(
+                    0, afterSecondBurst,
+                    "${WEDGE_SUSPECTED_RUN * 2 - 2} refusals spanning a commit are not a wedge at any " +
+                        "volume: a node that is committing is making progress, and reporting here " +
+                        "would answer a split-brain with a rebuild-this-node remedy that discards a " +
+                        "live committed log",
+                )
+            },
+            {
+                assertEquals(
+                    listOf(RaftMetric.WedgeSuspected(stranger, term, term, setOf(solo), Gate.LeaderAuthority)),
+                    wedges(metricsBy, solo),
+                    "the control: one further frame with nothing committed under it does report, so " +
+                        "the silence above is the progress clause and not a frame that never arrived",
+                )
+            },
+        )
+    }
+
     /** PreVoteResponses [victimId] sent to [leaderId] — one per PreVote that reached `onPreVote`. */
     private fun preVoteRepliesTo(sim: RaftSimulation, leaderId: NodeId, victimId: NodeId): Int =
         sim.network.sent.count {
@@ -570,6 +698,37 @@ internal class WedgeDetectionTest {
         )
     }
 
+    /**
+     * A cluster of exactly one voter, [solo] — which therefore elects itself and stays leader.
+     *
+     * The two properties [aCommittingNodeIsNeverAWedgeHoweverLongItRefuses] needs, and nothing else: a
+     * node that can commit (no peer to reach for a quorum) and that receives no leader→peer frame of
+     * its own (it *is* the leader), so `onMessage`'s accepted-frame reset cannot fire and the run is
+     * ended only by the clause under test.
+     */
+    private fun soloSimWithMetrics(
+        scope: TestScope,
+        nodeScope: CoroutineScope,
+        metricsBy: MutableMap<NodeId, MutableList<RaftMetric>>,
+    ): RaftSimulation {
+        val cluster = ClusterConfig(voters = setOf(solo))
+        val raftCfg = fastRaftConfig()
+        return RaftSimulation(
+            nodeIds = listOf(solo),
+            scope = scope,
+            nodeScope = nodeScope,
+            nodeFactory = { id, transport, storage, childScope ->
+                childScope.raftNode(
+                    cluster,
+                    transport,
+                    storage,
+                    raftCfg,
+                    onMetric = { metricsBy.getOrPut(id) { mutableListOf() } += it },
+                )
+            },
+        )
+    }
+
     private fun wedges(
         metricsBy: Map<NodeId, List<RaftMetric>>,
         id: NodeId = x,
@@ -582,9 +741,12 @@ internal class WedgeDetectionTest {
      * `settle()` alone is **not** enough and was an Android-variant-only red: it yields without
      * advancing virtual time, and a burst of ~64 injected frames is not reliably drained by the time
      * the next assertion reads the metric list. Advancing bounded virtual time as well is safe here
-     * *only because every other node has been crashed* — no honest leader frame can arrive to clear the
-     * run, and PreVote keeps the surviving node from moving its own term. Do not copy this into a test
-     * whose victim still has live peers.
+     * *only because the victim has no live peer* — either every other node has been crashed, or (in
+     * [aCommittingNodeIsNeverAWedgeHoweverLongItRefuses]) the cluster is a sole voter and never had
+     * one. No honest leader frame can arrive to clear the run, and the surviving node cannot move its
+     * own term: PreVote holds it down where the victim is a follower, and a sole voter that has
+     * elected itself runs no election timeout at all. Do not copy this into a test whose victim still
+     * has live peers.
      */
     private suspend fun RaftSimulation.drainInjections() {
         settle()
