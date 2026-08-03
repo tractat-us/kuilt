@@ -419,4 +419,147 @@ class CanonicalSerializationTest {
             },
         )
     }
+
+    // ── Rga / Fugue Compact.positions (#1978) ─────────────────────────────────
+
+    /**
+     * A cut that covers the single dot each of [a] and [b] mints below, used as
+     * `stableCut`, `frontierMax` and `delivered` at once: both replicas have
+     * delivered everything, so the compaction barrier's conditions 2 and 3 hold.
+     */
+    private val bothDelivered = VersionVector.of(mapOf(a to 1L, b to 1L))
+
+    /**
+     * An [Rga] holding exactly one tombstoned element authored by [replica], inserted
+     * directly after [RgaId.HEAD] so no *other* insert names it as a predecessor —
+     * compaction's condition 4.
+     */
+    private fun tombstonedRga(replica: ReplicaId, value: String): Rga<String> {
+        val (inserted, _) = Rga.empty<String>().insertAfter(replica, RgaId.HEAD, value)
+        return inserted.removeAt(0)?.first ?: error("the freshly-inserted element must be removable")
+    }
+
+    /**
+     * Two replicas that merged each other's tombstone in **opposite orders** and then
+     * each compacted locally must serialize to identical bytes.
+     *
+     * `Rga.compact` derives `positions` from [Rga.tombstones], which `piece` builds with
+     * `Set.plus` — a `LinkedHashSet` in merge order. `RgaOp.Compact` is a `data class`, so
+     * the two ops are `equal` (map equality ignores order) and the two `Rga`s are `equal`,
+     * while a plain `MapSerializer` writes the entries in that merge order. `Compact` ops
+     * ride inside the serialized `ops` set, so this is converged *state* on the wire.
+     *
+     * The `:kuilt-conformance` convergence suite cannot reach this: no operation generator
+     * calls [Rga.compact], so `positions` is always absent and every op-set encodes
+     * canonically. Same blind spot #1957 hit with `MovableTree.compactedDots`.
+     *
+     * Mutation-checked: reverting `positionsSerializer` in `RgaOpSerializer` to a plain
+     * `MapSerializer` makes this test fail with the two `pos` entries transposed and every
+     * other byte identical.
+     */
+    @Test
+    fun rgaCompactPositionsAreDeliveryOrderIndependent() {
+        val alice = tombstonedRga(a, "a1")
+        val bob = tombstonedRga(b, "b1")
+
+        val (aliceCompacted, aliceOp) = alice.piece(bob)
+            .compact(bothDelivered, bothDelivered, bothDelivered)
+            ?: error("both tombstones are causally stable and unreferenced — compact() must succeed")
+        val (bobCompacted, bobOp) = bob.piece(alice)
+            .compact(bothDelivered, bothDelivered, bothDelivered)
+            ?: error("both tombstones are causally stable and unreferenced — compact() must succeed")
+
+        val ser = Rga.wireSerializer(String.serializer())
+
+        assertAll(
+            {
+                assertEquals(
+                    2, aliceOp.positions.size,
+                    "the probe is vacuous unless positions carries both replicas' ids: ${aliceOp.positions}",
+                )
+            },
+            {
+                assertTrue(
+                    aliceOp.positions.keys.toList() != bobOp.positions.keys.toList(),
+                    "the probe is vacuous unless the two maps are built in opposite orders: ${aliceOp.positions}",
+                )
+            },
+            { assertEquals(aliceCompacted, bobCompacted, "sanity: both replicas reached the same state") },
+            {
+                assertEquals(
+                    json.encodeToString(ser, aliceCompacted),
+                    json.encodeToString(ser, bobCompacted),
+                    "compacted Rga JSON must be delivery-order-independent",
+                )
+            },
+            {
+                assertEquals(
+                    cbor.encodeToByteArray(ser, aliceCompacted).toList(),
+                    cbor.encodeToByteArray(ser, bobCompacted).toList(),
+                    "compacted Rga CBOR must be delivery-order-independent",
+                )
+            },
+        )
+    }
+
+    /**
+     * A [Fugue] holding exactly one tombstoned element authored by [replica]. Inserted into
+     * an empty sequence, so its tree parent is [FugueId.HEAD] and its `rightOrigin` is null —
+     * neither replica's id anchors the other, which is compaction's condition 4.
+     */
+    private fun tombstonedFugue(replica: ReplicaId, value: String): Fugue<String> {
+        val (inserted, _) = Fugue.empty<String>().insertAt(replica, 0, value)
+        return inserted.removeAt(0)?.first ?: error("the freshly-inserted element must be removable")
+    }
+
+    /**
+     * [Fugue] carries the same defect byte for byte — `FugueOp.Compact.positions` is a
+     * `Map<FugueId, FugueId>` built from a merge-ordered tombstone set and written by a plain
+     * `MapSerializer`. See [rgaCompactPositionsAreDeliveryOrderIndependent] for the full
+     * argument; mutation-checked the same way against `FugueOpSerializer`.
+     */
+    @Test
+    fun fugueCompactPositionsAreDeliveryOrderIndependent() {
+        val alice = tombstonedFugue(a, "a1")
+        val bob = tombstonedFugue(b, "b1")
+
+        val (aliceCompacted, aliceOp) = alice.piece(bob)
+            .compact(bothDelivered, bothDelivered, bothDelivered)
+            ?: error("both tombstones are causally stable and unreferenced — compact() must succeed")
+        val (bobCompacted, bobOp) = bob.piece(alice)
+            .compact(bothDelivered, bothDelivered, bothDelivered)
+            ?: error("both tombstones are causally stable and unreferenced — compact() must succeed")
+
+        val ser = Fugue.wireSerializer(String.serializer())
+
+        assertAll(
+            {
+                assertEquals(
+                    2, aliceOp.positions.size,
+                    "the probe is vacuous unless positions carries both replicas' ids: ${aliceOp.positions}",
+                )
+            },
+            {
+                assertTrue(
+                    aliceOp.positions.keys.toList() != bobOp.positions.keys.toList(),
+                    "the probe is vacuous unless the two maps are built in opposite orders: ${aliceOp.positions}",
+                )
+            },
+            { assertEquals(aliceCompacted, bobCompacted, "sanity: both replicas reached the same state") },
+            {
+                assertEquals(
+                    json.encodeToString(ser, aliceCompacted),
+                    json.encodeToString(ser, bobCompacted),
+                    "compacted Fugue JSON must be delivery-order-independent",
+                )
+            },
+            {
+                assertEquals(
+                    cbor.encodeToByteArray(ser, aliceCompacted).toList(),
+                    cbor.encodeToByteArray(ser, bobCompacted).toList(),
+                    "compacted Fugue CBOR must be delivery-order-independent",
+                )
+            },
+        )
+    }
 }
