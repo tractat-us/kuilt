@@ -46,7 +46,8 @@ This is therefore a **lift-and-generalise**, not an invention.
 | Layer | **Session** (`SeamRoom` host). Covers all four no-route fabrics (`MuxServerLoom` hub, `hubMesh` spoke, `:kuilt-multipeer`, `:kuilt-nearby`) because each gets a `SeamRoom` host; reuses the roster, admit gate and `ProtocolVersion` already there. A core-layer relay would cover one fabric and would have to push the roster down into the fabric, re-implementing the admit protocol a layer lower. |
 | Policy | **Unconditional.** Every `SeamRoom` in Host role relays. No knob; the contract is simply true. |
 | Old hosts | **Bump `ProtocolVersion`; refuse the join.** Relay changes what a room means, so `MIN_SUPPORTED` moves to 2. A mixed pair fails loudly at admit rather than black-holing for 90 s — which is exactly how #1994 was found. The gate already exists in `handleAdmitFrame`. |
-| Reuse | **Lift to a shared primitive; leave `:kuilt-cluster` alone.** Migrating a shipped consensus path (learner forwarding, cross-relay failover) at the same time as adding a feature is the change shape this repo's spec-conformance rule warns about. Migration is a follow-up. |
+| Reuse | **Lift to a shared primitive; do not *merge* the `:kuilt-cluster` migration, but *prototype* it in this track.** Migrating a shipped consensus path (learner forwarding, cross-relay failover) at the same time as adding a feature is the change shape this repo's spec-conformance rule warns about — so the migration does not land here. But deferring it *blind* is how kuilt would end up with two permanently divergent relay dialects, so the track carries a throwaway prototype that proves the lifted primitive genuinely subsumes `RaftRelay`/`RaftRelayHub`, gating the primitive's shape before the relay ships on it. |
+| Frame prefix | **#2007's registry lands first, as slice 0.** The relay claims `0x72` *from* the registry rather than adding a sixth loose `public const val`. The cheapest moment to make the byte space managed is the moment an entry is added; doing it afterwards means editing the relay's framing twice. |
 
 ## Architecture
 
@@ -161,7 +162,9 @@ Filed as follow-ups rather than folded in:
 
 - `TieredSeam.sendTo` silently drops a peer owned by neither tier — the worst #1576 variant, and the
   one an exception-keyed check cannot see.
-- Migrating `:kuilt-cluster` onto the lifted primitive.
+- **Landing** the `:kuilt-cluster` migration. Note this is a non-goal only for *merging*: the track
+  does prototype it (see Decisions), because a blind deferral is what would leave two divergent
+  dialects. The prototype's job is to gate the primitive's shape, then be thrown away.
 - Relay rate limiting / bandwidth caps. The `RELAY_HEADER_BUDGET` reservation is honoured; throttling
   is not in scope.
 
