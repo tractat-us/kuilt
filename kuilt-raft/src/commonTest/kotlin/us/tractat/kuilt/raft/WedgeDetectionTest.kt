@@ -407,6 +407,142 @@ internal class WedgeDetectionTest {
         )
     }
 
+    /**
+     * The **type** filter, pinned directly (#1980).
+     *
+     * `noteRefusedLeaderFrame` opens with `if (!m.isLeaderToPeer) return`, and nothing in this module
+     * pinned it: deleting that line left the whole suite green. It is the clause that makes the
+     * diagnosis honest — a refused `PreVote` says nothing about being able to make progress, where a
+     * refused `AppendEntries` is exactly the frame that would have carried it.
+     *
+     * Losing it is not a cosmetic mislabel, because the caller here has **no type test of its own**.
+     * The §5.2 leader-authority gate only ever calls with a leader→peer frame (`m.isLeaderToPeer` is
+     * literally its own predicate), but the term-jump bound calls for *any* message type carrying an
+     * implausible `wireTerm`. So without this line a peer that floods vote traffic at an out-of-range
+     * term drives a healthy node to `warn` an operator that it "can no longer be caught up in place"
+     * and must be rebuilt as a new member over empty storage — a hostile-mintable false diagnosis
+     * whose remedy is destructive.
+     *
+     * The burst is deliberately the *same* trajectory as
+     * [aRefusalUnderTheTermJumpBoundNamesTheTermJumpGate] — same sender, same term, same injection
+     * path, twice the run length — with only the message type swapped, so nothing but the type can
+     * explain the silence. In particular the term is `currentTerm + maxTermJump + 1`, **strictly
+     * above** our own: pick a term at or below it and the *next* clause
+     * (`senderTerm < state.currentTerm`) refuses the frames instead, and the test passes with the
+     * type filter deleted, pinning nothing.
+     *
+     * "No metric" is also what a frame that never arrived produces, so the negative rests on **two
+     * premises and one control** — labelled below the way the assertions themselves label them:
+     *
+     * - *premise* — a `PreVote` one term *lower*, exactly at the jump bound and so admitted, **is**
+     *   answered, proving this injection path reaches the victim's dispatch for this message type;
+     * - *premise* — the burst itself is answered by **nothing**, proving each of its frames really was
+     *   refused at the term-jump gate, whose only actions are that `debug`, this call, and `return`.
+     *   Together the two establish the thing the metric assertion cannot see on its own: that the
+     *   frames reached `noteRefusedLeaderFrame` at all.
+     * - *control* — the same burst as `AppendEntries` *does* report, proving the counter machinery is
+     *   live at this term and this sender, so the silence above is the type filter and nothing else.
+     */
+    @Test
+    fun aSustainedRefusalOfNonLeaderFramesIsNeverAWedge() = raftRunTest(timeout = 30.seconds) {
+        val metricsBy = mutableMapOf<NodeId, MutableList<RaftMetric>>()
+        val raftCfg = fastRaftConfig()
+        val sim = raftSimWithMetrics(this, backgroundScope, metricsBy, raftCfg)
+        val leaderNode = sim.awaitLeader()
+        val leaderId = sim.nodes.entries.first { it.value === leaderNode }.key
+        val victimId = sim.nodeIds.first { it != leaderId }
+        sim.awaitCommit(1L)
+
+        // Isolate the victim for the reason the two tests above give: the leader's own heartbeats
+        // legitimately clear the run, and PreVote keeps the now-alone victim from moving its own term,
+        // so the term read here stays valid for the whole burst.
+        sim.nodeIds.filter { it != victimId }.forEach { sim.crash(it) }
+        sim.drainInjections()
+        val term = sim.storages.getValue(victimId).term()
+        sim.network.recording = true
+
+        // Control: at the bound, so admitted, and `onPreVote` answers every PreVote it dispatches —
+        // grant or deny. One reply here is what makes the zero below mean "refused", not "never sent".
+        sim.deliverPreVote(
+            to = victimId,
+            from = leaderId,
+            term = term + raftCfg.maxTermJump,
+            lastLogIndex = 0L,
+            lastLogTerm = 0L,
+        )
+        sim.drainInjections()
+        val repliesToAdmittedPreVote = preVoteRepliesTo(sim, leaderId, victimId)
+
+        // One past the bound, and twice the run length. Refused at the term-jump gate, which — unlike
+        // the §5.2 gate — applies to every message type, so this is where the filter under test earns
+        // its keep.
+        val jumpTerm = term + raftCfg.maxTermJump + 1
+        repeat(WEDGE_SUSPECTED_RUN * 2) {
+            sim.deliverPreVote(
+                to = victimId,
+                from = leaderId,
+                term = jumpTerm,
+                lastLogIndex = 0L,
+                lastLogTerm = 0L,
+            )
+        }
+        sim.drainInjections()
+        val repliesToRefusedPreVotes = preVoteRepliesTo(sim, leaderId, victimId) - repliesToAdmittedPreVote
+        val afterPreVoteBurst = wedges(metricsBy, victimId).size
+
+        // Same sender, same term, same injection path — only the type differs, and now it reports.
+        repeat(WEDGE_SUSPECTED_RUN) {
+            sim.deliverAppendEntries(to = victimId, from = leaderId, term = jumpTerm)
+        }
+        sim.awaitTrue("the victim reported once a LEADER→PEER run reached $WEDGE_SUSPECTED_RUN") {
+            wedges(metricsBy, victimId).isNotEmpty()
+        }
+        sim.network.recording = false
+        val reports = wedges(metricsBy, victimId)
+
+        assertAll(
+            {
+                assertEquals(
+                    1, repliesToAdmittedPreVote,
+                    "the premise: a PreVote inside the jump bound reaches onPreVote and is answered, " +
+                        "so this injection path does deliver this message type to the victim",
+                )
+            },
+            {
+                assertEquals(
+                    0, repliesToRefusedPreVotes,
+                    "the premise: one term higher, every frame of the burst is dropped at the " +
+                        "term-jump gate — which answers nothing and calls noteRefusedLeaderFrame",
+                )
+            },
+            {
+                assertEquals(
+                    0, afterPreVoteBurst,
+                    "${WEDGE_SUSPECTED_RUN * 2} refused vote frames are not a wedge at any volume: " +
+                        "refusing one says nothing about being able to make progress, and reporting " +
+                        "here would let a hostile peer mint an operator-facing rebuild-this-node " +
+                        "diagnosis against a healthy node",
+                )
+            },
+            {
+                assertEquals(
+                    listOf(
+                        RaftMetric.WedgeSuspected(leaderId, jumpTerm, term, sim.nodeIds.toSet(), Gate.TermJump),
+                    ),
+                    reports,
+                    "the control: the identical burst as AppendEntries — a leader→peer type — does " +
+                        "report, so the silence above is the type filter and nothing else",
+                )
+            },
+        )
+    }
+
+    /** PreVoteResponses [victimId] sent to [leaderId] — one per PreVote that reached `onPreVote`. */
+    private fun preVoteRepliesTo(sim: RaftSimulation, leaderId: NodeId, victimId: NodeId): Int =
+        sim.network.sent.count {
+            it.to == leaderId && it.from == victimId && it.message is RaftMessage.PreVoteResponse
+        }
+
     private fun raftSimWithMetrics(
         scope: TestScope,
         nodeScope: CoroutineScope,
