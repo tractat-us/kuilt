@@ -5,6 +5,10 @@ package us.tractat.kuilt.raft
  *
  * The event vocabulary follows the etcd TLA+ action names so traces can be
  * replayed through the Vanlightly standard-raft TLA+ spec for TLC validation.
+ *
+ * [FrameRefused] is the one variant that is deliberately *not* a state transition — it reports a
+ * frame the engine refused, i.e. a transition that did **not** happen, and has no TLA+ action to
+ * correspond to. Filter it out before a spec replay.
  */
 public sealed interface RaftTraceEvent {
     /** Logical monotonic clock — incremented on every emitted event. */
@@ -195,6 +199,68 @@ public sealed interface RaftTraceEvent {
         val target: NodeId,
         val reason: LeadershipTransferAbandonReason,
     ) : RaftTraceEvent
+
+    /**
+     * A frame [from] a peer was **refused** by [gate] — the one variant that reports something the
+     * engine did *not* do.
+     *
+     * Every dispatch-boundary guard refuses by returning, so a refusal's only other observable is the
+     * absence of a state change, and absences carry no attribution: when two guards refuse the same
+     * frame, "term unchanged, still a Follower" cannot say which one did it (#1980, #1989). This
+     * event names the guard. One frame in, one event out — no run threshold, no latch, no
+     * commit-index precondition.
+     *
+     * ### Not a wedge detector
+     *
+     * [RaftMetric.WedgeSuspected] keeps that job, and a production consumer that wants to know
+     * whether a node is jammed must watch **it**, not this. Two observables, two jobs: the metric is
+     * the sustained-condition *diagnosis*, this is the per-frame *attribution*.
+     *
+     * The reason for the split is that this event is **losable by design**. `trace` is a
+     * `MutableSharedFlow` with `BufferOverflow.DROP_OLDEST`, so emitting it can never backpressure
+     * consensus — which is exactly what makes it safe to emit on a path a remote frame controls, and
+     * exactly why `WedgeSuspected` needs a run threshold and a latch and this does not. The
+     * consequence, stated here rather than left to be rediscovered as a bug: **a hostile flood of
+     * refused frames evicts honest trace events** from the buffer. A slow consumer sees the same
+     * thing. Neither harms the engine; both mean this flow is evidence, not a ledger.
+     *
+     * @property node this engine's own id — the *recipient* that refused the frame.
+     * @property from the frame's true origin, already unwrapped from any relay envelope.
+     * @property messageType the refused frame's wire type. A typed value rather than
+     *   `m::class.simpleName`, which is not guaranteed identical across Kotlin/Native, JVM and
+     *   wasmJs and so cannot be asserted on cross-target.
+     * @property gate the guard that refused it.
+     */
+    public data class FrameRefused(
+        override val clock: Long,
+        val node: NodeId,
+        val from: NodeId,
+        val messageType: RaftMessageType,
+        val gate: RefusalGate,
+    ) : RaftTraceEvent
+}
+
+/**
+ * The Raft wire vocabulary, as a value a trace consumer can hold and compare.
+ *
+ * The frame classes themselves are internal — nothing outside the module constructs or decodes one —
+ * so [RaftTraceEvent.FrameRefused] names the type rather than carrying the frame. The mapping is an
+ * exhaustive `when` with no `else` (`RaftMessage.messageType`), so a new frame type cannot compile
+ * without an entry here, the same discipline `RaftMessage.wireTerm` and `RaftMessage.isLeaderToPeer`
+ * are under (#1973).
+ */
+public enum class RaftMessageType {
+    RequestVote,
+    RequestVoteResponse,
+    AppendEntries,
+    AppendEntriesResponse,
+    InstallSnapshot,
+    InstallSnapshotResponse,
+    PreVote,
+    PreVoteResponse,
+    TimeoutNow,
+    Forward,
+    ForwardResponse,
 }
 
 /** Why a leadership transfer was abandoned without completing. */

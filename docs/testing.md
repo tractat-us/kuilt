@@ -134,6 +134,16 @@ action names so a captured trace can be replayed through the standard-raft TLA+ 
 Every event carries a monotonic logical `clock`, which is what lets a test assert
 ordering (`ClientRequest` before `AdvanceCommitIndex`).
 
+One variant is deliberately not a state transition, and so has no TLA+ action to
+correspond to: `FrameRefused(clock, node, from, messageType, gate)` reports a frame a
+dispatch-boundary guard **refused**, naming the guard through the `RefusalGate` enum.
+It exists because a guard refuses by returning, so its only other observable is the
+*absence* of a state change — which several guards produce identically, leaving a test
+that asserts only state effects unable to say which one fired. Assert attribution
+(`gate`) rather than "term unchanged, still a Follower" whenever more than one guard
+could refuse the frame under test. Filter it out before replaying a trace through the
+TLA+ spec.
+
 The harness turns traces into a **failure diagnostic**: each `await*` helper, on timeout
 or on excess election churn, throws `AssertionError(dumpState(...))`. `dumpState` renders
 per-node `role/term/commitIndex`, the log index range, and a

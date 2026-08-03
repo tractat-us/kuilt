@@ -220,11 +220,14 @@ internal class TermJumpBoundTest {
      * The gate's **other** arm — `wireTerm < 0L` — which is not decoration and not defence in depth
      * (#1980).
      *
-     * The comparison to its right is written as a subtraction, `wireTerm - currentTerm > maxTermJump`,
+     * The comparison it guards is written as a subtraction, `wireTerm - currentTerm > maxTermJump`,
      * precisely so the guard against an overflowing term cannot itself overflow; `RaftEngine`'s own
-     * note says that rests on **both operands being non-negative**, `wireTerm` "by the short-circuiting
-     * test to its left". Delete that test and the premise is false, so the subtraction it protects
-     * silently stops meaning what it says.
+     * note says that rests on **both operands being non-negative**, and `wireTerm` is non-negative
+     * only because this arm has already returned on a negative one. Delete the arm and the premise is
+     * false, so the subtraction it protects silently stops meaning what it says. (The two were one
+     * `if` — `wireTerm < 0L || wireTerm - currentTerm > maxTermJump` — until #1989 split them so a
+     * refusal could name which arm fired; the ordering dependency survived the split unchanged, and
+     * is why the malformed arm still runs first.)
      *
      * Concretely, and this is the reachable defect: `Long.MIN_VALUE - 0` *is* `Long.MIN_VALUE`, which
      * is not greater than [RaftConfig.maxTermJump]. Without the arm the frame clears the bound, clears
@@ -247,7 +250,12 @@ internal class TermJumpBoundTest {
      * Deliberately **not** asserted: a [RaftMetric.WedgeSuspected] naming
      * [RaftMetric.WedgeSuspected.Gate.TermJump]. `noteRefusedLeaderFrame` returns early on
      * `senderTerm < state.currentTerm`, and every negative term is below ours, so this arm's refusals
-     * are excluded from that report by construction — the function's own KDoc says so. Nor is
+     * are excluded from that report by construction — the function's own KDoc says so, and
+     * [RefusalGate.ImplausibleNegativeTerm]'s repeats it now that the arm has a name. (Since #1989 the
+     * arm *does* have a direct attribution observable — a [RaftTraceEvent.FrameRefused] carrying that
+     * gate, pinned in `FrameRefusedTest`. This test stays as it is: "the sender gets no answer" is the
+     * property that distinguishes refused-at-the-boundary from admitted-to-dispatch, and the trace
+     * event does not assert it.) Nor is
      * `storage.term()`: a negative term is not adopted either way (`m.term > currentTerm` is false for
      * `Long.MIN_VALUE`), so the persisted term is 0 with the arm and 0 without it, and an assertion on
      * it would look like coverage while distinguishing nothing.
@@ -270,7 +278,7 @@ internal class TermJumpBoundTest {
                     forged.emitted,
                     "a negative wire term must be dropped before dispatch, answering nothing — an " +
                         "emitted frame means it reached the RPC handlers, which is what deleting " +
-                        "`wireTerm < 0L ||` allows: Long.MIN_VALUE - 0 is not > maxTermJump",
+                        "the `wireTerm < 0L` arm allows: Long.MIN_VALUE - 0 is not > maxTermJump",
                 )
             },
             {
