@@ -23,6 +23,8 @@ package us.tractat.kuilt.quilter
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.cbor.Cbor
@@ -84,6 +86,12 @@ private fun Quilter<Rga<String>>.insertHead(value: String) {
 
 private suspend fun craftDelivered(from: Seam, vector: VersionVector) {
     val msg = QuiltMessage.Delivered<Rga<String>>(sender = ReplicaId(from.selfId.value), vector = vector)
+    from.broadcast(Cbor.encodeToByteArray(AUDIT_MSG_SER, msg))
+}
+
+/** Asks [target] for its full state, as a peer does after a mismatched [QuiltMessage.RootDigest]. */
+private suspend fun craftFullStateRequest(from: Seam, target: ReplicaId) {
+    val msg = QuiltMessage.FullStateRequest<Rga<String>>(requester = ReplicaId(from.selfId.value), sender = target)
     from.broadcast(Cbor.encodeToByteArray(AUDIT_MSG_SER, msg))
 }
 
@@ -455,6 +463,70 @@ class QuilterEvictionWiringAuditTest {
             repA.cutFrontier.value.frontierMax[a],
             "apply mutated the matrix-derived cut synchronously on the caller's context — no scope dispatch. " +
                 "This is the W2 confinement gap: confinement holds only if the consumer calls apply on scope's thread.",
+        )
+    }
+
+    // ---- Hypothesis 7: eviction must also drop the outstanding RootDigest grant (#1955) ----
+
+    /**
+     * H7 VERDICT: SOUND. `evictStalePeers` clears `digestOutstanding` alongside the other per-peer
+     * rows, so an evicted peer carries no redeemable full-state grant across its absence.
+     *
+     * A [QuiltMessage.RootDigest] arms a one-shot grant: it licenses exactly one
+     * [QuiltMessage.FullStateRequest] reply, which is what keeps an unsolicited request from being
+     * a full-state amplification lever (see `QuilterRootDigestTest`). The grant is consumed on use,
+     * but a peer that is evicted before answering leaves it armed — and because eviction is
+     * precisely the *long* absence, that stale grant would sit there indefinitely and be redeemable
+     * once on rejoin, at whatever the state has grown to by then.
+     *
+     * Load-bearing invariant: `digestOutstanding.remove(peer)` inside `evictStalePeers`. Deleting
+     * that one line leaves this probe's post-rejoin request answered with a `FullState`.
+     *
+     * Bounded virtual time only (`advanceTimeBy` + `runCurrent`) — the anti-entropy timer re-arms
+     * forever, so `advanceUntilIdle` is not available to this probe.
+     */
+    @Test
+    fun probe7_evictionDropsTheOutstandingDigestGrant() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val seamA = loom.host(Pattern("h7-digest-grant"))
+        val rawB = loom.join(InMemoryTag("b"))
+        val bPeer = PeerId(rawB.selfId.value)
+
+        val controlledPeers = MutableStateFlow(loom.peers.value)
+        val clock = AuditFakeClock()
+        val repA = auditRep(AuditControllableSeam(seamA, controlledPeers), backgroundScope, clock)
+        controlledPeers.value = loom.peers.value
+
+        val seenByB = mutableListOf<QuiltMessage<Rga<String>>>()
+        rawB.incoming
+            .onEach { swatch -> seenByB += swatch.decode(Cbor, AUDIT_MSG_SER) }
+            .launchIn(backgroundScope)
+        testScheduler.runCurrent()
+
+        // A sends B a digest — B now holds a grant for exactly one full state.
+        repA.sendRootDigestForTest(bPeer)
+        testScheduler.runCurrent()
+
+        // B goes silent long enough to be evicted by the real anti-entropy tick.
+        controlledPeers.value = controlledPeers.value - bPeer
+        clock.advanceBy(150L)
+        testScheduler.advanceTimeBy(60L)
+        testScheduler.runCurrent()
+        assertFalse(bPeer in repA.knownPeersForTest, "precondition: B was evicted by the real tick")
+
+        // B rejoins and redeems the grant it was holding when it left.
+        controlledPeers.value = controlledPeers.value + bPeer
+        clock.advanceBy(10L)
+        testScheduler.runCurrent()
+        val before = seenByB.size // the rejoin itself legitimately pushes a fresh FullState
+
+        craftFullStateRequest(rawB, repA.replica)
+        testScheduler.runCurrent()
+
+        assertTrue(
+            seenByB.drop(before).none { it is QuiltMessage.FullState },
+            "eviction must clear the digest grant — otherwise a peer that vanishes mid-exchange keeps a " +
+                "redeemable full-state coupon across its whole absence and spends it on rejoin (#1955)",
         )
     }
 }

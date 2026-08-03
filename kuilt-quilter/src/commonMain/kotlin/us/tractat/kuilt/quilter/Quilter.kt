@@ -507,28 +507,35 @@ public class Quilter<S : Quilted<S>>(
     }
 
     /**
-     * Picks one peer at random from the full membership and sends it the current merged
-     * state. This is the convergence backstop: a peer that missed a delta — it sat outside
-     * [deltaTargets], or a relayed delivery was dropped — merges the full state on the next
-     * round and converges without replaying the missing deltas.
+     * Picks one peer at random from the full membership and reconciles with it. This is the
+     * convergence backstop: a peer that missed a delta — it sat outside [deltaTargets], or a
+     * relayed delivery was dropped — merges the full state on the next round and converges
+     * without replaying the missing deltas.
      *
      * The merge at the receiver is idempotent and order-independent (every delta-state CRDT
      * is a join-semilattice), so the same full state can be sent any number of times safely.
      * This is what makes GC against a sparse [deltaTargets] set correct: convergence does
-     * not depend on every peer acking every delta. Full-state-first is always correct; a
-     * version-vector or digest diff is a later optimization for large CRDTs.
+     * not depend on every peer acking every delta.
+     *
+     * Sends a [QuiltMessage.RootDigest] — a hash of the state, not the state (#1955). The peer
+     * replies with a [QuiltMessage.FullStateRequest] only if its own root differs, so a converged
+     * round costs one small frame instead of the whole CRDT. Measured: a converged 100k-entry
+     * `GSet` node drops from ~58 KB/s of steady-state egress to ~0.5 B/s.
+     *
+     * [QuiltMessage.FullState] remains the always-correct fallback and every convergence
+     * guarantee still traces to it — a root collision or a digest a peer cannot parse costs a
+     * missed heal, never divergence that outlives the next round. The digest also carries
+     * `upThrough`, because on a *matched* round no state ships and nothing else would resync the
+     * recipient's receive cursor (#1266). On a mismatch the requested [QuiltMessage.FullState]
+     * carries its own, so the digest handler deliberately leaves the cursor alone there rather
+     * than acking history it has not yet received.
      *
      * The send is fire-and-forget — the next anti-entropy round is the natural retry. Must
      * be called under [lock]; the actual `seam.sendTo` is launched on [scope] outside it.
      */
     private fun reconcileWithRandomPeer() {
         if (knownPeers.isEmpty()) return
-        val peer = knownPeers.elementAt(random.nextInt(knownPeers.size))
-        val bytes = encode(QuiltMessage.FullState(sender = replica, state = _state.value, upThrough = nextSeq))
-        scope.launch {
-            runCatchingCancellable { seam.sendTo(peer, bytes) }
-                .onFailure { logger.debug { "antiEntropy reconcile to $peer failed: ${it.message}" } }
-        }
+        sendRootDigestTo(knownPeers.elementAt(random.nextInt(knownPeers.size)))
     }
 
     /**
