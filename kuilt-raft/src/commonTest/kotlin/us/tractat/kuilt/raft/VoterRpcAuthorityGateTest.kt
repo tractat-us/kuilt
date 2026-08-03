@@ -8,6 +8,7 @@ import us.tractat.kuilt.raft.internal.WEDGE_SUSPECTED_RUN
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 
@@ -46,11 +47,20 @@ import kotlin.time.Duration.Companion.seconds
  * `TimeoutNow` needs the metric because it is the one type whose *state* effects are
  * indistinguishable from a downstream refusal — see
  * [timeoutNowFromNonVoter_isDroppedByThisGate_notByTheDownstreamLeaderIdentityCheck].
+ *
+ * Every row above holds the gate **armed** (`voters` non-empty). Its other arm — the
+ * `voters.isEmpty()` carve-out that lets a pre-bootstrap joiner catch up at all — is
+ * [preBootstrapLearnerSeed_acceptsTheLeadersFrames_catchesUp_andIsPromoted], and it is asserted
+ * the opposite way round: as an outcome that must *happen*, not a frame that must not land.
  */
 class VoterRpcAuthorityGateTest {
 
     private val attacker = NodeId("attacker-not-a-voter")
     private val forgedCommand = byteArrayOf(0xBA.toByte(), 0xD0.toByte(), 0xDE.toByte())
+
+    private val bootstrapVoters = (1..3).map { NodeId("v$it") }.toSet()
+    private val joiner = NodeId("joiner-pre-bootstrap")
+    private val joinedCommand = byteArrayOf(0x10, 0x20, 0x30)
 
     /**
      * [raftSim]'s three-voter cluster with a metric hook bolted on, so a test can observe *which*
@@ -77,6 +87,118 @@ class VoterRpcAuthorityGateTest {
             },
         )
     }
+
+    /**
+     * Three voters that know only each other, plus a fourth node holding the **pre-bootstrap learner
+     * seed** — `ClusterConfig(voters = emptySet(), learners = setOf(self))`, the config an
+     * appoint-the-host joiner/spectator boots with before any host has admitted it.
+     *
+     * That empty voter set is the whole point: the seed node has learned no configuration, so *every*
+     * sender is outside its voter set, including the legitimate leader whose frames it must accept to
+     * make any progress at all. Per-node configs (the [MembershipTest] bootstrap pattern) are what let
+     * one simulation hold both states at once.
+     */
+    private fun TestScope.simWithPreBootstrapJoiner(): RaftSimulation {
+        val voterConfig = ClusterConfig(voters = bootstrapVoters)
+        val seedConfig = ClusterConfig(voters = emptySet(), learners = setOf(joiner))
+        val raftCfg = fastRaftConfig()
+        return RaftSimulation(
+            nodeIds = bootstrapVoters.toList() + joiner,
+            scope = this,
+            nodeScope = backgroundScope,
+            nodeFactory = { id, transport, storage, childScope ->
+                childScope.raftNode(
+                    if (id == joiner) seedConfig else voterConfig, transport, storage, raftCfg,
+                )
+            },
+        )
+    }
+
+    /**
+     * The gate's `voters.isNotEmpty()` arm — the carve-out that keeps a joining node from being
+     * locked out of the cluster by the very check that protects it once it is in.
+     *
+     * A node holding the pre-bootstrap learner seed knows no voters, so `from !in voters` is
+     * vacuously true for every sender there is. Arming the gate in that state refuses the leader's
+     * `AppendEntries`, the seed never learns a configuration, its voter set therefore never fills, and
+     * the gate stays armed forever: the join deadlocks. The comment on the gate makes the safety
+     * argument for skipping it — a node with no known voters is by definition not a voter, and has no
+     * leadership to transfer — so what is left to pin is the **liveness** the carve-out buys.
+     *
+     * ### Why this one asserts an outcome rather than an attribution
+     *
+     * Its siblings above assert that a frame had *no* effect, which several guards can produce
+     * identically — hence [RaftMetric.WedgeSuspected] discriminating the `TimeoutNow` case. Here the
+     * mutation's damage is a positive outcome *not happening*: the seed's log does not grow and it is
+     * never promoted. No neighbouring guard manufactures "this node successfully caught up", so an
+     * outcome assertion cannot be shadowed the way a refusal assertion can, and none is needed.
+     *
+     * ### And why it lives in `:kuilt-raft`
+     *
+     * It did not, which is what #1980's mutation survey found: deleting `voters.isNotEmpty() &&` from
+     * the gate left the entire `:kuilt-raft` suite green, and was caught only by 18 of `:kuilt-game`'s
+     * tests — the module where `gameJoin`/`gameSpectate` actually construct this seed. A `:kuilt-raft`
+     * refactor could therefore delete a load-bearing arm of this predicate, run `:kuilt-raft:build`,
+     * and ship a broken join path. The three steps below reproduce `GameNode`'s admit sequence
+     * (`admitLearnerThenVoter`: wire in as a learner, then promote) in terms this module owns.
+     */
+    @Test
+    fun preBootstrapLearnerSeed_acceptsTheLeadersFrames_catchesUp_andIsPromoted() =
+        raftRunTest(timeout = 30.seconds) {
+            val sim = simWithPreBootstrapJoiner()
+            awaitLeader(sim)
+
+            // Committed log the joiner is behind on, so catching up needs a real AppendEntries and not
+            // just an empty heartbeat.
+            val committed = sim.proposeOnLeader(joinedCommand)
+            sim.awaitCommit(committed.index, on = bootstrapVoters)
+
+            // The premise, asserted rather than assumed: the seed is in the carve-out state. If this
+            // ever stopped holding, everything below would pass with the gate armed and prove nothing.
+            val seed = sim.nodes.getValue(joiner)
+            assertEquals(
+                emptySet(), seed.membership.value.voters,
+                "the pre-bootstrap seed must know no voters — that empty set is what the carve-out keys on",
+            )
+            assertIs<RaftRole.Learner>(seed.role.value)
+
+            // The host admits the joiner as a learner; the leader begins replicating to it. Every frame
+            // it now receives is leader→peer from a sender outside its (empty) voter set.
+            sim.changeMembershipOnLeader(ClusterConfig(voters = bootstrapVoters, learners = setOf(joiner)))
+
+            // THE ASSERTION the mutation kills: those frames are accepted and the seed catches up.
+            // Bounded and dump-on-timeout, so an armed gate fails here in ~2 s of virtual time with a
+            // per-node state dump rather than running out the wall clock.
+            sim.awaitCommit(committed.index, on = setOf(joiner))
+
+            // Having caught up, it is promoted to a voter — the join completing end to end.
+            sim.changeMembershipOnLeader(ClusterConfig(voters = bootstrapVoters + joiner))
+            sim.awaitNode(joiner) { it.role.value !is RaftRole.Learner }
+
+            val joinerLog = sim.storages.getValue(joiner).entries()
+            assertAll(
+                {
+                    assertTrue(
+                        joinerLog.any { it.index == committed.index && it.command.contentEquals(joinedCommand) },
+                        "the leader's committed entry must have reached the seed's log — log was $joinerLog",
+                    )
+                },
+                {
+                    assertTrue(
+                        seed.membership.value.voters.containsAll(bootstrapVoters),
+                        "having applied the cluster's config, the seed now knows the voters and the gate " +
+                            "is armed — membership was ${seed.membership.value}",
+                    )
+                },
+                {
+                    assertTrue(
+                        joiner in seed.membership.value.voters,
+                        "the join must complete: the seed is promoted to a voter — membership was " +
+                            "${seed.membership.value}",
+                    )
+                },
+            )
+        }
 
     @Test
     fun forgedAppendEntriesFromNonVoter_isDropped_logAndTermAndLeaderIntact() = raftRunTest {
