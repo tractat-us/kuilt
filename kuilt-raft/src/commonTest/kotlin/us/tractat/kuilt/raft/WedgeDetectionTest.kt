@@ -312,14 +312,109 @@ internal class WedgeDetectionTest {
         )
     }
 
+    /**
+     * The **other** gate's attribution, pinned directly (#1980).
+     *
+     * `RaftEngine.onMessage` has two dispatch-boundary gates and both report through the same
+     * `noteRefusedLeaderFrame`, each naming which one refused. Every other assertion on
+     * [RaftMetric.WedgeSuspected.gate] in this module — the two above and the one in
+     * `VoterRpcAuthorityGateTest` — reads [Gate.LeaderAuthority], so the term-jump arm of that
+     * switch carried no coverage at all: passing [Gate.LeaderAuthority] from the term-jump call
+     * site, i.e. making every one of *those* reports name the wrong guard, left the whole module
+     * green. A report whose `gate` is decorative is worse than no `gate`, because the operator
+     * runbook it points into differs per gate — a stale voter set is repaired by re-admitting a new
+     * identity, a term jump is not.
+     *
+     * The sender here is a **current voter**, which is what makes the attribution unambiguous rather
+     * than merely first-wins: the §5.2 leader-authority gate would have passed this frame, so the
+     * term-jump bound is the only gate that can have produced the report. (It also happens to sit
+     * earlier in `onMessage`, but "it ran first" is not a property worth resting the report's meaning
+     * on — reorder the two gates and that argument evaporates while this one does not.)
+     *
+     * The trajectory is the honest wedge the enum's own KDoc describes: a node away for more
+     * elections than [RaftConfig.maxTermJump] admits in one step, so the cluster's term legitimately
+     * ran beyond what it can adopt and the frames that would catch it up are the ones it refuses.
+     */
+    @Test
+    fun aRefusalUnderTheTermJumpBoundNamesTheTermJumpGate() = raftRunTest(timeout = 30.seconds) {
+        val metricsBy = mutableMapOf<NodeId, MutableList<RaftMetric>>()
+        val raftCfg = fastRaftConfig()
+        val sim = raftSimWithMetrics(this, backgroundScope, metricsBy, raftCfg)
+        val leaderNode = sim.awaitLeader()
+        val leaderId = sim.nodes.entries.first { it.value === leaderNode }.key
+        val victimId = sim.nodeIds.first { it != leaderId }
+        sim.awaitCommit(1L)
+
+        // Isolate the victim exactly as the test above does, and for the same reason: crashing the
+        // rest stops the leader's own heartbeats, every one of which legitimately clears the run, and
+        // PreVote keeps the now-alone victim from moving its own term — so the term read here stays
+        // valid for the whole burst. The exact-value assertions at the end name the terms actually
+        // observed if that ever stops holding.
+        sim.nodeIds.filter { it != victimId }.forEach { sim.crash(it) }
+        sim.drainInjections()
+        val term = sim.storages.getValue(victimId).term()
+
+        // One past the bound, which is written `wireTerm - currentTerm > maxTermJump`.
+        val jumpTerm = term + raftCfg.maxTermJump + 1
+        repeat(WEDGE_SUSPECTED_RUN) {
+            sim.deliverAppendEntries(to = victimId, from = leaderId, term = jumpTerm)
+        }
+        sim.awaitTrue("the victim reported once the run reached $WEDGE_SUSPECTED_RUN") {
+            wedges(metricsBy, victimId).isNotEmpty()
+        }
+
+        val voters = sim.nodes.getValue(victimId).membership.value.voters
+        val reports = wedges(metricsBy, victimId)
+        val report = reports.first()
+        assertAll(
+            {
+                assertTrue(
+                    leaderId in voters,
+                    "the premise: the sender is a current voter, so the §5.2 leader-authority gate " +
+                        "passes this frame and cannot be what refused it; voters=$voters",
+                )
+            },
+            {
+                assertEquals(
+                    Gate.TermJump, report.gate,
+                    "the report must name the gate that actually refused the frame — the term-jump " +
+                        "bound, not the §5.2 gate that let it through",
+                )
+            },
+            {
+                assertEquals(leaderId, report.sender, "the report must name the sender being refused")
+            },
+            {
+                assertEquals(
+                    jumpTerm, report.senderTerm,
+                    "the report must carry the term the frame claimed, not the one we hold",
+                )
+            },
+            {
+                assertEquals(
+                    term, report.ourTerm,
+                    "our own term is unmoved: a refused frame is never adopted, and PreVote keeps the " +
+                        "isolated victim from raising it either",
+                )
+            },
+            {
+                assertEquals(
+                    1, reports.size,
+                    "latched once per voter-set epoch, which cannot change while the victim is " +
+                        "alone; got $reports",
+                )
+            },
+        )
+    }
+
     private fun raftSimWithMetrics(
         scope: TestScope,
         nodeScope: CoroutineScope,
         metricsBy: MutableMap<NodeId, MutableList<RaftMetric>>,
+        raftCfg: RaftConfig = fastRaftConfig(),
     ): RaftSimulation {
         val ids = (1..3).map { NodeId("v$it") }
         val cluster = ClusterConfig(voters = ids.toSet())
-        val raftCfg = fastRaftConfig()
         return RaftSimulation(
             nodeIds = ids,
             scope = scope,
