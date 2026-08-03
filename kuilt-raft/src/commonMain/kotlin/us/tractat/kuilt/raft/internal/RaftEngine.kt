@@ -47,6 +47,7 @@ import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.RaftStorage
 import us.tractat.kuilt.raft.RaftTraceEvent
 import us.tractat.kuilt.raft.RaftTransport
+import us.tractat.kuilt.raft.RefusalGate
 import us.tractat.kuilt.raft.Snapshot
 import us.tractat.kuilt.raft.SnapshotMeta
 import us.tractat.kuilt.raft.StepDownReason
@@ -988,6 +989,37 @@ internal class RaftEngine(
     private suspend fun emitTrace(event: RaftTraceEvent) = _trace.emit(event)
 
     private fun nextClock() = ++traceClock
+
+    /**
+     * The single site at which a dispatch-boundary guard refuses a frame (#1989).
+     *
+     * Each guard still `return`s on its own line — this only adds the attribution. Before it, a
+     * refusal's only observable was the absence of a state change, which several guards produce
+     * identically, so an upstream guard's coverage silently went to zero as soon as a downstream one
+     * refused the same frames (#1980).
+     *
+     * **Which of the two observables fires is [RefusalGate.wedgeGate]'s exhaustive `when`, not this
+     * function's.** The trace event is emitted for every gate; [noteRefusedLeaderFrame] is called for
+     * the gates that map to a [RaftMetric.WedgeSuspected.Gate], which is the two at
+     * `RaftEngine.onMessage`'s dispatch boundary and none of [onTimeoutNow]'s. Routing both through
+     * one place is what keeps the metric and the trace from ever naming different gates for the same
+     * frame; the mapping being a closed `when` is what stops a new guard being wired to one and not
+     * the other.
+     *
+     * `m.wireTerm` is recomputed rather than passed in — it is a pure `when` over the frame, so it is
+     * the same value both `onMessage` call sites already hold in a local.
+     *
+     * `suspend` because [emitTrace] is. That never blocks the actor loop: `_trace` is a
+     * `MutableSharedFlow` with `DROP_OLDEST`, on which `emit` is documented never to suspend, which is
+     * precisely why it is safe here — every caller is on a path a *remote frame* controls. For the
+     * same reason nothing here throws (#1818): a `require` on this path would convert one hostile
+     * frame into permanent node death.
+     */
+    private suspend fun refuseFrame(from: NodeId, m: RaftMessage, gate: RefusalGate) {
+        emitTrace(RaftTraceEvent.FrameRefused(nextClock(), transport.selfId, from, m.messageType, gate))
+        val wedge = gate.wedgeGate
+        if (wedge != null) noteRefusedLeaderFrame(from, m, m.wireTerm, wedge)
+    }
 
     // ── Metric helper ─────────────────────────────────────────────────────────
 
@@ -2834,10 +2866,12 @@ internal class RaftEngine(
         // Ignore if from a stale leader or if we are already leader/candidate.
         if (m.term < state.currentTerm) {
             debug { "onTimeoutNow: stale term ${m.term} < currentTerm=${state.currentTerm} — ignoring" }
+            refuseFrame(from, m, RefusalGate.TimeoutNowStaleTerm)
             return
         }
         if (_role.value is RaftRole.Leader || _role.value is RaftRole.Candidate) {
             debug { "onTimeoutNow: already ${_role.value} — ignoring" }
+            refuseFrame(from, m, RefusalGate.TimeoutNowSelfLeaderOrCandidate)
             return
         }
         // A TimeoutNow strictly ahead of our term carries NO authority we can check (#1889). The leader
@@ -2875,6 +2909,7 @@ internal class RaftEngine(
         // floor. (This also closes the remote route into [checkedRestoredTerm] documented there.)
         if (m.term > state.currentTerm) {
             debug { "onTimeoutNow: unauthenticated future term ${m.term} > currentTerm=${state.currentTerm} — ignoring" }
+            refuseFrame(from, m, RefusalGate.TimeoutNowFutureTerm)
             return
         }
         // Only this term's leader may issue TimeoutNow. m.term is now provably equal to currentTerm (the
@@ -2913,11 +2948,13 @@ internal class RaftEngine(
                 "onTimeoutNow: sender ${from.value} is not term ${state.currentTerm}'s established " +
                     "leader (${established?.value}) — ignoring"
             }
+            refuseFrame(from, m, RefusalGate.TimeoutNowSenderNotEstablishedLeader)
             return
         }
         // A learner never votes and must never start an election.
         if (_role.value is RaftRole.Learner) {
             debug { "onTimeoutNow: self is a learner — ignoring" }
+            refuseFrame(from, m, RefusalGate.TimeoutNowSelfLearner)
             return
         }
         // Start a real election immediately (skip pre-vote — we are already up-to-date per the leader's sync).
@@ -3092,8 +3129,9 @@ internal class RaftEngine(
         // Written as a SUBTRACTION rather than `wireTerm > state.currentTerm + maxTermJump` so the
         // guard against an overflowing term cannot itself overflow. `currentTerm` is no longer bounded
         // above by a constant (adoption is relative now), so the additive form could wrap negative near
-        // `Long.MAX_VALUE` and then refuse everything. Both operands here are non-negative — `wireTerm`
-        // by the short-circuiting test to its left, `currentTerm` by [checkedRestoredTerm] and by only
+        // `Long.MAX_VALUE` and then refuse everything. Both operands are non-negative — `wireTerm`
+        // because the malformed-term arm below returns first on a negative one (until #1989 split them
+        // that was the short-circuiting left half of one `if`), `currentTerm` by [checkedRestoredTerm] and by only
         // ever being raised from an admitted non-negative term — so the difference is representable.
         //
         // ### What MAX_PLAUSIBLE_TERM still does, and the asymmetry that opens
@@ -3110,12 +3148,26 @@ internal class RaftEngine(
         // first reaching `2^60`, which after this change costs ~10^14 accepted frames instead of one —
         // unreachable in practice, and the price of removing a cliff that was reachable in one.
         val wireTerm = m.wireTerm
-        if (wireTerm != null && (wireTerm < 0L || wireTerm - state.currentTerm > raftConfig.maxTermJump)) {
+        // The bound's two arms were one `if` until #1989 split them. They refuse for different
+        // reasons — malformed below us vs implausibly far above us — and a shared `return` made them
+        // indistinguishable to any test, so [RefusalGate] now names which one fired. The MALFORMED arm
+        // must stay FIRST: the jump arm's subtraction is only free of `Long` wrap because a negative
+        // `wireTerm` has already been refused here (the "short-circuiting test to its left" the
+        // overflow argument above refers to is now this `return`).
+        if (wireTerm != null && wireTerm < 0L) {
+            debug {
+                "onMessage: dropped ${m::class.simpleName} from $from — negative term=$wireTerm " +
+                    "(currentTerm=${state.currentTerm})"
+            }
+            refuseFrame(from, m, RefusalGate.ImplausibleNegativeTerm)
+            return
+        }
+        if (wireTerm != null && wireTerm - state.currentTerm > raftConfig.maxTermJump) {
             debug {
                 "onMessage: dropped ${m::class.simpleName} from $from — implausible term=$wireTerm " +
                     "(currentTerm=${state.currentTerm}, maxTermJump=${raftConfig.maxTermJump})"
             }
-            noteRefusedLeaderFrame(from, m, wireTerm, RaftMetric.WedgeSuspected.Gate.TermJump)
+            refuseFrame(from, m, RefusalGate.ImplausibleTermJump)
             return
         }
 
@@ -3170,7 +3222,7 @@ internal class RaftEngine(
         val voters = state.membershipState.voters
         if (m.isLeaderToPeer && voters.isNotEmpty() && from !in voters) {
             debug { "onMessage: dropped ${m::class.simpleName} from non-voter $from (§5.2 leader-authority gate) membershipState=${state.membershipState}" }
-            noteRefusedLeaderFrame(from, m, wireTerm, RaftMetric.WedgeSuspected.Gate.LeaderAuthority)
+            refuseFrame(from, m, RefusalGate.LeaderAuthority)
             return
         }
         // A leader→peer frame that clears both gates AT OR ABOVE our term ends any refusal run: whatever

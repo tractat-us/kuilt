@@ -4,6 +4,7 @@ import kotlinx.serialization.Serializable
 import us.tractat.kuilt.raft.ConfigPayload
 import us.tractat.kuilt.raft.DedupKey
 import us.tractat.kuilt.raft.LogEntry
+import us.tractat.kuilt.raft.RaftMessageType
 
 /**
  * The Raft wire frames.
@@ -252,6 +253,33 @@ internal val RaftMessage.isLeaderToPeer: Boolean
         is RaftMessage.PreVoteResponse         -> false
         is RaftMessage.Forward                 -> false
         is RaftMessage.ForwardResponse         -> false
+    }
+
+/**
+ * This frame's public [RaftMessageType] — the wire vocabulary a trace consumer can hold.
+ *
+ * `RaftTraceEvent.FrameRefused` reports the *type* of a refused frame rather than the frame itself,
+ * because these classes are internal. Deriving it here rather than from `this::class.simpleName`
+ * (what the engine's operator-facing `wedgeDiagnostic` string does) makes it comparable and
+ * cross-target stable: `simpleName` is not guaranteed identical on Kotlin/Native, JVM and wasmJs, so
+ * a test asserting on one would not be portable.
+ *
+ * Exhaustive `when` (no `else`) for the same reason as [wireTerm] and [isLeaderToPeer]: a new
+ * [RaftMessage] variant must name itself rather than silently falling into a catch-all.
+ */
+internal val RaftMessage.messageType: RaftMessageType
+    get() = when (this) {
+        is RaftMessage.RequestVote             -> RaftMessageType.RequestVote
+        is RaftMessage.RequestVoteResponse     -> RaftMessageType.RequestVoteResponse
+        is RaftMessage.AppendEntries           -> RaftMessageType.AppendEntries
+        is RaftMessage.AppendEntriesResponse   -> RaftMessageType.AppendEntriesResponse
+        is RaftMessage.InstallSnapshot         -> RaftMessageType.InstallSnapshot
+        is RaftMessage.InstallSnapshotResponse -> RaftMessageType.InstallSnapshotResponse
+        is RaftMessage.PreVote                 -> RaftMessageType.PreVote
+        is RaftMessage.PreVoteResponse         -> RaftMessageType.PreVoteResponse
+        is RaftMessage.TimeoutNow              -> RaftMessageType.TimeoutNow
+        is RaftMessage.Forward                 -> RaftMessageType.Forward
+        is RaftMessage.ForwardResponse         -> RaftMessageType.ForwardResponse
     }
 
 /** Outcome of a forwarded proposal, carried in [RaftMessage.ForwardResponse]. */
