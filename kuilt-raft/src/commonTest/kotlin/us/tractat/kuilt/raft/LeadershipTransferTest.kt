@@ -40,7 +40,7 @@ internal class LeadershipTransferTest {
      * candidate that can win (no third node to race with).
      */
     @Test
-    fun transferLeadership_happyPath_targetBecomesLeader() = raftRunTest(timeout = 10.seconds) {
+    fun transferLeadership_happyPath_targetBecomesLeader() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 2)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -76,7 +76,7 @@ internal class LeadershipTransferTest {
      * and leadership must not have moved to the target.
      */
     @Test
-    fun transferLeadership_unrelatedNodeDeposesLeader_transferFails() = raftRunTest(timeout = 10.seconds) {
+    fun transferLeadership_unrelatedNodeDeposesLeader_transferFails() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 3)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -154,7 +154,7 @@ internal class LeadershipTransferTest {
      * FAIL (auto-timeout), because no leader-authored message from B ever arrives.
      */
     @Test
-    fun transferLeadership_higherTermEchoFromTarget_doesNotCompleteTransfer() = raftRunTest(timeout = 10.seconds) {
+    fun transferLeadership_higherTermEchoFromTarget_doesNotCompleteTransfer() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 3)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -227,7 +227,7 @@ internal class LeadershipTransferTest {
      * one-election-timeout auto-abandon window comfortably contains the heal.
      */
     @Test
-    fun transferLeadership_nonTargetHigherTermOutracesTargetsWin_stillSucceeds() = raftRunTest(timeout = 10.seconds) {
+    fun transferLeadership_nonTargetHigherTermOutracesTargetsWin_stillSucceeds() = raftRunTest {
         val config = RaftConfig(
             electionTimeoutMin = 30.milliseconds,
             electionTimeoutMax = 60.milliseconds,
@@ -283,7 +283,7 @@ internal class LeadershipTransferTest {
      * the original leader is a follower and forwards proposals to the new leader successfully.
      */
     @Test
-    fun proposalsDuringTransfer_rejectedWithNotLeaderException() = raftRunTest(timeout = 10.seconds) {
+    fun proposalsDuringTransfer_rejectedWithNotLeaderException() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -324,7 +324,7 @@ internal class LeadershipTransferTest {
      * [LeadershipTransferException] and the original leader remains leader.
      */
     @Test
-    fun transferLeadership_targetUnreachable_autoTimeoutResumesLeader() = raftRunTest(timeout = 10.seconds) {
+    fun transferLeadership_targetUnreachable_autoTimeoutResumesLeader() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -351,7 +351,7 @@ internal class LeadershipTransferTest {
      * The [transferLeadership] call throws [LeadershipTransferException].
      */
     @Test
-    fun cancelTransfer_abortsInFlightTransfer() = raftRunTest(timeout = 10.seconds) {
+    fun cancelTransfer_abortsInFlightTransfer() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -384,7 +384,7 @@ internal class LeadershipTransferTest {
      * Calling [transferLeadership] on a non-leader node throws [NotLeaderException] immediately.
      */
     @Test
-    fun transferLeadership_nonLeader_throwsNotLeaderException() = raftRunTest(timeout = 5.seconds) {
+    fun transferLeadership_nonLeader_throwsNotLeaderException() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         awaitLeader(sim)
         val follower = sim.followers().first()
@@ -400,7 +400,7 @@ internal class LeadershipTransferTest {
      * [IllegalArgumentException] immediately.
      */
     @Test
-    fun transferLeadership_unknownTarget_throwsIllegalArgument() = raftRunTest(timeout = 5.seconds) {
+    fun transferLeadership_unknownTarget_throwsIllegalArgument() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
 
@@ -414,7 +414,7 @@ internal class LeadershipTransferTest {
      * [IllegalArgumentException] immediately.
      */
     @Test
-    fun transferLeadership_targetIsSelf_throwsIllegalArgument() = raftRunTest(timeout = 5.seconds) {
+    fun transferLeadership_targetIsSelf_throwsIllegalArgument() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -431,7 +431,7 @@ internal class LeadershipTransferTest {
      * The state machine on every surviving node agrees.
      */
     @Test
-    fun transferLeadership_noCommittedEntryLoss() = raftRunTest(timeout = 10.seconds) {
+    fun transferLeadership_noCommittedEntryLoss() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 3)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -466,7 +466,7 @@ internal class LeadershipTransferTest {
      * stale TimeoutNow would let any peer force a follower into a disruptive, term-bumping election.
      */
     @Test
-    fun timeoutNow_fromNonLeader_isIgnored() = raftRunTest(timeout = 10.seconds) {
+    fun timeoutNow_fromNonLeader_isIgnored() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 3)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -526,7 +526,7 @@ internal class LeadershipTransferTest {
      * move its state, which keeps the revert-verify honest instead of racy.
      */
     @Test
-    fun timeoutNow_fromNonLeaderVoter_atHigherTerm_isIgnored() = raftRunTest(timeout = 10.seconds) {
+    fun timeoutNow_fromNonLeaderVoter_atHigherTerm_isIgnored() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 3)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -607,7 +607,7 @@ internal class LeadershipTransferTest {
      * which reads the `RaftMetric.WedgeSuspected` report only the gate emits. The pair is deliberate.
      */
     @Test
-    fun timeoutNow_fromNonVoter_atCurrentTerm_isIgnored() = raftRunTest(timeout = 10.seconds) {
+    fun timeoutNow_fromNonVoter_atCurrentTerm_isIgnored() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 3)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -698,7 +698,7 @@ internal class LeadershipTransferTest {
      * [transferLeadership_n4_targetWinsFirstElection_bypassingOtherVotersStickiness].
      */
     @Test
-    fun transferLeadership_uncommittedTail_withholdsTimeoutNowUntilCaughtUp() = raftRunTest(timeout = 10.seconds) {
+    fun transferLeadership_uncommittedTail_withholdsTimeoutNowUntilCaughtUp() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 4)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -772,7 +772,7 @@ internal class LeadershipTransferTest {
      * path — and the tap confirms TimeoutNow is not sent before the target's tail ACK.
      */
     @Test
-    fun transferLeadership_uncommittedTail_n3_targetBecomesLeader() = raftRunTest(timeout = 10.seconds) {
+    fun transferLeadership_uncommittedTail_n3_targetBecomesLeader() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 3)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -841,7 +841,7 @@ internal class LeadershipTransferTest {
      * the target won — the assertions read the wire, not the call's completion.
      */
     @Test
-    fun transferLeadership_n4_targetWinsFirstElection_bypassingOtherVotersStickiness() = raftRunTest(timeout = 10.seconds) {
+    fun transferLeadership_n4_targetWinsFirstElection_bypassingOtherVotersStickiness() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 4)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -907,7 +907,7 @@ internal class LeadershipTransferTest {
      * a `changeMembership` call must be rejected with the same [NotLeaderException] `propose` throws.
      */
     @Test
-    fun changeMembership_duringTransfer_rejected() = raftRunTest(timeout = 10.seconds) {
+    fun changeMembership_duringTransfer_rejected() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 4)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -948,7 +948,7 @@ internal class LeadershipTransferTest {
      * the config entry not yet committed — when `onTransferLeadership` runs.
      */
     @Test
-    fun transferLeadership_duringMembershipChange_rejected() = raftRunTest(timeout = 10.seconds) {
+    fun transferLeadership_duringMembershipChange_rejected() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 3)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -984,7 +984,7 @@ internal class LeadershipTransferTest {
      * A failed/cancelled transfer emits a [RaftTraceEvent.LeadershipTransferAbandoned] event.
      */
     @Test
-    fun transferLeadership_abandonedEmitsTraceEvent() = raftRunTest(timeout = 10.seconds) {
+    fun transferLeadership_abandonedEmitsTraceEvent() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }

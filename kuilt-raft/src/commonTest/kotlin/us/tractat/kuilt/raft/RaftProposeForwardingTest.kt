@@ -13,7 +13,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Tests for follower → leader proposal forwarding (Raft §8).
@@ -127,7 +126,7 @@ class RaftProposeForwardingTest {
     // ── Change 1: learner forwarding ──────────────────────────────────────────
 
     @Test
-    fun learnerPropose_forwardsToLeader_andCommits() = raftRunTest(timeout = 10.seconds) {
+    fun learnerPropose_forwardsToLeader_andCommits() = raftRunTest {
         // 3 voters + 1 learner. Propose on the learner — must forward and commit.
         val voterIds = setOf(NodeId("v1"), NodeId("v2"), NodeId("v3"))
         val learnerId = NodeId("learner")
@@ -160,7 +159,7 @@ class RaftProposeForwardingTest {
      * [kotlinx.coroutines.CompletableDeferred.isCompleted] is true.
      */
     @Test
-    fun cancelledForwardingPropose_doesNotCommitLater() = raftRunTest(timeout = 10.seconds) {
+    fun cancelledForwardingPropose_doesNotCommitLater() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         val v1 = sim.nodeIds[0]
         val v2 = sim.nodeIds[1]

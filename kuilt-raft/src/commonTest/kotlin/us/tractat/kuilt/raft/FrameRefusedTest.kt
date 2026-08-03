@@ -7,7 +7,6 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Every dispatch-boundary guard emits a [RaftTraceEvent.FrameRefused] naming **itself** (#1989).
@@ -56,8 +55,9 @@ import kotlin.time.Duration.Companion.seconds
  *
  * Every test holds the target's state still by only [RaftSimulation.settle]ing after the injection,
  * never advancing virtual time, so no election timer can fire and the injected frame is the only
- * thing the node reacts to. The `timeout` is a **generous wedge backstop, not an assertion** — it is
- * wall-clock over a virtual-time trajectory, so it measures the host rather than the code (#1891).
+ * thing the node reacts to. The ceiling inherited from [raftRunTest] (`TEST_WEDGE_BACKSTOP`) is a
+ * **generous wedge backstop, not an assertion** — it is wall-clock over a virtual-time trajectory,
+ * so it measures the host rather than the code (#1891).
  */
 class FrameRefusedTest {
 
@@ -116,7 +116,7 @@ class FrameRefusedTest {
     // on the wire at all.
 
     @Test
-    fun aNegativeWireTerm_isRefusedAs_ImplausibleNegativeTerm() = raftRunTest(timeout = 30.seconds) {
+    fun aNegativeWireTerm_isRefusedAs_ImplausibleNegativeTerm() = raftRunTest {
         val sim = simWithLearner()
         val leaderId = sim.idOf(awaitLeader(sim))
         val followerId = voterIds.first { it != leaderId }
@@ -144,7 +144,7 @@ class FrameRefusedTest {
     }
 
     @Test
-    fun aTermFarAboveOurs_isRefusedAs_ImplausibleTermJump() = raftRunTest(timeout = 30.seconds) {
+    fun aTermFarAboveOurs_isRefusedAs_ImplausibleTermJump() = raftRunTest {
         val sim = simWithLearner()
         val leaderId = sim.idOf(awaitLeader(sim))
         val followerId = voterIds.first { it != leaderId }
@@ -183,7 +183,7 @@ class FrameRefusedTest {
      * the same discrimination for one frame.
      */
     @Test
-    fun aLeaderToPeerFrameFromANonVoter_isRefusedAs_LeaderAuthority() = raftRunTest(timeout = 30.seconds) {
+    fun aLeaderToPeerFrameFromANonVoter_isRefusedAs_LeaderAuthority() = raftRunTest {
         val sim = simWithLearner()
         val leaderId = sim.idOf(awaitLeader(sim))
         val followerId = voterIds.first { it != leaderId }
@@ -223,7 +223,7 @@ class FrameRefusedTest {
      * — do not move it.
      */
     @Test
-    fun aStaleTermTimeoutNow_isRefusedAs_TimeoutNowStaleTerm() = raftRunTest(timeout = 30.seconds) {
+    fun aStaleTermTimeoutNow_isRefusedAs_TimeoutNowStaleTerm() = raftRunTest {
         val sim = simWithLearner()
         val leaderId = sim.idOf(awaitLeader(sim))
         val followerId = voterIds.first { it != leaderId }
@@ -250,7 +250,7 @@ class FrameRefusedTest {
 
     /** Guard 2: the recipient is already the leader, so there is nothing to time it out into. */
     @Test
-    fun aTimeoutNowAtTheLeader_isRefusedAs_TimeoutNowSelfLeaderOrCandidate() = raftRunTest(timeout = 30.seconds) {
+    fun aTimeoutNowAtTheLeader_isRefusedAs_TimeoutNowSelfLeaderOrCandidate() = raftRunTest {
         val sim = simWithLearner()
         val leaderId = sim.idOf(awaitLeader(sim))
         val other = voterIds.first { it != leaderId }
@@ -281,7 +281,7 @@ class FrameRefusedTest {
      * the class KDoc — do not move it.
      */
     @Test
-    fun aFutureTermTimeoutNow_isRefusedAs_TimeoutNowFutureTerm() = raftRunTest(timeout = 30.seconds) {
+    fun aFutureTermTimeoutNow_isRefusedAs_TimeoutNowFutureTerm() = raftRunTest {
         val sim = simWithLearner()
         val leaderId = sim.idOf(awaitLeader(sim))
         val followerId = voterIds.first { it != leaderId }
@@ -314,7 +314,7 @@ class FrameRefusedTest {
     /** Guard 4 (#1900, #1938): a voter that was never this term's established leader. */
     @Test
     fun aTimeoutNowFromAVoterThatIsNotTheEstablishedLeader_isRefusedAs_TimeoutNowSenderNotEstablishedLeader() =
-        raftRunTest(timeout = 30.seconds) {
+        raftRunTest {
             val sim = simWithLearner()
             val leaderId = sim.idOf(awaitLeader(sim))
             val followerId = voterIds.first { it != leaderId }
@@ -347,7 +347,7 @@ class FrameRefusedTest {
      * argument, so its coverage is load-bearing twice over.
      */
     @Test
-    fun aTimeoutNowAtALearner_isRefusedAs_TimeoutNowSelfLearner() = raftRunTest(timeout = 30.seconds) {
+    fun aTimeoutNowAtALearner_isRefusedAs_TimeoutNowSelfLearner() = raftRunTest {
         val sim = simWithLearner()
         val leaderId = sim.idOf(awaitLeader(sim))
         sim.awaitTrue("$learnerId recognises $leaderId") {
@@ -391,7 +391,7 @@ class FrameRefusedTest {
      * adding a ninth gate turns it red without anyone remembering to come back here.
      */
     @Test
-    fun everyRefusalGateIsReachable() = raftRunTest(timeout = 30.seconds) {
+    fun everyRefusalGateIsReachable() = raftRunTest {
         val sim = simWithLearner()
         val leaderId = sim.idOf(awaitLeader(sim))
         val followerId = voterIds.first { it != leaderId }

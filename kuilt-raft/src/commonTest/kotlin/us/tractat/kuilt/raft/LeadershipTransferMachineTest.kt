@@ -13,7 +13,6 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Unit tests for [LeadershipTransferMachine] driven directly — it is a plain, actor-confined decision
@@ -34,7 +33,7 @@ internal class LeadershipTransferMachineTest {
      * 1's stale timeout. The stale timeout must be a no-op; transfer 2's own timeout must still abort it.
      */
     @Test
-    fun staleTimeout_fromResolvedTransfer_doesNotAbortSuccessor() = raftRunTest(timeout = 5.seconds) {
+    fun staleTimeout_fromResolvedTransfer_doesNotAbortSuccessor() = raftRunTest {
         val targetB = NodeId("B")
         val targetC = NodeId("C")
         val window = fastRaftConfig().electionTimeoutMax + 1.milliseconds
@@ -89,7 +88,7 @@ internal class LeadershipTransferMachineTest {
      * violation) must not report success either.
      */
     @Test
-    fun leaderElected_completesOnlyForTargetAtHigherTerm() = raftRunTest(timeout = 5.seconds) {
+    fun leaderElected_completesOnlyForTargetAtHigherTerm() = raftRunTest {
         val targetB = NodeId("B")
         val machine = LeadershipTransferMachine(
             scope = backgroundScope,
@@ -122,7 +121,7 @@ internal class LeadershipTransferMachineTest {
      * first), so the resumed leadership does not inherit a stale transfer and its propose gate.
      */
     @Test
-    fun selfElected_failsPendingTransfer() = raftRunTest(timeout = 5.seconds) {
+    fun selfElected_failsPendingTransfer() = raftRunTest {
         val targetB = NodeId("B")
         val machine = LeadershipTransferMachine(
             scope = backgroundScope,

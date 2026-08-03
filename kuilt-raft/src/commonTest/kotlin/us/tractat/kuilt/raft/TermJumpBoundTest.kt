@@ -261,7 +261,7 @@ internal class TermJumpBoundTest {
      * it would look like coverage while distinguishing nothing.
      */
     @Test
-    fun aNegativeWireTermIsRefusedAtTheDispatchBoundary() = raftRunTest(timeout = 30.seconds) {
+    fun aNegativeWireTermIsRefusedAtTheDispatchBoundary() = raftRunTest {
         // Term 0: the subtraction's non-wrapping case, which is the only one that tests the arm.
         val forged = loneVoterAt(0L)
         heartbeatAt(forged, Long.MIN_VALUE)

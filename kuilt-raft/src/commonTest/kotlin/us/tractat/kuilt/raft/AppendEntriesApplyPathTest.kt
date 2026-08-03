@@ -25,7 +25,8 @@ import kotlin.time.Duration.Companion.seconds
  * inspect the exact log mutation plus the reply the follower emits — captured through the network's
  * opt-in message tap ([InMemoryRaftNetwork.recording] / [InMemoryRaftNetwork.sent]).
  *
- * Runs under [raftRunTest] (StandardTestDispatcher, seeded election RNG, tight timeout). The follower
+ * Runs under [raftRunTest] (StandardTestDispatcher, seeded election RNG, and its generous
+ * `TEST_WEDGE_BACKSTOP` wall-clock ceiling — a wedge backstop, never an assertion). The follower
  * uses a very long election timeout so it stays a passive follower for the whole test — it never
  * campaigns, so the only message it ever sends is the AppendEntriesResponse under test.
  */
@@ -83,7 +84,7 @@ class AppendEntriesApplyPathTest {
      * the old first-entry-only check the divergent `6:t1/7:t1` were silently kept (revert-verify #1).
      */
     @Test
-    fun conflictBelowFirstBatchEntryTruncatesAndAdopts() = raftRunTest(timeout = 5.seconds) {
+    fun conflictBelowFirstBatchEntryTruncatesAndAdopts() = raftRunTest {
         val f = follower(term = 2L, preload = (1L..7L).map { entry(it, 1L) })
 
         f.network.deliver(
@@ -118,7 +119,7 @@ class AppendEntriesApplyPathTest {
      * unverified stale suffix `4,5`. Old code over-attested 5 and committed 5 (revert-verify #2).
      */
     @Test
-    fun staleSuffixDoesNotOverAttestOrOverCommit() = raftRunTest(timeout = 5.seconds) {
+    fun staleSuffixDoesNotOverAttestOrOverCommit() = raftRunTest {
         val f = follower(term = 2L, preload = (1L..5L).map { entry(it, 1L) })
 
         f.network.deliver(
@@ -146,7 +147,7 @@ class AppendEntriesApplyPathTest {
      * (both exact duplicates). The log must be identical afterwards and the reply attests 3.
      */
     @Test
-    fun duplicateBatchIsANoOp() = raftRunTest(timeout = 5.seconds) {
+    fun duplicateBatchIsANoOp() = raftRunTest {
         val f = follower(term = 2L, preload = (1L..3L).map { entry(it, 1L) })
         val before = logPairs(f.storage)
 

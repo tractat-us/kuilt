@@ -7,7 +7,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * §3.10 `TimeoutNow` authenticates its sender against the leader this node recognises. Which
@@ -38,10 +37,11 @@ import kotlin.time.Duration.Companion.seconds
  * Those two tests are therefore a **matched pair**, and reading either alone is misleading — one
  * fails to any tightening that is not backed by recovered state, the other to any loosening.
  *
- * The `timeout` on each test is a **generous wedge backstop, not an assertion**: it is wall-clock
- * over a virtual-time trajectory, so it measures the host rather than the code (#1891). Fast failure
- * comes from the bounded `await*` / [RaftSimulation.settle] helpers, which are bounded in *virtual*
- * time and so are load-independent.
+ * Each test inherits [raftRunTest]'s `TEST_WEDGE_BACKSTOP` ceiling — a **generous wedge backstop,
+ * not an assertion**: it is wall-clock over a virtual-time trajectory, so it measures the host
+ * rather than the code (#1891).
+ * Fast failure comes from the bounded `await*` / [RaftSimulation.settle] helpers, which are bounded
+ * in *virtual* time and so are load-independent.
  */
 class TimeoutNowAuthorityPinTest {
 
@@ -56,7 +56,7 @@ class TimeoutNowAuthorityPinTest {
      * an election timer cannot launder the result either way.
      */
     @Test
-    fun steppedDownLeaderRefusesSameTermTimeoutNowFromAnotherVoter() = raftRunTest(timeout = 30.seconds) {
+    fun steppedDownLeaderRefusesSameTermTimeoutNowFromAnotherVoter() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 3)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -125,7 +125,7 @@ class TimeoutNowAuthorityPinTest {
      * *before* the crash for the same reason.
      */
     @Test
-    fun timeoutNowSurvivesARestartOfTheTransferTarget() = raftRunTest(timeout = 30.seconds) {
+    fun timeoutNowSurvivesARestartOfTheTransferTarget() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 3)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -184,7 +184,7 @@ class TimeoutNowAuthorityPinTest {
      */
     @Test
     fun sameTermForgeryFromAnotherVoterIsRefusedAfterARestartOfTheTransferTarget() =
-        raftRunTest(timeout = 30.seconds) {
+        raftRunTest {
             val sim = raftSim(this, backgroundScope, n = 3)
             val leader = awaitLeader(sim)
             val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -257,7 +257,7 @@ class TimeoutNowAuthorityPinTest {
      * since there the two terms are equal.
      */
     @Test
-    fun aRestoredPinFromAnEarlierTermIsNotAuthorityAtTheCurrentTerm() = raftRunTest(timeout = 30.seconds) {
+    fun aRestoredPinFromAnEarlierTermIsNotAuthorityAtTheCurrentTerm() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 3)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -324,7 +324,7 @@ class TimeoutNowAuthorityPinTest {
      * any vote is counted.
      */
     @Test
-    fun theRecognisedLeadersOwnTimeoutNowIsStillAccepted() = raftRunTest(timeout = 30.seconds) {
+    fun theRecognisedLeadersOwnTimeoutNowIsStillAccepted() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 3)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
