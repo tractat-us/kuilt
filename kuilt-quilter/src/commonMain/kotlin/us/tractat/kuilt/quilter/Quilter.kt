@@ -310,6 +310,13 @@ public class Quilter<S : Quilted<S>>(
      */
     private val pendingFullStateJobs: MutableMap<PeerId, Job> = mutableMapOf()
 
+    /**
+     * Peers we have sent a [QuiltMessage.RootDigest] to and not yet answered a
+     * [QuiltMessage.FullStateRequest] for. Gates the amplification lever: an unsolicited request
+     * finds no entry and is dropped.
+     */
+    private val digestOutstanding: MutableSet<PeerId> = mutableSetOf()
+
     /** Counts anti-entropy iterations; logged each tick so virtual-time cycling is visible. */
     private var antiEntropyCount = 0L
 
@@ -325,6 +332,9 @@ public class Quilter<S : Quilted<S>>(
 
     /** Exposed internally so tests can verify [close] cancels every background job. */
     internal val backgroundJobsForTest: List<Job> get() = backgroundJobs
+
+    /** Sends one [QuiltMessage.RootDigest] to [peer], arming the solicited-request flag. Test-only. */
+    internal fun sendRootDigestForTest(peer: PeerId): Unit = lock.withLock { sendRootDigestTo(peer) }
 
     init {
         // `scope` here is the constructor parameter (the original parent scope).
@@ -521,6 +531,31 @@ public class Quilter<S : Quilted<S>>(
         }
     }
 
+    /**
+     * FNV-1a 64 over the state as it would appear on the wire. Must be called under [lock].
+     *
+     * There is no `KSerializer<S>` on this class — the primary constructor takes only
+     * [messageSerializer], and the top-level factory's `valueSerializer` is not retained — so the
+     * state is encoded inside a fixed synthetic [QuiltMessage.FullState]. [ReplicaId.Bottom] and
+     * `upThrough = 0L` are constants, so equal states still yield equal roots on every peer.
+     */
+    private fun stateRoot(): Long = fnv1a64(
+        binaryFormat.encodeToByteArray(
+            messageSerializer,
+            QuiltMessage.FullState(sender = ReplicaId.Bottom, state = _state.value, upThrough = 0L),
+        ),
+    )
+
+    /** Ships a [QuiltMessage.RootDigest] to [peer] and arms the solicited-request flag. Under [lock]. */
+    private fun sendRootDigestTo(peer: PeerId) {
+        val bytes = encode(QuiltMessage.RootDigest(sender = replica, root = stateRoot(), upThrough = nextSeq))
+        digestOutstanding.add(peer)
+        scope.launch {
+            runCatchingCancellable { seam.sendTo(peer, bytes) }
+                .onFailure { logger.debug { "rootDigest to $peer failed: ${it.message}" } }
+        }
+    }
+
     private fun evictStalePeers() {
         val currentPeers = seam.peers.value
         val now = clock.now()
@@ -544,6 +579,7 @@ public class Quilter<S : Quilted<S>>(
             ackedThrough.remove(peer)
             lastSeenAt.remove(peer)
             cancelFullStateRetry(peer)
+            digestOutstanding.remove(peer)
         }
         recomputeUniversalAck()
         recomputeCut()
@@ -616,6 +652,8 @@ public class Quilter<S : Quilted<S>>(
             is QuiltMessage.FullState -> onFullState(sender, msg)
             is QuiltMessage.Resend -> onResend(sender, msg)
             is QuiltMessage.Delivered -> onDelivered(sender, msg)
+            is QuiltMessage.RootDigest -> onRootDigest(sender, msg)
+            is QuiltMessage.FullStateRequest -> onFullStateRequest(sender, msg)
         }
     }
 
@@ -799,6 +837,51 @@ public class Quilter<S : Quilted<S>>(
             sendFullStateTo(sender)
         }
         resyncReceiveCursor(sender, msg.sender, msg.upThrough)
+    }
+
+    /**
+     * An inbound anti-entropy digest.
+     *
+     * On a **match** the roots agree, so the states agree, so resyncing the receive cursor and
+     * acking [QuiltMessage.RootDigest.upThrough] is honest — and it is the #1266 obligation this
+     * frame exists to carry, since no state ships.
+     *
+     * On a **mismatch** it deliberately does **not** resync. `resyncReceiveCursor` acks, and today
+     * that ack is only ever issued after the state was merged ([onFullState] merges, then resyncs).
+     * Acking here would claim absorption of history we have not received and drop buffered deltas
+     * covering it; if the request or its reply were then lost we would be stale *and* cut off from
+     * that history via the delta path. The requested [QuiltMessage.FullState] carries its own
+     * `upThrough` and resyncs exactly as it does today.
+     */
+    private fun onRootDigest(sender: PeerId, msg: QuiltMessage.RootDigest<S>) {
+        if (msg.root == stateRoot()) {
+            resyncReceiveCursor(sender, msg.sender, msg.upThrough)
+            return
+        }
+        val bytes = encode(QuiltMessage.FullStateRequest<S>(requester = replica, sender = msg.sender))
+        scope.launch {
+            runCatchingCancellable { seam.sendTo(sender, bytes) }
+                .onFailure { logger.debug { "fullStateRequest to $sender failed: ${it.message}" } }
+        }
+    }
+
+    /**
+     * A peer's reply to our digest, asking for the state. Ships it directly rather than via
+     * [sendFullStateTo]: that helper arms [scheduleFullStateRetry] for the first-contact path,
+     * and anti-entropy already retries every interval, so reusing it would run two independent
+     * retry machines over one peer.
+     */
+    private fun onFullStateRequest(sender: PeerId, msg: QuiltMessage.FullStateRequest<S>) {
+        if (msg.sender != replica) return // mirrors onResend's guard — not our state being asked for
+        if (!digestOutstanding.remove(sender)) {
+            logger.debug { "unsolicited fullStateRequest from $sender — ignored" }
+            return
+        }
+        val bytes = encode(QuiltMessage.FullState(sender = replica, state = _state.value, upThrough = nextSeq))
+        scope.launch {
+            runCatchingCancellable { seam.sendTo(sender, bytes) }
+                .onFailure { logger.debug { "fullState reply to $sender failed: ${it.message}" } }
+        }
     }
 
     /**

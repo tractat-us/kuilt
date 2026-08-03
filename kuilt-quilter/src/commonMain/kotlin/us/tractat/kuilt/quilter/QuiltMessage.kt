@@ -62,6 +62,47 @@ public sealed class QuiltMessage<S> {
     ) : QuiltMessage<S>()
 
     /**
+     * A hash of [sender]'s whole state, sent on the anti-entropy tick in place of the state
+     * itself (#1955). The recipient compares it with its own root and replies with a
+     * [FullStateRequest] only if they differ, so a converged round costs one small frame
+     * instead of the entire CRDT.
+     *
+     * [upThrough] carries the same own-delta high-water as [FullState.upThrough], and for the
+     * same reason: an anti-entropy round must resync the recipient's receive cursor whether or
+     * not it ships state. Omitting it here would reintroduce the #1266 livelock for a peer
+     * whose state matches while its delta cursor lags.
+     *
+     * [upThrough] deliberately has **no default**: omitting it must be a compile error, not a
+     * silent `0L` that disables the resync. ([FullState.upThrough] carries a default only because
+     * it predates its callers.)
+     *
+     * [root] is advisory — a collision costs a missed heal, cleared by the next state mutation on
+     * either side or routed around by a third peer, never divergence that survives a [FullState].
+     */
+    @Serializable
+    @SerialName("rootDigest")
+    public class RootDigest<S>(
+        public val sender: ReplicaId,
+        public val root: Long,
+        public val upThrough: Long,
+    ) : QuiltMessage<S>()
+
+    /**
+     * Sent by [requester] when a [RootDigest] from [sender] disagreed with its own root: please
+     * ship the state. The recipient answers with a [FullState].
+     *
+     * Honored only when the recipient has sent [requester] a [RootDigest] since the last request
+     * it honored, which caps delivery at one full state per peer per anti-entropy interval —
+     * exactly the pre-#1955 ceiling — and makes an unsolicited request a no-op.
+     */
+    @Serializable
+    @SerialName("fullStateRequest")
+    public class FullStateRequest<S>(
+        public val requester: ReplicaId,
+        public val sender: ReplicaId,
+    ) : QuiltMessage<S>()
+
+    /**
      * Gap retransmission request: [requester] has detected that it is missing
      * deltas from [sender] in the range [[fromSeq]..[toSeq]] inclusive.
      * [sender] should re-broadcast each buffered delta in that range.
