@@ -66,10 +66,10 @@ A (anti-entropy tick)                 B
    ~54 b                              ├─ equal ──►  resync cursor from upThrough.
                                       │             done.  ~54 b for the whole round
                                       │
-                                      └─ differ ─►  FullStateRequest ─────────►  A
+                                      ├─ differ ─►  FullStateRequest ─────────►  A
                                       │             ◄──── FullState (exactly as today,
                                       │                   carrying its own upThrough)
-                                      └─ cursor left untouched on this branch
+                                      └─ ...and on that branch the cursor is left untouched
 ```
 
 **The resync sits on the equal branch, not ahead of the compare.** That placement is load-bearing,
@@ -93,10 +93,19 @@ On a mismatch the receiver cannot tell from a hash *which* side is behind. Two o
 ### Mixed-version rooms — an accepted limitation
 
 An older peer receives an unknown `SerialName` and the frame is silently dropped at
-`Quilter.kt:612`, so anti-entropy between a new and an old peer stops working with no signal. This
-is **accepted**: `QuiltMessage` has no version handshake today, so uniform peer versions are already
-an implicit precondition, and consumers pin via `kuilt-bom`. Documented as a precondition rather
-than defended.
+`Quilter.kt:612`, so **every** digest a new peer ticks at an old one is dead — not one, all of
+them — with no signal either way.
+
+It does not stop anti-entropy between the pair outright, though, and the difference matters for
+sizing the risk. The old peer still runs *its* tick the old way, shipping `FullState`, which a new
+peer handles unchanged; and `onFullState`'s push-back heal (`:795-800`) means that single shipment
+still repairs **both** directions. So the pair converges on the old peer's ticks alone — reduced
+rate and one-sided initiation, not a permanent hole. In a room where the old peers are a minority
+the effect is proportionally smaller still.
+
+This is **accepted**: `QuiltMessage` has no version handshake today, so uniform peer versions are
+already an implicit precondition, and consumers pin via `kuilt-bom`. Documented as a precondition
+rather than defended.
 
 The upgrade path, if mixed-version support is ever needed, is a reply-always protocol: have a root
 *match* send back a tiny confirmation, making "no reply at all" a reliable signal that the peer does
@@ -174,7 +183,7 @@ All changes in `:kuilt-quilter`.
 | `Fnv1a64.kt` (new) | `internal fun fnv1a64(bytes: ByteArray): Long`. ~8 lines, its own file so it is independently testable and cannot quietly accrete callers. |
 | `QuiltMessage.kt` | Add `RootDigest` and `FullStateRequest`. `FullState` unchanged. |
 | `Quilter.reconcileWithRandomPeer` | Ship `RootDigest` instead of `FullState`. Fire-and-forget, otherwise unchanged. |
-| `Quilter.onRootDigest` (new) | Resync cursor from `upThrough`, compare root, send `FullStateRequest` on mismatch. |
+| `Quilter.onRootDigest` (new) | Compare root; on a **match** resync the cursor from `upThrough`, on a **mismatch** send `FullStateRequest` and leave the cursor alone. |
 | `Quilter.onFullStateRequest` (new) | Ship `FullState` directly, **without** arming `scheduleFullStateRetry`. |
 | `Quilter.resyncReceiveCursor` | Narrow the signature (below). |
 

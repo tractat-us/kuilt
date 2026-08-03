@@ -56,18 +56,22 @@ same size whatever the data holds:
 
 | A settled peer's background check | before | after |
 |---|---|---|
-| one round, 200-element shared set | ~6.5 KB | 54 bytes |
-| one round, 100,000-element shared set | ~3.5 MB | 54 bytes |
+| one round, 200-element shared set | ~6.5 KB | ~54 bytes |
+| one round, 100,000-element shared set | ~3.5 MB | ~54 bytes |
 | ongoing traffic per peer, 100,000 entries | ~58 KB/s | roughly 1 B/s |
 
-That last row is a **~58,000×** drop. Treat it as a floor rather than an exact constant:
-the frame is flat in the size of the data, but a few bytes move with the particular
-numbers it happens to carry, so quote it rounded. Reproduced by
-`MerkleDigestCostModelTest` and `GossipAntiEntropyMeasurementTest`.
+That last row is a **~58,000×** drop. Treat every figure here as a floor rather than an
+exact constant: the frame is flat in the size of the data, but a few bytes move with the
+particular numbers it happens to carry, so quote them rounded. Reproduced by the
+`:kuilt-scale` cost-model and anti-entropy measurement tests.
 
 Sending the whole picture is still the fallback every guarantee rests on. Two peers whose
-fingerprints coincide by accident, or a peer too old to understand the check, lose one
-repair — never their eventual agreement.
+fingerprints coincide by accident lose one repair — never their eventual agreement; the
+next change either of them makes moves the fingerprints apart again. A peer running a
+version too old to recognise the check is a larger gap: it ignores every check sent to
+it, so those are all wasted, not just one. It still runs its *own* background checks the
+old way, though, and those repair in both directions — so the two peers still agree in
+the end, just more slowly. Keeping every peer on the same version avoids this entirely.
 
 ### Deferred optimizations (measured, not yet needed)
 
@@ -79,7 +83,8 @@ the target scale, with the trigger to revisit recorded:
 | **Splitting the fingerprint into shards**, so a mismatch ships only the differing part rather than the whole picture | The advantage collapses as peers drift further apart: at 100,000 entries across 256 shards, one differing entry is 245× cheaper than sending everything, but a thousand differing entries is **1.0×** — no saving at all. Since the check is a backstop and rounds are overwhelmingly quiet, a single whole-picture fingerprint already captures nearly all the benefit | Rounds stop being overwhelmingly quiet, i.e. mismatches become common *and* typically small |
 | **Anti-entropy fanout > 1** | First-contact latency with fanout=1 follows the coupon-collector tail ≈ N·H(N): 29 / 80 / 166 rounds at N = 10 / 20 / 40 — but only on the backstop path; the flood reaches everyone in O(k) immediately | Large membership where backstop latency matters and flood drops are non-trivial |
 
-Numbers are reproduced by `GossipAntiEntropyMeasurementTest`. The full design rationale —
+The fanout numbers are reproduced by `GossipAntiEntropyMeasurementTest`; the sharding
+numbers by the `:kuilt-scale` cost-model test. The full design rationale —
 including why kuilt uses simpler variants than HyParView and Plumtree — is in
 [`docs/gossip-mesh-design.md`](https://github.com/tractat-us/kuilt/blob/main/docs/gossip-mesh-design.md).
 

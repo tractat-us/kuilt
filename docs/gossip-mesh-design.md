@@ -175,10 +175,18 @@ anti-entropy round after a missed delivery. The backstop also heals dropped delt
 within the neighbour set: the next reconcile re-delivers the merged result regardless
 of what was lost.
 
-The digest gate (#1955) does not weaken this. A peer that is behind has a different
-root, so it still receives the full state on the next round; a peer whose root matches
-is by construction not missing anything, and skipping the shipment to it is exactly the
-waste the gate exists to remove.
+The digest gate (#1955) preserves this, with one honest qualification. A peer that is
+behind has a different root, so it still receives the full state on the round that
+*selects* it — anti-entropy picks one random peer per tick, so that is a coupon-collector
+wait, not the next tick (follow-up (ii) below quantifies the tail). And barring a root
+collision — which costs a missed heal, not divergence — a peer whose root matches is not
+missing anything, so skipping the shipment to it is exactly the waste the gate exists to
+remove.
+
+What the gate does change is the *shape* of a heal: it now takes three frames (digest →
+request → state) where it took one, so a frame lost mid-exchange costs a further round
+that the unconditional push did not. Eventual convergence is unaffected — the next round
+that selects the peer starts over — but heal latency has a longer tail than before.
 
 ### Named follow-ups
 
