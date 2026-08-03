@@ -15,8 +15,8 @@ import kotlin.time.Duration.Companion.milliseconds
  * **Heartbeat interval** — how often the leader sends a heartbeat (empty
  * AppendEntries) to suppress followers' election timers.
  *
- * **Both timing relations are validated at construction (#1984)** — they were
- * stated here as constraints and enforced nowhere, and each failed late rather
+ * **The timing constraints are validated at construction (#1984, #1991)** — they
+ * were stated here as constraints and enforced nowhere, and each failed late rather
  * than at the constructor that caused it. They are checked in *different units*,
  * because each failure lives in a different one:
  *
@@ -37,6 +37,25 @@ import kotlin.time.Duration.Companion.milliseconds
  *   reachable: `1.5ms..1.9ms` is ordered yet truncates to the empty range `1..1`.
  *   Truncation is monotone, so the millisecond bound is strictly stronger, never
  *   weaker.
+ * - **[heartbeatInterval] `≥` 1 ms**, again **in whole milliseconds**. The two
+ *   relations above are satisfied *together* by a configuration that still breaks
+ *   the engine: `heartbeatInterval = 500us` with a `900us..1900us` window gives a
+ *   heartbeat under the floor and a non-empty draw range `0..1`, so nothing above
+ *   refuses it — and `nextLong(0, 1)` can only ever return `0`. `becomeLeader`'s
+ *   quorum-check loop is `while (true) { delay(draw); … }`, so a draw pinned at
+ *   zero spins it without bound. This floor is what closes that: a heartbeat of at
+ *   least one whole millisecond drags [electionTimeoutMin] strictly *above* one
+ *   millisecond (the relation above is strict), hence its truncation to at least
+ *   `1`, hence every draw to at least `1`. One bound, stated on the field a
+ *   consumer actually tunes, holds both loops off zero.
+ *
+ *   It is a bound from *below*, orthogonal to the first relation's bound from
+ *   above, and it is the reason the leader's heartbeat loop is safe: that loop
+ *   passes this [Duration] to `delay` directly rather than flooring it, and
+ *   `delay(Duration)` rounds *up* to the next whole millisecond, so it cannot
+ *   reach zero. The election draw cannot be fixed the same way — `nextLong` takes
+ *   `Long` bounds and has no `Duration` overload — which is why the guard lives
+ *   here (#1991).
  *
  * **Tests** should use fast values (e.g. 20 ms / 40 ms / 5 ms) so elections
  * complete quickly without real-clock waits. The preferred test substitute is
@@ -48,7 +67,8 @@ import kotlin.time.Duration.Companion.milliseconds
  *   millisecond — see the constraints above.
  * @param electionTimeoutMax Upper bound of the randomised election timeout window.
  * @param heartbeatInterval How often the leader sends a heartbeat. Validated at
- *   construction to be strictly less than [electionTimeoutMin].
+ *   construction to be strictly less than [electionTimeoutMin], and to be at least
+ *   one whole millisecond — see the constraints above.
  * @param strictTestGuard When `true`, throw [IllegalStateException] at construction
  *   time if the owning [kotlinx.coroutines.CoroutineScope] contains a
  *   `kotlinx.coroutines.test.TestDispatcher`. When `false` (the default), emit a
@@ -218,11 +238,34 @@ public data class RaftConfig(
                 "exception in a timer long after this node appeared to start. Widen the window to at least " +
                 "one whole millisecond (#1984)."
         }
+        // Ordered AFTER the window relation deliberately. A window under one millisecond forces a heartbeat
+        // under one millisecond too (the heartbeat must be strictly below the floor), so both guards fire on
+        // such a pair — and checking this one first would take the window guard's attribution away from the
+        // case it exists for. The two remain independent above a millisecond: 1.5ms..1.9ms breaks only the
+        // window relation, and a 750us heartbeat under the shipped 150ms..300ms window breaks only this one.
+        require(heartbeatInterval.inWholeMilliseconds >= MIN_HEARTBEAT_MILLIS) {
+            "heartbeatInterval must be at least one whole millisecond, but heartbeatInterval=$heartbeatInterval " +
+                "truncates to ${heartbeatInterval.inWholeMilliseconds}ms. Below a millisecond the engine's " +
+                "election draw collapses: heartbeatInterval < electionTimeoutMin then permits a sub-millisecond " +
+                "electionTimeoutMin, and Random.nextLong(minMs, maxMs) over a range starting at 0 can only draw " +
+                "0 — so the leader's quorum-check loop becomes while (true) { delay(0) } and spins as fast as the " +
+                "dispatcher schedules it. That is an unbounded hot loop in production, and under virtual time a " +
+                "loop that never yields the clock, so a test hangs instead of failing. Stated in whole " +
+                "milliseconds, like the window relation above, because nextLong takes Long bounds and cannot " +
+                "take a Duration (#1991)."
+        }
     }
 
     private companion object {
         /** Smallest jump that still admits `currentTerm + 1`, and so the smallest that keeps elections possible. */
         const val MIN_TERM_JUMP = 1L
+
+        /**
+         * Smallest heartbeat the millisecond-quantised timers can represent. Derived on the [heartbeatInterval]
+         * KDoc: it is what drags [electionTimeoutMin] strictly above a millisecond, hence the election draw's
+         * lower bound to at least `1`.
+         */
+        const val MIN_HEARTBEAT_MILLIS = 1L
 
         /** `2^20`. Derived on the [maxTermJump] KDoc from the attack cost and the largest honest absence. */
         const val MAX_TERM_JUMP = 1L shl 20

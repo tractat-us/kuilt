@@ -12,10 +12,11 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 /**
- * Regression for #1984: [RaftConfig] refuses the two timing relations its own KDoc calls constraints.
+ * Regression for #1984 (the two relations) and #1991 (the floor under [RaftConfig.heartbeatInterval]).
  *
- * `maxTermJump` was validated by #1972; these two were stated in prose and enforced nowhere. Both fail late
- * and unattributably rather than at the constructor that caused them.
+ * `maxTermJump` was validated by #1972; the two relations below were stated in prose and enforced nowhere.
+ * Both fail late and unattributably rather than at the constructor that caused them — and #1991 found a
+ * third, orthogonal way to reach the same class of late failure, which the two relations jointly admit.
  *
  * ### `heartbeatInterval < electionTimeoutMin`
  *
@@ -121,7 +122,67 @@ internal class RaftConfigTimingValidationTest {
     @Test
     fun aSubMillisecondWindowIsRefusedBecauseTheEngineDrawsInWholeMilliseconds() = assertAll(
         { assertRefused(min = 1500.microseconds, max = 1900.microseconds, heartbeat = 1.milliseconds) },
-        { assertRefused(min = 100.microseconds, max = 900.microseconds, heartbeat = 50.microseconds) },
+        // Asserted by *attribution*, not merely by "something threw". #1991 adds a third check that this
+        // pair also breaks (a window under 1 ms forces a heartbeat under 1 ms, since the heartbeat has to
+        // be strictly under the floor), so which guard fires is now an ordering question — and an ordering
+        // that shadowed the window guard here would leave this case pinning nothing. The window check runs
+        // first, so the message still names the empty draw range this test exists for.
+        {
+            val message = refusalMessage(min = 100.microseconds, max = 900.microseconds, heartbeat = 50.microseconds)
+            assertContains(message, "0..0", message = "the window guard, not the heartbeat guard, must claim this: $message")
+        },
+    )
+
+    // ── heartbeatInterval survives millisecond truncation ─────────────────────
+
+    /**
+     * Regression for #1991. The bound the other two leave open: both relations above are satisfied by
+     * `heartbeatInterval = 500.microseconds` with `electionTimeoutMin = 900.microseconds` and
+     * `electionTimeoutMax = 1900.microseconds` — the heartbeat outpaces the floor, and the window is a
+     * non-empty `0..1` — yet the engine then draws every election deadline with `nextLong(0, 1)`, whose
+     * only value is `0`. `becomeLeader`'s quorum-check loop is `while (true) { delay(draw); … }`, so a
+     * draw pinned at zero spins it as fast as the dispatcher schedules it: an unbounded hot loop on the
+     * leader in production, and under virtual time a loop that never yields the clock — the test does not
+     * fail, it **hangs**, and `runTest` reports an `UncompletedCoroutinesError` with no state to read.
+     *
+     * The floor is stated on the heartbeat rather than on the election window because it is the *stronger*
+     * place to put it: `heartbeatInterval < electionTimeoutMin` already holds, so a heartbeat of at least
+     * one whole millisecond drags `electionTimeoutMin` strictly above one millisecond, hence its truncation
+     * to at least `1`, hence a draw of at least `1`. One check bounds both loops away from zero.
+     *
+     * It is stated **in whole milliseconds** for the same reason the window relation is: `nextLong` takes
+     * `Long` bounds and cannot take a `Duration`, so the quantisation is what the guard has to speak about.
+     *
+     * The heartbeat loop's own truncation — a separate half of #1991 — is not fixed here but at the call
+     * site, which now passes the `Duration` to `delay` and never floors it; see `HeartbeatCadenceTest`.
+     */
+    @Test
+    fun aHeartbeatUnderOneWholeMillisecondIsRefusedBecauseItWouldPinTheElectionDrawAtZero() = assertAll(
+        // The reachable config the other two guards admit today, and the draw it produces.
+        { assertRefused(min = 900.microseconds, max = 1900.microseconds, heartbeat = 500.microseconds) },
+        { assertEquals(0L, 500.microseconds.inWholeMilliseconds, "the premise: a sub-millisecond heartbeat floors to zero") },
+        { assertEquals(0L, Random(RAFT_TEST_SEED).nextLong(0L, 1L), "…and nextLong(0, 1) can only ever draw it") },
+        // Both sides of the edge, since a bound tested from one side is satisfied by a bound in the wrong place.
+        { assertRefused(heartbeat = 999.microseconds) },
+        { assertEquals(1.milliseconds, admitted(heartbeat = 1.milliseconds).heartbeatInterval, "one whole millisecond is the smallest admitted") },
+        // Zero and negative reach the same draw, and neither of the other two relations refuses them.
+        { assertRefused(heartbeat = Duration.ZERO) },
+        { assertRefused(heartbeat = -1.milliseconds) },
+    )
+
+    /**
+     * The mirror of the guard above: adding a check that the window guard's own sub-millisecond case also
+     * breaks must not leave that guard with nothing of its own to refuse. It does not — a window can be
+     * sub-millisecond *above* one millisecond (`1.5ms..1.9ms`), where the heartbeat floor is satisfied and
+     * only the window relation bites.
+     */
+    @Test
+    fun theWindowGuardStillRefusesAPairTheHeartbeatFloorAdmits() = assertAll(
+        { assertEquals(1L, 1.milliseconds.inWholeMilliseconds, "the heartbeat floor is satisfied here…") },
+        {
+            val message = refusalMessage(min = 1500.microseconds, max = 1900.microseconds, heartbeat = 1.milliseconds)
+            assertContains(message, "1..1", message = "…so only the window guard can refuse this pair: $message")
+        },
     )
 
     /**
@@ -163,6 +224,13 @@ internal class RaftConfigTimingValidationTest {
             val message = refusalMessage(min = 1500.microseconds, max = 1900.microseconds, heartbeat = 1.milliseconds)
             assertContains(message, "1..1", message = "names the range the sub-millisecond pair truncates to: $message")
         },
+        {
+            val message = refusalMessage(heartbeat = 750.microseconds)
+            assertAll(
+                { assertContains(message, "heartbeatInterval=750us", message = message) },
+                { assertContains(message, "0ms", message = "names the value it truncates to: $message") },
+            )
+        },
     )
 
     /**
@@ -173,6 +241,7 @@ internal class RaftConfigTimingValidationTest {
     fun copyIsValidatedToo() = assertAll(
         { assertFailsWith<IllegalArgumentException> { RaftConfig().copy(heartbeatInterval = 1.seconds) } },
         { assertFailsWith<IllegalArgumentException> { RaftConfig().copy(electionTimeoutMax = defaultMin) } },
+        { assertFailsWith<IllegalArgumentException> { RaftConfig().copy(heartbeatInterval = 999.microseconds) } },
     )
 
     // ── Helpers ───────────────────────────────────────────────────────────────
