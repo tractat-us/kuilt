@@ -6,6 +6,7 @@
 package us.tractat.kuilt.scale
 
 import java.lang.management.ManagementFactory
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.KSerializer
@@ -21,6 +22,7 @@ import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.quilter.QuiltMessage
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.assertAll
 import kotlin.math.pow
 import kotlin.math.roundToLong
 import kotlin.random.Random
@@ -44,24 +46,61 @@ import kotlin.time.Instant
  *
  * **What is measured, not modelled.** Every byte count below comes out of the real codec:
  * [Quilter] frames its wire messages as `Cbor.encodeToByteArray(QuiltMessage.serializer(v), …)`,
- * and so does this suite. [meteredReconcileMatchesEncodedFullStateSize] closes the loop by
- * checking the encoded size against bytes actually counted on a [MeteredSeam], so the size
- * sweep can then run without standing up a mesh per data point.
+ * and so does this suite. Part (B) closes the loop on a real [MeteredSeam], checking what the wire
+ * actually carries against what the codec says the frame costs.
  *
- * **What is modelled.** The digest protocol does not exist yet, so its messages are declared
- * here as [RootDigestProbe] / [ShardDigestsProbe] / [ShardPushProbe] and encoded with the same
- * `Cbor` — a real price for a hypothetical frame, rather than a guessed constant. The one
- * genuinely derived quantity is the shard-mismatch count, which is closed-form
- * (see [expectedMismatchedShards]).
+ * **Superseded in part.** `QuiltMessage.RootDigest` shipped in #1955, so the converged-round cost
+ * is no longer modelled at all: [quiescentRoundBytes] prices the *shipped* frame, and part (B) —
+ * [convergedRoundShipsADigestNotTheState] and [convergedRoundCostIsFlatInStateSize] — measures it
+ * end to end on a [MeteredSeam]. Part (B) used to assert the opposite (an anti-entropy round *is*
+ * one encoded `FullState`, exactly); that equality held right up until #1955 falsified it by
+ * design, and it is what licenses (A)'s sweep and (D)'s `today b/round` column to price a
+ * full-state round from the codec alone. The codec has not changed since, only which frame the
+ * tick reaches for.
+ *
+ * **What is still modelled.** The *sharded* variant was measured and deliberately not built — its
+ * advantage collapses as divergence grows (see the (D) table) — so its frames stay declared here
+ * as [ShardDigestsProbe] / [ShardPushProbe] and encoded with the same `Cbor`: a real price for a
+ * hypothetical frame, rather than a guessed constant. The one genuinely derived quantity is the
+ * shard-mismatch count, which is closed-form (see [expectedMismatchedShards]).
  *
  * The verdict table is printed by [crossoverTableForDigestGatedAntiEntropy].
+ *
+ * Determinism mirrors the sibling scaling suites: [UnconfinedTestDispatcher], per-peer seeded RNG,
+ * heartbeats pushed past the measurement window, `jitter = ZERO` for synchronous view convergence,
+ * bounded virtual-time advance — never `advanceUntilIdle`, which would hang rather than fail on
+ * the forever-re-arming anti-entropy timer.
  */
 class MerkleDigestCostModelTest {
 
     private companion object {
         /** Knuth's 32-bit golden-ratio constant — only to make the probe shard vector incompressible. */
         const val GOLDEN_RATIO_32 = -0x61c88647
+
+        /**
+         * A full-width stand-in for a real root. `stateRoot()` is FNV-1a 64 over the encoded state,
+         * so a root is ~uniformly distributed over `Long` and pays CBOR's full 9-byte cost; a tidy
+         * placeholder like `-1L` encodes in one byte and would understate the frame by eight.
+         */
+        const val REPRESENTATIVE_ROOT = -0x5AA53CC31EE12DD2L
     }
+
+    /**
+     * Anti-entropy interval used by the metered rounds in (B). Short enough that twenty rounds fit
+     * in a one-second virtual window, and far below the 30 s `fullStateRetryInterval`, so no
+     * first-contact retry can ride the tick and pollute the measurement.
+     */
+    private val antiEntropyInterval = 50.milliseconds
+
+    /** Virtual-time steps used to settle handshakes and first-contact traffic before metering. */
+    private val flushSteps = 32
+
+    /**
+     * The replica id a metered peer actually uses: [buildInMemoryMesh] names peers `peer-N` and
+     * [Quilter] defaults its replica to the seam's own peer id. Every id in a sub-10-node mesh is
+     * six characters, so one name prices every peer's frames.
+     */
+    private val meshSender = ReplicaId("peer-0")
 
     // ---- shapes under measurement ----------------------------------------------------------
 
@@ -140,17 +179,19 @@ class MerkleDigestCostModelTest {
 
     private fun slope(rows: List<Pair<Int, Int>>): Double = segmentSlope(rows, 4, 5)
 
-    // ---- B. grounding: does the encoded size equal what the wire actually carries? ----------
+    // ---- B. acceptance: what a converged anti-entropy round actually costs ------------------
 
-    @Test
-    fun meteredReconcileMatchesEncodedFullStateSize() = runTest(UnconfinedTestDispatcher()) {
-        val n = 4
-        val rounds = 20
-        val stateSize = 200
-        val antiEntropy = 50.milliseconds
-
+    /**
+     * Stands up an [n]-node metered mesh in which **every** node replicates the same [state], so
+     * every anti-entropy round is a converged round — the case the #1955 digest gate exists for —
+     * and returns the bytes that [rounds] such rounds put on the wire, cluster-wide.
+     *
+     * Handshakes and the first-contact `FullState` exchange are flushed *before* the meter is read,
+     * so the window holds anti-entropy traffic and nothing else.
+     */
+    private suspend fun TestScope.meterConvergedRounds(n: Int, state: GSet<String>, rounds: Int): Long {
         val clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
-        fun flush() = repeat(32) { testScheduler.advanceTimeBy(1); testScheduler.runCurrent() }
+        fun flush() = repeat(flushSteps) { testScheduler.advanceTimeBy(1); testScheduler.runCurrent() }
 
         val mesh = buildInMemoryMesh(n)
         val gossips = mesh.seams.mapIndexed { i, base ->
@@ -165,50 +206,104 @@ class MerkleDigestCostModelTest {
         gossips.forEach { it.start(backgroundScope) }
         flush()
 
-        // Quilter defaults its replica to the seam's own peer id, and that id is *in* the frame.
-        // Derive it rather than assuming this suite's `replica`, or the comparison below is off by
-        // the difference in id length.
-        val sender = ReplicaId(gossips[0].selfId.value)
-        Quilter(
-            seam = gossips[0],
-            initial = gsetOf(stateSize),
-            valueSerializer = GSet.serializer(String.serializer()),
-            scope = backgroundScope,
-            config = QuilterConfig(expectVirtualTime = true, antiEntropyInterval = antiEntropy),
-            random = Random(100),
-        )
+        gossips.forEach { gossip ->
+            Quilter(
+                seam = gossip,
+                initial = state,
+                valueSerializer = GSet.serializer(String.serializer()),
+                scope = backgroundScope,
+                config = QuilterConfig(expectVirtualTime = true, antiEntropyInterval = antiEntropyInterval),
+                random = Random(100),
+            )
+        }
         flush()
 
         val before = mesh.clusterMetrics().totalBytesOut
-        repeat(rounds) { testScheduler.advanceTimeBy(antiEntropy.inWholeMilliseconds); testScheduler.runCurrent() }
-        val totalOnWire = mesh.clusterMetrics().totalBytesOut - before
+        repeat(rounds) {
+            testScheduler.advanceTimeBy(antiEntropyInterval.inWholeMilliseconds)
+            testScheduler.runCurrent()
+        }
+        val measured = mesh.clusterMetrics().totalBytesOut - before
         mesh.close()
+        return measured
+    }
 
-        val encoded = fullStateBytes(gsetOf(stateSize), sender)
-        println("\n=== #1955 Phase 0 (B): model grounding at GSet($stateSize), sender=${sender.value} ===")
-        println("  metered bytes on the wire, $rounds rounds : $totalOnWire")
-        println("  Cbor-encoded FullState frame × $rounds     : ${encoded * rounds}")
-        println("  framing/relay overhead                   : ${totalOnWire - encoded * rounds} bytes")
+    @Test
+    fun convergedRoundShipsADigestNotTheState() = runTest(UnconfinedTestDispatcher()) {
+        val n = 4
+        val rounds = 20
+        val stateSize = 200
 
-        // Exact, not a band: an anti-entropy round *is* one encoded FullState frame and nothing
-        // else — heartbeats are pinned to a 1h interval so none fire inside the window, and a
-        // unicast push draws no reply. That equality is what licenses (A)'s size sweep to stand in
-        // for wire cost without standing up a mesh per data point; if it ever stops holding, the
-        // sweep is measuring the wrong quantity and this suite's conclusions do not follow.
-        assertEquals(
-            encoded.toLong() * rounds,
-            totalOnWire,
-            "$rounds anti-entropy rounds must put exactly $rounds encoded FullState frames " +
-                "($encoded b each) on the wire",
+        val shared = gsetOf(stateSize)
+        val measured = meterConvergedRounds(n = n, state = shared, rounds = rounds)
+
+        val fullState = fullStateBytes(shared, meshSender)
+        val digestFrame = quiescentRoundBytes(meshSender)
+        val perNodeRound = measured.toDouble() / (rounds * n)
+        println("\n=== #1955 acceptance (B): converged anti-entropy round, GSet($stateSize), $n nodes ===")
+        println("  bytes/node/round now       : ${"%.1f".format(perNodeRound)}")
+        println("  one RootDigest frame       : $digestFrame (encoded from the shipped class)")
+        println("  full state would have been : $fullState")
+        println("  reduction                  : ${"%.1f".format(fullState / perNodeRound)}x")
+
+        assertAll(
+            // The Phase-0 prediction was that a converged round becomes a small constant frame,
+            // independent of state size. 200 entries is ~6.5 KB of state; a digest round is tens of
+            // bytes. Assert the order of magnitude, not an exact frame size, so incidental framing
+            // changes do not red-light this.
+            {
+                assertTrue(
+                    perNodeRound < fullState / 20.0,
+                    "a converged round must cost far less than the state ($perNodeRound b vs $fullState b)",
+                )
+            },
+            // Grounding, in the role the old part (B) played: the wire must carry the digest frame
+            // and essentially nothing else. A round costing multiples of a digest would mean
+            // something else is riding the anti-entropy tick, and every figure (D) derives from
+            // [quiescentRoundBytes] would be understated.
+            {
+                assertTrue(
+                    perNodeRound < digestFrame * 2.0,
+                    "a converged round must be one digest frame, not several " +
+                        "(metered $perNodeRound b vs modelled $digestFrame b)",
+                )
+            },
         )
     }
 
-    // ---- C. the digest protocol's own cost -------------------------------------------------
+    @Test
+    fun convergedRoundCostIsFlatInStateSize() = runTest(UnconfinedTestDispatcher()) {
+        // The #1955 claim is not "cheaper" but "constant": the converged round must cost the same
+        // at 200 entries as at 20,000, while full state grows 100x. Measured, not modelled.
+        val rounds = 10
+        data class Row(val size: Int, val bytes: Long, val fullState: Int)
 
-    /** Round hash only: what a converged round would carry if the roots match. */
-    @Serializable
-    @SerialName("rootDigest")
-    private class RootDigestProbe(val sender: ReplicaId, val root: Long)
+        val measured = listOf(200, 20_000).map { size ->
+            val shared = gsetOf(size)
+            Row(
+                size = size,
+                bytes = meterConvergedRounds(n = 2, state = shared, rounds = rounds),
+                fullState = fullStateBytes(shared, meshSender),
+            )
+        }
+
+        println("\n=== #1955 acceptance (B): converged-round cost vs state size, $rounds rounds, 2 nodes ===")
+        measured.forEach {
+            println(
+                "  GSet(%6d) -> %7d bytes total   (a full-state round would be %9d b)"
+                    .format(it.size, it.bytes, it.fullState),
+            )
+        }
+
+        val (small, large) = measured
+        assertTrue(
+            large.bytes < small.bytes * 2,
+            "converged-round cost must be ~flat in state size " +
+                "(${small.size} entries: ${small.bytes} b, ${large.size} entries: ${large.bytes} b)",
+        )
+    }
+
+    // ---- C. frame sizes: the shipped root digest, and the shard vector that was not built ----
 
     /** The shard vector, sent only when roots disagree. */
     @Serializable
@@ -225,10 +320,22 @@ class MerkleDigestCostModelTest {
 
     /**
      * Cost of a converged round: one root-hash frame, nothing in reply. Independent of state
-     * size — that constancy *is* the optimization, so it is asserted rather than printed.
+     * size — that constancy *is* the optimization, so part (B) measures it rather than trusting it.
+     *
+     * Priced from the **shipped** `QuiltMessage.RootDigest`, not a probe. A probe of it drifted
+     * once already: it modelled `(sender, root)` while the shipped frame carries a third field,
+     * `upThrough` — the #1266 receive-cursor resync a matched round would otherwise skip — so every
+     * figure derived from it underpriced the real converged round. Encoding the shipped class makes
+     * that class of drift impossible, and it already pays the sealed-variant tag, so no
+     * [sealedTagOverhead] is added here.
+     *
+     * `upThrough` is a peer's own-delta high-water; `1L` is the floor a quiet replica sits at, so
+     * this is the cheapest honest frame — a busy replica's sequence number costs a few bytes more.
      */
-    private fun quiescentRoundBytes(): Int =
-        bytesOf(RootDigestProbe.serializer(), RootDigestProbe(replica, root = -1L)) + sealedTagOverhead()
+    private fun quiescentRoundBytes(sender: ReplicaId = replica): Int = bytesOf(
+        gsetSerializer,
+        QuiltMessage.RootDigest<GSet<String>>(sender = sender, root = REPRESENTATIVE_ROOT, upThrough = 1L),
+    )
 
     /**
      * The tag a variant pays for living in the `QuiltMessage` sealed hierarchy. Measured against
@@ -253,7 +360,7 @@ class MerkleDigestCostModelTest {
 
         println("\n=== #1955 Phase 0 (C): measured digest-protocol frame sizes (Cbor) ===")
         println("  sealed-variant tag overhead        : ${sealedTagOverhead()} bytes")
-        println("  converged round (root hash only)   : $quiescent bytes — constant in state size")
+        println("  converged round (shipped RootDigest): $quiescent bytes — constant in state size")
         shardVectors.forEach { (s, bytes) -> println("  shard vector, S=%4d               : %6d bytes".format(s, bytes)) }
 
         // The whole premise: a converged round costs the same whether the CRDT holds 1 entry
