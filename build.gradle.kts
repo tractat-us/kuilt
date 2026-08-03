@@ -1665,10 +1665,109 @@ val forbidTightRunTestTimeout by tasks.registering {
     }
 }
 
+// Guard: forbid a module that contributes Kotlin source but no detekt task (#2005).
+//
+// Detekt is registered as a SIDE EFFECT of applying `kuilt.kmp-library`. Nothing else applies it,
+// and nothing notices when a module doesn't: the module compiles, `./gradlew build` is green, and
+// `detektAll` simply schedules no task for it — silent zero lint coverage, indistinguishable from
+// "clean". That has now been found three times independently, each time by someone tripping over it
+// while doing something else: `:spike` (#1863), `commonTest` across the whole repo (#1960), and
+// `:kuilt-scale` (#2005, found because its new measurement suites had to be held to the repo's
+// conventions BY HAND). Fixing instances leaves the fourth one to be found the same way. This makes
+// "compiled but unlinted" a build failure instead.
+//
+// The assertion, per subproject with at least one `**/*.kt` under `src/`:
+//   1. the detekt plugin is applied — the module is analysable at all, and
+//   2. a `detektAll` task exists — so `./gradlew detektAll`, which is what CI's lint job runs,
+//      actually reaches it. (1) without (2) is the shape that produced #2005's evidence: a module
+//      can carry detekt tasks that the repo's own entry point never schedules.
+//
+// Both checks are by NAME/plugin-id rather than by task type: `io.gitlab.arturbosch.detekt.Detekt`
+// is on `build-logic`'s classpath, not this script's, so a typed reference wouldn't compile here.
+//
+// WHAT THIS DOES NOT CATCH, stated rather than implied: it asserts the module is linted, not that
+// every source set is covered. `detektAll` deliberately wires only the type-resolved tasks, and
+// `commonTest` has no such task at all — that gap is #1960 and needs a different mechanism. Nor
+// does it see a module whose sources live outside `src/`; the definition matches the sibling
+// guards above, and widening it to "any Kotlin file anywhere" would drag in `build/` output.
+//
+// The allowlist is the known backlog, not an escape hatch. Every entry cites the issue tracking it,
+// and each is there because wiring detekt is NOT a small change — all three are plain KMP modules,
+// where type-resolved analysis needs the ~70 lines of source-set folding `kuilt.kmp-library` does
+// (and `:demo-web`/`:spike` have no JVM target to fold into at all). A plain Kotlin/JVM module has
+// no excuse: apply `kuilt.detekt-jvm`, which is one line.
+val unlintedModuleProbes = mutableListOf<Triple<String, Boolean, FileTree>>()
+gradle.projectsEvaluated {
+    rootProject.subprojects.forEach { sub ->
+        val linted = sub.plugins.hasPlugin("io.gitlab.arturbosch.detekt") &&
+            sub.tasks.findByName("detektAll") != null
+        unlintedModuleProbes += Triple(sub.path, linted, kotlinSourcesIn(listOf(sub.projectDir.resolve("src"))))
+    }
+    tasks.named("forbidUnlintedModule") {
+        // Two independent things can flip the verdict, so both are declared. The per-module source
+        // trees (separately named, for the same reason as `forbidSourcelessKmpTarget`: the verdict
+        // depends on WHICH module a file sits in, so a pooled fingerprint would let a file move
+        // between modules invisibly) cover "this module gained its first Kotlin source". The
+        // registration map covers "this module gained or lost detekt", which is a change in a
+        // SUBPROJECT's build script — invisible to the root script's own action-implementation hash,
+        // so without this property a module could quietly drop detekt onto a cached green.
+        unlintedModuleProbes.forEach { (path, _, tree) ->
+            inputs.files(tree)
+                .withPropertyName("moduleSources_" + path.replace(Regex("[^A-Za-z0-9]+"), "_"))
+                .withPathSensitivity(PathSensitivity.RELATIVE)
+        }
+        inputs.property("detektRegistration", unlintedModuleProbes.associate { (path, linted, _) -> path to linted })
+    }
+}
+
+val forbidUnlintedModule by tasks.registering {
+    group = "verification"
+    description = "Fails if a subproject has Kotlin source but no detekt task — compiled but unlinted (#2005)."
+    val probes = unlintedModuleProbes
+    // See "Guard plumbing" above: stamp ⇒ UP-TO-DATE (#1827). Inputs are registered in the
+    // `projectsEvaluated` block above, once every module's plugins and tasks exist.
+    val stamp = layout.buildDirectory.file("verification/forbid-unlinted-module.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    // Known-unlinted modules, each with the issue that tracks wiring it up. An entry MUST cite an
+    // issue — a bare exclusion turns this guard back into the silence it exists to break. Shrinks to
+    // empty; do NOT add a plain-JVM module here, apply `kuilt.detekt-jvm` instead.
+    val allowlist = mapOf(
+        ":demo-shared" to "#2016", // plain KMP (jvm + wasmJs); needs the KMP source-set folding
+        ":demo-web" to "#2016", // plain KMP, wasmJs-only — no JVM target to type-resolve against
+        ":spike" to "#1863", // plain KMP, appleMain-only; -PincludeSpike-gated
+    )
+    doLast {
+        val offenders = probes
+            .filter { (path, linted, tree) -> !linted && path !in allowlist && !tree.isEmpty }
+            .map { (path, _, tree) -> "$path (${tree.files.size} Kotlin file(s) under src/)" }
+        if (offenders.isNotEmpty()) {
+            error(
+                "Module(s) contribute Kotlin source but register no detekt task — they compile, " +
+                    "`./gradlew build` is green, and `detektAll` schedules NOTHING for them, which is " +
+                    "indistinguishable from being clean (#2005):\n  " + offenders.joinToString("\n  ") +
+                    "\n  THE FIX for a plain Kotlin/JVM module is one line in its `plugins { }` block:\n" +
+                    "      id(\"kuilt.detekt-jvm\")\n" +
+                    "  A KMP module should apply `kuilt.kmp-library`, which registers detekt already.\n" +
+                    "  If neither fits, add the module to this guard's `allowlist` in the root " +
+                    "`build.gradle.kts` WITH the issue number tracking it — an entry without one is " +
+                    "not acceptable, because a silent exclusion is the exact failure this guard ends.",
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText(
+            "ok — ${probes.count { (_, _, tree) -> !tree.isEmpty }} module(s) with Kotlin source checked, " +
+                "${allowlist.size} allowlisted\n",
+        )
+    }
+}
+
 // Run the guards as part of `check` (hence `build`, hence CI) in every module.
 allprojects {
     tasks.matching { it.name == "check" }.configureEach {
         dependsOn(rootProject.tasks.named("forbidUnboundedSwatchDelivery"))
+        dependsOn(rootProject.tasks.named("forbidUnlintedModule"))
         dependsOn(rootProject.tasks.named("forbidSourcelessKmpTarget"))
         dependsOn(rootProject.tasks.named("forbidPortProbeRebind"))
         dependsOn(rootProject.tasks.named("verifyDocCitations"))
