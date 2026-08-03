@@ -112,7 +112,12 @@ class FrameRefusedTest {
 
         val refusal = refusals.only(followerId)
         assertAll(
-            { assertEquals(RefusalGate.ImplausibleNegativeTerm, refusal.gate, "a negative term is malformed, not a jump") },
+            {
+                assertEquals(
+                    RefusalGate.ImplausibleNegativeTerm, refusal.gate,
+                    "a negative term is malformed, not a jump",
+                )
+            },
             { assertEquals(followerId, refusal.node, "the refusing node is the recipient") },
             { assertEquals(other, refusal.from, "the frame's true origin") },
             { assertEquals(RaftMessageType.RequestVote, refusal.messageType) },
@@ -335,7 +340,12 @@ class FrameRefusedTest {
         assertAll(
             { assertEquals(RefusalGate.TimeoutNowSelfLearner, refusal.gate) },
             { assertEquals(learnerId, refusal.node) },
-            { assertEquals(leaderId, refusal.from, "the sender is the recognised leader — every earlier guard passed") },
+            {
+                assertEquals(
+                    leaderId, refusal.from,
+                    "the sender is the recognised leader — every earlier guard passed",
+                )
+            },
         )
     }
 

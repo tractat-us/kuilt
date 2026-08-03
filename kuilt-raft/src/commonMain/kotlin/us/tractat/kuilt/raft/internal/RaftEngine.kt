@@ -3130,9 +3130,10 @@ internal class RaftEngine(
         // guard against an overflowing term cannot itself overflow. `currentTerm` is no longer bounded
         // above by a constant (adoption is relative now), so the additive form could wrap negative near
         // `Long.MAX_VALUE` and then refuse everything. Both operands are non-negative — `wireTerm`
-        // because the malformed-term arm below returns first on a negative one (until #1989 split them
-        // that was the short-circuiting left half of one `if`), `currentTerm` by [checkedRestoredTerm] and by only
-        // ever being raised from an admitted non-negative term — so the difference is representable.
+        // because the malformed-term arm below returns first on a negative one (until #1989 split
+        // them that was the short-circuiting left half of one `if`), `currentTerm` by
+        // [checkedRestoredTerm] and by only ever being raised from an admitted non-negative term —
+        // so the difference is representable.
         //
         // ### What MAX_PLAUSIBLE_TERM still does, and the asymmetry that opens
         //
@@ -3240,26 +3241,32 @@ internal class RaftEngine(
      * Observe one leader→peer frame that a dispatch-boundary gate just dropped, and name the wedge if
      * this node has been doing that for a sustained run while making no progress of its own (#1898).
      *
-     * **Changes no decision.** The caller has already returned the frame to the floor and that stays
+     * **Changes no decision.** The gate has already returned the frame to the floor and that stays
      * correct either way; all this adds is the signal. That is what makes detection safe: an honest
      * long absence and a hostile peer produce the same local symptom, so a gate *relaxed* on this
      * predicate would relax for both (`docs/raft-wedge-diagnosis-and-recovery.md`).
+     *
+     * Reached only through [refuseFrame], for the gates whose [RefusalGate.wedgeGate] is non-null —
+     * the two at [onMessage]'s dispatch boundary, which since #1989 are three [RefusalGate] values
+     * (the implausible-term bound's two arms and the §5.2 gate). [onTimeoutNow]'s guards map to
+     * `null` and never arrive here; a wedge is about frames that could not be *dispatched*.
      *
      * ### The predicate, and why each clause is there
      *
      * - **A leader→peer type.** [RaftMessage.isLeaderToPeer] — the same three types the §5.2 gate
      *   tests. The jump bound has no type test of its own, so this is where the filter lives for that
-     *   caller. A refused `PreVote` or `RequestVoteResponse` says nothing about being able to make
+     *   gate. A refused `PreVote` or `RequestVoteResponse` says nothing about being able to make
      *   progress; a refused `AppendEntries` is exactly the frame that would have carried it.
      * - **[senderTerm] at least ours.** Tested rather than inferred: a frame from *behind* us is an
-     *   ordinary stale straggler, and refusing it is the gate working, not a wedge. Neither caller
-     *   establishes the relation on its own. The §5.2 leader-authority gate tests the *sender* and the
-     *   message *type* and says nothing about the term, so its frames arrive at any term at all; and
-     *   the jump bound's sibling arm (a negative term) is malformed and lands below us, so it is
-     *   excluded here even though it shares that `return`. Only the jump bound's other arm implies a
-     *   term above ours — [RaftConfig.maxTermJump] is validated positive since #1972, so
-     *   `wireTerm - currentTerm > maxTermJump` does now put `wireTerm` above `currentTerm` — and one
-     *   arm of one caller is not a relation this function may assume.
+     *   ordinary stale straggler, and refusing it is the gate working, not a wedge. No gate that
+     *   reaches here establishes the relation on its own. The §5.2 leader-authority gate tests the
+     *   *sender* and the message *type* and says nothing about the term, so its frames arrive at any
+     *   term at all; and [RefusalGate.ImplausibleNegativeTerm] is malformed and lands below us, so it
+     *   is excluded here even though it is named as a `TermJump` refusal. Only
+     *   [RefusalGate.ImplausibleTermJump] implies a term above ours — [RaftConfig.maxTermJump] is
+     *   validated positive since #1972, so `wireTerm - currentTerm > maxTermJump` does now put
+     *   `wireTerm` above `currentTerm` — and one gate out of three is not a relation this function
+     *   may assume.
      * - **Our commit index standing still.** A node that is committing is making progress, whatever it
      *   is refusing — most concretely a wedged voter that campaigned and won inside its own stale set,
      *   which is a split-brain rather than the silence this reports. The run restarts whenever
