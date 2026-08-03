@@ -36,8 +36,13 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
- * Phase-0 measurement for **#1955** (Merkle/digest anti-entropy for the non-causal CRDTs),
- * and the gate on whether that issue should be built at all.
+ * Phase-0 measurement for **#1955** (digest-gated anti-entropy for the non-causal CRDTs), and the
+ * gate on whether that issue should be built at all.
+ *
+ * **The class name outlives what shipped, deliberately.** #1955 shipped a *bare root hash*, not a
+ * Merkle tree. This class keeps the name because it still prices the sharded/tree variant that was
+ * measured and rejected — part (D) is the whole reason that decision has a number behind it.
+ * Nothing here should be read as a claim that a tree exists in the codebase.
  *
  * #1955 and its predecessor #663 both say *measure first*, and #663's stated trigger was
  * "when average CRDT state exceeds a threshold". Nobody had produced the threshold. This
@@ -57,6 +62,11 @@ import kotlin.time.Instant
  * design, and it is what licenses (A)'s sweep and (D)'s `today b/round` column to price a
  * full-state round from the codec alone. The codec has not changed since, only which frame the
  * tick reaches for.
+ *
+ * **A converged round is two frames, not one.** The digest goes out and the matched peer acks its
+ * `upThrough` back, so [matchedRoundBytes] — not [quiescentRoundBytes] — is the figure to quote.
+ * [meterConvergedRounds] makes every node apply a local mutation before the meter opens for exactly
+ * that reason; see its KDoc for why a never-written mesh silently halves the number.
  *
  * **What is still modelled.** The *sharded* variant was measured and deliberately not built — its
  * advantage collapses as divergence grows (see the (D) table) — so its frames stay declared here
@@ -186,8 +196,19 @@ class MerkleDigestCostModelTest {
      * every anti-entropy round is a converged round — the case the #1955 digest gate exists for —
      * and returns the bytes that [rounds] such rounds put on the wire, cluster-wide.
      *
-     * Handshakes and the first-contact `FullState` exchange are flushed *before* the meter is read,
-     * so the window holds anti-entropy traffic and nothing else.
+     * **Every node applies one local mutation before the meter opens, and the mesh is then allowed
+     * to re-agree.** That is load-bearing, not decoration. A replica that has never called
+     * `Quilter.apply` sits at `nextSeq == 0`, so its digest carries `upThrough = 0`, and the
+     * recipient's `resyncReceiveCursor` returns at its `upThrough <= 0` guard *before* acking.
+     * Metering that mesh prices digest-out-with-nothing-back — a state no replica that has ever
+     * written is in — and halves the published round cost. One mutation each puts every node at
+     * `nextSeq >= 1`; the deltas re-agree the states, so the window still holds genuinely
+     * *converged* rounds, now carrying the matched round's `Ack` exactly as production does.
+     * Convergence is asserted rather than assumed — a diverged window would be measuring the
+     * mismatch branch, which is a different quantity entirely.
+     *
+     * Handshakes, the first-contact `FullState` exchange, and those reconvergence deltas are all
+     * flushed *before* the meter is read, so the window holds anti-entropy traffic and nothing else.
      */
     private suspend fun TestScope.meterConvergedRounds(n: Int, state: GSet<String>, rounds: Int): Long {
         val clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
@@ -206,7 +227,7 @@ class MerkleDigestCostModelTest {
         gossips.forEach { it.start(backgroundScope) }
         flush()
 
-        gossips.forEach { gossip ->
+        val quilters = gossips.map { gossip ->
             Quilter(
                 seam = gossip,
                 initial = state,
@@ -217,6 +238,17 @@ class MerkleDigestCostModelTest {
             )
         }
         flush()
+
+        quilters.forEachIndexed { i, quilter -> quilter.mutate { it.add("converged-writer-$i") } }
+        flush()
+
+        val settled = quilters.map { it.state.value }.toSet()
+        assertEquals(
+            1,
+            settled.size,
+            "the metered window must hold CONVERGED rounds: $n writing nodes settled on " +
+                "${settled.size} distinct states, so the rounds below would be mismatch rounds",
+        )
 
         val before = mesh.clusterMetrics().totalBytesOut
         repeat(rounds) {
@@ -239,10 +271,13 @@ class MerkleDigestCostModelTest {
 
         val fullState = fullStateBytes(shared, meshSender)
         val digestFrame = quiescentRoundBytes(meshSender)
+        val matchedRound = matchedRoundBytes(meshSender)
         val perNodeRound = measured.toDouble() / (rounds * n)
         println("\n=== #1955 acceptance (B): converged anti-entropy round, GSet($stateSize), $n nodes ===")
         println("  bytes/node/round now       : ${"%.1f".format(perNodeRound)}")
         println("  one RootDigest frame       : $digestFrame (encoded from the shipped class)")
+        println("  its matched Ack back       : ${matchedAckBytes(meshSender)}")
+        println("  modelled matched round     : $matchedRound (digest out + ack back)")
         println("  full state would have been : $fullState")
         println("  reduction                  : ${"%.1f".format(fullState / perNodeRound)}x")
 
@@ -257,15 +292,27 @@ class MerkleDigestCostModelTest {
                     "a converged round must cost far less than the state ($perNodeRound b vs $fullState b)",
                 )
             },
-            // Grounding, in the role the old part (B) played: the wire must carry the digest frame
-            // and essentially nothing else. A round costing multiples of a digest would mean
-            // something else is riding the anti-entropy tick, and every figure (D) derives from
-            // [quiescentRoundBytes] would be understated.
+            // The floor, and the reason [meterConvergedRounds] makes every node write. A matched
+            // round is digest-out PLUS ack-back; a harness whose nodes have never applied a local
+            // mutation sits at `upThrough = 0`, `resyncReceiveCursor` returns before acking, and
+            // the round silently prices at half. This assertion is what makes that regression red.
             {
                 assertTrue(
-                    perNodeRound < digestFrame * 2.0,
-                    "a converged round must be one digest frame, not several " +
-                        "(metered $perNodeRound b vs modelled $digestFrame b)",
+                    perNodeRound > digestFrame * 1.2,
+                    "a matched round must carry the ack back, not the digest alone " +
+                        "(metered $perNodeRound b vs one digest $digestFrame b) — nodes that have " +
+                        "never applied a local mutation emit `upThrough = 0` and get no ack",
+                )
+            },
+            // Grounding, in the role the old part (B) played: the wire must carry the matched round
+            // and essentially nothing else. A round costing multiples of it would mean something
+            // else is riding the anti-entropy tick, and every figure (D) derives from
+            // [matchedRoundBytes] would be understated.
+            {
+                assertTrue(
+                    perNodeRound < matchedRound * 1.5,
+                    "a converged round must be one digest plus its ack, not several frames " +
+                        "(metered $perNodeRound b vs modelled $matchedRound b)",
                 )
             },
         )
@@ -319,8 +366,11 @@ class MerkleDigestCostModelTest {
         Cbor.encodeToByteArray(serializer, value).size
 
     /**
-     * Cost of a converged round: one root-hash frame, nothing in reply. Independent of state
+     * The **sender's half** of a converged round: one root-hash frame out. Independent of state
      * size — that constancy *is* the optimization, so part (B) measures it rather than trusting it.
+     * For what the whole round costs, see [matchedRoundBytes]: the recipient answers a matched
+     * digest with an `Ack`, and quoting this figure as the round is the mistake that made the
+     * published cost ~2x optimistic.
      *
      * Priced from the **shipped** `QuiltMessage.RootDigest`, not a probe. A probe of it drifted
      * once already: it modelled `(sender, root)` while the shipped frame carries a third field,
@@ -329,13 +379,38 @@ class MerkleDigestCostModelTest {
      * that class of drift impossible, and it already pays the sealed-variant tag, so no
      * [sealedTagOverhead] is added here.
      *
-     * `upThrough` is a peer's own-delta high-water; `1L` is the floor a quiet replica sits at, so
-     * this is the cheapest honest frame — a busy replica's sequence number costs a few bytes more.
+     * `upThrough` is the sender's own-delta high-water. Its floor is **`0`**, not `1`: `nextSeq`
+     * starts at `0` and pre-increments on the first `apply`, so a replica that has never applied a
+     * local mutation ships `upThrough = 0`. That distinction is not cosmetic — at `0` the recipient's
+     * `resyncReceiveCursor` returns before acking, so such a round has no reply at all. `1L` is
+     * priced here because it is the floor for a replica that has *written*, which is the production
+     * case and the one [meterConvergedRounds] reproduces; a busy replica's sequence number costs a
+     * few bytes more.
      */
     private fun quiescentRoundBytes(sender: ReplicaId = replica): Int = bytesOf(
         gsetSerializer,
         QuiltMessage.RootDigest<GSet<String>>(sender = sender, root = REPRESENTATIVE_ROOT, upThrough = 1L),
     )
+
+    /**
+     * The `Ack` that comes **back** on a matched round. `onRootDigest`'s match branch calls
+     * `resyncReceiveCursor`, which acks the digest's `upThrough` unconditionally (idempotent at the
+     * sender, and it heals a previously-lost ack). `seq = 1L` mirrors [quiescentRoundBytes]'s
+     * written-replica floor.
+     */
+    private fun matchedAckBytes(sender: ReplicaId = replica): Int =
+        bytesOf(gsetSerializer, QuiltMessage.Ack<GSet<String>>(acker = sender, sender = sender, seq = 1L))
+
+    /**
+     * A whole converged round between two replicas that have each written at least once: the digest
+     * out and the ack back. This — not [quiescentRoundBytes] alone — is the figure to quote as the
+     * steady-state cost of anti-entropy, and it is what part (B) meters end to end.
+     *
+     * It is still flat in state size (both frames are), so the #1955 claim is unaffected; only the
+     * constant moves.
+     */
+    private fun matchedRoundBytes(sender: ReplicaId = replica): Int =
+        quiescentRoundBytes(sender) + matchedAckBytes(sender)
 
     /**
      * The tag a variant pays for living in the `QuiltMessage` sealed hierarchy. Measured against
@@ -360,7 +435,9 @@ class MerkleDigestCostModelTest {
 
         println("\n=== #1955 Phase 0 (C): measured digest-protocol frame sizes (Cbor) ===")
         println("  sealed-variant tag overhead        : ${sealedTagOverhead()} bytes")
-        println("  converged round (shipped RootDigest): $quiescent bytes — constant in state size")
+        println("  RootDigest out (shipped class)     : $quiescent bytes — constant in state size")
+        println("  Ack back on a match                : ${matchedAckBytes()} bytes")
+        println("  whole matched round                : ${matchedRoundBytes()} bytes — also constant")
         shardVectors.forEach { (s, bytes) -> println("  shard vector, S=%4d               : %6d bytes".format(s, bytes)) }
 
         // The whole premise: a converged round costs the same whether the CRDT holds 1 entry
@@ -382,6 +459,7 @@ class MerkleDigestCostModelTest {
     fun crossoverTableForDigestGatedAntiEntropy() {
         val shards = 256
         val quiescent = quiescentRoundBytes()
+        val matchedRound = matchedRoundBytes()
         val vectorBytes = bytesOf(
             ShardDigestsProbe.serializer(),
             ShardDigestsProbe(replica, List(shards) { it }),
@@ -391,15 +469,19 @@ class MerkleDigestCostModelTest {
         val bytesPerEntry = slope(gsetRows)
 
         println("\n=== #1955 Phase 0 (D): crossover, GSet, S=$shards shards ===")
-        println("  converged round: $quiescent b (digest) vs O(state) (today)")
+        println("  converged round: $matchedRound b (digest $quiescent + ack ${matchedAckBytes()}) vs O(state) before #1955")
         println(
-            "  crossover at ${(quiescent / bytesPerEntry).toInt() + 1} entries — " +
+            "  crossover at ${(matchedRound / bytesPerEntry).toInt() + 1} entries — " +
                 "above that a converged round is cheaper as a digest",
         )
+        // The "before #1955" columns price the full state alone. That round also carried an ack
+        // (`onFullState` resyncs the cursor exactly as the digest's match branch does), so the
+        // comparison is a few tens of bytes conservative against a multi-KB-to-multi-MB frame —
+        // it understates the win, which is the safe direction.
         println("\n  Steady-state egress per node at the default 60s antiEntropyInterval:")
-        println("  %9s %14s %14s %10s".format("entries", "today b/round", "b/s (today)", "b/s (digest)"))
+        println("  %9s %19s %17s %12s".format("entries", "b/round (before)", "b/s (before)", "b/s (now)"))
         gsetRows.forEach { (n, bytes) ->
-            println("  %9d %14d %14.1f %10.2f".format(n, bytes, bytes / 60.0, quiescent / 60.0))
+            println("  %9d %19d %17.1f %12.2f".format(n, bytes, bytes / 60.0, matchedRound / 60.0))
         }
 
         println("\n  Diverged round — d keys actually differ (n = 100k entries):")

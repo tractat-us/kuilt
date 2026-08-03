@@ -35,8 +35,9 @@ import kotlin.time.Instant
  * scaled with *state* size, not *delta* size. The tick now ships a `QuiltMessage.RootDigest` — a
  * 64-bit hash of the state plus the sender's own-delta high-water — and the recipient asks for the
  * state only when the roots differ. [reconcileBytesPerRoundStayFlatAsStateGrows] measures what that
- * leaves: the same sweep over state size, now asserting the *inversion* — a converged round is one
- * small frame whose size does not track state size at all.
+ * leaves — the same sweep over state size, now asserting the *inversion*: the frame the tick emits
+ * does not track state size at all. It measures the **sender's half** only (see
+ * [singleReconcilerMesh]); the whole round adds the matched peer's ack.
  *
  * **#664 — anti-entropy fanout / scheduling.** Still unbuilt by design: fanout = 1 is correct at
  * the tens–low-hundreds target scale. Reconcile picks **one** uniform-random peer per round, so a
@@ -62,9 +63,17 @@ class GossipAntiEntropyMeasurementTest {
      * random peer per round — so the metered seams isolate exactly the reconcile cost and
      * contact pattern.
      *
-     * The peers hold no replica, so none of them ever answers with a `QuiltMessage.FullStateRequest`.
-     * What the meter therefore reads is the *sender's* per-round cost with nothing in reply — which
-     * is both the quantity #663 was about and, byte for byte, what a converged round costs.
+     * The peers hold no replica, so none of them ever answers: no `QuiltMessage.FullStateRequest`
+     * when the roots differ, and no `QuiltMessage.Ack` when they match. What the meter reads is
+     * therefore the **sender's half** of a round — one digest out, nothing back.
+     *
+     * That is exactly the quantity #663 was about (reconcile cost as a function of state size), and
+     * it is what this suite asserts on. It is **not** the whole cost of a converged round: in
+     * production a matched peer acks the digest's `upThrough`, so a real round is digest-out *plus*
+     * ack-back, ~2x this figure. `MerkleDigestCostModelTest.convergedRoundShipsADigestNotTheState`
+     * meters the whole round on a mesh whose nodes have all written; quote that one for a total.
+     * Giving these peers replicas would answer the same question at more moving parts, so the
+     * division of labour stands.
      */
     private suspend fun TestScope.singleReconcilerMesh(
         n: Int,
@@ -115,7 +124,8 @@ class GossipAntiEntropyMeasurementTest {
         }
 
         println("\n=== #663 (shipped as #1955): anti-entropy reconcile bytes/round vs CRDT state size (N=$n, digest push) ===")
-        results.forEach { println("  GSet(${it.stateSize} elems): ${it.bytesPerRound} bytes/round (root digest shipped, change was 0)") }
+        println("  (sender's half only — these peers hold no replica, so nothing is acked back)")
+        results.forEach { println("  GSet(${it.stateSize} elems): ${it.bytesPerRound} bytes/round out (root digest shipped, change was 0)") }
         val small = results.first { it.stateSize == 1 }
         val large = results.first { it.stateSize == 200 }
         println("  ratio 200:1 elems = ${large.bytesPerRound.toDouble() / small.bytesPerRound} (~200x before #1955; the round no longer carries the state)")

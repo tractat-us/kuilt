@@ -16,8 +16,10 @@ import kotlin.test.assertEquals
  * the same way regardless of merge order. It cannot prove that **two different targets** agree
  * — every comparison it makes happens in one process on one target, so a platform-dependent
  * encoding is self-consistent on each side while the bytes differ. That is exactly the failure
- * that would make a Merkle digest report permanent false divergence between a JVM peer and a
- * Native peer. Only a checked-in byte string catches it, and because `commonTest` compiles and
+ * that would make `Quilter`'s root digest (#1955 — a hash over the encoded state) report permanent
+ * false divergence between a JVM peer and a Native peer: the two would never agree, so every
+ * anti-entropy round between them would fall back to shipping the whole state, forever.
+ * Only a checked-in byte string catches it, and because `commonTest` compiles and
  * runs on JVM, Android, iOS, macOS and wasmJs, **this file *is* the cross-target check.**
  *
  * **Every construction below is deliberately shaped so that removing its type's canonical

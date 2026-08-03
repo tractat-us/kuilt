@@ -51,27 +51,35 @@ broadcasts), via a per-origin high-water mark (`GossipDedup`).
 The safety net that catches anything the fast path drops used to re-send a peer's whole
 picture every round, whether or not anything had changed — so its cost grew with the
 amount of data being shared. It now sends a short **fingerprint** of that picture
-instead, and ships the data only when two fingerprints disagree. The routine case is the
-same size whatever the data holds:
+instead, and ships the data only when two fingerprints disagree. A settled round is two
+short messages: the fingerprint out, and a brief "yes, I'm up to date" back. The routine
+case is the same size whatever the data holds:
 
 | A settled peer's background check | before | after |
 |---|---|---|
-| one round, 200-element shared set | ~6.5 KB | ~54 bytes |
-| one round, 100,000-element shared set | ~3.5 MB | ~54 bytes |
-| ongoing traffic per peer, 100,000 entries | ~58 KB/s | roughly 1 B/s |
+| one round, 200-element shared set | ~6.5 KB | ~94 bytes |
+| one round, 100,000-element shared set | ~3.5 MB | ~94 bytes |
+| ongoing traffic per peer, 100,000 entries | ~58 KB/s | roughly 1.6 B/s |
 
-That last row is a **~58,000×** drop. Treat every figure here as a floor rather than an
-exact constant: the frame is flat in the size of the data, but a few bytes move with the
-particular numbers it happens to carry, so quote them rounded. Reproduced by the
-`:kuilt-scale` cost-model and anti-entropy measurement tests.
+That last row is a **~36,000×** drop. What the table is really claiming is the two rows
+above it: the settled round is the *same size* at 100,000 entries as at 200 — and that
+holds because both messages are short and neither carries the data. Treat the exact
+numbers as rounded rather than fixed: a few bytes move with the particular values a
+message happens to carry and with how long a peer's name is, so a round is more precisely
+~94–103 bytes. Reproduced by the `:kuilt-scale` cost-model and anti-entropy measurement
+tests.
 
 Sending the whole picture is still the fallback every guarantee rests on. Two peers whose
-fingerprints coincide by accident lose one repair — never their eventual agreement; the
-next change either of them makes moves the fingerprints apart again. A peer running a
-version too old to recognise the check is a larger gap: it ignores every check sent to
-it, so those are all wasted, not just one. It still runs its *own* background checks the
-old way, though, and those repair in both directions — so the two peers still agree in
-the end, just more slowly. Keeping every peer on the same version avoids this entirely.
+fingerprints coincide by accident lose a repair — never their eventual agreement. If
+either of them then changes anything, the fingerprints move apart and the next round
+repairs; but if both are simply sitting still, the same two fingerprints keep matching, so
+the wait is until *something* changes, not until the next round. (The odds are about one
+in eighteen quintillion per pair, so this is worth knowing rather than worth planning
+for.) A peer running a version too old to recognise the check is a larger gap: it ignores
+every check sent to it, so those are all wasted, not just one. It still runs its *own*
+background checks the old way, though, and those repair in both directions — so the two
+peers still agree in the end, just more slowly. Keeping every peer on the same version
+avoids this entirely.
 
 ### Deferred optimizations (measured, not yet needed)
 

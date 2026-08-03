@@ -23,8 +23,9 @@ import kotlin.test.assertTrue
  * Receive-side behaviour of the #1955 digest exchange, driven by injecting frames into a
  * [FakeSeam] and reading back what the [Quilter] sent via [FakeSeam.directed].
  *
- * The send side still ships `FullState` at this point in the plan, so nothing here depends on
- * the anti-entropy tick.
+ * The anti-entropy tick now ships a `RootDigest` too, but nothing here depends on it: every test
+ * below drives the clock with `runCurrent()` only, which never reaches the first tick, so the sole
+ * frames on the wire are the ones injected and the handler's direct replies.
  */
 class QuilterRootDigestTest {
 

@@ -202,11 +202,19 @@ already knew.
 What shipped is a **bare root hash, not a tree.** `QuiltMessage.RootDigest(sender,
 root, upThrough)` carries a 64-bit FNV-1a hash of the `binaryFormat`-encoded state;
 a receiver whose own root differs answers `QuiltMessage.FullStateRequest` and the
-sender ships `FullState` exactly as before. Measured: a converged round drops to a
-54-byte frame, flat in state size, so steady-state egress at 100k entries falls to
-**roughly 1 B/s** — a ~58,000× reduction. (Treat that as a floor: the frame is flat
-in state size, but CBOR encodes `root` and `upThrough` at minimal width, so a few
-bytes move with the values.)
+sender ships `FullState` exactly as before. Measured: a converged round drops to two
+small frames — the 54–57 b digest out, plus the matched peer's 40–46 b `Ack` of
+`upThrough` back, ~94–103 b in all — both flat in state size, so steady-state egress
+at 100k entries falls to **roughly 1.6 B/s**, a ~36,000× reduction. (Treat the
+constant as rounded: CBOR encodes `root`, `seq` and `upThrough` at minimal width, so
+a few bytes move with the values and with the replica id's length. The flatness, not
+the constant, is the result.)
+
+The ack is easy to measure away and was, once: a harness whose replicas have never
+applied a local mutation sits at `nextSeq == 0`, ships `upThrough = 0`, and
+`resyncReceiveCursor` returns before acking — so the round reads as digest-only and
+the published cost halves. `MerkleDigestCostModelTest.meterConvergedRounds` makes
+every node write before it opens the meter for exactly that reason.
 
 Two design notes worth keeping, because both are counter-intuitive:
 

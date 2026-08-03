@@ -11,7 +11,9 @@ import us.tractat.kuilt.crdt.VersionVector
  * [Delta] carries a lattice fragment tagged with the sender's monotonic sequence
  * number. [Ack] tells the sender that the acker has absorbed all deltas through
  * [seq], enabling GC of the delta buffer. [FullState] ships the entire current
- * state and is sent once on first contact with a new peer.
+ * state — on first contact with a new peer, and in reply to a [FullStateRequest].
+ * [RootDigest] is what the anti-entropy tick sends instead of the state: a hash of
+ * it, answered with a [FullStateRequest] only when the recipient's own hash differs.
  *
  * @param S the [us.tractat.kuilt.crdt.Quilted] state type.
  */
@@ -82,7 +84,13 @@ public sealed class QuiltMessage<S> {
      * risk, inflicted here on a false match. It stays recoverable: the next state mutation on
      * either side changes both roots, and any [FullState] — from a third peer, the first-contact
      * path, or a later round whose roots then differ — re-merges the state and re-resyncs the
-     * cursor. So a stall until the next round, never divergence that survives a [FullState].
+     * cursor. So a stall, never divergence that survives a [FullState].
+     *
+     * That stall is **not** bounded by the next round, though. Between two *quiescent* peers
+     * neither state changes, so the same two roots collide again identically on every subsequent
+     * round, in both directions; recovery needs a local mutation or a [FullState] from a third
+     * peer. At 2⁻⁶⁴ per pair this is worth recording, not engineering around — but the bound is
+     * "until something changes", not "one round".
      */
     @Serializable
     @SerialName("rootDigest")

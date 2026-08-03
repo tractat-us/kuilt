@@ -7,8 +7,8 @@ ones; where they differ from Phase 0's predictions, that is called out inline.
 ## What this changes, in one sentence
 
 `Quilter`'s anti-entropy tick stops pushing the entire CRDT state to a random peer every 60 s and
-pushes a small constant-size frame carrying a hash of it instead (54–57 b measured), shipping the
-state only when the hashes disagree.
+pushes a small constant-size frame carrying a hash of it instead (54–57 b measured, answered by a
+40–46 b ack when the hashes agree), shipping the state only when they disagree.
 
 ## Why — the measured case
 
@@ -19,25 +19,33 @@ behaviour through the real codec and grounded the model against bytes actually c
 
 | `GSet` entries | full state | steady-state egress/node @60 s | with a digest † |
 |---|---|---|---|
-| 1,000 | 32.9 KB | 549 B/s | ~1 B/s |
-| 10,000 | 339 KB | 5.6 KB/s | ~1 B/s |
-| 100,000 | 3.49 MB | **58.1 KB/s** | ~1 B/s |
+| 1,000 | 32.9 KB | 549 B/s | ~1.6 B/s |
+| 10,000 | 339 KB | 5.6 KB/s | ~1.6 B/s |
+| 100,000 | 3.49 MB | **58.1 KB/s** | ~1.6 B/s |
 
 † The digest column is **state-size-independent by design** — that constancy is the whole
-optimization — so it is one value at every row. It is also a **floor**. The measured `RootDigest`
-frame is 54–57 b depending on replica-id length, i.e. 0.90–0.95 B/s over a 60 s interval; but CBOR
-encodes integers at minimal width, so a node whose own-delta high-water (`upThrough`) has reached
-six figures pays ~4 bytes more, landing at ~1.0 B/s. `~1 B/s` is the honest rounding; do not quote a
-more precise number as if it held at every state size.
+optimization, and it is the only part of this column that is exact — so it is one value at every
+row. The constant itself is rounded. A converged round is **two** frames, not one: the `RootDigest`
+out (54–57 b, by replica-id length) plus the matched peer's `Ack` of `upThrough` back (40–46 b),
+so 94–103 b, i.e. 1.57–1.72 B/s over a 60 s interval. CBOR also encodes integers at minimal width, so
+a node whose own-delta high-water has reached six figures pays a few bytes more. `~1.6 B/s` is the
+honest rounding; do not quote a more precise number as if it held at every state size.
+
+> **The ack is easy to measure away, and was.** `resyncReceiveCursor` returns at its `upThrough <= 0`
+> guard, and `upThrough` is `nextSeq`, which starts at `0` and pre-increments — so a harness whose
+> replicas never call `apply` emits no ack at all, and a converged round reads as digest-only. Every
+> figure in this doc was ~2× optimistic until `meterConvergedRounds` was changed to make each node
+> write once before the meter opens. Any replica that has ever mutated locally pays the ack.
 
 The full-state egress is what a **fully converged** node pays, forever, to tell a peer something it
-already knows. At 100k entries it is ≈5 GB/day/node — so the saving is ~58,000×. Below ~1k entries
+already knows. At 100k entries it is ≈5 GB/day/node — so the saving is ~36,000×. Below ~1k entries
 it is noise.
 
-> **Phase 0 predicted 0.52 B/s and was wrong by ~1.8×.** The model omitted `RootDigest.upThrough`
-> entirely and priced `root` as the placeholder `-1L`, which CBOR stores in **one** byte where a
-> real FNV-1a 64 root — uniformly distributed over `Long` — costs **nine**. The *before* side
-> (58.1 KB/s) is confirmed exactly. See "Close the loop on the Phase-0 measurement" below.
+> **Phase 0 predicted 0.52 B/s and was wrong by ~3×.** The model omitted `RootDigest.upThrough`
+> entirely, priced `root` as the placeholder `-1L` (which CBOR stores in **one** byte where a real
+> FNV-1a 64 root — uniformly distributed over `Long` — costs **nine**), and modelled the round as
+> the digest alone with nothing coming back. The *before* side (58.1 KB/s) is confirmed exactly.
+> See "Close the loop on the Phase-0 measurement" below.
 
 **The win is quiescence, not diffing.** Phase 0 also measured the sharded-diff alternative and found
 its advantage collapses as divergence grows — at n=100k with S=256 shards, 1 differing key is 245×
@@ -63,8 +71,9 @@ Two new `QuiltMessage` variants. `FullState` is untouched and remains the always
 A (anti-entropy tick)                 B
   RootDigest ──────────────────────►  compare root
   (sender, root, upThrough)           │
-   ~54 b                              ├─ equal ──►  resync cursor from upThrough.
-                                      │             done.  ~54 b for the whole round
+   ~54 b                              ├─ equal ──►  resync cursor from upThrough,
+                                      │             ◄──── Ack(upThrough)  ~40 b
+                                      │             done.  ~94 b for the whole round
                                       │
                                       ├─ differ ─►  FullStateRequest ─────────►  A
                                       │             ◄──── FullState (exactly as today,
@@ -92,13 +101,14 @@ On a mismatch the receiver cannot tell from a hash *which* side is behind. Two o
 
 ### Mixed-version rooms — an accepted limitation
 
-An older peer receives an unknown `SerialName` and the frame is silently dropped at
-`Quilter.kt:612`, so **every** digest a new peer ticks at an old one is dead — not one, all of
-them — with no signal either way.
+An older peer receives an unknown `SerialName` and the frame is dropped at `dispatch`'s decode
+guard, so **every** digest a new peer ticks at an old one is dead — not one, all of them. The drop
+is `DEBUG`-logged (added under #2006 precisely because this branch made silence the only symptom of
+a mixed-version rollout); there is still no signal on the wire, in either direction.
 
 It does not stop anti-entropy between the pair outright, though, and the difference matters for
 sizing the risk. The old peer still runs *its* tick the old way, shipping `FullState`, which a new
-peer handles unchanged; and `onFullState`'s push-back heal (`:795-800`) means that single shipment
+peer handles unchanged; and `onFullState`'s push-back heal means that single shipment
 still repairs **both** directions. So the pair converges on the old peer's ticks alone — reduced
 rate and one-sided initiation, not a permanent hole. In a room where the old peers are a minority
 the effect is proportionally smaller still.
@@ -115,8 +125,8 @@ separately; not built here.
 ## The trap this design exists to avoid
 
 **An anti-entropy `FullState` does two jobs, not one.** It ships the state, *and* it carries
-`upThrough` — the sender's own-delta high-water — which the receiver feeds to `resyncReceiveCursor`
-(`Quilter.kt:816`). That function's KDoc is explicit about what happens without it (#1266):
+`upThrough` — the sender's own-delta high-water — which the receiver feeds to `resyncReceiveCursor`.
+That function's KDoc is explicit about what happens without it (#1266):
 
 > a receiver whose gap range outlives the sender's GC — the late-joiner case — livelocks: every
 > subsequent delta is buffered against a cursor that can never advance … the receiver never acks via
@@ -133,12 +143,12 @@ design, not an optimization.
 ### …but resync only on the *match* branch
 
 The tempting implementation — resync first, then compare roots — is wrong, and in a way today's
-protocol never exhibits. `resyncReceiveCursor` **acks** `upThrough` (`Quilter.kt:829`), and today
-that ack is always issued *after* the state has been merged: `onFullState` merges at `:791-794` and
-only then resyncs at `:801`. The ack is therefore honest.
+protocol never exhibits. `resyncReceiveCursor` **acks** `upThrough`, and today that ack is always
+issued *after* the state has been merged: `onFullState` merges first and only then resyncs. The ack
+is therefore honest.
 
 Resyncing on a *mismatched* digest would ack history the receiver has not received. It would also
-drop buffered inbound deltas at or below `upThrough` (`:823`). If the `FullStateRequest` or the
+drop buffered inbound deltas at or below `upThrough`. If the `FullStateRequest` or the
 `FullState` reply is then lost, the receiver is stale *and* its delta path to that history is severed
 — the sender GC'd on the ack, and the receiver's cursor has moved past it. Convergence still recovers
 on a later round's mismatch, so this is a window rather than a permanent hole, but it is a new
@@ -158,21 +168,20 @@ So:
 The `upThrough` carry is the non-obvious dependency, but it is not the only consequence of a frame
 arriving every 60 s. Each of these was traced and survives:
 
-- **`lastSeenAt` / eviction.** `evictStalePeers` keys on `peer !in seam.peers && isStale`
-  (`Quilter.kt:524-550`) — frame-kind- and size-agnostic. A digest refreshes liveness exactly as a
-  full state did.
-- **`cancelFullStateRetry(sender)`** fires on every inbound frame in `dispatch` (`Quilter.kt:611`),
-  digests included.
-- **The push-back heal** (`onFullState`, `:795-800`) is *preserved through the chain*, and is worth
+- **`lastSeenAt` / eviction.** `evictStalePeers` keys on `peer !in seam.peers && isStale` —
+  frame-kind- and size-agnostic. A digest refreshes liveness exactly as a full state did.
+- **`cancelFullStateRetry(sender)`** fires on every inbound frame in `dispatch`, digests included.
+- **The push-back heal** (`onFullState`) is *preserved through the chain*, and is worth
   naming because a future refactor could break it invisibly: on a mismatch the receiver requests, the
   sender ships, and the receiver then sees `merged == current && msg.state != current` and pushes its
   own state back. Both heal directions still work.
 - **Sender-side GC.** The match branch's ack drives `onAck` → `ackedThrough` →
-  `recomputeUniversalAck` → `gcPendingDeltas` (`:734-764`) identically.
+  `recomputeUniversalAck` → `gcPendingDeltas` identically. (That ack is also why a converged round
+  is two frames rather than one — see the cost table's footnote.)
 - **`recomputeDeliveredLocal`, the causal matrix, `cutFrontier`, RGA/Fugue GC, BoundedCounter
-  transfer.** None were driven by a *converged* round: `recomputeDeliveredLocal` fires only when
-  `merged != current` (`:792-794`), and the rest ride the `Delivered` broadcast or their own message
-  types, which `runAntiEntropy` still calls independently (`:491-495`).
+  transfer.** None were driven by a *converged* round: `recomputeDeliveredLocal` fires from
+  `onFullState` only when `merged != current`, and the rest ride the `Delivered` broadcast or their
+  own message types, which `runAntiEntropy` still calls independently.
 
 ## Components
 
@@ -189,10 +198,9 @@ All changes in `:kuilt-quilter`.
 
 ### Computing the root without a new constructor parameter
 
-`Quilter`'s primary constructor holds only `messageSerializer: KSerializer<QuiltMessage<S>>`
-(`Quilter.kt:157`) — there is **no** `KSerializer<S>` on the class. `valueSerializer` exists only as
-a parameter of the top-level convenience factory (`Quilter.kt:929`) and is not retained, so the class
-cannot encode a bare `S`.
+`Quilter`'s primary constructor holds only `messageSerializer: KSerializer<QuiltMessage<S>>` — there
+is **no** `KSerializer<S>` on the class. `valueSerializer` exists only as a parameter of the
+top-level `Quilter(…)` factory function and is not retained, so the class cannot encode a bare `S`.
 
 Rather than widen the primary constructor — a public API change churning every direct call site,
 including every test — hash a **fixed synthetic frame** through the serializer it already has:
@@ -244,10 +252,16 @@ code being changed, not unrelated refactoring.
 
 ### Why `onFullStateRequest` must not call `sendFullStateTo`
 
-`sendFullStateTo` arms `scheduleFullStateRetry` (`Quilter.kt:583`), which exists for the
-*first-contact* path where nothing else retries. Anti-entropy already retries every interval by
-construction, so reusing that helper would layer two independent retry machines over the same peer.
-The handler sends directly, matching `reconcileWithRandomPeer`'s fire-and-forget shape.
+`sendFullStateTo` arms `scheduleFullStateRetry`, which exists for the *first-contact* path where
+nothing else retries; reusing that helper here would layer two independent retry machines over the
+same peer. The handler sends directly, matching `reconcileWithRandomPeer`'s fire-and-forget shape.
+
+Nothing replaces the retry, because the **requester** re-drives the exchange: it asks again on the
+next digest whose root disagrees with its own. Note that this is *not* "anti-entropy retries every
+interval" — `reconcileWithRandomPeer` draws **one** peer uniformly per tick, so a given peer is
+re-digested at rate 1/N, a coupon-collector wait rather than the next round. That is the same tail
+every heal on this path already carries (see follow-up (ii) in `docs/gossip-mesh-design.md`), so
+declining to retry here costs nothing extra.
 
 ### Amplification guard
 
@@ -261,14 +275,13 @@ not one per interval. A matched round sends nothing back, so the flag stays arme
 redeemable later — a long-lived converged peer accumulates a standing one-shot grant. The bound that
 matters is unaffected: redemption *rate* is still capped by the digest rate, one per peer per
 interval, which is exactly the pre-#1955 ceiling. The handler should also mirror `onResend`'s
-`if (msg.sender != replica) return` check (`Quilter.kt:853`), or the frame's `ReplicaId` fields are
-decoration.
+`if (msg.sender != replica) return` check, or the frame's `ReplicaId` fields are decoration.
 
 ### Deliberately untouched
 
-First-contact `FullState` (`Quilter.kt:577`) and its retry (`598`) keep shipping state
-unconditionally: a brand-new peer needs it, and a digest round there would only add a round trip.
-**Only the anti-entropy tick at `Quilter.kt:517` changes.**
+First-contact `FullState` (`sendFullStateTo`) and its retry (`scheduleFullStateRetry`) keep shipping
+state unconditionally: a brand-new peer needs it, and a digest round there would only add a round
+trip. **Only the anti-entropy tick — `reconcileWithRandomPeer` — changes.**
 
 ## Scope: all `Quilted` types, and why that is safe
 
@@ -288,7 +301,7 @@ application is not a pessimization.
 
 | Case | Behaviour |
 |---|---|
-| Undecodable frame | Dropped at `Quilter.kt:612`, as today. Covers the mixed-version case above. |
+| Undecodable frame | Dropped at `dispatch`'s decode guard, as today, now with a `DEBUG` log (#2006). Covers the mixed-version case above. |
 | Send failure | Fire-and-forget; the next tick is the retry (unchanged). |
 | Root collision | 2⁻⁶⁴, and it clears on the next state mutation on either side (a new state gives a new root) or via a third peer where one exists. Only a permanently quiescent **2-peer** session stays divergent — there is no third peer to route around it. |
 | State mutates between digest and request | Harmless — `FullState` is a join, always correct. |
@@ -351,11 +364,14 @@ never a red test — abort on a non-zero build exit before reading any results X
 grounding approach. This makes the Phase-0 model the acceptance criterion rather than a standing
 claim — and if the real saving misses the prediction, that is a finding, not a surprise.
 
-**It did, and it is.** Measured: 58.1 KB/s → **~1 B/s**, not 0.52 — the *before* confirmed exactly,
-the *after* ~1.8× worse than modelled, for the two pricing bugs named under the table above. The
-model was corrected to encode the shipped `QuiltMessage.RootDigest` directly rather than a probe
-class, so model and wire now agree to the byte (54 modelled, 54 metered). The prediction's *shape* —
-a constant frame, flat in state size — is confirmed; only its magnitude moved.
+**It did, and it is.** Measured: 58.1 KB/s → **~1.6 B/s**, not 0.52 — the *before* confirmed
+exactly, the *after* ~3× worse than modelled, for the three pricing bugs named under the table
+above. The model was corrected to encode the shipped `QuiltMessage.RootDigest` and its answering
+`QuiltMessage.Ack` directly rather than a probe class, and the metered mesh was corrected to make
+every node write before the window opens, so model and wire now agree to the byte (94 modelled, 94
+metered). The prediction's *shape* — a constant round, flat in state size — is confirmed; only its
+magnitude moved. Flatness is re-verified independently: 10 rounds over 2 nodes cost **1880 b at 200
+entries and 1880 b at 20,000**, identical to the byte while the state grew 100×.
 
 ### (e) Remaining behavioural tests
 
