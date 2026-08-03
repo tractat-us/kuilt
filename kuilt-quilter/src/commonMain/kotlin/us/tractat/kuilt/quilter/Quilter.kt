@@ -515,7 +515,10 @@ public class Quilter<S : Quilted<S>>(
      * Sends a [QuiltMessage.RootDigest] — a hash of the state, not the state (#1955). The peer
      * replies with a [QuiltMessage.FullStateRequest] only if its own root differs, so a converged
      * round costs one small frame instead of the whole CRDT. Measured: a converged 100k-entry
-     * `GSet` node drops from ~58 KB/s of steady-state egress to ~0.5 B/s.
+     * `GSet` node drops from ~58 KB/s of steady-state egress to roughly 1 B/s — a ~58,000×
+     * reduction. That figure is a floor, not an exact constant: the frame is flat in state
+     * size, but CBOR encodes `root` and `upThrough` at minimal width, so a few bytes move
+     * with the values and with the replica id's length.
      *
      * The merge at the receiver is idempotent and order-independent (every delta-state CRDT
      * is a join-semilattice), so the same full state can be sent any number of times safely.

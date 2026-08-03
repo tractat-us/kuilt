@@ -1,12 +1,14 @@
 # Root-hash-gated anti-entropy for `Quilter`
 
 **Issue:** [#1955](https://github.com/tractat-us/kuilt/issues/1955) · **Date:** 2026-08-03 ·
-**Status:** design approved, ready to plan
+**Status:** design approved and implemented under #1955. The figures below are the **measured**
+ones; where they differ from Phase 0's predictions, that is called out inline.
 
 ## What this changes, in one sentence
 
 `Quilter`'s anti-entropy tick stops pushing the entire CRDT state to a random peer every 60 s and
-pushes a 31-byte hash of it instead, shipping the state only when the hashes disagree.
+pushes a small constant-size frame carrying a hash of it instead (54–57 b measured), shipping the
+state only when the hashes disagree.
 
 ## Why — the measured case
 
@@ -15,14 +17,27 @@ Phase 0 ([#1985](https://github.com/tractat-us/kuilt/pull/1985),
 behaviour through the real codec and grounded the model against bytes actually counted on a
 `MeteredSeam` — framing overhead measured at exactly **0**, so the numbers are wire cost, not a proxy.
 
-| `GSet` entries | full state | steady-state egress/node @60 s | with a digest |
+| `GSet` entries | full state | steady-state egress/node @60 s | with a digest † |
 |---|---|---|---|
-| 1,000 | 32.9 KB | 549 B/s | 0.52 B/s |
-| 10,000 | 339 KB | 5.6 KB/s | 0.52 B/s |
-| 100,000 | 3.49 MB | **58.1 KB/s** | 0.52 B/s |
+| 1,000 | 32.9 KB | 549 B/s | ~1 B/s |
+| 10,000 | 339 KB | 5.6 KB/s | ~1 B/s |
+| 100,000 | 3.49 MB | **58.1 KB/s** | ~1 B/s |
 
-That egress is what a **fully converged** node pays, forever, to tell a peer something it already
-knows. At 100k entries it is ≈5 GB/day/node. Below ~1k entries it is noise.
+† The digest column is **state-size-independent by design** — that constancy is the whole
+optimization — so it is one value at every row. It is also a **floor**. The measured `RootDigest`
+frame is 54–57 b depending on replica-id length, i.e. 0.90–0.95 B/s over a 60 s interval; but CBOR
+encodes integers at minimal width, so a node whose own-delta high-water (`upThrough`) has reached
+six figures pays ~4 bytes more, landing at ~1.0 B/s. `~1 B/s` is the honest rounding; do not quote a
+more precise number as if it held at every state size.
+
+The full-state egress is what a **fully converged** node pays, forever, to tell a peer something it
+already knows. At 100k entries it is ≈5 GB/day/node — so the saving is ~58,000×. Below ~1k entries
+it is noise.
+
+> **Phase 0 predicted 0.52 B/s and was wrong by ~1.8×.** The model omitted `RootDigest.upThrough`
+> entirely and priced `root` as the placeholder `-1L`, which CBOR stores in **one** byte where a
+> real FNV-1a 64 root — uniformly distributed over `Long` — costs **nine**. The *before* side
+> (58.1 KB/s) is confirmed exactly. See "Close the loop on the Phase-0 measurement" below.
 
 **The win is quiescence, not diffing.** Phase 0 also measured the sharded-diff alternative and found
 its advantage collapses as divergence grows — at n=100k with S=256 shards, 1 differing key is 245×
@@ -46,14 +61,19 @@ Two new `QuiltMessage` variants. `FullState` is untouched and remains the always
 
 ```
 A (anti-entropy tick)                 B
-  RootDigest ──────────────────────►  resync cursor from upThrough
-  (sender, root, upThrough)           compare root
-   ~31 b                              │
-                                      ├─ equal ──►  done.  ~31 b for the whole round
+  RootDigest ──────────────────────►  compare root
+  (sender, root, upThrough)           │
+   ~54 b                              ├─ equal ──►  resync cursor from upThrough.
+                                      │             done.  ~54 b for the whole round
                                       │
                                       └─ differ ─►  FullStateRequest ─────────►  A
-                                                    ◄───────── FullState (exactly as today)
+                                      │             ◄──── FullState (exactly as today,
+                                      │                   carrying its own upThrough)
+                                      └─ cursor left untouched on this branch
 ```
+
+**The resync sits on the equal branch, not ahead of the compare.** That placement is load-bearing,
+not incidental — see "…but resync only on the *match* branch" below.
 
 - **`RootDigest(sender: ReplicaId, root: Long, upThrough: Long)`** — the tick frame. Flat in state
   size; that constancy *is* the optimization.
@@ -321,6 +341,12 @@ never a red test — abort on a non-zero build exit before reading any results X
 **actual** converged-round bytes over a `MeteredSeam` and asserts the drop, reusing part (B)'s
 grounding approach. This makes the Phase-0 model the acceptance criterion rather than a standing
 claim — and if the real saving misses the prediction, that is a finding, not a surprise.
+
+**It did, and it is.** Measured: 58.1 KB/s → **~1 B/s**, not 0.52 — the *before* confirmed exactly,
+the *after* ~1.8× worse than modelled, for the two pricing bugs named under the table above. The
+model was corrected to encode the shipped `QuiltMessage.RootDigest` directly rather than a probe
+class, so model and wire now agree to the byte (54 modelled, 54 metered). The prediction's *shape* —
+a constant frame, flat in state size — is confirmed; only its magnitude moved.
 
 ### (e) Remaining behavioural tests
 

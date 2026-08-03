@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make `Quilter`'s anti-entropy tick ship a 31-byte hash of the CRDT state instead of the whole state, sending state only when the hashes disagree.
+**Goal:** Make `Quilter`'s anti-entropy tick ship a small constant-size frame carrying a hash of the CRDT state instead of the whole state, sending state only when the hashes disagree. (Phase 0 sized that frame at ~31 b; the shipped frame measured 54–57 b — see Task 5.)
 
 **Architecture:** Two new `QuiltMessage` variants (`RootDigest`, `FullStateRequest`) turn the tick into a digest exchange; `FullState` is untouched and stays the always-correct fallback. The digest is 64-bit FNV-1a over the `binaryFormat`-encoded state, computed in `:kuilt-quilter` under the existing lock. `RootDigest` **must** carry the sender's `upThrough` high-water, because today's anti-entropy `FullState` doubles as the carrier that resyncs the receiver's delta cursor (#1266).
 
@@ -636,7 +636,9 @@ git add kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/QuiltMessag
 git commit -m "feat(quilter): add RootDigest/FullStateRequest and their handlers (part of #1955)
 
 Receive side only — the anti-entropy tick still ships FullState, so no existing behaviour
-moves. onRootDigest resyncs the receive cursor BEFORE comparing roots (#1266), and
+moves. onRootDigest compares roots FIRST and resyncs the receive cursor only on the match
+branch (#1266) — resyncing on a mismatch would ack history not yet received and drop the
+buffered deltas covering it; the requested FullState carries its own upThrough. And
 onFullStateRequest honors a request only from a peer we have an outstanding digest with,
 so an unsolicited request cannot pull a full state on demand.
 
@@ -853,7 +855,10 @@ The existing KDoc ends "Full-state-first is always correct; a version-vector or 
      * Sends a [QuiltMessage.RootDigest] — a hash of the state, not the state (#1955). The peer
      * replies with a [QuiltMessage.FullStateRequest] only if its own root differs, so a converged
      * round costs one small frame instead of the whole CRDT. Measured: a converged 100k-entry
-     * `GSet` node drops from ~58 KB/s of steady-state egress to ~0.5 B/s.
+     * `GSet` node drops from ~58 KB/s of steady-state egress to roughly 1 B/s — a ~58,000×
+     * reduction. That figure is a floor, not an exact constant: the frame is flat in state
+     * size, but CBOR encodes `root` and `upThrough` at minimal width, so a few bytes move
+     * with the values and with the replica id's length.
      *
      * [QuiltMessage.FullState] remains the always-correct fallback and every convergence
      * guarantee still traces to it — a root collision or a digest a peer cannot parse costs a
@@ -992,7 +997,7 @@ git commit -m "feat(quilter): gate anti-entropy on a root hash instead of shippi
 
 The tick now sends RootDigest; the peer asks for state only when its root differs.
 Measured basis: a converged 100k-entry GSet node drops from ~58 KB/s of steady-state
-egress to ~0.5 B/s.
+egress to roughly 1 B/s.
 
 RootDigest carries upThrough because the old FullState did two jobs — moving state and
 resyncing the receiver's delta cursor. Mutation-verified: upThrough = 0L turns
@@ -1009,7 +1014,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ### Task 5: Turn the Phase-0 model into a measured acceptance test
 
-Phase 0 predicted 58.1 KB/s → 0.52 B/s. Measure the real thing and assert it, so the prediction is verified rather than left standing.
+Phase 0 predicted 58.1 KB/s → 0.52 B/s. Measure the real thing and assert it, so the prediction is verified rather than left standing. (**Outcome:** 58.1 KB/s → ~1 B/s. The *before* is confirmed exactly; the *after* is ~1.8× worse than modelled, because the Phase-0 model omitted `RootDigest.upThrough` and priced `root` as the placeholder `-1L`, which CBOR stores in one byte where a real FNV-1a 64 root costs nine.)
 
 **Files:**
 - Modify: `kuilt-scale/src/test/kotlin/us/tractat/kuilt/scale/MerkleDigestCostModelTest.kt`
@@ -1164,7 +1169,7 @@ Its "What is modelled" paragraph says the digest protocol "does not exist yet" a
 ./gradlew :kuilt-scale:test --tests "*MerkleDigestCostModelTest" --rerun-tasks
 ```
 
-Expected: PASS. Read the printed reduction factor. Phase 0 predicted the converged round becomes a ~31-byte frame; if the measured per-node round is wildly larger (say >200 b), something else is riding the tick — investigate before accepting, and record the number either way.
+Expected: PASS. Read the printed reduction factor. Phase 0 predicted the converged round becomes a ~31-byte frame; if the measured per-node round is wildly larger (say >200 b), something else is riding the tick — investigate before accepting, and record the number either way. (**Recorded:** 54 b metered, 54 b independently encoded from the shipped `RootDigest` — agreeing to the byte, so nothing else rides the tick. The >200 b tripwire was never approached; the gap to Phase 0's ~31 b is the two model pricing bugs, not an extra frame.)
 
 - [ ] **Step 6: Commit**
 
@@ -1204,7 +1209,7 @@ Any sentence saying the anti-entropy backstop ships full state, or that a digest
 
 - [ ] **Step 2: Rewrite the stale sentences**
 
-Keep the existing accessible-first structure: plain language up top, mechanism deeper down. State that the tick sends a hash and ships state only on disagreement, that `FullState` is still the fallback every guarantee rests on, and give the measured figures (58.1 KB/s → ~0.5 B/s at 100k entries). Do not introduce "Merkle" — no tree was built, and saying otherwise would mislead the next reader.
+Keep the existing accessible-first structure: plain language up top, mechanism deeper down. State that the tick sends a hash and ships state only on disagreement, that `FullState` is still the fallback every guarantee rests on, and give the measured figures (58.1 KB/s → **roughly 1 B/s** at 100k entries, a ~58,000× reduction). Publish a rounded figure, not a precise one: the digest frame is flat in state size but CBOR encodes `root` and `upThrough` at minimal width, so ~1 B/s is a floor rather than a constant. Do not introduce "Merkle" — no tree was built, and saying otherwise would mislead the next reader.
 
 - [ ] **Step 3: Verify citations still resolve**
 

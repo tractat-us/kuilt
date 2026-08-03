@@ -91,11 +91,17 @@ Three mechanisms combine. None needs a global coordinator:
   the flood; a hop-count budget is only a backstop against pathological loops. So a
   broadcast walks the whole network device-to-device along ~k edges instead of being
   sent N times by the origin.
-- **An anti-entropy backstop.** Periodically each peer reconciles full state with one
-  random peer. This is the safety net that makes everything else able to be
-  *approximate*: anything a flood drops, or any peer temporarily outside the neighbour
-  graph, is caught up here. It's why the flood doesn't need its own reliability
-  machinery.
+- **An anti-entropy backstop.** Periodically each peer checks in with one random other
+  peer. It doesn't send its data — it sends a short **fingerprint** of it, a few dozen
+  bytes no matter how much data there is, and the two compare fingerprints. If they
+  match, nothing is missing and the check is over. Only when they differ does the full
+  picture actually get sent. This is the safety net that makes everything else able to
+  be *approximate*: anything a flood drops, or any peer temporarily outside the
+  neighbour graph, is caught up here. It's why the flood doesn't need its own
+  reliability machinery — and because the routine case costs a fingerprint rather than a
+  copy of everything, the net stays cheap enough to leave running forever. A settled
+  peer holding 100,000 entries spends roughly **1 byte per second** on it, where sending
+  the whole picture each time cost about 58 KB/s.
 
 For the measured scaling numbers — and the optimizations that are deliberately *not*
 built yet — see [Performance and Scaling](performance.md).
