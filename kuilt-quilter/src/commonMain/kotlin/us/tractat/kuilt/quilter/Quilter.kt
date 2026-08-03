@@ -509,18 +509,18 @@ public class Quilter<S : Quilted<S>>(
     /**
      * Picks one peer at random from the full membership and reconciles with it. This is the
      * convergence backstop: a peer that missed a delta — it sat outside [deltaTargets], or a
-     * relayed delivery was dropped — merges the full state on the next round and converges
-     * without replaying the missing deltas.
-     *
-     * The merge at the receiver is idempotent and order-independent (every delta-state CRDT
-     * is a join-semilattice), so the same full state can be sent any number of times safely.
-     * This is what makes GC against a sparse [deltaTargets] set correct: convergence does
-     * not depend on every peer acking every delta.
+     * relayed delivery was dropped — requests and merges the full state on the next round and
+     * converges without replaying the missing deltas.
      *
      * Sends a [QuiltMessage.RootDigest] — a hash of the state, not the state (#1955). The peer
      * replies with a [QuiltMessage.FullStateRequest] only if its own root differs, so a converged
      * round costs one small frame instead of the whole CRDT. Measured: a converged 100k-entry
      * `GSet` node drops from ~58 KB/s of steady-state egress to ~0.5 B/s.
+     *
+     * The merge at the receiver is idempotent and order-independent (every delta-state CRDT
+     * is a join-semilattice), so the same full state can be sent any number of times safely.
+     * This is what makes GC against a sparse [deltaTargets] set correct: convergence does
+     * not depend on every peer acking every delta.
      *
      * [QuiltMessage.FullState] remains the always-correct fallback and every convergence
      * guarantee still traces to it — a root collision or a digest a peer cannot parse costs a

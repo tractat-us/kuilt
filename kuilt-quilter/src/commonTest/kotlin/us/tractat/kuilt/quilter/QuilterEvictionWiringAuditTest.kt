@@ -503,9 +503,15 @@ class QuilterEvictionWiringAuditTest {
             .launchIn(backgroundScope)
         testScheduler.runCurrent()
 
-        // A sends B a digest — B now holds a grant for exactly one full state.
+        // A sends B a digest — B now holds a grant for exactly one full state. Asserted, not
+        // assumed: if this call ever silently no-op'd, the negative assertion below would pass
+        // vacuously and the probe would stop guarding anything.
         repA.sendRootDigestForTest(bPeer)
         testScheduler.runCurrent()
+        assertTrue(
+            seenByB.any { it is QuiltMessage.RootDigest },
+            "precondition: the digest reached B, so a grant really was armed",
+        )
 
         // B goes silent long enough to be evicted by the real anti-entropy tick.
         controlledPeers.value = controlledPeers.value - bPeer

@@ -62,6 +62,7 @@ class QuilterAntiEntropyDigestResyncTest {
             messageSerializer = msgSer,
             scope = backgroundScope,
             config = QuilterConfig(expectVirtualTime = true, fullStateRetryLimit = 0),
+            random = Random(7),
         )
         testScheduler.runCurrent()
 
@@ -137,6 +138,17 @@ class QuilterAntiEntropyDigestResyncTest {
             digests.first().upThrough,
             "the emitted digest must carry our own-delta high-water, or a matched round can never " +
                 "unpin the receiver's cursor (#1266)",
+        )
+        // Same asymmetry argument, one field over: every receive-side test fabricates its inbound
+        // digest, so none of them can catch a wrong root on the SEND side. A hardcoded root leaves
+        // the module green and silently reverts the whole optimization — every round mismatches,
+        // every peer requests state, and the wire cost is the old FullState plus a round trip.
+        // Convergence tests cannot see it either: a wrong root still converges via the fallback.
+        assertEquals(
+            expectedRoot(GSet.of("e0", "e1", "e2")),
+            digests.first().root,
+            "the emitted digest must carry the root of our actual state — a constant root would " +
+                "mismatch every round, silently turning the digest gate off (#1955)",
         )
     }
 }
