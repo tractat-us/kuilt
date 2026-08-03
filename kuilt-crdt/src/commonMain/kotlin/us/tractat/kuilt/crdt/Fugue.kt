@@ -122,6 +122,15 @@ public sealed interface FugueOp<out V> {
      */
     @Serializable
     public data class Compact(
+        /**
+         * Serialized in canonical key order (#1978): the map is built from a merge-ordered
+         * tombstone set, so two replicas at the same logical state hold `equal` [Compact] ops
+         * whose plain-map encodings differ. `FugueOpSerializer` — the wire path, via
+         * [Fugue.wireSerializer] — applies the same [CanonicalMapSerializer]; the annotation
+         * covers the compiler-generated serializer a consumer reaches through
+         * `Compact.serializer()`.
+         */
+        @Serializable(with = CanonicalMapSerializer::class)
         public val positions: Map<FugueId, FugueId>,
     ) : FugueOp<Nothing> {
         override val id: FugueId get() = FugueId.HEAD

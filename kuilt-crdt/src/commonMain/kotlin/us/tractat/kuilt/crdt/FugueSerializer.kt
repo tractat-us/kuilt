@@ -4,7 +4,6 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.builtins.ListSerializer
-import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.SetSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.descriptors.SerialDescriptor
@@ -112,8 +111,15 @@ internal class FugueOpSerializer<V>(
 
     private val idSerializer: KSerializer<FugueId> = FugueId.serializer()
     private val sideSerializer: KSerializer<FugueSide> = FugueSide.serializer()
+    /**
+     * Canonical, **not** a plain `MapSerializer` — [Fugue] carries the [RgaOpSerializer] defect
+     * byte for byte: [Fugue.compact] derives [FugueOp.Compact.positions] from a tombstone set that
+     * [Fugue.piece] builds with `Set.plus`, so two replicas at the same logical state hold *equal*
+     * `Compact` ops that a plain map serializer would write in two different orders, inside the
+     * serialized `ops` set (#1978).
+     */
     private val positionsSerializer: KSerializer<Map<FugueId, FugueId>> =
-        MapSerializer(idSerializer, idSerializer)
+        CanonicalMapSerializer(idSerializer, idSerializer)
 
     override val descriptor: SerialDescriptor = buildClassSerialDescriptor("us.tractat.kuilt.crdt.FugueOp") {
         element<Int>("t")                                                            // 0=Insert, 1=Remove, 2=Compact

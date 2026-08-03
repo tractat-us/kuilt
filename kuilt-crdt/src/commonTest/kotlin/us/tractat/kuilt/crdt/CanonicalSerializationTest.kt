@@ -453,9 +453,17 @@ class CanonicalSerializationTest {
      * calls [Rga.compact], so `positions` is always absent and every op-set encodes
      * canonically. Same blind spot #1957 hit with `MovableTree.compactedDots`.
      *
-     * Mutation-checked: reverting `positionsSerializer` in `RgaOpSerializer` to a plain
-     * `MapSerializer` makes this test fail with the two `pos` entries transposed and every
-     * other byte identical.
+     * Two sites are fixed and each is pinned by its own assertion below, because they are reached
+     * by different callers and neither shadows the other:
+     *
+     * - `RgaOpSerializer.positionsSerializer` — the **wire** path, via [Rga.wireSerializer].
+     *   Mutation-checked: reverting it to a plain `MapSerializer` fails the `Rga JSON`/`Rga CBOR`
+     *   assertions with the two `pos` entries transposed and every other byte identical, and
+     *   leaves the standalone-op assertion green.
+     * - the `@Serializable(with = CanonicalMapSerializer::class)` annotation on
+     *   [RgaOp.Compact.positions] — the **compiler-generated** serializer, which is public API a
+     *   consumer reaches through `RgaOp.Compact.serializer()` to ship one op on its own.
+     *   Mutation-checked: dropping the annotation fails only the standalone-op assertion.
      */
     @Test
     fun rgaCompactPositionsAreDeliveryOrderIndependent() {
@@ -499,6 +507,13 @@ class CanonicalSerializationTest {
                     "compacted Rga CBOR must be delivery-order-independent",
                 )
             },
+            {
+                assertEquals(
+                    json.encodeToString(RgaOp.Compact.serializer(), aliceOp),
+                    json.encodeToString(RgaOp.Compact.serializer(), bobOp),
+                    "a standalone RgaOp.Compact must be delivery-order-independent",
+                )
+            },
         )
     }
 
@@ -515,8 +530,9 @@ class CanonicalSerializationTest {
     /**
      * [Fugue] carries the same defect byte for byte — `FugueOp.Compact.positions` is a
      * `Map<FugueId, FugueId>` built from a merge-ordered tombstone set and written by a plain
-     * `MapSerializer`. See [rgaCompactPositionsAreDeliveryOrderIndependent] for the full
-     * argument; mutation-checked the same way against `FugueOpSerializer`.
+     * `MapSerializer`. See [rgaCompactPositionsAreDeliveryOrderIndependent] for the full argument
+     * and the two-site mutation matrix; mutation-checked the same way against `FugueOpSerializer`
+     * and [FugueOp.Compact.positions]'s annotation.
      */
     @Test
     fun fugueCompactPositionsAreDeliveryOrderIndependent() {
@@ -558,6 +574,13 @@ class CanonicalSerializationTest {
                     cbor.encodeToByteArray(ser, aliceCompacted).toList(),
                     cbor.encodeToByteArray(ser, bobCompacted).toList(),
                     "compacted Fugue CBOR must be delivery-order-independent",
+                )
+            },
+            {
+                assertEquals(
+                    json.encodeToString(FugueOp.Compact.serializer(), aliceOp),
+                    json.encodeToString(FugueOp.Compact.serializer(), bobOp),
+                    "a standalone FugueOp.Compact must be delivery-order-independent",
                 )
             },
         )

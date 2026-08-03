@@ -3,7 +3,6 @@ package us.tractat.kuilt.crdt
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerializationException
-import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.buildClassSerialDescriptor
 import kotlinx.serialization.descriptors.element
@@ -35,7 +34,21 @@ public class RgaOpSerializer<V>(
 ) : KSerializer<RgaOp<V>> {
 
     private val rgaIdSerializer: KSerializer<RgaId> = RgaId.serializer()
-    private val positionsSerializer: KSerializer<Map<RgaId, RgaId>> = MapSerializer(rgaIdSerializer, rgaIdSerializer)
+
+    /**
+     * Canonical, **not** a plain `MapSerializer`: [Rga.compact] derives [RgaOp.Compact.positions]
+     * from [Rga.tombstones], which [Rga.piece] builds with `Set.plus` — a `LinkedHashSet` in merge
+     * order. [RgaOp.Compact] is a `data class`, so two replicas at the same logical state hold
+     * *equal* ops that a plain map serializer would write in two different orders, and a `Compact`
+     * op rides inside the serialized `ops` set — this is converged state on the wire (#1978).
+     *
+     * Composes with, rather than duplicates, [RgaSerializer]'s `compareCompactOps`: that orders
+     * *between* several `Compact` ops, this orders *within* one op's map. The two use different
+     * key orders — natural [RgaId] order there, serialized-leaf order here — but each is a pure
+     * function of the logical value, so the composition is canonical.
+     */
+    private val positionsSerializer: KSerializer<Map<RgaId, RgaId>> =
+        CanonicalMapSerializer(rgaIdSerializer, rgaIdSerializer)
 
     override val descriptor: SerialDescriptor = buildClassSerialDescriptor("us.tractat.kuilt.crdt.RgaOp") {
         element<Int>("t")         // 0 = Insert, 1 = Remove, 2 = Compact
