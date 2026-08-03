@@ -39,6 +39,11 @@ import kotlin.time.Duration.Companion.seconds
  *   that ceiling, where the absolute bound admitted it in silence —
  *   [aJumpBeyondTheBoundIsRefusedFarBelowTheOldCeiling].
  *
+ * The gate's *other* arm, `wireTerm < 0L`, is pinned separately by
+ * [aNegativeWireTermIsRefusedAtTheDispatchBoundary] (#1980). It is not defence in depth: it is what
+ * makes the subtraction above non-overflowing, so deleting it turns `Long.MIN_VALUE` into a term the
+ * bound admits.
+ *
  * `MAX_PLAUSIBLE_TERM` is untouched by all of this. It keeps its job on the storage and
  * well-formedness paths (`checkedRestoredTerm`, `checkedRestoredSnapshotMeta`,
  * `isWellFormedSnapshotChunk`), where a value is read back off a disk or unpacked from a frame rather
@@ -51,7 +56,8 @@ import kotlin.time.Duration.Companion.seconds
  * helpers use). Two voters rather than one so the frame passes the §5.2 leader-authority gate (an
  * `AppendEntries` sender must be a current voter) and so the running node can never reach quorum
  * alone. Its election timeout is set far beyond the test's horizon, so it never campaigns and never
- * raises its own term — which makes `storage.term()` a clean readout of *adoption* and nothing else.
+ * raises its own term — which makes `storage.term()` a clean readout of *adoption* and nothing else,
+ * and [LoneVoter.emitted] a clean readout of what the injected frame provoked.
  */
 internal class TermJumpBoundTest {
 
@@ -84,13 +90,24 @@ internal class TermJumpBoundTest {
     )
 
     /** One running voter of a two-voter cluster, plus the handles needed to inject and to assert. */
-    private class LoneVoter(val storage: InMemoryRaftStorage, val network: InMemoryRaftNetwork)
+    private class LoneVoter(val storage: InMemoryRaftStorage, val network: InMemoryRaftNetwork) {
+        /**
+         * Every frame this voter has attempted to send since it started, decoded and in order.
+         *
+         * [InMemoryRaftNetwork.recording] is switched on by [loneVoterAt] before the node is built, so
+         * the log covers the node's whole life and an empty log means "emitted nothing at all" rather
+         * than "emitted nothing after we started watching". Only the running node has a transport
+         * here, so anything in the list was authored by [self].
+         */
+        val emitted: List<InMemoryRaftNetwork.Sent> get() = network.sent
+    }
 
     /** Start [self] with a durable term of [startingTerm], and let its init-restore finish. */
     private suspend fun TestScope.loneVoterAt(startingTerm: Long): LoneVoter {
         val storage = InMemoryRaftStorage()
         if (startingTerm != 0L) storage.saveTermAndVotedFor(startingTerm, null)
         val network = InMemoryRaftNetwork()
+        network.recording = true   // on before the node exists, so `emitted` covers its whole life
         backgroundScope.raftNode(
             ClusterConfig(voters = setOf(self, peer)),
             network.transport(self),
@@ -194,6 +211,74 @@ internal class TermJumpBoundTest {
                     0L,
                     refusedTerm,
                     "one past the bound must be refused",
+                )
+            },
+        )
+    }
+
+    /**
+     * The gate's **other** arm — `wireTerm < 0L` — which is not decoration and not defence in depth
+     * (#1980).
+     *
+     * The comparison to its right is written as a subtraction, `wireTerm - currentTerm > maxTermJump`,
+     * precisely so the guard against an overflowing term cannot itself overflow; `RaftEngine`'s own
+     * note says that rests on **both operands being non-negative**, `wireTerm` "by the short-circuiting
+     * test to its left". Delete that test and the premise is false, so the subtraction it protects
+     * silently stops meaning what it says.
+     *
+     * Concretely, and this is the reachable defect: `Long.MIN_VALUE - 0` *is* `Long.MIN_VALUE`, which
+     * is not greater than [RaftConfig.maxTermJump]. Without the arm the frame clears the bound, clears
+     * the §5.2 leader-authority gate (the sender is a current voter), reaches [onAppendEntries] and
+     * draws an `AppendEntriesResponse` — a forged frame answered, where a correct drop is silent.
+     *
+     * **The starting term must be SMALL, and a future reader must not "simplify" that away.** At a
+     * large `currentTerm` the same subtraction wraps *positive* and the frame is refused by accident —
+     * arithmetic that happens to land the right way, not the guard working. A test built on a large
+     * term would stay green with the arm deleted and would therefore pin nothing.
+     *
+     * ### What is asserted, and why not the wedge report
+     *
+     * The observable that separates *refused at the dispatch boundary* from *admitted to dispatch* is
+     * whether the sender gets an answer, so that is what this reads: the node emits nothing at all.
+     * The positive control alongside it — an admissible term at the same node shape *does* draw a
+     * response — is what keeps the negative half from passing vacuously if the tap ever stops
+     * observing.
+     *
+     * Deliberately **not** asserted: a [RaftMetric.WedgeSuspected] naming
+     * [RaftMetric.WedgeSuspected.Gate.TermJump]. `noteRefusedLeaderFrame` returns early on
+     * `senderTerm < state.currentTerm`, and every negative term is below ours, so this arm's refusals
+     * are excluded from that report by construction — the function's own KDoc says so. Nor is
+     * `storage.term()`: a negative term is not adopted either way (`m.term > currentTerm` is false for
+     * `Long.MIN_VALUE`), so the persisted term is 0 with the arm and 0 without it, and an assertion on
+     * it would look like coverage while distinguishing nothing.
+     */
+    @Test
+    fun aNegativeWireTermIsRefusedAtTheDispatchBoundary() = raftRunTest(timeout = 30.seconds) {
+        // Term 0: the subtraction's non-wrapping case, which is the only one that tests the arm.
+        val forged = loneVoterAt(0L)
+        heartbeatAt(forged, Long.MIN_VALUE)
+
+        // The control: same node shape, same injection path, an admissible term. Proves the tap below
+        // can see a response at all, so "nothing emitted" is a real observation and not a dead assert.
+        val honest = loneVoterAt(0L)
+        heartbeatAt(honest, 1L)
+
+        assertAll(
+            {
+                assertEquals(
+                    emptyList(),
+                    forged.emitted,
+                    "a negative wire term must be dropped before dispatch, answering nothing — an " +
+                        "emitted frame means it reached the RPC handlers, which is what deleting " +
+                        "`wireTerm < 0L ||` allows: Long.MIN_VALUE - 0 is not > maxTermJump",
+                )
+            },
+            {
+                assertEquals(
+                    listOf(peer),
+                    honest.emitted.map { it.to },
+                    "control: an admissible term at the same node reaches dispatch and is answered, " +
+                        "so an empty log above is the guard working and not a blind tap",
                 )
             },
         )
