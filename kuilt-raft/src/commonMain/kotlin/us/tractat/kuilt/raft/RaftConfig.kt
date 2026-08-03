@@ -15,9 +15,28 @@ import kotlin.time.Duration.Companion.milliseconds
  * **Heartbeat interval** — how often the leader sends a heartbeat (empty
  * AppendEntries) to suppress followers' election timers.
  *
- * **Constraint:** [heartbeatInterval] must be strictly less than
- * [electionTimeoutMin]. If heartbeats arrive at the election-timeout rate,
- * followers will time out spuriously. A ratio of roughly 1:3–1:10 is typical.
+ * **Both timing relations are validated at construction (#1984)** — they were
+ * stated here as constraints and enforced nowhere, and each failed late rather
+ * than at the constructor that caused it. They are checked in *different units*,
+ * because each failure lives in a different one:
+ *
+ * - **[heartbeatInterval] `<` [electionTimeoutMin]**, compared as [Duration]s. If
+ *   heartbeats arrive at the election-timeout rate, followers time out spuriously
+ *   and the cluster re-elects perpetually. A ratio of roughly 1:3–1:10 is typical.
+ *   Nothing throws on that path, so before this the only symptom was a cluster
+ *   that never made progress. The relation degrades continuously — a heartbeat
+ *   merely *close* to the floor is merely fragile — so the honest bound is the one
+ *   stated here, on the durations themselves.
+ * - **[electionTimeoutMin] `<` [electionTimeoutMax]**, compared **in whole
+ *   milliseconds**. `RaftEngine` draws each deadline with
+ *   `random.nextLong(electionTimeoutMin.inWholeMilliseconds,
+ *   electionTimeoutMax.inWholeMilliseconds)`, which throws on an empty range, and
+ *   it draws inside the election timer's coroutine — so an equal pair (what one
+ *   writes to disable jitter) used to surface as an uncaught exception in a timer
+ *   long after the node appeared to start. Comparing the durations would leave that
+ *   reachable: `1.5ms..1.9ms` is ordered yet truncates to the empty range `1..1`.
+ *   Truncation is monotone, so the millisecond bound is strictly stronger, never
+ *   weaker.
  *
  * **Tests** should use fast values (e.g. 20 ms / 40 ms / 5 ms) so elections
  * complete quickly without real-clock waits. The preferred test substitute is
@@ -25,9 +44,11 @@ import kotlin.time.Duration.Companion.milliseconds
  * entirely — see [strictTestGuard] for misuse detection.
  *
  * @param electionTimeoutMin Lower bound of the randomised election timeout window.
+ *   Validated at construction to be under [electionTimeoutMax] by at least one whole
+ *   millisecond — see the constraints above.
  * @param electionTimeoutMax Upper bound of the randomised election timeout window.
- * @param heartbeatInterval How often the leader sends a heartbeat. Must be less
- *   than [electionTimeoutMin].
+ * @param heartbeatInterval How often the leader sends a heartbeat. Validated at
+ *   construction to be strictly less than [electionTimeoutMin].
  * @param strictTestGuard When `true`, throw [IllegalStateException] at construction
  *   time if the owning [kotlinx.coroutines.CoroutineScope] contains a
  *   `kotlinx.coroutines.test.TestDispatcher`. When `false` (the default), emit a
@@ -177,6 +198,25 @@ public data class RaftConfig(
                 "$MAX_TERM_JUMP nothing breaks at once — the cost of a fabricated climb degrades " +
                 "continuously — but it is no longer guaranteed to exceed the 2^40 accepted frames " +
                 "this ceiling is placed to hold (#1972)."
+        }
+        require(heartbeatInterval < electionTimeoutMin) {
+            "heartbeatInterval must be strictly less than electionTimeoutMin, but " +
+                "heartbeatInterval=$heartbeatInterval and electionTimeoutMin=$electionTimeoutMin. " +
+                "A leader that heartbeats no faster than its followers time out cannot suppress their " +
+                "election timers: every follower campaigns, the leader steps down, and the cluster " +
+                "re-elects perpetually without ever committing. Nothing throws on that path — the only " +
+                "symptom is a cluster that never makes progress, which is why it is refused here (#1984)."
+        }
+        require(electionTimeoutMin.inWholeMilliseconds < electionTimeoutMax.inWholeMilliseconds) {
+            "electionTimeoutMin must be strictly less than electionTimeoutMax once both are truncated to " +
+                "whole milliseconds, but electionTimeoutMin=$electionTimeoutMin and " +
+                "electionTimeoutMax=$electionTimeoutMax give the empty draw range " +
+                "${electionTimeoutMin.inWholeMilliseconds}..${electionTimeoutMax.inWholeMilliseconds}. " +
+                "The engine draws every election deadline with Random.nextLong(minMs, maxMs), which throws " +
+                "on an empty range, and it draws inside the election timer's coroutine — so an equal pair " +
+                "(the natural way to pin a fixed timeout and disable jitter) would surface as an uncaught " +
+                "exception in a timer long after this node appeared to start. Widen the window to at least " +
+                "one whole millisecond (#1984)."
         }
     }
 
