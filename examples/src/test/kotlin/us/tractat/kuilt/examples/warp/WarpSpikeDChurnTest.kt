@@ -237,7 +237,7 @@ class WarpSpikeDChurnTest {
                 print(" %-16s".format(pct(r.d.gossip.duplicateRate)))
                 assertTrue(r.d.gossip.duplicateRate in 0.0..1.0)
             }
-            val bl = baseline!!
+            val bl = checkNotNull(baseline) { "hopVariants is non-empty, so the loop above always assigns a baseline" }
             println(" | %-6s %-6s".format(pct(bl.v2.optimistic.duplicateRate), pct(bl.v2.consensus.duplicateRate)))
         }
         println()
