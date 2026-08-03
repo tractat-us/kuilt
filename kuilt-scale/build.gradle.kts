@@ -6,6 +6,9 @@
 
 plugins {
     alias(libs.plugins.kotlinJvm)
+    // Measurement suites declare their own @Serializable probe messages to price a
+    // not-yet-built wire protocol against the real codec (see MerkleDigestCostModelTest).
+    alias(libs.plugins.kotlinSerialization)
 }
 
 dependencies {
@@ -21,6 +24,9 @@ dependencies {
     testImplementation(project(":kuilt-quilter"))
     testImplementation(project(":kuilt-gossip"))
     testImplementation(project(":kuilt-crdt"))
+    // Quilter's wire codec: measurements must price frames with the format production uses.
+    testImplementation(libs.kotlinx.serialization.core)
+    testImplementation(libs.kotlinx.serialization.cbor)
     testImplementation(project(":kuilt-tcp"))
     testImplementation(project(":kuilt-stream"))
     testImplementation(libs.kotlin.test)
@@ -32,6 +38,10 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+
+    // The #1955 cost model encodes 100k-entry CRDTs, and CanonicalMapSerializer materializes a
+    // sorted key-bytes view on top of the state itself. Gradle's 512m default OOMs on that.
+    maxHeapSize = "2g"
 
     // Forward -Pscale.tcp.tests=true to the test process as a system property.
     // Tests guarded by ScaleTcpTests.assumeEnabled() only run when this is present,
