@@ -76,8 +76,13 @@ public sealed class QuiltMessage<S> {
      * silent `0L` that disables the resync. ([FullState.upThrough] carries a default only because
      * it predates its callers.)
      *
-     * [root] is advisory — a collision costs a missed heal, cleared by the next state mutation on
-     * either side or routed around by a third peer, never divergence that survives a [FullState].
+     * [root] is advisory, and a collision costs more than a missed heal: the recipient takes the
+     * **match** branch, so it also fast-forwards its receive cursor to [upThrough], acks it, and
+     * drops buffered inbound deltas at or below it — the exact harm the mismatch branch refuses to
+     * risk, inflicted here on a false match. It stays recoverable: the next state mutation on
+     * either side changes both roots, and any [FullState] — from a third peer, the first-contact
+     * path, or a later round whose roots then differ — re-merges the state and re-resyncs the
+     * cursor. So a stall until the next round, never divergence that survives a [FullState].
      */
     @Serializable
     @SerialName("rootDigest")

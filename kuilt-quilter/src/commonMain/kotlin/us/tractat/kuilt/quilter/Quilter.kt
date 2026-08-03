@@ -537,7 +537,16 @@ public class Quilter<S : Quilted<S>>(
      * There is no `KSerializer<S>` on this class — the primary constructor takes only
      * [messageSerializer], and the top-level factory's `valueSerializer` is not retained — so the
      * state is encoded inside a fixed synthetic [QuiltMessage.FullState]. [ReplicaId.Bottom] and
-     * `upThrough = 0L` are constants, so equal states still yield equal roots on every peer.
+     * `upThrough = 0L` are constants, so the *envelope* is identical on every peer.
+     *
+     * Equal states then yield equal roots **provided `S`'s serializer is encoding-canonical** —
+     * equal values must encode to identical bytes, which requires a deterministic order for any
+     * set- or map-valued field. Every CRDT in the in-tree zoo satisfies this (they serialize
+     * through sorted, canonical forms), but [Quilter] is generic over consumer state types: an `S`
+     * carrying a plain unordered `Set`/`Map` can encode one value two ways on two peers. The
+     * failure mode is benign and self-limiting — the roots never match, so every round falls back
+     * to the [QuiltMessage.FullState] path that predates #1955 and the optimization simply never
+     * engages for that pair. It is never divergence.
      */
     private fun stateRoot(): Long = fnv1a64(
         binaryFormat.encodeToByteArray(
