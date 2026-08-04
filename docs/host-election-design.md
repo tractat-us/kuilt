@@ -168,9 +168,12 @@ no Room has adopted it**.
   compute the same `host`, and `host` updates as peers join / leave.
 - **Freeze round** — multi-peer: host `start()`, members `awaitRoom()`; assert all adopt the correct
   role and the Room forms. Abort case: mutate membership mid-freeze → `Reopen` → retry converges.
-- **Discipline** — `StandardTestDispatcher`, tight timeouts (`timeout = 5.seconds`), seeded RNG where
-  relevant, node coroutines on `backgroundScope`; never `advanceUntilIdle()`. (Repo coroutine-determinism
-  rules; multi-peer tests fenced with an OS `timeout` when run from an agent.)
+- **Discipline** — `StandardTestDispatcher`, a **generous** named wedge backstop
+  (`timeout = TEST_WEDGE_BACKSTOP`) rather than a tight one, seeded RNG where relevant, node coroutines on
+  `backgroundScope`; never `advanceUntilIdle()`. Fast failure comes from the *bounded* `await*`/`settle()`
+  calls, whose bounds are virtual time and therefore immune to host load — a tight wall-clock ceiling only
+  pre-empts them with a load-sensitive false red (#1739). (Repo coroutine-determinism rules; multi-peer
+  tests fenced with an OS `timeout` when run from an agent.)
 
 ## Explicitly out of scope (follow-ups)
 
