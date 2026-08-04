@@ -2252,10 +2252,21 @@ internal class RaftEngine(
         val lastNewIndex = m.prevLogIndex + m.entries.size
 
         if (m.leaderCommit > state.currentCommitIndex) {
-            // Commit only up to what this AE verified. Clamp forward-only (`maxOf(_, currentCommitIndex)`)
-            // so a reordered/partial batch whose `lastNewIndex` sits below our committed prefix can never
-            // regress commitIndex (advanceCommit assigns it unconditionally). For the reachable full-suffix
-            // send `lastNewIndex >= currentCommitIndex`, so the clamp is a no-op and behaviour is unchanged.
+            // Commit only up to what this AE verified, and clamp forward-only (`maxOf(_, currentCommitIndex)`).
+            // [advanceCommit] ends with `state.currentCommitIndex = newCommit` UNCONDITIONALLY, so a batch
+            // whose `lastNewIndex` sits below our committed prefix would otherwise un-commit it — silently,
+            // because advanceCommit's emit loop `(currentCommitIndex + 1)..newCommit` is empty when
+            // `newCommit` is lower: nothing is re-emitted and `_commitIndex` is left stale.
+            //
+            // No honest sender emits such a frame, and the reason is stronger than "the reachable send is
+            // full-suffix": [sendAppendEntries] ships the entire suffix, so a minted frame has
+            // `lastNewIndex == the leader's lastLogIndex`, and its `leaderCommit` is that same leader's
+            // commit index, which never exceeds its own last index. `leaderCommit <= lastNewIndex` is
+            // therefore a relation between two fields OF THE FRAME, fixed at mint time — delay, duplication
+            // and reordering cannot break it. The clamp needs the opposite (`leaderCommit > lastNewIndex`),
+            // so today it bites only on a malformed or foreign frame. It is one [sendAppendEntries] change
+            // from load-bearing, though: any entry-count or payload cap on AppendEntries produces
+            // `leaderCommit > lastNewIndex` immediately. Pinned by `ForwardOnlyCommitClampTest` (#2024).
             advanceCommit(minOf(m.leaderCommit, maxOf(lastNewIndex, state.currentCommitIndex)))
         }
 
