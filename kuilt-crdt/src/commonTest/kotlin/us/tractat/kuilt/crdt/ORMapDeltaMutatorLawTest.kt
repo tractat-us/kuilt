@@ -308,6 +308,9 @@ class ORMapDeltaMutatorLawTest {
      * round, the delta is the right thing to pay. This test states which one was chosen: **not**
      * flat here, and flat in every other term ([aPutDeltasFrameIsFlatInMapSize],
      * [aPutDeltasFrameIsFlatInTheStoredValuesSize]).
+     *
+     * The cost this leaves on the table — a key one replica grows alone costs O(n²) cumulative — is
+     * tracked in #2102, with the amortisation options and the guidance alternative.
      */
     @Test
     fun aPutDeltaCarriesTheSendersOwnRunningContributionToTheKey() {
