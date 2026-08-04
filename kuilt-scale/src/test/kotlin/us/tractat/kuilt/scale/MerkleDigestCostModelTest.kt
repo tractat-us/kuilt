@@ -70,6 +70,10 @@ import kotlin.time.Instant
  * [meterConvergedRounds] makes every node apply a local mutation before the meter opens for exactly
  * that reason; see its KDoc for why a never-written mesh silently halves the number.
  *
+ * **So was the round it replaced**, which is easy to lose because only the state frame changed
+ * size: `onFullState` ends in the same `resyncReceiveCursor` the digest's match branch does, so
+ * (D) prices both of its columns as [fullStateRoundBytes] against [matchedRoundBytes] (#2015).
+ *
  * **What is still modelled.** The *sharded* variant was measured and deliberately not built — its
  * advantage collapses as divergence grows (see the (D) table) — so its frames stay declared here
  * as [ShardDigestsProbe] / [ShardPushProbe] and encoded with the same `Cbor`: a real price for a
@@ -468,6 +472,20 @@ class MerkleDigestCostModelTest {
         quiescentRoundBytes(sender) + matchedAckBytes(sender)
 
     /**
+     * A whole **pre-#1955** converged round, given the size of its `FullState` frame: the state out
+     * and the same [matchedAckBytes] back. That round was two frames as well —
+     * `reconcileWithRandomPeer` sent a `FullState` and `onFullState` ends in
+     * `resyncReceiveCursor`, exactly as the digest's match branch does — so pricing the state frame
+     * alone against [matchedRoundBytes] compares a one-frame round with a two-frame one.
+     *
+     * The error is not uniformly conservative, which is what made it look harmless: it is a
+     * rounding detail against a 3.5 MB frame and the larger half of the round at one entry, where
+     * it inverts the verdict outright.
+     */
+    private fun fullStateRoundBytes(stateBytes: Int, sender: ReplicaId = replica): Int =
+        stateBytes + matchedAckBytes(sender)
+
+    /**
      * The tag a variant pays for living in the `QuiltMessage` sealed hierarchy. Measured against
      * the smallest existing variant so the probes above are priced as real `QuiltMessage` members.
      */
@@ -522,21 +540,29 @@ class MerkleDigestCostModelTest {
 
         val gsetRows = sizes.map { it to fullStateBytes(gsetOf(it)) }
         val bytesPerEntry = slope(gsetRows)
+        // Both columns are whole rounds — see [fullStateRoundBytes] for why the before round is
+        // two frames as well. The state frames stay in [gsetRows] because the slope and the
+        // diverged table below are about state *content*, which the ack is not part of.
+        val beforeRounds = gsetRows.map { (n, stateBytes) -> n to fullStateRoundBytes(stateBytes) }
 
         println("\n=== #1955 Phase 0 (D): crossover, GSet, S=$shards shards ===")
-        println("  converged round: $matchedRound b (digest $quiescent + ack ${matchedAckBytes()}) vs O(state) before #1955")
         println(
-            "  crossover at ${(matchedRound / bytesPerEntry).toInt() + 1} entries — " +
-                "above that a converged round is cheaper as a digest",
+            "  converged round: $matchedRound b (digest $quiescent + ack ${matchedAckBytes()}) vs " +
+                "O(state) + the same ${matchedAckBytes()} b ack before #1955",
         )
-        // The "before #1955" columns price the full state alone. That round also carried an ack
-        // (`onFullState` resyncs the cursor exactly as the digest's match branch does), so the
-        // comparison is a few tens of bytes conservative against a multi-KB-to-multi-MB frame —
-        // it understates the win, which is the safe direction.
+        // The ack rides both rounds, so it cancels and #1955 pays off wherever the FullState frame
+        // outweighs the RootDigest frame. That is already true of a one-entry GSet, because the
+        // state frame pays a constant envelope the per-entry slope ignores — so there is no
+        // crossover inside the sweep at all, and the marginal figure is an upper bound on it.
+        println(
+            "  no crossover in the sweep: GSet(1) is already ${gsetRows.first().second} b of state " +
+                "against a $quiescent b digest (marginal upper bound " +
+                "${(quiescent / bytesPerEntry).toInt() + 1} entries)",
+        )
         println("\n  Steady-state egress per node at the default 60s antiEntropyInterval:")
         println("  %9s %19s %17s %12s".format("entries", "b/round (before)", "b/s (before)", "b/s (now)"))
-        gsetRows.forEach { (n, bytes) ->
-            println("  %9d %19d %17.1f %12.2f".format(n, bytes, bytes / 60.0, matchedRound / 60.0))
+        beforeRounds.forEach { (n, round) ->
+            println("  %9d %19d %17.1f %12.2f".format(n, round, round / 60.0, matchedRound / 60.0))
         }
 
         // The two columns must price rounds on the same basis or the table is not a comparison.
@@ -545,9 +571,9 @@ class MerkleDigestCostModelTest {
         // state is, so the *before* column comes out below the *now* column and the table says
         // #1955 made a one-entry GSet more expensive. It did not — that round paid the same ack.
         assertTrue(
-            gsetRows.all { (_, beforeRound) -> beforeRound > matchedRound },
+            beforeRounds.all { (_, beforeRound) -> beforeRound > matchedRound },
             "a whole pre-#1955 round must cost more than a whole #1955 round at every size swept " +
-                "(smallest: ${gsetRows.first().second} b before vs $matchedRound b now)",
+                "(smallest: ${beforeRounds.first().second} b before vs $matchedRound b now)",
         )
 
         println("\n  Diverged round — d keys actually differ (n = 100k entries):")
