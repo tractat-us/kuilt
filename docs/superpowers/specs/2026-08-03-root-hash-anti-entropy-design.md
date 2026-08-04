@@ -107,6 +107,10 @@ On a mismatch the receiver cannot tell from a hash *which* side is behind. Two o
 
 ### Mixed-version rooms — an accepted limitation
 
+> **Superseded.** Accepted at design time; fixed under #2006 by the has-sent-me-a-digest
+> latch (see `docs/gossip-mesh-design.md`). The reasoning below is why it was survivable,
+> not a description of what ships.
+
 An older peer receives an unknown `SerialName` and the frame is dropped at `dispatch`'s decode
 guard, so **every** digest a new peer ticks at an old one is dead — not one, all of them. The drop
 is `DEBUG`-logged (added under #2006 precisely because this branch made silence the only symptom of

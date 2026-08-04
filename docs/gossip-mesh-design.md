@@ -188,6 +188,18 @@ request → state) where it took one, so a frame lost mid-exchange costs a furth
 that the unconditional push did not. Eventual convergence is unaffected — the next round
 that selects the peer starts over — but heal latency has a longer tail than before.
 
+The gate also assumes the peer can *read* a digest, which a build predating #1955 cannot:
+it drops the frame at the decode guard, and this side's anti-entropy towards it stops
+dead. #2006 closed that by keying the gate to evidence rather than assuming it. A peer
+that has sent us a `RootDigest` of its own is proven — silence in *reply* would be
+ambiguous, since a converged peer answers a matched root with nothing, but nothing except
+a current build ever *sends* one. An unproven peer is sent the state alongside the digest,
+which is the pre-#1955 cost and never worse. Two details carry it: the digest goes to
+every peer regardless, because it is the only thing that can ever set the latch; and first
+contact announces one beside its `FullState`, because otherwise the proof waits on the
+peer's own tick drawing us — the same coupon-collector tail as above, during which a mesh
+of entirely current peers would take the fallback on nearly every round.
+
 ### Named follow-ups
 
 **(i) Digest-gated reconcile** — **SHIPPED as #1955.** Originally tracked as #663
