@@ -7,6 +7,7 @@ import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.decodeFromByteArray
 import kotlinx.serialization.encodeToByteArray
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.session.RoomFramePrefix
 
 /**
  * Wire messages for the host-election freeze round (#1439). Sent over the raw lobby [seam] BEFORE any
@@ -40,12 +41,8 @@ public sealed interface LobbyMessage {
     public data class Reopen(val epoch: Long) : LobbyMessage
 
     public companion object {
-        /**
-         * First byte of every encoded lobby payload: `0x65` ('e' for "election"). Distinct from
-         * [us.tractat.kuilt.session.admit.AdmitMessage.PREFIX_BYTE] (`0x61`) and the channel prefix
-         * (`0x63`) so the three frame kinds never alias on one seam.
-         */
-        public const val PREFIX_BYTE: Byte = 0x65
+        /** First byte of every lobby frame. Reserved by [RoomFramePrefix.Lobby] (#2007). */
+        public val PREFIX_BYTE: Byte = RoomFramePrefix.Lobby.byte
 
         @OptIn(ExperimentalSerializationApi::class)
         private val cbor = Cbor { ignoreUnknownKeys = true }

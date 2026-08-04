@@ -13,6 +13,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.core.validFirstHop
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftEnvelope
 import us.tractat.kuilt.raft.RaftTransport
@@ -301,7 +302,7 @@ public class RoutedRaftTransport internal constructor(
         // First-hop origin validation, BEFORE any emit or forward. A spoke may
         // speak only for itself; a core sender is trusted to carry a validated
         // origin. Shared with RaftRelayHub via [validFirstHop].
-        if (!validFirstHop(sender = sender, origin = relay.origin, core = core)) {
+        if (!validFirstHop(sender = sender, origin = relay.origin, trusted = core)) {
             log.debug { "raft-relay: $selfId rejected spoofed frame (origin=${relay.origin}, sender=$sender)" }
             return
         }

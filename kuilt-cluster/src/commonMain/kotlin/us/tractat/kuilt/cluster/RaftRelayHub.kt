@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.core.validFirstHop
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftEnvelope
 
@@ -128,7 +129,7 @@ internal class RaftRelayHub(private val voters: Set<NodeId>) {
                         return@collect
                     }
                     val sender = NodeId(senderPeer.value)
-                    if (!validFirstHop(sender = sender, origin = relay.origin, core = voters)) {
+                    if (!validFirstHop(sender = sender, origin = relay.origin, trusted = voters)) {
                         log.debug { "raft-relay-hub: rejected spoofed frame (origin=${relay.origin}, sender=$sender)" }
                         return@collect
                     }

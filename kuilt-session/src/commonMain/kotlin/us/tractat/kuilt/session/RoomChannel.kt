@@ -1,7 +1,6 @@
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
@@ -17,16 +16,23 @@ import us.tractat.kuilt.core.Swatch
  * ## Reserved prefix
  *
  * Every channel frame begins with [CHANNEL_PREFIX] (`0x63`, ASCII 'c' for
- * "channel"). This value is:
- * - Distinct from the admit-protocol prefix (`0x61` / 'a').
- * - Outside the CBOR major-type-7 range (`0xe0`–`0xff`) used by serialization.
- * - Not emitted as the first byte of a heartbeat string (`kuilt.heartbeat.…`
- *   starts with `0x6b`).
+ * "channel"), reserved by [RoomFramePrefix.Channel] — the registry that owns the
+ * whole room frame-prefix byte space (#2007). It is distinct from every other
+ * claimed byte by construction.
+ *
+ * This KDoc previously claimed `0x63` is safe because it sits "outside the CBOR
+ * major-type-7 range (`0xe0`–`0xff`) used by serialization". **That was false.**
+ * CBOR text-string headers are `0x60 or len`, so a bare 3-character CBOR string
+ * begins `0x63` — and the same is true of every other prefix in the registry. The
+ * real collision band is `0x60..0x7f`; see [RoomFramePrefix] for the full table.
+ * The codebase lives with it because room payloads are framed, not bare.
  *
  * Applications **must not** emit raw payloads starting with `0x63` via [Room.broadcast]
- * or [Room.sendTo] — that byte is reserved for channel framing. Application frames
- * that happen to start with `0x63` will be misclassified as channel frames and routed
- * (or silently dropped).
+ * or [Room.sendTo] — that byte is reserved for channel framing. An application frame of
+ * 3 bytes or more starting with `0x63` is misclassified as a channel frame and routed
+ * (or silently dropped); a 1- or 2-byte one survives, on the strength of the classifier's
+ * length test alone. Do not build on that. [Room.broadcast] carries the whole reserved
+ * byte space and which of it is conditional.
  *
  * ## Wire format
  *
@@ -43,10 +49,12 @@ public object RoomChannel {
     /**
      * First byte of every channel frame.
      *
-     * Value: `0x63` (ASCII 'c' for "channel"). See the class-level documentation
-     * for namespace-collision guarantees.
+     * Value: `0x63` (ASCII 'c' for "channel"). The class-level documentation
+     * describes the byte space this belongs to — note that the registry asserts
+     * **distinctness** between frame families and explicitly cannot assert safety
+     * against an application payload that happens to lead with the same byte.
      */
-    public const val CHANNEL_PREFIX: Byte = 0x63
+    public val CHANNEL_PREFIX: Byte = RoomFramePrefix.Channel.byte
 
     /**
      * Derive a 2-byte wire sub-id from a channel [name].
@@ -110,17 +118,27 @@ public object RoomChannel {
  * - `state` forwards the delegate seam's state.
  * - `close` is a no-op — the Room owns the lifecycle.
  *
- * The shared upstream ([sharedRaw]) is started eagerly so that frames emitted before
- * [incoming] is first collected are not held in a buffer. Late subscribers use
- * `replay = 0` and may miss frames; this is safe for [us.tractat.kuilt.quilter.Quilter]
- * (gaps heal via FullState + resend).
+ * ## The upstream is a merge of two inbound streams
+ *
+ * [sharedRaw] is `SeamRoom`'s direct inbound stream **merged with** its relayed one (#1994) — a
+ * `Flow`, not a `SharedFlow`, purely because `merge` returns one; the only operations applied are
+ * `filter`/`map`, so nothing here depended on the narrower type. The split upstream is deliberate
+ * and asymmetric: a channel view must see a co-spoke's host-relayed frames, while the per-peer
+ * liveness detectors (which collect the direct stream alone) must **not** — a detector treats any
+ * inbound frame as proof of liveness, so feeding it relayed data would mask a dead direct edge.
+ * Data is relayed; liveness is not.
+ *
+ * Both underlying streams are hot `SharedFlow`s started eagerly, so frames emitted before
+ * [incoming] is first collected are not held in a buffer. Late subscribers use `replay = 0` and may
+ * miss frames; this is safe for [us.tractat.kuilt.quilter.Quilter] (gaps heal via FullState +
+ * resend). Those `replay = 0` semantics are unchanged by the merge.
  *
  * Construction should go through [SeamRoom.channel], which caches instances by id.
  */
 internal class RoomChannelSeam(
     private val room: SeamRoom,
     private val subId: Short,
-    sharedRaw: SharedFlow<Swatch>,
+    sharedRaw: Flow<Swatch>,
 ) : Seam {
 
     override val selfId: PeerId get() = room.selfId

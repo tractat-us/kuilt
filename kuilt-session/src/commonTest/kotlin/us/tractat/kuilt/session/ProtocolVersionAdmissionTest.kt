@@ -71,28 +71,60 @@ class ProtocolVersionAdmissionTest {
         }
 
     /**
-     * Wire additivity at the room level: a joiner whose `Hello` carries **no** version (a peer that
-     * predates #1569 — `protocolVersion == null`) is still admitted, decoding as legacy exactly as a
-     * pre-change build would send. Version negotiation must not lock out older peers.
+     * The #1994 inversion of the old permissive-null policy. A joiner whose `Hello` carries **no**
+     * version predates #1569 and is therefore *definitionally* incapable of relaying between spokes
+     * of a star fabric, so it is now **refused** with a terminal [RejectCode.ProtocolMismatch]
+     * rather than admitted as legacy — leaving `null` permissive would re-admit exactly the
+     * population the v2 bump exists to exclude.
+     *
+     * This test previously pinned the opposite ("a version-less hello must admit"). It is inverted
+     * rather than deleted so the policy flip stays visible and cannot silently flip back.
      */
     @Test
-    fun `legacy joiner with no protocol version still admits`() =
+    fun `version-less joiner is refused since protocol version 2`() =
         runTest {
             val loom = InMemoryLoom()
             val host = factory(loom, backgroundScope).host(Pattern("HostA"), memberName = "HostA")
 
-            val joinerSeam = loom.join(InMemoryTag("Bob"))
-            joinerSeam.broadcast(
+            val legacySeam = loom.join(InMemoryTag("Bob"))
+            legacySeam.broadcast(
                 AdmitMessage.encode(
                     // protocolVersion defaults to null — the legacy, version-less form.
                     AdmitMessage.Hello(displayName = "Bob", sessionId = "session-bob"),
                 ),
             )
 
-            val welcomed = host.roster.first { it.size == 1 }
-            assertEquals("Bob", welcomed.single().identity.displayName, "a version-less hello must admit")
+            val reply = legacySeam.incoming.first { AdmitMessage.decode(it.toByteArray()) is AdmitMessage.Reject }
+            val reject = AdmitMessage.decode(reply.toByteArray()) as AdmitMessage.Reject
 
-            joinerSeam.close()
+            // Positive control: the same host admits a joiner that DOES declare the current version,
+            // so the roster assertion below is attributable to the gate and not to an inert host.
+            val currentSeam = loom.join(InMemoryTag("Carol"))
+            currentSeam.broadcast(
+                AdmitMessage.encode(
+                    AdmitMessage.Hello(
+                        displayName = "Carol",
+                        sessionId = "session-carol",
+                        protocolVersion = ProtocolVersion.CURRENT,
+                    ),
+                ),
+            )
+            val admitted = host.roster.first { it.size == 1 }
+
+            assertAll(
+                { assertEquals(RejectCode.ProtocolMismatch, reject.code, "a version-less hello must be refused") },
+                { assertTrue(!reject.code.retryable, "a protocol mismatch is terminal, not retryable") },
+                {
+                    assertEquals(
+                        "Carol",
+                        admitted.single().identity.displayName,
+                        "only the version-declaring joiner is admitted",
+                    )
+                },
+            )
+
+            legacySeam.close()
+            currentSeam.close()
             host.leave()
         }
 

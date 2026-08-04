@@ -8,6 +8,7 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.ProtocolVersion
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -75,6 +76,9 @@ class RoomBoundAdmissionTest {
                         displayName = "Bob",
                         sessionId = "session-bob",
                         targetRoom = "room-B",
+                        // Declare the current version so this Hello clears the protocol gate, which
+                        // runs first (#1994): the subject here is the room gate, not versioning.
+                        protocolVersion = ProtocolVersion.CURRENT,
                     ),
                 ),
             )
