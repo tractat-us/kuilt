@@ -99,13 +99,33 @@ public sealed interface RaftTraceEvent {
         val term: Long,
     ) : RaftTraceEvent
 
-    /** Vote denied to a candidate. */
+    /**
+     * Vote denied to a candidate.
+     *
+     * [reasons] is the attribution to assert against; [reason] is a lossy projection of it kept for
+     * source compatibility. See [DenyReason] for why a denial can carry more than one.
+     */
     public data class VoteDenied(
         override val clock: Long,
         val from: NodeId,
         val to: NodeId,
         val term: Long,
+        /**
+         * The **first-failing** reason, not the only-failing one — `reasons.first()` under the
+         * responder's own arm order. Asserting equality against this is blind to every other conjunct
+         * that failed alongside it (#2052); prefer `DenyReason.X in reasons`.
+         */
         val reason: DenyReason,
+        /**
+         * **Every** conjunct of the vote decision that failed, in the responder's arm order. Never
+         * empty on a denial, and always contains [reason].
+         *
+         * A candidate can fail several at once — already having lost our vote *and* carrying a log
+         * behind ours is an ordinary split-vote outcome, not a corner case — and a single-valued field
+         * can only name one of them. That made §5.4.1 unattributable through this channel on exactly
+         * the trajectories where it mattered most.
+         */
+        val reasons: Set<DenyReason> = setOf(reason),
     ) : RaftTraceEvent
 
     /** §7 InstallSnapshot chunk sent to a follower whose needed prefix has been compacted away. */
@@ -159,13 +179,21 @@ public sealed interface RaftTraceEvent {
         val proposedTerm: Long,
     ) : RaftTraceEvent
 
-    /** Node denied a pre-vote to a candidate. */
+    /**
+     * Node denied a pre-vote to a candidate.
+     *
+     * [reasons] is the attribution to assert against; [reason] is a lossy projection of it kept for
+     * source compatibility. See [VoteDenied] and [DenyReason].
+     */
     public data class PreVoteDenied(
         override val clock: Long,
         val node: NodeId,
         val to: NodeId,
         val proposedTerm: Long,
+        /** The **first-failing** reason — see [VoteDenied.reason]. Prefer `DenyReason.X in reasons`. */
         val reason: DenyReason,
+        /** **Every** conjunct of the pre-vote decision that failed — see [VoteDenied.reasons]. */
+        val reasons: Set<DenyReason> = setOf(reason),
     ) : RaftTraceEvent
 
     /**
