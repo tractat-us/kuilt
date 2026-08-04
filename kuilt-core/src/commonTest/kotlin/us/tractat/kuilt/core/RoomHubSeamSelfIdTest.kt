@@ -4,11 +4,11 @@ package us.tractat.kuilt.core
 
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * [RoomHubSeam] must honour the [Seam.peers] contract (`Seam.kt` KDoc): the roster **includes
@@ -20,7 +20,7 @@ import kotlin.time.Duration.Companion.seconds
 class RoomHubSeamSelfIdTest {
 
     @Test
-    fun peersAlwaysContainsSelfId() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun peersAlwaysContainsSelfId() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val self = PeerId("server")
         val room = RoomHubSeam("table-7", self, RoomAuthorizer.AllowAll)
         val peer = PeerId("client-a")

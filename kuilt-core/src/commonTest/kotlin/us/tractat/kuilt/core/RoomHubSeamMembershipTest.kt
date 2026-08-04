@@ -18,6 +18,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.fabric.hubMesh
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
 import us.tractat.kuilt.test.fabric.connectionPair
@@ -40,7 +41,7 @@ class RoomHubSeamMembershipTest {
      * is re-associated by id, never duplicated.
      */
     @Test
-    fun reconnectResumesMembershipByPeerId() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun reconnectResumesMembershipByPeerId() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val dispatcher = coroutineContext[ContinuationInterceptor]!!
         val source = InMemoryConnectionSource()
         val serverLoom = MuxServerLoom(

@@ -9,6 +9,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -26,7 +27,7 @@ class AcceptPumpTest {
     /** A conn whose handling hangs must not block a later conn's handling (concurrency), and must be
      *  abandoned after the handshake timeout (no permanent wedge). */
     @Test
-    fun aHungHandshakeDoesNotStarveLaterConnections() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun aHungHandshakeDoesNotStarveLaterConnections() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val handled = mutableListOf<String>()
         val gate = CompletableDeferred<Unit>()   // never completed → conn "hangs"
         val conns = ArrayDeque(listOf("hang", "good-1", "good-2"))
