@@ -1,8 +1,9 @@
 # Teaching the convergence generator to clean up after itself
 
 **Issue:** [#2019](https://github.com/tractat-us/kuilt/issues/2019) · **Date:** 2026-08-03 ·
-**Status:** design, not yet implemented. Every number below was measured on this branch and the
-measurement scripts are described in "How the figures were produced".
+**Status:** design approved, not yet implemented; both open questions decided (see "Decisions
+taken"). Every number below was measured on this branch, and the measurement scripts are described
+in "How the figures were produced".
 
 ## What this changes, in plain language
 
