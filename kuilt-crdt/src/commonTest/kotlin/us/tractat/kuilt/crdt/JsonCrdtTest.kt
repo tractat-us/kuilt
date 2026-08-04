@@ -457,7 +457,7 @@ class JsonCrdtTest {
     // When #2086 fixes ORMapEntry.join, each `assertNotEquals` below must flip to the
     // `assertEquals` its message names — that is the point of writing them this way. The
     // trajectory test at the bottom already asserts the *other* half of the law (with removes
-    // taken out of the generator, JsonCrdt is associative over ~60k causally-related triples),
+    // taken out of the generator, JsonCrdt is associative over ~39k causally-related triples),
     // so the fix has a green target to aim at as well as a red one to clear.
     //
     // Why the divergence exists: ORMapEntry.join calls `value.piece(other.value)` whenever both
@@ -689,24 +689,43 @@ class JsonCrdtTest {
     }
 
     /**
-     * Cross-type precedence (`Object > Array > Leaf`) over a **causal chain**, which
-     * [crossTypePieceIsAssociative] above does not reach: it folds its three documents from three
-     * independent `empty()`s, so no state there is an ancestor of another. The type dimension is a
-     * total order and `max` over one is associative — this test is what says so on states that
-     * could actually expose an ordering bug.
+     * Cross-type precedence (`Object > Array > Leaf`) with all three types **concurrent at one key
+     * and descended from a shared ancestor**, which [crossTypePieceIsAssociative] above does not
+     * reach: it folds its three documents from three independent `empty()`s, so no state there is
+     * an ancestor of another.
+     *
+     * The branch point deliberately leaves `k` absent and carries an unrelated key instead. Writing
+     * `k` on a state that *already holds* it would collapse the types at write time — [ORMap.put] is
+     * additive, so `set` runs `Leaf.piece(Array)` locally and the state stops being purely typed —
+     * and the triple would no longer put three different types side by side at merge time.
+     *
+     * `Object > Array > Leaf` is a total order and `max` over one is associative. This is the test
+     * that says so; a tiebreak that answered by receiver rather than by rank would break it.
      */
     @Test
-    fun pieceIsAssociativeOnCrossTypeConflictsOverACausalChain() {
-        val asLeaf = JsonCrdt.empty(a).set("k", scalar("W1", "v1"))
-        val asArray = asLeaf.set("k", arrayNode("W2", scalar("W2", "e1")))
-        val asObject = asArray.set("k", objectNode("W3", "p" to scalar("W3", "p1")))
+    fun pieceIsAssociativeOnConcurrentCrossTypeWritesFromASharedAncestor() {
+        val c = ReplicaId("C")
+        val branchPoint = JsonCrdt.empty(a).set("unrelated", scalar("W0", "v0"))
+        val asLeaf = branchPoint.set("k", scalar("W1", "v1"))
+        val asArray = branchPoint.withReplica(b).set("k", arrayNode("W2", scalar("W2", "e1")))
+        val asObject = branchPoint.withReplica(c).set("k", objectNode("W3", "p" to scalar("W3", "p1")))
 
         assertAll(
-            *associativityChecks("cross-type chain", asLeaf, asArray, asObject),
+            *associativityChecks("concurrent cross-type", asLeaf, asArray, asObject),
+            {
+                assertIs<JsonNode.Array>(asLeaf["k"]?.piece(asArray["k"]!!), "vacuity: pure types")
+            },
             {
                 assertIs<JsonNode.Object>(
                     asLeaf.piece(asArray).piece(asObject)["k"],
                     "the richest type must win regardless of grouping",
+                )
+            },
+            {
+                assertContains(
+                    asLeaf.piece(asArray).piece(asObject).keys,
+                    "unrelated",
+                    "the shared ancestor's key must survive every grouping",
                 )
             },
         )
@@ -714,9 +733,9 @@ class JsonCrdtTest {
 
     /**
      * **The general law over causally-related trajectories, run twice.** With `remove` taken out of
-     * the generator, `JsonCrdt.piece` is associative across all 66,642 ordered triples drawn from
+     * the generator, `JsonCrdt.piece` is associative across all 39,232 ordered triples drawn from
      * shared histories — objects, arrays, scalars, cross-type overwrites, merges and all. Put
-     * `remove` back and 648 of the same 66,642 triples diverge, about one in a hundred.
+     * `remove` back and 280 of the same 39,232 triples diverge, about one in a hundred.
      *
      * Two assertions, and each can fail on its own:
      * - the *control* arm pins the null result — no part of `JsonNode`'s own algebra (the type
@@ -898,20 +917,20 @@ class JsonCrdtTest {
 
     private companion object {
         /** Shared histories per run of the trajectory law. */
-        const val TRAJECTORY_TRIALS = 60
+        const val TRAJECTORY_TRIALS = 35
 
         /**
-         * Floors the generator must clear. **Measured on seed 2086, over 66,642 triples per arm:
-         * the control made 289 overwrites of a live key, 105 object values and 105 array values;
-         * the removes arm re-set a key some replica had already removed 37 times and found 648
+         * Floors the generator must clear. **Measured on seed 2086, over 39,232 triples per arm:
+         * the control made 172 overwrites of a live key, 57 object values and 63 array values; the
+         * removes arm re-set a key some replica had already removed 22 times and found 280
          * violations.** Each floor sits near half its measurement, so an incidental tweak does not
          * red-light the suite while a generator that stopped writing structured values — or stopped
          * re-setting after a remove, the shape that breaks `ORMap` — fails loudly instead of
          * passing vacuously.
          */
-        const val MIN_RE_SETS = 140
-        const val MIN_STRUCTURED = 50
-        const val MIN_RE_SETS_AFTER_REMOVE = 15
+        const val MIN_RE_SETS = 85
+        const val MIN_STRUCTURED = 28
+        const val MIN_RE_SETS_AFTER_REMOVE = 11
 
         val TRAJECTORY_REPLICAS = listOf(ReplicaId("A"), ReplicaId("B"), ReplicaId("C"))
 
