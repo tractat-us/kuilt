@@ -37,8 +37,21 @@ internal data class GatedRead(val deferred: CompletableDeferred<Long>, val reinv
  * appear fresh for a read queued at `sinceRound = H` (round-slip). Crediting to the echoed round `H`
  * correctly excludes it. An echo *above* [round] is discarded outright (#1817) — an honest echo can
  * never exceed it, so nothing is lost, and a nonce admits no conservative in-range reading the way a
- * quantity does (see [recordAck]). Pinned by `roundSlipAckDoesNotConfirmReadIndex` /
- * `staleAckDoesNotConfirmReadIndex` / `ReadIndexRoundClampTest`.
+ * quantity does (see [recordAck]).
+ *
+ * **[recordAck] is fed by two engine lanes, and each needs its own pin** (#2050). The property is
+ * one function's, but the `echoedRound` reaching it is minted per lane — `onAppendEntriesResponse`
+ * and `onInstallSnapshotResponse` — so a regression on either lane is invisible to the other's
+ * tests. Pinned by `roundSlipAckDoesNotConfirmReadIndex` (AppendEntries lane),
+ * `InstallSnapshotReadFreshnessTest` (InstallSnapshot lane, both the receipt end and the five
+ * `echoedRound = m.round` send sites), and `ReadIndexRoundClampTest` for the discard-vs-clamp
+ * disposition of [recordAck] itself.
+ *
+ * `staleAckDoesNotConfirmReadIndex` is deliberately **not** in that list, though it long was: it
+ * pins the *per-voter* half of BLOCKER 1 (a cumulative contact set inflating the quorum count), not
+ * the nonce. Both ACKs it injects carry the default `echoedRound = 0L`, so its stale/fresh
+ * distinction is carried by delivery order; crediting the round at receipt instead of the echo
+ * leaves it green.
  *
  * **BLOCKER 2 — joint dual-majority (do not regress).** Freshness is checked via
  * [MembershipState.quorumOfContacts], which during a Joint configuration requires an independent fresh

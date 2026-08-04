@@ -23,11 +23,18 @@ import kotlin.test.assertEquals
  * assembled from voters that never answered the current round, and the engine's `confirmFreshReads()`
  * completed `readIndex()` — a stale read served as linearizable, violating §3.7.
  *
- * The clamp is `minOf(echoedRound, round)`. It is a no-op for every honest peer: `round` only ever
- * increases and only the leader stamps it into a request, so any round a follower can be echoing was
- * necessarily stamped when `round` was at or below its present value. The clamp therefore bites only on
- * a value the leader never sent — exactly the reasoning behind the sibling `minOf(m.matchIndex,
- * state.lastLogIndex)` clamp two lines away in the same handler (#1175).
+ * **The shipped disposition is a discard, not the clamp this class is named for.** `recordAck` is
+ * `if (echoedRound <= round) lastAckRound[from] = echoedRound` — an out-of-range echo drops its
+ * freshness evidence entirely. The `minOf(echoedRound, round)` clamp that the sibling
+ * `minOf(m.matchIndex, state.lastLogIndex)` (#1175) would suggest was considered and **rejected**:
+ * `matchIndex` is a quantity, where the nearest valid value is a meaningful conservative answer, but
+ * a round is a nonce, where clamping maps a forged value onto the *most favourable* value in range.
+ * See [forgedEchoArrivingAfterBumpMustNotConfirmRead], the one test in the repo that separates the
+ * two — it is what the clamp fails and the discard passes.
+ *
+ * Either disposition is a no-op for every honest peer: `round` only ever increases and only the
+ * leader stamps it into a request, so any round a follower can be echoing was necessarily stamped
+ * when `round` was at or below its present value. They differ only on a value the leader never sent.
  */
 internal class ReadIndexRoundClampTest {
 
@@ -132,13 +139,13 @@ internal class ReadIndexRoundClampTest {
     }
 
     /**
-     * BLOCKER 1 (round-slip) must survive the clamp. Storing `round` at receipt — the tempting
-     * one-liner — would credit a late ack for round 6 to round 7 and wrongly confirm a read queued at
-     * `sinceRound = 6`. Clamping with `minOf` preserves the echoed value whenever it is in range, so the
-     * late ack is still correctly credited to the round it answered.
+     * BLOCKER 1 (round-slip) must survive the out-of-range guard. Storing `round` at receipt — the
+     * tempting one-liner — would credit a late ack for round 6 to round 7 and wrongly confirm a read
+     * queued at `sinceRound = 6`. The guard fires only on `echoedRound > round`, so an in-range echo
+     * is stored verbatim and the late ack stays credited to the round it answered.
      */
     @Test
-    fun clampPreservesRoundSlipCreditingForLateAck() {
+    fun inRangeEchoPreservesRoundSlipCreditingForLateAck() {
         val tracker = ReadIndexTracker()
         tracker.advanceRoundTo(6L)
 
