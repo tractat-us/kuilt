@@ -47,11 +47,6 @@ class QuilterAntiEntropyDigestResyncTest {
     private val peer = PeerId("peer-1")
     private val peerReplica = ReplicaId("peer-1")
 
-    /** Mirrors `Quilter.stateRoot()` — see the same helper in `QuilterRootDigestTest`. */
-    private fun expectedRoot(state: GSet<String>): Long = fnv1a64(
-        Cbor.encodeToByteArray(msgSer, QuiltMessage.FullState(ReplicaId.Bottom, state, upThrough = 0L)),
-    )
-
     @Test
     fun matchedRootStillAcksSoSenderCanGc() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val seam = FakeSeam(selfId = self, initialPeers = setOf(self, peer))
@@ -67,7 +62,7 @@ class QuilterAntiEntropyDigestResyncTest {
         testScheduler.runCurrent()
 
         // The peer's state matches ours exactly, so the roots agree...
-        val matchingRoot = expectedRoot(GSet.of("shared"))
+        val matchingRoot = quilter.stateRootForTest()
         // ...but it claims deltas 1..5, which our receive cursor has never seen.
         val before = seam.directed.size
         seam.deliver(
@@ -144,8 +139,11 @@ class QuilterAntiEntropyDigestResyncTest {
         // the module green and silently reverts the whole optimization — every round mismatches,
         // every peer requests state, and the wire cost is the old FullState plus a round trip.
         // Convergence tests cannot see it either: a wrong root still converges via the fallback.
+        // The expectation is the production root rather than a hand-written mirror of its framing
+        // (#2015); what pins that framing is `QuilterStateRootGoldenVectorTest`, which asserts the
+        // same function against absolute constants.
         assertEquals(
-            expectedRoot(GSet.of("e0", "e1", "e2")),
+            quilter.stateRootForTest(),
             digests.first().root,
             "the emitted digest must carry the root of our actual state — a constant root would " +
                 "mismatch every round, silently turning the digest gate off (#1955)",
