@@ -21,6 +21,11 @@ canonical reference. The harness derives the cut itself, from `causalDots()`, as
 **Spec:** [`docs/superpowers/specs/2026-08-03-crdt-compaction-convergence-coverage-design.md`](../specs/2026-08-03-crdt-compaction-convergence-coverage-design.md)
 · **Issue:** [#2019](https://github.com/tractat-us/kuilt/issues/2019)
 
+> **Two figures in #2019 are wrong — do not plan against them.** There are **16** bound convergence
+> suites, not "~19", and **13 of them need no edit**. And **`JsonCrdt` has no `compact()`** — the
+> compactable set is exactly `Rga`, `Fugue`, `MovableTree`. The issue body has been corrected;
+> the design doc carries the detail.
+
 ## Global Constraints
 
 - **JDK/toolchain:** `source ~/.sdkman/bin/sdkman-init.sh && sdk use java 21.0.5-tem` in every
@@ -68,11 +73,16 @@ symbol. Dispatch them together. Everything else is serial.
 
 ---
 
-### Task 0: Reproduce the vacuity — a receipt, not code
+### Task 0: Reproduce the vacuity — MANDATORY AND BLOCKING
 
-No code lands. This produces the evidence that the coverage being added does not already exist, and
-the baseline against which "now it goes red" means something. Do this **before** writing any
-assertion; asserting first tempts you to read a green suite as success.
+> **Do not start Task 1 until Task 0's four verdicts are recorded.** No code lands in this task, and
+> that is exactly why it is skippable-looking and must not be skipped: it is the step that makes
+> every later "now it goes red" mean something. Without it, a green suite after the change is
+> indistinguishable from a green suite that was always going to be green. Asserting first and
+> mutating afterwards tempts you to read success into the wrong evidence — the failure mode this
+> whole issue is about.
+
+This produces the baseline: proof that the coverage being added does not already exist.
 
 **Files:** none (every edit is reverted).
 
@@ -96,13 +106,26 @@ repo-global across every linked worktree.
 | M3 | `MovableTree.compactedDots` set order | delete the `@Serializable(with = CanonicalSetSerializer::class)` line above `compactedDots` |
 | M4 | inter-`Compact`-op order | `compareCompactPositions`: insert `if (a.size >= 0) return 0` as the first statement |
 
-> **Trap — mutate the path the test actually takes.** `RgaOp.Compact.positions` *also* carries a
-> `@Serializable(with = CanonicalMapSerializer::class)` annotation, but `RgaConvergenceTest` encodes
-> through `Rga.wireSerializer` → `RgaSerializer` → `RgaOpSerializer`, and a hand-written enclosing
-> `KSerializer` ignores that annotation. Mutating only the annotation leaves the suite green and
-> reads as "no teeth" when the truth is "wrong mutation". `MovableTreeConvergenceTest` is the
-> opposite case — it uses the compiler-generated `MovableTree.serializer(…)`, so there the
-> annotation *is* the wire path.
+> ## ⚠ STOP — mutate `RgaOpSerializer`, NOT the annotation
+>
+> **For M1 and M2, mutate `RgaOpSerializer.positionsSerializer` / `FugueOpSerializer.positionsSerializer`
+> — NOT the `@Serializable(with = CanonicalMapSerializer::class)` annotation on
+> `RgaOp.Compact.positions` / `FugueOp.Compact.positions`.**
+>
+> Both exist, and the annotation is the one you will reach for first. It is the wrong one:
+> `RgaConvergenceTest` encodes through `Rga.wireSerializer` → `RgaSerializer` → `RgaOpSerializer`,
+> and a **hand-written enclosing `KSerializer` ignores the annotation entirely.** Mutating only the
+> annotation leaves the suite green — and a green mutation reads as *"the assertion has no teeth"*
+> when the truth is *"you mutated a path the test never takes"*. That inversion already cost a round
+> on #1978, where an `@Serializable(with = …)` annotation was proposed as the fix and would have
+> fixed nothing on the wire.
+>
+> `MovableTreeConvergenceTest` is the **opposite** case: it uses the compiler-generated
+> `MovableTree.serializer(…)`, so for M3 the annotation *is* the wire path and deleting it is
+> correct.
+>
+> Rule of thumb: before trusting any mutation verdict here, confirm the symbol you edited is on the
+> path from the test's `serializer` argument to the bytes.
 
 Expected for all four, on JVM **and** `wasmJsBrowserTest` **and** `macosArm64Test`: **GREEN**.
 Record the four green verdicts. Restore every file and confirm `git status --short` is clean.
@@ -113,14 +136,21 @@ The claim "no convergence generator reaches `compact()`" is now a receipt rather
 
 ---
 
-### Task 1: Move `contiguousFrontier` to `:kuilt-crdt`
+### Task 1: Move `contiguousFrontier` to `:kuilt-crdt` — a PUBLIC-API addition
 
 Behaviour-preserving, and independently reviewable as such. It exists because the harness must
 derive its cut with the *same* function `Quilter` uses — two copies of the quantity whose sameness
 is the design's central argument would defeat the argument.
 
+> **This is a public-API addition to `:kuilt-crdt`, not an internal move, and carries a different
+> review bar than the rest of this plan.** `explicitApi()` is enforced, so it needs an explicit
+> `public` and real consumer-facing KDoc — not the terse internal comment it has today. Per repo
+> convention a documented public entry point also gets a `@sample`, and samples compile as part of
+> `commonTest`, so a broken one breaks the build. Budget for all three; do not land it as a rename.
+
 **Files:**
 - Modify: `kuilt-crdt/src/commonMain/kotlin/us/tractat/kuilt/crdt/VersionVector.kt`
+- Modify: `kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt`
 - Modify: `kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/Quilter.kt`
 
 **Interfaces:**
@@ -164,6 +194,40 @@ Move the body verbatim, including `contiguousHighWater`, into `VersionVector.kt`
             while ((n + 1L) in seqs) n++
             return n
         }
+```
+
+The KDoc above is written for a consumer, not for the one existing caller — that is the point of
+promoting it. Add the `@sample` tag to it:
+
+```kotlin
+         * @sample us.tractat.kuilt.crdt.sampleVersionVectorContiguous
+```
+
+- [ ] **Step 2b: Write the sample**
+
+Append to `kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt`, matching the
+file's existing shape (`internal fun`, `@Suppress("unused")`, `check(...)` assertions, a one-line
+KDoc that reads plainly). The sample must show the property that makes the function worth having —
+**a gap stops the frontier**:
+
+```kotlin
+// ── VersionVector.contiguous ─────────────────────────────────────────────────
+
+/** A gap stops the frontier: an author's high-water is the last seq with no hole below it. */
+@Suppress("unused")
+internal fun sampleVersionVectorContiguous() {
+    val phone = ReplicaId("phone")
+    val watch = ReplicaId("watch")
+
+    // The phone's ops 1, 2 and 4 arrived — 3 is still missing.
+    val delivered = VersionVector.contiguous(
+        setOf(Dot(phone, 1), Dot(phone, 2), Dot(phone, 4), Dot(watch, 1)),
+    )
+
+    // The phone counts as delivered only up to 2: everything past the hole is held back.
+    check(delivered[phone] == 2L)
+    check(delivered[watch] == 1L)
+}
 ```
 
 - [ ] **Step 3: Make `:kuilt-quilter`'s `contiguousFrontier` a delegate**
@@ -516,10 +580,17 @@ declare the floors. The compactor body is one call:
 | 3b | `Fugue<String>` | `state.compact(stableCut, frontierMax, delivered)?.let { CompactionStep(it.first, it.second.positions.size) }` | **8 → 16** |
 | 3c | `MovableTree<String>` | `state.compact(stableCut, frontierMax, delivered)?.let { CompactionStep(it.first, it.second.droppedDots.size) }` | 8, unchanged |
 
-Task 3b's `opsPerReplica` bump is the only generator change in this plan. At 8 ops `Fugue` reaches
-phase B on 7/32 seeds; at 16 it reaches 19/32 and phase A rises 22 → 26. More ops can only add
-coverage, but it changes an existing load-bearing test's shape, so Step 4 re-runs `Fugue`'s M2
-mutation at the new size and confirms it is still red (measured 23 → 67 byte failures).
+Task 3b's `opsPerReplica` bump is the only generator change in this plan. **Approved on 2026-08-03
+as a measured choice, not a round number** — record these figures in the test's KDoc so a later
+reader can tell:
+
+| `Fugue` at `opsPerReplica` | seeds reaching phase B | seeds reaching phase A | M2 byte failures (of 192) |
+|---|---|---|---|
+| 8 (today) | 7/32 | 22/32 | 23 |
+| **16 (adopted)** | **19/32** | **26/32** | **67** |
+
+More ops can only add coverage, but it changes an existing load-bearing test's shape, so Step 4
+re-runs `Fugue`'s M2 mutation at the new size and confirms it is still red — and it is redder.
 
 - [ ] **Step 2: Measure, then pin**
 
@@ -646,8 +717,10 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 derivation and its reachability → Tasks 1 and 2 (`cutOf`). Vacuity V1/V2 → Task 2's
 `CompactionCoverage` + Task 3's floors. V3 → Tasks 0 and 3 Step 4. V4 → Task 3 Step 5. API shape and
 blast radius → Task 2 Step 4 (the additivity proof). `Fugue` generator tuning → Task 3b. Disjoint-
-author precondition → Task 2's `requireDisjointAuthors`. Docs → Task 4. The open question about
-`VersionVector.contiguous` becoming public API is Task 1 and is flagged for Iain.
+author precondition → Task 2's `requireDisjointAuthors`. Docs → Task 4. Both of the design's open
+questions were decided on 2026-08-03 and are implemented here, not left open: `contiguousFrontier`
+moves to `:kuilt-crdt` as public API with KDoc and a `@sample` (Task 1), and `Fugue`'s
+`opsPerReplica` goes 8 → 16 with the before/after reachability recorded (Task 3b).
 
 **Type consistency.** `VersionVector.contiguous(Set<Dot>): VersionVector` — Task 1 defines, Task 2
 calls. `CompactionStep<S>(state, droppedCount)` and `CrdtCompactor<S>.compactOnce(state, stableCut,

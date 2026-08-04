@@ -38,15 +38,19 @@ the three mechanisms is pinned somewhere — by the dedicated tests #1957 and #2
 whole complaint: every future compactable type starts with zero generator coverage and needs its own
 hand-written test, which is the cost this design removes.
 
-Two of #2019's incidental figures are off, in the direction that makes this cheaper:
+### Two figures in #2019 are wrong — use these instead
 
-- **16 bound suites, not ~19** — all `internal` classes in
+Both errors are in the direction that makes this cheaper, and both are corrected here rather than
+only in a comment, so a later reader of the issue does not re-derive the old numbers.
+
+- **16 bound suites, not "~19".** All are `internal` classes in
   `kuilt-conformance/src/commonTest/kotlin/us/tractat/kuilt/conformance/convergence/`. A repo-wide
   search for `CrdtConvergenceSuite` / `CrdtConvergenceHarness` outside `commonMain` finds nothing
-  else; no module outside `:kuilt-conformance` subclasses either.
-- **`JsonCrdt` has no `compact()`.** It overrides `causalDots()` and its KDoc says nested arrays
-  "do not participate in the `Rga.compact` … GC path". The compactable set is exactly `Rga`,
-  `Fugue`, `MovableTree`.
+  else; no module outside `:kuilt-conformance` subclasses either. Of the 16, **13 need no edit**.
+- **`JsonCrdt` has no `compact()`** — #2019 and its dispatch brief both list it among the
+  compaction implementations. It overrides `causalDots()` only, and its own KDoc says nested arrays
+  "do not participate in the `Rga.compact` … GC path". **The compactable set is exactly `Rga`,
+  `Fugue`, `MovableTree`** — three types, not four.
 
 ## The crux: one hook is not enough
 
@@ -351,15 +355,27 @@ leave all 16 green before any type binds.
   binding sites and no conditional skip anywhere: a type either extends the compactable suite and
   gets the coverage assertions, or it does not and nothing pretends otherwise.
 
-### One production change, and why it belongs here
+### One production change: `contiguousFrontier` moves to `:kuilt-crdt` (decided)
 
 `contiguousFrontier` is `internal` to `:kuilt-quilter`, and `:kuilt-conformance` does not depend on
-that module. Rather than duplicate it — two copies of the quantity whose *sameness* is the entire
-"reachable, not synthetic" argument — move it to `:kuilt-crdt` beside `VersionVector`, as
-`VersionVector.Companion.contiguous(dots: Set<Dot>)`, and have `:kuilt-quilter` delegate. It is pure
-`Dot`/`VersionVector` logic with no coroutine or `Seam` content; it belongs there on its own merits.
+that module. It **moves** to `:kuilt-crdt` beside `VersionVector`, as
+`VersionVector.Companion.contiguous(dots: Set<Dot>)`, with `:kuilt-quilter` keeping
+`contiguousFrontier` as a one-line delegate so its five referencing test files stay untouched.
 
-This is the one judgement call worth a second opinion — see "Open question" below.
+The deciding argument is the one the reachability claim rests on: **the harness must compute the
+same quantity the production cut uses, and two copies make that sameness an untested coincidence.**
+A cross-module golden test would pin the copies against each other but not against future drift in
+*intent* — someone fixing a frontier subtlety in `Quilter` has no reason to look in
+`:kuilt-conformance`. It is also pure `Dot`/`VersionVector` logic (group by replica → contiguous
+high-water → `VersionVector.of`) with no coroutine or `Seam` content, so `:kuilt-crdt` is arguably
+where it always belonged. Widening a pre-1.0 API is cheap here; the module layout is explicitly
+still moving.
+
+**This is a public-API addition, not an internal move, and carries that review bar.**
+`explicitApi()` is enforced, so it needs an explicit `public`, real KDoc, and — since it is
+documented as a consumer-facing entry point on `VersionVector` — a `@sample` in
+`kuilt-crdt/src/commonSamples/kotlin/`. Samples compile as part of `commonTest`, so a broken one
+breaks the build.
 
 ## What is deliberately unchanged
 
@@ -402,18 +418,18 @@ This is the one judgement call worth a second opinion — see "Open question" be
 4. Three independently-compacted replicas converge, byte-identically, under every fold order.
 5. Thirteen of sixteen bound suites are textually unchanged.
 
-## Open question for Iain
+## Decisions taken
 
-**Should `contiguousFrontier` become public API on `:kuilt-crdt`?** It is currently `internal` to
-`:kuilt-quilter`, and the harness needs the same quantity. Moving it makes the harness's cut
-*provably* the production cut rather than a look-alike, and the function is pure `VersionVector`
-logic that arguably belongs beside `VersionVector` regardless. The cost is a slightly wider public
-surface on the module whose selling point is having almost none.
+Both questions this design opened were answered by Iain on 2026-08-03; recorded here so the next
+reader does not re-litigate them.
 
-**Recommendation: move it.** The alternative is two implementations of the exact quantity whose
-sameness this design's central argument rests on, which is a worse trade than one small, well-named
-public function. If the answer is no, the fallback is to duplicate it in `:kuilt-conformance` and
-add a cross-module golden test pinning both to the same answers on a shared fixture.
+1. **`contiguousFrontier` moves to `:kuilt-crdt` as `VersionVector.contiguous(dots)`** — see "One
+   production change" above for the reasoning and the public-API review bar it carries.
+2. **`Fugue`'s `opsPerReplica` goes 8 → 16.** Measured: seeds reaching the pre-merge phase
+   **7/32 → 19/32**, seeds reaching the post-merge phase **22/32 → 26/32**, and the #1978 mutation
+   goes from 23 to 67 byte failures — i.e. still red, and more so. A strengthening, not a behaviour
+   change. The numbers are recorded rather than the round number so a later reader can tell it was
+   measured.
 
 ## How the figures were produced
 
