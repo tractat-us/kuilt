@@ -1539,7 +1539,6 @@ val forbidTightRunTestTimeout by tasks.registering {
         "kuilt-quilter/src/commonTest/kotlin/us/tractat/kuilt/quilter/QuilterResendRetryTest.kt" to 3,
         "kuilt-quilter/src/jvmTest/kotlin/us/tractat/kuilt/quilter/QuilterConcurrencyTest.kt" to 3,
         "kuilt-scale/src/test/kotlin/us/tractat/kuilt/scale/InMemoryMeshBuilderTest.kt" to 11,
-        "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/AdmitFanOutOrderingTest.kt" to 4,
         "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/AdoptTearTerminalTest.kt" to 3,
         "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/ConcurrentResumeHangTest.kt" to 2,
         "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/FastReconnectRaceTest.kt" to 3,

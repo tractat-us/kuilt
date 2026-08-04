@@ -291,10 +291,18 @@ public class SeamRoomFactory(
 private const val MEMBERSHIP_EVENT_REPLAY = 64
 
 /**
- * Capacity of [SeamRoom.relayForwards] (#1994). Deep enough to hold several `Quilter` deltas in
- * flight per recipient, shallow enough that a wedged link cannot accumulate unboundedly — past
- * which [kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST] sheds the stalest frame, which
- * anti-entropy heals.
+ * Capacity of **one recipient's** relay lane (#1994; per-recipient since #2048). Deep enough to hold
+ * several `Quilter` deltas in flight for that recipient, shallow enough that a wedged link cannot
+ * accumulate unboundedly — past which [kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST] sheds
+ * that recipient's stalest frame, which anti-entropy heals.
+ *
+ * **The number did not change when the keying did, and that is the point.** Its own KDoc always
+ * described a *per-recipient* depth ("several `Quilter` deltas in flight per recipient") while the
+ * buffer it sized was shared by the whole room — so on an N-spoke star it was over-provisioned for
+ * one wedged spoke and under-provisioned for N healthy ones at the same time. Keeping 64 per lane
+ * makes the constant mean what it says. The cost is that the room's worst-case buffered frames are
+ * now `64 × spokes` rather than 64; that is the honest price of isolation, it is still bounded, and
+ * it is bounded by a quantity (the roster) the room already bounds.
  */
 private const val RELAY_FORWARD_CAPACITY = 64
 
@@ -346,8 +354,8 @@ private const val RELAY_FORWARD_CAPACITY = 64
  *
  * **Thread safety**: all mutable membership state (`admittedById`, `closed`, `hostLost`,
  * `hostPeerId`, `incomingCollectJob`, `admissionFailed`, `admitDeadlineJob`, `detectorJobs`,
- * `channelViews`) is guarded by an atomicfu [reentrantLock]. The joiner-side resume state
- * (`resumeToken`, `pendingResume`, `reconnecting`, `reconnectJob`) lives in
+ * `channelViews`, `admitLanes`, `relayLanes`) is guarded by an atomicfu [reentrantLock]. The
+ * joiner-side resume state (`resumeToken`, `pendingResume`, `reconnecting`, `reconnectJob`) lives in
  * [JoinerResumeMachine], which **shares the same lock instance** (see [resumeMachine]).
  * Critical sections perform only synchronous map/field operations; all suspend calls (sends,
  * broadcasts, re-weave, awaiting `Woven`, resume) are made outside the lock.
@@ -449,8 +457,8 @@ internal class SeamRoom(
     /**
      * Guards every mutation of the plain membership state:
      * `admittedById`, `closed`, `hostLost`, `hostPeerId`, `incomingCollectJob`,
-     * `detectorJobs`, `channelViews` — and, shared with [JoinerResumeMachine] (which is
-     * handed this same instance), the joiner-side resume state.
+     * `detectorJobs`, `channelViews`, `admitLanes`, `relayLanes` — and, shared with
+     * [JoinerResumeMachine] (which is handed this same instance), the joiner-side resume state.
      *
      * Multiple coroutines (`runMainLoop`, `runTornWatcher`, the resume machine's reconnect
      * attempt, `runReconnectEventLoop`, per-peer detector collectors, `scope.launch { admitPeer }`,
@@ -796,22 +804,19 @@ internal class SeamRoom(
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     internal fun start() {
-        // The SINGLE admit fan-out writer, launched FIRST: every loop below can raise a fan-out, and
-        // the #1781 ordering guarantee is only real if the queue is already being drained in order by
-        // the time one of them does. (Ordering itself does not depend on this — [admitFanOuts] is
-        // unbounded, so anything enqueued before the writer starts is drained, not lost — but a room
-        // that never sends is easier to reason about than one that buffers silently.)
+        // No fan-out writer is launched here any more (#2048): both queues are keyed by [PeerId], so
+        // a lane and its writer are created together, under [lock], by the first enqueue for that
+        // recipient ([admitLaneFor] / [relayLaneFor]). The #1781 ordering guarantee does not depend on
+        // when a writer starts — the lane exists before the frame that created it is enqueued, and an
+        // admit lane is unbounded, so anything queued before the writer is first dispatched is
+        // drained, not lost.
         //
-        // Deliberately NOT in `loopJobs`: [leave] closes [admitFanOuts] rather than cancelling this,
-        // so the loop completes on its own when the queue drains rather than dying mid-item, and
-        // frames already enqueued may still be attempted before the seam tears — exactly what the
-        // per-call `scope.launch`es did, since [leave] never cancelled those either. (Only *may*: see
-        // the close site in [leave].) Otherwise it dies with [scope].
-        scope.launch { runAdmitFanOutWriter() }
-        // The relay forward writer, on the same discipline and for the same reason — but on its own
-        // queue, because relay traffic is per-frame and [admitFanOuts]'s growth bound is not. See
-        // [relayForwards].
-        scope.launch { runRelayForwardWriter() }
+        // Lane writers are deliberately NOT in `loopJobs`: [leave] closes each lane rather than
+        // cancelling its writer, so the loop completes on its own when the lane drains rather than
+        // dying mid-item, and frames already enqueued may still be attempted before the seam tears —
+        // exactly what the per-call `scope.launch`es this queue replaced did, since [leave] never
+        // cancelled those either. (Only *may*: see the close site in [leave].) Otherwise they die
+        // with [scope], or with their recipient — see [discardLanes].
         val jobs = mutableListOf(
             scope.launch { runMainLoop() },
             scope.launch { runTornWatcher() },
@@ -1273,12 +1278,13 @@ internal class SeamRoom(
         // against one. Same for the two joiner-directed loops below.
         runCatchingCancellable { seam.sendTo(joinerPeerId, welcomeBytes) }
 
-        // Tell the existing members about the joiner (roster sync) — through the single fan-out queue
-        // (#1781), not a loop of direct sends. This is a host-authoritative membership announcement to
-        // bystanders, structurally identical to propagateFarewell, so it needs the same ordering: a
-        // slow bystander link could leave `Welcome(X)` in flight while X drops and its window expires,
-        // and the queued `Farewell(X)` would then arrive FIRST. handleFarewell removes a peer that
-        // bystander does not hold yet — a no-op — and the late Welcome then ADDS X to its roster. On a
+        // Tell the existing members about the joiner (roster sync) — through the per-recipient
+        // fan-out lanes (#1781/#2048), not a loop of direct sends. This is a host-authoritative
+        // membership announcement to bystanders, structurally identical to propagateFarewell, so it
+        // needs the same ordering: a slow bystander link could leave `Welcome(X)` in flight while X
+        // drops and its window expires, and the `Farewell(X)` queued behind it on THAT bystander's
+        // lane would then arrive FIRST. handleFarewell removes a peer that bystander does not hold
+        // yet — a no-op — and the late Welcome then ADDS X to its roster. On a
         // star that bystander has no heartbeat edge to X, so it holds a ghost member forever with no
         // anti-entropy to correct it. `fanOutToOtherMembers` re-snapshots the same recipient set
         // (`existingMembers` is `admittedById` minus the joiner, taken moments earlier under the same
@@ -1479,11 +1485,12 @@ internal class SeamRoom(
      * a lost Farewell degrades to that member's heartbeat-window eviction *where such a window
      * exists* (a mesh; on a star it does not, which is why the expiry fan-out matters).
      *
-     * Goes through [fanOutToOtherMembers] — i.e. the single [admitFanOuts] writer — like every other
-     * admit fan-out, so a `Farewell` can never overtake the `Paused` for the same peer (#1781). A
-     * FIFO that half the announcements bypass is not a FIFO; this method previously hand-rolled its
-     * own copy of the roster-snapshot-then-`scope.launch` shape, which is exactly what created the
-     * ordering hole. Roster snapshot still under [lock], sends still outside it.
+     * Goes through [fanOutToOtherMembers] — i.e. each recipient's own [admitLanes] writer — like
+     * every other admit fan-out, so at any given member a `Farewell` can never overtake the `Paused`
+     * for the same peer (#1781). A FIFO that half the announcements bypass is not a FIFO; this
+     * method previously hand-rolled its own copy of the roster-snapshot-then-`scope.launch` shape,
+     * which is exactly what created the ordering hole. Roster snapshot still under [lock], sends
+     * still outside it.
      */
     private fun propagateFarewell(departed: PeerId, expired: Boolean = false) {
         fanOutToOtherMembers(departed, AdmitMessage.Farewell(departed.value, expired))
@@ -1813,10 +1820,11 @@ internal class SeamRoom(
         // estimate, which is right for the default controller and a placeholder for an injected one —
         // refineWindow re-fans the enforced deadline when the two differ.
         //
-        // ORDER is guaranteed; DELIVERY is best-effort. Both fan-outs are enqueued on the single
-        // admitFanOuts writer (#1781), so this estimate cannot arrive after refineWindow's refinement
-        // and move a remote level backwards. What is still best-effort is whether a given frame
-        // arrives at all: a recipient that tears loses it, and `Paused` carries no episode identity,
+        // ORDER is guaranteed; DELIVERY is best-effort. Both fan-outs are enqueued on the SAME
+        // recipient's admit lane (#1781/#2048) — they address the same member set, so this estimate
+        // cannot arrive after refineWindow's refinement at any recipient and move a remote level
+        // backwards. What is still best-effort is whether a given frame arrives at all:
+        // a recipient that tears loses it, and `Paused` carries no episode identity,
         // so a LOST refinement leaves that member holding this estimate with no anti-entropy behind it
         // (the drop is logged for exactly that reason).
         //
@@ -1880,10 +1888,11 @@ internal class SeamRoom(
      * member's roster keeps `at + reconnectWindow` forever while the host holds the seat to the
      * injected policy's deadline, so the two rosters disagree with no way to converge.
      *
-     * **Order is guaranteed; delivery is not.** This fan-out and [markPartitioned]'s are enqueued on
-     * the one [admitFanOuts] writer, so the estimate can no longer land *after* this refinement and
+     * **Order is guaranteed; delivery is not.** This fan-out and [markPartitioned]'s address the same
+     * member set, so at each recipient both are enqueued on that recipient's one lane and the
+     * estimate can no longer land *after* this refinement and
      * move a remote level backwards — that inversion was real on a multi-threaded dispatcher and is
-     * now structurally impossible (#1781). It takes **two** properties, not one: the queue makes
+     * now structurally impossible (#1781). It takes **two** properties, not one: the lane makes
      * enqueue order the wire order, and [markPartitioned] enqueues its estimate *before* it calls
      * `onPeerUnresponsive` — the head of this function's own call path. The queue alone would leave
      * which one is enqueued first a race, because that path runs on a different coroutine; see the
@@ -1901,8 +1910,8 @@ internal class SeamRoom(
      *
      * That partition guard is **narrower than it reads**, deliberately: it rejects a deadline for a
      * member that is not partitioned *now*, which covers "recovered, and still recovered" but not
-     * "recovered, then partitioned again". This is the one half of #1781 the [admitFanOuts] writer
-     * does **not** close, because the reordering happens *before* this function is reached rather than
+     * "recovered, then partitioned again". This is the one half of #1781 the admit lanes do **not**
+     * close, because the reordering happens *before* this function is reached rather than
      * on the wire after it: a controller's [JoinerReconnectEvent.WindowOpened] is emitted from its own
      * `scope.launch`, so an event for episode *N* can in principle land after
      * episode *N+1* opened and move that episode's level backwards. Theoretical — the
@@ -1949,9 +1958,9 @@ internal class SeamRoom(
      * every other. On a star/host-relayed topology a member has no heartbeat edge to another
      * member, so the pause would be invisible to it and [MembershipEvent.Partitioned] would
      * silently mean different things on different topologies. Roster snapshot under [lock]; the send
-     * is enqueued on the single [admitFanOuts] writer, so *delivery* is best-effort (like
-     * [propagateFarewell]) but *ordering* against every other announcement is not — see
-     * [admitFanOuts] (#1781).
+     * is enqueued on each recipient's own lane, so *delivery* is best-effort (like
+     * [propagateFarewell]) but *ordering* against every other announcement **to that recipient** is
+     * not — see [admitLanes] (#1781/#2048).
      *
      * Two call sites, both host-side: [markPartitioned] on first detection (the room's
      * [HeartbeatConfig] estimate) and [refineWindow] when the enforcing controller's deadline turns
@@ -2202,18 +2211,25 @@ internal class SeamRoom(
     }
 
     /**
-     * One queued relay forward: the original envelope bytes plus its recipient snapshot.
+     * One queued relay forward, for **one** recipient: the original envelope bytes unchanged.
      *
-     * [seq] is a gap-detector, not an ordering key — the channel already preserves order. It is
-     * assigned at enqueue from [relaySeq], so a hole in the sequence the writer dequeues is
-     * *exactly* the set of items [BufferOverflow.DROP_OLDEST] discarded. See [relayForwardsDropped].
+     * [seq] is a gap-detector, not an ordering key — the lane's channel already preserves order. It
+     * is assigned at enqueue from the owning [RelayLane]'s own counter, so a hole in the sequence
+     * that lane's writer dequeues is *exactly* the set of items [BufferOverflow.DROP_OLDEST]
+     * discarded **from that lane**. See [relayForwardsDropped].
+     *
+     * **Per-lane, not global (#2048).** A single room-wide counter cannot survive per-recipient
+     * writers: each writer would dequeue only its own subsequence of it, and every frame stamped for
+     * a *different* lane would read as a hole. The old code's counter was correct only because one
+     * writer dequeued every item it stamped.
+     *
+     * [bytes] is shared by reference across the lanes of a multi-recipient forward — the frame is
+     * encoded once by the origin and never rewritten (`dest` is meaningful on this hop only), so
+     * fanning it out costs one small item per lane rather than a copy.
      */
-    private class RelayForward(val recipients: List<PeerId>, val bytes: ByteArray, val seq: Long)
+    private class RelayForward(val bytes: ByteArray, val seq: Long)
 
-    /** Monotonic enqueue counter stamped onto each [RelayForward]. First forward is `1`. */
-    private val relaySeq = atomic(0L)
-
-    /** Total forwards discarded by [relayForwards]'s [BufferOverflow.DROP_OLDEST] overflow. */
+    /** Total forwards discarded by relay-lane [BufferOverflow.DROP_OLDEST] overflow, across all lanes. */
     private val relayDropped = atomic(0L)
 
     /**
@@ -2232,109 +2248,175 @@ internal class SeamRoom(
     internal val relayForwardsDropped: Long get() = relayDropped.value
 
     /**
-     * Queued relay forwards, drained by [runRelayForwardWriter].
+     * One recipient's relay lane: the frames waiting for that peer, and the writer draining them.
      *
-     * **Separate from [admitFanOuts], deliberately.** That queue's growth analysis rests on *what
+     * **Separate from [admitLanes], deliberately.** That queue's growth analysis rests on *what
      * enqueues*: membership **transitions**, "on the heartbeat timescale rather than per-frame".
      * Relay traffic is exactly per-frame, so putting it there would invalidate the bound — with
-     * [Channel.UNLIMITED] and a `reconnectWindow + timeout` per-recipient budget, one black-holed
-     * spoke would delay every `Paused`/`Unpaused`/`Farewell` behind it, which is the permanent
-     * roster divergence #1781 built that queue to prevent.
+     * [Channel.UNLIMITED] and a `reconnectWindow + timeout` budget, one black-holed spoke would
+     * delay every `Paused`/`Unpaused`/`Farewell` *to that same peer* behind it, which is the
+     * permanent roster divergence #1781 built that queue to prevent.
      *
      * The policies differ because the contents do. A dropped `Unpaused` pins a recovered member
-     * [Liveness.Partitioned] in a remote roster **forever**, so that queue must never drop; a
+     * [Liveness.Partitioned] in a remote roster **forever**, so that lane must never drop; a
      * dropped relay frame is loss the [Room] contract already documents (lossy-without-error on a
      * star) and that `Quilter` anti-entropy heals. So this one is **bounded** with
      * [BufferOverflow.DROP_OLDEST] — back-pressure is unavailable here for the same reason it is
      * there (enqueue happens from a non-suspending frame handler), and dropping the *oldest*
      * relayed frame under sustained overload is strictly better than growing without bound.
+     *
+     * [nextSeq] stamps [RelayForward.seq]; see there for why the counter is per-lane.
      */
-    private val relayForwards = Channel<RelayForward>(
-        capacity = RELAY_FORWARD_CAPACITY,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST,
-    )
+    private class RelayLane(val queue: Channel<RelayForward>, val writer: Job) {
+        /** Monotonic enqueue counter for **this lane**. First forward on the lane is `1`. */
+        val nextSeq = atomic(0L)
+    }
+
+    /**
+     * Relay lanes, one per recipient (#2048), created on that peer's first forward and torn down
+     * when it leaves the roster. Guarded by [lock]; see [relayLaneFor] and [discardLanes].
+     *
+     * **Why keyed rather than shared.** A single bounded queue drained by a single writer gives a
+     * wedged recipient two ways to hurt healthy ones, and the star relay (#1994) made both ordinary
+     * rather than exotic. It *delays* them: the writer parks in the wedged `sendTo` for
+     * [relaySendBudget], which is [HeartbeatConfig.interval] — 5 s on the shipped defaults — so one
+     * black-holed spoke throttled the room's entire relayed data plane to ~0.2 forwards/second. And
+     * past that it *evicts* them: [BufferOverflow.DROP_OLDEST] sheds whatever is oldest once the
+     * backlog fills, which on a shared buffer includes frames bound for peers that are perfectly
+     * healthy. The trigger needs no star topology at all — routing flips to the relay whenever
+     * `rosterPeers ⊄ seam.peers`, whose dominant cause on a flat mesh is one member sitting in its
+     * reconnect window (#1557/#1614), so a single transiently-partitioned peer could route every
+     * other peer's traffic through the host for the whole window. With a lane per recipient, a
+     * wedged peer's backlog can only ever cost that peer.
+     */
+    private val relayLanes = mutableMapOf<PeerId, RelayLane>()
+
+    /**
+     * The relay lane for [recipient], created (and its writer launched) on first use — or null once
+     * the room is terminal, so no lane can outlive [leave].
+     *
+     * Lazy rather than created at admit time: a peer that is never relayed to costs nothing, and the
+     * lane is by construction created before the first frame is enqueued on it, so per-recipient
+     * order holds from the first frame without a start-up ordering rule.
+     *
+     * Callers must hold [lock] — the same discipline (and the same "launch a coroutine from inside
+     * the critical section" shape) as [startDetector]. The launched body's first act is to receive
+     * from an empty channel, so even an eager dispatcher runs it only as far as that suspension.
+     */
+    private fun relayLaneFor(recipient: PeerId): RelayLane? {
+        if (closed) return null
+        return relayLanes.getOrPut(recipient) {
+            val queue = Channel<RelayForward>(
+                capacity = RELAY_FORWARD_CAPACITY,
+                onBufferOverflow = BufferOverflow.DROP_OLDEST,
+            )
+            RelayLane(queue, scope.launch { runRelayForwardWriter(recipient, queue) })
+        }
+    }
 
     /**
      * Per-recipient deadline for one relay forward — [HeartbeatConfig.interval], **not**
-     * [admitFanOuts]'s `reconnectWindow + timeout`.
+     * [admitLanes]'s `reconnectWindow + timeout`.
      *
      * That budget is deliberately loose because an announcement stays meaningful for the whole span
      * of the hold it describes. A relayed data frame does not: it is superseded by the next one,
      * and `Quilter` anti-entropy heals the gap. A budget on the order of one heartbeat interval
-     * keeps a wedged spoke from consuming the writer while staying far above what a healthy link
+     * keeps a wedged spoke from consuming its own lane while staying far above what a healthy link
      * needs.
+     *
+     * Still load-bearing after per-recipient keying, for a *narrower* reason: it no longer protects
+     * other recipients (their lanes are independent), it bounds how long **this** recipient's own
+     * next frame waits behind a black hole, and with it the lane's own backlog.
      */
     private val relaySendBudget: Duration get() = heartbeatConfig.interval
 
-    /** Drains [relayForwards]. Guard discipline is identical to [runAdmitFanOutWriter] — see its KDoc. */
-    private suspend fun runRelayForwardWriter() {
-        // Writer-local: this is the only coroutine that ever dequeues, so no atomic is needed.
+    /**
+     * Drains one recipient's relay lane. Guard discipline is identical to [runAdmitFanOutWriter] —
+     * see its KDoc.
+     */
+    private suspend fun runRelayForwardWriter(recipient: PeerId, queue: Channel<RelayForward>) {
+        // Writer-local: this is the only coroutine that ever dequeues this lane, so no atomic is
+        // needed. Counting is per-lane; `relayDropped` aggregates across lanes.
         var expectedSeq = 1L
-        for (forward in relayForwards) {
+        for (forward in queue) {
             val dropped = forward.seq - expectedSeq
             if (dropped > 0) {
                 val total = relayDropped.addAndGet(dropped)
                 logger.debug {
-                    "room.relay.drop self=${selfId.value} reason=queue-overflow " +
+                    "room.relay.drop self=${selfId.value} to=${recipient.value} reason=queue-overflow " +
                         "dropped=$dropped total=$total capacity=$RELAY_FORWARD_CAPACITY"
                 }
             }
             expectedSeq = forward.seq + 1
-            for (recipient in forward.recipients) {
-                try {
-                    val accepted = withTimeoutOrNull(relaySendBudget) {
-                        seam.sendTo(recipient, forward.bytes)
-                    } != null
-                    if (!accepted) {
-                        logger.debug {
-                            "room.relay.drop self=${selfId.value} to=${recipient.value} " +
-                                "reason=send-budget-exceeded budget=$relaySendBudget"
-                        }
-                    }
-                } catch (failure: Throwable) {
-                    // Genuinely OUR cancellation ends the loop; anything else — including a
-                    // CancellationException a consumer's `sendTo` minted itself — is that
-                    // recipient's failure and must not kill the relay writer.
-                    currentCoroutineContext().ensureActive()
+            try {
+                val accepted = withTimeoutOrNull(relaySendBudget) {
+                    seam.sendTo(recipient, forward.bytes)
+                } != null
+                if (!accepted) {
                     logger.debug {
                         "room.relay.drop self=${selfId.value} to=${recipient.value} " +
-                            "cause=${failure::class.simpleName}: ${failure.message}"
+                            "reason=send-budget-exceeded budget=$relaySendBudget"
                     }
+                }
+            } catch (failure: Throwable) {
+                // Genuinely OUR cancellation ends the loop; anything else — including a
+                // CancellationException a consumer's `sendTo` minted itself — is that
+                // recipient's failure and must not kill this recipient's writer.
+                currentCoroutineContext().ensureActive()
+                logger.debug {
+                    "room.relay.drop self=${selfId.value} to=${recipient.value} " +
+                        "cause=${failure::class.simpleName}: ${failure.message}"
                 }
             }
         }
     }
 
     /**
-     * Enqueue a relay forward. Never suspends; drops the oldest under sustained overload.
+     * Enqueue a relay forward on each recipient's own lane. Never suspends; drops that lane's oldest
+     * frame under sustained overload.
      *
      * The overflow itself is invisible here by construction — `DROP_OLDEST` reports success for the
-     * very call that displaces an older item — so it is detected downstream as a gap in [RelayForward.seq].
+     * very call that displaces an older item — so it is detected downstream as a gap in
+     * [RelayForward.seq].
+     *
+     * **The stamp is exact because the enqueuer is single-threaded**, not because it is atomic:
+     * every call reaches here from [handleRelayFrame] on the room's one [Seam.incoming] collector
+     * (the ADR-034 single-collection contract), so `incrementAndGet` and the `trySend` that follows
+     * it cannot interleave with another enqueue on the same lane. The counter is nonetheless an
+     * atomic so the *value* is safely published to the writer coroutine.
      */
     private fun enqueueRelayForward(recipients: List<PeerId>, bytes: ByteArray) {
         if (recipients.isEmpty()) return
-        val queued = relayForwards.trySend(RelayForward(recipients, bytes, relaySeq.incrementAndGet())).isSuccess
-        if (!queued) {
-            // DROP_OLDEST never refuses, so the only way `trySend` fails is a closed channel: the
-            // room went terminal. Logged for the same reason a dropped fan-out is (#1781).
-            logger.debug {
-                "room.relay.drop self=${selfId.value} reason=room-terminal " +
-                    "recipients=${recipients.size}"
+        // Lane resolution under the lock, the trySends after it: nothing suspend-capable sits inside
+        // the critical section, matching [fanOutToOtherMembers].
+        val lanes = lock.withLock { recipients.mapNotNull { peer -> relayLaneFor(peer)?.let { peer to it } } }
+        lanes.forEach { (recipient, lane) ->
+            val queued = lane.queue.trySend(RelayForward(bytes, lane.nextSeq.incrementAndGet())).isSuccess
+            if (!queued) {
+                // DROP_OLDEST never refuses, so the only way `trySend` fails is a closed or
+                // cancelled lane: the room went terminal, or this recipient left the roster,
+                // between the resolution above and here. Logged for the same reason a dropped
+                // fan-out is (#1781).
+                logger.debug {
+                    "room.relay.drop self=${selfId.value} to=${recipient.value} reason=lane-gone"
+                }
             }
         }
     }
 
-    /** One queued admit fan-out: a frame encoded once, plus the recipient snapshot it was taken against. */
+    /** One queued admit fan-out for one recipient: a frame encoded once for the whole fan-out. */
     private class AdmitFanOut(
-        val recipients: List<PeerId>,
         val bytes: ByteArray,
         /** [AdmitMessage] subclass name, carried purely so a dropped frame is nameable in the log. */
         val label: String,
     )
 
+    /** One recipient's admit fan-out lane: the frames waiting for that peer, and its writer. */
+    private class AdmitLane(val queue: Channel<AdmitFanOut>, val writer: Job)
+
     /**
-     * Queued admit fan-outs, drained **in enqueue order** by the single [runAdmitFanOutWriter]
-     * coroutine (#1781).
+     * Queued admit fan-outs, **one lane per recipient** (#2048), each drained **in enqueue order**
+     * by its own [runAdmitFanOutWriter] coroutine (#1781).
      *
      * Every host-authoritative membership announcement *to bystanders* — [AdmitMessage.Paused],
      * [AdmitMessage.Unpaused], [AdmitMessage.Farewell], and the roster-sync [AdmitMessage.Welcome] —
@@ -2360,10 +2442,21 @@ internal class SeamRoom(
      *
      * This is the dedicated-writer-draining-a-[Channel] pattern (`:kuilt-core`'s
      * `CompositeSeam.capabilityWriter` is the sibling), **not** a `limitedParallelism(1)` confinement
-     * crutch: ordering is a property of this queue, not of where coroutines happen to run, so it
-     * holds on a genuinely multi-threaded dispatcher.
+     * crutch: ordering is a property of these queues, not of where coroutines happen to run, so it
+     * holds on a genuinely multi-threaded dispatcher. The map itself is guarded by [lock] for the
+     * same reason — explicit mutual exclusion, never a single-threaded dispatcher standing in for it.
      *
-     * **[Channel.UNLIMITED], deliberately.** The alternatives, and why not:
+     * **Keyed by [PeerId], not one global FIFO (#2048).** Every inversion above is a statement about
+     * what **one** recipient's roster ends up holding, so per-recipient FIFO is the invariant #1781
+     * actually needs and a global FIFO was strictly stronger than required. It was also expensive:
+     * one wedged recipient delayed every healthy one by up to [fanOutSendBudget] — `reconnectWindow +
+     * timeout`, 75 s on the shipped [HeartbeatConfig] defaults — per item ahead of it. Nothing
+     * depends on the order two *different* recipients see frames in: each bystander's roster is
+     * derived only from the frames it received, and no announcement asserts anything about another
+     * bystander's state. So the guarantee is now, exactly: **whatever a recipient receives, it
+     * receives in the order this room raised it.**
+     *
+     * **[Channel.UNLIMITED] per lane, deliberately.** The alternatives, and why not:
      * - [Channel.CONFLATED] is *wrong*. These are distinct announcements about distinct peers, not a
      *   level where only the latest matters — conflation would drop an `Unpaused` for peer A because
      *   a `Paused` for peer B was enqueued behind it, i.e. manufacture the forever-pinned failure
@@ -2378,59 +2471,83 @@ internal class SeamRoom(
      *
      * Unbounded growth is bounded *in practice* by two things. First, by what enqueues: membership
      * **transitions** (admit / pause / refine / recover / evict), which occur on the heartbeat
-     * timescale rather than per-frame, and each item is one small recipient list plus one shared
-     * encoded frame. Second, and load-bearing, by the fact that the writer's every send is
-     * **budgeted** — see [runAdmitFanOutWriter]. Without that budget a wedged link is not a memory
-     * question at all: `Seam.sendTo` can suspend forever (`LinkSeam`'s outbox is bounded and
-     * backpressured by design, so a black-holed link parks its caller indefinitely — the #1655 shape),
-     * and with a *single* writer that parks the room's only sender. Every subsequent announcement to
-     * every *healthy* peer would then buffer here and never be sent, which is both the real
-     * unbounded-growth driver and a worse failure than the queue growing. The budget caps the drain
-     * rate at one recipient per budget instead, so the backlog is bounded by roster churn over that
-     * span. A per-[PeerId] keying would remove the head-of-line delay too; see [runAdmitFanOutWriter].
+     * timescale rather than per-frame, and each item is one shared encoded frame. Second, and
+     * load-bearing, by the fact that every send is **budgeted** — see [runAdmitFanOutWriter]. Without
+     * that budget a wedged link is not a memory question at all: `Seam.sendTo` can suspend forever
+     * (`LinkSeam`'s outbox is bounded and backpressured by design, so a black-holed link parks its
+     * caller indefinitely — the #1655 shape), and a parked writer never drains its lane. The budget
+     * caps each lane's drain rate at one frame per budget instead, so a lane's backlog is bounded by
+     * roster churn over that span — and, since #2048, a wedged peer's backlog is the *only* thing its
+     * wedge can grow.
      */
-    private val admitFanOuts = Channel<AdmitFanOut>(Channel.UNLIMITED)
+    private val admitLanes = mutableMapOf<PeerId, AdmitLane>()
 
     /**
-     * Encode [message] once and **enqueue** it for every admitted member except [subject]. The
-     * fan-out is *ordered* here and *sent* by [runAdmitFanOutWriter] — see [admitFanOuts] for why
-     * that separation is the fix and not an indirection.
+     * The admit lane for [recipient], created (and its writer launched) on first use — or null once
+     * the room is terminal, so no lane can outlive [leave].
      *
-     * The roster snapshot is taken under [lock] and the enqueue happens after it is released, so
-     * the pre-existing invariant that nothing suspend-capable sits inside a critical section is
-     * preserved (a [Channel.trySend] into an unbounded channel cannot suspend either way).
+     * Lazily, for the same reasons as [relayLaneFor]; see there. Ordering does not depend on when the
+     * writer starts: the lane exists before the frame that created it is enqueued, and the channel is
+     * unbounded, so anything queued before the writer is first dispatched is drained, not lost.
+     *
+     * Callers must hold [lock].
+     */
+    private fun admitLaneFor(recipient: PeerId): Channel<AdmitFanOut>? {
+        if (closed) return null
+        return admitLanes.getOrPut(recipient) {
+            val queue = Channel<AdmitFanOut>(Channel.UNLIMITED)
+            AdmitLane(queue, scope.launch { runAdmitFanOutWriter(recipient, queue) })
+        }.queue
+    }
+
+    /**
+     * Encode [message] once and **enqueue** it on the lane of every admitted member except [subject].
+     * The fan-out is *ordered* here and *sent* by each recipient's [runAdmitFanOutWriter] — see
+     * [admitLanes] for why that separation is the fix and not an indirection.
+     *
+     * The roster snapshot and the lane resolution are taken under [lock] and the enqueues happen
+     * after it is released, so the pre-existing invariant that nothing suspend-capable sits inside a
+     * critical section is preserved (a [Channel.trySend] into an unbounded channel cannot suspend
+     * either way).
+     *
+     * The frame is encoded **once** and the same [ByteArray] is shared by every lane, so keying by
+     * recipient costs one small queue item per recipient rather than a copy of the frame.
      *
      * A **terminal** room enqueues nothing: [leave] flips `closed` under this same [lock], so a
      * fan-out raised by an in-flight handler after [leave] cannot resurrect a send — matching
-     * [broadcast]/[sendTo]'s terminal no-op. [leave] also closes [admitFanOuts], and `trySend` on a
+     * [broadcast]/[sendTo]'s terminal no-op. [leave] also closes every lane, and `trySend` on a
      * closed channel returns a failed result rather than throwing, so a caller that loses the race
      * with that gate still never sees an exception.
      */
     private fun fanOutToOtherMembers(subject: PeerId, message: AdmitMessage) {
-        val recipients = lock.withLock {
+        val lanes = lock.withLock {
             if (closed) return
-            admittedById.keys.filter { it != subject }
+            admittedById.keys
+                .filter { it != subject }
+                .mapNotNull { peer -> admitLaneFor(peer)?.let { peer to it } }
         }
-        if (recipients.isEmpty()) return
+        if (lanes.isEmpty()) return
         val label = message::class.simpleName ?: "AdmitMessage"
-        val queued = admitFanOuts.trySend(
-            AdmitFanOut(recipients = recipients, bytes = AdmitMessage.encode(message), label = label),
-        ).isSuccess
-        if (!queued) {
-            // The channel is UNLIMITED, so the only way `trySend` fails is a closed channel: the
-            // room went terminal between the snapshot above and here. Logged for the same reason a
-            // dropped send is — absence of an announcement has to be diagnosable off-device (#1781).
-            logger.debug {
-                "room.fanout.drop self=${selfId.value} message=$label reason=room-terminal " +
-                    "recipients=${recipients.size}"
+        val bytes = AdmitMessage.encode(message)
+        lanes.forEach { (recipient, queue) ->
+            val queued = queue.trySend(AdmitFanOut(bytes = bytes, label = label)).isSuccess
+            if (!queued) {
+                // The lane is UNLIMITED, so the only way `trySend` fails is a closed or cancelled
+                // channel: the room went terminal, or this recipient left the roster, between the
+                // resolution above and here. Logged for the same reason a dropped send is — absence
+                // of an announcement has to be diagnosable off-device (#1781).
+                logger.debug {
+                    "room.fanout.drop self=${selfId.value} to=${recipient.value} message=$label " +
+                        "reason=lane-gone"
+                }
             }
         }
     }
 
     /**
-     * The **single** admit fan-out writer: drains [admitFanOuts] in enqueue order, delivering every
-     * recipient of one fan-out before it touches the next item. One coroutine, so no two fan-outs
-     * can interleave and no later announcement can overtake an earlier one (#1781).
+     * One recipient's admit fan-out writer: drains that peer's lane in enqueue order. One coroutine
+     * per recipient, so for **that** recipient no later announcement can overtake an earlier one
+     * (#1781) — and a peer whose link is wedged holds up nothing but its own lane (#2048).
      *
      * **Survives a throwing recipient — including a cancellation the callee minted itself.**
      * [Seam.sendTo] is the only call in this loop that can throw (a peer may tear between the roster
@@ -2444,22 +2561,28 @@ internal class SeamRoom(
      * lets this through, so the guard does not rely on it.
      *
      * A rethrow here would be maximally silent: because the throwable *is* a `CancellationException`,
-     * the `scope.launch` in [start] is **cancelled rather than failed** — no handler runs, nothing
-     * reaches `state`, and there is not even a stack trace. [admitFanOuts] is never closed, so every
+     * the `scope.launch` in [admitLaneFor] is **cancelled rather than failed** — no handler runs,
+     * nothing reaches `state`, and there is not even a stack trace. The lane is never closed, so every
      * later `trySend` still reports success while every `Paused`/`Unpaused`/`Farewell` for the room's
-     * life is enqueued and never sent: remote rosters diverge permanently, with no announcement at
-     * all. That is strictly worse than the per-call `scope.launch` this queue replaced, where the same
-     * throw cost one fan-out's remaining recipients. [ensureActive] is the discriminator
-     * (`CompositeSeam.reconcile` in `:kuilt-core` is the sibling): our *own* cancellation still ends
-     * the loop, and anything else — cancellation-shaped or not — is that recipient's failure.
+     * life is enqueued and never sent: that recipient's roster diverges permanently, with no
+     * announcement at all. [ensureActive] is the discriminator (`CompositeSeam.reconcile` in
+     * `:kuilt-core` is the sibling): our *own* cancellation still ends the loop, and anything else —
+     * cancellation-shaped or not — is that recipient's failure.
      *
-     * **Each send is budgeted.** A single wedged recipient must not stall announcements to healthy
-     * ones. `sendTo` can suspend indefinitely: `LinkSeam`'s outbox is a *bounded*
+     * **Per-[PeerId] lanes shrink this blast radius but do not remove the need for the guard**, and
+     * the shrinkage is what makes it easy to under-rate: before #2048 a single mint killed the room's
+     * only sender and every remote roster diverged; now it silences exactly one peer, forever, with a
+     * queue growing behind it. Forever-silent-and-unbounded for one member is still the #1781 failure,
+     * so the guard is load-bearing at the new granularity — see `AdmitFanOutOrderingTest`, which pins
+     * it on the recipient that minted the cancellation rather than only on a bystander.
+     *
+     * **Each send is budgeted.** A wedged recipient must not stall its own later announcements
+     * indefinitely. `sendTo` can suspend forever: `LinkSeam`'s outbox is a *bounded*
      * `BufferOverflow.SUSPEND` channel by design, so a black-holed link (one whose `conn.send` never
-     * returns and never tears — the #1655 shape) backpressures its caller forever. With one writer
-     * that parks the *only* sender, so [withTimeoutOrNull] bounds it and the frame is dropped and
-     * logged like any other undeliverable one. [withTimeoutOrNull] and never bare `withTimeout` —
-     * that would hand-mint the very callee-minted cancellation the guard above exists to absorb.
+     * returns and never tears — the #1655 shape) backpressures its caller forever, and a parked writer
+     * never drains its lane. [withTimeoutOrNull] bounds it and the frame is dropped and logged like any
+     * other undeliverable one. [withTimeoutOrNull] and never bare `withTimeout` — that would hand-mint
+     * the very callee-minted cancellation the guard above exists to absorb.
      *
      * The budget is derived, not configured: [HeartbeatConfig.reconnectWindow] plus
      * [HeartbeatConfig.timeout]. Both terms are load-bearing, and the floor is set by what the queue
@@ -2477,43 +2600,68 @@ internal class SeamRoom(
      * that point every frame in flight has outlived its own subject. The budget is therefore
      * deliberately **loose** — its job is to make the wedge *finite*, not to be tight.
      *
-     * Bounding the send is what makes the growth analysis on [admitFanOuts] true: the queue drains at
-     * no worse than one recipient per budget, so a wedged link costs a bounded delay rather than an
-     * unbounded backlog. It is still **stronger than the invariant #1781 needs** — that invariant is
-     * *per-recipient* order, and this is a global FIFO, so a wedged peer delays healthy ones by up to
-     * one budget each. Keying the queue by [PeerId] removes even that; tracked as a follow-up rather
-     * than folded in here, because per-recipient writers need their own admit/evict/leave lifecycle.
+     * Bounding the send is what makes the growth analysis on [admitLanes] true: a lane drains at no
+     * worse than one frame per budget, so a wedged link costs a bounded delay on its own lane rather
+     * than an unbounded backlog. Since #2048 that delay is also *all* it costs — a healthy peer's lane
+     * is drained by its own writer and never waits on anyone else's.
      *
      * Delivery remains **best-effort** — a torn, wedged, or throwing recipient's frame is dropped and
-     * logged, exactly as before. What is now guaranteed is *order*: whatever arrives, arrives in the
-     * order this room raised it.
+     * logged, exactly as before. What is guaranteed is *per-recipient order*: whatever a recipient
+     * receives, it receives in the order this room raised it.
      */
-    private suspend fun runAdmitFanOutWriter() {
-        for (fanOut in admitFanOuts) {
-            for (recipient in fanOut.recipients) {
-                try {
-                    val accepted = withTimeoutOrNull(fanOutSendBudget) {
-                        seam.sendTo(recipient, fanOut.bytes)
-                    } != null
-                    if (!accepted) {
-                        logger.debug {
-                            "room.fanout.drop self=${selfId.value} to=${recipient.value} " +
-                                "message=${fanOut.label} reason=send-budget-exceeded " +
-                                "budget=$fanOutSendBudget"
-                        }
-                    }
-                } catch (failure: Throwable) {
-                    // Genuinely OUR cancellation → rethrow and end the loop; anything else (including
-                    // a CancellationException the consumer's `sendTo` minted itself) is this
-                    // recipient's failure and must not kill the room's only sender. See the KDoc.
-                    currentCoroutineContext().ensureActive()
+    private suspend fun runAdmitFanOutWriter(recipient: PeerId, queue: Channel<AdmitFanOut>) {
+        for (fanOut in queue) {
+            try {
+                val accepted = withTimeoutOrNull(fanOutSendBudget) {
+                    seam.sendTo(recipient, fanOut.bytes)
+                } != null
+                if (!accepted) {
                     logger.debug {
                         "room.fanout.drop self=${selfId.value} to=${recipient.value} " +
-                            "message=${fanOut.label} cause=${failure::class.simpleName}: " +
-                            "${failure.message}"
+                            "message=${fanOut.label} reason=send-budget-exceeded " +
+                            "budget=$fanOutSendBudget"
                     }
                 }
+            } catch (failure: Throwable) {
+                // Genuinely OUR cancellation → rethrow and end the loop; anything else (including
+                // a CancellationException the consumer's `sendTo` minted itself) is this
+                // recipient's failure and must not kill this recipient's writer. See the KDoc.
+                currentCoroutineContext().ensureActive()
+                logger.debug {
+                    "room.fanout.drop self=${selfId.value} to=${recipient.value} " +
+                        "message=${fanOut.label} cause=${failure::class.simpleName}: " +
+                        "${failure.message}"
+                }
             }
+        }
+    }
+
+    /**
+     * Tear down both of [recipient]'s lanes — its queue and its writer — because it has left the
+     * roster. Callers must hold [lock]; the sole caller is [removeFromRoster], which is the sole
+     * place a peer is removed from [admittedById].
+     *
+     * **Cancelled, not closed, and that difference is load-bearing.** [leave] closes its lanes so each
+     * writer completes on drain rather than dying mid-item; that is right for a room going terminal
+     * and wrong here, because a peer that leaves can come back. [addToRoster] supports re-admitting
+     * the *same* [PeerId] (its `isReadmit` branch), and a departed peer's stale backlog draining into
+     * a re-admitted one is exactly the inversion the lane exists to prevent: a `Paused(Y)` queued
+     * before the eviction, delivered after the re-admit, pins a recovered Y [Liveness.Partitioned] in
+     * that peer's roster forever. Cancelling the writer additionally aborts a send already parked in a
+     * wedged `sendTo`, which closing alone would let complete. A re-admit then mints a fresh lane —
+     * new channel, new writer, sequence restarted — with no path back to the old one.
+     *
+     * The frames discarded here are announcements to a peer that is no longer a member, so discarding
+     * them costs nothing: nothing in the roster the departed peer holds matters to this room again.
+     */
+    private fun discardLanes(recipient: PeerId) {
+        admitLanes.remove(recipient)?.let { lane ->
+            lane.writer.cancel()
+            lane.queue.cancel()
+        }
+        relayLanes.remove(recipient)?.let { lane ->
+            lane.writer.cancel()
+            lane.queue.cancel()
         }
     }
 
@@ -2706,7 +2854,12 @@ internal class SeamRoom(
     }
 
     private fun removeFromRoster(peerId: PeerId, reason: LeaveReason) {
-        val removed = lock.withLock { admittedById.remove(peerId) }
+        // The fan-out lanes are torn down in the SAME critical section that removes the member, so a
+        // concurrent `fanOutToOtherMembers` either sees the peer (and resolves a lane that is still
+        // live) or does not see it at all — a lane can never be minted for a peer already gone. Tied
+        // to `removed != null` so a duplicate eviction cannot discard a lane a re-admit has since
+        // installed. See [discardLanes].
+        val removed = lock.withLock { admittedById.remove(peerId)?.also { discardLanes(peerId) } }
         removed ?: return // already removed, avoid duplicate Left events
         _roster.update { current -> current.filterNot { it.id == peerId }.toSet() }
         _rosterPeers.update { current -> current - peerId }
@@ -2827,6 +2980,16 @@ internal class SeamRoom(
      *   `null` on a host — which a plausible tidy-up would have broken.
      * - **The roster is a subset of what the transport can address**, i.e. a full mesh.
      *
+     * **On a plain mesh the dominant divergence trigger is a transient partition, not a star.** The
+     * subset test says nothing about topology: on a flat, fully-connected mesh the ordinary way for
+     * it to fail is one member sitting in its reconnect window — still in the roster, already gone
+     * from [Seam.peers] (#1557/#1614). That single peer routes **everyone's** traffic through the host
+     * for the whole window (60 s by default), on a topology with no star in it. Rule I2 below makes
+     * that deliberate rather than accidental — mixing hop counts is worse — but it means the relay's
+     * cost model has to hold for a mesh under a routine transient drop, not only for a real star. It
+     * is why the relay lanes are keyed per recipient (#2048): shared, one wedged spoke would have
+     * throttled a whole mesh's data plane every time any member blinked.
+     *
      * Otherwise **everything** relays, including frames to a peer that *is* directly reachable.
      * Keying [broadcast] on the roster subset but [sendTo] on the individual peer would, on a
      * partial mesh, give one destination two different hop counts — and a `Quilter`'s ack could
@@ -2913,19 +3076,25 @@ internal class SeamRoom(
         if (announce) {
             runCatchingCancellable { seam.broadcast(AdmitMessage.encode(AdmitMessage.Goodbye)) }
         }
-        // Close the fan-out queue rather than cancelling its writer (#1781), so
-        // [runAdmitFanOutWriter] completes when the queue drains instead of dying mid-item. Anything
-        // already enqueued MAY still be attempted, best-effort, before the seam tears — but do not
-        // read that as a guarantee: the writer is a separate coroutine and `seam.close` below is
-        // reached without necessarily yielding to it, so in practice it typically does not resume
-        // until the seam is already `Torn` and its remaining sends fail fast. That matches the
-        // pre-existing behaviour, where [leave] never cancelled the per-call `scope.launch`es either.
-        // The `closed` flag set above already stops anything new being enqueued; a `trySend` that
-        // races that gate fails against this closed channel instead of throwing at its caller.
-        admitFanOuts.close()
-        // Same discipline, same reason (see above): close the queue rather than cancelling its
-        // writer, so [runRelayForwardWriter] completes on drain instead of dying mid-item.
-        relayForwards.close()
+        // Close EVERY fan-out lane rather than cancelling its writer (#1781, per-recipient since
+        // #2048), so each [runAdmitFanOutWriter] / [runRelayForwardWriter] completes when its lane
+        // drains instead of dying mid-item. Anything already enqueued MAY still be attempted,
+        // best-effort, before the seam tears — but do not read that as a guarantee: the writers are
+        // separate coroutines and `seam.close` below is reached without necessarily yielding to them,
+        // so in practice they typically do not resume until the seam is already `Torn` and their
+        // remaining sends fail fast. That matches the pre-existing behaviour, where [leave] never
+        // cancelled the per-call `scope.launch`es either.
+        //
+        // No lane can leak past this point: `closed` was set under [lock] above, and both
+        // [admitLaneFor] and [relayLaneFor] refuse to mint a lane once it is set — so the maps are
+        // frozen by the time this second critical section reads them, and clearing them here means a
+        // room that somehow re-entered [leave] cannot double-close. A `trySend` that raced the gate
+        // fails against a closed channel instead of throwing at its caller.
+        val lanesToDrain = lock.withLock {
+            (admitLanes.values.map { it.queue } + relayLanes.values.map { it.queue })
+                .also { admitLanes.clear(); relayLanes.clear() }
+        }
+        lanesToDrain.forEach { it.close() }
         jobsToCancel.forEach { it.cancel() }
         detectorJobsToCancel.forEach { it.cancel() }
         seam.close(

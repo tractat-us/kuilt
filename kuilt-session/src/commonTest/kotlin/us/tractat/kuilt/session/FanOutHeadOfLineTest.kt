@@ -4,6 +4,7 @@ package us.tractat.kuilt.session
 
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -55,13 +56,6 @@ import kotlin.time.Duration.Companion.seconds
 class FanOutHeadOfLineTest {
 
     /**
-     * A generous wedge backstop, **not** an assertion — wall-clock over a virtual-time trajectory,
-     * so tightening it measures the host machine rather than this code (#1739/#1891). Fast failure
-     * comes from the bounded advances inside each test.
-     */
-    private val backstop = 30.seconds
-
-    /**
      * Virtual time allowed for the membership announcement in [`a membership announcement…`].
      *
      * Comfortably over what the announcement needs (one detector timeout of 600 ms plus a fan-out
@@ -88,7 +82,7 @@ class FanOutHeadOfLineTest {
      */
     @Test
     fun `a relay forward to a wedged spoke does not wait behind it at all`() =
-        runTest(StandardTestDispatcher(), timeout = backstop) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val star = relayStar(coJoiners = 3, wedge = setOf("joiner-b"))
 
             // Queued first, and it never completes.
@@ -139,7 +133,7 @@ class FanOutHeadOfLineTest {
      */
     @Test
     fun `a relay flood at a wedged spoke does not evict a forward queued for a healthy one`() =
-        runTest(StandardTestDispatcher(), timeout = backstop) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val star = relayStar(coJoiners = 3, wedge = setOf("joiner-b"))
 
             // Park the shared writer inside the black hole …
@@ -197,7 +191,7 @@ class FanOutHeadOfLineTest {
      */
     @Test
     fun `a membership announcement to a wedged bystander does not delay one to a healthy bystander`() =
-        runTest(StandardTestDispatcher(), timeout = backstop) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val star = relayStar(coJoiners = 3, wedge = setOf("joiner-a"))
 
             star.partition(star.joinerCId)
