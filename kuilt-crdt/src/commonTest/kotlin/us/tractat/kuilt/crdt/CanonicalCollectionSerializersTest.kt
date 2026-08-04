@@ -1,5 +1,6 @@
 package us.tractat.kuilt.crdt
 
+import kotlinx.serialization.ContextualSerializer
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
@@ -12,6 +13,8 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.encoding.decodeStructure
 import kotlinx.serialization.encoding.encodeStructure
+import kotlinx.serialization.modules.SerializersModule
+import kotlinx.serialization.modules.contextual
 import us.tractat.kuilt.crdt.internal.sortedByCanonicalKey
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -55,10 +58,56 @@ private object SparseSerializer : KSerializer<Sparse> {
     }
 }
 
+/**
+ * A key type deliberately carrying **no** `@Serializable` annotation, so its serializer exists
+ * only inside a [SerializersModule] and is reachable only through whichever encoder is asked to
+ * write it — which is what makes it a probe for #2035.
+ *
+ * Compound on purpose: `ordinal` 2 vs 10 discriminates a structural sort from a textual one, so
+ * the order assertions below stay load-bearing rather than incidental.
+ */
+private data class Tag(val name: String, val ordinal: Int)
+
+@OptIn(ExperimentalSerializationApi::class)
+private object TagSerializer : KSerializer<Tag> {
+    override val descriptor: SerialDescriptor = buildClassSerialDescriptor("Tag") {
+        element<String>("name")
+        element<Int>("ordinal")
+    }
+
+    override fun serialize(encoder: Encoder, value: Tag) {
+        encoder.encodeStructure(descriptor) {
+            encodeStringElement(descriptor, 0, value.name)
+            encodeIntElement(descriptor, 1, value.ordinal)
+        }
+    }
+
+    override fun deserialize(decoder: Decoder): Tag = decoder.decodeStructure(descriptor) {
+        var name = ""
+        var ordinal = 0
+        while (true) {
+            when (val index = decodeElementIndex(descriptor)) {
+                0 -> name = decodeStringElement(descriptor, 0)
+                1 -> ordinal = decodeIntElement(descriptor, 1)
+                else -> break
+            }
+        }
+        Tag(name, ordinal)
+    }
+}
+
 @OptIn(ExperimentalSerializationApi::class)
 class CanonicalCollectionSerializersTest {
 
     private val cbor = Cbor {}
+
+    /** The only place [TagSerializer] is registered — exactly as a consumer's format would carry it. */
+    private val contextualCbor = Cbor {
+        serializersModule = SerializersModule { contextual(Tag::class, TagSerializer) }
+    }
+
+    /** Three tags in canonical order: `name` first, then `ordinal` **numerically** (2 before 10). */
+    private val tagsInCanonicalOrder = listOf(Tag("a", 2), Tag("a", 10), Tag("b", 1))
 
     @Test
     fun mapEncodingIsInsertionOrderIndependent() {
@@ -296,6 +345,123 @@ class CanonicalCollectionSerializersTest {
                     "seq must sort numerically, not by toString",
                 )
             },
+        )
+    }
+
+    // ── @Contextual keys: the sort must use the FORMAT's module (#2035) ───────
+    //
+    // Each of the three tests below reaches a distinct call site, and no one of them shadows
+    // another: the two `sortedByCanonicalKey` overloads are separate functions, and each public
+    // serializer that takes an arbitrary key serializer passes the module in on its own line.
+    // A fix that threads the module at one site and leaves another on an empty module is caught
+    // by exactly the test for the site it missed.
+    //
+    // Non-vacuity, in all three: the encode *itself* is the assertion — with an empty module the
+    // sort raises `SerializationException` before a byte is written, so a green run proves the
+    // format's module reached the leaf encoder. The order assertion beside it then proves the
+    // sort still ran (and ran structurally: `ordinal` 2 before 10, which a textual sort inverts),
+    // so a "fix" that skipped the sort for unresolvable keys would fail too.
+
+    /**
+     * A `@Contextual` **map key** encodes through [CanonicalMapSerializer] when the format's
+     * module can resolve it.
+     *
+     * Before #2035 the sort ran every key through an encoder holding an *empty* module, so a key
+     * type that the format resolves fine on its own became un-encodable the moment it was wrapped
+     * in a canonical collection.
+     */
+    @Test
+    fun contextualMapKeysResolveThroughTheFormatsModule() {
+        val ser = CanonicalMapSerializer(ContextualSerializer(Tag::class), Long.serializer())
+        val forward = linkedMapOf(Tag("a", 2) to 1L, Tag("a", 10) to 2L, Tag("b", 1) to 3L)
+        val reverse = linkedMapOf(Tag("b", 1) to 3L, Tag("a", 10) to 2L, Tag("a", 2) to 1L)
+        assertNotEquals(
+            forward.keys.toList(),
+            reverse.keys.toList(),
+            "precondition: inputs must iterate differently",
+        )
+
+        val forwardBytes = contextualCbor.encodeToByteArray(ser, forward)
+        assertAll(
+            {
+                assertEquals(
+                    forwardBytes.toList(),
+                    contextualCbor.encodeToByteArray(ser, reverse).toList(),
+                    "a contextual map key must still sort canonically",
+                )
+            },
+            {
+                assertEquals(
+                    tagsInCanonicalOrder,
+                    contextualCbor.decodeFromByteArray(ser, forwardBytes).keys.toList(),
+                    "the sort must run structurally over the contextually-resolved key",
+                )
+            },
+        )
+    }
+
+    /**
+     * The [Iterable] half of [contextualMapKeysResolveThroughTheFormatsModule]:
+     * [CanonicalSetSerializer] reaches the other `sortedByCanonicalKey` overload, so it needs the
+     * module threaded on its own line.
+     */
+    @Test
+    fun contextualSetElementsResolveThroughTheFormatsModule() {
+        val ser = CanonicalSetSerializer(ContextualSerializer(Tag::class))
+        val forward = linkedSetOf(Tag("a", 2), Tag("a", 10), Tag("b", 1))
+        val reverse = linkedSetOf(Tag("b", 1), Tag("a", 10), Tag("a", 2))
+        assertNotEquals(
+            forward.toList(),
+            reverse.toList(),
+            "precondition: inputs must iterate differently",
+        )
+
+        val forwardBytes = contextualCbor.encodeToByteArray(ser, forward)
+        assertAll(
+            {
+                assertEquals(
+                    forwardBytes.toList(),
+                    contextualCbor.encodeToByteArray(ser, reverse).toList(),
+                    "a contextual set element must still sort canonically",
+                )
+            },
+            {
+                assertEquals(
+                    tagsInCanonicalOrder,
+                    contextualCbor.decodeFromByteArray(ser, forwardBytes).toList(),
+                    "the sort must run structurally over the contextually-resolved element",
+                )
+            },
+        )
+    }
+
+    /**
+     * [DotMapSerializer] is the third public serializer that takes an arbitrary key serializer, so
+     * it is a third independent site — the `Canonical*Serializer` pair could both be fixed while
+     * this one still handed the sort an empty module.
+     *
+     * `DotFunSerializer` and `DotSetSerializer` are not probed: both hard-code `Dot.serializer()`,
+     * so no contextual key can reach them.
+     */
+    @Test
+    fun contextualDotMapKeysResolveThroughTheFormatsModule() {
+        val ser = DotMapSerializer(ContextualSerializer(Tag::class), DotSetSerializer())
+        fun tagged(vararg tags: Tag): DotMap<Tag, DotSet> =
+            DotMap(tags.withIndex().associate { (i, tag) -> tag to DotSet(setOf(Dot(ReplicaId("r"), i + 1L))) })
+
+        val forward = tagged(Tag("a", 2), Tag("a", 10), Tag("b", 1))
+        val reverse = tagged(Tag("b", 1), Tag("a", 10), Tag("a", 2))
+        assertNotEquals(
+            forward.entries.keys.toList(),
+            reverse.entries.keys.toList(),
+            "precondition: inputs must iterate differently",
+        )
+
+        assertEquals(
+            tagsInCanonicalOrder,
+            contextualCbor.decodeFromByteArray(ser, contextualCbor.encodeToByteArray(ser, forward))
+                .entries.keys.toList(),
+            "a contextual DotMap key must resolve through the format's module and sort structurally",
         )
     }
 }
