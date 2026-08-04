@@ -32,11 +32,24 @@ internal class MVRegisterLawsPropertyTest {
     @Provide
     fun statesC(): Arbitrary<MVRegister<String>> = statesFor(ReplicaId("C"))
 
-    private fun statesFor(replica: ReplicaId): Arbitrary<MVRegister<String>> {
+    /** Replica A's running history — see [assertAssociativeAlongTrajectory]. */
+    @Provide
+    fun trajectories(): Arbitrary<List<MVRegister<String>>> = trajectoryFor(ReplicaId("A"))
+
+    private fun statesFor(replica: ReplicaId): Arbitrary<MVRegister<String>> =
+        trajectoryFor(replica).map { it.last() }
+
+    private fun trajectoryFor(replica: ReplicaId): Arbitrary<List<MVRegister<String>>> {
         val valueArb: Arbitrary<String> = Arbitraries.integers().between(0, 9).map { "v-$it" }
         return valueArb.list().ofMinSize(0).ofMaxSize(5).map { values: List<String> ->
-            values.fold(MVRegister.empty<String>()) { s: MVRegister<String>, v: String -> s.set(replica, v) }
+            values.runningFold(MVRegister.empty<String>()) { s: MVRegister<String>, v: String -> s.set(replica, v) }
         }
+    }
+
+    /** The law over states that are causal ancestors of one another. */
+    @Property(tries = 100)
+    fun pieceIsAssociativeAlongOneTrajectory(@ForAll("trajectories") trajectory: List<MVRegister<String>>) {
+        assertAssociativeAlongTrajectory(trajectory)
     }
 
     @Property

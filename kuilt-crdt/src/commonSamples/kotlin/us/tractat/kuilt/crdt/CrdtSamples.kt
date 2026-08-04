@@ -265,7 +265,7 @@ internal fun sampleORMap() {
 
 /**
  * Ship the change, not the map — and note the two things the change has to say: only the value
- * *you* passed, and the tags this put supersedes.
+ * *you* passed, and the tags of yours this put supersedes.
  */
 @Suppress("unused")
 internal fun sampleORMapDelta() {
@@ -282,15 +282,15 @@ internal fun sampleORMapDelta() {
     val hire = alpha.putDelta(a, "team", GSet.of("erin"))
     check(hire.delta["team"] == GSet.of("erin"))
 
-    // The delta also names B's older tag, which the put supersedes, so both peers drop it.
+    // A's tag joins B's rather than replacing it, so the key's value is both writes together.
     alpha = alpha.piece(hire)
     bravo = bravo.piece(hire)
     check(alpha == bravo)
     check(alpha["team"] == GSet.of("alice", "bob", "carol", "dan", "erin"))
 
-    // Now a remove lands everywhere, because both peers agree on which tag is live. Had the delta
-    // above kept quiet about B's tag, it would still be alive on bravo — and "team" would come
-    // back from the dead there.
+    // Now a remove lands everywhere, because both peers agree on which tags are live. Had A already
+    // held a tag on "team" and the delta kept quiet about it, that older tag would still be alive on
+    // bravo — and "team" would come back from the dead there.
     val disband = alpha.removeDelta("team")
     alpha = alpha.piece(disband)
     bravo = bravo.piece(disband)

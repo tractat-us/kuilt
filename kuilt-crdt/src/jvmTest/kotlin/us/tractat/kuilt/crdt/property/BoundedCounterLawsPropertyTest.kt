@@ -16,7 +16,11 @@ internal class BoundedCounterLawsPropertyTest {
 
     /** Seed + random spend/transfer operations, depth 0..8. */
     @Provide
-    fun states(): Arbitrary<BoundedCounter> {
+    fun states(): Arbitrary<BoundedCounter> = trajectories().map { it.last() }
+
+    /** One running history — see [assertAssociativeAlongTrajectory]. */
+    @Provide
+    fun trajectories(): Arbitrary<List<BoundedCounter>> {
         val quotaArb: Arbitrary<Long> = Arbitraries.integers().between(0, 20).map { it.toLong() }
         val seedArb: Arbitrary<BoundedCounter> = quotaArb.flatMap { q0: Long ->
             quotaArb.flatMap { q1: Long ->
@@ -34,7 +38,7 @@ internal class BoundedCounterLawsPropertyTest {
         }
         return seedArb.flatMap { seed: BoundedCounter ->
             opArb.list().ofMinSize(0).ofMaxSize(8).map { ops: List<Op> ->
-                ops.fold(seed) { s: BoundedCounter, op: Op ->
+                ops.runningFold(seed) { s: BoundedCounter, op: Op ->
                     when (op.opType) {
                         0 -> s.trySpend(replicas[op.replicaIndex], op.amount)?.let { s.piece(it) } ?: s
                         1 -> {
@@ -76,6 +80,12 @@ internal class BoundedCounterLawsPropertyTest {
         val joined = a.piece(b)
         check(joined == joined.piece(a)) { "left absorption failed: $a, $b" }
         check(joined == joined.piece(b)) { "right absorption failed: $a, $b" }
+    }
+
+    /** The law over states that are causal ancestors of one another. */
+    @Property(tries = 100)
+    fun pieceIsAssociativeAlongOneTrajectory(@ForAll("trajectories") trajectory: List<BoundedCounter>) {
+        assertAssociativeAlongTrajectory(trajectory)
     }
 
     private companion object {

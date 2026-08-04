@@ -35,15 +35,18 @@ import kotlin.test.assertTrue
  * [aPutDeltasFrameIsFlatInMapSize] and its two siblings, which are the only assertions standing
  * between this change and a no-op that looks fully pinned.
  *
- * Also pinned here: the two delta shapes proposed in #2044, each reconstructed from public API as a
- * negative control, so that reinstating either in production turns a named test red rather than
- * quietly diverging replicas.
+ * Also pinned here: the two delta shapes proposed in #2044, so that reinstating either in production
+ * turns a named test red rather than quietly diverging replicas. The remove shape is still
+ * reconstructed from public API as a negative control; the put shape no longer can be, and
+ * [aPutDeltaSupersedesTheSendersOwnPriorTagsAndNoOthers] explains why and pins the hazard directly
+ * instead.
  *
- * **One property [ORMap] does not have, and this suite does not claim.** Delivery order is
- * irrelevant to which keys are present and to their tags, but *not* to a key's value: [ORMap.piece]
- * is not associative on the value axis, a pre-existing defect reproducible on `main` with no delta
- * code at all (#2086). See [aRemoveDeltaRacingAPutDeltaIsOrderDependentOnTheValueAxis], which pins
- * the behaviour as measured rather than asserting a convergence [ORMap] cannot deliver.
+ * This suite once carried a caveat that delivery order was irrelevant to key presence and tags but
+ * *not* to a key's value. That was #2086, and it is fixed: each of a key's tags now carries the write
+ * made under it, so a remove takes the writes sitting on the tags it retired, and every comparison
+ * here is on bytes. (Not *every* write the remover ever saw — a re-put by its author moves it onto a
+ * fresh tag first; `ORMapTest.aReplicasRePutCarriesItsEarlierWriteBeyondAConcurrentRemove` pins that
+ * boundary.)
  */
 @OptIn(ExperimentalSerializationApi::class)
 class ORMapDeltaMutatorLawTest {
@@ -271,13 +274,13 @@ class ORMapDeltaMutatorLawTest {
     }
 
     /**
-     * …and flat in the size of the **value already stored under the key**, on the nested
-     * `ORMap<K, ORSet<X>>` shape where that term dominates.
+     * …and flat in the size of the **value other replicas have stored under the key**, on the
+     * nested `ORMap<K, ORSet<X>>` shape where that term dominates.
      *
      * This is the assertion that makes [putDeltaCarriesTheSuppliedValueNotTheLocallyMergedOne] a
-     * performance guard rather than a stylistic one. Shipping the sender's locally merged value
-     * converges perfectly well; it just puts the receiver's own history back on the wire, which is
-     * an O(value) frame wearing a delta's name.
+     * performance guard rather than a stylistic one. Shipping the whole stored value converges
+     * perfectly well; it just puts the receiver's own history back on the wire, which is an
+     * O(value) frame wearing a delta's name.
      */
     @Test
     fun aPutDeltasFrameIsFlatInTheStoredValuesSize() {
@@ -293,36 +296,114 @@ class ORMapDeltaMutatorLawTest {
         )
     }
 
-    // ── the two #2044 shapes, as negative controls ────────────────────────────────
-
     /**
-     * #2044's `put` delta is `Causal(DotMap(mapOf(k to ORMapEntry(DotSet(setOf(dot)), v))),
-     * DotContext.of(dot))` — the minted tag and nothing else. That is exactly what building the
-     * delta on a *fresh* map produces, so the shape is reconstructible from public API and needs no
-     * production method.
+     * **The one place the frame is *not* flat, measured rather than asserted away.** A put
+     * supersedes the sender's own tag on the key, so the fresh tag has to carry what that tag was
+     * holding, and a replica that keeps growing one key on its own therefore ships its own running
+     * total each time.
      *
-     * It forgets every tag the re-put supersedes, the receiver keeps them, and a later remove — a
-     * *correct* one — retires only the tag the remover knows about. The key comes back.
+     * The alternative — supersede nothing — keeps every delta at O(the value you passed) and lets a
+     * key accumulate one tag per put, for ever. Between a delta that is occasionally large and a
+     * state that grows without bound while being held, hashed and re-shipped on every anti-entropy
+     * round, the delta is the right thing to pay. This test states which one was chosen: **not**
+     * flat here, and flat in every other term ([aPutDeltasFrameIsFlatInMapSize],
+     * [aPutDeltasFrameIsFlatInTheStoredValuesSize]).
+     *
+     * The cost this leaves on the table — a key one replica grows alone costs O(n²) cumulative — is
+     * tracked in #2102, with the amortisation options and the guidance alternative.
      */
     @Test
-    fun aPutDeltaThatOmitsSupersededTagsResurrectsARemovedKey() {
-        val issueShapeRePut: (ORMap<String, GSet<String>>) -> Patch<ORMap<String, GSet<String>>> = { _ ->
-            // A fresh map has an empty context, so `put` here mints (alpha,1) and witnesses only
-            // that — #2044's shape, with none of the tags the re-put actually supersedes.
-            Patch(ORMap.empty<String, GSet<String>>().put(alpha, KEY, GSet.of("v2")))
+    fun aPutDeltaCarriesTheSendersOwnRunningContributionToTheKey() {
+        // Each put contributes one element carrying a *fresh* inner dot. Handing `put` a series of
+        // `ORSet.empty().add(…)` values instead would reuse `(replica, 1)` every time, and folding
+        // two of those retires both elements — a degenerate fixture that measures nothing.
+        fun grownBy(replica: ReplicaId, elements: Int): ORMap<String, ORSet<String>> {
+            var inner = ORSet.empty<String>()
+            var map = ORMap.empty<String, ORSet<String>>()
+            repeat(elements) { index ->
+                val patch = inner.addDelta(replica, "own-$index")
+                inner = inner.piece(patch)
+                map = map.put(replica, KEY, patch.delta)
+            }
+            return map
         }
+
+        val contributed = ORSet.empty<String>().add(alpha, "fresh")
+        val afterOne = nestedBytes(grownBy(alpha, 1).putDelta(alpha, KEY, contributed).delta).size.toLong()
+        val afterMany = nestedBytes(grownBy(alpha, LARGE_STATE).putDelta(alpha, KEY, contributed).delta).size.toLong()
 
         assertAll(
             {
                 assertTrue(
-                    replayRePutThenRemove(issueShapeRePut),
-                    "negative control: #2044's put delta must leave the key alive on the receiver",
+                    afterMany > afterOne * GROWTH_FLOOR,
+                    "the sender's own contribution must ride along, so the frame is expected to grow " +
+                        "across $LARGE_STATE puts ($afterOne b to $afterMany b). If this is now flat, " +
+                        "the supersession term has been dropped and a key will accumulate a tag per put",
+                )
+            },
+            {
+                // …and one more replica's separate history does not add to it.
+                val alongsideBravo = grownBy(alpha, LARGE_STATE)
+                    .put(bravo, KEY, ORSet.empty<String>().add(bravo, "theirs"))
+                assertEquals(
+                    afterMany,
+                    nestedBytes(alongsideBravo.putDelta(alpha, KEY, contributed).delta).size.toLong(),
+                    "another replica's contribution to the same key must not appear in alpha's delta",
+                )
+            },
+        )
+    }
+
+    // ── the two #2044 shapes, as negative controls ────────────────────────────────
+
+    /**
+     * A put delta must name the tags it supersedes — the sender's own prior tags on the key — or a
+     * receiver keeps one alive, and a later *correct* remove, retiring only what the remover knows
+     * about, leaves it behind. The key comes back. Measured while designing this method (#2044).
+     *
+     * **The reconstruction this test used to perform is no longer expressible, and that is worth
+     * saying out loud rather than quietly dropping.** #2044's shape was
+     * `Patch(ORMap.empty().put(alpha, KEY, v))` — the minted tag and nothing else — and it was a
+     * faithful stand-in while a put superseded *every* tag on the key, because then an omitting
+     * delta always differed from the correct one. A put now supersedes only the sender's own tags
+     * (#2086), and a fresh map always mints seq 1, so for the reconstruction's dot to be the one the
+     * real delta mints the sender must hold no tag of its own — precisely the case where there is
+     * nothing to omit and the two shapes coincide. Any other arrangement reuses a dot, which is a
+     * different invalid state and would demonstrate the wrong thing.
+     *
+     * So the hazard is pinned where it lives: on which tags survive on the receiver. Drop the
+     * `superseded` term from `putPatch` and the first two assertions go red.
+     */
+    @Test
+    fun aPutDeltaSupersedesTheSendersOwnPriorTagsAndNoOthers() {
+        val start = ORMap.empty<String, GSet<String>>()
+            .put(alpha, KEY, GSet.of("v0"))
+            .put(bravo, KEY, GSet.of("v1"))
+        val alphaPrior = start.tagsOn(KEY).single { it.replica == alpha }
+        val bravoTag = start.tagsOn(KEY).single { it.replica == bravo }
+
+        val receiver = start.piece(start.putDelta(alpha, KEY, GSet.of("v2")))
+        val author = start.put(alpha, KEY, GSet.of("v2"))
+
+        assertAll(
+            {
+                assertFalse(
+                    alphaPrior in receiver.tagsOn(KEY),
+                    "the delta must retire alpha's own prior tag, or a later remove resurrects the key",
+                )
+            },
+            { assertTrue(bravoTag in receiver.tagsOn(KEY), "…and must not touch bravo's") },
+            {
+                assertEquals(
+                    author.tagsOn(KEY),
+                    receiver.tagsOn(KEY),
+                    "author and receiver must agree on the key's tags",
                 )
             },
             {
                 assertFalse(
                     replayRePutThenRemove { state -> state.putDelta(alpha, KEY, GSet.of("v2")) },
-                    "putDelta must carry the superseded tags, or a later remove resurrects the key",
+                    "end to end: after a correct remove the key must be gone on the receiver too",
                 )
             },
         )
@@ -494,20 +575,17 @@ class ORMapDeltaMutatorLawTest {
     }
 
     /**
-     * The same with removes mixed in, again against the **full-mutator fold**. Key presence and the
-     * map's tags agree under any delivery order, with any repeats — that is the observed-remove
-     * lattice doing its job, and it is the part the delta shapes are responsible for.
+     * The same with removes mixed in, again against the **full-mutator fold**, and now asserted on
+     * **bytes**.
      *
-     * The **values** do not agree, and that is not this change's doing: [ORMap.piece] is not
-     * associative on the value axis, because [ORMap.remove] discards a key's value while
-     * `ORMapEntry.join` merges it whenever both sides still hold the key. Reproducible on `main`
-     * with no delta code at all — see #2086, and
-     * [aRemoveDeltaRacingAPutDeltaIsOrderDependentOnTheValueAxis] for the minimal case. Asserting
-     * byte-identity here would be asserting a property [ORMap] does not have, so this test asserts
-     * the one it does.
+     * Until #2086 this test could only compare key presence and tags. The values did not agree,
+     * because a remove discarded a key's value while the entry-level join merged it whenever both
+     * sides still held the key — so whether a removed replica's write survived depended on the
+     * order the deltas landed in. A tag now carries its own write, a remove takes exactly the writes
+     * it observed, and the byte comparison the delta path is supposed to support holds.
      */
     @Test
-    fun removeDeltasConvergeOnKeyPresenceAndTagsUnderShuffledDelivery() {
+    fun removeDeltasConvergeUnderShuffledDelivery() {
         val random = Random(29)
         var removeDeltas = 0
 
@@ -517,11 +595,11 @@ class ORMapDeltaMutatorLawTest {
             val reference = fold(fullStates)
             val outOfOrder = fold((deltas + deltas).shuffled(random))
 
-            assertEquals(
-                tagsByKey(reference),
-                tagsByKey(outOfOrder),
-                "trial $trial: ${deltas.size} deltas, delivered shuffled and duplicated, must agree " +
-                    "with the full-mutator fold on which keys are present and on their tags",
+            assertTrue(
+                bytes(reference).contentEquals(bytes(outOfOrder)),
+                "trial $trial: ${deltas.size} deltas, delivered shuffled and duplicated, must encode " +
+                    "identically to the full-mutator fold (reference=${reference.keys}, " +
+                    "jumbled=${outOfOrder.keys})",
             )
         }
 
@@ -579,7 +657,13 @@ class ORMapDeltaMutatorLawTest {
     /**
      * Add-wins on the key survives the delta path. A concurrent put mints a tag the remover never
      * witnessed, so it is absent from the remove delta's context and lives through the join — in
-     * either order, with the same tags.
+     * either order, with the same tags, **the same value and the same bytes**.
+     *
+     * The value and byte assertions are the ones #2086 used to make impossible. Before it, the two
+     * orders disagreed on the key's value — a peer that applied the remove first no longer had the
+     * old value to merge into, while a peer that applied the put first kept both — so this test
+     * could only pin presence and tags. Now a tag carries its own write, the remove takes the writes
+     * on the tags it retired, and the orders agree outright.
      */
     @Test
     fun aConcurrentPutDeltaSurvivesARemoveDeltaInEitherOrder() {
@@ -606,58 +690,17 @@ class ORMapDeltaMutatorLawTest {
                     "both orders must agree on which keys are present and on their tags",
                 )
             },
-        )
-    }
-
-    /**
-     * **A pre-existing [ORMap] defect, pinned rather than papered over — see #2086.** [ORMap.piece]
-     * is not associative on the value axis: [ORMap.remove] drops a key's value along with its tags,
-     * while `ORMapEntry.join` merges the two values whenever both sides still hold the key. So
-     * whether the removed replica's value survives depends on the order the two operations are
-     * applied in.
-     *
-     * It reproduces on `main` with **no delta code at all** — `start.piece(removed).piece(rePut)`
-     * against `start.piece(removed.piece(rePut))`, where `rePut` is a peer that removed the key and
-     * then put it back. What the delta form changes is how easy it is to reach: because a put delta
-     * carries the *supplied* value rather than the sender's locally merged one (deliberately — that
-     * is where the saving lives), **any** remove racing a put on the same key now lands here,
-     * instead of only a peer that did remove-then-put locally.
-     *
-     * The two peers do reconcile: the next anti-entropy round joins their full states and unions the
-     * values. Until then their `Quilter.stateRoot()`s disagree and #1955's gate is off for the pair.
-     *
-     * This test asserts the behaviour as measured. If #2086 changes it, this test is meant to go red.
-     */
-    @Test
-    fun aRemoveDeltaRacingAPutDeltaIsOrderDependentOnTheValueAxis() {
-        val start = racingStart()
-        val removal = start.removeDelta(KEY).delta
-        val concurrent = start.putDelta(bravo, KEY, GSet.of("v2")).delta
-
-        val removeFirst = start.piece(removal).piece(concurrent)
-        val putFirst = start.piece(concurrent).piece(removal)
-
-        assertAll(
             {
                 assertEquals(
                     setOf("v2"),
                     assertNotNull(removeFirst[KEY]).elements,
-                    "remove-then-put: the removed replica's value is gone, so the delta's value stands alone",
+                    "the surviving value is the concurrent put's own write — alpha's went with its tag",
                 )
             },
             {
-                assertEquals(
-                    setOf("v1", "v2"),
-                    assertNotNull(putFirst[KEY]).elements,
-                    "put-then-remove: the key was still present when the delta landed, so the values merged",
-                )
-            },
-            {
-                assertFalse(
+                assertTrue(
                     bytes(removeFirst).contentEquals(bytes(putFirst)),
-                    "if these now encode identically, #2086 has been fixed — delete this test, " +
-                        "restore the byte assertion in aConcurrentPutDeltaSurvivesARemoveDeltaInEitherOrder, " +
-                        "and drop the concurrent-remove caveat from ORMap.putDelta's KDoc",
+                    "both orders must encode identically, or the root-hash gate is off for the pair",
                 )
             },
         )
@@ -678,7 +721,10 @@ class ORMapDeltaMutatorLawTest {
     private fun replayRePutThenRemove(
         rePutDelta: (ORMap<String, GSet<String>>) -> Patch<ORMap<String, GSet<String>>>,
     ): Boolean {
-        val start = ORMap.empty<String, GSet<String>>().put(bravo, KEY, GSet.of("v1"))
+        // alpha holds a tag of its own, so the re-put has something to supersede.
+        val start = ORMap.empty<String, GSet<String>>()
+            .put(alpha, KEY, GSet.of("v0"))
+            .put(bravo, KEY, GSet.of("v1"))
         var author = start
         var receiver = start
 
@@ -868,5 +914,13 @@ class ORMapDeltaMutatorLawTest {
          * beyond this is a term that scales with the state.
          */
         const val FLAT_TOLERANCE_PERCENT = 120
+
+        /**
+         * The factor a sender's own running contribution must grow the frame by across
+         * [LARGE_STATE] puts. Measured at roughly 400×; set two orders of magnitude below that, so
+         * the assertion fails on a frame that has gone *flat* — the tell that supersession was
+         * dropped — rather than on encoding noise.
+         */
+        const val GROWTH_FLOOR = 4L
     }
 }

@@ -31,9 +31,16 @@ internal class CausalDotSetLawsPropertyTest {
     @Provide
     fun statesC(): Arbitrary<Causal<DotSet>> = statesFor(ReplicaId("C"))
 
+    /** Replica A's running history — see [assertAssociativeAlongTrajectory]. */
+    @Provide
+    fun trajectories(): Arbitrary<List<Causal<DotSet>>> = trajectoryFor(ReplicaId("A"))
+
     private fun statesFor(replica: ReplicaId): Arbitrary<Causal<DotSet>> =
+        trajectoryFor(replica).map { it.last() }
+
+    private fun trajectoryFor(replica: ReplicaId): Arbitrary<List<Causal<DotSet>>> =
         Arbitraries.of(true, false).list().ofMinSize(0).ofMaxSize(6).map { ops: List<Boolean> ->
-            ops.fold(Causal(DotSet(), DotContext.EMPTY)) { causal: Causal<DotSet>, isAdd: Boolean ->
+            ops.runningFold(Causal(DotSet(), DotContext.EMPTY)) { causal: Causal<DotSet>, isAdd: Boolean ->
                 if (isAdd) {
                     val dot = causal.context.nextDot(replica)
                     Causal(DotSet(causal.store.dots + dot), causal.context.add(dot))
@@ -43,6 +50,12 @@ internal class CausalDotSetLawsPropertyTest {
                 }
             }
         }
+
+    /** The law over states that are causal ancestors of one another. */
+    @Property(tries = 100)
+    fun pieceIsAssociativeAlongOneTrajectory(@ForAll("trajectories") trajectory: List<Causal<DotSet>>) {
+        assertAssociativeAlongTrajectory(trajectory)
+    }
 
     @Property
     fun pieceIsIdempotent(@ForAll("statesA") a: Causal<DotSet>) {

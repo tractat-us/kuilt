@@ -19,6 +19,24 @@ internal class GCounterLawsPropertyTest {
                 GCounter.of(*pairs.toTypedArray())
             }
 
+    /** One replica-by-replica running history — see [assertAssociativeAlongTrajectory]. */
+    @Provide
+    fun trajectories(): Arbitrary<List<GCounter>> =
+        Arbitraries.integers().between(1, 100).map { it.toLong() }
+            .list().ofMinSize(0).ofMaxSize(4)
+            .map { amounts: List<Long> ->
+                amounts.foldIndexed(mutableListOf(GCounter.ZERO)) { i, chain, amount ->
+                    val replica = replicas[i % replicas.size]
+                    chain.apply { add(last().piece(last().inc(replica, amount).delta)) }
+                }
+            }
+
+    /** The law over states that are causal ancestors of one another. */
+    @Property(tries = 100)
+    fun pieceIsAssociativeAlongOneTrajectory(@ForAll("trajectories") trajectory: List<GCounter>) {
+        assertAssociativeAlongTrajectory(trajectory)
+    }
+
     @Property
     fun pieceIsIdempotent(@ForAll("states") a: GCounter) {
         check(a == a.piece(a)) { "idempotence failed for $a" }
