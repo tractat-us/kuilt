@@ -4,11 +4,31 @@
 > or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`)
 > syntax for tracking.
 
-**Revision 2.** Revision 1 of this plan was withdrawn: it contained a remotely-triggerable co-joiner
-takeover, suspended its fan-out inside the single inbound collector, and gated its own de-risking
-prototype on a tautology. This plan is written against **revision 2** of
+**Revision 3.** Revision 1 was withdrawn (remotely-triggerable co-joiner takeover, fan-out suspended
+inside the single inbound collector, a tautological de-risking prototype). Revision 2 fixed those and
+was then reviewed; that review found **five more blocking defects**, folded in here. Written against
+**revision 2** of
 [`docs/superpowers/specs/2026-08-03-star-relay-design.md`](../specs/2026-08-03-star-relay-design.md),
-whose "What revision 1 got wrong" table is the checklist it satisfies. No code was carried over.
+whose "What revision 1 got wrong" table is one of the two checklists it satisfies.
+
+### What the review of revision 2 changed
+
+| # | Defect | Correction |
+|---|---|---|
+| **B1** | **The host was excluded from every relayed delivery.** `admittedById` never contains `selfId` (`addToRoster` is called only for *other* peers, `SeamRoom.kt:1217`/`:1376`), so `One(hostId)` resolved to `None` and was dropped, and `Everyone` forwarded to co-joiners while never delivering to the host. Meanwhile the joiner's relay path replaced `seam.broadcast` — which **does** reach the host today — with a send the host forwards away. A joiner's frames would have stopped reaching the host entirely on any 3+ member star. | `Resolved` gains explicit local-delivery cases; the host delivers to itself **and** forwards. Two new positive-control tests (Task 5 §T1, §T2). |
+| **B2** | **No admitted-sender gate on the host relay arm.** It fired before the existing `isAdmittedPeer` arm and never re-checked admission, so an unadmitted peer could drive an unbounded fan-out. Every other application-data path in `dispatchIncoming` is admit-gated; this was the first that was not. | `isAdmittedPeer(sender)` is the **first** gate in the host branch, with its own test. |
+| **B3** | **Sharing `admitFanOuts` invalidated that queue's own growth analysis.** Its KDoc says growth is bounded because "what enqueues" is membership *transitions*, "on the heartbeat timescale rather than **per-frame**". Moving the data plane onto it makes one wedged spoke (75 s budget, `Channel.UNLIMITED`) delay every `Paused`/`Unpaused`/`Farewell` behind it — the exact permanent roster divergence #1781 built the queue to prevent. | A **dedicated, bounded** relay queue and writer. See "Why a second writer does not violate C3". |
+| **B4** | **Task 3's "watch it fail" step could not fail.** `Room.roster` excludes self, and the *first* joiner's roster only reaches 2 after the host-intro has already set `hostPeerId`. The test subject could never exhibit the window — C5 reintroduced in the task that exists to close a security hole. | Observe the **last** joiner and gate on holding a non-host member, not on a size. |
+| **B5** | **The host-side leak-boundary negative was vacuous** — green because of B1, not because of the boundary. | Paired with the B1 positive controls; it only becomes meaningful once the host receives relayed frames at all. |
+
+Five `SHOULD-FIX` items are also folded in: fail-fast on a null `hostPeerId` (**S1**, restoring spec
+item I4, which revision 2 had reversed); relayed payloads must not feed liveness detectors (**S2**);
+log a dropped `tryEmit` (**S3**); `@SerialName` on `RelayDest` (**S4**); Tasks 5 and 6 **merged**
+(**S5**); the head-of-line test specified rather than delegated (**S6**).
+
+**Upheld on review:** the module-placement deviation below (J1 — "do not overturn it"), and the
+`validFirstHop(…, emptySet())` degeneracy, which is *not* the revision-1 tautology because
+`:kuilt-cluster` exercises the function non-degenerately and the swap in Task 2 can genuinely go red.
 
 **Goal:** Make a room's roster genuinely routable on star fabrics — the host forwards peer-addressed
 frames between spokes — so a `Quilter` over `Room.channel(...)` converges between two spokes that have
@@ -51,7 +71,7 @@ Every task's requirements implicitly include this section.
 - **Every negative assertion shares a test with its positive control.** A test whose only assertion is
   `assertTrue(x.none { … })` is green before the feature exists and is therefore not a test. This is
   spec correction **C5** and it is non-negotiable.
-- **Consensus/runtime behavior gate:** the final gate for Tasks 5–8 is the **full** `./gradlew build`,
+- **Consensus/runtime behavior gate:** the final gate for Tasks 5–7 is the **full** `./gradlew build`,
   not a module-scoped build — a `:kuilt-session`-scoped build skips the `:examples` / `:kuilt-cluster`
   E2E tests.
 - **Cache-disabled verification before auto-merge:** `--rerun-tasks`, and confirm tasks are `EXECUTED`
@@ -83,11 +103,19 @@ So: `validFirstHop` → `:kuilt-core`, **public**, no new dependency. Everything
 `:kuilt-session`, **internal**. The only public surface this track adds is `RoomFramePrefix` and
 `validFirstHop`.
 
-**If the reviewer wants the envelope in core anyway**, the cost is explicit: add
-`implementation(libs.kotlinx.serialization.cbor)` to `kuilt-core/build.gradle.kts`, move
-`RoomFramePrefix` to core with it, and accept that the contract module now knows about admit, lobby and
-heartbeat framing. That is a real architectural change and should be an explicit decision, not a side
-effect of following a bullet list.
+**Reviewed and upheld** — "the module-placement deviation is correct; do not overturn it". The review
+verified independently that nothing outside `:kuilt-session` plausibly needs `RelayEnvelope`
+(`:kuilt-cluster` keeps its own `RaftRelay` dialect and delivers into a
+`MutableSharedFlow<RaftEnvelope>` rather than a peer set; `:kuilt-gossip` decorates below the Room
+layer), that `internal` blocks nothing today and `internal` → `public` is a non-breaking one-line
+change pre-1.0, and that #2007's body says verbatim "One registry in `:kuilt-session` owning the byte
+space" — so an envelope framed behind `RoomFramePrefix.Relay` genuinely cannot live in `:kuilt-core`
+without either contradicting #2007 or splitting the prefix from the codec.
+
+**One follow-up, owned by Task 9:** the spec's Architecture bullet contradicts its own Decisions row.
+Fold this resolution back into the spec (a revision-3 note is enough) rather than leaving the deviation
+plan-level — a design of record left self-contradicting is the stale-body hazard this repo keeps
+re-learning.
 
 ### An honest weakness to put in front of the reviewer
 
@@ -103,7 +131,7 @@ to the tautology that sank revision 1 (**C2**), and it should be argued, not ass
 - **The spec says three stale `TieredSeam` claims need correcting. Only two do.**
   `docs/fabric-peer-routing.md:47` was **already corrected on `main`** by commit `c82e39a6`
   (2026-07-31) and now reads "…now throws `PeerNotConnected` (#1935)". The two that remain are
-  `SeamRoom.kt:1525` and #1994's own body (lines 29 and 91). Task 10 fixes exactly those two.
+  `SeamRoom.kt:1525` and #1994's own body (lines 29 and 91). Task 9 fixes exactly those two.
 - **The join-window fix widens one surface while narrowing another** — see Task 3. It is not a pure
   win and the plan says so.
 
@@ -638,7 +666,7 @@ of those sends. That window matters twice:
    (`Quilter.kt:566`, `:576`) straight into `PeerNotConnected` — **#1994's own symptom, transiently
    reintroduced at the exact moment convergence is being established.**
 
-Task 6's joiner-side receive gates on `sender == hostPeerId`, so this must land first.
+Task 5's joiner-side receive gates on `sender == hostPeerId`, so this must land first.
 
 **This is not a pure win — say so in review.** Today `hostPeerId` is captured only by a *self-intro*
 shaped Welcome (`assignedId == sender`). Pinning it to the **first** Welcome from any sender narrows
@@ -657,7 +685,7 @@ from silent to loud.
 **Interfaces:**
 - Consumes: nothing.
 - Produces: the invariant *"a joiner's `hostPeerId` is non-null from the first `Welcome` it accepts"*,
-  plus `internal fun SeamRoom.hostPeer(): PeerId?`. Task 6's `handleRelayedDelivery` depends on both.
+  plus `internal fun SeamRoom.hostPeer(): PeerId?`. Task 5's `handleRelayedDelivery` depends on both.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -701,16 +729,26 @@ class JoinWindowHostIdentityTest {
     @Test
     fun `a joiner knows its host before it holds any co-member`() =
         runTest(StandardTestDispatcher(), timeout = backstop) {
-            val star = star(coJoiners = 2)
+            val star = star(coJoiners = 3)
 
-            // The joiner's roster reaching 2 means it has accepted a Welcome describing a
-            // co-member. hostPeerId must ALREADY be set at that point.
-            star.joinerA.roster.first { it.size == 2 }
+            // MUST be the LAST joiner, and MUST gate on holding a NON-HOST member.
+            //
+            // `Room.roster` excludes self, and the FIRST joiner is admitted while
+            // `existingMembers` is empty — so it receives only the self-admission Welcome (early
+            // return, no roster add) and then the host-intro, which sets `hostPeerId` and adds the
+            // host in the same call. Its roster therefore never holds a co-member before
+            // `hostPeerId` is set: the window is structurally unreachable for that subject, and a
+            // size-keyed wait on it makes this test green before the fix exists.
+            //
+            // The last joiner is admitted with two pre-existing members, so `admitPeer` sends
+            // self-admission, then a bootstrap Welcome per existing member, and only THEN the
+            // host-intro. Its roster holds a non-host member across that gap — the window.
+            star.lastJoiner.roster.first { members -> members.any { it.id != star.hostId } }
 
             assertAll(
                 {
                     assertNotNull(
-                        star.joinerAHostPeerId(),
+                        star.lastJoinerHostPeerId(),
                         "hostPeerId is still null while the roster already holds a co-member — " +
                             "this is the window in which a Quilter's sendFullStateTo hits " +
                             "PeerNotConnected, and in which a forged Welcome can capture the host",
@@ -721,7 +759,7 @@ class JoinWindowHostIdentityTest {
                     // change that set hostPeerId to some arbitrary non-null peer would pass above.
                     assertEquals(
                         star.hostId,
-                        star.joinerAHostPeerId(),
+                        star.lastJoinerHostPeerId(),
                         "the identified host must be the actual host",
                     )
                 },
@@ -736,9 +774,9 @@ class JoinWindowHostIdentityTest {
     @Test
     fun `a second sender cannot displace an identified host`() =
         runTest(StandardTestDispatcher(), timeout = backstop) {
-            val star = star(coJoiners = 2)
-            star.joinerA.roster.first { it.size == 2 }
-            val identified = assertNotNull(star.joinerAHostPeerId())
+            val star = star(coJoiners = 3)
+            star.lastJoiner.roster.first { members -> members.any { it.id != star.hostId } }
+            val identified = assertNotNull(star.lastJoinerHostPeerId())
 
             // A co-joiner forges a host self-introduction naming itself.
             star.forgeWelcomeFromCoJoiner()
@@ -748,7 +786,7 @@ class JoinWindowHostIdentityTest {
                 {
                     assertEquals(
                         identified,
-                        star.joinerAHostPeerId(),
+                        star.lastJoinerHostPeerId(),
                         "a co-joiner's forged Welcome must not move hostPeerId (#1180)",
                     )
                 },
@@ -766,8 +804,9 @@ class JoinWindowHostIdentityTest {
 
     private class Star(
         val hostId: PeerId,
-        val joinerA: Room,
-        val joinerAHostPeerId: () -> PeerId?,
+        /** The joiner admitted LAST — the only one whose admit burst has bootstrap sends. */
+        val lastJoiner: Room,
+        val lastJoinerHostPeerId: () -> PeerId?,
         val forgeWelcomeFromCoJoiner: suspend () -> Unit,
     )
 
@@ -775,15 +814,22 @@ class JoinWindowHostIdentityTest {
         TODO(
             "Build with InMemoryRoomFabric exactly as LivenessRouteGateTest.star() does " +
                 "(fabric.serverLoom for the host; fabric.clientLoom + adopt(seam, Joiner) per " +
-                "joiner, keeping each joiner's own seam handle), with `coJoiners` clients so " +
-                "admitPeer performs more than one bootstrap send. joinerAHostPeerId reads " +
-                "(joinerA as SeamRoom).hostPeer(). forgeWelcomeFromCoJoiner sends " +
+                "joiner, keeping each joiner's own seam handle). Join the joiners SEQUENTIALLY, " +
+                "awaiting each one's admission before starting the next, so the last one is " +
+                "admitted with two pre-existing members and admitPeer performs real bootstrap " +
+                "sends before the host-intro. lastJoinerHostPeerId reads " +
+                "(lastJoiner as SeamRoom).hostPeer(). forgeWelcomeFromCoJoiner sends " +
                 "AdmitMessage.encode(Welcome(assignedPeerId = <coJoiner>.value, displayName = " +
-                "\"forged\", sessionId = \"forged\")) from the co-joiner's raw seam to joinerA."
+                "\"forged\", sessionId = \"forged\")) from a co-joiner's raw seam to lastJoiner."
         )
     }
 }
 ```
+
+> **Sequential joins are load-bearing, not incidental.** If all three joiners are admitted
+> concurrently the interleaving decides whether `existingMembers` is populated when the subject is
+> admitted, and the test becomes order-dependent — green on some runs for the B4 reason above. Await
+> each admission before starting the next.
 
 > **Worker note:** the `TODO(...)` above is the ONE place this plan does not hand you finished code,
 > and it is deliberate — the harness is a mechanical transcription of
@@ -824,6 +870,11 @@ Expected: FAIL on `a joiner knows its host before it holds any co-member` with
 "hostPeerId is still null while the roster already holds a co-member".
 The second test should already PASS (it pins the pre-existing #1180 gate) — that is the control
 proving the harness itself works.
+
+**If the first test PASSES here, stop and fix the test, not the code.** That is the B4 failure
+recurring: it means the subject you are observing cannot exhibit the window (wrong joiner, or a
+size-keyed wait instead of a holds-a-non-host-member wait). A green here proves nothing and would
+carry a vacuous test into the security-critical task.
 
 - [ ] **Step 4: Set `hostPeerId` from the first accepted Welcome**
 
@@ -1084,6 +1135,7 @@ Create `kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/RelayEnvelo
 package us.tractat.kuilt.session
 
 import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.decodeFromByteArray
@@ -1100,12 +1152,17 @@ import us.tractat.kuilt.core.runCatchingCancellable
 @Serializable
 internal sealed interface RelayDest {
 
-    /** Every admitted member except the origin. The relayed form of `Room.broadcast`. */
+    /**
+     * The host, plus every admitted member except the origin. The relayed form of
+     * `Room.broadcast`.
+     */
     @Serializable
+    @SerialName("all")
     data object Everyone : RelayDest
 
-    /** Exactly [peer]. The relayed form of `Room.sendTo`. */
+    /** Exactly [peer] — which may be the host itself. The relayed form of `Room.sendTo`. */
     @Serializable
+    @SerialName("one")
     data class One(val peer: PeerId) : RelayDest
 }
 
@@ -1135,6 +1192,12 @@ internal sealed interface RelayDest {
  * CBOR behind [RoomFramePrefix.Relay] (`0x72`), matching every other room frame family. Lives in
  * `:kuilt-session` rather than `:kuilt-core` because the contract module carries no CBOR
  * dependency and nothing outside this module consumes this type.
+ *
+ * [RelayDest]'s subclasses carry explicit `@SerialName`s for the same reason `AdmitMessage`'s do
+ * (`@SerialName("hello")`, `"paused"`, …): without one the CBOR discriminator is the
+ * fully-qualified class name, so a package move or rename would silently break cross-version wire
+ * compatibility with no compile error — and a 44-byte discriminator would put the envelope well
+ * past the spec's "roughly 40–60 bytes" estimate, which matters while budgeting is deferred.
  * [equals]/[hashCode] compare [payload] by content (kuilt convention for byte-carrying types).
  */
 @Serializable
@@ -1234,110 +1297,173 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
-### Task 5: Host-side forwarding
+### Task 5: The relay itself — host forwarding, local delivery, and joiner routing
 
-The host decodes, validates, allow-lists, resolves, and enqueues on the **existing** writer.
+**Tasks 5 and 6 of revision 2 are merged here.** They were separable on paper only: every host test
+observes delivery through the joiner side, and revision 2's escape hatch ("merge them if you must")
+invited a worker to commit a half-wired relay and verify it by grepping the debug log for
+`reason=unimplemented` — recording a green that was never green. One task, one gate.
 
-Three properties this task exists to establish, each of which was a revision-1 defect:
+Six properties this task exists to establish. The first five were revision-1 or revision-2 defects;
+the sixth is the spec's liveness carve-out, which revision 2 silently violated.
 
-- **The allow-list (C1).** Revision 1 re-entered the full `dispatchIncoming` with a synthesized
-  sender, and that routes any `0x61` payload to `handleAdmitFrame`. Since `handleWelcome` is
-  host-authoritative only *after* a host exists, any admitted joiner could relay a crafted `Welcome`
-  and permanently capture a co-joiner's `hostPeerId`. Relayability is therefore an **allow-list**:
-  a channel frame, or a payload claiming **no** registered prefix. A future frame family is excluded
-  by default rather than needing to be remembered.
-- **The writer (C3).** Forwards go through `admitFanOuts` (`SeamRoom.kt:1974`, drained at `:2073`),
-  which already carries the per-recipient budget and `ensureActive()` discipline. **Do not add a second
-  writer.** Inline sends inside the collector would let one slow spoke stall the host's entire inbound
-  pipeline and manufacture false partitions.
-- **Cardinality in the type (I1).** `Resolved` is sealed; `Exactly` cannot hold two peers, and
-  deleting a `when` branch cannot compile.
+- **The host is a recipient, not just a router (B1).** `admittedById` **never contains `selfId`** —
+  `addToRoster` is called only for *other* peers (`SeamRoom.kt:1217` from `admitPeer`, `:1376` from
+  `handleWelcome`). So a resolver that consults it alone drops `One(hostId)` as unresolvable and
+  fans `Everyone` to co-joiners while never delivering to the host. And the joiner's relay path
+  *replaces* `seam.broadcast` — which **does** reach the host today (`MuxServerLoom.readLoop` spools
+  a spoke's frame into the host's `incoming`; the spec says so itself) — with a send the host would
+  then forward away. Net effect of getting this wrong: a joiner's frames stop reaching the host
+  entirely on any 3+ member star, and no mesh test can see it.
+- **The relay arm is admit-gated (B2).** It fires **before** the existing
+  `isAdmittedPeer(sender) -> routeApplicationFrame` arm, so it inherits none of that arm's gating.
+  Every other application-data path in `dispatchIncoming` is admit-gated — channel frames by
+  `RoomChannelSeam.incoming`'s `room.isAdmitted(swatch.sender)` filter (`RoomChannel.kt:147`), plain
+  app frames by the `isAdmittedPeer` arm. This must not be the first that is not.
+- **Relay traffic gets its own queue (B3).** See below.
+- **Cardinality in the type (I1).** `Resolved` is sealed and its cases name *what happens*, not just
+  *to whom*. `Exactly` cannot hold two peers; deleting a branch cannot compile.
+- **The allow-list (C1).** Relayability is an allow-list — a channel frame, or a payload claiming
+  **no** registered prefix. Revision 1 re-entered the full `dispatchIncoming`, which routes any
+  `0x61` payload to `handleAdmitFrame`; since `handleWelcome` is host-authoritative only *after* a
+  host exists, any admitted joiner could relay a crafted `Welcome` and capture a co-joiner's
+  `hostPeerId`. A future frame family is excluded by default rather than needing to be remembered.
+- **Data is relayed; liveness is not (S2).** Relayed payloads must **not** reach the per-peer
+  liveness detectors. See "The second inbound flow" below.
+
+#### Why a second writer does not violate correction C3
+
+C3's defect was **suspending inside the single inbound collector**, not "using more than one writer".
+Revision 2 satisfied it by sharing `admitFanOuts` — and thereby broke that queue's own stated growth
+bound. Its KDoc (`SeamRoom.kt:1961-1972`) says unbounded growth is tolerable because *"what enqueues:
+membership **transitions** … which occur on the heartbeat timescale rather than per-frame."* Relay
+traffic is exactly per-frame. With `Channel.UNLIMITED` and a per-recipient budget of
+`reconnectWindow + timeout` (**75 s** by default), one black-holed spoke would delay every
+`Paused`/`Unpaused`/`Farewell` queued behind it by 75 s × items-ahead — the permanent roster
+divergence #1781 built that queue to prevent, now reachable by one slow peer.
+
+Revision 2's ordering argument for sharing was also weak. It claimed a `Farewell(X)` overtaking
+relayed data from X is a hazard; in fact dropping a departed peer's in-flight frame at
+`RoomChannelSeam.incoming`'s admitted-sender filter is the **correct** semantics, not a bug. So
+sharing bought little and cost the growth bound.
+
+A dedicated queue is therefore the right shape, and the two queues' policies differ *because their
+contents differ*:
+
+| | `admitFanOuts` | `relayForwards` (new) |
+|---|---|---|
+| Contents | membership transitions | application data, per-frame |
+| Capacity | `UNLIMITED` | bounded (64) |
+| Overflow | n/a | `DROP_OLDEST` |
+| Per-recipient budget | `reconnectWindow + timeout` (~75 s) | `heartbeatConfig.interval` (~seconds) |
+| Loss semantics | a dropped `Unpaused` pins a peer `Partitioned` **forever** — must not drop | already lossy-without-error by documented contract |
+
+`DROP_OLDEST` is *semantically correct* for relay and *wrong* for membership, which is precisely why
+they cannot share. The relay forward still leaves the inbound collector, so C3 holds.
 
 **Files:**
 - Modify: `kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/SeamRoom.kt` — new arm in
-  `dispatchIncoming` (`:1037-1079`), new members near `fanOutToOtherMembers` (`:1991`)
+  `dispatchIncoming` (`:1037-1079`); new members near `fanOutToOtherMembers` (`:1991`); a second
+  writer launched beside `runAdmitFanOutWriter` (`:781`); `broadcast` (`:2321`); `sendTo` (`:2332`);
+  `channel()` (`:2346`)
+- Modify: `kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/RoomChannel.kt:120-149` —
+  `RoomChannelSeam` collects the merged inbound
 - Create: `kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/StarRelayHarness.kt`
-- Test: `kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/StarRelayHostTest.kt`
+- Test: `kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/StarRelayTest.kt`
 
 **Interfaces:**
-- Consumes: `RelayEnvelope`/`RelayDest` (Task 4), `validFirstHop` (Task 2), `RoomFramePrefix` (Task 1).
-- Produces: `private sealed interface Resolved { None; Exactly(peer); Every(peers) }`,
-  `private fun resolveRecipients(envelope: RelayEnvelope): Resolved`,
-  `private fun isRelayable(payload: ByteArray): Boolean`,
-  `private fun enqueueRelayForward(recipients: List<PeerId>, bytes: ByteArray)`.
-  Task 6 calls `isRelayable`.
+- Consumes: `RelayEnvelope`/`RelayDest` (Task 4), `validFirstHop` (Task 2), `RoomFramePrefix` (Task 1),
+  and Task 3's invariant that `hostPeerId` is set from the first accepted `Welcome`.
+- Produces: nothing later tasks depend on beyond working relay behaviour.
 
-> **Scope note for the worker:** the host tests below observe delivery through the *joiner* side, which
-> Task 6 implements. If you cannot make Tasks 5 and 6 independently green, **merge them into one task**
-> rather than committing a half-wired relay — and say which you did. Do not weaken the tests to
-> decouple them.
+**The send rules — keyed on the destination-set state, not on the call:**
+
+| Condition | `sendTo(p)` | `broadcast()` |
+|---|---|---|
+| `role == Host` | direct | direct |
+| `rosterPeers ⊆ seam.peers` | direct | direct |
+| any divergence | relay via host | relay via host |
+
+- **The host early-returns explicitly on `role == Host` (I3).** Revision 1 claimed a host always
+  satisfies `rosterPeers ⊆ seam.peers`. **False** — a member inside its reconnect window stays in the
+  roster while `Seam.peers` has dropped it (#1557/#1614), so a host with one partitioned member would
+  have entered the relay branch and tried to relay through itself.
+- **Once any divergence exists, relay everything (I2)** — including to a peer that *is* directly
+  reachable. Keying `broadcast` on the roster subset but `sendTo` on the individual peer would, on a
+  partial mesh, give one destination two different hop counts, and a `Quilter`'s ack
+  (`Quilter.kt:717`) could then overtake the delta it acknowledges (`:557`).
+
+#### The second inbound flow (S2)
+
+`rawIncoming` is collected by **two** consumers with different needs: `RoomChannelSeam.incoming`
+(which must see relayed channel frames) and `PerPeerSeam` (`SeamRoom.kt:2447`), which feeds each
+peer's `HeartbeatPartitionDetector` — and that detector treats **any** inbound frame as proof of
+liveness (`HeartbeatPartitionDetector.kt:110-127`, `observedPeer(peerId)`).
+
+Emitting relayed payloads into `rawIncoming` stamped with the origin would therefore let A's *relayed
+data* refresh B's detector for A. On a pure star that is inert (no detector exists for an unroutable
+co-joiner), but rule I2 relays **everything** once the roster diverges — so on a partial-mesh,
+composite or tiered topology where B *does* hold a direct edge to A, a dead A↔B link would be masked
+by relayed traffic and never mature into `PeerUnresponsive`. That is the exact inverse of the spec's
+carve-out ("Data is relayed; liveness is not").
+
+So relayed payloads go to a **separate** flow that only the channel views collect.
 
 - [ ] **Step 1: Build the shared star harness**
 
 Create `kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/StarRelayHarness.kt` holding:
 
-- an `InMemoryRoomFabric` star (host + N joiners), each joiner keeping its own raw seam handle —
-  model on `LivenessRouteGateTest.star()` (`:223-254`);
+- an `InMemoryRoomFabric` star (host + N joiners), joiners admitted **sequentially** (await each
+  admission before starting the next), each keeping its own raw seam handle — model on
+  `LivenessRouteGateTest.star()` (`:223-254`), but **not** its `timeout = 5.seconds`;
 - `sendRelay(dest, payload)` and `sendRelayForgingOrigin(origin, dest, payload)`, writing a
   `RelayEnvelope.encode(...)` straight onto a joiner's raw seam;
+- `sendRelayFromUnadmitted(dest, payload)` — a client seam wired to the fabric that has **not**
+  completed the admit handshake (needed by §T3);
 - per-room collectors recording `RoomFrame`s so `appFramesFrom(peer): List<String>` can be asserted,
-  plus `hostAppFramesFrom(peer)`;
+  on **every** room including the host (`host.appFramesFrom(peer)`);
+- `wireFramesTo(peer): List<ByteArray>` so a test can assert whether a `0x72` frame was ever emitted;
 - `appPayload(s: String) = s.encodeToByteArray()`.
 
-**Payload-byte trap:** a plain-text payload is relayable only because it claims no registered prefix.
-Lowercase `a`, `c`, `e`, `k`, `r` **are** `0x61`, `0x63`, `0x65`, `0x6b`, `0x72`. Every string used in
-these tests ("hello", "legit", "plain", "nested", "for-b", "somewhere", "honest", "forged",
-"nowhere") is safe; do not add one starting with those letters without noticing.
+Fold Task 3's `star()` in here — one harness, not two.
 
-If Task 3's `star()` is still inline in `JoinWindowHostIdentityTest`, fold it in here — one harness,
-not three.
+**Payload-byte trap:** a plain-text payload is relayable only because it claims no registered prefix.
+Lowercase `a`, `c`, `e`, `k`, `r` **are** `0x61`, `0x63`, `0x65`, `0x6b`, `0x72`. Every string used
+below ("hello", "legit", "plain", "nested", "for-b", "for-host", "somewhere", "honest", "forged",
+"nowhere", "unadmitted", "to-host") is safe; do not add one starting with those letters.
 
 - [ ] **Step 2: Write the failing tests**
 
-Create `kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/StarRelayHostTest.kt`:
+Create `kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/StarRelayTest.kt`. Standard
+preamble: `StandardTestDispatcher`, `private val backstop = 30.seconds` with the backstop KDoc, every
+negative paired with a positive control **in the same test**.
+
+**§T1 — the host receives a joiner's broadcast** *(the B1 regression guard; revision 2 had no such
+test, which is why B1 survived its whole test set)*
 
 ```kotlin
-@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-
-package us.tractat.kuilt.session
-
-import kotlinx.coroutines.test.StandardTestDispatcher
-import kotlinx.coroutines.test.runTest
-import us.tractat.kuilt.core.PeerId
-import us.tractat.kuilt.session.admit.AdmitMessage
-import us.tractat.kuilt.test.assertAll
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
-
-/**
- * The host half of the star relay (#1994): decode, first-hop-validate, allow-list, resolve,
- * enqueue on the existing admit fan-out writer.
- *
- * Every negative here is paired with a positive control in the same test. Revision 1's two
- * security tests were bare `assertTrue(seen.none { … })` assertions and were green *before any
- * relay code existed* — a bug that dropped everything would have left them passing.
- */
-class StarRelayHostTest {
-
-    /** Generous wedge backstop, not an assertion — see JoinWindowHostIdentityTest. */
-    private val backstop = 30.seconds
-
     @Test
-    fun `a broadcast relay reaches the co-joiner and not the origin`() =
+    fun `a joiner's broadcast reaches the host and every co-joiner`() =
         runTest(StandardTestDispatcher(), timeout = backstop) {
-            val star = relayStar()
+            val star = relayStar(coJoiners = 2)
 
-            star.joinerA.sendRelay(RelayDest.Everyone, appPayload("hello"))
+            star.joinerA.room.broadcast(appPayload("hello"))
             testScheduler.runCurrent()
 
             assertAll(
                 {
                     assertEquals(
                         listOf("hello"),
+                        star.host.appFramesFrom(star.joinerAId),
+                        "the HOST must receive a joiner's broadcast. Today an un-relayed " +
+                            "seam.broadcast reaches it; the relay must not regress that",
+                    )
+                },
+                {
+                    assertEquals(
+                        listOf("hello"),
                         star.joinerB.appFramesFrom(star.joinerAId),
-                        "the co-joiner must receive the relayed frame, credited to its ORIGIN",
+                        "and so must the co-joiner — the thing the relay adds",
                     )
                 },
                 {
@@ -1348,49 +1474,49 @@ class StarRelayHostTest {
                 },
             )
         }
+```
 
+**§T2 — the host receives a joiner's unicast** *(B1 for the `One` case)*
+
+```kotlin
     @Test
-    fun `a unicast reaches only its target`() =
+    fun `a joiner's unicast to the host reaches the host and no one else`() =
         runTest(StandardTestDispatcher(), timeout = backstop) {
-            val star = relayStar(coJoiners = 3)
+            val star = relayStar(coJoiners = 2)
 
-            star.joinerA.sendRelay(RelayDest.One(star.joinerBId), appPayload("for-b"))
+            star.joinerA.room.sendTo(star.hostId, appPayload("to-host"))
             testScheduler.runCurrent()
 
             assertAll(
-                // Positive control — without it, a relay that dropped everything passes the two
-                // negatives below.
                 {
                     assertEquals(
-                        listOf("for-b"),
-                        star.joinerB.appFramesFrom(star.joinerAId),
-                        "the addressed peer must receive it",
+                        listOf("to-host"),
+                        star.host.appFramesFrom(star.joinerAId),
+                        "One(host) must resolve to LOCAL delivery — the host is not in its own " +
+                            "admittedById, so a roster-only resolver drops this silently",
                     )
                 },
                 {
                     assertTrue(
-                        star.joinerC.appFramesFrom(star.joinerAId).isEmpty(),
-                        "an unaddressed co-joiner must not observe a unicast — the leak boundary",
-                    )
-                },
-                {
-                    assertTrue(
-                        star.hostAppFramesFrom(star.joinerAId).isEmpty(),
-                        "the relaying host must not surface a unicast it merely forwarded",
+                        star.joinerB.appFramesFrom(star.joinerAId).isEmpty(),
+                        "and must not be widened to the co-joiner",
                     )
                 },
             )
         }
+```
 
+**§T3 — an unadmitted sender cannot drive the relay** *(B2)*
+
+```kotlin
     @Test
-    fun `a spoke cannot forge another peer's origin`() =
+    fun `an unadmitted peer cannot drive a relay fan-out`() =
         runTest(StandardTestDispatcher(), timeout = backstop) {
             val star = relayStar(coJoiners = 3)
 
-            // A speaks for itself — accepted.
+            star.sendRelayFromUnadmitted(RelayDest.Everyone, appPayload("unadmitted"))
+            // Positive control from an ADMITTED peer, so total non-delivery cannot pass this.
             star.joinerA.sendRelay(RelayDest.Everyone, appPayload("honest"))
-            // A claims to be C — must be refused outright, not re-attributed.
-            star.joinerA.sendRelayForgingOrigin(star.joinerCId, RelayDest.Everyone, appPayload("forged"))
             testScheduler.runCurrent()
 
             assertAll(
@@ -1398,193 +1524,287 @@ class StarRelayHostTest {
                     assertEquals(
                         listOf("honest"),
                         star.joinerB.appFramesFrom(star.joinerAId),
-                        "the honest frame must arrive — the positive control for the refusal below",
+                        "an admitted peer's relay must work — the control",
                     )
                 },
                 {
                     assertTrue(
-                        star.joinerB.appFramesFrom(star.joinerCId).isEmpty(),
-                        "a frame whose origin names another peer must be refused, not relayed",
+                        star.joinerB.appFrames().none { it == "unadmitted" },
+                        "a peer that never completed the admit handshake must not reach the relay " +
+                            "at all: the arm fires BEFORE the isAdmittedPeer guard, so it must " +
+                            "carry its own",
                     )
                 },
             )
         }
+```
 
-    /**
-     * The C1 defect, pinned. A relayed `Welcome` naming the sender as host must change nothing on
-     * the recipient — specifically it must not move `hostPeerId`.
-     */
+**§T4–§T9 — carried from revision 2, unchanged in intent.** Write them exactly as revision 2 specified
+(they were reviewed and not faulted), adjusting only for the merged harness:
+
+- `a unicast reaches only its target` — target receives; an unaddressed co-joiner does not; **and**
+  the host does not surface a unicast it merely forwarded. *(That last negative is only meaningful
+  now that §T1/§T2 prove the host receives relayed frames at all — before them it was vacuous, B5.)*
+- `a spoke cannot forge another peer's origin` — honest frame arrives, forged origin refused.
+- `a relayed admit frame changes nothing on the recipient` — forged `Welcome` does not move
+  `hostPeer()`, paired with a legitimate app frame that does arrive.
+- `a nested relay envelope is not honoured` — paired with a plain frame.
+- `an unresolvable destination is dropped and never fanned` — paired with a resolvable one.
+- `a relayed frame is credited to its origin, not to the relaying host` — assert
+  `RoomFrame.sender == originId` **and** `!= hostId`.
+
+**§T10 — the joiner-side gates** *(specified here rather than left as `TODO()`; this is the
+security-critical half)*
+
+```kotlin
     @Test
-    fun `a relayed admit frame changes nothing on the recipient`() =
-        runTest(StandardTestDispatcher(), timeout = backstop) {
-            val star = relayStar()
-            val hostBefore = star.joinerB.hostPeer()
-
-            val forgedWelcome = AdmitMessage.encode(
-                AdmitMessage.Welcome(
-                    assignedPeerId = star.joinerAId.value,
-                    displayName = "attacker",
-                    sessionId = star.joinerAId.value,
-                ),
-            )
-            star.joinerA.sendRelay(RelayDest.One(star.joinerBId), forgedWelcome)
-            // …and one legitimate application frame, so total non-delivery cannot pass this test.
-            star.joinerA.sendRelay(RelayDest.One(star.joinerBId), appPayload("legit"))
-            testScheduler.runCurrent()
-
-            assertAll(
-                {
-                    assertEquals(
-                        listOf("legit"),
-                        star.joinerB.appFramesFrom(star.joinerAId),
-                        "the application frame must still arrive — otherwise this test is vacuous",
-                    )
-                },
-                {
-                    assertEquals(
-                        hostBefore,
-                        star.joinerB.hostPeer(),
-                        "a relayed Welcome must not capture the recipient's hostPeerId (C1)",
-                    )
-                },
-                {
-                    assertEquals(
-                        star.hostId,
-                        star.joinerB.hostPeer(),
-                        "sanity: the recipient's host is still the real host",
-                    )
-                },
-            )
-        }
-
-    @Test
-    fun `a nested relay envelope is not honoured`() =
-        runTest(StandardTestDispatcher(), timeout = backstop) {
-            val star = relayStar()
-            val inner = RelayEnvelope.encode(
-                RelayEnvelope(star.joinerAId, RelayDest.Everyone, appPayload("nested")),
-            )
-
-            star.joinerA.sendRelay(RelayDest.Everyone, inner)
-            star.joinerA.sendRelay(RelayDest.Everyone, appPayload("plain"))
-            testScheduler.runCurrent()
-
-            assertEquals(
-                listOf("plain"),
-                star.joinerB.appFramesFrom(star.joinerAId),
-                "a relay envelope nested inside a relay payload must be dropped, not unwrapped; " +
-                    "the plain frame proves delivery works at all",
-            )
-        }
-
-    @Test
-    fun `an unresolvable destination is dropped and never fanned`() =
+    fun `a joiner ignores a relay frame that did not come from its host`() =
         runTest(StandardTestDispatcher(), timeout = backstop) {
             val star = relayStar(coJoiners = 3)
 
-            star.joinerA.sendRelay(RelayDest.One(PeerId("ghost")), appPayload("nowhere"))
-            star.joinerA.sendRelay(RelayDest.One(star.joinerBId), appPayload("somewhere"))
+            // A genuine host-relayed frame (control), and a co-joiner injecting a relay frame
+            // directly onto B's link — the flat-loom / compromised-peer case.
+            star.joinerA.sendRelay(RelayDest.One(star.joinerBId), appPayload("honest"))
+            star.joinerC.injectRelayDirectlyTo(
+                star.joinerB,
+                RelayEnvelope(star.joinerAId, RelayDest.One(star.joinerBId), appPayload("forged")),
+            )
+            testScheduler.runCurrent()
+
+            assertEquals(
+                listOf("honest"),
+                star.joinerB.appFramesFrom(star.joinerAId),
+                "only the identified host may relay; a co-joiner's injected relay frame is refused",
+            )
+        }
+
+    @Test
+    fun `a joiner ignores a relayed unicast addressed to someone else`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 3)
+
+            // The far-end leak-boundary re-check: the HOST is made to misroute, and the joiner
+            // refuses anyway. Paired with a One(self) that IS honoured.
+            star.hostRelayDirectlyTo(
+                star.joinerB,
+                RelayEnvelope(star.joinerAId, RelayDest.One(star.joinerCId), appPayload("forged")),
+            )
+            star.hostRelayDirectlyTo(
+                star.joinerB,
+                RelayEnvelope(star.joinerAId, RelayDest.One(star.joinerBId), appPayload("legit")),
+            )
+            testScheduler.runCurrent()
+
+            assertEquals(
+                listOf("legit"),
+                star.joinerB.appFramesFrom(star.joinerAId),
+                "dest is re-checked at the far end — a misrouting host cannot widen a unicast",
+            )
+        }
+```
+
+**§T11 — the host does not relay through itself** *(I3)*
+
+```kotlin
+    @Test
+    fun `a host sends directly even while a member is inside its reconnect window`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 2)
+            star.partition(star.joinerBId) // in the roster, gone from seam.peers
+
+            star.host.room.broadcast(appPayload("plain"))
             testScheduler.runCurrent()
 
             assertAll(
                 {
                     assertEquals(
-                        listOf("somewhere"),
-                        star.joinerB.appFramesFrom(star.joinerAId),
-                        "the resolvable unicast must arrive",
+                        listOf("plain"),
+                        star.joinerA.appFramesFrom(star.hostId),
+                        "the healthy joiner still receives it",
                     )
                 },
                 {
                     assertTrue(
-                        star.joinerC.appFramesFrom(star.joinerAId).isEmpty(),
-                        "an unresolvable dest must be DROPPED, never widened into a fan-out",
+                        star.wireFramesTo(star.joinerAId).none { RelayEnvelope.isRelayFrame(it) },
+                        "the host must take the DIRECT path — keyed on role, not on the subset " +
+                            "test, which a host with a partitioned member fails",
                     )
                 },
             )
         }
-
-    @Test
-    fun `a relay forward to a stalled spoke does not delay a concurrent Hello`() =
-        runTest(StandardTestDispatcher(), timeout = backstop) {
-            // Head-of-line (C3): the forward is enqueued on admitFanOuts and sent by the writer, so
-            // a wedged recipient cannot block the inbound collector.
-            TODO(
-                "Wrap joinerB's client seam in a sendTo that never returns (a black-holed link, " +
-                    "the #1655 shape), relay to it, then join a fourth peer and assert " +
-                    "host.roster reaches 4 within a bounded advanceTimeBy. With inline sends in " +
-                    "the collector the Hello is never dispatched at all."
-            )
-        }
-}
 ```
 
-> **Worker note:** the one `TODO(...)` is the head-of-line test body — the test that proves **C3**.
-> Fill it; do not delete it. If it is genuinely hard to build, say so and propose an alternative that
-> still discriminates "enqueued on the writer" from "sent inline".
+**§T12 — one destination, one path** *(I2)*
+
+```kotlin
+    @Test
+    fun `a joiner relays both broadcast and unicast once its roster diverges`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 2)
+
+            star.joinerA.room.broadcast(appPayload("plain"))
+            star.joinerA.room.sendTo(star.joinerBId, appPayload("for-b"))
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertEquals(listOf("plain", "for-b"), star.joinerB.appFramesFrom(star.joinerAId)) },
+                {
+                    assertTrue(
+                        star.wireFramesFrom(star.joinerAId).all { RelayEnvelope.isRelayFrame(it) },
+                        "BOTH call shapes must take the relayed path — mixing hop counts to one " +
+                            "destination lets a Quilter ack overtake the delta it acks",
+                    )
+                },
+            )
+        }
+```
+
+**§T13 — head-of-line** *(C3; specified, not delegated — S6)*
+
+```kotlin
+    @Test
+    fun `a relay forward to a wedged spoke does not delay membership announcements`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            // The C3 property, asserted on the thing that actually matters: a wedged relay
+            // recipient must not stall the MEMBERSHIP queue. Sharing one writer would.
+            val star = relayStar(coJoiners = 3, wedge = setOf("joiner-b"))
+
+            // Fill the relay queue toward a wedged recipient.
+            repeat(RELAY_FLOOD) { star.joinerA.sendRelay(RelayDest.One(star.joinerBId), appPayload("plain")) }
+            // Now raise a membership transition and require it to land promptly.
+            star.partition(star.joinerCId)
+            testScheduler.advanceTimeBy(membershipBudget)
+            testScheduler.runCurrent()
+
+            assertAll(
+                {
+                    assertTrue(
+                        star.joinerA.sawPartitioned(star.joinerCId),
+                        "a Paused for C must reach A while relay traffic to a wedged B is " +
+                            "backed up — this is why relay does not share admitFanOuts",
+                    )
+                },
+                {
+                    // Positive control: the wedge is real. Without this the test could pass
+                    // because nothing was ever queued.
+                    assertTrue(
+                        star.joinerB.appFramesFrom(star.joinerAId).isEmpty(),
+                        "sanity: B really is wedged",
+                    )
+                },
+            )
+        }
+```
+
+`membershipBudget` must be **well under** `reconnectWindow + timeout`; the whole point is that the
+membership announcement is not stuck behind a relay budget. `RELAY_FLOOD` should exceed the relay
+queue capacity so `DROP_OLDEST` is exercised too.
 
 - [ ] **Step 3: Run the tests and watch them fail**
 
 ```bash
 JAVA_HOME=$HOME/.sdkman/candidates/java/21.0.5-tem timeout 90 ./gradlew \
-  :kuilt-session:jvmTest --tests "*StarRelayHostTest*"
+  :kuilt-session:jvmTest --tests "*StarRelayTest*"
 ```
 
-Expected: every test FAILS — no relay arm exists, so nothing is forwarded and every positive control
-is empty. **That is the point of the positive controls**: they fail first.
+Expected: every test FAILS — no relay exists, so every positive control is empty. **That is what the
+positive controls are for**: they fail first. A test that passes at this step is vacuous — fix the
+test before writing any implementation.
 
 - [ ] **Step 4: Add the relay arm to `dispatchIncoming`**
 
 In `SeamRoom.kt`, insert a new arm into the `when` at `:1037` — **before** the
-`isAdmittedPeer(sender) -> routeApplicationFrame(...)` arm at `:1077`, and after the lobby arm:
+`isAdmittedPeer(sender) -> routeApplicationFrame(...)` arm at `:1077`, after the lobby arm:
 
 ```kotlin
             RelayEnvelope.isRelayFrame(bytes) -> handleRelayFrame(sender, bytes)
 ```
 
-Ordering matters and is a known hazard: this arm fires **before** the existing admit guard, which is
-the "an earlier guard un-pins an older test" shape this repo has hit four times. Task 9 mutates both.
+That ordering is deliberate and is a known hazard: this arm fires **before** the existing admit
+guard, which is the "an earlier guard un-pins an older test" shape this repo has hit four times.
+It is why `handleRelayFrame` carries its own admission check (B2) and why Task 8 mutates both in
+combination.
 
-- [ ] **Step 5: Implement the host half**
+- [ ] **Step 5: The second inbound flow, so relayed data does not feed liveness (S2)**
 
-Add these members to `SeamRoom`, next to `fanOutToOtherMembers` (`:1991`):
+Add beside `rawIncoming` (`SeamRoom.kt:557`):
 
 ```kotlin
     /**
-     * Which members a relayed frame resolves to — **cardinality carried in the type**.
+     * Relayed payloads, delivered to **channel views only** — deliberately *not* [rawIncoming].
      *
-     * A `Set<PeerId>` would erase the property the leak boundary depends on: a set of one and a
-     * set of three have the same type, so "a unicast never fans out" would be a runtime property
-     * of a value, invisible to the compiler and deletable by a later edit. [Exactly] *cannot* hold
-     * two peers, and removing a branch from the `when` that consumes this *cannot* compile.
+     * [rawIncoming] feeds two consumers with different needs: [RoomChannelSeam.incoming], which must
+     * see relayed channel frames, and [PerPeerSeam] (`:2447`), which feeds each peer's
+     * [HeartbeatPartitionDetector] — and that detector treats **any** inbound frame as proof of
+     * liveness. Emitting a relayed payload into [rawIncoming] stamped with its origin would let A's
+     * relayed *data* refresh B's detector for A.
      *
-     * For `:kuilt-deal`'s per-recipient card secrets the security property **is** cardinality, so
-     * it belongs in the type.
+     * On a pure star that is inert (a joiner has no detector for an unroutable co-joiner), but the
+     * send rule relays **everything** once the roster diverges — so on a partial-mesh, composite or
+     * tiered topology where B does hold a direct edge to A, a dead A↔B link would be masked by
+     * relayed traffic and never mature into `PeerUnresponsive`. That is the exact inverse of the
+     * documented carve-out: **data is relayed; liveness is not** (#1592/#1576).
+     */
+    private val relayedIncoming = MutableSharedFlow<Swatch>(extraBufferCapacity = 256)
+```
+
+Merge the two for channel views. In `channel()` (`:2346`), pass the merged flow:
+
+```kotlin
+                RoomChannelSeam(room = this, subId = subId, sharedRaw = merge(rawIncoming, relayedIncoming))
+```
+
+and widen `RoomChannelSeam`'s parameter in `RoomChannel.kt:123` from `SharedFlow<Swatch>` to
+`Flow<Swatch>` (it only calls `.filter { }.map { }` on it). Update that constructor's KDoc: the
+upstream is now a merge of the direct and relayed inbound streams, and `replay = 0` semantics are
+unchanged.
+
+- [ ] **Step 6: Implement the host half**
+
+Add to `SeamRoom`, next to `fanOutToOtherMembers` (`:1991`):
+
+```kotlin
+    /**
+     * What a relayed frame resolves to on this host — **the outcome, carried in the type**.
+     *
+     * The cases name *what happens*, not just *to whom*, because the host is a **recipient as well
+     * as a router** and a resolver that only answers "which peers" cannot say so. [admittedById]
+     * never contains [selfId] — `addToRoster` is called only for other peers (`:1217`, `:1376`) —
+     * so a `Set<PeerId>` resolver silently drops `One(host)` as unresolvable and fans `Everyone`
+     * past the host. That would stop a joiner's frames reaching the host at all, and no mesh test
+     * could see it.
+     *
+     * Cardinality stays in the type (I1): [Exactly] *cannot* hold two peers, and removing a branch
+     * from the `when` that consumes this *cannot* compile. For `:kuilt-deal`'s per-recipient card
+     * secrets the security property **is** cardinality, so it belongs here.
      */
     private sealed interface Resolved {
-        /** Nothing to forward — an unknown, departed, or self-addressed destination. Drop it. */
+        /** Unknown, departed, or self-addressed-by-the-origin destination. Drop it. */
         data object None : Resolved
 
-        /** Exactly one recipient. */
+        /** Addressed to this host alone — deliver locally, forward to nobody. */
+        data object SelfOnly : Resolved
+
+        /** Forward to exactly one other member; not for us. */
         data class Exactly(val peer: PeerId) : Resolved
 
-        /** Every admitted member except the origin. */
-        data class Every(val peers: Set<PeerId>) : Resolved
+        /** Deliver locally **and** forward to [others] (which may legitimately be empty). */
+        data class SelfAndEvery(val others: Set<PeerId>) : Resolved
     }
 
     /**
      * Whether a relayed payload may be honoured — an **allow-list**, deliberately not a deny-list.
      *
-     * A relayed payload is honoured only if it is an explicit channel frame, or claims **no**
-     * registered prefix at all (a plain application frame). That excludes admit, lobby, heartbeat
-     * and a nested [RelayEnvelope] in one predicate — and excludes a *future* frame family by
-     * default rather than requiring someone to remember it.
+     * Honoured only if it is an explicit channel frame, or claims **no** registered prefix at all
+     * (a plain application frame). That excludes admit, lobby, heartbeat and a nested
+     * [RelayEnvelope] in one predicate — and excludes a *future* frame family by default rather
+     * than requiring someone to remember it.
      *
-     * **Why an allow-list and not "re-dispatch with a synthesized sender".** An earlier revision of
-     * this design re-entered [dispatchIncoming], which routes any `0x61` payload to
-     * [handleAdmitFrame]. [handleWelcome] is host-authoritative only *after* a host exists, so any
-     * admitted joiner could relay a crafted `Welcome` naming itself and capture a co-joiner's
-     * `hostPeerId` — then drive every host-authoritative gate on the victim and permanently break
-     * its sends. #1180 hardened that on a flat loom; the four star fabrics were protected by
+     * **Why not "re-dispatch with a synthesized sender".** That re-enters [dispatchIncoming], which
+     * routes any `0x61` payload to [handleAdmitFrame]. [handleWelcome] is host-authoritative only
+     * *after* a host exists, so any admitted joiner could relay a crafted `Welcome` naming itself
+     * and capture a co-joiner's `hostPeerId` — then drive every host-authoritative gate on the
+     * victim. #1180 hardened that on a flat loom; the four star fabrics were protected by
      * *topology*, and a relay removes that protection on all of them.
      *
      * A relayed admit frame has no legitimate sender: the admit protocol is by construction
@@ -1593,15 +1813,20 @@ Add these members to `SeamRoom`, next to `fanOutToOtherMembers` (`:1991`):
     private fun isRelayable(payload: ByteArray): Boolean =
         RoomChannel.isChannelFrame(payload) || RoomFramePrefix.entries.none { it.matches(payload) }
 
-    /**
-     * Host-side: forward one relayed frame, or drop it.
-     *
-     * A joiner reaching here instead delegates to [handleRelayedDelivery] — the two roles share the
-     * `0x72` prefix and are split by role, not by frame.
-     */
+    /** Host-side: forward and/or deliver one relayed frame, or drop it. */
     private fun handleRelayFrame(sender: PeerId, bytes: ByteArray) {
         if (_role.value != SessionRole.Host) {
             handleRelayedDelivery(sender, bytes)
+            return
+        }
+        // FIRST gate. This arm fires before the `isAdmittedPeer(sender)` arm it precedes, so it
+        // inherits none of that arm's gating and must carry its own: every other application-data
+        // path in dispatchIncoming is admit-gated, and an ungated relay lets a peer that never
+        // completed the handshake drive an N-recipient fan-out per frame.
+        if (!isAdmittedPeer(sender)) {
+            logger.debug {
+                "room.relay.drop self=${selfId.value} from=${sender.value} reason=sender-not-admitted"
+            }
             return
         }
         val envelope = RelayEnvelope.decode(bytes) ?: run {
@@ -1625,61 +1850,149 @@ Add these members to `SeamRoom`, next to `fanOutToOtherMembers` (`:1991`):
             }
             return
         }
-        // The ORIGINAL bytes are forwarded unchanged — `dest` is meaningful on this hop only, so
-        // there is no per-recipient re-wrapping, and `Everyone` stays `Everyone` on the wire.
+        // Forwards carry the ORIGINAL bytes unchanged — `dest` is meaningful on this hop only, so
+        // there is no per-recipient re-wrapping and `Everyone` stays `Everyone` on the wire.
         when (val resolved = resolveRecipients(envelope)) {
             Resolved.None ->
                 logger.debug {
                     "room.relay.drop self=${selfId.value} origin=${envelope.origin.value} " +
                         "dest=${envelope.dest} reason=unresolvable"
                 }
+            Resolved.SelfOnly -> deliverRelayedPayload(envelope)
             is Resolved.Exactly -> enqueueRelayForward(listOf(resolved.peer), bytes)
-            is Resolved.Every -> enqueueRelayForward(resolved.peers.toList(), bytes)
+            is Resolved.SelfAndEvery -> {
+                deliverRelayedPayload(envelope)
+                if (resolved.others.isNotEmpty()) enqueueRelayForward(resolved.others.toList(), bytes)
+            }
         }
     }
 
     /**
-     * Resolve a relayed frame's destination against the current roster.
+     * Resolve a relayed frame's destination against the current roster **and this host itself**.
      *
-     * A self-addressed or departed destination resolves to [Resolved.None] and is dropped — never
-     * widened into a fan-out, which is how a unicast would leak.
+     * A destination the origin addressed to itself, or one naming a peer this room does not hold,
+     * resolves to [Resolved.None] and is dropped — never widened into a fan-out, which is how a
+     * unicast would leak.
      */
     private fun resolveRecipients(envelope: RelayEnvelope): Resolved = lock.withLock {
         if (closed) return@withLock Resolved.None
         when (val dest = envelope.dest) {
-            RelayDest.Everyone -> {
-                val others = admittedById.keys.filterTo(mutableSetOf()) { it != envelope.origin }
-                if (others.isEmpty()) Resolved.None else Resolved.Every(others)
+            RelayDest.Everyone ->
+                // `others` may legitimately be empty (a 2-peer room): the host is still a
+                // recipient, so this is SelfAndEvery(emptySet()), NOT None.
+                Resolved.SelfAndEvery(admittedById.keys.filterTo(mutableSetOf()) { it != envelope.origin })
+            is RelayDest.One -> when {
+                dest.peer == envelope.origin -> Resolved.None
+                dest.peer == selfId -> Resolved.SelfOnly
+                admittedById.containsKey(dest.peer) -> Resolved.Exactly(dest.peer)
+                else -> Resolved.None
             }
-            is RelayDest.One ->
-                if (dest.peer != envelope.origin && admittedById.containsKey(dest.peer)) {
-                    Resolved.Exactly(dest.peer)
-                } else {
-                    Resolved.None
-                }
         }
     }
 
     /**
-     * Enqueue a relay forward on the **existing** [admitFanOuts] writer.
+     * Deliver a relayed payload to this member's own consumers, stamped with the **origin**.
      *
-     * Deliberately not a second writer, and deliberately not an inline send. [dispatchIncoming]
-     * runs inside the room's single `seam.incoming.collect` body, which is effectively
-     * non-blocking today; issuing up to N−1 suspending `seam.sendTo` calls there would let one
-     * slow spoke stall the host's whole inbound pipeline — no `Hello` admitted, no `Resume`
-     * answered, no heartbeat pong observed — which then trips the host's own detectors and
-     * manufactures false partitions. Relay is unconditional and unbudgeted at the call site, so
-     * any single admitted member could reach that.
+     * Shared by the host (which is a recipient of anything addressed to it) and the joiner (after
+     * its own gates in [handleRelayedDelivery]). Callers must have already applied [isRelayable].
      *
-     * Sharing the writer also keeps order between membership announcements and relayed data: a
-     * `Farewell(X)` overtaking relayed data from X would make the recipient drop X and then reject
-     * X's frame at `RoomChannelSeam.incoming`'s `isAdmitted(sender)` filter.
+     * The two surfaces mirror [dispatchIncoming]'s own arms for these payload kinds — channel
+     * frames to the channel views, plain application frames to [routeApplicationFrame] — but this
+     * is a **narrow, explicit** re-implementation of exactly those two, deliberately *not* a call
+     * back into [dispatchIncoming], which would restore the admit-frame path the allow-list exists
+     * to remove.
      */
+    private fun deliverRelayedPayload(envelope: RelayEnvelope) {
+        if (RoomChannel.isChannelFrame(envelope.payload)) {
+            val accepted = relayedIncoming.tryEmit(Swatch(envelope.payload, sender = envelope.origin))
+            if (!accepted) {
+                // Relayed delivery is the one place weaker than direct delivery: the direct path
+                // uses a suspending `emit` inside the collector (`:1027`), which this cannot.
+                // Absence has to be diagnosable off-device (#1781).
+                logger.debug {
+                    "room.relay.drop self=${selfId.value} origin=${envelope.origin.value} " +
+                        "reason=inbound-buffer-full"
+                }
+            }
+        } else {
+            routeApplicationFrame(envelope.origin, envelope.payload)
+        }
+    }
+```
+
+- [ ] **Step 7: The dedicated relay queue and its writer**
+
+```kotlin
+    /** One queued relay forward: the original envelope bytes plus its recipient snapshot. */
+    private class RelayForward(val recipients: List<PeerId>, val bytes: ByteArray)
+
+    /**
+     * Queued relay forwards, drained by [runRelayForwardWriter].
+     *
+     * **Separate from [admitFanOuts], deliberately.** That queue's growth analysis rests on *what
+     * enqueues*: membership **transitions**, "on the heartbeat timescale rather than per-frame".
+     * Relay traffic is exactly per-frame, so putting it there would invalidate the bound — with
+     * `Channel.UNLIMITED` and a `reconnectWindow + timeout` per-recipient budget, one black-holed
+     * spoke would delay every `Paused`/`Unpaused`/`Farewell` behind it, which is the permanent
+     * roster divergence #1781 built that queue to prevent.
+     *
+     * The policies differ because the contents do. A dropped `Unpaused` pins a recovered member
+     * `Partitioned` in a remote roster **forever**, so that queue must never drop; a dropped relay
+     * frame is loss the `Room` contract already documents (lossy-without-error on a star) and that
+     * `Quilter` anti-entropy heals. So this one is **bounded** with [BufferOverflow.DROP_OLDEST] —
+     * back-pressure is unavailable here for the same reason it is there (enqueue happens from a
+     * non-suspending frame handler), and dropping the *oldest* relayed frame under sustained
+     * overload is strictly better than growing without bound.
+     */
+    private val relayForwards = Channel<RelayForward>(
+        capacity = RELAY_FORWARD_CAPACITY,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+
+    /**
+     * Per-recipient deadline for one relay forward — [HeartbeatConfig.interval], **not**
+     * `admitFanOuts`'s `reconnectWindow + timeout`.
+     *
+     * That budget is deliberately loose because an announcement stays meaningful for the whole span
+     * of the hold it describes. A relayed data frame does not: it is superseded by the next one,
+     * and `Quilter` anti-entropy heals the gap. A budget on the order of one heartbeat interval
+     * keeps a wedged spoke from consuming the writer while staying far above what a healthy link
+     * needs.
+     */
+    private val relaySendBudget: Duration get() = heartbeatConfig.interval
+
+    /** Drains [relayForwards]. Guard discipline is identical to [runAdmitFanOutWriter] — see its KDoc. */
+    private suspend fun runRelayForwardWriter() {
+        for (forward in relayForwards) {
+            for (recipient in forward.recipients) {
+                try {
+                    val accepted = withTimeoutOrNull(relaySendBudget) {
+                        seam.sendTo(recipient, forward.bytes)
+                    } != null
+                    if (!accepted) {
+                        logger.debug {
+                            "room.relay.drop self=${selfId.value} to=${recipient.value} " +
+                                "reason=send-budget-exceeded budget=$relaySendBudget"
+                        }
+                    }
+                } catch (failure: Throwable) {
+                    // Genuinely OUR cancellation ends the loop; anything else — including a
+                    // CancellationException a consumer's `sendTo` minted itself — is that
+                    // recipient's failure and must not kill the relay writer.
+                    currentCoroutineContext().ensureActive()
+                    logger.debug {
+                        "room.relay.drop self=${selfId.value} to=${recipient.value} " +
+                            "cause=${failure::class.simpleName}: ${failure.message}"
+                    }
+                }
+            }
+        }
+    }
+
+    /** Enqueue a relay forward. Never suspends; drops the oldest under sustained overload. */
     private fun enqueueRelayForward(recipients: List<PeerId>, bytes: ByteArray) {
         if (recipients.isEmpty()) return
-        val queued = admitFanOuts.trySend(
-            AdmitFanOut(recipients = recipients, bytes = bytes, label = "Relay"),
-        ).isSuccess
+        val queued = relayForwards.trySend(RelayForward(recipients, bytes)).isSuccess
         if (!queued) {
             logger.debug {
                 "room.relay.drop self=${selfId.value} reason=room-terminal " +
@@ -1689,177 +2002,37 @@ Add these members to `SeamRoom`, next to `fanOutToOtherMembers` (`:1991`):
     }
 ```
 
-Add `import us.tractat.kuilt.core.validFirstHop` to `SeamRoom.kt`.
-
-- [ ] **Step 6: Stub the joiner half so this compiles**
-
-```kotlin
-    /** Implemented in the joiner-side task; see [handleRelayFrame]'s role split. */
-    private fun handleRelayedDelivery(sender: PeerId, bytes: ByteArray) {
-        logger.debug { "room.relay.drop self=${selfId.value} from=${sender.value} reason=unimplemented" }
-    }
-```
-
-- [ ] **Step 7: Run the tests**
-
-```bash
-JAVA_HOME=$HOME/.sdkman/candidates/java/21.0.5-tem timeout 90 ./gradlew \
-  :kuilt-session:jvmTest --tests "*StarRelayHostTest*"
-```
-
-They will still fail while the joiner half is a stub — that is expected and is why the scope note above
-allows merging Tasks 5 and 6. Confirm the *host* is forwarding by reading the debug log for
-`room.relay.drop … reason=unimplemented` on the recipient: that line firing proves decode,
-first-hop, allow-list, resolve and enqueue all ran.
-
-- [ ] **Step 8: Commit**
-
-```bash
-git add kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/SeamRoom.kt \
-        kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/StarRelayHostTest.kt \
-        kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/StarRelayHarness.kt
-git commit -m "feat(session): host-side star relay forwarding
-
-The host forwards a spoke's frame to its co-spokes: decode, first-hop validate,
-allow-list, resolve, enqueue on the EXISTING admit fan-out writer.
-
-Relayability is an allow-list (channel frames, or payloads claiming no registered
-prefix), so admit/lobby/heartbeat/nested-relay are excluded by construction and a
-future frame family is excluded by default. Re-entering the full dispatch would
-let any admitted joiner relay a crafted Welcome and capture a co-joiner's host.
-
-Recipients resolve into a sealed Resolved, so Exactly cannot hold two peers and a
-deleted branch cannot compile.
-
-Part of #1994.
-
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
-```
-
----
-
-### Task 6: Joiner-side send routing and receipt
-
-**Files:**
-- Modify: `kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/SeamRoom.kt` —
-  `broadcast` (`:2321`), `sendTo` (`:2332`), and `handleRelayedDelivery`
-- Test: `kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/StarRelayJoinerTest.kt` (create)
-
-**Interfaces:**
-- Consumes: everything from Tasks 3–5.
-- Produces: nothing new for later tasks.
-
-**The send rules — keyed on the destination-set state, not on the call:**
-
-| Condition | `sendTo(p)` | `broadcast()` |
-|---|---|---|
-| `role == Host` | direct | direct |
-| `rosterPeers ⊆ seam.peers` | direct | direct |
-| any divergence | relay via host | relay via host |
-
-Two properties, each a revision-1 correction:
-
-- **The host early-returns explicitly on `role == Host` (I3).** Revision 1 claimed a host always
-  satisfies `rosterPeers ⊆ seam.peers`. **False** — a member inside its reconnect window stays in the
-  roster while `Seam.peers` has dropped it (#1557/#1614), so a host with one partitioned member would
-  have entered the relay branch. It was saved only by `hostPeerId` being incidentally `null` on a
-  host, which a plausible tidy-up would break.
-- **Once any divergence exists, relay everything (I2)** — including to a peer that *is* directly
-  reachable. Keying `broadcast` on the roster subset but `sendTo` on the individual peer would, on a
-  partial mesh, give one destination two different hop counts — and a `Quilter`'s ack
-  (`Quilter.kt:717`) could then overtake the delta it acknowledges (`:557`). One consistent path per
-  destination-set state is monotone and cheap.
-
-- [ ] **Step 1: Write the failing tests**
-
-Create `kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/StarRelayJoinerTest.kt` with these
-five tests, against the Task 5 harness. **Each must carry a positive control in the same test.**
+Launch the writer beside the existing one (`SeamRoom.kt:781`), and close the queue in `leave()`
+beside `admitFanOuts.close()` (`:2409`):
 
 ```kotlin
-    @Test
-    fun `a host sends directly even while a member is inside its reconnect window`() =
-        runTest(StandardTestDispatcher(), timeout = backstop) {
-            // I3: rosterPeers is NOT a subset of seam.peers here (the partitioned member is in the
-            // roster and gone from the transport), so a subset-keyed rule would wrongly relay.
-            // Assert the host's frame reaches the healthy joiner AND that nothing with the 0x72
-            // prefix was ever written to the wire.
-            TODO("partition one member via the fabric, then host.broadcast; assert direct delivery")
-        }
-
-    @Test
-    fun `a joiner relays both broadcast and unicast once its roster diverges`() =
-        runTest(StandardTestDispatcher(), timeout = backstop) {
-            // I2: the SAME destination must take the SAME path for both call shapes.
-            TODO("assert both frames arrive at the co-joiner AND both crossed the wire as 0x72")
-        }
-
-    @Test
-    fun `a joiner ignores a relay frame that did not come from its host`() =
-        runTest(StandardTestDispatcher(), timeout = backstop) {
-            // Positive control paired: a genuine host-relayed frame arrives; a co-joiner-injected
-            // relay frame does not.
-            TODO()
-        }
-
-    @Test
-    fun `a joiner ignores a relayed unicast addressed to someone else`() =
-        runTest(StandardTestDispatcher(), timeout = backstop) {
-            // The far-end leak-boundary re-check: even a correctly-relayed One(other) is refused,
-            // paired with a One(self) that IS honoured.
-            TODO()
-        }
-
-    @Test
-    fun `a relayed frame is credited to its origin, not to the relaying host`() =
-        runTest(StandardTestDispatcher(), timeout = backstop) {
-            // The property RoomChannelSeam.incoming's isAdmitted(sender) filter and every Quilter
-            // depend on. Assert RoomFrame.sender == originId AND != hostId.
-            TODO()
-        }
+        scope.launch { runRelayForwardWriter() }
 ```
 
-> **Worker note:** these five `TODO(...)` bodies are yours to write against the Task 5 harness. Fill
-> them before running anything; none may remain in the commit.
+`RELAY_FORWARD_CAPACITY` goes in the file's companion with a one-line rationale (64: several
+`Quilter` deltas in flight per recipient without letting a wedged link accumulate unboundedly).
 
-- [ ] **Step 2: Run and watch them fail**
+Add `import us.tractat.kuilt.core.validFirstHop` and the `BufferOverflow` / `merge` imports.
 
-```bash
-JAVA_HOME=$HOME/.sdkman/candidates/java/21.0.5-tem timeout 90 ./gradlew \
-  :kuilt-session:jvmTest --tests "*StarRelayJoinerTest*"
-```
-
-- [ ] **Step 3: Implement joiner-side receipt**
-
-Replace the Task 5 stub in `SeamRoom.kt`:
+- [ ] **Step 8: Implement joiner-side receipt**
 
 ```kotlin
     /**
      * Joiner-side: accept a frame the host relayed on a co-member's behalf.
      *
-     * Four gates, in order, each of which must independently hold:
+     * Four gates, each of which must independently hold:
      *
      * 1. **The sender is our identified host.** A relay frame from anyone else is a co-joiner
      *    injecting directly, which on a flat loom is reachable. Depends on `hostPeerId` being set
      *    from the *first* Welcome — see [handleWelcome].
      * 2. **`dest` names us.** The host already resolved this, but the leak boundary is re-checked
-     *    at the far end rather than trusting the host's routing — cheap, and it means a
-     *    misrouting host cannot silently widen a unicast.
-     * 3. **The payload is relayable.** The same allow-list the host applied ([isRelayable]),
-     *    applied again: a host is not trusted to have applied it.
+     *    at the far end rather than trusting the host's routing — cheap, and it means a misrouting
+     *    host cannot silently widen a unicast.
+     * 3. **The payload is relayable.** The same allow-list the host applied, applied again: a host
+     *    is not trusted to have applied it.
      * 4. **The origin is an admitted member.** Otherwise the frame would be credited to a peer
-     *    outside the roster, which `RoomChannelSeam.incoming`'s own `isAdmitted(sender)` filter
-     *    would then drop anyway — failing here keeps the reason loggable.
-     *
-     * The inner payload is re-emitted stamped with the **origin** as sender, never the host. Every
-     * consumer — `RoomChannelSeam.incoming`'s admitted-sender filter, every `Quilter`'s
-     * per-replica accounting — keys on that field, and crediting the host would silently
-     * misattribute the whole relayed stream.
-     *
-     * The two delivery surfaces mirror [dispatchIncoming]'s own arms for these payload kinds:
-     * channel frames reach subscribers via `rawIncoming`, application frames via
-     * [routeApplicationFrame]. This is a **narrow, explicit** re-implementation of exactly those
-     * two arms — deliberately *not* a call back into [dispatchIncoming], which would restore the
-     * admit-frame path this allow-list exists to remove.
+     *    outside the roster, which the channel views' own `isAdmitted(sender)` filter would drop
+     *    anyway — failing here keeps the reason loggable.
      */
     private fun handleRelayedDelivery(sender: PeerId, bytes: ByteArray) {
         val host = lock.withLock { hostPeerId }
@@ -1898,15 +2071,11 @@ Replace the Task 5 stub in `SeamRoom.kt`:
             }
             return
         }
-        // Stamped with the ORIGIN, never the relaying host.
-        rawIncoming.tryEmit(Swatch(envelope.payload, sender = envelope.origin))
-        if (!RoomChannel.isChannelFrame(envelope.payload)) {
-            routeApplicationFrame(envelope.origin, envelope.payload)
-        }
+        deliverRelayedPayload(envelope)
     }
 ```
 
-- [ ] **Step 4: Implement joiner-side send routing**
+- [ ] **Step 9: Implement joiner-side send routing**
 
 Replace `broadcast` (`:2321`) and `sendTo` (`:2332`):
 
@@ -1915,15 +2084,15 @@ Replace `broadcast` (`:2321`) and `sendTo` (`:2332`):
      * Broadcast [bytes] to all admitted members.
      *
      * On a star fabric a spoke's frame reaches only the host, so once this member's roster diverges
-     * from what the transport can address, the frame is wrapped and **relayed via the host**
-     * instead. `RoomChannelSeam` therefore needs no change: it already delegates here, so
+     * from what the transport can address, the frame is wrapped and **relayed via the host**.
+     * `RoomChannelSeam` therefore needs no change: it already delegates here, so
      * `peers = room.rosterPeers` becomes honest for free.
      *
      * Silent no-op when the room is terminal (after [MembershipEvent.HostLost] or [leave]).
      *
      * **Lossy without error on a star.** An unresolvable destination is dropped with a debug log and
-     * a torn recipient's send is swallowed by [runAdmitFanOutWriter]'s best-effort discipline. On a
-     * mesh this call surfaces failures; relayed, it does not.
+     * a torn or wedged recipient's send is dropped by [runRelayForwardWriter]. On a mesh this call
+     * surfaces failures; relayed, it does not.
      */
     override suspend fun broadcast(bytes: ByteArray) {
         val terminal = lock.withLock { hostLost || closed }
@@ -1952,78 +2121,89 @@ Replace `broadcast` (`:2321`) and `sendTo` (`:2332`):
      *   A host does **not** always satisfy `rosterPeers ⊆ seam.peers`: a member inside its reconnect
      *   window stays in the roster while the transport has dropped it (#1557/#1614), so a host with
      *   one partitioned member would otherwise enter the relay branch and try to relay through
-     *   itself. An earlier revision of this design was saved from that only by `hostPeerId` being
-     *   incidentally `null` on a host — which a plausible tidy-up would have broken.
-     * - **The roster is a subset of what the transport can address**, i.e. a full mesh. Nothing to
-     *   relay.
+     *   itself. An earlier revision was saved from that only by `hostPeerId` being incidentally
+     *   `null` on a host — which a plausible tidy-up would have broken.
+     * - **The roster is a subset of what the transport can address**, i.e. a full mesh.
      *
      * Otherwise **everything** relays, including frames to a peer that *is* directly reachable.
      * Keying `broadcast` on the roster subset but `sendTo` on the individual peer would, on a
      * partial mesh, give one destination two different hop counts — and a `Quilter`'s ack
-     * (`Quilter.kt:717`) could then overtake the delta it acknowledges (`:557`). One consistent
-     * path per destination-set state is monotone and cheap.
+     * (`Quilter.kt:717`) could then overtake the delta it acknowledges (`:557`).
      *
-     * A `null` [hostPeerId] while the roster diverges is an **invariant violation on a joiner**, not
-     * a degrade-quietly case: [handleWelcome] sets it from the first Welcome, which necessarily
-     * precedes any co-member entering the roster. It is logged at warn and the send falls back to
-     * direct, which is the pre-#1994 behaviour.
+     * **A null [hostPeerId] here throws.** It is an invariant violation on a joiner, not a
+     * degrade-quietly case: [handleWelcome] sets `hostPeerId` from the first accepted `Welcome`,
+     * which necessarily precedes any co-member entering the roster, so a diverged roster with no
+     * identified host means that invariant has already been broken upstream. Falling back to a
+     * direct send would re-create #1994's own symptom — silent non-delivery — and hide the cause.
      */
     private fun relayHostOrNull(): PeerId? {
         if (_role.value == SessionRole.Host) return null
         val (roster, host) = lock.withLock { _rosterPeers.value to hostPeerId }
         if (roster.all { it in seam.peers.value }) return null
-        if (host == null) {
-            logger.warn {
-                "room.relay.no-host self=${selfId.value} roster=${roster.map { it.value }} " +
-                    "seamPeers=${seam.peers.value.map { it.value }} — sending direct"
-            }
-            return null
+        return requireNotNull(host) {
+            "relay required but no host identified — roster=${roster.map { it.value }} " +
+                "seamPeers=${seam.peers.value.map { it.value }}; hostPeerId must be set by the " +
+                "first accepted Welcome (see handleWelcome)"
         }
-        return host
     }
 ```
 
-- [ ] **Step 5: Run both relay suites — they must pass**
+- [ ] **Step 10: Run the suite — it must pass**
 
 ```bash
 JAVA_HOME=$HOME/.sdkman/candidates/java/21.0.5-tem timeout 90 ./gradlew \
-  :kuilt-session:jvmTest --tests "*StarRelay*"
+  :kuilt-session:jvmTest --tests "*StarRelayTest*"
 ```
 
-- [ ] **Step 6: Full build — this is a runtime-behavior change**
+- [ ] **Step 11: Full build — this is a runtime-behavior change**
 
 ```bash
 JAVA_HOME=$HOME/.sdkman/candidates/java/21.0.5-tem timeout 600 ./gradlew build --rerun-tasks
 ```
 
-A `:kuilt-session`-scoped build is a **false green** here: it skips the `:examples` and
-`:kuilt-cluster` E2E tests, and `ClusterClient` rides `Room.channel("raft")` — the exact surface this
-task changes. Run the full build.
+A `:kuilt-session`-scoped build is a **false green**: it skips the `:examples` and `:kuilt-cluster`
+E2E tests, and `ClusterClient` rides `Room.channel("raft")` — the exact surface this task changes.
+`RoomChannelSeam`'s constructor signature also changed, so the whole module graph must compile.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 12: Commit**
 
 ```bash
 git add kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/SeamRoom.kt \
-        kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/StarRelayJoinerTest.kt
-git commit -m "feat(session): route a joiner's sends through the host when the roster diverges
+        kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/RoomChannel.kt \
+        kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/StarRelayTest.kt \
+        kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/StarRelayHarness.kt
+git commit -m "feat(session): relay frames between the spokes of a star
 
-Both broadcast and sendTo relay once rosterPeers is not a subset of seam.peers,
-so one destination never takes two different hop counts (an ack could otherwise
-overtake the delta it acks). The host early-returns to the direct path on ROLE,
-not on the subset test — a host with a partitioned member fails that test.
+The host forwards a spoke's frame to its co-spokes AND delivers to itself:
+admittedById never contains selfId, so a roster-only resolver would drop
+One(host) and fan Everyone past the host — silently ending a joiner's ability
+to reach the host at all. Resolved's cases name the outcome, not just the
+recipients, so local delivery cannot be forgotten.
 
-On receipt a joiner re-checks the host identity, that dest names it, the
-relayability allow-list, and roster membership of the origin — then re-emits the
-payload stamped with the ORIGIN, never the relaying host.
+The arm fires before the isAdmittedPeer arm, so it carries its own admission
+gate: every other application-data path in dispatchIncoming is admit-gated and
+this must not be the first that is not.
+
+Relay forwards get their own bounded DROP_OLDEST queue rather than sharing
+admitFanOuts, whose growth bound rests on enqueueing membership TRANSITIONS
+rather than per-frame data. A dropped Unpaused pins a peer Partitioned forever;
+a dropped relay frame is loss the Room contract already documents.
+
+Relayed payloads reach channel views only, never the per-peer liveness
+detectors — data is relayed, liveness is not.
+
+A joiner re-checks the host identity, that dest names it, the relayability
+allow-list, and roster membership of the origin, then delivers stamped with the
+ORIGIN. A diverged roster with no identified host throws rather than falling
+back to a send known not to deliver.
 
 Part of #1994.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
-
 ---
 
-### Task 7: Protocol version 2, and close the `isSupported(null)` carve-out
+### Task 6: Protocol version 2, and close the `isSupported(null)` carve-out
 
 **Files:**
 - Modify: `kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/admit/ProtocolVersion.kt`
@@ -2208,7 +2388,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
-### Task 8: The done criteria — a Quilter converges between two spokes
+### Task 7: The done criteria — a Quilter converges between two spokes
 
 This is #1994's acceptance test and the reason the whole track exists.
 
@@ -2281,8 +2461,8 @@ class StarQuilterConvergenceTest {
             val star = relayStar()
 
             // Quilter auto-starts — there is no start().
-            val onA = setReplicator(star.joinerARoom, backgroundScope)
-            val onB = setReplicator(star.joinerBRoom, backgroundScope)
+            val onA = setReplicator(star.joinerA.room, backgroundScope)
+            val onB = setReplicator(star.joinerB.room, backgroundScope)
             testScheduler.runCurrent()
 
             onA.apply(onA.state.value.add("from-a"))
@@ -2316,7 +2496,7 @@ class StarQuilterConvergenceTest {
 }
 ```
 
-> **Worker note:** `relayStar()` and its `joinerARoom` / `joinerBRoom` accessors come from Task 5's
+> **Worker note:** `relayStar()` and its `joinerA.room` / `joinerB.room` accessors come from Task 5's
 > `StarRelayHarness.kt`. Extend that harness rather than building a third star.
 
 - [ ] **Step 2: Run it**
@@ -2332,7 +2512,7 @@ or a `room.relay.drop`, and report.
 
 - [ ] **Step 3: Prove it was actually impossible before (the anti-vacuity check)**
 
-Temporarily change Task 6's `relayHostOrNull()` to `return null` unconditionally (always direct) and
+Temporarily change Task 5's `relayHostOrNull()` to `return null` unconditionally (always direct) and
 re-run Step 2. Expected: **FAIL** — neither element crosses. Restore. Record the observed failure
 output in the PR: this is what proves the test measures the relay and not the harness.
 
@@ -2357,7 +2537,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
-### Task 9: Mutation-verify the guard set
+### Task 8: Mutation-verify the guard set
 
 The relay branch fires **before** the existing `isAdmittedPeer(sender) -> routeApplicationFrame` arm.
 That is the "an earlier guard un-pins an older test" shape this repo has hit four times: an earlier
@@ -2412,7 +2592,7 @@ than one with two explained greens.
 
 ---
 
-### Task 10: Documentation
+### Task 9: Documentation
 
 **Files:**
 - Modify: `docs/fabric-peer-routing.md` — four fabric rows, plus the liveness carve-out
@@ -2568,7 +2748,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
       keyword. Keep `closes #2007` on Task 1's work.
 - [ ] Rebase onto current `origin/main` **before** `gh pr ready`.
 - [ ] `~/.claude/bin/gh-pr-wait 2026 --arm-auto`. Do not hand-roll a poll loop.
-- [ ] Post the mutation table (Task 9) and the anti-vacuity output (Task 8 Step 3) in the PR body.
+- [ ] Post the mutation table (Task 8) and the anti-vacuity output (Task 7 Step 3) in the PR body.
 
 ## Follow-ups to file when this lands
 
