@@ -29,8 +29,11 @@ import kotlin.test.assertTrue
  *
  * **Why the law alone is not enough here.** `Patch(map.put(…))` — the whole state — satisfies the
  * law perfectly; that is what ships today. So does a delta carrying the sender's *locally merged*
- * value instead of the caller's. Both converge and both throw the saving away. The law tests are
- * paired with tests that pin what actually goes on the wire.
+ * value instead of the caller's. Both converge and both throw the saving away, and no law, no
+ * convergence property and no negative control in this file can tell. The law tests are therefore
+ * paired with tests that measure **what actually goes on the wire** — see
+ * [aPutDeltasFrameIsFlatInMapSize] and its two siblings, which are the only assertions standing
+ * between this change and a no-op that looks fully pinned.
  *
  * Also pinned here: the two delta shapes proposed in #2044, each reconstructed from public API as a
  * negative control, so that reinstating either in production turns a named test red rather than
@@ -228,6 +231,68 @@ class ORMapDeltaMutatorLawTest {
         )
     }
 
+    // ── the frame is flat in state size ───────────────────────────────────────────
+
+    /**
+     * The point of the whole change, and **the one thing the law cannot see**: a delta's frame is
+     * *flat* in the size of the state it was built from. `Patch(map.put(…))` — the whole state —
+     * satisfies `X.piece(mᵟ(X)) == m(X)` perfectly, so every law test, every convergence test and
+     * every negative control in this file stays green while nothing at all has been saved.
+     *
+     * Measured at two map sizes an order of magnitude apart. Flatness, not "smaller than the full
+     * state", is the invariant to assert: the latter would pass a change that reintroduced
+     * O(entries) with a better constant.
+     */
+    @Test
+    fun aPutDeltasFrameIsFlatInMapSize() {
+        val small = mapOfSize(SMALL_STATE)
+        val large = mapOfSize(LARGE_STATE)
+
+        assertFlat(
+            small = bytes(small.putDelta(bravo, "k-0", GSet.of("fresh")).delta),
+            large = bytes(large.putDelta(bravo, "k-0", GSet.of("fresh")).delta),
+            fullState = bytes(large.put(bravo, "k-0", GSet.of("fresh"))),
+            what = "put delta over a $SMALL_STATE-key vs a $LARGE_STATE-key map",
+        )
+    }
+
+    /** The same for [ORMap.removeDelta]. */
+    @Test
+    fun aRemoveDeltasFrameIsFlatInMapSize() {
+        val small = mapOfSize(SMALL_STATE)
+        val large = mapOfSize(LARGE_STATE)
+
+        assertFlat(
+            small = bytes(small.removeDelta("k-0").delta),
+            large = bytes(large.removeDelta("k-0").delta),
+            fullState = bytes(large.remove("k-0")),
+            what = "remove delta over a $SMALL_STATE-key vs a $LARGE_STATE-key map",
+        )
+    }
+
+    /**
+     * …and flat in the size of the **value already stored under the key**, on the nested
+     * `ORMap<K, ORSet<X>>` shape where that term dominates.
+     *
+     * This is the assertion that makes [putDeltaCarriesTheSuppliedValueNotTheLocallyMergedOne] a
+     * performance guard rather than a stylistic one. Shipping the sender's locally merged value
+     * converges perfectly well; it just puts the receiver's own history back on the wire, which is
+     * an O(value) frame wearing a delta's name.
+     */
+    @Test
+    fun aPutDeltasFrameIsFlatInTheStoredValuesSize() {
+        val contributed = ORSet.empty<String>().add(bravo, "fresh")
+        val small = nestedMapWithValueOfSize(SMALL_STATE)
+        val large = nestedMapWithValueOfSize(LARGE_STATE)
+
+        assertFlat(
+            small = nestedBytes(small.putDelta(bravo, KEY, contributed).delta),
+            large = nestedBytes(large.putDelta(bravo, KEY, contributed).delta),
+            fullState = nestedBytes(large.put(bravo, KEY, contributed)),
+            what = "put delta over a $SMALL_STATE-element vs a $LARGE_STATE-element nested value",
+        )
+    }
+
     // ── the two #2044 shapes, as negative controls ────────────────────────────────
 
     /**
@@ -399,41 +464,47 @@ class ORMapDeltaMutatorLawTest {
     // ── delivery-order independence ───────────────────────────────────────────────
 
     /**
-     * Three replicas, random **put** streams, every delta delivered **shuffled and duplicated**. The
-     * result must be byte-identical to the straight in-order fold. This is what licenses the
-     * design's claim that no causal delivery, buffering or de-duplication is required above the
-     * lattice: a delta is an element of the same semilattice as the state.
+     * Three replicas, random **put** streams, every delta delivered **shuffled and duplicated**, and
+     * the result compared byte-for-byte against the same op script folded through the **full
+     * mutators** — the path that ships today. This is what licenses the design's claim that no
+     * causal delivery, buffering or de-duplication is required above the lattice: a delta is an
+     * element of the same semilattice as the state.
+     *
+     * The reference is deliberately the full-mutator fold and not the in-order *delta* fold. A delta
+     * fold compared against itself is self-consistent under any mutation of the delta shape — it
+     * passes just as happily when both sides are equally wrong, and pins nothing.
      */
     @Test
     fun putDeltasConvergeUnderShuffledAndDuplicatedDelivery() {
         val random = Random(23)
 
         repeat(CONVERGENCE_TRIALS) { trial ->
-            val deltas = randomDeltaStream(random, withRemoves = false)
+            val (deltas, fullStates) = randomStream(random, withRemoves = false)
 
-            val inOrder = fold(deltas)
+            val reference = fold(fullStates)
             val outOfOrder = fold((deltas + deltas).shuffled(random))
 
             assertTrue(
-                bytes(inOrder).contentEquals(bytes(outOfOrder)),
+                bytes(reference).contentEquals(bytes(outOfOrder)),
                 "trial $trial: ${deltas.size} put deltas, delivered shuffled and duplicated, must " +
-                    "encode identically to the in-order fold (in-order=${inOrder.keys}, " +
+                    "encode identically to the full-mutator fold (reference=${reference.keys}, " +
                     "jumbled=${outOfOrder.keys})",
             )
         }
     }
 
     /**
-     * The same with removes mixed in. **Key presence and the map's tags** converge under any
-     * delivery order, with any repeats — that is the observed-remove lattice doing its job, and it
-     * is the part the delta shapes are responsible for.
+     * The same with removes mixed in, again against the **full-mutator fold**. Key presence and the
+     * map's tags agree under any delivery order, with any repeats — that is the observed-remove
+     * lattice doing its job, and it is the part the delta shapes are responsible for.
      *
-     * The **values** do not, and that is not this change's doing: [ORMap.piece] is not associative
-     * on the value axis, because [ORMap.remove] discards a key's value while `ORMapEntry.join`
-     * merges it whenever both sides still hold the key. Reproducible on `main` with no delta code at
-     * all — see #2086, and [aRemoveDeltaRacingAPutDeltaIsOrderDependentOnTheValueAxis] for the
-     * minimal case. Asserting byte-identity here would be asserting a property [ORMap] does not
-     * have, so this test asserts the one it does.
+     * The **values** do not agree, and that is not this change's doing: [ORMap.piece] is not
+     * associative on the value axis, because [ORMap.remove] discards a key's value while
+     * `ORMapEntry.join` merges it whenever both sides still hold the key. Reproducible on `main`
+     * with no delta code at all — see #2086, and
+     * [aRemoveDeltaRacingAPutDeltaIsOrderDependentOnTheValueAxis] for the minimal case. Asserting
+     * byte-identity here would be asserting a property [ORMap] does not have, so this test asserts
+     * the one it does.
      */
     @Test
     fun removeDeltasConvergeOnKeyPresenceAndTagsUnderShuffledDelivery() {
@@ -441,16 +512,16 @@ class ORMapDeltaMutatorLawTest {
         var removeDeltas = 0
 
         repeat(CONVERGENCE_TRIALS) { trial ->
-            val deltas = randomDeltaStream(random, withRemoves = true) { removeDeltas++ }
+            val (deltas, fullStates) = randomStream(random, withRemoves = true) { removeDeltas++ }
 
-            val inOrder = fold(deltas)
+            val reference = fold(fullStates)
             val outOfOrder = fold((deltas + deltas).shuffled(random))
 
             assertEquals(
-                tagsByKey(inOrder),
+                tagsByKey(reference),
                 tagsByKey(outOfOrder),
                 "trial $trial: ${deltas.size} deltas, delivered shuffled and duplicated, must agree " +
-                    "on which keys are present and on their tags",
+                    "with the full-mutator fold on which keys are present and on their tags",
             )
         }
 
@@ -662,37 +733,47 @@ class ORMapDeltaMutatorLawTest {
             .put(alpha, KEY, GSet.of("v1"))
 
     /**
-     * A stream of deltas produced by three replicas writing concurrently, with each delta delivered
-     * eagerly to a random subset of peers so that later operations supersede tags minted elsewhere.
+     * One random op script run by three replicas writing concurrently, emitted **twice**: once as
+     * the minimal deltas and once as the whole-state patches the full mutators produce today. Each
+     * op's full state is delivered eagerly to a random subset of peers, so later operations
+     * supersede tags minted elsewhere.
+     *
+     * Replicas advance along the **full-mutator** path, which makes that stream the independent
+     * reference the delta stream is checked against. The two paths agree at every step anyway — that
+     * is the law — so the deltas are derived from exactly the states their authors held.
      */
-    private fun randomDeltaStream(
+    private fun randomStream(
         random: Random,
         withRemoves: Boolean,
         onRemove: () -> Unit = {},
-    ): List<ORMap<String, GSet<String>>> {
+    ): Pair<List<ORMap<String, GSet<String>>>, List<ORMap<String, GSet<String>>>> {
         val replicas = listOf(alpha, bravo, charlie)
         val local = replicas.associateWith { ORMap.empty<String, GSet<String>>() }.toMutableMap()
         val deltas = mutableListOf<ORMap<String, GSet<String>>>()
+        val fullStates = mutableListOf<ORMap<String, GSet<String>>>()
 
         repeat(random.nextInt(3, 10)) {
             val author = replicas.random(random)
             val key = KEYS.random(random)
             val state = local.getValue(author)
 
-            val patch = if (withRemoves && key in state.keys && random.nextInt(3) == 0) {
+            val advanced = if (withRemoves && key in state.keys && random.nextInt(3) == 0) {
                 onRemove()
-                state.removeDelta(key)
+                deltas += state.removeDelta(key).delta
+                state.remove(key)
             } else {
-                state.putDelta(author, key, GSet.of(VALUES.random(random)))
+                val value = GSet.of(VALUES.random(random))
+                deltas += state.putDelta(author, key, value).delta
+                state.put(author, key, value)
             }
-            local[author] = state.piece(patch)
-            deltas += patch.delta
+            local[author] = advanced
+            fullStates += advanced
 
             replicas.filter { it != author && random.nextBoolean() }.forEach { peer ->
-                local[peer] = local.getValue(peer).piece(patch)
+                local[peer] = local.getValue(peer).piece(advanced)
             }
         }
-        return deltas
+        return deltas to fullStates
     }
 
     private fun fold(deltas: List<ORMap<String, GSet<String>>>): ORMap<String, GSet<String>> =
@@ -701,6 +782,33 @@ class ORMapDeltaMutatorLawTest {
     /** Every present key with the map tags currently on it — the observed-remove lattice's content. */
     private fun tagsByKey(map: ORMap<String, GSet<String>>): Map<String, Set<Dot>> =
         map.keys.associateWith { map.tagsOn(it) }
+
+    /** A map of [keyCount] keys, each holding a small value, all put by one replica. */
+    private fun mapOfSize(keyCount: Int): ORMap<String, GSet<String>> =
+        (0 until keyCount).fold(ORMap.empty()) { map, index ->
+            map.put(alpha, "k-$index", GSet.of("v-$index"))
+        }
+
+    /** A one-key nested map whose value is an [ORSet] of [elementCount] elements. */
+    private fun nestedMapWithValueOfSize(elementCount: Int): ORMap<String, ORSet<String>> {
+        val value = (0 until elementCount).fold(ORSet.empty<String>()) { set, index ->
+            set.add(charlie, "e-$index")
+        }
+        return ORMap.empty<String, ORSet<String>>().put(alpha, KEY, value)
+    }
+
+    /**
+     * Asserts a delta's encoded size does not grow with the state it was built from: [large] must be
+     * within [FLAT_TOLERANCE_PERCENT]% of [small], measured across an order of magnitude. [fullState]
+     * is reported for scale only — it is deliberately *not* what the assertion compares against.
+     */
+    private fun assertFlat(small: ByteArray, large: ByteArray, fullState: ByteArray, what: String) {
+        assertTrue(
+            large.size * 100 <= small.size * FLAT_TOLERANCE_PERCENT,
+            "$what: the delta must be flat in state size, but grew from ${small.size} b to " +
+                "${large.size} b (the full state at that size is ${fullState.size} b)",
+        )
+    }
 
     /** [KEY] plus [otherKeys] unrelated keys, all tagged by the same replica in the same order. */
     private fun bulkyMap(otherKeys: Int): ORMap<String, GSet<String>> {
@@ -749,5 +857,16 @@ class ORMapDeltaMutatorLawTest {
 
         /** Unrelated keys added when a test needs the rest of the map to be expensive. */
         const val BULKY_KEY_COUNT = 200
+
+        /** The two state sizes the flat-frame tests measure across — an order of magnitude apart. */
+        const val SMALL_STATE = 100
+        const val LARGE_STATE = 1_000
+
+        /**
+         * How much a delta's frame may grow across that order of magnitude. Not zero: the minted
+         * dot's sequence number is a varint, so it costs a byte more at the larger size. Anything
+         * beyond this is a term that scales with the state.
+         */
+        const val FLAT_TOLERANCE_PERCENT = 120
     }
 }
