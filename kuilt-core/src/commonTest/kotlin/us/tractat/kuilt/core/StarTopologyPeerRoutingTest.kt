@@ -37,6 +37,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.fabric.hubMesh
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
 import us.tractat.kuilt.test.fabric.connectionPair
@@ -47,7 +48,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 class StarTopologyPeerRoutingTest {
 
@@ -97,7 +97,7 @@ class StarTopologyPeerRoutingTest {
      * heartbeat ping to travel, relayed or otherwise.
      */
     @Test
-    fun joinerCannotAddressACoJoiner() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun joinerCannotAddressACoJoiner() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val dispatcher = coroutineContext[ContinuationInterceptor]!!
         val source = InMemoryConnectionSource()
         val loom = backgroundScope.newLoom(source, dispatcher)
@@ -138,7 +138,7 @@ class StarTopologyPeerRoutingTest {
      * a frame sent by A lands in the host's `incoming` rather than being relayed onward to B.
      */
     @Test
-    fun spokeFramesReachOnlyTheHostNeverAnotherSpoke() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun spokeFramesReachOnlyTheHostNeverAnotherSpoke() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val dispatcher = coroutineContext[ContinuationInterceptor]!!
         val source = InMemoryConnectionSource()
         val loom = backgroundScope.newLoom(source, dispatcher)

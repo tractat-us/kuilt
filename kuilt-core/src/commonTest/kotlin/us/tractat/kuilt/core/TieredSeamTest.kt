@@ -28,13 +28,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.test.FakeSeam
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 class TieredSeamTest {
 
@@ -75,7 +75,7 @@ class TieredSeamTest {
     // ── 1 · peers is the union, and updates when either tier's roster changes ──
 
     @Test
-    fun peersIsTheUnionOfBothTiers() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+    fun peersIsTheUnionOfBothTiers() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val f = buildFixture(backgroundScope)
 
         assertEquals(
@@ -98,7 +98,7 @@ class TieredSeamTest {
     }
 
     @Test
-    fun peersUpdatesWhenALocalTierRosterGrows() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+    fun peersUpdatesWhenALocalTierRosterGrows() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loomLocal = InMemoryLoom()
         val selfLocal = loomLocal.host(Pattern("tiered-grow-local"))
         val loomPeer = InMemoryLoom()
@@ -118,7 +118,7 @@ class TieredSeamTest {
     // ── 2 · broadcast tees to BOTH tiers ──────────────────────────────────────
 
     @Test
-    fun broadcastTeesToBothTiers() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+    fun broadcastTeesToBothTiers() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val f = buildFixture(backgroundScope)
         val payload = byteArrayOf(7, 7, 7)
 
@@ -138,7 +138,7 @@ class TieredSeamTest {
     // ── 3 · sendTo is single-addressee across the union ───────────────────────
 
     @Test
-    fun sendToLocalMemberReachesOnlyTheLocalTier() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+    fun sendToLocalMemberReachesOnlyTheLocalTier() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val f = buildFixture(backgroundScope)
 
         val peerInbox = f.peerMember.incoming.produceIn(this)
@@ -155,7 +155,7 @@ class TieredSeamTest {
     }
 
     @Test
-    fun sendToPeerMemberReachesOnlyThePeerTier() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+    fun sendToPeerMemberReachesOnlyThePeerTier() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val f = buildFixture(backgroundScope)
 
         val localInbox = f.localMember.incoming.produceIn(this)
@@ -184,7 +184,7 @@ class TieredSeamTest {
      */
     @Test
     fun sendToUnknownPeerThrowsPeerNotConnectedAndReachesNeitherTier() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val f = buildFixture(backgroundScope)
 
             val localInbox = f.localMember.incoming.produceIn(this)
@@ -205,7 +205,7 @@ class TieredSeamTest {
     // ── 4 · incoming merges both underlying seams, exactly once each ──────────
 
     @Test
-    fun incomingMergesFramesFromEitherTier() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+    fun incomingMergesFramesFromEitherTier() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val f = buildFixture(backgroundScope)
 
         val inbox = f.tiered.incoming.produceIn(this)
@@ -230,7 +230,7 @@ class TieredSeamTest {
     }
 
     @Test
-    fun selfIdMismatchIsRejected() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+    fun selfIdMismatchIsRejected() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loomLocal = InMemoryLoom()
         val selfLocal = loomLocal.host(Pattern("tiered-mismatch-local"))
         val loomPeer = InMemoryLoom()
@@ -259,7 +259,7 @@ class TieredSeamTest {
      */
     @Test
     fun bothTiersTornIsTerminalLatchedTornAndIncomingCompletes() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             // Two FakeSeams sharing one selfId (both tiers are views of the SAME node) whose state and
             // incoming we drive directly, so we can tear both then flap one back to Woven.
             val node = PeerId("node")
@@ -338,7 +338,7 @@ class TieredSeamTest {
     // ── 5 · close() lifecycle ─────────────────────────────────────────────────
 
     @Test
-    fun closeTearsDownBothTiers() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+    fun closeTearsDownBothTiers() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val f = buildFixture(backgroundScope)
 
         f.tiered.close(CloseReason.Normal)
@@ -359,7 +359,7 @@ class TieredSeamTest {
      * parent); passes on the fix (SupervisorJob wins the Job key).
      */
     @Test
-    fun closeDoesNotCancelTheCallerScope() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+    fun closeDoesNotCancelTheCallerScope() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         // A scope we own (not backgroundScope, which the harness cancels at teardown anyway).
         val callerScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
         val loomLocal = InMemoryLoom()
@@ -382,7 +382,7 @@ class TieredSeamTest {
     }
 
     @Test
-    fun closeIsIdempotent() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+    fun closeIsIdempotent() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val f = buildFixture(backgroundScope)
 
         f.tiered.close(CloseReason.Normal)

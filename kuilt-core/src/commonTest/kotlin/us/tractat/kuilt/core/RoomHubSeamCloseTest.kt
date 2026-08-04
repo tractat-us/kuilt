@@ -7,12 +7,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Terminal-lifecycle tests for [RoomHubSeam] — the roster-shaped member of the lost-terminal-Torn
@@ -27,7 +27,7 @@ import kotlin.time.Duration.Companion.seconds
 class RoomHubSeamCloseTest {
 
     @Test
-    fun deliverInFlightDuringCloseDoesNotResurrectRoster() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun deliverInFlightDuringCloseDoesNotResurrectRoster() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val authGate = CompletableDeferred<Unit>()
         // A suspending authorizer we control: the deliver() parks here, past its Torn pre-check.
         val authorizer = RoomAuthorizer { _, _ -> authGate.await(); true }
@@ -63,7 +63,7 @@ class RoomHubSeamCloseTest {
     }
 
     @Test
-    fun closeIsSingleShotAndIdempotent() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun closeIsSingleShotAndIdempotent() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val room = RoomHubSeam("table-7", PeerId("server"), RoomAuthorizer.AllowAll)
         room.close(CloseReason.Normal)
         val first = room.state.value
