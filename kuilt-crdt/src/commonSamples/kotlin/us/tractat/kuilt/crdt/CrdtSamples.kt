@@ -212,6 +212,39 @@ internal fun sampleLWWMap() {
     check(removed.piece(rewritten)["score"] == 30)
 }
 
+/**
+ * Ship the change, not the map — and note that a removal ships a *tombstone cell*, not an
+ * absence: an empty map says nothing at all, so the removal would never leave the writer.
+ */
+@Suppress("unused")
+internal fun sampleLWWMapDelta() {
+    val a = ReplicaId("A")
+    val b = ReplicaId("B")
+
+    // Two peers have converged on a settings map.
+    var alpha = LWWMap.empty<String, String>()
+        .set(a, timestamp = 1L, key = "lang", value = "en")
+        .set(a, timestamp = 2L, key = "tz", value = "UTC")
+        .set(a, timestamp = 3L, key = "theme", value = "dark")
+    var bravo = alpha
+
+    // B changes one setting and puts only that cell on the wire. The frame is the same size
+    // whether the map holds three keys or ten thousand, and the other keys are untouched.
+    val change = alpha.setDelta(b, timestamp = 4L, key = "theme", value = "light")
+    alpha = alpha.piece(change)
+    bravo = bravo.piece(change)
+    check(alpha == bravo)
+    check(alpha["theme"] == "light")
+    check(alpha["lang"] == "en")
+
+    // A removal is a write too, so its delta is a one-cell tombstone map…
+    val forget = bravo.removeDelta(b, timestamp = 5L, key = "lang")
+    check(alpha.piece(forget)["lang"] == null)
+
+    // …and never an empty map, which is the lattice identity and carries no removal at all.
+    check(alpha.piece(LWWMap.empty<String, String>())["lang"] == "en")
+}
+
 // ── ORMap ─────────────────────────────────────────────────────────────────────
 
 /** Observed-remove map: a concurrent put survives a concurrent remove. */
