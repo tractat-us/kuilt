@@ -724,7 +724,16 @@ public class WarpNode(
                     "WarpNode($selfId): raftNode is required to enqueue coordinated tasks — " +
                         "no RaftNode was supplied at construction time"
                 }
-                coordQueueQuilter.apply(Patch(coordQueueQuilter.state.value.add(replica, taskId)))
+                // Hold the WarpNode lock across the read-mint-apply, exactly as the free-path
+                // sibling above does. The coordinated queue is an ORSet, so `add` mints its dot
+                // from the context of the state it reads: two concurrent enqueues off the same
+                // snapshot mint the SAME dot, and the causal join then annihilates *both* tasks
+                // (each patch witnesses the shared dot but carries only its own key, so each
+                // reads the other's as retired). Guarding only the `apply` is not enough — the
+                // read is where the dot is minted (#2077).
+                lock.withLock {
+                    coordQueueQuilter.apply(Patch(coordQueueQuilter.state.value.add(replica, taskId)))
+                }
             }
         }
     }
@@ -813,6 +822,15 @@ public class WarpNode(
      * are tombstoned and that coordinated tasks never write one (#873).
      */
     internal fun intentTaskIds(): Set<TaskId> = intentQuilter.state.value.keys
+
+    /**
+     * The [TaskId]s currently pending on the [CoordinationKind.Coordinated] queue, as seen by
+     * this peer.
+     *
+     * Test observability only: lets module tests assert that no coordinated enqueue is lost when
+     * several run concurrently (#2077).
+     */
+    internal fun coordinatedTaskIds(): Set<TaskId> = coordQueueQuilter.state.value.elements
 
     /**
      * Close this node's Quilter connections and stop all detectors. Idempotent.
