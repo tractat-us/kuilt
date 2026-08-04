@@ -48,14 +48,15 @@ import kotlin.test.assertEquals
  * | `MovableTree.compactedDots` | [MOVABLE_TREE] |
  * | `DotMapSerializer`'s sort | [ORSET], [ORMAP] |
  * | `DotSetSerializer`'s sort | [ORMAP] |
- * | `DotContextSerializer`'s `vv` sort | [ORSET], [ORMAP] |
+ * | `DotFunSerializer`'s sort | [MV_REGISTER] |
+ * | `DotContextSerializer`'s `vv` sort | [ORSET], [ORMAP], [MV_REGISTER] |
+ * | `VersionVector.entries` | [VERSION_VECTOR] |
  *
  * **Not pinned here — the rest of the older #713 dot-family sorts.** No vector reaches
- * `DotFunSerializer` (only `MVRegister` and `ResettableCounter` use it), `RgaSerializer`'s or
- * `FugueSerializer`'s op sort, or `DotContextSerializer`'s `cloud` sort (`cloud` is empty in both
- * [ORSET] and [ORMAP]).
- * So `MVRegister`, `ResettableCounter`, `Rga`, `Fugue` and `JsonCrdt` have no cross-target byte
- * pin: adding a type to that family does **not** inherit one from this file — add a vector.
+ * `RgaSerializer`'s or `FugueSerializer`'s op sort, or `DotContextSerializer`'s `cloud` sort
+ * (`cloud` is empty in [ORSET], [ORMAP] and [MV_REGISTER]).
+ * So `Rga`, `Fugue` and `JsonCrdt` have no cross-target byte pin: adding a type to that family
+ * does **not** inherit one from this file — add a vector.
  *
  * **Regenerate only on a deliberate encoding change, and expect every vector to move together.**
  * A single vector changing on one target and not another is the exact defect this file exists to
@@ -116,6 +117,14 @@ class CanonicalGoldenVectorTest {
                     "MovableTree",
                 )
             },
+            {
+                assertEquals(
+                    MV_REGISTER,
+                    hex(MVRegister.serializer(String.serializer()), mvRegister()),
+                    "MVRegister",
+                )
+            },
+            { assertEquals(VERSION_VECTOR, hex(VersionVector.serializer(), versionVector()), "VersionVector") },
         )
     }
 
@@ -160,6 +169,8 @@ class CanonicalGoldenVectorTest {
             { assertEquals(2L, boundedCounter().quota(delta), "BoundedCounter transfers reached delta") },
             { assertEquals(4, ephemeralMap().entries.size, "EphemeralMap slots") },
             { assertEquals(2, movableTree().compactedDotCount(), "MovableTree compactedDots") },
+            { assertEquals(4, mvRegister().values.size, "MVRegister concurrent values") },
+            { assertEquals(4, versionVector().entries.size, "VersionVector authors") },
         )
     }
 
@@ -361,6 +372,37 @@ class CanonicalGoldenVectorTest {
     }
 
     /**
+     * Four replicas write concurrently and are absorbed out of sorted order, so the backing
+     * `DotFun` is a four-dot map reached in insertion order `zulu, mike, alpha, delta` against a
+     * canonical order of `alpha, delta, mike, zulu`.
+     *
+     * **This is the only vector that reaches [DotFunSerializer]** — the file previously had none,
+     * so that sort had no cross-target pin and, more to the point here, no byte-parity anchor for
+     * #1964's collapse of it onto the shared canonical sort.
+     */
+    private fun mvRegister(): MVRegister<String> =
+        MVRegister.empty<String>()
+            .piece(MVRegister.empty<String>().set(zulu, "z"))
+            .piece(MVRegister.empty<String>().set(mike, "m"))
+            .piece(MVRegister.empty<String>().set(alpha, "a"))
+            .piece(MVRegister.empty<String>().set(delta, "d"))
+
+    /**
+     * Four authors merged in a deliberately non-sorted order, so `entries` reaches insertion order
+     * `zulu, mike, alpha, delta` against a canonical order of `alpha, delta, mike, zulu`.
+     *
+     * `VersionVector.combine` builds its result from `entries.keys + other.entries.keys`, a
+     * `LinkedHashSet` in merge order, so this vector is stable only because
+     * [VersionVector.entries] is encoded through [CanonicalMapSerializer] (#2010). It is on the
+     * wire as `QuiltMessage.Delivered.vector`, and #1986 keys anti-entropy on a diff of it.
+     */
+    private fun versionVector(): VersionVector =
+        VersionVector.of(mapOf(zulu to 3L))
+            .ceilWith(VersionVector.of(mapOf(mike to 1L)))
+            .ceilWith(VersionVector.of(mapOf(alpha to 4L)))
+            .ceilWith(VersionVector.of(mapOf(delta to 2L)))
+
+    /**
      * `compactedDots` is private, but every compacted dot is re-emitted through [Quilted.causalDots]
      * alongside the surviving log ops — so the compacted count is the total minus [moveLogSize],
      * the merged log. Each replica records four ops (`ts=1, 2, 3, 4`) and its own compaction drops
@@ -421,5 +463,12 @@ class CanonicalGoldenVectorTest {
                 "72656e74685f5f726f6f745f5f6576616c7565f66373657104ffff6c73657142795265706c696361bf65616c70686104" +
                 "647a756c7504ff6d636f6d706163746564446f74739fbf677265706c69636165616c7068616373657103ffbf67726570" +
                 "6c696361647a756c756373657103ffffff"
+        const val MV_REGISTER =
+            "bf6663617573616cbf6573746f7265bfbf677265706c69636165616c7068616373657101ff6161bf677265706c6963616564" +
+                "656c74616373657101ff6164bf677265706c696361646d696b656373657101ff616dbf677265706c696361647a756c756373" +
+                "657101ff617aff67636f6e74657874bf627676bf65616c706861016564656c746101646d696b6501647a756c7501ff65636c" +
+                "6f75649fffffffff"
+        const val VERSION_VECTOR =
+            "bf67656e7472696573bf65616c706861046564656c746102646d696b6501647a756c7503ffff"
     }
 }
