@@ -25,6 +25,7 @@ import us.tractat.kuilt.raft.NotLeaderException
 import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -44,7 +45,8 @@ import kotlin.time.Duration.Companion.seconds
  *
  * ## Determinism contract (this repo's multi-node discipline)
  *
- * - Runs under `runTest(StandardTestDispatcher(), timeout = 5.seconds)` — see [voterMeshSimTest].
+ * - Runs under `runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP)` — a generous
+ *   wall-clock backstop for a genuine wedge, never a performance assertion. See [voterMeshSimTest].
  * - One **seeded** [RaftConfig] shared across voters (matching the real path — [assembleVoterMesh]
  *   takes one config); `expectVirtualTime = true` suppresses the real-dispatcher guard. Voters draw
  *   distinct election timeouts from the shared seeded [Random] as the sequence advances, so a leader
@@ -205,7 +207,10 @@ internal class VoterMeshSim internal constructor(
         }
 
     internal companion object {
-        /** Default bound on a single await — tight enough to surface a hang fast under the 5 s test timeout. */
+        /**
+         * Default bound on a single await, in **virtual** time — the load-independent fast-failure
+         * detector, which is why it is tight and why the wall-clock backstop above it need not be.
+         */
         val DEFAULT_AWAIT: Duration = 2.seconds
     }
 }
@@ -271,12 +276,21 @@ internal suspend fun TestScope.buildVoterMeshSim(
 private const val MESH_NONCE_SEED_MIX: Long = 0x5EED
 
 /**
- * Run [body] against an N-voter [VoterMeshSim] under `runTest(StandardTestDispatcher(), timeout = 5s)`
- * — the canonical harness for a voter-mesh consensus test. Closes the mesh at teardown so the owned
- * `hubMesh` seams' read loops don't leak.
+ * Run [body] against an N-voter [VoterMeshSim] under
+ * `runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP)` — the canonical harness for a
+ * voter-mesh consensus test. Closes the mesh at teardown so the owned `hubMesh` seams' read loops
+ * don't leak.
  *
  * @param n voter count (default 3 — minimum for one-fault tolerance; use an odd count for clean quorum).
- * @param seed election/nonce RNG seed. @param timeout test timeout (default 5 s — keep it tight).
+ * @param seed election/nonce RNG seed.
+ * @param timeout Wall-clock **wedge backstop**, not a performance assertion. The trajectory here runs
+ *   on virtual time under a [StandardTestDispatcher] with a seeded RNG, so this ceiling measures the
+ *   *host*, not the mesh — a busy box inflates the wall time while the trajectory is unchanged, and
+ *   tightening it therefore asserts nothing while manufacturing load-sensitive false reds. Fast
+ *   failure is bought load-independently by the bounded virtual-time `await*` / `settle()` calls
+ *   inside the test body, which also report the state they were checking; this ceiling only bounds
+ *   the residual wedge *outside* them. Read [TEST_WEDGE_BACKSTOP] before changing it, and in
+ *   particular before lowering it.
  * @param fabricFactory Builds the [InMemoryVoterFabric] the mesh runs over, given the voter ids and the
  *   node scope ([TestScope.backgroundScope]). Defaults to the non-severable [InMemoryVoterFabric]; a
  *   reconnection test passes a [SeverableInMemoryVoterFabric] factory (it needs the scope to arm its
@@ -285,7 +299,7 @@ private const val MESH_NONCE_SEED_MIX: Long = 0x5EED
 internal fun voterMeshSimTest(
     n: Int = 3,
     seed: Long = VOTER_MESH_SIM_SEED,
-    timeout: Duration = 5.seconds,
+    timeout: Duration = TEST_WEDGE_BACKSTOP,
     fabricFactory: (List<NodeId>, CoroutineScope) -> InMemoryVoterFabric = { ids, _ -> InMemoryVoterFabric(ids) },
     body: suspend TestScope.(VoterMeshSim) -> Unit,
 ): TestResult = runTest(StandardTestDispatcher(), timeout = timeout) {

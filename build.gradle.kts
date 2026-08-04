@@ -421,6 +421,156 @@ object RunTestTimeoutScanner {
     }
 }
 
+// Locates the WRAPPER shape `RunTestTimeoutScanner` is structurally blind to (#1739): a function
+// that feeds `runTest`'s own timeout from one of its PARAMETERS, whose DEFAULT is a bare duration
+// literal. There is no literal at the `runTest(` call site — it reads `timeout = timeout` — so the
+// call-site scanner cannot flag it and cannot vouch for it either. One such wrapper silently applies
+// its ceiling to every call site that takes the default, which is normally all of them.
+//
+// The anchor that keeps this from firing on the many legitimate APIs that take a timeout
+// (`HeartbeatConfig(timeout = …)`, `awaitCommit(within = 2.seconds)`, `assertAborts…(timeout =
+// 5.seconds)` — a VIRTUAL `withTimeout` bound, which is the thing #1739 wants) is that the parameter
+// must belong to a declaration that itself calls `runTest(`. Nothing but a `runTest` wrapper does.
+//
+// Ownership is resolved by taking the NEAREST PRECEDING `fun` keyword rather than by computing a
+// declaration's extent: all four in-tree wrappers are expression-bodied (`): TestResult = runTest(`),
+// for which no brace walk gives an extent at all. A plain `@Test fun t() = runTest(timeout = X)`
+// resolves to `t`, which has no parameters, so it contributes nothing.
+//
+// Two rules, unioned, both keyed to "the default CONTAINS A DIGIT" for the same reason the sibling
+// scanner is — a rule naming `5.seconds` is satisfied by `4.seconds`, and every sanctioned constant
+// (`TEST_WEDGE_BACKSTOP`, `RAFT_SIM_WEDGE_BACKSTOP`, `WARP_SIM_WEDGE_BACKSTOP`) is digit-free:
+//   (a) FORWARDING — a parameter whose name appears inside the `runTest(` call's own top-level
+//       `timeout =` argument. Name-agnostic on purpose: `fun sim(wedge: Duration = 5.seconds) =
+//       runTest(timeout = wedge)` is the same defect, and a rule keyed to the NAME `timeout` would be
+//       evaded by renaming exactly as a rule keyed to `5` is evaded by writing `4`.
+//   (b) NAME — a parameter called `timeout` in a `runTest`-calling declaration, which catches the
+//       POSITIONAL forward (`runTest(dispatcher, timeout)`) that (a) cannot see because there is no
+//       `timeout =` argument to read.
+object RunTestWrapperTimeoutScanner {
+    private val call = Regex("""(?<![A-Za-z0-9_])runTest\s*\(""")
+    private val funKeyword = Regex("""(?<![A-Za-z0-9_])fun(?![A-Za-z0-9_])""")
+    private val named = Regex("""(?<![A-Za-z0-9_])timeout\s*=""")
+    private val digit = Regex("""[0-9]""")
+    private val ident = Regex("""[A-Za-z_][A-Za-z0-9_]*""")
+
+    /** One offending wrapper parameter: where it is declared, what it is called, what it defaults to. */
+    data class Violation(val line: Int, val parameter: String, val default: String)
+
+    private data class Param(val name: String, val default: String, val offset: Int)
+
+    /** In source order, deduplicated by declaration site, over already-stripped [code]. */
+    fun violations(code: String): List<Violation> {
+        val funs = funKeyword.findAll(code).map { it.range.first }.toList()
+        val out = linkedMapOf<Int, Violation>()
+        for (m in call.findAll(code)) {
+            val owner = funs.lastOrNull { it < m.range.first } ?: continue
+            val literalDefaults = parameters(code, owner).filter { digit.containsMatchIn(it.default) }
+            if (literalDefaults.isEmpty()) continue
+            val close = matchingBracket(code, m.range.last) ?: continue
+            val timeoutArg = timeoutArgument(code.substring(m.range.last + 1, close))
+            val mentioned = timeoutArg?.let { arg -> ident.findAll(arg).map { it.value }.toSet() }.orEmpty()
+            literalDefaults
+                .filter { it.name in mentioned || it.name == "timeout" }
+                .forEach { p ->
+                    out[p.offset] = Violation(
+                        line = code.take(p.offset).count { it == '\n' } + 1,
+                        parameter = p.name,
+                        default = p.default,
+                    )
+                }
+        }
+        return out.values.sortedBy { it.line }
+    }
+
+    /** The top-level `timeout = …` argument's value expression, or `null` if the call has none. */
+    private fun timeoutArgument(args: String): String? =
+        topLevelParts(args, 0, args.length)
+            .map { args.substring(it.first, it.last + 1) }
+            .firstNotNullOfOrNull { arg ->
+                named.find(arg)?.takeIf { depthOf(arg, it.range.first) == 0 }?.let { arg.substring(it.range.last + 1) }
+            }
+
+    /** Parameters of the declaration whose `fun` keyword starts at [funStart], defaults included. */
+    private fun parameters(code: String, funStart: Int): List<Param> {
+        var i = funStart + "fun".length
+        while (i < code.length && code[i] != '(') {
+            if (code[i] == '{' || code[i] == '}' || code[i] == ';') return emptyList()
+            i++
+        }
+        val close = matchingBracket(code, i) ?: return emptyList()
+        return topLevelParts(code, i + 1, close).mapNotNull { param(code, it) }
+    }
+
+    // `name: Type = default`, both separators taken at depth 0. Angle brackets are NOT tracked, so a
+    // generic argument list splits a parameter in two (`Map<String` / `Int> = mapOf()`); the halves
+    // simply fail to parse as a parameter, and every OTHER parameter in the list still resolves —
+    // degrading to a miss on that one parameter rather than to a wrong verdict on the declaration.
+    private fun param(code: String, range: IntRange): Param? {
+        var depth = 0
+        var colon = -1
+        var eq = -1
+        for (i in range) {
+            when (code[i]) {
+                '(', '[', '{' -> depth++
+                ')', ']', '}' -> depth--
+                ':' -> if (depth == 0 && colon < 0) colon = i
+                '=' -> if (depth == 0 && eq < 0 && code.getOrNull(i + 1) != '=' &&
+                    code.getOrNull(i - 1) !in setOf('=', '!', '<', '>')
+                ) {
+                    eq = i
+                }
+            }
+        }
+        if (colon < 0 || eq < colon) return null // no type, or no default: not a defaulted parameter
+        val name = ident.findAll(code.substring(range.first, colon)).lastOrNull() ?: return null
+        return Param(
+            name = name.value,
+            default = code.substring(eq + 1, range.last + 1).trim(),
+            offset = range.first + name.range.first,
+        )
+    }
+
+    /** Comma-separated spans of `code[from until until]` at bracket depth 0, as absolute ranges. */
+    private fun topLevelParts(code: String, from: Int, until: Int): List<IntRange> {
+        val parts = mutableListOf<IntRange>()
+        var start = from
+        var depth = 0
+        for (i in from until until) {
+            when (code[i]) {
+                '(', '[', '{' -> depth++
+                ')', ']', '}' -> depth--
+                ',' -> if (depth == 0) { parts += start until i; start = i + 1 }
+            }
+        }
+        parts += start until until
+        return parts.filter { !it.isEmpty() }
+    }
+
+    /** Index of the bracket closing the one at [open], or `null` when the source is unbalanced. */
+    private fun matchingBracket(code: String, open: Int): Int? {
+        var depth = 0
+        for (i in open until code.length) {
+            when (code[i]) {
+                '(', '[', '{' -> depth++
+                ')', ']', '}' -> { depth--; if (depth == 0) return i }
+            }
+        }
+        return null
+    }
+
+    private fun depthOf(text: String, index: Int): Int {
+        var depth = 0
+        for (k in 0 until index) {
+            when (text[k]) {
+                '(', '[', '{' -> depth++
+                ')', ']', '}' -> depth--
+            }
+        }
+        return depth
+    }
+}
+
 // Guard: forbid unbounded Swatch delivery channels (fabric-backpressure epic, #701/#741).
 // Every in-process fabric must deliver inbound frames through the bounded `Spool` primitive;
 // a raw `Channel<Swatch>(... UNLIMITED ...)` reintroduces the unbounded inbound backlog that
@@ -1429,7 +1579,8 @@ val forbidBareRunCatching by tasks.registering {
     }
 }
 
-// Guard: forbid a bare duration literal in a `runTest(…)` timeout argument (#1739).
+// Guard: forbid a bare duration literal as a `runTest(…)` timeout — at a CALL SITE (pass 1, a
+// per-file count ratchet) or in a WRAPPER's parameter default (pass 2, zero tolerance). #1739.
 //
 // WHAT IS BANNED. `runTest(StandardTestDispatcher(), timeout = 5.seconds)`. Under a test dispatcher
 // with seeded RNG and in-memory transports a test has no real-clock input anywhere on its execution
@@ -1460,30 +1611,68 @@ val forbidBareRunCatching by tasks.registering {
 // COUNT per file and the guard fails when a count INCREASES. Sweeping a file drives it to zero and
 // deletes its entry; the baseline only moves down.
 //
+// THE WRAPPER SHAPE, AND WHY IT NEEDS ITS OWN PASS. A harness that feeds `runTest`'s timeout from a
+// PARAMETER DEFAULT (`fun simTest(timeout: Duration = 5.seconds, …) = runTest(timeout = timeout)`) is
+// a DECLARATION, not a call site: the literal never appears in an argument list, so the call-site
+// rule above can neither flag it nor vouch for it, while every caller taking the default silently
+// inherits the ceiling. That is how `warpSimTest`'s 5 s hid on a published `commonMain` harness. This
+// comment used to say the blind spot was open and enumerate the four in-tree wrappers by hand, with
+// `voterMeshSimTest` marked LIVE; both the enumeration and the defect are now gone — pass 2
+// (`RunTestWrapperTimeoutScanner`) decides it mechanically, with NO baseline, so the correct count is
+// zero and a fifth wrapper fails on arrival rather than needing a reviewer to notice.
+//
+// Its boundary is exact, and stated here rather than implied. It fires on a parameter whose default
+// CONTAINS A DIGIT (same test as pass 1 — `4.seconds` must be the same defect as `5.seconds`, and
+// every sanctioned constant is digit-free) when the parameter either (a) is named in the enclosing
+// declaration's `runTest(… timeout = …)` argument, or (b) is itself called `timeout`. Rule (a) is
+// name-agnostic on purpose, so renaming the parameter evades nothing; rule (b) is what catches a
+// POSITIONAL forward, where there is no `timeout =` argument to read. The anchor keeping it off the
+// many legitimate timeout-taking APIs — `HeartbeatConfig(timeout = …)`, `awaitCommit(within =
+// 2.seconds)`, `assertAbortsOnMidHandshakeCollapse(timeout = 5.seconds)`, all VIRTUAL bounds, which
+// are the detectors #1739 wants — is that the declaration must itself call `runTest(`. Nothing but a
+// `runTest` wrapper does.
+//
+// That anchor is why pass 2 depends on `KotlinCodeScanner.stripNonCode` for its PRECISION and not
+// merely for tidiness, and there is a live receipt in the tree: `:kuilt-test`'s
+// `assertAbortsOnMidHandshakeCollapse` takes `timeout: Duration = 5.seconds` — a virtual `withTimeout`
+// bound, entirely correct — and its KDoc says "pair with `runTest(timeout = TEST_WEDGE_BACKSTOP)`".
+// On raw text that is a `timeout` parameter with a literal default in a declaration containing
+// `runTest(`, i.e. a false positive on a published `commonMain` helper. Stripped, the KDoc is gone
+// and it does not fire. Anything that weakens the stripper re-arms it.
+//
+// It reads the SAME whole-tree source set as pass 1 rather than a curated list of test source sets
+// plus the test-support modules' `commonMain` (where two of the four wrappers live — `raftSimTest`
+// and `warpSimTest` ship in a published `commonMain`, so a `*Test`-only scan would miss exactly the
+// two with the widest blast radius). A curated list would itself be the next blind spot, since the
+// module that needs adding to it is by definition the one nobody thought of; the `runTest(`-in-
+// declaration anchor already does all the filtering, at no cost, on files pass 1 has open anyway.
+//
 // KNOWN LIMITS, stated rather than papered over:
 //   * The ratchet does not auto-tighten. Sweeping a file without deleting its entry leaves the
 //     baseline loose for that path until someone notices. Failing on a DECREASE would fix it, and is
 //     deliberately not done here: it would red-light every in-flight branch that merely deletes a
 //     test, for a diff this PR is explicitly trying not to be a bad neighbour to.
-//   * A wrapper harness's own default (`fun simTest(timeout: Duration = 5.seconds)`) is invisible to
-//     a rule scoped to `runTest(` call sites — the wrapper passes `timeout = timeout`, which has no
-//     literal. That is how `warpSimTest`'s 5 s default hid on a published `commonMain` harness while
-//     applying to every call site. THIS BLIND SPOT IS NOT CLOSED, and the comment here previously
-//     said "both in-tree wrappers now use named constants", which was a count and was wrong. There
-//     are FOUR wrappers that feed `runTest`'s own timeout from a parameter default:
-//       - `raftSimTest`      (`:kuilt-raft-test`, commonMain)  → `RAFT_SIM_WEDGE_BACKSTOP`   OK
-//       - `warpSimTest`      (`:kuilt-warp-test`, commonMain)  → `WARP_SIM_WEDGE_BACKSTOP`   OK
-//       - `raftRunTest`      (`:kuilt-raft`,      commonTest)  → `TEST_WEDGE_BACKSTOP`       OK (#1739 slice)
-//       - `voterMeshSimTest` (`:kuilt-cluster`,   commonTest)  → bare `5.seconds`            LIVE
-//     `voterMeshSimTest` (`kuilt-cluster/src/commonTest/.../VoterMeshSim.kt`) is a known live
-//     instance: 4 call sites, none overriding, and its KDoc still argues for the defect
-//     ("default 5 s — keep it tight"). Tracked separately; do not read this guard as green for it.
-//     A FIFTH wrapper would be caught only by review — the scanner cannot see any of them.
+//   * Pass 2 sees the literal, not the value. A wrapper that COMPUTES its default from something
+//     digit-free — `timeout: Duration = tightBudget()`, `= SOMETHING / 6` — reads as a named
+//     constant and passes, exactly as `timeout = tightBudget()` does at a call site. Both passes buy
+//     "the number lives in one reviewable named place", not "the number is generous"; nothing
+//     mechanical can assert the latter, which is why `TEST_WEDGE_BACKSTOP`'s KDoc argues it instead.
+//   * Pass 2 resolves a parameter one hop. A wrapper wrapping a wrapper (`fun a(t: Duration =
+//     5.seconds) = b(timeout = t)`) has no `runTest(` in its own declaration and is invisible; the
+//     literal is caught only if it reaches a declaration that calls `runTest` directly. Zero in-tree
+//     sites are two hops deep, and the honest reason not to chase it is that call-graph resolution is
+//     not something a lexical scanner should be asked to do.
+//   * A wrapper that hard-codes the ceiling in its BODY (`= runTest(timeout = 5.seconds)`) is not a
+//     pass-2 shape at all — it is an ordinary call site, and pass 1 has it.
+//   * Declaration ownership is the nearest preceding `fun` keyword, not a computed extent (all four
+//     in-tree wrappers are expression-bodied, for which no brace walk yields one). A `runTest(` that
+//     is not inside any function body would therefore borrow the parameters of whatever `fun`
+//     precedes it in the file. It would also have to mention one of them by name to fire.
 //   * `:spike` (only present under `-PincludeSpike`) and `build-logic/` are not scanned, same as the
 //     sibling guards.
 val forbidTightRunTestTimeout by tasks.registering {
     group = "verification"
-    description = "Fails if a file gains a runTest(timeout = <literal>) beyond its baseline — use a named backstop constant (#1739)."
+    description = "Fails on a runTest timeout that is a bare duration literal — at a call site beyond its baseline, or in a wrapper's parameter default. Use a named backstop constant (#1739)."
     val sources = kotlinSourcesIn(subprojects.map { it.projectDir.resolve("src") })
     inputs.files(sources).withPropertyName("kotlinSources")
         .withPathSensitivity(PathSensitivity.RELATIVE)
@@ -1525,11 +1714,44 @@ val forbidTightRunTestTimeout by tasks.registering {
     )
     doLast {
         val found = sortedMapOf<String, List<Int>>()
+        val wrappers = sortedMapOf<String, List<RunTestWrapperTimeoutScanner.Violation>>()
         sources.files.forEach { file ->
             val raw = file.readText()
             if ("runTest" !in raw) return@forEach
-            val hits = RunTestTimeoutScanner.violations(KotlinCodeScanner.stripNonCode(raw))
-            if (hits.isNotEmpty()) found[file.relativeTo(rootPath).invariantSeparatorsPath] = hits
+            val code = KotlinCodeScanner.stripNonCode(raw)
+            val path = file.relativeTo(rootPath).invariantSeparatorsPath
+            val hits = RunTestTimeoutScanner.violations(code)
+            if (hits.isNotEmpty()) found[path] = hits
+            val wrapped = RunTestWrapperTimeoutScanner.violations(code)
+            if (wrapped.isNotEmpty()) wrappers[path] = wrapped
+        }
+        // Pass 2: the wrapper defaults. NO baseline and NO ratchet — unlike the call sites there is
+        // no grandfathered population to burn down, so the only correct count is zero. A wrapper is
+        // also strictly worse than a call site: it is one edit that retimes every test that takes
+        // the default, which is normally all of them.
+        if (wrappers.isNotEmpty()) {
+            val detail = wrappers.entries.joinToString("\n") { (path, hits) ->
+                "  $path\n" + hits.joinToString("\n") { "    :${it.line}  ${it.parameter} = ${it.default}" }
+            }
+            error(
+                "A `runTest(…)` wrapper defaults its timeout to a bare duration literal (#1739).\n" +
+                    "The literal is in the PARAMETER DEFAULT, so the call site reads `timeout = timeout` and " +
+                    "the call-site rule can neither flag it nor vouch for it — while every caller that takes " +
+                    "the default silently inherits the ceiling. That is how a 5 s cap rode a published " +
+                    "`commonMain` harness into every test using it.\n" +
+                    "  THE FIX IS A NAMED CONSTANT, NOT A DIFFERENT NUMBER — `4.seconds` is the same defect " +
+                    "as `5.seconds`:\n" +
+                    "      timeout: Duration = TEST_WEDGE_BACKSTOP        // us.tractat.kuilt.test, :kuilt-test\n" +
+                    "      timeout: Duration = RAFT_SIM_WEDGE_BACKSTOP    // :kuilt-raft-test\n" +
+                    "      timeout: Duration = WARP_SIM_WEDGE_BACKSTOP    // :kuilt-warp-test\n" +
+                    "  A harness far enough from those to want its own declares one beside itself, with KDoc " +
+                    "saying it is a generous wall-clock WEDGE BACKSTOP and not a performance assertion — fast " +
+                    "failure is the job of the bounded virtual-time `await*`/`settle()` calls inside the test, " +
+                    "which are immune to host load.\n" +
+                    "  If this parameter is a VIRTUAL bound (a `withTimeout` inside the test body) rather than " +
+                    "`runTest`'s wall-clock ceiling, the repo's name for it is `within` — see " +
+                    "`RaftTestFixtures.awaitCommit`.\n" + detail,
+            )
         }
         val regressions = found.filter { (path, hits) -> hits.size > (baseline[path] ?: 0) }
         if (regressions.isNotEmpty()) {
@@ -1560,7 +1782,8 @@ val forbidTightRunTestTimeout by tasks.registering {
         out.parentFile.mkdirs()
         out.writeText(
             "ok — ${sources.files.size} Kotlin sources scanned, " +
-                "${found.size} file(s) at or below baseline (${found.values.sumOf { it.size }} sites)\n",
+                "${found.size} file(s) at or below baseline (${found.values.sumOf { it.size }} sites), " +
+                "0 wrapper timeout defaults\n",
         )
     }
 }

@@ -46,8 +46,8 @@ class VoterMeshReconnectionTest {
 
     // A redial issued WHILE the edge is still severed suspends until the harness's 2 s dialTimeout
     // fires, so a post-restore relink can take up to ~dialTimeout + backoff of VIRTUAL time. Give the
-    // heal awaits a window past that (virtual time advances in ~zero wall time; the 5 s runTest bound
-    // still guards a genuine hang).
+    // heal awaits a window past that (virtual time advances in ~zero wall time; the harness's
+    // wall-clock backstop still guards a genuine hang).
     private val healWindow = 4.seconds
 
     private fun severableFabric(): (List<NodeId>, kotlinx.coroutines.CoroutineScope) -> InMemoryVoterFabric =
