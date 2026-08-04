@@ -5,9 +5,9 @@ package us.tractat.kuilt.nearby
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertNotEquals
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Regression for #1432: [NearbyLoom] must mint a *globally* unique self-identity,
@@ -21,7 +21,7 @@ import kotlin.time.Duration.Companion.seconds
 class NearbyIdentityTest {
 
     @Test
-    fun independentLoomsMintDistinctSelfIds() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun independentLoomsMintDistinctSelfIds() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loomA = NearbyLoom(FakeNearbyApi(FakeNearbyRadio()))
         val loomB = NearbyLoom(FakeNearbyApi(FakeNearbyRadio()))
 

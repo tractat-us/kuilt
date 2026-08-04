@@ -18,6 +18,7 @@ kotlin {
         }
         commonTest.dependencies {
             implementation(project(":kuilt-conformance"))
+            implementation(project(":kuilt-test")) // TEST_WEDGE_BACKSTOP
             implementation(libs.kotlin.test)
             implementation(libs.kotlinx.coroutines.test)
         }

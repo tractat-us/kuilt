@@ -1500,9 +1500,6 @@ val forbidTightRunTestTimeout by tasks.registering {
     // class the stamps were made safe against. Regenerate after a sweep with the same scanner rather
     // than by hand. Entries are paths relative to the root, violation counts as of #1739's first PR.
     val baseline = mapOf(
-        "demo/cli/src/test/kotlin/us/tractat/kuilt/demo/cli/PatchworkCliTest.kt" to 2,
-        "demo/shared/src/commonTest/kotlin/us/tractat/kuilt/demo/PatchworkSessionSeamTearTest.kt" to 2,
-        "demo/shared/src/commonTest/kotlin/us/tractat/kuilt/demo/PatchworkSessionTest.kt" to 4,
         "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/AttachmentDirectoryTest.kt" to 2,
         "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/ClusterClientFailoverTest.kt" to 7,
         "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/ClusterClientTest.kt" to 8,
@@ -1516,8 +1513,6 @@ val forbidTightRunTestTimeout by tasks.registering {
         "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/ServerClusterDirectoryConvergenceTest.kt" to 1,
         "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/VoterReconnectionSupervisorTest.kt" to 4,
         "kuilt-cluster/src/jvmTest/kotlin/us/tractat/kuilt/cluster/RoutedRaftTransportMisWiredRelayTest.kt" to 1,
-        "kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/PrincipalAttestationConformanceSuite.kt" to 6,
-        "kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/RoomFanoutIsolationConformanceSuite.kt" to 4,
         "kuilt-core/src/commonTest/kotlin/us/tractat/kuilt/core/MuxServerLoomLifecycleTest.kt" to 7,
         "kuilt-core/src/commonTest/kotlin/us/tractat/kuilt/core/RoomHubSeamCloseTest.kt" to 2,
         "kuilt-core/src/commonTest/kotlin/us/tractat/kuilt/core/RoomHubSeamMembershipTest.kt" to 1,
@@ -1525,12 +1520,6 @@ val forbidTightRunTestTimeout by tasks.registering {
         "kuilt-core/src/commonTest/kotlin/us/tractat/kuilt/core/StarTopologyPeerRoutingTest.kt" to 2,
         "kuilt-core/src/commonTest/kotlin/us/tractat/kuilt/core/TieredSeamTest.kt" to 12,
         "kuilt-core/src/commonTest/kotlin/us/tractat/kuilt/core/fabric/AcceptPumpTest.kt" to 1,
-        "kuilt-gossip/src/commonTest/kotlin/us/tractat/kuilt/gossip/GossipSimulationTest.kt" to 1,
-        "kuilt-gossip/src/commonTest/kotlin/us/tractat/kuilt/gossip/GossipViewTest.kt" to 1,
-        "kuilt-liveness/src/commonTest/kotlin/us/tractat/kuilt/liveness/HeartbeatPartitionDetectorTransportCloseTest.kt" to 2,
-        "kuilt-liveness/src/commonTest/kotlin/us/tractat/kuilt/liveness/SoloDeadlineDetectorTest.kt" to 9,
-        "kuilt-nearby/src/commonTest/kotlin/us/tractat/kuilt/nearby/NearbyIdentityTest.kt" to 1,
-        "kuilt-nw/src/commonTest/kotlin/us/tractat/kuilt/nw/NwMeshRoomPartitionTest.kt" to 1,
         "kuilt-quilter/src/commonSamples/kotlin/us/tractat/kuilt/quilter/QuilterSamples.kt" to 6,
         "kuilt-quilter/src/commonTest/kotlin/us/tractat/kuilt/quilter/BoundedCounterEqualizerTest.kt" to 5,
         "kuilt-quilter/src/commonTest/kotlin/us/tractat/kuilt/quilter/QuilterCustomReplicaIdTest.kt" to 2,
@@ -1538,8 +1527,6 @@ val forbidTightRunTestTimeout by tasks.registering {
         "kuilt-quilter/src/commonTest/kotlin/us/tractat/kuilt/quilter/QuilterFullStateRetryTest.kt" to 2,
         "kuilt-quilter/src/commonTest/kotlin/us/tractat/kuilt/quilter/QuilterResendRetryTest.kt" to 3,
         "kuilt-quilter/src/jvmTest/kotlin/us/tractat/kuilt/quilter/QuilterConcurrencyTest.kt" to 3,
-        "kuilt-scale/src/test/kotlin/us/tractat/kuilt/scale/InMemoryMeshBuilderTest.kt" to 11,
-        "kuilt-test/src/commonTest/kotlin/us/tractat/kuilt/test/FakeSeamTest.kt" to 5,
         "kuilt-warp-compiler/src/jvmTest/kotlin/us/tractat/kuilt/warp/RealVariantTieringTest.kt" to 1,
         "kuilt-warp-runtime/src/jvmTest/kotlin/us/tractat/kuilt/warp/ChicoryWasmRuntimeTest.kt" to 1,
     )

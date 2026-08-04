@@ -13,6 +13,7 @@ import us.tractat.kuilt.demo.Colour
 import us.tractat.kuilt.demo.PatchworkSession
 import us.tractat.kuilt.demo.StitchClock
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertContains
@@ -20,7 +21,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * [PatchworkCli] is a thin wrapper over [PatchworkSession]; these tests drive
@@ -42,7 +42,7 @@ class PatchworkCliTest {
     @Test
     fun commandsDriveTheSessionThroughTheTunnelAndBack() = runTest(
         StandardTestDispatcher(),
-        timeout = 5.seconds,
+        timeout = TEST_WEDGE_BACKSTOP,
     ) {
         val loom = InMemoryLoom()
         val host = session(loom, "host")
@@ -77,7 +77,7 @@ class PatchworkCliTest {
     @Test
     fun malformedCommandsReportUsageWithoutTouchingTheSession() = runTest(
         StandardTestDispatcher(),
-        timeout = 5.seconds,
+        timeout = TEST_WEDGE_BACKSTOP,
     ) {
         val loom = InMemoryLoom()
         val session = session(loom, "cli")

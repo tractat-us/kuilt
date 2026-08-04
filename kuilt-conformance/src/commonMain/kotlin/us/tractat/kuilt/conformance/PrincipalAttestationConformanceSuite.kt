@@ -10,6 +10,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Principal
 import us.tractat.kuilt.core.PrincipalRoster
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.coroutines.CoroutineContext
@@ -18,7 +19,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Reusable contract test suite for **hub seams that carry a host-verified identity** — any
@@ -107,7 +107,7 @@ public abstract class PrincipalAttestationConformanceSuite {
     /** A peer admitted with a verified principal is reported on the roster for that peer. */
     @Test
     public fun attestedPrincipalIsReportedForAdmittedPeer(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val harness = newHarness(backgroundScope, dispatcher(), Random(1L))
             val alice = PeerId("alice")
             val aliceKey = Principal("verified-alice")
@@ -123,7 +123,7 @@ public abstract class PrincipalAttestationConformanceSuite {
     /** Two peers admitted with distinct principals are keyed independently by peer id. */
     @Test
     public fun distinctPrincipalsAreKeyedByPeer(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val harness = newHarness(backgroundScope, dispatcher(), Random(2L))
             val alice = PeerId("alice")
             val bob = PeerId("bob")
@@ -147,7 +147,7 @@ public abstract class PrincipalAttestationConformanceSuite {
      */
     @Test
     public fun unattestedPeerIsAbsentFromRoster(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val harness = newHarness(backgroundScope, dispatcher(), Random(3L))
             val alice = PeerId("alice")
             val bob = PeerId("bob")
@@ -168,7 +168,7 @@ public abstract class PrincipalAttestationConformanceSuite {
     /** A peer that reconnects with a new principal supersedes its prior roster entry. */
     @Test
     public fun rosterUpdatesPrincipalOnReconnect(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val harness = newHarness(backgroundScope, dispatcher(), Random(4L))
             val alice = PeerId("alice")
             val firstKey = Principal("verified-alice-1")
@@ -188,7 +188,7 @@ public abstract class PrincipalAttestationConformanceSuite {
     /** A dropped peer's roster entry is removed; a bystander's entry survives. */
     @Test
     public fun droppedPeerLeavesTheRoster(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val harness = newHarness(backgroundScope, dispatcher(), Random(5L))
             val alice = PeerId("alice")
             val bob = PeerId("bob")
@@ -211,7 +211,7 @@ public abstract class PrincipalAttestationConformanceSuite {
     /** Closing the seam empties the roster with the membership. */
     @Test
     public fun closingTheSeamEmptiesTheRoster(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val harness = newHarness(backgroundScope, dispatcher(), Random(6L))
             val alice = PeerId("alice")
             val aliceKey = Principal("verified-alice")

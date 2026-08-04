@@ -12,7 +12,6 @@ import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import kotlin.test.Test
-import kotlin.time.Duration.Companion.seconds
 import kotlin.test.assertContains
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -135,7 +134,7 @@ class FakeSeamTest {
     // ── tear/close complete incoming (real-seam fidelity, #1492) ────────────────
 
     @Test
-    fun `tear completes incoming like a real seam`() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun `tear completes incoming like a real seam`() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val seam = FakeSeam()
         val collected = async { seam.incoming.toList() }
         seam.tear()
@@ -144,7 +143,7 @@ class FakeSeamTest {
     }
 
     @Test
-    fun `close completes incoming like a real seam`() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun `close completes incoming like a real seam`() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val seam = FakeSeam()
         val collected = async { seam.incoming.toList() }
         seam.close()
@@ -153,7 +152,7 @@ class FakeSeamTest {
 
     @Test
     fun `deliver after tear throws IllegalStateException`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val seam = FakeSeam()
             seam.tear()
             assertFailsWith<IllegalStateException> { seam.deliver(PeerId("bob"), byteArrayOf(1)) }
@@ -161,7 +160,7 @@ class FakeSeamTest {
 
     @Test
     fun `deliver swatch after tear throws IllegalStateException`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val seam = FakeSeam()
             seam.tear()
             val swatch = Swatch(payload = byteArrayOf(1), sender = PeerId("bob"), sequence = 1L)
@@ -170,7 +169,7 @@ class FakeSeamTest {
 
     @Test
     fun `deliver after close throws IllegalStateException`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val seam = FakeSeam()
             seam.close()
             assertFailsWith<IllegalStateException> { seam.deliver(PeerId("bob"), byteArrayOf(1)) }

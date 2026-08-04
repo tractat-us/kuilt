@@ -6,11 +6,11 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Smoke tests for [buildInMemoryMesh] and the [MeteredSeam] / [ConvergenceTracker] model.
@@ -22,7 +22,7 @@ import kotlin.time.Duration.Companion.seconds
 class InMemoryMeshBuilderTest {
 
     @Test
-    fun buildCompleteMeshOfTwo() = runTest(timeout = 5.seconds) {
+    fun buildCompleteMeshOfTwo() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val mesh = buildInMemoryMesh(2, Topology.Complete)
         assertEquals(2, mesh.size)
         assertEquals(setOf("peer-0", "peer-1"), mesh.seams.map { it.selfId.value }.toSet())
@@ -30,7 +30,7 @@ class InMemoryMeshBuilderTest {
     }
 
     @Test
-    fun buildCompleteMeshOfThree() = runTest(timeout = 5.seconds) {
+    fun buildCompleteMeshOfThree() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val mesh = buildInMemoryMesh(3, Topology.Complete)
         assertEquals(3, mesh.size)
         // Each peer should see all 3 peers (including itself)
@@ -41,7 +41,7 @@ class InMemoryMeshBuilderTest {
     }
 
     @Test
-    fun buildCompleteMeshOfFive() = runTest(timeout = 5.seconds) {
+    fun buildCompleteMeshOfFive() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val mesh = buildInMemoryMesh(5, Topology.Complete)
         assertEquals(5, mesh.size)
         mesh.seams.forEach { seam ->
@@ -51,7 +51,7 @@ class InMemoryMeshBuilderTest {
     }
 
     @Test
-    fun broadcastCountedByMetrics_threeNodeCompleteMesh() = runTest(timeout = 5.seconds) {
+    fun broadcastCountedByMetrics_threeNodeCompleteMesh() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val mesh = buildInMemoryMesh(3, Topology.Complete)
         val (a, b, c) = mesh.seams
 
@@ -74,7 +74,7 @@ class InMemoryMeshBuilderTest {
     }
 
     @Test
-    fun incomingFramesCountedByMetrics_threeNodeCompleteMesh() = runTest(timeout = 5.seconds) {
+    fun incomingFramesCountedByMetrics_threeNodeCompleteMesh() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val mesh = buildInMemoryMesh(3, Topology.Complete)
         val (a, b, c) = mesh.seams
 
@@ -104,7 +104,7 @@ class InMemoryMeshBuilderTest {
     }
 
     @Test
-    fun clusterMetricsSumsAcrossAllPeers() = runTest(timeout = 5.seconds) {
+    fun clusterMetricsSumsAcrossAllPeers() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val mesh = buildInMemoryMesh(3, Topology.Complete)
         val (a, b, c) = mesh.seams
 
@@ -127,7 +127,7 @@ class InMemoryMeshBuilderTest {
     }
 
     @Test
-    fun convergenceTrackerDetectsConvergence() = runTest(timeout = 5.seconds) {
+    fun convergenceTrackerDetectsConvergence() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val n = 3
         val mesh = buildInMemoryMesh(n, Topology.Complete)
         val (a, b, c) = mesh.seams
@@ -156,7 +156,7 @@ class InMemoryMeshBuilderTest {
     }
 
     @Test
-    fun buildRingTopology_connectsInRing() = runTest(timeout = 5.seconds) {
+    fun buildRingTopology_connectsInRing() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val mesh = buildInMemoryMesh(4, Topology.Ring)
         assertEquals(4, mesh.size)
         // In a ring of 4, each peer has exactly 2 neighbors (itself + 2 others = 3 peers visible)
@@ -167,7 +167,7 @@ class InMemoryMeshBuilderTest {
     }
 
     @Test
-    fun buildStarTopology_hubSeesAllSpokes() = runTest(timeout = 5.seconds) {
+    fun buildStarTopology_hubSeesAllSpokes() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val n = 4
         val mesh = buildInMemoryMesh(n, Topology.Star)
         assertEquals(n, mesh.size)
@@ -184,7 +184,7 @@ class InMemoryMeshBuilderTest {
     @Test
     fun buildRequiresAtLeastTwoPeers() {
         assertFailsWith<IllegalArgumentException> {
-            runTest(timeout = 5.seconds) {
+            runTest(timeout = TEST_WEDGE_BACKSTOP) {
                 buildInMemoryMesh(1)
             }
         }
@@ -192,7 +192,7 @@ class InMemoryMeshBuilderTest {
 
     @Test
     fun messageComplexityOfCompleteMeshBroadcast_isExactlyNMinusOnePerBroadcast() =
-        runTest(timeout = 5.seconds) {
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
             // In a fully-connected mesh, one broadcast from peer A delivers to N-1 peers.
             // The MeteredSeam on A records 1 broadcast; each of the N-1 others records 1 frame received.
             val n = 5

@@ -17,12 +17,12 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * A transport that tears on its own (relay crash, socket drop) must free the
@@ -49,7 +49,7 @@ class PatchworkSessionSeamTearTest {
     )
 
     @Test
-    fun transportTearGoesOfflineAndKeepsTheBoard() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun transportTearGoesOfflineAndKeepsTheBoard() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val mesh = InMemoryLoom()
         val tearable = TearableLoom(mesh)
         val alice = session(mesh, "alice", FakeClock(1_000))
@@ -74,7 +74,7 @@ class PatchworkSessionSeamTearTest {
     @Test
     fun reconnectAfterTransportTearMergesOfflineStitches() = runTest(
         StandardTestDispatcher(),
-        timeout = 5.seconds,
+        timeout = TEST_WEDGE_BACKSTOP,
     ) {
         val mesh = InMemoryLoom()
         val tearable = TearableLoom(mesh)

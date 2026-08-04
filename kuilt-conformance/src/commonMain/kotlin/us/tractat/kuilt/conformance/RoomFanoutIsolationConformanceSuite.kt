@@ -14,6 +14,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.RoomAuthorizer
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.coroutines.CoroutineContext
@@ -94,7 +95,7 @@ public abstract class RoomFanoutIsolationConformanceSuite {
      */
     @Test
     public fun broadcastOnRoomReachesOnlyRoomMembers(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor]) {
                 "weave/handshake: no dispatcher (ContinuationInterceptor) in coroutine context"
             }
@@ -145,7 +146,7 @@ public abstract class RoomFanoutIsolationConformanceSuite {
      */
     @Test
     public fun perRoomPeersReflectsOnlyRoomMembers(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor]) {
                 "weave/handshake: no dispatcher (ContinuationInterceptor) in coroutine context"
             }
@@ -190,7 +191,7 @@ public abstract class RoomFanoutIsolationConformanceSuite {
      */
     @Test
     public fun closingOneRoomDoesNotAffectSibling(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor]) {
                 "weave/handshake: no dispatcher (ContinuationInterceptor) in coroutine context"
             }
@@ -225,7 +226,7 @@ public abstract class RoomFanoutIsolationConformanceSuite {
      */
     @Test
     public fun rejectedConnectionIsStructurallyExcluded(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor]) {
                 "weave/handshake: no dispatcher (ContinuationInterceptor) in coroutine context"
             }

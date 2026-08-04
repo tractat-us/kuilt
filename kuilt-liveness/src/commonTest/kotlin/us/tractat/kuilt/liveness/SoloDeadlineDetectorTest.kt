@@ -8,6 +8,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -57,7 +58,7 @@ class SoloDeadlineDetectorTest {
     private fun paired(): SoloDeadlineEvent = SoloDeadlineEvent.Paired(now)
 
     @Test
-    fun deadlineElapsesAloneEmitsExactlyOneNeverPaired() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun deadlineElapsesAloneEmitsExactlyOneNeverPaired() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val detector = detector(backgroundScope)
         val events = backgroundScope.record(detector)
 
@@ -74,7 +75,7 @@ class SoloDeadlineDetectorTest {
     }
 
     @Test
-    fun minimumReachedFirstEmitsPairedAndDisarms() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun minimumReachedFirstEmitsPairedAndDisarms() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val detector = detector(backgroundScope)
         val events = backgroundScope.record(detector)
 
@@ -90,7 +91,7 @@ class SoloDeadlineDetectorTest {
     }
 
     @Test
-    fun pairedThenEmptiedStaysSilent() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun pairedThenEmptiedStaysSilent() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val detector = detector(backgroundScope)
         val events = backgroundScope.record(detector)
 
@@ -104,7 +105,7 @@ class SoloDeadlineDetectorTest {
     }
 
     @Test
-    fun higherMinimumRequiresThatManyMembers() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun higherMinimumRequiresThatManyMembers() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val detector = detector(backgroundScope, minimumMembers = 3)
         val events = backgroundScope.record(detector)
 
@@ -115,7 +116,7 @@ class SoloDeadlineDetectorTest {
     }
 
     @Test
-    fun neverObservedMembershipReportsZeroObserved() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun neverObservedMembershipReportsZeroObserved() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val detector = detector(backgroundScope)
         val events = backgroundScope.record(detector)
 
@@ -125,7 +126,7 @@ class SoloDeadlineDetectorTest {
     }
 
     @Test
-    fun lateSubscriberStillSeesTheVerdict() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun lateSubscriberStillSeesTheVerdict() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val detector = detector(backgroundScope)
         detector.observeMembership(setOf(self))
         advanceTimeBy(deadline + 1.seconds)
@@ -138,7 +139,7 @@ class SoloDeadlineDetectorTest {
 
     @Test
     fun neverPairedNeverReportsAMembershipThatMetTheRequirement() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val detector = detector(backgroundScope)
             val events = backgroundScope.record(detector)
 
@@ -159,12 +160,12 @@ class SoloDeadlineDetectorTest {
         }
 
     @Test
-    fun minimumMembersBelowTwoIsRejected() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun minimumMembersBelowTwoIsRejected() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         assertFailsWith<IllegalArgumentException> { detector(backgroundScope, minimumMembers = 1) }
     }
 
     @Test
-    fun nonPositiveDeadlineIsRejected() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun nonPositiveDeadlineIsRejected() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         assertFailsWith<IllegalArgumentException> { detector(backgroundScope, wait = Duration.ZERO) }
     }
 }

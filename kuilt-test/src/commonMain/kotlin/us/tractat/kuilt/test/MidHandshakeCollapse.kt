@@ -36,7 +36,8 @@ import kotlin.time.Duration.Companion.seconds
  *    here means [establish] suspended past the bound — the very hang this invariant forbids — and is
  *    reported as a loud [AssertionError], never a silent timeout.
  *
- * Runs under [TestScope]; pair with `runTest(timeout = 5.seconds)` and a `StandardTestDispatcher`.
+ * Runs under [TestScope]; pair with `runTest(timeout = TEST_WEDGE_BACKSTOP)` and a
+ * `StandardTestDispatcher`.
  *
  * This does not depend on `kotlin-test` (not a `commonMain` dependency of `:kuilt-test`); it raises a
  * plain [AssertionError] on failure, which every kotlin-test runner surfaces identically.
