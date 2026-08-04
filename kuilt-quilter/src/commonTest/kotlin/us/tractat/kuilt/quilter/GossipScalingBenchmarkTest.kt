@@ -148,11 +148,18 @@ private suspend fun kotlinx.coroutines.test.TestScope.runScenarioA(n: Int): Scen
 }
 
 /**
- * Runs Scenario B: sparse delta-target GC (k=3) with one phantom "observer" peer.
+ * Runs Scenario B: sparse delta-target GC (k=3) with one non-target "observer" peer.
  *
- * The phantom peer receives no deltas (not in delta-target set) but converges via
- * anti-entropy. We model the observer as a real Quilter connected to the loom so we
- * can actually verify its state.
+ * The observer must converge on the anti-entropy backstop alone. Note that dropping it from
+ * `deltaTargets` is **not** what starves it: `deltaTargets` selects whom the sender GCs
+ * against, not whom it sends to — [Quilter.apply] broadcasts to the whole room regardless.
+ * So the observer is held behind a [ChaosSeam] partition for the whole update burst (#2002);
+ * without that it simply received every delta by broadcast, and the "converges via
+ * anti-entropy" column below was true of a mechanism the run never exercised.
+ *
+ * The partition lifts before the anti-entropy rounds, which is the only path left by which
+ * the observer can reach M. It is modelled as a real Quilter on the loom so its state can
+ * actually be read; the remaining phantoms stay bare PeerIds (membership load, no acks).
  */
 private suspend fun kotlinx.coroutines.test.TestScope.runScenarioB(n: Int): ScenarioResult {
     val loom = InMemoryLoom()
@@ -161,8 +168,16 @@ private suspend fun kotlinx.coroutines.test.TestScope.runScenarioB(n: Int): Scen
     // k real delta-target receivers (they ack).
     val targetSeams = (1..K).map { loom.join(InMemoryTag("target-b-$n-$it")) }
 
-    // 1 real non-target observer that must converge via anti-entropy.
-    val observerSeam = loom.join(InMemoryTag("observer-b-$n"))
+    // 1 real non-target observer that must converge via anti-entropy. Partitioned for the
+    // whole burst so no delta — and no first-contact FullState — can reach it.
+    val rawObserverSeam = loom.join(InMemoryTag("observer-b-$n"))
+    var observerPartitioned = true
+    val observerSeam = ChaosSeam(
+        rawObserverSeam,
+        ChaosConfig(partitioned = { observerPartitioned }),
+        backgroundScope,
+        seed = 4242L,
+    )
 
     // (N - K - 2) phantom peers (no seam, no ack — extra membership load).
     val phantomIds = (1..(n - K - 2)).map { PeerId("phantom-b-$n-$it") }
@@ -216,8 +231,14 @@ private suspend fun kotlinx.coroutines.test.TestScope.runScenarioB(n: Int): Scen
         maxPending = maxOf(maxPending, sender.pendingDeltasForTest.size)
     }
 
-    // Drive enough anti-entropy rounds for the observer to converge.
-    // 4 rounds * 50ms = 200ms of virtual time — well within bounds.
+    check(observer.state.value.value == 0L) {
+        "premise: the partitioned observer must have missed the whole burst, " +
+            "was ${observer.state.value.value}"
+    }
+
+    // Lift the partition. The burst is over, so anti-entropy is the only path left:
+    // RootDigest → FullStateRequest → FullState. 4 rounds * 50ms = 200ms of virtual time.
+    observerPartitioned = false
     repeat(4) {
         testScheduler.advanceTimeBy(ANTI_ENTROPY_INTERVAL_MS + 1)
         testScheduler.runCurrent()
@@ -252,7 +273,7 @@ private fun printTable(aResults: List<ScenarioResult>, bResults: List<ScenarioRe
     println()
     println("Claim: ack-set A is O(N) (full membership); ack-set B is constant k=$K — the O(N)→O(k) GC unlock.")
     println("Claim: A's buffer is pinned at M=$M (one phantom blocks GC); B's drains to 0 — independent of N.")
-    println("Claim: observer (non-target peer) converges via anti-entropy in all B runs.")
+    println("Claim: observer (non-target, partitioned for the burst) converges via anti-entropy in all B runs.")
     println()
 }
 
@@ -267,8 +288,8 @@ class GossipScalingBenchmarkTest {
      *   every N. The ack dependency is O(N).
      * - **Scenario B (sparse delta-target, k=3):** GC watermarks over the k real acking
      *   targets only; phantoms and the non-target observer cannot pin it, so `pendingDeltas`
-     *   stays bounded (≤ k+1) **independent of N**, while the observer still converges via
-     *   the anti-entropy backstop.
+     *   stays bounded (≤ k+1) **independent of N**, while the observer — partitioned away
+     *   from the whole burst — still converges once the anti-entropy backstop runs.
      *
      * Consolidated into a single sweep (rather than three) so the suite stays fast; the
      * markdown table is printed for the PR body. Driven entirely by bounded virtual time.
