@@ -15,10 +15,16 @@ import kotlinx.serialization.Serializable
  * Absent authors read as `0` ([get]); the vector is sparse — only positive
  * high-waters are stored.
  *
- * @property entries the backing map; never holds a `0` or negative value.
+ * @property entries the backing map; never holds a `0` or negative value. Encoded through
+ *   [CanonicalMapSerializer], because [combine] builds it from `entries.keys + other.entries.keys`
+ *   — a `LinkedHashSet` in **merge order** — while `equals` is order-insensitive, so two peers at
+ *   the same logical vector would otherwise put different bytes on the wire (#2010).
  */
 @Serializable
-public data class VersionVector(public val entries: Map<ReplicaId, Long> = emptyMap()) {
+public data class VersionVector(
+    @Serializable(with = CanonicalMapSerializer::class)
+    public val entries: Map<ReplicaId, Long> = emptyMap(),
+) {
 
     /** The high-water seq for [author], or `0` if this vector has never seen it. */
     public operator fun get(author: ReplicaId): Long = entries[author] ?: 0L
