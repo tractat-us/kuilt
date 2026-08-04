@@ -224,4 +224,47 @@ class HeartbeatPartitionDetectorRecoveryEvidenceTest {
                 { assertIs<PartitionEvent.PeerRecovered>(events[1], "expected a recovery in $events") },
             )
         }
+
+    /**
+     * A frame heard *before* a long dispatch stall is not a recovery — a fresh one is.
+     *
+     * The advance-since-unresponsive test alone would accept a peer whose last frame is now older
+     * than [HeartbeatConfig.timeout], which is reachable exactly when polling stalls for longer
+     * than the timeout — the iOS-backgrounding shape the surrounding `suspected_suspension`
+     * diagnostics were added for (#1618). So the recovery gate keeps the silence conjunct, and
+     * this pins it: the clock jumps independently of virtual time, as it does across a suspension.
+     */
+    @Test
+    fun aFrameHeardBeforeALongStallIsNotARecovery() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val link = ControllableLink(self, target) // target never leaves `peers`
+            // A wall clock the test moves by hand, so it can run ahead of virtual time.
+            var nowMs = 0L
+            val detector = HeartbeatPartitionDetector(link, target, config) { Instant.fromEpochMilliseconds(nowMs) }
+            val events = mutableListOf<PartitionEvent>()
+            backgroundScope.launch { detector.events.toList(events) }
+
+            detector.start(backgroundScope)
+            // Silence crosses the timeout → PeerUnresponsive(Timeout).
+            nowMs = config.timeout.inWholeMilliseconds + config.interval.inWholeMilliseconds
+            advanceTimeBy(config.interval.inWholeMilliseconds + 1)
+
+            // One frame lands, so `lastSeen` advances past its value at the unresponsive edge…
+            link.deliverFromTarget(byteArrayOf(7))
+            advanceTimeBy(1)
+
+            // …and then dispatch stalls: the wall clock runs past the timeout with nothing heard.
+            nowMs += config.timeout.inWholeMilliseconds + config.interval.inWholeMilliseconds
+            advanceTimeBy(config.interval.inWholeMilliseconds)
+
+            assertAll(
+                { assertEquals(0, events.countOf(recovered = true), "stale frame is not evidence: $events") },
+                { assertEquals(1, events.countOf(recovered = false), "one unresponsive edge, but got $events") },
+            )
+
+            // A frame heard *now* does recover it.
+            link.deliverFromTarget(byteArrayOf(7))
+            advanceTimeBy(config.interval.inWholeMilliseconds * 2)
+            assertEquals(1, events.countOf(recovered = true), "a fresh frame recovers the peer: $events")
+        }
 }
