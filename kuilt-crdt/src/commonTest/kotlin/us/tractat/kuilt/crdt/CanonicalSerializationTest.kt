@@ -585,4 +585,118 @@ class CanonicalSerializationTest {
             },
         )
     }
+
+    /**
+     * Two replicas that each compacted **before** merging must serialize to identical bytes.
+     *
+     * A second, independent mechanism from the one
+     * [fugueCompactPositionsAreDeliveryOrderIndependent] pins — that one canonicalises the map
+     * *within* one op, this is the ordering *between* ops. `Fugue.sortedOps` is
+     * `ops.sortedWith(compareBy { it.id })` and **every** [FugueOp.Compact] reports
+     * [FugueId.HEAD] as its id, so two `Compact` ops compare equal; `sortedWith` is stable, so
+     * their relative order falls back to the iteration order of `ops` — a `LinkedHashSet` in
+     * merge order. [Rga] has no such hole: `RgaSerializer.opComparator` keys on the op *type*
+     * before delegating `Compact`-vs-`Compact` to [compareCompactPositions].
+     *
+     * Reachable on the plain `piece` path with no adversary and no out-of-order delivery, and
+     * `FugueGcCoordinator.compactUntilStable` loops until `compact` returns null, so one replica
+     * mints several `Compact` ops per pass.
+     *
+     * Deliberately disjoint from the within-op probe: each map here holds a **single** entry, so
+     * a one-entry map has only one order and reverting the `positionsSerializer` fix cannot make
+     * this test fail. Conversely the within-op probe holds a single `Compact` op, so reverting
+     * this fix cannot make *it* fail. Neither can shadow the other.
+     */
+    @Test
+    fun fugueMultipleCompactOpsAreDeliveryOrderIndependent() {
+        val aliceCut = VersionVector.of(mapOf(a to 1L))
+        val bobCut = VersionVector.of(mapOf(b to 1L))
+        val (alice, _) = tombstonedFugue(a, "a1").compact(aliceCut, aliceCut, aliceCut)
+            ?: error("alice's own tombstone is causally stable and unanchored — compact() must succeed")
+        val (bob, _) = tombstonedFugue(b, "b1").compact(bobCut, bobCut, bobCut)
+            ?: error("bob's own tombstone is causally stable and unanchored — compact() must succeed")
+
+        val aliceFirst = alice.piece(bob)
+        val bobFirst = bob.piece(alice)
+        val ser = Fugue.wireSerializer(String.serializer())
+
+        assertAll(
+            {
+                assertEquals(
+                    2, aliceFirst.ops.filterIsInstance<FugueOp.Compact>().size,
+                    "the probe is vacuous unless the merged log holds two Compact ops: ${aliceFirst.ops}",
+                )
+            },
+            {
+                assertTrue(
+                    aliceFirst.ops.toList() != bobFirst.ops.toList(),
+                    "the probe is vacuous unless the two op-sets iterate in opposite orders",
+                )
+            },
+            { assertEquals(aliceFirst, bobFirst, "sanity: both replicas reached the same state") },
+            {
+                assertEquals(
+                    json.encodeToString(ser, aliceFirst),
+                    json.encodeToString(ser, bobFirst),
+                    "a Fugue holding two Compact ops must be delivery-order-independent",
+                )
+            },
+            {
+                assertEquals(
+                    cbor.encodeToByteArray(ser, aliceFirst).toList(),
+                    cbor.encodeToByteArray(ser, bobFirst).toList(),
+                    "a Fugue holding two Compact ops must be delivery-order-independent (CBOR)",
+                )
+            },
+        )
+    }
+
+    /**
+     * A replica that received `Remove(x)` **before** `Insert(x)` must serialize identically to one
+     * that received them in causal order.
+     *
+     * The same `compareBy { it.id }` tie: [FugueOp.Insert] and [FugueOp.Remove] for one element
+     * share an id, so the stable sort falls back to `ops` iteration order — which is arrival order.
+     *
+     * Reachability verified rather than assumed: [Fugue.apply] is public, `applyRemove` has no
+     * guard requiring the insert to be present (it tombstones the id and appends the op), and
+     * [Fugue.causalDots]' own KDoc contemplates the case — "would over-claim when a Remove arrives
+     * before its Insert". So an op-based consumer delivering out of causal order reaches this on
+     * shipped API. [Rga] is already immune via its op-type-ordinal primary key.
+     *
+     * Disjoint from both `Compact` probes above: this log holds no `Compact` op at all.
+     */
+    @Test
+    fun fugueInsertAndRemoveOfOneElementAreArrivalOrderIndependent() {
+        val (afterInsert, insertOp) = Fugue.empty<String>().insertAt(a, 0, "x")
+        val (_, removeOp) = afterInsert.removeAt(0) ?: error("the freshly-inserted element must be removable")
+
+        val causalOrder = Fugue.empty<String>().apply(insertOp).apply(removeOp)
+        val reversedOrder = Fugue.empty<String>().apply(removeOp).apply(insertOp)
+        val ser = Fugue.wireSerializer(String.serializer())
+
+        assertAll(
+            {
+                assertTrue(
+                    causalOrder.ops.toList() != reversedOrder.ops.toList(),
+                    "the probe is vacuous unless the two op-sets iterate in opposite orders",
+                )
+            },
+            { assertEquals(causalOrder, reversedOrder, "sanity: both replicas hold the same op-set") },
+            {
+                assertEquals(
+                    json.encodeToString(ser, causalOrder),
+                    json.encodeToString(ser, reversedOrder),
+                    "Fugue must encode an Insert/Remove pair independently of arrival order",
+                )
+            },
+            {
+                assertEquals(
+                    cbor.encodeToByteArray(ser, causalOrder).toList(),
+                    cbor.encodeToByteArray(ser, reversedOrder).toList(),
+                    "Fugue must encode an Insert/Remove pair independently of arrival order (CBOR)",
+                )
+            },
+        )
+    }
 }
