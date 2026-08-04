@@ -2809,12 +2809,26 @@ internal class RaftEngine(
             // Joint committed → append C_new (Simple) to complete the transition — but ONLY if no
             // later config entry has already superseded the Joint. `membershipState` always reflects the
             // last config entry in the log, so `membershipState is Joint` is exactly the condition "no
-            // Simple(C_new) follows the Joint yet." A new leader that inherits a Joint whose trailing
-            // Simple(C_new) is already in its log (the original leader appended it before crashing /
-            // stepping down) must NOT append a second C_new: that duplicate carries the new leader's
-            // term, diverges from the existing C_new, and wedges replication in an infinite
-            // AppendEntries backup loop. Skipping is safe — C_new already exists; the Simple branch
-            // will complete the deferred and run the step-down when that existing C_new commits.
+            // Simple(C_new) follows the Joint yet." Appending a second C_new diverges from the existing
+            // one and wedges replication in an infinite AppendEntries backup loop. Skipping is safe —
+            // C_new already exists; the Simple branch completes the deferred and runs the step-down when
+            // that existing C_new commits.
+            //
+            // WHO actually reaches the false branch is a **follower**, on every ordinary voter-set
+            // change — not the new-leader-inherits-a-Joint case this comment used to name. That case is
+            // subsumed here (§5.4.2 makes a new leader commit an inherited Joint only via its own no-op,
+            // whose window then spans the trailing Simple too, and [advanceCommit] passes only the LAST
+            // config entry); it is covered instead by the sibling copy in
+            // [finalizeInheritedCommittedJoint], on the snapshot-restore path that bypasses
+            // [advanceCommit]. The two copies cover disjoint trajectories — neither is redundant. The
+            // follower path and the derivation are pinned and spelled out in `JointSupersessionTest`.
+            //
+            // That test exists because deleting this line reddens 12 tests without pinning it: all 12
+            // die of LeadershipLostException collateral, and the test whose name claims this contract
+            // ([LeaderInheritsCommittedJointTest]) is not among them (#2049). **A 🔴 is evidence only if
+            // the test that CLAIMS the guard is among the failures — read the failure set, not the
+            // count.** Note also that `_role.value is RaftRole.Leader` is measurably equivalent here on
+            // every reachable trajectory, so the deletion mutation alone does not discriminate the two.
             if (state.membershipState is MembershipState.Joint) {
                 debug { "onConfigCommitted: Joint committed — appending Simple(C_new=${payload.new})" }
                 appendConfigEntry(ConfigPayload(old = null, new = payload.new))
