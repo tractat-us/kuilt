@@ -6,6 +6,7 @@ import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
+import us.tractat.kuilt.crdt.internal.sortedByCanonicalKey
 
 /**
  * Custom [KSerializer] for [DotFun]`<V>` that emits [DotFun.values] entries sorted by
@@ -21,6 +22,10 @@ import kotlinx.serialization.encoding.Encoder
  *
  * This is the serializer selected by `@Serializable(with = DotFunSerializer::class)` on
  * [DotFun]. Callers obtain an instance via `DotFun.serializer(valueSerializer)`.
+ *
+ * **Sort order:** [sortedByCanonicalKey], the one canonical order shared with
+ * [CanonicalMapSerializer] and the rest of the dot family (#1964). It is byte-identical to the
+ * `sortedBy { dot }` it replaced — see [DotSetSerializer].
  */
 @OptIn(ExperimentalSerializationApi::class)
 public class DotFunSerializer<V>(
@@ -32,10 +37,7 @@ public class DotFunSerializer<V>(
     override val descriptor: SerialDescriptor = mapSerializer.descriptor
 
     override fun serialize(encoder: Encoder, value: DotFun<V>) {
-        val sorted = value.values.entries
-            .sortedBy { (dot, _) -> dot }
-            .associate { (dot, v) -> dot to v }
-        mapSerializer.serialize(encoder, sorted)
+        mapSerializer.serialize(encoder, value.values.sortedByCanonicalKey(Dot.serializer()))
     }
 
     override fun deserialize(decoder: Decoder): DotFun<V> =

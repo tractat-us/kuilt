@@ -3,11 +3,13 @@
 package us.tractat.kuilt.quilter
 
 import kotlinx.serialization.cbor.Cbor
+import us.tractat.kuilt.crdt.Dot
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.VersionVector
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 
 class QuiltMessageTest {
 
@@ -114,6 +116,51 @@ class QuiltMessageTest {
             frame(alphaFirst),
             frame(mikeFirst),
             "a Delivered frame must be merge-order-independent on the wire",
+        )
+    }
+
+    /**
+     * The vector as the shipped path actually builds it: [contiguousFrontier] over a set of dots.
+     *
+     * `Quilter`'s `_deliveredLocal` — the field gossiped as [QuiltMessage.Delivered.vector] — is
+     * `contiguousFrontier(dots)`, which is `dots.groupBy { it.replica }`: a `LinkedHashMap` in the
+     * **iteration order of the dot set**, and that set is built by merging deltas, so its order is
+     * delivery history. So the wire vector is order-dependent for a reason
+     * `VersionVector.combine` has nothing to do with — two peers holding the same dots can gossip
+     * bytes that differ purely because the dots arrived in a different order.
+     *
+     * That makes the canonicalisation load-bearing at the *encoder*: a fix inside `combine` would
+     * not have reached this path at all.
+     *
+     * Mutation-checked: dropping `@Serializable(with = CanonicalMapSerializer::class)` from
+     * `VersionVector.entries` fails this with the author slots transposed.
+     */
+    @Test
+    fun deliveredVectorFromContiguousFrontierIsDotArrivalOrderIndependent() {
+        val alpha = ReplicaId("alpha")
+        val zulu = ReplicaId("zulu")
+        val mike = ReplicaId("mike")
+        val dots = listOf(Dot(alpha, 1L), Dot(zulu, 1L), Dot(mike, 1L), Dot(zulu, 2L))
+
+        fun frame(order: List<Dot>): List<Byte> = Cbor.encodeToByteArray(
+            msgSerializer,
+            QuiltMessage.Delivered(sender = a, vector = contiguousFrontier(LinkedHashSet(order))),
+        ).toList()
+
+        val arrivalOrder = contiguousFrontier(LinkedHashSet(dots))
+        val reverseOrder = contiguousFrontier(LinkedHashSet(dots.reversed()))
+
+        assertEquals(3, arrivalOrder.entries.size, "the probe is vacuous unless the frontier is multi-entry")
+        assertNotEquals(
+            arrivalOrder.entries.keys.toList(),
+            reverseOrder.entries.keys.toList(),
+            "the probe is vacuous unless groupBy actually reaches the two orders differently",
+        )
+        assertEquals(arrivalOrder, reverseOrder, "sanity: both peers hold the same frontier")
+        assertEquals(
+            frame(dots),
+            frame(dots.reversed()),
+            "a Delivered frame must not depend on the order its dots arrived in",
         )
     }
 

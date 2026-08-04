@@ -723,6 +723,46 @@ class CanonicalSerializationTest {
     }
 
     /**
+     * A [VersionVector] built **directly** from a differently-ordered map must encode identically
+     * too — the fix has to sit in the serializer, not in [VersionVector.combine].
+     *
+     * Not redundant with [versionVectorIsMergeOrderIndependent], and deliberately so: sorting the
+     * `authors` set inside `combine` is the obvious cheaper-looking alternative fix, and it would
+     * turn that test green while leaving this one red. It would also be **wrong on the shipped
+     * path**, which does not go through `combine` at all — `Quilter`'s delivered vector is built by
+     * `contiguousFrontier(dots)`, i.e. `dots.groupBy { it.replica }`, whose `LinkedHashMap` is in
+     * the iteration order of a merge-ordered `Set<Dot>`. Every public entry point that can mint a
+     * vector — the constructor, [VersionVector.of], `combine` — has to land on the same bytes, and
+     * only canonicalising at the encoder achieves that for all of them at once.
+     *
+     * Mutation-checked: replacing the `CanonicalMapSerializer` annotation with a sort inside
+     * `combine` leaves [versionVectorIsMergeOrderIndependent] green and fails this.
+     */
+    @Test
+    fun versionVectorIsInsertionOrderIndependent() {
+        val forward = VersionVector.of(linkedMapOf(ReplicaId("alpha") to 3L, ReplicaId("zulu") to 5L))
+        val reverse = VersionVector.of(linkedMapOf(ReplicaId("zulu") to 5L, ReplicaId("alpha") to 3L))
+        val ser = VersionVector.serializer()
+
+        assertAll(
+            {
+                assertTrue(
+                    forward.entries.keys.toList() != reverse.entries.keys.toList(),
+                    "the probe is vacuous unless the two maps iterate differently",
+                )
+            },
+            { assertEquals(forward, reverse, "sanity: the two vectors are the same value") },
+            {
+                assertEquals(
+                    cbor.encodeToByteArray(ser, forward).toList(),
+                    cbor.encodeToByteArray(ser, reverse).toList(),
+                    "VersionVector CBOR must be insertion-order-independent",
+                )
+            },
+        )
+    }
+
+    /**
      * A replica that received `Remove(x)` **before** `Insert(x)` must serialize identically to one
      * that received them in causal order.
      *
