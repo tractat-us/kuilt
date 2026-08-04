@@ -13,9 +13,9 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 
 /**
- * `RaftEngine.isWellFormedBatch` — the §5.3 frame-internal validation of an `AppendEntries` batch
- * (#1832). It holds **three independent `return false` bounds**, and this file exists to measure each
- * of them separately:
+ * `RaftEngine.batchRefusal` — the §5.3 frame-internal validation of an `AppendEntries` batch
+ * (#1832). It holds **three independent bounds**, one per refusing `return`, and this file exists to
+ * measure each of them separately:
  *
  * | | bound | the frame it must refuse |
  * |---|---|---|
@@ -46,7 +46,7 @@ import kotlin.time.Duration.Companion.seconds
  *
  * ## The observable, and why the obvious one does not discriminate
  *
- * `isWellFormedBatch` returns **before** the term check, the demotion, the log path and the reply —
+ * `batchRefusal` returns **before** the term check, the demotion, the log path and the reply —
  * so a refused frame leaves *no* state effect, and "the forged entry is not in the log" is satisfied
  * just as well by a frame the log-consistency check rejected one screen later. The C1 overflow probe
  * makes that concrete: delete C1 and the frame is *processed*, yet it still never reaches the log
@@ -54,9 +54,16 @@ import kotlin.time.Duration.Companion.seconds
  *
  * The bound's actual contract is **drop the frame**, so that is what is asserted: after each probe
  * the victim emitted no `AppendEntriesAccepted` and no `AppendEntriesRejected`, put no
- * `AppendEntriesResponse` on the wire, and holds the same log. The `RefusalGate` attribution of #1998
- * does not reach this guard — it refuses silently — which is why the pin is "nothing was processed"
- * rather than "gate X fired".
+ * `AppendEntriesResponse` on the wire, and holds the same log.
+ *
+ * Since #2033 the guard does *also* name itself on the trace (`RefusalGate.AppendEntries*`, asserted
+ * per bound in `FrameRefusedTest`), and the two files are deliberately complementary rather than
+ * redundant. This one measures the **decision** — that a frame violating exactly one bound moves no
+ * state and draws no reply, which is what the bound is *for*, and which stays true whatever the trace
+ * says. `FrameRefusedTest` measures the **attribution** — that the refusal names the bound that made
+ * it, which is what a mutation to one of several identically-silent siblings needs. Neither subsumes
+ * the other: a gate wired to the wrong site keeps every assertion here green, and a guard that
+ * refused loudly and then fell through would keep every assertion there green.
  *
  * A negative is only evidence if the path was live, so [armedVictim]'s two setup frames are a
  * **control**: well-formed, same sender, same term, same injection path, single entry at the tail —
@@ -92,6 +99,13 @@ import kotlin.time.Duration.Companion.seconds
  * `AppendEntriesAccepted(matchIndex = -1)` — it attests to a **negative** index on the wire. Dropping
  * the overflow clause makes it emit `AppendEntriesRejected(conflictIndex = 8)` instead: the frame was
  * processed, answered, and *never reached the log*. A log-only assertion sees nothing at all there.
+ *
+ * **Both matrices were measured before #2033 and their "exactly one" column is now stale by
+ * construction** — stated rather than left to be rediscovered, since a stale receipt is worse than
+ * none. Each bound now also emits a `RefusalGate`, so deleting one stops that gate being produced at
+ * all, and every column additionally reddens the matching `FrameRefusedTest` case plus
+ * `everyRefusalGateIsReachable`. The diagonal above is unchanged and is still the claim this file
+ * makes; what changed is that it is no longer the *whole* red set, and it no longer needs to be.
  */
 internal class AppendEntriesBatchValidationTest {
 
@@ -266,7 +280,7 @@ internal class AppendEntriesBatchValidationTest {
      *
      * **Covers the AppendEntries lane only.** `InstallSnapshot`'s `lastIncludedTerm` /
      * `lastIncludedIndex` reach the same §5.4.1 domination through a sibling frame guarded by
-     * `isWellFormedSnapshotChunk` and pinned by `InstallSnapshotMetaValidationTest` (#1868). Neither
+     * `snapshotChunkRefusal` and pinned by `InstallSnapshotMetaValidationTest` (#1868). Neither
      * check makes a frame trustworthy — in-range metadata stays unauthenticated (#1876).
      */
     @Test
@@ -339,7 +353,7 @@ internal class AppendEntriesBatchValidationTest {
     }
 
     /**
-     * The guard against an **over-broad predicate**: `isWellFormedBatch` must not refuse honest
+     * The guard against an **over-broad predicate**: `batchRefusal` must not refuse honest
      * traffic. [armedVictim] already appends a multi-entry batch and a single-entry batch at the tail
      * and asserts both; this adds the third honest shape, a contiguous multi-entry batch appended
      * above the control, over the same injection path the probes use.
@@ -434,7 +448,7 @@ internal class AppendEntriesBatchValidationTest {
     /**
      * The node under probe, plus the two taps that say whether a frame was *processed at all*.
      *
-     * The distinction matters because `isWellFormedBatch` returns before every side-effect
+     * The distinction matters because `batchRefusal` returns before every side-effect
      * `onAppendEntries` has: a refused frame changes no state, so state alone cannot tell a frame
      * this guard dropped from one the §5.3 consistency check rejected a screen later.
      */

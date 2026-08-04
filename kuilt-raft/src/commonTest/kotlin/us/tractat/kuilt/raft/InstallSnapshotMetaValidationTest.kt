@@ -11,7 +11,7 @@ import kotlin.test.assertTrue
  * Regression for #1868: an `InstallSnapshot` frame's `lastIncludedTerm` / `lastIncludedIndex` must be
  * validated against the frame's own `term` before anything is installed.
  *
- * `isWellFormedBatch` (#1832) guards `AppendEntries` and nothing else; `onMessage`'s
+ * `batchRefusal` (#1832) guards `AppendEntries` and nothing else; `onMessage`'s
  * `MAX_PLAUSIBLE_TERM` bound (#1833) guards a frame's own `term` and nothing else. So the snapshot
  * metadata was inspected by neither, and a single frame carrying the victim's *own* current term —
  * honest enough to pass both the stale-term check and the §5.2 leader-authority gate — reached
@@ -31,7 +31,7 @@ import kotlin.test.assertTrue
  *
  * Like #1832 this is a **frame-internal** property, checkable with no trust and no extra state: the
  * leader states its own `term` in the same message, and a snapshot's term is a term the sender
- * *held*, so `lastIncludedTerm <= term` always — the identical §5.3 argument `isWellFormedBatch`
+ * *held*, so `lastIncludedTerm <= term` always — the identical §5.3 argument `batchRefusal`
  * makes about entry terms. The disposition is likewise to **drop the frame**: no honest leader can
  * emit it (`sendSnapshotChunk` copies the metadata of a snapshot it stored while at its own term),
  * so there is no honest sender to answer, and an ack would hand a forger a lever on the leader's
@@ -191,7 +191,7 @@ internal class InstallSnapshotMetaValidationTest {
      * `lastIncludedIndex`.
      *
      * The snapshot lane has no structural defence to fall back on, which is why it needs an explicit
-     * ceiling where the AppendEntries lane needs none: `isWellFormedBatch` pins
+     * ceiling where the AppendEntries lane needs none: `batchRefusal` pins
      * `entries[i].index == prevLogIndex + 1 + i` and `prevLogIndex` must satisfy Log Matching against
      * the local log, so a forger cannot leap the index. The analogous snapshot check —
      * `state.entryAt(m.lastIncludedIndex)?.term == m.lastIncludedTerm` — **fails open**: a mismatch,
@@ -263,7 +263,7 @@ internal class InstallSnapshotMetaValidationTest {
      * The mirror of [forgedHugeIndexAtALegalTermIsNotInstalled], and the test without which the
      * **term** bound is pinned by nothing at all.
      *
-     * `isWellFormedSnapshotChunk` tests the index first and returns early, so once the index ceiling
+     * `snapshotChunkRefusal` tests the index first and returns early, so once the index ceiling
      * landed every other forgery test here — all of which pair their forged term with
      * `Long.MAX_VALUE - 1` — began failing the *index* check and returning before the term check was
      * ever evaluated. Deleting the term branch outright left the whole class green. The attribution

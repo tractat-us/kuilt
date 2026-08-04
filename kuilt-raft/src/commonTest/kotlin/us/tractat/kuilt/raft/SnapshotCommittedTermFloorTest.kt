@@ -14,7 +14,7 @@ import kotlin.test.assertTrue
  * Regression for #1910: an `InstallSnapshot` whose `lastIncludedTerm` is **below the term of the
  * recipient's own entry at `commitIndex`** must be dropped.
  *
- * `isWellFormedSnapshotChunk` (#1868) bounds the metadata against the *frame's own* fields
+ * `snapshotChunkRefusal` (#1868) bounds the metadata against the *frame's own* fields
  * (`lastIncludedTerm <= term`, both halves under the plausibility ceilings). Nothing compared it
  * against the recipient's local state, so a stale, replayed or forged frame naming a *real earlier
  * term* — perfectly well-formed — reached `finalizeInstalledSnapshot`, took the discard-whole branch

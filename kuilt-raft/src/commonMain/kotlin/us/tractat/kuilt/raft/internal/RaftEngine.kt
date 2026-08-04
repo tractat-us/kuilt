@@ -444,9 +444,10 @@ internal class RaftEngine(
     }
 
     /**
-     * Adopt-if-unset-else-must-match: `true` if [from] may act as this term's leader, `false` if some
-     * *other* node was already established as leader for this term — in which case, by §5.2, one of
-     * the two frames is forged and the caller must drop the one it is holding.
+     * Adopt-if-unset-else-must-match: `null` if [from] may act as this term's leader,
+     * [RefusalGate.ForgedLeaderForTerm] if some *other* node was already established as leader for this
+     * term — in which case, by §5.2, one of the two frames is forged and the caller must drop the one
+     * it is holding and attribute the drop.
      *
      * This is the whole of #1906. `_leader` used to be assigned straight from whichever leader→peer
      * frame arrived last, so an ordinary same-term `AppendEntries` from any voter redirected a
@@ -470,7 +471,7 @@ internal class RaftEngine(
      * and clamping one launders a forgery into the most favourable valid value (#1817). Not a throw —
      * this runs inside the engine's actor loop, whose `try`/`finally` has no `catch`, so a throw would
      * convert one remote frame into permanent node death (#1818). Not a reply either — but for a weaker
-     * reason than [clearsCommittedTermFloor]'s: there, no honest sender can emit the frame at all, so
+     * reason than [committedTermFloorRefusal]'s: there, no honest sender can emit the frame at all, so
      * there is nobody to answer. Here the dropped frame may well be the honest leader's (see below), and
      * the reason not to answer is simply that no reply helps — the recipient cannot tell the two senders
      * apart, so it has nothing to say that the honest one could act on.
@@ -486,16 +487,23 @@ internal class RaftEngine(
      * needs the mechanism tracked in #1907, not a better local check.
      *
      * Logged at `debug`, like its sibling drops, deliberately: the caller is an unauthenticated remote
-     * peer that can repeat the frame at will, so a `warn` here would be a log-flood lever. The
-     * Election-Safety-violating case that *is* locally attributable — this node still believing it is
-     * Leader — already emits `BecomeFollower(AppendEntriesFromLeader)` on the trace via
-     * [demoteToFollowerOnLeaderContact].
+     * peer that can repeat the frame at will, so a `warn` here would be a log-flood lever. Since #2033
+     * the drop also names itself on the trace, which is where its only *machine-readable* observable
+     * lives: [demoteToFollowerOnLeaderContact] runs immediately above and emits
+     * `BecomeFollower(AppendEntriesFromLeader)` **only** when this node was still Leader or Candidate,
+     * so reached as an ordinary Follower — the common case — the refusal used to produce nothing at all
+     * and was indistinguishable from a §5.3 consistency-check drop a screen later.
+     *
+     * Returns the gate rather than emitting it so this stays one decision with one caller-owned
+     * side-effect, matching [batchRefusal] / [snapshotChunkRefusal] / [committedTermFloorRefusal] and
+     * the module's `SnapshotSender` / `SnapshotReceiver` convention. It is `suspend` for the durable
+     * [pinLeaderForTerm] write on the *adopting* path, not for the refusing one.
      */
-    private suspend fun adoptLeaderForTerm(from: NodeId, rpc: String): Boolean {
+    private suspend fun adoptLeaderForTerm(from: NodeId, rpc: String): RefusalGate? {
         val established = leaderForTerm
         if (established == null) {
             pinLeaderForTerm(from)
-            return true
+            return null
         }
         if (established != from) {
             debug {
@@ -503,9 +511,9 @@ internal class RaftEngine(
                     "${state.currentTerm}; §5.2 permits one leader per term, so one of the two is " +
                     "forged — which one is not locally decidable, and the pin is first-claim-wins"
             }
-            return false
+            return RefusalGate.ForgedLeaderForTerm
         }
-        return true
+        return null
     }
 
     // ── Client-proposal forwarding state (§8) — actor-teardown-touched ─────────
@@ -869,7 +877,7 @@ internal class RaftEngine(
      * to `Long.MIN_VALUE` and load the compacted prefix straight back into the positional log.
      *
      * The ceilings are the same constants the [RaftMessage.InstallSnapshot] lane uses in
-     * [isWellFormedSnapshotChunk], and inclusive for the same reason: a pure plausibility filter with no
+     * [snapshotChunkRefusal], and inclusive for the same reason: a pure plausibility filter with no
      * progress obligation creates no fixed point at the boundary.
      *
      * **Refuse, don't repair** — the disposition [checkedRestoredTerm] argues for, and the reason it also
@@ -913,7 +921,7 @@ internal class RaftEngine(
      * constrains none of these fields, so every persistent adapter is consumer code that can pass the
      * whole TCK and still return garbage.
      *
-     * - **Term in `0..state.currentTerm`.** The wire analogue is [isWellFormedBatch]'s
+     * - **Term in `0..state.currentTerm`.** The wire analogue is [batchRefusal]'s
      *   `entry.term > m.term` — "no entry may carry a term above the leader's"; here the ceiling is the
      *   node's *own* persisted term. `storage.term() >= max(log entry terms)` is an invariant of every
      *   append path, because [persistTermAndVote] is storage-first and runs before `storage.appendEntries`.
@@ -1034,17 +1042,25 @@ internal class RaftEngine(
     private fun nextClock() = ++traceClock
 
     /**
-     * The single site at which a dispatch-boundary guard refuses a frame (#1989).
+     * The single site at which a guard refuses an inbound frame (#1989, widened past the dispatch
+     * boundary in #2033).
      *
      * Each guard still `return`s on its own line — this only adds the attribution. Before it, a
      * refusal's only observable was the absence of a state change, which several guards produce
      * identically, so an upstream guard's coverage silently went to zero as soon as a downstream one
      * refused the same frames (#1980).
      *
+     * Called from two shapes of site. The dispatch-boundary gates and [onTimeoutNow]'s five guards
+     * refuse inline and call this directly. The handler-lane validators — [batchRefusal],
+     * [snapshotChunkRefusal], [committedTermFloorRefusal], [adoptLeaderForTerm] — instead *return* a
+     * [RefusalGate] and let their caller do this, which is what keeps the non-suspend ones non-suspend
+     * and, more usefully, makes a new refusing clause in any of them uncompilable without naming a
+     * gate. See [RefusalGate]'s KDoc for what that does and does not enforce.
+     *
      * **Which of the two observables fires is [RefusalGate.wedgeGate]'s exhaustive `when`, not this
      * function's.** The trace event is emitted for every gate; [noteRefusedLeaderFrame] is called for
      * the gates that map to a [RaftMetric.WedgeSuspected.Gate], which is the two at
-     * `RaftEngine.onMessage`'s dispatch boundary and none of [onTimeoutNow]'s. Routing both through
+     * `RaftEngine.onMessage`'s dispatch boundary and none of the gates past it. Routing both through
      * one place is what keeps the metric and the trace from ever naming different gates for the same
      * frame; the mapping being a closed `when` is what stops a new guard being wired to one and not
      * the other.
@@ -1739,9 +1755,9 @@ internal class RaftEngine(
 
     /**
      * §5.4.1 / §5.3 frame-internal well-formedness of an [RaftMessage.InstallSnapshot] chunk's
-     * snapshot metadata (issue #1868) — the sibling of [isWellFormedBatch] on the snapshot lane.
+     * snapshot metadata (issue #1868) — the sibling of [batchRefusal] on the snapshot lane.
      *
-     * `lastIncludedIndex` / `lastIncludedTerm` were inspected by nothing. [isWellFormedBatch] guards
+     * `lastIncludedIndex` / `lastIncludedTerm` were inspected by nothing. [batchRefusal] guards
      * [RaftMessage.AppendEntries] and nothing else, and [onMessage]'s term bound guards a frame's own
      * `term` and nothing else — so a single frame carrying the recipient's *own*
      * current term (honest enough to clear both the stale-term check and the §5.2 leader-authority
@@ -1756,14 +1772,14 @@ internal class RaftEngine(
      *
      * [RaftState.lastLogTerm] falls back to `snapshotTerm` when the log is empty, so the victim's
      * [RaftState.lastLogPosition] becomes `(Long.MAX_VALUE, Long.MAX_VALUE - 1)`: the same §5.4.1
-     * lexicographic domination (§5.4 / Figure 3.2) [isWellFormedBatch] prevents on its own lane. The
+     * lexicographic domination (§5.4 / Figure 3.2) [batchRefusal] prevents on its own lane. The
      * victim then denies every vote and wins every election it enters while holding none of the
      * committed entries a legitimate leader must have.
      *
      * Checkable without trust or extra state, exactly as for a batch: a snapshot's `lastIncludedTerm`
      * is the term of a log entry the sender held, and a node's log never carries a term above its own
      * `currentTerm`, which is what the frame states as `term`. So `lastIncludedTerm <= term` — the
-     * identical §5.3 argument [isWellFormedBatch] makes about entry terms. The `MAX_PLAUSIBLE_TERM`
+     * identical §5.3 argument [batchRefusal] makes about entry terms. The `MAX_PLAUSIBLE_TERM`
      * ceiling is folded into the same bound, and is enforced *here* rather than inherited — which is
      * what makes this check survive #1897 unchanged, since [onMessage] no longer bounds `term` against
      * that constant at all.
@@ -1791,19 +1807,25 @@ internal class RaftEngine(
      * [sendSnapshotChunk] copies [SnapshotMeta] from a snapshot it stored while at its own term — so
      * there is no honest sender to answer, and an [RaftMessage.InstallSnapshotResponse] would hand a
      * forger a free lever on the leader's [SnapshotSender] transfer state. Dropping mirrors
-     * [isWellFormedBatch] and the §5.2 leader-authority gate in [onMessage]. It is deliberately not a
+     * [batchRefusal] and the §5.2 leader-authority gate in [onMessage]. It is deliberately not a
      * `require`: this runs inside the engine's actor loop, whose `try`/`finally` has no `catch`, so a
      * throw would convert a malformed frame into permanent node death (#1818).
      *
      * Called before the term check, so a malformed frame never adopts its term or resets the
      * recipient's election timeout either.
+     *
+     * **Returns the gate that refused, or `null` to admit** (#2033). The three snapshot-lane guards —
+     * this one's two bounds and [committedTermFloorRefusal] — all drop without an ack and without
+     * touching state, so they are mutually indiscriminable by any state-effect or wire assertion; the
+     * gate is the only thing that tells them apart. The `RefusalGate?` return is also what makes a
+     * fourth bound added here unable to compile without naming itself.
      */
-    private fun isWellFormedSnapshotChunk(from: NodeId, m: RaftMessage.InstallSnapshot): Boolean {
+    private fun snapshotChunkRefusal(from: NodeId, m: RaftMessage.InstallSnapshot): RefusalGate? {
         if (m.lastIncludedIndex < 0L || m.lastIncludedIndex > MAX_PLAUSIBLE_INDEX) {
             debug {
                 "onInstallSnapshot($from): DROP — lastIncludedIndex=${m.lastIncludedIndex} outside 0..$MAX_PLAUSIBLE_INDEX"
             }
-            return false
+            return RefusalGate.InstallSnapshotIndexOutOfRange
         }
         val termCeiling = minOf(m.term, MAX_PLAUSIBLE_TERM)
         if (m.lastIncludedTerm < 0L || m.lastIncludedTerm > termCeiling) {
@@ -1811,17 +1833,17 @@ internal class RaftEngine(
                 "onInstallSnapshot($from): DROP — lastIncludedTerm=${m.lastIncludedTerm} outside 0..$termCeiling " +
                     "(term=${m.term}, MAX_PLAUSIBLE_TERM=$MAX_PLAUSIBLE_TERM; no snapshot may carry a term above the leader's)"
             }
-            return false
+            return RefusalGate.InstallSnapshotTermOutOfRange
         }
-        return true
+        return null
     }
 
     /**
      * §5.4 cross-check of an [RaftMessage.InstallSnapshot]'s `lastIncludedTerm` against **local
-     * committed state** (issue #1910) — the tighter sibling of [isWellFormedSnapshotChunk]'s
+     * committed state** (issue #1910) — the tighter sibling of [snapshotChunkRefusal]'s
      * frame-internal bound.
      *
-     * [isWellFormedSnapshotChunk] admits any `lastIncludedTerm` in `0..min(term, MAX_PLAUSIBLE_TERM)`,
+     * [snapshotChunkRefusal] admits any `lastIncludedTerm` in `0..min(term, MAX_PLAUSIBLE_TERM)`,
      * which is everything a *stale, replayed or forged* frame naming a real earlier term needs. There
      * is a tighter bound available from state the recipient already holds:
      *
@@ -1852,7 +1874,7 @@ internal class RaftEngine(
      * — and must keep being acked rather than dropped, so they are exempted here rather than
      * laundered through a bound that does not apply to them.
      *
-     * **Disposition: drop the frame, don't ack it**, as for [isWellFormedSnapshotChunk] — no honest
+     * **Disposition: drop the frame, don't ack it**, as for [snapshotChunkRefusal] — no honest
      * leader can emit one, so there is no honest sender to answer, and a reply would hand a forger a
      * lever on the sender's [SnapshotSender] transfer state. Deliberately not a `require`: this runs
      * inside the engine's actor loop, whose `try`/`finally` has no `catch`, so a throw would convert a
@@ -1875,8 +1897,8 @@ internal class RaftEngine(
      * dropped. Promoting that from an adoption rule to a full authority check — refusing an install
      * while the term's leader is genuinely unknown — is #1910's deferred half and is not done here.
      */
-    private fun clearsCommittedTermFloor(from: NodeId, m: RaftMessage.InstallSnapshot): Boolean {
-        if (m.lastIncludedIndex <= state.currentCommitIndex) return true
+    private fun committedTermFloorRefusal(from: NodeId, m: RaftMessage.InstallSnapshot): RefusalGate? {
+        if (m.lastIncludedIndex <= state.currentCommitIndex) return null
         val floor = state.entryAt(state.currentCommitIndex)?.term ?: state.snapshotTerm
         if (m.lastIncludedTerm < floor) {
             debug {
@@ -1884,16 +1906,18 @@ internal class RaftEngine(
                     "$floor (the term of our own entry at commitIndex=${state.currentCommitIndex}); no snapshot " +
                     "covering ${m.lastIncludedIndex} can predate an entry we have committed"
             }
-            return false
+            return RefusalGate.InstallSnapshotBelowCommittedTermFloor
         }
-        return true
+        return null
     }
 
     /** Follower: reassemble chunks in order, then install the snapshot once the final chunk arrives. */
     private suspend fun onInstallSnapshot(from: NodeId, m: RaftMessage.InstallSnapshot) {
-        if (!isWellFormedSnapshotChunk(from, m)) return
+        val malformed = snapshotChunkRefusal(from, m)
+        if (malformed != null) { refuseFrame(from, m, malformed); return }
         if (m.term < state.currentTerm) { send(from, RaftMessage.InstallSnapshotResponse(state.currentTerm, 0L)); return }
-        if (!clearsCommittedTermFloor(from, m)) return
+        val belowFloor = committedTermFloorRefusal(from, m)
+        if (belowFloor != null) { refuseFrame(from, m, belowFloor); return }
         if (m.term > state.currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
         demoteToFollowerOnLeaderContact()
         // #1906: the demotion above fires FIRST and unconditionally — a same-term leader-contact
@@ -1902,7 +1926,8 @@ internal class RaftEngine(
         // two concerns are separable and both are kept; see [adoptLeaderForTerm]. Placed before every
         // remaining side-effect so a refused frame also cannot cancel an in-flight pre-vote probe or
         // hold this node's election timer open.
-        if (!adoptLeaderForTerm(from, "onInstallSnapshot")) return
+        val forged = adoptLeaderForTerm(from, "onInstallSnapshot")
+        if (forged != null) { refuseFrame(from, m, forged); return }
         preVoteTerm = null          // a live leader appeared — cancel any in-flight pre-vote probe
         // The leader is [from]: the peer that authored this frame, not a payload claim (#1912).
         _leader.value = from
@@ -2090,7 +2115,7 @@ internal class RaftEngine(
      * **Scope — the AppendEntries lane.** This check guards [RaftMessage.AppendEntries] and nothing
      * else, and [onMessage]'s term bound guards a frame's own `term` and nothing else. [RaftMessage.InstallSnapshot]'s `lastIncludedTerm` / `lastIncludedIndex` are seen by
      * neither and reach the same §5.4.1 domination (plus a wiped log) through a sibling frame; that
-     * lane has its own [isWellFormedSnapshotChunk] (issue #1868), which bounds **both** halves of the
+     * lane has its own [snapshotChunkRefusal] (issue #1868), which bounds **both** halves of the
      * position. Note this lane needs no index ceiling and that one does: here `entries[i].index` is
      * pinned to `prevLogIndex + 1 + i` and Log Matching pins `prevLogIndex` against the local log, so
      * a forger cannot leap the index, whereas the snapshot lane's analogous term check fails open.
@@ -2109,30 +2134,39 @@ internal class RaftEngine(
      * `catch`, so a throw would convert a malformed frame into permanent node death (#1818).
      *
      * Called before the term check, so a malformed frame never adopts its term either.
+     *
+     * **Returns the gate that refused, or `null` to admit** (#2033). The bounds are silent apart from a
+     * `debug { }` and return before every side-effect, so the refusal's only other observable is an
+     * absence — one that a §5.3 consistency-check rejection a screen later produces just as well.
+     * #2031's receipt is concrete: delete the overflow clause and the frame is *processed and answered*
+     * with `AppendEntriesRejected(conflictIndex = 8)`, never reaching the log, so a log-based assertion
+     * there is blind rather than merely ambiguous. The `RefusalGate?` return is also what makes a
+     * fourth bound added here unable to compile without naming itself.
      */
-    private fun isWellFormedBatch(from: NodeId, m: RaftMessage.AppendEntries): Boolean {
+    private fun batchRefusal(from: NodeId, m: RaftMessage.AppendEntries): RefusalGate? {
         // A negative probe index is nonsense, and one within `entries.size + 1` of Long.MAX_VALUE
         // would overflow the expected-index arithmetic below. Neither is reachable honestly.
         if (m.prevLogIndex < 0L || m.prevLogIndex > Long.MAX_VALUE - m.entries.size - 1L) {
             debug { "onAppendEntries($from): DROP — implausible prevLogIndex=${m.prevLogIndex} (entries=${m.entries.size})" }
-            return false
+            return RefusalGate.AppendEntriesPrevLogIndexOutOfRange
         }
         m.entries.forEachIndexed { i, entry ->
             val expected = m.prevLogIndex + 1L + i
             if (entry.index != expected) {
                 debug { "onAppendEntries($from): DROP — non-contiguous batch: entries[$i].index=${entry.index} expected=$expected (prevLogIndex=${m.prevLogIndex}, size=${m.entries.size})" }
-                return false
+                return RefusalGate.AppendEntriesNonContiguousBatch
             }
             if (entry.term < 0L || entry.term > m.term) {
                 debug { "onAppendEntries($from): DROP — entries[$i].term=${entry.term} outside 0..${m.term} (no entry may carry a term above the leader's)" }
-                return false
+                return RefusalGate.AppendEntriesEntryTermOutOfRange
             }
         }
-        return true
+        return null
     }
 
     private suspend fun onAppendEntries(from: NodeId, m: RaftMessage.AppendEntries) {
-        if (!isWellFormedBatch(from, m)) return
+        val malformed = batchRefusal(from, m)
+        if (malformed != null) { refuseFrame(from, m, malformed); return }
         if (m.term < state.currentTerm) {
             // Echo round 0, NOT `m.round` (issue #1831). This reply pairs OUR current term with a
             // request from an older one, and `ReadIndexTracker.round` resets to 0 on every
@@ -2165,7 +2199,8 @@ internal class RaftEngine(
         // two concerns are separable and both are kept. Placed before every remaining side-effect so
         // a refused frame cannot cancel an in-flight pre-vote probe, hold this node's election timer
         // open, resolve a §3.10 transfer, or reach the log. See [adoptLeaderForTerm].
-        if (!adoptLeaderForTerm(from, "onAppendEntries")) return
+        val forged = adoptLeaderForTerm(from, "onAppendEntries")
+        if (forged != null) { refuseFrame(from, m, forged); return }
         preVoteTerm = null          // a live leader appeared — cancel any in-flight pre-vote probe
         // The leader is [from]: the peer that authored this frame, not a payload claim (#1912).
         _leader.value = from
@@ -3237,7 +3272,7 @@ internal class RaftEngine(
         // ### What MAX_PLAUSIBLE_TERM still does, and the asymmetry that opens
         //
         // It is unchanged at `2^60` and keeps its other jobs: [checkedRestoredTerm],
-        // [checkedRestoredSnapshotMeta] and [isWellFormedSnapshotChunk], where a value is read back off
+        // [checkedRestoredSnapshotMeta] and [snapshotChunkRefusal], where a value is read back off
         // a disk or unpacked from a frame rather than compared against our own progress. It also still
         // supplies the OVERFLOW HEADROOM this comment's `currentTerm + 1` argument rests on — but now
         // via [termPinnedAtCeiling] guarding the two increment sites, not via this check.
@@ -3347,8 +3382,10 @@ internal class RaftEngine(
      *
      * Reached only through [refuseFrame], for the gates whose [RefusalGate.wedgeGate] is non-null —
      * the two at [onMessage]'s dispatch boundary, which since #1989 are three [RefusalGate] values
-     * (the implausible-term bound's two arms and the §5.2 gate). [onTimeoutNow]'s guards map to
-     * `null` and never arrive here; a wedge is about frames that could not be *dispatched*.
+     * (the implausible-term bound's two arms and the §5.2 gate). Every gate *past* that boundary maps
+     * to `null` and never arrives here; a wedge is about frames that could not be *dispatched*, and a
+     * frame that reached a handler has by definition already zeroed the run at [onMessage]'s reset
+     * below.
      *
      * ### The predicate, and why each clause is there
      *
@@ -3485,7 +3522,7 @@ internal class RaftEngine(
 
         /**
          * Upper sanity bound on a term this node **stores or unpacks** — [checkedRestoredTerm],
-         * [checkedRestoredSnapshotMeta], [isWellFormedSnapshotChunk] — and the ceiling
+         * [checkedRestoredSnapshotMeta], [snapshotChunkRefusal] — and the ceiling
          * [termPinnedAtCeiling] refuses to increment past (issue #1833).
          *
          * **It is no longer the term-adoption rule.** #1897 replaced that with a relative bound on the
@@ -3506,12 +3543,12 @@ internal class RaftEngine(
 
         /**
          * Upper sanity bound on a snapshot's `lastIncludedIndex` arriving off the wire (issue #1868) —
-         * see [isWellFormedSnapshotChunk]. The index-half counterpart of [MAX_PLAUSIBLE_TERM].
+         * see [snapshotChunkRefusal]. The index-half counterpart of [MAX_PLAUSIBLE_TERM].
          *
          * §5.4.1 orders positions by `(term, index)` lexicographically, so **tying on term and winning
          * on index dominates** just as surely as a huge term does — bounding only the term half leaves
          * the violation reachable. Unlike the AppendEntries lane, the snapshot lane has no structural
-         * check to fall back on: [isWellFormedBatch] pins each entry's index to `prevLogIndex + 1 + i`
+         * check to fall back on: [batchRefusal] pins each entry's index to `prevLogIndex + 1 + i`
          * and Log Matching pins `prevLogIndex` to the local log, whereas
          * `state.entryAt(lastIncludedIndex)?.term == lastIncludedTerm` **fails open** — the `null` for
          * any index past the tail falls through to discard-whole rather than rejecting.

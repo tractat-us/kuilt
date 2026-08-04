@@ -9,7 +9,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * Every dispatch-boundary guard emits a [RaftTraceEvent.FrameRefused] naming **itself** (#1989).
+ * Every inbound-frame guard emits a [RaftTraceEvent.FrameRefused] naming **itself** (#1989, widened
+ * past the dispatch boundary by #2033).
  *
  * The defect this closes is that a guard refuses by `return`ing, so its only observable was the
  * *absence* of a state change — and absences carry no attribution. #1980's mutation survey measured
@@ -49,9 +50,14 @@ import kotlin.test.assertTrue
  *
  * [everyRefusalGateIsReachable] is the structural half. `RefusalGate.wedgeGate`'s exhaustive `when`
  * makes a new entry impossible to *add* without deciding how it relates to the wedge metric, but no
- * compiler can insist the engine ever emits it. That test drives all eight sites in one simulation
- * and compares the observed set against [RefusalGate.entries], so an entry with no emit site — or an
+ * compiler can insist the engine ever emits it. That test drives every site in one simulation and
+ * compares the observed set against [RefusalGate.entries], so an entry with no emit site — or an
  * emit site deleted from under an entry — goes red.
+ *
+ * **It is a set comparison, so it cannot see a *misattributed* gate** — a site emitting some other
+ * declared value keeps the set whole (#1988's C1 defect). That is what the per-gate tests above it
+ * are for, and why each one asserts an exact [RefusalGate] at an exact node rather than "some
+ * refusal happened".
  *
  * Every test holds the target's state still by only [RaftSimulation.settle]ing after the injection,
  * never advancing virtual time, so no election timer can fire and the injected frame is the only
@@ -109,6 +115,14 @@ class FrameRefusedTest {
     }
 
     private fun RaftSimulation.idOf(node: RaftNode): NodeId = nodeIds.first { nodes[it] === node }
+
+    /**
+     * The term of [node]'s own committed entry at [commit] — the floor `committedTermFloorRefusal`
+     * reads. Taken from durable storage rather than restated from the leader's term, so the fixture
+     * asserts the engine's own input rather than a guess about it.
+     */
+    private suspend fun RaftSimulation.committedFloorTerm(node: NodeId, commit: Long): Long =
+        storages.getValue(node).entries(commit).first { it.index == commit }.term
 
     // ── onMessage: the implausible-term bound, both arms ─────────────────────
     // One `if` until #1989. They refuse for different reasons and only the split makes either
@@ -376,6 +390,271 @@ class FrameRefusedTest {
         )
     }
 
+    // ── onAppendEntries: batchRefusal's three bounds (#1832, attributed by #2033) ──
+    // Past the dispatch boundary, inside the handler. All three refuse before the term check, the
+    // demotion, the log path and the reply, so the refusal's only other observable is an absence —
+    // and the §5.3 consistency check produces the same absence a screen later for a frame it
+    // *processed*. #2031 had to route around exactly that; the gate is what removes the need to.
+
+    /**
+     * Bound 1's lower arm. The batch is **empty**, so the contiguity and entry-term bounds live inside
+     * a `forEachIndexed` that never runs: they are structurally unreachable on this frame rather than
+     * merely satisfied, which is the stronger of the two inertness shapes `AppendEntriesBatchValidationTest`
+     * distinguishes.
+     */
+    @Test
+    fun aNegativePrevLogIndex_isRefusedAs_AppendEntriesPrevLogIndexOutOfRange() = raftRunTest {
+        val sim = simWithLearner()
+        val leaderId = sim.idOf(awaitLeader(sim))
+        val followerId = voterIds.first { it != leaderId }
+        sim.awaitTrue("$followerId recognises $leaderId") {
+            sim.nodes.getValue(followerId).leader.value == leaderId
+        }
+        val term = sim.storages.getValue(followerId).term()
+
+        val refusals = collectRefusals(sim)
+        sim.settle()
+        refusals.clear()
+
+        // From the recognised leader at our own term, so every gate upstream — both term arms, the
+        // §5.2 authority gate — passes it and this bound is what is being measured.
+        sim.deliverAppendEntries(to = followerId, from = leaderId, term = term, prevLogIndex = -1L)
+        sim.settle()
+
+        val refusal = refusals.only(followerId)
+        assertAll(
+            { assertEquals(RefusalGate.AppendEntriesPrevLogIndexOutOfRange, refusal.gate) },
+            { assertEquals(followerId, refusal.node, "the refusing node is the recipient") },
+            { assertEquals(leaderId, refusal.from) },
+            { assertEquals(RaftMessageType.AppendEntries, refusal.messageType) },
+        )
+    }
+
+    /**
+     * Bound 2. The entry sits at index 5 where the probe point demands `0 + 1 + 0 = 1`. Its term is the
+     * frame's own, so bound 3's two sides are equal and it is inert; `prevLogIndex = 0` is inside bound
+     * 1's range, so that is inert too.
+     */
+    @Test
+    fun aNonContiguousBatch_isRefusedAs_AppendEntriesNonContiguousBatch() = raftRunTest {
+        val sim = simWithLearner()
+        val leaderId = sim.idOf(awaitLeader(sim))
+        val followerId = voterIds.first { it != leaderId }
+        sim.awaitTrue("$followerId recognises $leaderId") {
+            sim.nodes.getValue(followerId).leader.value == leaderId
+        }
+        val term = sim.storages.getValue(followerId).term()
+
+        val refusals = collectRefusals(sim)
+        sim.settle()
+        refusals.clear()
+
+        sim.deliverAppendEntries(
+            to = followerId, from = leaderId, term = term, prevLogIndex = 0L,
+            entries = listOf(LogEntry(index = 5L, term = term, command = byteArrayOf())),
+        )
+        sim.settle()
+
+        val refusal = refusals.only(followerId)
+        assertAll(
+            { assertEquals(RefusalGate.AppendEntriesNonContiguousBatch, refusal.gate) },
+            { assertEquals(leaderId, refusal.from) },
+            { assertEquals(RaftMessageType.AppendEntries, refusal.messageType) },
+        )
+    }
+
+    /**
+     * Bound 3's upper arm — the §5.4.1 lever, an entry carrying a term above the leader's own. The
+     * entry is contiguous from the probe point and the probe point is in range, so bounds 1 and 2 are
+     * both inert by equality.
+     */
+    @Test
+    fun anEntryTermAboveTheFrameTerm_isRefusedAs_AppendEntriesEntryTermOutOfRange() = raftRunTest {
+        val sim = simWithLearner()
+        val leaderId = sim.idOf(awaitLeader(sim))
+        val followerId = voterIds.first { it != leaderId }
+        sim.awaitTrue("$followerId recognises $leaderId") {
+            sim.nodes.getValue(followerId).leader.value == leaderId
+        }
+        val term = sim.storages.getValue(followerId).term()
+
+        val refusals = collectRefusals(sim)
+        sim.settle()
+        refusals.clear()
+
+        sim.deliverAppendEntries(
+            to = followerId, from = leaderId, term = term, prevLogIndex = 0L,
+            entries = listOf(LogEntry(index = 1L, term = term + 1L, command = byteArrayOf())),
+        )
+        sim.settle()
+
+        val refusal = refusals.only(followerId)
+        assertAll(
+            { assertEquals(RefusalGate.AppendEntriesEntryTermOutOfRange, refusal.gate) },
+            { assertEquals(leaderId, refusal.from) },
+            { assertEquals(RaftMessageType.AppendEntries, refusal.messageType) },
+        )
+    }
+
+    // ── onInstallSnapshot: the indiscriminable trio (#1868, #1910) ────────────
+    // The strongest case in #2033 for attribution over state effects: all three drop the frame with
+    // NO ack and NO state change, so they produce byte-identical observables and nothing but the
+    // gate can say which one fired.
+
+    /** `snapshotChunkRefusal` bound 1's lower arm: a `lastIncludedIndex` below the log origin. */
+    @Test
+    fun aNegativeSnapshotIndex_isRefusedAs_InstallSnapshotIndexOutOfRange() = raftRunTest {
+        val sim = simWithLearner()
+        val leaderId = sim.idOf(awaitLeader(sim))
+        val followerId = voterIds.first { it != leaderId }
+        sim.awaitTrue("$followerId recognises $leaderId") {
+            sim.nodes.getValue(followerId).leader.value == leaderId
+        }
+        val term = sim.storages.getValue(followerId).term()
+
+        val refusals = collectRefusals(sim)
+        sim.settle()
+        refusals.clear()
+
+        // `lastIncludedTerm = 0` is inside the term bound's range, so that sibling is inert.
+        sim.deliverInstallSnapshot(
+            to = followerId, from = leaderId, term = term,
+            lastIncludedIndex = -1L, lastIncludedTerm = 0L,
+        )
+        sim.settle()
+
+        val refusal = refusals.only(followerId)
+        assertAll(
+            { assertEquals(RefusalGate.InstallSnapshotIndexOutOfRange, refusal.gate) },
+            { assertEquals(leaderId, refusal.from) },
+            { assertEquals(RaftMessageType.InstallSnapshot, refusal.messageType) },
+        )
+    }
+
+    /**
+     * `snapshotChunkRefusal` bound 2's upper arm: no snapshot may carry a term above the leader's own,
+     * so `term + 1` is above the `min(term, MAX_PLAUSIBLE_TERM)` ceiling. The index is plausible, so
+     * bound 1 is inert — and this is the pairing that matters, since bound 1 is evaluated first and
+     * returns early.
+     */
+    @Test
+    fun aSnapshotTermAboveTheFrameTerm_isRefusedAs_InstallSnapshotTermOutOfRange() = raftRunTest {
+        val sim = simWithLearner()
+        val leaderId = sim.idOf(awaitLeader(sim))
+        val followerId = voterIds.first { it != leaderId }
+        sim.awaitTrue("$followerId recognises $leaderId") {
+            sim.nodes.getValue(followerId).leader.value == leaderId
+        }
+        val term = sim.storages.getValue(followerId).term()
+
+        val refusals = collectRefusals(sim)
+        sim.settle()
+        refusals.clear()
+
+        sim.deliverInstallSnapshot(
+            to = followerId, from = leaderId, term = term,
+            lastIncludedIndex = 5L, lastIncludedTerm = term + 1L,
+        )
+        sim.settle()
+
+        val refusal = refusals.only(followerId)
+        assertAll(
+            { assertEquals(RefusalGate.InstallSnapshotTermOutOfRange, refusal.gate) },
+            { assertEquals(leaderId, refusal.from) },
+            { assertEquals(RaftMessageType.InstallSnapshot, refusal.messageType) },
+        )
+    }
+
+    /**
+     * `committedTermFloorRefusal`: a snapshot advancing our frontier whose `lastIncludedTerm` is below
+     * the term of our own committed entry.
+     *
+     * The frame is **frame-internally well-formed** — it names a real, previously-legal term — so the
+     * two bounds above it are satisfied rather than merely unreached, and only the cross-check against
+     * local committed state can refuse it. The §5.4.2 no-op the new leader appends on election is what
+     * makes the floor non-vacuous: at `commitIndex == 0` the floor is `snapshotTerm == 0` and nothing
+     * legal sits below it, so a fixture that injected before the no-op committed would pass with the
+     * guard deleted.
+     */
+    @Test
+    fun aSnapshotBelowOurCommittedFloor_isRefusedAs_InstallSnapshotBelowCommittedTermFloor() = raftRunTest {
+        val sim = simWithLearner()
+        val leaderId = sim.idOf(awaitLeader(sim))
+        val followerId = voterIds.first { it != leaderId }
+        sim.awaitTrue("$followerId committed $leaderId's no-op") {
+            sim.nodes.getValue(followerId).commitIndex.value >= 1L
+        }
+        val term = sim.storages.getValue(followerId).term()
+        val commit = sim.nodes.getValue(followerId).commitIndex.value
+        val floor = sim.committedFloorTerm(followerId, commit)
+        assertTrue(floor >= 1L, "precondition: a floor of 0 is vacuous — nothing legal is below it (floor=$floor)")
+
+        val refusals = collectRefusals(sim)
+        sim.settle()
+        refusals.clear()
+
+        sim.deliverInstallSnapshot(
+            to = followerId, from = leaderId, term = term,
+            // Above our commit frontier, so the behind-commit exemption (an honest §7 retransmission,
+            // which must keep being acked) does not apply...
+            lastIncludedIndex = commit + JUMP_AHEAD,
+            // ...and one below the floor: a real earlier term, in range for both frame-internal bounds.
+            lastIncludedTerm = floor - 1L,
+        )
+        sim.settle()
+
+        val refusal = refusals.only(followerId)
+        assertAll(
+            { assertEquals(RefusalGate.InstallSnapshotBelowCommittedTermFloor, refusal.gate) },
+            { assertEquals(leaderId, refusal.from) },
+            { assertEquals(RaftMessageType.InstallSnapshot, refusal.messageType) },
+        )
+    }
+
+    // ── adoptLeaderForTerm: §5.2 Election Safety ─────────────────────────────
+
+    /**
+     * The gate #2033 called highest-value, because its observable was **nothing at all**.
+     *
+     * `demoteToFollowerOnLeaderContact` runs immediately before it and emits `BecomeFollower` only if
+     * this node was still Leader or Candidate; reaching it as an ordinary Follower — the common case,
+     * and the one here — the refusal moved no state, sent no reply and produced no event, leaving the
+     * frame indistinguishable from one the §5.3 consistency check drops a screen later.
+     *
+     * The sender is a **voter**, so the §5.2 leader-authority gate at the dispatch boundary passes it:
+     * that gate asks whether the sender *could ever* be leader, this one whether it is the leader
+     * *this term already established*. Only the second is violated here.
+     */
+    @Test
+    fun aSameTermAppendEntriesFromAVoterThatIsNotThePinnedLeader_isRefusedAs_ForgedLeaderForTerm() = raftRunTest {
+        val sim = simWithLearner()
+        val leaderId = sim.idOf(awaitLeader(sim))
+        val followerId = voterIds.first { it != leaderId }
+        val other = voterIds.first { it != leaderId && it != followerId }
+        // Recognising the leader is what proves the pin exists: `_leader` is assigned only after
+        // adoptLeaderForTerm admits the frame that set it.
+        sim.awaitTrue("$followerId recognises $leaderId") {
+            sim.nodes.getValue(followerId).leader.value == leaderId
+        }
+        val term = sim.storages.getValue(followerId).term()
+
+        val refusals = collectRefusals(sim)
+        sim.settle()
+        refusals.clear()
+
+        // Same term — a higher one would step down and invalidate the pin, a lower one would be
+        // answered by the §5.1 stale-term reply, and neither would reach this gate.
+        sim.deliverAppendEntries(to = followerId, from = other, term = term)
+        sim.settle()
+
+        val refusal = refusals.only(followerId)
+        assertAll(
+            { assertEquals(RefusalGate.ForgedLeaderForTerm, refusal.gate) },
+            { assertEquals(other, refusal.from, "a voter, so the §5.2 gate upstream passed it") },
+            { assertEquals(RaftMessageType.AppendEntries, refusal.messageType) },
+        )
+    }
+
     // ── The structural half ──────────────────────────────────────────────────
 
     /**
@@ -400,18 +679,28 @@ class FrameRefusedTest {
             sim.nodes.getValue(followerId).leader.value == leaderId &&
                 sim.nodes.getValue(learnerId).leader.value == leaderId
         }
+        // The committed-floor gate is the one injection with a fixture premise: below a committed
+        // entry at a non-zero term the floor is 0 and nothing legal sits under it.
+        sim.awaitTrue("$followerId committed $leaderId's no-op") {
+            sim.nodes.getValue(followerId).commitIndex.value >= 1L
+        }
 
         val leaderTerm = sim.storages.getValue(leaderId).term()
         val followerTerm = sim.storages.getValue(followerId).term()
         val learnerTerm = sim.storages.getValue(learnerId).term()
+        val followerCommit = sim.nodes.getValue(followerId).commitIndex.value
+        val floor = sim.committedFloorTerm(followerId, followerCommit)
         assertTrue(followerTerm >= 1L, "precondition: a stale term must exist below $followerTerm")
+        assertTrue(floor >= 1L, "precondition: a floor of 0 is vacuous — nothing legal is below it")
 
         val refusals = collectRefusals(sim)
         sim.settle()
         refusals.clear()
 
         // Nothing below advances virtual time, so no election can fire between injections and every
-        // term read above stays current. Each frame is refused, so none of them moves state either.
+        // term read above stays current. Each frame is refused, so none of them moves state either —
+        // including the handler-lane ones, which all return ahead of the term adoption, the demotion,
+        // the election-timeout reset and the reply.
         sim.deliverRequestVote(to = followerId, from = other, term = -1L, lastLogIndex = 0L, lastLogTerm = 0L)
         sim.deliverRequestVote(
             to = followerId, from = other,
@@ -423,6 +712,28 @@ class FrameRefusedTest {
         sim.deliverTimeoutNow(to = followerId, from = leaderId, term = followerTerm + 1)
         sim.deliverTimeoutNow(to = followerId, from = other, term = followerTerm)
         sim.deliverTimeoutNow(to = learnerId, from = leaderId, term = learnerTerm)
+        sim.deliverAppendEntries(to = followerId, from = leaderId, term = followerTerm, prevLogIndex = -1L)
+        sim.deliverAppendEntries(
+            to = followerId, from = leaderId, term = followerTerm, prevLogIndex = 0L,
+            entries = listOf(LogEntry(index = 5L, term = followerTerm, command = byteArrayOf())),
+        )
+        sim.deliverAppendEntries(
+            to = followerId, from = leaderId, term = followerTerm, prevLogIndex = 0L,
+            entries = listOf(LogEntry(index = 1L, term = followerTerm + 1L, command = byteArrayOf())),
+        )
+        sim.deliverInstallSnapshot(
+            to = followerId, from = leaderId, term = followerTerm,
+            lastIncludedIndex = -1L, lastIncludedTerm = 0L,
+        )
+        sim.deliverInstallSnapshot(
+            to = followerId, from = leaderId, term = followerTerm,
+            lastIncludedIndex = 5L, lastIncludedTerm = followerTerm + 1L,
+        )
+        sim.deliverInstallSnapshot(
+            to = followerId, from = leaderId, term = followerTerm,
+            lastIncludedIndex = followerCommit + JUMP_AHEAD, lastIncludedTerm = floor - 1L,
+        )
+        sim.deliverAppendEntries(to = followerId, from = other, term = followerTerm)
         sim.settle()
 
         assertEquals(
@@ -430,5 +741,13 @@ class FrameRefusedTest {
             refusals.map { it.gate }.toSet(),
             "every declared RefusalGate must have a live emit site — refusals were $refusals",
         )
+    }
+
+    private companion object {
+        /**
+         * A snapshot boundary comfortably above the recipient's commit frontier, so the behind-commit
+         * exemption in `committedTermFloorRefusal` cannot be what admits the frame.
+         */
+        const val JUMP_AHEAD = 50L
     }
 }

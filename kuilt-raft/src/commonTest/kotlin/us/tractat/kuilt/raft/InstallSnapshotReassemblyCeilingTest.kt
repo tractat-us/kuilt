@@ -37,7 +37,7 @@ internal class InstallSnapshotReassemblyCeilingTest {
     /** Small enough that a single injected chunk overshoots it without allocating anything real. */
     private val ceiling = 64
 
-    /** Well inside `MAX_PLAUSIBLE_INDEX`, so `isWellFormedSnapshotChunk` passes the frame through. */
+    /** Well inside `MAX_PLAUSIBLE_INDEX`, so `snapshotChunkRefusal` passes the frame through. */
     private val snapshotIndex = 99L
 
     @Test
