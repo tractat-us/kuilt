@@ -28,6 +28,8 @@ import kotlin.math.roundToLong
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.ZERO
 import kotlin.time.Duration.Companion.hours
@@ -93,6 +95,17 @@ class MerkleDigestCostModelTest {
          * placeholder like `-1L` encodes in one byte and would understate the frame by eight.
          */
         const val REPRESENTATIVE_ROOT = -0x5AA53CC31EE12DD2L
+
+        /**
+         * The largest mesh one [meshSender] can price for, and the bound [meterConvergedRounds]
+         * enforces. [buildInMemoryMesh] names peers `peer-0` … `peer-(n-1)`, so ten peers are
+         * `peer-0` … `peer-9` — every id the same six characters as [meshSender] — and the
+         * eleventh brings in `peer-10`, a seventh character and one more CBOR byte per frame.
+         *
+         * Note the bound is `<= 10`, **not** the `< 10` that "sub-10-node" suggests: the mesh of
+         * size ten is the last one that is uniformly priced, not the first one that is not.
+         */
+        const val MAX_UNIFORMLY_PRICED_MESH = 10
     }
 
     /**
@@ -258,6 +271,36 @@ class MerkleDigestCostModelTest {
         val measured = mesh.clusterMetrics().totalBytesOut - before
         mesh.close()
         return measured
+    }
+
+    /**
+     * [meshSender]'s "every id in a sub-10-node mesh is six characters" is true and, until now,
+     * unenforced — [meterConvergedRounds] takes the node count as a parameter, so a larger mesh
+     * would keep printing figures that are silently a byte per frame light. The neighbouring KDoc
+     * already records that this error class "looks like negative framing overhead", i.e. it has
+     * bitten once and was caught by luck.
+     *
+     * The two length assertions are what pin the *bound* rather than restate it: raising
+     * [MAX_UNIFORMLY_PRICED_MESH] admits a `peer-10` the sender cannot price, and lowering it
+     * makes the guard needlessly tight.
+     */
+    @Test
+    fun meteringRefusesAMeshItCannotPrice() = runTest(UnconfinedTestDispatcher()) {
+        assertTrue(
+            (0 until MAX_UNIFORMLY_PRICED_MESH).all { "peer-$it".length == meshSender.value.length },
+            "every peer id in a $MAX_UNIFORMLY_PRICED_MESH-node mesh must be as long as $meshSender, " +
+                "or one sender id cannot price them all",
+        )
+        assertNotEquals(
+            meshSender.value.length,
+            "peer-$MAX_UNIFORMLY_PRICED_MESH".length,
+            "and the next id must not be, or the bound is tighter than it needs to be",
+        )
+        assertFailsWith<IllegalArgumentException>(
+            "a mesh one peer past the uniformly-priced bound must be refused, not measured",
+        ) {
+            meterConvergedRounds(n = MAX_UNIFORMLY_PRICED_MESH + 1, state = gsetOf(1), rounds = 1)
+        }
     }
 
     @Test
