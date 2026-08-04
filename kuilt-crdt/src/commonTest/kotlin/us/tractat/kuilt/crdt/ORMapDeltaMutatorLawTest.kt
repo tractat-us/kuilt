@@ -42,9 +42,11 @@ import kotlin.test.assertTrue
  * instead.
  *
  * This suite once carried a caveat that delivery order was irrelevant to key presence and tags but
- * *not* to a key's value. That was #2086, and it is fixed: each of a key's tags now carries the
- * write made under it, so a remove takes exactly the writes it observed and every comparison here is
- * on bytes.
+ * *not* to a key's value. That was #2086, and it is fixed: each of a key's tags now carries the write
+ * made under it, so a remove takes the writes sitting on the tags it retired, and every comparison
+ * here is on bytes. (Not *every* write the remover ever saw — a re-put by its author moves it onto a
+ * fresh tag first; `ORMapTest.aReplicasRePutCarriesItsEarlierWriteBeyondAConcurrentRemove` pins that
+ * boundary.)
  */
 @OptIn(ExperimentalSerializationApi::class)
 class ORMapDeltaMutatorLawTest {
@@ -657,8 +659,8 @@ class ORMapDeltaMutatorLawTest {
      * The value and byte assertions are the ones #2086 used to make impossible. Before it, the two
      * orders disagreed on the key's value — a peer that applied the remove first no longer had the
      * old value to merge into, while a peer that applied the put first kept both — so this test
-     * could only pin presence and tags. Now a tag carries its own write, the remove takes only the
-     * writes it observed, and the orders agree outright.
+     * could only pin presence and tags. Now a tag carries its own write, the remove takes the writes
+     * on the tags it retired, and the orders agree outright.
      */
     @Test
     fun aConcurrentPutDeltaSurvivesARemoveDeltaInEitherOrder() {

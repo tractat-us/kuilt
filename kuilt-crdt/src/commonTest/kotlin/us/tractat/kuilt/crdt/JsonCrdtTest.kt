@@ -466,8 +466,11 @@ class JsonCrdtTest {
     // no change, which pieceIsAssociativeOverCausallyRelatedTrajectories' control arm pins.
     //
     // NOTE the semantic this settles, visible in pieceIsAssociativeAcrossAConcurrentSetAndRemove:
-    // a remove takes the writes it observed with it. The key still survives a concurrent write
-    // (add-wins), holding that write alone.
+    // a remove takes with it the writes sitting on the tags it retired. The key still survives a
+    // concurrent write (add-wins), holding that write alone. It is NOT "every write the remover
+    // ever saw" — a re-put by a write's own author moves it onto a fresh tag, out of a concurrent
+    // remover's reach; ORMapTest.aReplicasRePutCarriesItsEarlierWriteBeyondAConcurrentRemove pins
+    // that boundary.
 
     /**
      * A leaf whose register dot is minted by [writer].
@@ -685,7 +688,7 @@ class JsonCrdtTest {
                 assertEquals(
                     setOf<JsonValue>(JsonValue.Str("v2")),
                     remover.piece(setter).piece(start).scalarsAt("k"),
-                    "…holding its own write alone — the remover took the write it had observed",
+                    "…holding its own write alone — v1 sat on the tag the remover retired",
                 )
             },
         )

@@ -16,24 +16,7 @@ internal class BoundedCounterLawsPropertyTest {
 
     /** Seed + random spend/transfer operations, depth 0..8. */
     @Provide
-    fun states(): Arbitrary<BoundedCounter> {
-        val quotaArb: Arbitrary<Long> = Arbitraries.integers().between(0, 20).map { it.toLong() }
-        val seedArb: Arbitrary<BoundedCounter> = quotaArb.flatMap { q0: Long ->
-            quotaArb.flatMap { q1: Long ->
-                quotaArb.map { q2: Long ->
-                    BoundedCounter.init(
-                        mapOf(replicas[0] to q0, replicas[1] to q1, replicas[2] to q2),
-                    )
-                }
-            }
-        }
-        val opArb: Arbitrary<Op> = Arbitraries.integers().between(0, 2).flatMap { rIdx: Int ->
-            Arbitraries.integers().between(0, 2).flatMap { opType: Int ->
-                Arbitraries.integers().between(1, 5).map { amount: Int -> Op(rIdx, opType, amount.toLong()) }
-            }
-        }
-        return trajectories().map { it.last() }
-    }
+    fun states(): Arbitrary<BoundedCounter> = trajectories().map { it.last() }
 
     /** One running history — see [assertAssociativeAlongTrajectory]. */
     @Provide

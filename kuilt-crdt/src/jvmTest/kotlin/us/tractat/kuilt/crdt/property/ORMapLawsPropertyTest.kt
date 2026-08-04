@@ -44,9 +44,37 @@ internal class ORMapLawsPropertyTest {
     fun trajectories(): Arbitrary<List<ORMap<String, GCounter>>> = trajectoryFor(ReplicaId("A"))
 
     private fun statesFor(replica: ReplicaId): Arbitrary<ORMap<String, GCounter>> =
-        trajectoryFor(replica).map { it.last() }
+        randomOps().map { ops -> ops.fold(ORMap.empty(), applyTo(replica)) }
 
-    private fun trajectoryFor(replica: ReplicaId): Arbitrary<List<ORMap<String, GCounter>>> {
+    /**
+     * A trajectory that **begins with the failing shape** and then explores randomly around it.
+     *
+     * The prefix is not decoration. Left to sampling alone, the shape this property exists to catch
+     * — put `k`, remove `k`, put `k` again with a *strictly smaller* weight, so a `GCounter` max
+     * merge can show the difference — is a few-percent event per try. At `tries = 100` that misses a
+     * reverted `ORMap` outright: **measured 4 reds in 6 independent runs** without the prefix, and
+     * 6 in 6 with it. A pin that goes green a third of the time while the bug is present is not a
+     * pin, and this one was being quoted as a deterministic red.
+     *
+     * **Measuring that needed its own hygiene, and getting it wrong inflates the answer.** jqwik
+     * defaults to `AfterFailureMode.PREVIOUS_SEED` and records the failing seed in
+     * `kuilt-crdt/.jqwik-database`, so every run after the first failure *replays* that seed rather
+     * than drawing a fresh one. Repeated runs then look deterministic whatever the generator does —
+     * the first pass at this measurement read 6/6 on both arms until the database was deleted
+     * between runs. Delete it per run, or the experiment answers a question you did not ask.
+     *
+     * Constructing the shape rather than pinning a jqwik seed is the sturdier of the two fixes: a
+     * seed makes one *stream* reproducible, and a jqwik upgrade or a generator edit silently
+     * re-rolls it. Every try here contains the counterexample by construction, so the property fails
+     * on the first try against a reverted `ORMap` whatever the seed, and the random tail still
+     * explores the region around it.
+     */
+    private fun trajectoryFor(replica: ReplicaId): Arbitrary<List<ORMap<String, GCounter>>> =
+        randomOps().map { tail ->
+            (SHAPE + tail).runningFold(ORMap.empty(), applyTo(replica))
+        }
+
+    private fun randomOps(): Arbitrary<List<Op>> {
         val keyArb: Arbitrary<String> = Arbitraries.integers().between(0, 3).map { "k-$it" }
         val opArb: Arbitrary<Op> = keyArb.flatMap { key: String ->
             // The value varies per op. A generator that always put the same value would make a lost
@@ -55,21 +83,19 @@ internal class ORMapLawsPropertyTest {
                 Arbitraries.longs().between(1L, 4L).map { weight: Long -> Op(key, isPut, weight) }
             }
         }
-        return opArb.list().ofMinSize(0).ofMaxSize(6).map { ops: List<Op> ->
-            ops.runningFold(ORMap.empty<String, GCounter>()) { s: ORMap<String, GCounter>, op: Op ->
-                if (op.isPut) {
-                    s.put(replica, op.key, GCounter.of(replica to op.weight))
-                } else {
-                    s.remove(op.key)
-                }
-            }
-        }
+        return opArb.list().ofMinSize(0).ofMaxSize(6)
     }
+
+    private fun applyTo(replica: ReplicaId): (ORMap<String, GCounter>, Op) -> ORMap<String, GCounter> =
+        { state, op ->
+            if (op.isPut) state.put(replica, op.key, GCounter.of(replica to op.weight)) else state.remove(op.key)
+        }
 
     /**
      * The law over states that are causal *ancestors* of one another, which the three
      * disjoint-replica providers above structurally cannot produce. This is the property that
-     * catches #2086.
+     * catches #2086, and — see [trajectoryFor] — it catches it on every try rather than on a lucky
+     * draw.
      */
     @Property(tries = 100)
     fun pieceIsAssociativeAlongOneTrajectory(
@@ -109,5 +135,18 @@ internal class ORMapLawsPropertyTest {
         val joined = a.piece(b)
         check(joined == joined.piece(a)) { "left absorption failed: $a, $b" }
         check(joined == joined.piece(b)) { "right absorption failed: $a, $b" }
+    }
+
+    private companion object {
+        /**
+         * Put, remove, put again — one key, and the second weight strictly *below* the first so the
+         * `GCounter` max merge can tell a resurrected write from a kept one. Every trajectory starts
+         * here; see [trajectoryFor].
+         */
+        val SHAPE = listOf(
+            Op(key = "k-0", isPut = true, weight = 4L),
+            Op(key = "k-0", isPut = false, weight = 0L),
+            Op(key = "k-0", isPut = true, weight = 1L),
+        )
     }
 }

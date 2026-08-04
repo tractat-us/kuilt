@@ -2,6 +2,7 @@ package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -72,9 +73,9 @@ class ORMapTest {
     }
 
     @Test
-    fun aRemoveTakesTheWritesItObservedAndLeavesTheOnesItDidNot() {
-        // The same shape one step on: the key is put twice before the remove, so the removed
-        // contribution is a fold of two writes rather than one.
+    fun aRemoveTakesTheWholeFoldSittingOnTheTagItRetires() {
+        // The same shape one step on: the key is put twice before the remove, so the tag the
+        // remover retires is carrying a fold of two writes rather than one, and both go.
         val start = ORMap.empty<String, GCounter>()
             .put(a, "votes", GCounter.of(a to 1L))
             .put(a, "votes", GCounter.of(a to 4L))
@@ -82,6 +83,42 @@ class ORMapTest {
         val merged = start.remove("votes").piece(bob)
 
         assertEquals(2L, merged["votes"]?.value, "only the write the remover never observed survives")
+    }
+
+    /**
+     * **The boundary on "a remove takes the writes it observed".** It is true of the writes still
+     * sitting on the tags the remover retired — and a re-put by their author moves them off those
+     * tags first.
+     *
+     * `A` writes `{a:1}` under tag `(A,1)`. `B` syncs and sees it. Concurrently `A` re-puts, which
+     * supersedes `(A,1)` and re-homes its write onto the fresh `(A,2)`, while `B` removes the key —
+     * retiring `(A,1)`, the only tag it knows. The merge keeps `{a:1}`: it is riding a tag `B` never
+     * saw, so `B`'s removal does not reach it.
+     *
+     * This is a deliberate consequence of a put being additive over the value lattice while leaving
+     * a replica one tag per key, not a hole in the observed-remove rule — associativity holds
+     * throughout, because a tag's payload is fixed when the tag is minted rather than blended at
+     * join time. It is pinned because it is the semantic edge a consumer eventually meets, and an
+     * unpinned documented boundary rots.
+     */
+    @Test
+    fun aReplicasRePutCarriesItsEarlierWriteBeyondAConcurrentRemove() {
+        val start = ORMap.empty<String, GCounter>().put(a, "votes", GCounter.of(a to 1L))
+        val alice = start.put(a, "votes", GCounter.of(b to 4L)) // supersedes (A,1), re-homes {a:1}
+        val bob = start.remove("votes")                         // retires (A,1) — all bob can see
+
+        val merged = alice.piece(bob)
+
+        assertAll(
+            { assertEquals(5L, merged["votes"]?.value, "the re-homed write outlives a remove of its original tag") },
+            {
+                assertEquals(
+                    merged,
+                    bob.piece(alice),
+                    "…and it does so in either order — this is a semantics boundary, not a race",
+                )
+            },
+        )
     }
 
     @Test

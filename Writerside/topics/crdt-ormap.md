@@ -6,9 +6,11 @@ A map where keys can be added and removed, and values can be any CRDT. When two 
 
 ## Merge rule
 
-Key presence is an ORSet of presence dots, and **each dot carries the write that was made under it**. A key's value is the join of the writes whose dots are still live, so a removal takes exactly the writes it observed away with it.
+Key presence is an ORSet of presence dots, and **each dot carries the write that was made under it**. A key's value is the join of the writes whose dots are still live, so a removal takes away the writes sitting on the dots it retired.
 
 That is what makes a delivery order irrelevant. When one replica removes a key and another concurrently writes to it, the writer's dot survives — the remover never saw it — so the key is present with the writer's value, and the removed write is gone whichever order the two states are merged in. Keeping one value beside the tags instead would make the answer depend on that order, which is [issue 2086](https://github.com/tractat-us/kuilt/issues/2086).
+
+One consequence worth knowing before you rely on removal to erase something. Writing to a key again *moves* that replica's earlier writes onto the new dot, so they are no longer sitting where a concurrent remover can reach them: if A writes, B sees it, and then A writes again while B removes the key, A's first write survives. It rode a dot B never saw. Removal erases what it observed at the dot it observed it on — it is not a guarantee that a value is gone everywhere for good.
 
 ## Code example
 

@@ -20,6 +20,14 @@ import us.tractat.kuilt.crdt.Quilted
  * single-replica fold, so each is a prefix of the next and each dot is minted exactly once — the
  * states are all reachable, and the triple `(s, s.remove(k), s.remove(k).put(k, v))` is drawn from
  * an ordinary run rather than fabricated.
+ *
+ * **Which of these is a pin and which is exploration.** Only `ORMapLawsPropertyTest`'s trajectory
+ * generator *constructs* the failing shape, so only that one is deterministic — it fails on the
+ * first try against a broken `ORMap`, whatever seed jqwik draws. The others sample freely and are
+ * exploration: a green run there is evidence, not proof, and none of them is standing in for a
+ * regression pin. Do not quote one as a deterministic verdict without checking how its generator is
+ * built (#2086 — a trajectory property that sampled the shape at a few percent per try read as a
+ * hard red while missing a reverted bug one run in six).
  */
 internal fun <S : Quilted<S>> assertAssociativeAlongTrajectory(trajectory: List<S>) {
     for (a in trajectory) for (b in trajectory) for (c in trajectory) {
