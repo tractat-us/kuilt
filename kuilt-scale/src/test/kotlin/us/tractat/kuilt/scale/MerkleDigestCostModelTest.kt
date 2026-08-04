@@ -539,6 +539,17 @@ class MerkleDigestCostModelTest {
             println("  %9d %19d %17.1f %12.2f".format(n, bytes, bytes / 60.0, matchedRound / 60.0))
         }
 
+        // The two columns must price rounds on the same basis or the table is not a comparison.
+        // "A few tens of bytes conservative against a multi-KB frame" is only true at the bottom
+        // of the sweep: at one entry the omitted ack is a larger share of the round than the
+        // state is, so the *before* column comes out below the *now* column and the table says
+        // #1955 made a one-entry GSet more expensive. It did not — that round paid the same ack.
+        assertTrue(
+            gsetRows.all { (_, beforeRound) -> beforeRound > matchedRound },
+            "a whole pre-#1955 round must cost more than a whole #1955 round at every size swept " +
+                "(smallest: ${gsetRows.first().second} b before vs $matchedRound b now)",
+        )
+
         println("\n  Diverged round — d keys actually differ (n = 100k entries):")
         println("  %8s %12s %16s %12s".format("d", "shards hit", "diff-ship bytes", "vs full"))
         val n = 100_000
