@@ -65,7 +65,7 @@ public fun raftSimTest(
 ```
 
 Inside `:kuilt-raft`'s own commonTest the equivalent internal pair is `raftRunTest`
-(`runTest(StandardTestDispatcher(), timeout = 5.seconds)`) plus `raftSim(...)`, which
+(`runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP)`) plus `raftSim(...)`, which
 builds a `RaftSimulation`. Both harnesses expose the same surface:
 
 - **Cluster mutation** — `crash`, `restart`, `partition`, `partitionOff`, `heal`,
