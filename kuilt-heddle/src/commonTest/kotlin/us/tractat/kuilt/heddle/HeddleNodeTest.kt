@@ -23,6 +23,7 @@ import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.liveness.PartitionEvent
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -42,7 +43,8 @@ import kotlin.time.Instant
  * stale-demand safety (§6), the §8.2 bound metrics, stranded crashed-peer earmarks,
  * the full §10.1 conservation identity **with** earmarks, and the §13 end-to-end scenario.
  *
- * Discipline (repo CLAUDE.md): tight 5 s timeout, `StandardTestDispatcher`, node coroutines
+ * Discipline (repo CLAUDE.md): a generous `TEST_WEDGE_BACKSTOP` wedge ceiling (never a tight
+ * real-time cap, #1739), `StandardTestDispatcher`, node coroutines
  * on `backgroundScope`, seeded RNG, bounded `advanceTimeBy` only — never `advanceUntilIdle`
  * (the replicator/liveness timers re-arm forever).
  */
@@ -84,7 +86,7 @@ class HeddleNodeTest {
     @Test
     fun twoPeersConvergeAfterIndependentScheduling() = runTest(
         StandardTestDispatcher(),
-        timeout = 5.seconds,
+        timeout = TEST_WEDGE_BACKSTOP,
     ) {
         val h = harness(peers = 2, mint = mapOf(0 to 100L, 1 to 100L), topology = flatTopology())
         h.pump()
@@ -106,7 +108,7 @@ class HeddleNodeTest {
     }
 
     @Test
-    fun convergesUnderDuplicatedDelivery() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun convergesUnderDuplicatedDelivery() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         // Every frame is delivered twice in and out on both peers — the lattice must absorb it (§10.7).
         val h = harness(
             peers = 2,
@@ -134,7 +136,7 @@ class HeddleNodeTest {
     // ─────────────────────────────────────────────────────────────────────────────
 
     @Test
-    fun completeIsIdempotentHistoryRisesOnce() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun completeIsIdempotentHistoryRisesOnce() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val h = harness(peers = 1, mint = mapOf(0 to 100L), topology = flatTopology())
         h.pump()
         val node = h.peers[0].node
@@ -161,7 +163,7 @@ class HeddleNodeTest {
 
     @Test
     fun expiredDemandStopsSchedulingButNeverAuthorizesSpend() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val h = harness(peers = 1, mint = mapOf(0 to 100L), topology = flatTopology())
             h.pump()
             val node = h.peers[0].node
@@ -194,7 +196,7 @@ class HeddleNodeTest {
 
     @Test
     fun globalConservationHoldsWithReservationInFlightAcrossMerge() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val minted = 200L
             val h = harness(peers = 2, mint = mapOf(0 to 100L, 1 to 100L), topology = flatTopology())
             h.pump()
@@ -242,7 +244,7 @@ class HeddleNodeTest {
 
     @Test
     fun completeChargesCapturedPathWhenLeafQuarantinedConcurrently() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val h = harness(peers = 1, mint = mapOf(0 to 100L), topology = flatTopology())
             h.pump()
             val node = h.peers[0].node
@@ -267,7 +269,7 @@ class HeddleNodeTest {
 
     @Test
     fun completeChargesWhenLeafGainsChildConcurrently() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val h = harness(peers = 1, mint = mapOf(0 to 100L), topology = flatTopology())
             h.pump()
             val node = h.peers[0].node
@@ -289,7 +291,7 @@ class HeddleNodeTest {
         }
 
     @Test
-    fun reserveRejectsNonLeafGroup() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun reserveRejectsNonLeafGroup() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val h = harness(peers = 1, mint = mapOf(0 to 100L), topology = flatTopology())
         h.pump()
         // root has children → not a leaf → reserve must refuse (else every complete throws).
@@ -303,7 +305,7 @@ class HeddleNodeTest {
 
     @Test
     fun invalidActualCostDoesNotLeakEarmarkOrLoseReservation() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val h = harness(peers = 1, mint = mapOf(0 to 100L), topology = flatTopology())
             h.pump()
             val node = h.peers[0].node
@@ -330,7 +332,7 @@ class HeddleNodeTest {
     // ─────────────────────────────────────────────────────────────────────────────
 
     @Test
-    fun scheduleNeverDelegatesEarmarkedUnits() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun scheduleNeverDelegatesEarmarkedUnits() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val minted = 100L
         val h = harness(peers = 1, mint = mapOf(0 to minted), topology = flatTopology())
         h.pump()
@@ -376,7 +378,7 @@ class HeddleNodeTest {
 
     @Test
     fun boundMetricsConsistentUnderAsymmetricDemand() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val h = harness(peers = 1, mint = mapOf(0 to 100L), topology = flatTopology())
             h.pump()
             val node = h.peers[0].node
@@ -395,7 +397,7 @@ class HeddleNodeTest {
 
     @Test
     fun partitionedPeersConvergeOnHealWithinBound() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val h = harness(peers = 2, mint = mapOf(0 to 100L, 1 to 100L), topology = flatTopology())
             h.pump()
             for (p in h.peers) {
@@ -444,7 +446,7 @@ class HeddleNodeTest {
 
     @Test
     fun crashedPeerEarmarksStrandedNoOtherHoldingsChange() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val h = harness(peers = 2, mint = mapOf(0 to 100L, 1 to 100L), topology = flatTopology())
             h.pump()
             val alive = h.peers[0].node
@@ -490,7 +492,7 @@ class HeddleNodeTest {
 
     @Test
     fun silentPeerSurfacesOnPartitionEventsAndUnreachable() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val h = harness(peers = 2, mint = mapOf(0 to 100L, 1 to 100L), topology = flatTopology())
             h.pump()
             val observer = h.peers[0].node
@@ -538,7 +540,7 @@ class HeddleNodeTest {
 
     @Test
     fun enrollmentReMonitorsALostPeerAndSeamReappearanceAloneDoesNot() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val h = harness(peers = 2, mint = mapOf(0 to 100L, 1 to 100L), topology = flatTopology())
             h.pump()
             val observer = h.peers[0].node
@@ -587,7 +589,7 @@ class HeddleNodeTest {
 
     @Test
     fun endToEndScenarioTwoTenantsDynamicSubtreePartitionHeal() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             // root → {tenant-a w1, tenant-b w1}
             val tenantA = GroupId("tenant-a")
             val tenantB = GroupId("tenant-b")
@@ -673,7 +675,7 @@ class HeddleNodeTest {
     @Test
     fun wakingChildIsClampedToTheFrontInsteadOfBursting() = runTest(
         StandardTestDispatcher(),
-        timeout = 5.seconds,
+        timeout = TEST_WEDGE_BACKSTOP,
     ) {
         val h = harness(peers = 1, mint = mapOf(0 to 500L), topology = flatTopology())
         h.pump()
@@ -714,7 +716,7 @@ class HeddleNodeTest {
     @Test
     fun firstObservationOfADemandingEdgeIsNotTreatedAsAWake() = runTest(
         StandardTestDispatcher(),
-        timeout = 5.seconds,
+        timeout = TEST_WEDGE_BACKSTOP,
     ) {
         val h = harness(peers = 1, mint = mapOf(0 to 200L), topology = flatTopology())
         h.pump()
@@ -762,7 +764,7 @@ class HeddleNodeTest {
     @Test
     fun aRewakeCannotLowerAnEffectiveVirtualService() = runTest(
         StandardTestDispatcher(),
-        timeout = 5.seconds,
+        timeout = TEST_WEDGE_BACKSTOP,
     ) {
         // 220 = e1's 200 plus e2's 20; holdings are exhausted from phase 2 on, so no later grant
         // can move a raw virtual service and mask the clamp.

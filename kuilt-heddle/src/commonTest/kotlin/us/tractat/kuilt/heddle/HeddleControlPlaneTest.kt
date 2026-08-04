@@ -27,6 +27,7 @@ import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.test.FakeRaftNode
 import us.tractat.kuilt.raft.test.MultiNodeRaftSim
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -48,8 +49,9 @@ import kotlin.time.Instant
  * the spend path stays coordination-free.
  *
  * **Test discipline (repo CLAUDE.md).** Consensus tests run through the canonical `MultiNodeRaftSim`
- * from `:kuilt-raft-test` — never a hand-rolled cluster network: `StandardTestDispatcher`, tight 5 s
- * timeout, node coroutines on `backgroundScope`, per-node seeded election RNG, bounded `await*`
+ * from `:kuilt-raft-test` — never a hand-rolled cluster network: `StandardTestDispatcher`, a generous
+ * `TEST_WEDGE_BACKSTOP` wedge ceiling (never a tight real-time cap, #1739), node coroutines on
+ * `backgroundScope`, per-node seeded election RNG, bounded `await*`
  * helpers only (never `advanceUntilIdle`). Single-node determinism/idempotence tests use a
  * [FakeRaftNode] double.
  */
@@ -65,7 +67,7 @@ class HeddleControlPlaneTest {
     // ACTIVE at that index, so eB loses. (Fable's executed kill chain; §5.4.3.)
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun gateIgnoresGossipMergedAheadState() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun gateIgnoresGossipMergedAheadState() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         val sink = RecordingSink()
         val plane = HeddleControlPlane(
@@ -105,7 +107,7 @@ class HeddleControlPlaneTest {
     // 1. Split-brain mint impossible (§9 #1) — a partitioned minority can never commit.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun splitBrainMintImpossible() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun splitBrainMintImpossible() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val ids = (1..5).map { NodeId("v$it") }
         val sim = MultiNodeRaftSim(nodeIds = ids, scope = this, nodeScope = backgroundScope)
         val sinks = ids.associateWith { RecordingSink() }
@@ -142,7 +144,7 @@ class HeddleControlPlaneTest {
     // 2. Overlapping reshapes serialize; the loser surfaces as a structured conflict.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun overlappingReshapesSerializeLoserSurfacesConflict() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun overlappingReshapesSerializeLoserSurfacesConflict() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val ids = (1..3).map { NodeId("v$it") }
         val sim = MultiNodeRaftSim(nodeIds = ids, scope = this, nodeScope = backgroundScope)
         val sinks = ids.associateWith { RecordingSink() }
@@ -183,7 +185,7 @@ class HeddleControlPlaneTest {
     // 3. Non-overlapping reshapes commit independently — no contention.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun nonOverlappingReshapesCommitIndependently() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun nonOverlappingReshapesCommitIndependently() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val ids = (1..3).map { NodeId("v$it") }
         val sim = MultiNodeRaftSim(nodeIds = ids, scope = this, nodeScope = backgroundScope)
         val sinks = ids.associateWith { RecordingSink() }
@@ -217,7 +219,7 @@ class HeddleControlPlaneTest {
     // a re-created node's regenerated ids never collide, so no committed mint evaporates.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun mintIdentitySurvivesRestartWithoutCollision() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun mintIdentitySurvivesRestartWithoutCollision() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         val durable = RecordingSink() // the durable replicated ledger, shared across the "restart"
         val holder = ReplicaId("acme")
@@ -241,7 +243,7 @@ class HeddleControlPlaneTest {
     // the apply loop dedups the re-committed entry on its stable requestKey.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun retryAfterLeadershipLossMintsExactlyOnce() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun retryAfterLeadershipLossMintsExactlyOnce() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         // The leader commits the entry BUT the caller's forwarded proposal is rejected (LeadershipLost)
         // on the first attempt — the "outcome unknown" case — so submit retries, re-committing the SAME
@@ -265,7 +267,7 @@ class HeddleControlPlaneTest {
     // instead of hanging forever.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun submitTimeoutSurfacesLeaderCrash() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun submitTimeoutSurfacesLeaderCrash() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         fake.proposeBehavior = { awaitCancellation() } // a forwarded proposal that never commits (leader crash)
         val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, RecordingSink(), NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-4")
@@ -278,7 +280,7 @@ class HeddleControlPlaneTest {
     // 4. Zero consensus messages on the spend path (§10.13 message accounting).
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun spendPathIssuesZeroConsensusMessages() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun spendPathIssuesZeroConsensusMessages() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         val counting = CountingRaftNode(fake)
         val loom = InMemoryLoom()
@@ -328,7 +330,7 @@ class HeddleControlPlaneTest {
     // 5. The readIndex()-fenced revocation seam is specified but not shipped (§9 #3).
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun revocationSeamSpecifiedNotShipped() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun revocationSeamSpecifiedNotShipped() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         val loom = InMemoryLoom()
         val seam: Seam = loom.host(Pattern("heddle-h5-revoke"))
@@ -346,7 +348,7 @@ class HeddleControlPlaneTest {
     // structured Refused, not a lying Applied. Same record stays idempotent-Applied.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun prepareConflictingRecordIsRefusedNotSilentlyApplied() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun prepareConflictingRecordIsRefusedNotSilentlyApplied() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, RecordingSink(), NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-prep")
         val id = AttachmentId("e")
@@ -367,7 +369,7 @@ class HeddleControlPlaneTest {
     // close-refused) that the DualInbound/Prepare tests never reach.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun activateAndCloseOfMissingOrRetiredEdgeAreRefused() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun activateAndCloseOfMissingOrRetiredEdgeAreRefused() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, RecordingSink(), NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-refuse")
         val unknown = AttachmentId("never-prepared")
@@ -400,7 +402,7 @@ class HeddleControlPlaneTest {
     // a non-drained edge is refused LOCALLY (retiring it would strand entitlement).
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun governedRetireDrainGate() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun governedRetireDrainGate() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         val loom = InMemoryLoom()
         val seam: Seam = loom.host(Pattern("heddle-h5-retire"))
@@ -446,7 +448,7 @@ class HeddleControlPlaneTest {
     // consensus apply; RecordingSink+forceMerge models the gossip-merged data plane.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun reconcileClearsRacedRetireStrandAcrossAllPeers() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun reconcileClearsRacedRetireStrandAcrossAllPeers() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         // The three raft nodes ARE the three data-plane replicas here, so each plane's barrier reads
         // and acks its own slots — which is what the fence quantifies over.
         val ids = listOf(NodeId("p1"), NodeId("p2"), NodeId("p3"))
@@ -554,7 +556,7 @@ class HeddleControlPlaneTest {
     // there is no witness to smuggle anything through.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun theDerivedReconcileNeverWritesTheLiveEdgesBaseIssuedSlot() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun theDerivedReconcileNeverWritesTheLiveEdgesBaseIssuedSlot() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val fake = FakeRaftNode(selfId = NodeId("p3"), initialRole = RaftRole.Leader)
         val sink = RecordingSink()
         val p3 = ReplicaId("p3")
@@ -615,7 +617,7 @@ class HeddleControlPlaneTest {
     // still holds an unreplicated reservation: finding 2 through a side door.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun aThirdPartyQuiesceAckIsRefusedAndDoesNotCompleteTheFence() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun aThirdPartyQuiesceAckIsRefusedAndDoesNotCompleteTheFence() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val absent = ReplicaId("absent")
         val solo = ReplicaId("solo")
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
@@ -665,7 +667,7 @@ class HeddleControlPlaneTest {
     // partitioned ex-leader can never drive recovery from stale authority.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun reconcileReadIndexFenceRefusesANonLeaderProposer() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun reconcileReadIndexFenceRefusesANonLeaderProposer() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         fake.readIndexBehavior = { throw us.tractat.kuilt.raft.NotLeaderException("deposed") }
         val loom = InMemoryLoom()
@@ -694,7 +696,7 @@ class HeddleControlPlaneTest {
     // the §9 #3 readIndex fence AND a caught-up applied prefix.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun prepareNeutralRefusesAnOriginSeatOnAStaleEmptyView() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun prepareNeutralRefusesAnOriginSeatOnAStaleEmptyView() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         // Model the #1713 stale-view shape: the committed log is AHEAD of what this peer has folded.
         // readIndex fences at 42 while the control plane's applied prefix is still 0, i.e. the
@@ -738,7 +740,7 @@ class HeddleControlPlaneTest {
     // non-null and the joiner is seated at ⌈V⌉ with no fence involved (§7.2, #1688).
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun prepareNeutralSeatsAGenuineFirstGenerationAtTheOrigin() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun prepareNeutralSeatsAGenuineFirstGenerationAtTheOrigin() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         val loom = InMemoryLoom()
         val seam: Seam = loom.host(Pattern("heddle-h5-neutral-origin"))
@@ -785,7 +787,7 @@ class HeddleControlPlaneTest {
     // is asserted here because it is where the warning belongs (HeddleNode.prepare).
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun twoProposersOfOneIdAreOrderedFirstWinsAndDoNotStarveTheChild() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun twoProposersOfOneIdAreOrderedFirstWinsAndDoNotStarveTheChild() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         val plane = HeddleControlPlane(
             fake, ReplicaId("solo"), backgroundScope, RecordingSink(), NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-two-fronts",
@@ -839,7 +841,7 @@ class HeddleControlPlaneTest {
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
     @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
-    fun undecodableEntryIsSkippedAndStillAdvancesTheAppliedIndex() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun undecodableEntryIsSkippedAndStillAdvancesTheAppliedIndex() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         val sink = RecordingSink()
         val plane = HeddleControlPlane(
