@@ -26,6 +26,8 @@ import us.tractat.kuilt.crdt.ReplicaId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.minutes
 
 private fun gcounterSer() = QuiltMessage.serializer(GCounter.serializer())
 
@@ -35,16 +37,20 @@ private fun orSetSer() =
 /** Default config for replicator tests: suppresses the TestDispatcher guard warning. */
 private val REPLICATOR_TEST_CONFIG = QuilterConfig(expectVirtualTime = true)
 
+/** Short anti-entropy interval for the test that drives individual ticks by hand. */
+private const val ANTI_ENTROPY_MS = 50L
+
 private fun gcounterReplicator(
     seam: us.tractat.kuilt.core.Seam,
     scope: CoroutineScope,
+    config: QuilterConfig = REPLICATOR_TEST_CONFIG,
 ) = Quilter(
     replica = ReplicaId(seam.selfId.value),
     seam = seam,
     initial = GCounter.ZERO,
     messageSerializer = gcounterSer(),
     scope = scope,
-    config = REPLICATOR_TEST_CONFIG,
+    config = config,
 )
 
 class QuilterTest {
@@ -146,49 +152,109 @@ class QuilterTest {
 
     /**
      * A [QuiltMessage.FullState] whose state is dominated by the receiver's current state
-     * must not trigger any state change — the idempotence guard introduced for #737.
+     * must not trigger any state change — the idempotence guard introduced for #737 — and
+     * the receiver must instead push its own state back so the lagging sender heals (#828).
      *
-     * Setup: A and B converge; then A applies an extra increment alone. B now has a
-     * dominated state. After anti-entropy fires (B → A), A's state must remain at the
-     * converged value and must NOT be replaced with the lower-count dominated state.
+     * ## Why the setup has to work this hard (#2002)
      *
-     * Also verifies the converse: B must still correctly receive and apply A's FullState
-     * (new information is never dropped). The guard only skips the dominated direction.
+     * The delta path must be **dead** for the anti-entropy path to be observable at all.
+     * [Quilter.apply] broadcasts to every peer in the room; `deltaTargets` only chooses whom
+     * a replica GCs against. So the earlier version of this test — which simply applied a
+     * mutation and advanced a tick — had already delivered that mutation by broadcast before
+     * the tick fired. It asserted a value that was true one line earlier, stayed green with
+     * the whole anti-entropy reconcile deleted, and pinned nothing.
+     *
+     * And post-#1955 the tick ships a [QuiltMessage.RootDigest], not state: two converged
+     * peers now agree on the root and **no [QuiltMessage.FullState] is sent at all**. A
+     * dominated FullState is only reachable when the two states genuinely differ, so this
+     * test must construct that divergence rather than assume it.
+     *
+     * ## The trajectory
+     *
+     * 1. Gate open: A and B converge to 8 over the ordinary delta path.
+     * 2. Gate closed ([BroadcastGateSeam]): A applies +7 alone. A is 15, B is stranded at 8 —
+     *    a *genuine* dominated state (B's own 3 is already inside A's 15), not an empty one.
+     * 3. Exactly one tick, on B only (A's interval is set far outside the window), so the
+     *    exchange runs in the direction that puts the dominated FullState **into A**:
+     *    B `RootDigest` → A's root differs → A `FullStateRequest` → B `FullState(8)` → A.
+     *
+     * A's guard sees `merged == current` and must (a) leave A at 15 and (b) take the
+     * `else if` branch, pushing A's own state back to B. That push-back is B's **only**
+     * route to 15 — the broadcast gate is shut and A never ticks — so `repB == 15` is a
+     * direct assertion on the guard, and deleting either the guard or the reconcile
+     * strands B at 8.
      */
     @Test
     fun dominatedFullStateIsIdempotentAndNewInfoIsPreserved() = runTest(UnconfinedTestDispatcher()) {
         val loom = InMemoryLoom()
-        val seamA = loom.host(Pattern("test"))
+        val rawSeamA = loom.host(Pattern("test"))
         val seamB = loom.join(InMemoryTag("b"))
 
-        val repA = gcounterReplicator(seamA, backgroundScope)
-        val repB = gcounterReplicator(seamB, backgroundScope)
+        // A's delta broadcasts are silenced from step 2 on; sendTo (anti-entropy) stays live.
+        var deltaPathClosed = false
+        val seamA = BroadcastGateSeam(rawSeamA) { deltaPathClosed }
 
-        // Both accumulate and fully converge.
+        // Only B ticks inside the test window: A's interval is an order of magnitude beyond it.
+        // fullStateRetryLimit = 0 so no first-contact retry can heal B behind the guard's back.
+        val repA = gcounterReplicator(
+            seamA,
+            backgroundScope,
+            QuilterConfig(
+                antiEntropyInterval = 1.minutes,
+                fullStateRetryLimit = 0,
+                expectVirtualTime = true,
+            ),
+        )
+        val repB = gcounterReplicator(
+            seamB,
+            backgroundScope,
+            QuilterConfig(
+                antiEntropyInterval = ANTI_ENTROPY_MS.milliseconds,
+                fullStateRetryLimit = 0,
+                expectVirtualTime = true,
+            ),
+        )
+
+        // 1. Both accumulate and fully converge over the delta path.
         repA.apply(repA.state.value.inc(repA.replica, 5L))
         repB.apply(repB.state.value.inc(repB.replica, 3L))
         testScheduler.advanceUntilIdle()
         assertEquals(8L, repA.state.value.value)
         assertEquals(8L, repB.state.value.value)
 
-        // B applies an extra increment that A has NOT seen yet.
-        repB.apply(repB.state.value.inc(repB.replica, 7L))
+        // 2. Shut the delta path, then advance A alone. B cannot learn this by broadcast.
+        deltaPathClosed = true
+        repA.apply(repA.state.value.inc(repA.replica, 7L))
+        testScheduler.advanceUntilIdle()
+        assertEquals(15L, repA.state.value.value)
+        assertEquals(
+            8L,
+            repB.state.value.value,
+            "premise: the delta path must be dead, or the anti-entropy exchange below proves nothing",
+        )
 
-        // Advance ONE anti-entropy tick. B sends A its full state (now 15).
-        // This is NOT dominated — A must learn B's new count and converge to 15.
-        testScheduler.advanceTimeBy(QuilterConfig().antiEntropyInterval.inWholeMilliseconds)
+        // 3. One tick, B only. B's dominated FullState(8) lands on A.
+        testScheduler.advanceTimeBy(ANTI_ENTROPY_MS + 1)
         testScheduler.advanceUntilIdle()
 
-        assertEquals(15L, repA.state.value.value, "A must absorb B's new state via FullState")
-        assertEquals(15L, repB.state.value.value)
+        assertEquals(
+            15L,
+            repA.state.value.value,
+            "A must ignore B's dominated FullState(8) and stay at 15",
+        )
+        assertEquals(
+            15L,
+            repB.state.value.value,
+            "B must heal to 15 via the guard's push-back — the only route open to it",
+        )
 
-        // Now both are fully converged. The NEXT anti-entropy tick sends equal state.
-        // The guard must fire (merged == current) and A's value must stay at 15.
-        testScheduler.advanceTimeBy(QuilterConfig().antiEntropyInterval.inWholeMilliseconds)
+        // Converged: the roots now match, so the next tick ships a digest and no state at all
+        // (#1955). Nothing may move.
+        testScheduler.advanceTimeBy(ANTI_ENTROPY_MS + 1)
         testScheduler.advanceUntilIdle()
 
-        assertEquals(15L, repA.state.value.value, "A's state must remain 15 after dominated FullState delivery")
-        assertEquals(15L, repB.state.value.value, "B's state must remain 15 after dominated FullState delivery")
+        assertEquals(15L, repA.state.value.value, "A must be unmoved by a matched-root round")
+        assertEquals(15L, repB.state.value.value, "B must be unmoved by a matched-root round")
     }
 
     /**

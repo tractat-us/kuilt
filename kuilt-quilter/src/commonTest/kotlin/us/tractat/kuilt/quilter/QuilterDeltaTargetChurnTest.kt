@@ -155,6 +155,19 @@ class QuilterDeltaTargetChurnTest {
      * - C (initially out-of-target, then in-target) must have converged.
      * - A's pending-delta buffer must be fully drained (GC proceeds against
      *   whoever is the current target at each ack).
+     *
+     * ## Why the delta path is shut at the switch (#2002)
+     *
+     * `deltaTargets` picks whom A **GCs against**, not whom A **sends to** — [Quilter.apply]
+     * broadcasts to every peer in the room regardless. So dropping B from the target set
+     * does not stop B receiving deltas, and the original version of this test converged B
+     * by plain broadcast while its assertion message claimed anti-entropy. It stayed green
+     * with the whole anti-entropy reconcile deleted.
+     *
+     * Closing a [BroadcastGateSeam] at the same instant the target set flips is what makes
+     * the docstring above true: the second burst reaches **neither** B nor C over the delta
+     * path, so both peers' last five increments — and the acks that let A's buffer drain —
+     * can only arrive over the anti-entropy backstop.
      */
     @Test
     fun gcAndConvergenceHoldAcrossDeltaTargetSwitch() = runTest(UnconfinedTestDispatcher()) {
@@ -168,9 +181,13 @@ class QuilterDeltaTargetChurnTest {
         // Mutable delta-target: starts as {B}.
         val targetPeers = MutableStateFlow(setOf(seamB.selfId))
 
+        // A's delta broadcasts die at the switch; sendTo (the anti-entropy channel) stays live.
+        var deltaPathClosed = false
+        val seamA = BroadcastGateSeam(rawSeamA) { deltaPathClosed }
+
         val repA = Quilter(
             replica = aReplica,
-            seam = rawSeamA,
+            seam = seamA,
             initial = GCounter.ZERO,
             messageSerializer = CHURN_MSG_SER,
             scope = backgroundScope,
@@ -197,16 +214,24 @@ class QuilterDeltaTargetChurnTest {
 
         testScheduler.advanceUntilIdle() // join handshakes
 
-        // First half: target is {B}. Apply 5 updates.
+        // First half: target is {B}, delta path open. Apply 5 updates.
         repeat(5) { repA.apply(repA.state.value.inc(aReplica, 1L)) }
         testScheduler.advanceUntilIdle()
 
-        // Switch target to {C} mid-flight.
+        // Switch target to {C} mid-flight, and shut the delta path in the same breath.
         targetPeers.value = setOf(seamC.selfId)
+        deltaPathClosed = true
 
-        // Second half: apply 5 more updates; now GC is against C's acks.
+        // Second half: apply 5 more updates; now GC is against C's acks — and neither B nor
+        // C can see these deltas at all, so only anti-entropy can carry them.
         repeat(5) { repA.apply(repA.state.value.inc(aReplica, 1L)) }
         testScheduler.advanceUntilIdle()
+
+        assertEquals(
+            5L,
+            repB.state.value.value,
+            "premise: with the delta path shut, B must still be stranded on the first burst",
+        )
 
         // Drive anti-entropy so all peers converge on the full 10-unit state.
         val rounds = 20
@@ -226,14 +251,16 @@ class QuilterDeltaTargetChurnTest {
                 assertEquals(
                     expected,
                     repB.state.value.value,
-                    "B must converge to $expected (initially in-target, later via anti-entropy)",
+                    "B must converge to $expected — out of target and off the delta path, " +
+                        "so only the anti-entropy backstop can carry the second burst",
                 )
             },
             {
                 assertEquals(
                     expected,
                     repC.state.value.value,
-                    "C must converge to $expected (initially non-target, later in-target)",
+                    "C must converge to $expected (initially non-target, later in-target) " +
+                        "via anti-entropy — the delta path is shut for the second burst too",
                 )
             },
             {
