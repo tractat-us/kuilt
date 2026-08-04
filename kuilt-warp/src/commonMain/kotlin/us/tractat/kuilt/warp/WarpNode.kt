@@ -724,7 +724,16 @@ public class WarpNode(
                     "WarpNode($selfId): raftNode is required to enqueue coordinated tasks — " +
                         "no RaftNode was supplied at construction time"
                 }
-                coordQueueQuilter.apply(Patch(coordQueueQuilter.state.value.add(replica, taskId)))
+                // Hold the WarpNode lock across the read-mint-apply, exactly as the free-path
+                // sibling above does. The coordinated queue is an ORSet, so `add` mints its dot
+                // from the context of the state it reads: two concurrent enqueues off the same
+                // snapshot mint the SAME dot, and the causal join then annihilates *both* tasks
+                // (each patch witnesses the shared dot but carries only its own key, so each
+                // reads the other's as retired). Guarding only the `apply` is not enough — the
+                // read is where the dot is minted (#2077).
+                lock.withLock {
+                    coordQueueQuilter.apply(Patch(coordQueueQuilter.state.value.add(replica, taskId)))
+                }
             }
         }
     }
