@@ -2,6 +2,7 @@ package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.test.assertAll
@@ -28,6 +29,9 @@ import kotlin.test.assertEquals
  * multi-entry value that both replicas hold *identically* degenerates to `value.piece(value)`,
  * seeding the merge from the same source on both sides. Each vector is therefore built by
  * merging replicas that contribute **different** slices, in a deliberately non-sorted order.
+ * The `*_DELTA` vectors are the one place a single-entry store appears, because that *is* the
+ * shape a delta has; what they exist to pin is the causal context riding with it, and every one
+ * of those is multi-dot and non-sorted on arrival.
  *
  * **Mutation-verified on `jvmTest`: every canonicalisation site #1957 introduced — the nine
  * `Canonical*Serializer` annotations — plus the three hand-written dot-family sorts the vectors do
@@ -40,7 +44,7 @@ import kotlin.test.assertEquals
  * | `GSet.elements` | [GSET] |
  * | `TwoPhaseSet.added` | [TWO_PHASE_SET] |
  * | `TwoPhaseSet.removed` | [TWO_PHASE_SET] |
- * | `GCounter.counts` | [GCOUNTER], [PNCOUNTER], [ORMAP], [BOUNDED_COUNTER] |
+ * | `GCounter.counts` | [GCOUNTER], [PNCOUNTER], [ORMAP], [BOUNDED_COUNTER], [ORMAP_PUT_DELTA] |
  * | `LWWMap.cells` | [LWWMAP] |
  * | `BoundedCounter.transfers` | [BOUNDED_COUNTER] |
  * | `EphemeralMap.entries` | [EPHEMERAL_MAP] |
@@ -49,8 +53,8 @@ import kotlin.test.assertEquals
  * | `DotMapSerializer`'s sort | [ORSET], [ORMAP] |
  * | `DotSetSerializer`'s sort | [ORMAP] |
  * | `DotFunSerializer`'s sort | [MV_REGISTER] |
- * | `DotContextSerializer`'s `vv` sort | [ORSET], [ORMAP], [MV_REGISTER], [DOT_CONTEXT] |
- * | `DotContextSerializer`'s `cloud` sort | [DOT_CONTEXT] |
+ * | `DotContextSerializer`'s `vv` sort | [ORSET], [ORMAP], [MV_REGISTER], [DOT_CONTEXT], [JSON_CRDT] |
+ * | `DotContextSerializer`'s `cloud` sort | [DOT_CONTEXT], [ORSET_ADD_DELTA], [ORSET_REMOVE_DELTA], [ORMAP_PUT_DELTA] |
  * | `VersionVector.entries` | [VERSION_VECTOR] |
  * | `RgaSerializer`'s op sort | [RGA], [JSON_CRDT] |
  * | `FugueSerializer`'s op sort | [FUGUE] |
@@ -61,10 +65,26 @@ import kotlin.test.assertEquals
  * which by construction cannot see two targets disagree.
  * **Adding a type to that family does not inherit a pin from this file — add a vector.**
  *
+ * The three `*_DELTA` rows closed #2044's half of that gap. A `DotContext` reaches a non-empty
+ * `cloud` on an `ORSet`/`ORMap` frame only when the frame is a **delta**: a delta's context starts
+ * empty and witnesses just the dots the operation asserts or retires, so any of them above the
+ * sender's first seq has a gap below it and cannot compact into the vector. Until the delta
+ * mutators landed, that shape could not be produced by any mutator at all, and the `cloud` sort was
+ * pinned only by [DOT_CONTEXT] — a `DotContext` standing alone, never one riding a CRDT frame.
+ *
  * **Still not pinned here: the `Compact` op sorts.** No construction below calls `Rga.compact` or
  * `Fugue.compact`, so neither `Compact.positions` nor the Compact-vs-Compact tiebreak is reached;
  * `rgaCompactPositionsAreDeliveryOrderIndependent` and its `Fugue` sibling cover them same-target.
  * The `ORSET` vector's `DotSet`s remain singletons, which is not a gap — see [orMap].
+ *
+ * **What the delta vectors deliberately do *not* claim.** `DotMapSerializer` and
+ * `DotSetSerializer` are unreachable on them and always will be: a delta's store is one entry or
+ * none, and that entry carries one dot, so there is exactly one order to choose from. [orSet] and
+ * [orMap] are what pin those. The `vv` sort is subtler and worth stating plainly — deleting it
+ * leaves all three delta vectors **green on `jvmTest`**. On [ORSET_REMOVE_DELTA] that is
+ * structural, because its vector is empty; on the other two it is an accident of one target, whose
+ * `HashMap` happens to iterate their two entries in canonical order anyway. Neither is evidence
+ * the sort is unnecessary, and neither earns a place in the `vv` row above.
  *
  * **Regenerate only on a deliberate encoding change, and expect every vector to move together.**
  * A single vector changing on one target and not another is the exact defect this file exists to
@@ -81,6 +101,15 @@ class CanonicalGoldenVectorTest {
     private val mike = ReplicaId("mike")
     private val delta = ReplicaId("delta")
     private val alpha = ReplicaId("alpha")
+
+    /** A fifth replica, so the delta constructions can reach a four- and five-dot cloud. */
+    private val bravo = ReplicaId("bravo")
+
+    /** The element/key five replicas all hold — what the add- and put-delta vectors touch. */
+    private val shared = "shared"
+
+    /** A second five-replica element, minted *after* [shared] so every dot on it sits at seq ≥ 2. */
+    private val retired = "retired"
 
     @Test
     fun everyVectorMatchesOnEveryTarget() {
@@ -134,6 +163,27 @@ class CanonicalGoldenVectorTest {
             },
             { assertEquals(VERSION_VECTOR, hex(VersionVector.serializer(), versionVector()), "VersionVector") },
             { assertEquals(DOT_CONTEXT, hex(DotContext.serializer(), dotContext()), "DotContext") },
+            {
+                assertEquals(
+                    ORSET_ADD_DELTA,
+                    hex(ORSet.serializer(String.serializer()), orSetAddDelta()),
+                    "ORSet addDelta",
+                )
+            },
+            {
+                assertEquals(
+                    ORSET_REMOVE_DELTA,
+                    hex(ORSet.serializer(String.serializer()), orSetRemoveDelta()),
+                    "ORSet removeDelta",
+                )
+            },
+            {
+                assertEquals(
+                    ORMAP_PUT_DELTA,
+                    hex(ORMap.serializer(String.serializer(), GCounter.serializer()), orMapPutDelta()),
+                    "ORMap putDelta",
+                )
+            },
             { assertEquals(RGA, hex(Rga.wireSerializer(String.serializer()), rga()), "Rga") },
             { assertEquals(FUGUE, hex(Fugue.wireSerializer(String.serializer()), fugue()), "Fugue") },
             { assertEquals(JSON_CRDT, hex(JsonCrdt.serializer(), jsonCrdt()), "JsonCrdt") },
@@ -194,8 +244,40 @@ class CanonicalGoldenVectorTest {
             { assertEquals(2, jsonCrdt().keys.size, "JsonCrdt keys") },
             { assertEquals(4, jsonCrdt().arrayAt("list").ops.size, "JsonCrdt nested Rga ops") },
             { assertEquals(2, jsonCrdt().arrayAt("list").insertAuthors().size, "JsonCrdt nested Rga authors") },
+            { assertEquals(4, orSetAddDelta().wireContext().cloud.size, "ORSet addDelta cloud") },
+            { assertEquals(2, orSetAddDelta().wireContext().vv.size, "ORSet addDelta vv") },
+            { assertEquals(setOf(shared), orSetAddDelta().elements, "ORSet addDelta store") },
+            { assertEquals(5, orSetRemoveDelta().wireContext().cloud.size, "ORSet removeDelta cloud") },
+            { assertEquals(0, orSetRemoveDelta().wireContext().vv.size, "ORSet removeDelta vv") },
+            { assertEquals(emptySet(), orSetRemoveDelta().elements, "ORSet removeDelta store") },
+            { assertEquals(3, orMapPutDelta().wireContext().cloud.size, "ORMap putDelta cloud") },
+            { assertEquals(2, orMapPutDelta().wireContext().vv.size, "ORMap putDelta vv") },
+            { assertEquals(4, orMapPutDelta()[shared]?.replicas()?.size, "ORMap putDelta value slots") },
         )
     }
+
+    /**
+     * The [DotContext] this frame carries, **decoded back out of its own encoded bytes** rather
+     * than read off the value — [ORSet] keeps its `Causal` private, and re-deriving the context in
+     * the test would guard the test's idea of the delta rather than the delta.
+     *
+     * [CausalFrame] is a structural stand-in: CBOR carries field names, not class names, so a
+     * one-field `causal` class decodes any `Causal`-backed CRDT's frame.
+     */
+    private fun ORSet<String>.wireContext(): DotContext =
+        cbor.decodeFromByteArray(
+            CausalFrame.serializer(DotMap.serializer(String.serializer(), DotSet.serializer())),
+            cbor.encodeToByteArray(ORSet.serializer(String.serializer()), this),
+        ).causal.context
+
+    /** The [ORMap] mirror of [ORSet.wireContext]. */
+    private fun ORMap<String, GCounter>.wireContext(): DotContext =
+        cbor.decodeFromByteArray(
+            CausalFrame.serializer(
+                DotMap.serializer(String.serializer(), ORMapEntry.serializer(GCounter.serializer())),
+            ),
+            cbor.encodeToByteArray(ORMap.serializer(String.serializer(), GCounter.serializer()), this),
+        ).causal.context
 
     /** The distinct authors of this log's [RgaOp.Insert]s — a single-replica collapse drops to 1. */
     private fun Rga<*>.insertAuthors(): Set<ReplicaId> =
@@ -535,6 +617,101 @@ class CanonicalGoldenVectorTest {
         return view(zulu, "z").piece(view(alpha, "a"))
     }
 
+    // ── Delta-shaped frames (#2044) ───────────────────────────────────────────
+    //
+    // What a delta mutator puts on the wire is a *different shape* from every construction
+    // above: a one-entry store, and a `DotContext` holding only the dots the operation asserts
+    // or retires. Those dots are the sender's *current* seqs, so they arrive in a context that
+    // starts empty — and a dot with a gap below it stays in the `cloud`. That is how `cloud`
+    // becomes non-empty on an `ORSet`/`ORMap` frame at all, which it never was here before.
+
+    /**
+     * Five replicas that each hold both [shared] and [retired], each minting its two dots at a
+     * *different* seq — `zulu` at 1–2, `delta` at 1–2, `alpha` at 2–3, `mike` at 3–4, `bravo` at
+     * 4–5 — because each has a different number of private adds behind it.
+     *
+     * The spread is the point. A delta's context witnesses exactly the dots the operation touches,
+     * starting from empty, so a dot lands in `vv` only when it is seq 1 (or contiguous with what is
+     * already there) and in `cloud` otherwise. Give every replica the same seq and the delta
+     * contexts below collapse to all-`vv` or all-`cloud` with nothing to order.
+     *
+     * The merge runs `zulu` first and then out of sorted order, so each element's `DotSet` — and
+     * therefore the cloud the delta builds from it — arrives in insertion order `zulu, mike, alpha,
+     * delta, bravo` against a canonical order of `alpha, bravo, delta, mike, zulu`.
+     */
+    private fun sharedByFive(): ORSet<String> {
+        fun view(replica: ReplicaId, priorAdds: Int): ORSet<String> =
+            (1..priorAdds)
+                .fold(ORSet.empty<String>()) { set, n -> set.add(replica, "${replica.value}$n") }
+                .add(replica, shared)
+                .add(replica, retired)
+        return view(zulu, priorAdds = 0)
+            .piece(view(mike, priorAdds = 2))
+            .piece(view(alpha, priorAdds = 1))
+            .piece(view(delta, priorAdds = 0))
+            .piece(view(bravo, priorAdds = 3))
+    }
+
+    /**
+     * `zulu` re-adds [shared] on the converged [sharedByFive]. The delta's context is the four
+     * dots the re-add supersedes plus the one it mints, and nothing else.
+     *
+     * Reached: `vv` = `{zulu:1, delta:1}` — the two replicas whose [shared] dot *is* their first —
+     * and `cloud` = insertion order `mike:3, alpha:2, bravo:4, zulu:3` against a canonical order of
+     * `alpha:2, bravo:4, mike:3, zulu:3`. **Four cloud dots, no two adjacent in canonical order**,
+     * so neither `sorted()` nor its reverse nor insertion order coincide — the shape a two-dot
+     * cloud cannot pin, because two elements have only one wrong order and `sorted()` and
+     * `reversed()` agree on it.
+     *
+     * `zulu:3` is the *minted* dot and it lands in the cloud, above `zulu`'s `vv` entry of 1: a
+     * delta announces the sender's current seq, not a history, so its own dot is normally gapped.
+     *
+     * The store is one element carrying one dot — that is what a delta *is* — so
+     * [DotMapSerializer] and [DotSetSerializer] are not exercised here. [orSet] and [orMap] pin
+     * those; this vector exists for the context.
+     */
+    private fun orSetAddDelta(): ORSet<String> = sharedByFive().addDelta(zulu, shared).delta
+
+    /**
+     * The other delta shape: an **empty store** with a non-empty context — "these dots are
+     * retired, I assert nothing else". No construction above puts an empty `DotMap` on the wire.
+     *
+     * [retired] is minted after [shared] on every replica, so every one of its five dots sits at
+     * seq ≥ 2 and none of them can compact. That gives the third context shape: **`vv` empty,
+     * `cloud` holding all five** — reached in insertion order `zulu:2, mike:4, alpha:3, delta:2,
+     * bravo:5` against a canonical order of `alpha:3, bravo:5, delta:2, mike:4, zulu:2`.
+     * [dotContext] pins a cloud beside a populated vector; this pins one standing alone.
+     */
+    private fun orSetRemoveDelta(): ORSet<String> = sharedByFive().removeDelta(retired).delta
+
+    /**
+     * The [ORMap] mirror, with a value on the wire. Five replicas put [shared] at five different
+     * seqs, then `zulu` puts over it: `vv` = `{zulu:2, delta:1}` and `cloud` = insertion order
+     * `mike:3, alpha:2, bravo:4` against a canonical order of `alpha:2, bravo:4, mike:3`.
+     *
+     * The supplied value is a four-slot `GCounter` built out of sorted order, so this vector also
+     * pins `GCounter.counts`' canonical sort *inside a delta frame*. It pins one more thing for
+     * free: `putDelta` ships **the caller's value, not the locally merged one**. Ship the merged
+     * value instead and these bytes change — the frame would carry every replica's slice rather
+     * than the four written here.
+     */
+    private fun orMapPutDelta(): ORMap<String, GCounter> {
+        fun view(replica: ReplicaId, priorPuts: Int): ORMap<String, GCounter> =
+            (1..priorPuts)
+                .fold(ORMap.empty<String, GCounter>()) { map, n ->
+                    map.put(replica, "${replica.value}$n", GCounter.of(replica to n.toLong()))
+                }
+                .put(replica, shared, GCounter.of(replica to 1L))
+        val converged = view(zulu, priorPuts = 0)
+            .piece(view(mike, priorPuts = 2))
+            .piece(view(alpha, priorPuts = 1))
+            .piece(view(delta, priorPuts = 0))
+            .piece(view(bravo, priorPuts = 3))
+        return converged
+            .putDelta(zulu, shared, GCounter.of(mike to 8L, alpha to 6L, delta to 4L, zulu to 2L))
+            .delta
+    }
+
     /**
      * `compactedDots` is private, but every compacted dot is re-emitted through [Quilted.causalDots]
      * alongside the surviving log ops — so the compacted count is the total minus [moveLogSize],
@@ -648,5 +825,32 @@ class CanonicalGoldenVectorTest {
                 "6c7068616373657101ff9f63737472bf6576616c75656161ffffbf677265706c696361647a756c756373657101ff9f63" +
                 "737472bf6576616c7565617affffff67636f6e74657874bf627676bf65616c70686101647a756c7501ff65636c6f7564" +
                 "9fffffffffffffff67636f6e74657874bf627676bf65616c70686102647a756c7502ff65636c6f75649fffffffff"
+        const val ORSET_ADD_DELTA =
+            "bf6663617573616cbf6573746f7265bf667368617265649fbf677265706c696361647a756c756373657103ffffff6763" +
+                "6f6e74657874bf627676bf6564656c746101647a756c7501ff65636c6f75649fbf677265706c69636165616c70686163" +
+                "73657102ffbf677265706c69636165627261766f6373657104ffbf677265706c696361646d696b656373657103ffbf67" +
+                "7265706c696361647a756c756373657103ffffffffff"
+        const val ORSET_REMOVE_DELTA =
+            "bf6663617573616cbf6573746f7265bfff67636f6e74657874bf627676bfff65636c6f75649fbf677265706c69636165" +
+                "616c7068616373657103ffbf677265706c69636165627261766f6373657105ffbf677265706c6963616564656c746163" +
+                "73657102ffbf677265706c696361646d696b656373657104ffbf677265706c696361647a756c756373657102ffffffff" +
+                "ff"
+        const val ORMAP_PUT_DELTA =
+            "bf6663617573616cbf6573746f7265bf66736861726564bf64746167739fbf677265706c696361647a756c7563736571" +
+                "02ffff6576616c7565bf66636f756e7473bf65616c706861066564656c746104646d696b6508647a756c7502ffffffff" +
+                "67636f6e74657874bf627676bf6564656c746101647a756c7502ff65636c6f75649fbf677265706c69636165616c7068" +
+                "616373657102ffbf677265706c69636165627261766f6373657104ffbf677265706c696361646d696b656373657103ff" +
+                "ffffffff"
     }
 }
+
+/**
+ * A structural stand-in for any `Causal`-backed CRDT — one field named `causal`, exactly how
+ * [ORSet] and [ORMap] encode. CBOR carries field names and not class names, so decoding either
+ * one's frame through this class recovers its [Causal] without widening a production API.
+ *
+ * Used only by the vacuity guards, to read a delta frame's `vv` and `cloud` cardinality off the
+ * **bytes** rather than off a re-derivation of what the mutator was supposed to have built.
+ */
+@Serializable
+private class CausalFrame<S : DotStore<S>>(val causal: Causal<S>)
