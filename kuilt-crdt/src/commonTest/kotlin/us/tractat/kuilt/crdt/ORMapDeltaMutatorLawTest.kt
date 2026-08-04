@@ -272,13 +272,13 @@ class ORMapDeltaMutatorLawTest {
     }
 
     /**
-     * …and flat in the size of the **value already stored under the key**, on the nested
-     * `ORMap<K, ORSet<X>>` shape where that term dominates.
+     * …and flat in the size of the **value other replicas have stored under the key**, on the
+     * nested `ORMap<K, ORSet<X>>` shape where that term dominates.
      *
      * This is the assertion that makes [putDeltaCarriesTheSuppliedValueNotTheLocallyMergedOne] a
-     * performance guard rather than a stylistic one. Shipping the sender's locally merged value
-     * converges perfectly well; it just puts the receiver's own history back on the wire, which is
-     * an O(value) frame wearing a delta's name.
+     * performance guard rather than a stylistic one. Shipping the whole stored value converges
+     * perfectly well; it just puts the receiver's own history back on the wire, which is an
+     * O(value) frame wearing a delta's name.
      */
     @Test
     fun aPutDeltasFrameIsFlatInTheStoredValuesSize() {
@@ -291,6 +291,61 @@ class ORMapDeltaMutatorLawTest {
             large = nestedBytes(large.putDelta(bravo, KEY, contributed).delta),
             fullState = nestedBytes(large.put(bravo, KEY, contributed)),
             what = "put delta over a $SMALL_STATE-element vs a $LARGE_STATE-element nested value",
+        )
+    }
+
+    /**
+     * **The one place the frame is *not* flat, measured rather than asserted away.** A put
+     * supersedes the sender's own tag on the key, so the fresh tag has to carry what that tag was
+     * holding, and a replica that keeps growing one key on its own therefore ships its own running
+     * total each time.
+     *
+     * The alternative — supersede nothing — keeps every delta at O(the value you passed) and lets a
+     * key accumulate one tag per put, for ever. Between a delta that is occasionally large and a
+     * state that grows without bound while being held, hashed and re-shipped on every anti-entropy
+     * round, the delta is the right thing to pay. This test states which one was chosen: **not**
+     * flat here, and flat in every other term ([aPutDeltasFrameIsFlatInMapSize],
+     * [aPutDeltasFrameIsFlatInTheStoredValuesSize]).
+     */
+    @Test
+    fun aPutDeltaCarriesTheSendersOwnRunningContributionToTheKey() {
+        // Each put contributes one element carrying a *fresh* inner dot. Handing `put` a series of
+        // `ORSet.empty().add(…)` values instead would reuse `(replica, 1)` every time, and folding
+        // two of those retires both elements — a degenerate fixture that measures nothing.
+        fun grownBy(replica: ReplicaId, elements: Int): ORMap<String, ORSet<String>> {
+            var inner = ORSet.empty<String>()
+            var map = ORMap.empty<String, ORSet<String>>()
+            repeat(elements) { index ->
+                val patch = inner.addDelta(replica, "own-$index")
+                inner = inner.piece(patch)
+                map = map.put(replica, KEY, patch.delta)
+            }
+            return map
+        }
+
+        val contributed = ORSet.empty<String>().add(alpha, "fresh")
+        val afterOne = nestedBytes(grownBy(alpha, 1).putDelta(alpha, KEY, contributed).delta).size.toLong()
+        val afterMany = nestedBytes(grownBy(alpha, LARGE_STATE).putDelta(alpha, KEY, contributed).delta).size.toLong()
+
+        assertAll(
+            {
+                assertTrue(
+                    afterMany > afterOne * GROWTH_FLOOR,
+                    "the sender's own contribution must ride along, so the frame is expected to grow " +
+                        "across $LARGE_STATE puts ($afterOne b to $afterMany b). If this is now flat, " +
+                        "the supersession term has been dropped and a key will accumulate a tag per put",
+                )
+            },
+            {
+                // …and one more replica's separate history does not add to it.
+                val alongsideBravo = grownBy(alpha, LARGE_STATE)
+                    .put(bravo, KEY, ORSet.empty<String>().add(bravo, "theirs"))
+                assertEquals(
+                    afterMany,
+                    nestedBytes(alongsideBravo.putDelta(alpha, KEY, contributed).delta).size.toLong(),
+                    "another replica's contribution to the same key must not appear in alpha's delta",
+                )
+            },
         )
     }
 
@@ -854,5 +909,13 @@ class ORMapDeltaMutatorLawTest {
          * beyond this is a term that scales with the state.
          */
         const val FLAT_TOLERANCE_PERCENT = 120
+
+        /**
+         * The factor a sender's own running contribution must grow the frame by across
+         * [LARGE_STATE] puts. Measured at roughly 400×; set two orders of magnitude below that, so
+         * the assertion fails on a frame that has gone *flat* — the tell that supersession was
+         * dropped — rather than on encoding noise.
+         */
+        const val GROWTH_FLOOR = 4L
     }
 }

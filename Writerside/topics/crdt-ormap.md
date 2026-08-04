@@ -1,12 +1,14 @@
 # ORMap
 
-A map where keys can be added and removed, and values can be any CRDT. When two devices edit at the same time — one removes a key, another writes to it — the key survives (add-wins). The value at that key merges normally using its own type's rules.
+A map where keys can be added and removed, and values can be any CRDT. When two devices edit at the same time — one removes a key, another writes to it — the key survives (add-wins), holding what the writer wrote. Writes that nobody removed are kept and combined using the value's own rules.
 
-**Converges to:** a map where key presence follows ORSet semantics (add-wins on conflict) and each value converges according to its own `piece` rule.
+**Converges to:** a map where key presence follows ORSet semantics (add-wins on conflict) and each key's value is every surviving write to it, combined by that value type's own `piece` rule.
 
 ## Merge rule
 
-Key presence is an ORSet of presence dots. Value merging is the value type's own `piece`. When a key is removed by one replica and re-added with a new value by another concurrently, the ORSet semantics apply: the new add's dot survives, so the key is present, and the value is the merge of both sides.
+Key presence is an ORSet of presence dots, and **each dot carries the write that was made under it**. A key's value is the join of the writes whose dots are still live, so a removal takes exactly the writes it observed away with it.
+
+That is what makes a delivery order irrelevant. When one replica removes a key and another concurrently writes to it, the writer's dot survives — the remover never saw it — so the key is present with the writer's value, and the removed write is gone whichever order the two states are merged in. Keeping one value beside the tags instead would make the answer depend on that order, which is [issue 2086](https://github.com/tractat-us/kuilt/issues/2086).
 
 ## Code example
 
