@@ -18,6 +18,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.time.Duration.Companion.seconds
@@ -50,7 +51,7 @@ class HeartbeatPartitionDetectorTransportCloseTest {
 
     @Test
     fun `target leaving peers fires PeerUnresponsive TransportClosed immediately`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val self = PeerId("self")
             val target = PeerId("target")
             val link = FakeLink(self, target)
@@ -69,7 +70,7 @@ class HeartbeatPartitionDetectorTransportCloseTest {
 
     @Test
     fun `peer that stays in peers still uses the Timeout path`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val self = PeerId("self")
             val target = PeerId("target")
             val link = FakeLink(self, target) // never drops target

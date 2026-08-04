@@ -10,12 +10,12 @@ import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Convergence tests for [PatchworkSession] over an [InMemoryLoom] — the
@@ -47,7 +47,7 @@ class PatchworkSessionTest {
     )
 
     @Test
-    fun threePeersConvergeToOneQuilt() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun threePeersConvergeToOneQuilt() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val alice = session(loom, "alice", FakeClock(1_000))
         val bob = session(loom, "bob", FakeClock(1_000))
@@ -72,7 +72,7 @@ class PatchworkSessionTest {
     }
 
     @Test
-    fun lateJoinerReceivesTheWholeQuilt() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun lateJoinerReceivesTheWholeQuilt() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val alice = session(loom, "alice", FakeClock(1_000))
         alice.host(Pattern("patchwork"))
@@ -94,7 +94,7 @@ class PatchworkSessionTest {
      * and the patches he missed merge into his.
      */
     @Test
-    fun offlineStitchesMergeOnReconnect() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun offlineStitchesMergeOnReconnect() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val alice = session(loom, "alice", FakeClock(1_000))
         val bob = session(loom, "bob", FakeClock(1_000))
@@ -148,7 +148,7 @@ class PatchworkSessionTest {
     @Test
     fun concurrentStitchesToOneCellResolveIdentically() = runTest(
         StandardTestDispatcher(),
-        timeout = 5.seconds,
+        timeout = TEST_WEDGE_BACKSTOP,
     ) {
         val loom = InMemoryLoom()
         val aliceClock = FakeClock(1_000)

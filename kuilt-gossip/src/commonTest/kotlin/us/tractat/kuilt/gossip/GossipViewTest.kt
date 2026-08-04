@@ -14,6 +14,7 @@ import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
 import us.tractat.kuilt.test.FakeSeam
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -253,7 +254,7 @@ class GossipViewTest {
 
     @Test
     fun fullFanoutSelectsEveryOtherPeerAsActive() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val self = PeerId("hub")
             val roster = MutableStateFlow(setOf(self, PeerId("a"), PeerId("b"), PeerId("c")))
             val view =

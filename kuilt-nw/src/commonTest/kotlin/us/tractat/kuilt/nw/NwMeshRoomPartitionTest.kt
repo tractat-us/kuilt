@@ -16,6 +16,7 @@ import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.test.FaultySeam
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -75,7 +76,7 @@ class NwMeshRoomPartitionTest {
 
     @Test
     fun `host sees Partitioned when a non-host peer silently drops off a 3-peer NW mesh`() =
-        runTest(StandardTestDispatcher(), timeout = 10.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val radio = FakeNwRadio()
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
             fun nwLoom(i: Int) =
