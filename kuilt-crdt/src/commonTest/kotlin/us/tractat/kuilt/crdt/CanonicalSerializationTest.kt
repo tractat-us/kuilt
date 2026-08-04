@@ -651,6 +651,117 @@ class CanonicalSerializationTest {
         )
     }
 
+    // ── VersionVector (#2010) ─────────────────────────────────────────────────
+
+    /**
+     * Two replicas that reached the **same** [VersionVector] by merging the same authors in
+     * different orders must serialize to identical bytes.
+     *
+     * `VersionVector.combine` builds its result from `entries.keys + other.entries.keys` — a
+     * `LinkedHashSet` in **merge order** — and `VersionVector` is a `data class`, so `equals` is
+     * order-insensitive over the map and every equality test in the zoo stays green while the
+     * bytes differ. Unlike the `HashMap` cases of #1979 this reproduces on **every** target,
+     * including the JVM, because the offending order is deliberate insertion order rather than
+     * hash order.
+     *
+     * It is on the wire: `QuiltMessage.Delivered.vector` gossips this vector on every local apply
+     * and every anti-entropy tick, and #1986 proposes keying dot-family anti-entropy on a
+     * version-vector *diff* — a diff over a non-canonical encoding reports permanent false
+     * divergence.
+     *
+     * **Deliberately three authors.** Both pre-existing canonical-suite uses of [VersionVector]
+     * are single-entry (`VersionVector.of(mapOf(replica to 4L))`), and a one-entry map has exactly
+     * one iteration order, so neither pins anything — the same blind spot #1983 found for the
+     * ORSET vector's singleton `DotSet`s. Two authors would be pinned by the two merge orders
+     * below; three makes the middle author's placement load-bearing too.
+     *
+     * Mutation-checked: dropping `@Serializable(with = CanonicalMapSerializer::class)` from
+     * [VersionVector.entries] fails the JSON and CBOR assertions with the three author slots
+     * transposed and every other byte identical.
+     */
+    @Test
+    fun versionVectorIsMergeOrderIndependent() {
+        val alpha = VersionVector.of(mapOf(ReplicaId("alpha") to 3L))
+        val zulu = VersionVector.of(mapOf(ReplicaId("zulu") to 5L))
+        val mike = VersionVector.of(mapOf(ReplicaId("mike") to 7L))
+
+        val alphaFirst = alpha.ceilWith(zulu).ceilWith(mike)
+        val mikeFirst = mike.ceilWith(zulu).ceilWith(alpha)
+
+        val ser = VersionVector.serializer()
+
+        assertAll(
+            {
+                assertEquals(
+                    3, alphaFirst.entries.size,
+                    "the probe is vacuous unless the vector is multi-entry: ${alphaFirst.entries}",
+                )
+            },
+            {
+                assertTrue(
+                    alphaFirst.entries.keys.toList() != mikeFirst.entries.keys.toList(),
+                    "the probe is vacuous unless the two vectors are built in different orders: " +
+                        "${alphaFirst.entries.keys} vs ${mikeFirst.entries.keys}",
+                )
+            },
+            { assertEquals(alphaFirst, mikeFirst, "sanity: both replicas reached the same vector") },
+            {
+                assertEquals(
+                    json.encodeToString(ser, alphaFirst),
+                    json.encodeToString(ser, mikeFirst),
+                    "VersionVector JSON must be merge-order-independent",
+                )
+            },
+            {
+                assertEquals(
+                    cbor.encodeToByteArray(ser, alphaFirst).toList(),
+                    cbor.encodeToByteArray(ser, mikeFirst).toList(),
+                    "VersionVector CBOR must be merge-order-independent",
+                )
+            },
+        )
+    }
+
+    /**
+     * A [VersionVector] built **directly** from a differently-ordered map must encode identically
+     * too — the fix has to sit in the serializer, not in [VersionVector.combine].
+     *
+     * Not redundant with [versionVectorIsMergeOrderIndependent], and deliberately so: sorting the
+     * `authors` set inside `combine` is the obvious cheaper-looking alternative fix, and it would
+     * turn that test green while leaving this one red. It would also be **wrong on the shipped
+     * path**, which does not go through `combine` at all — `Quilter`'s delivered vector is built by
+     * `contiguousFrontier(dots)`, i.e. `dots.groupBy { it.replica }`, whose `LinkedHashMap` is in
+     * the iteration order of a merge-ordered `Set<Dot>`. Every public entry point that can mint a
+     * vector — the constructor, [VersionVector.of], `combine` — has to land on the same bytes, and
+     * only canonicalising at the encoder achieves that for all of them at once.
+     *
+     * Mutation-checked: replacing the `CanonicalMapSerializer` annotation with a sort inside
+     * `combine` leaves [versionVectorIsMergeOrderIndependent] green and fails this.
+     */
+    @Test
+    fun versionVectorIsInsertionOrderIndependent() {
+        val forward = VersionVector.of(linkedMapOf(ReplicaId("alpha") to 3L, ReplicaId("zulu") to 5L))
+        val reverse = VersionVector.of(linkedMapOf(ReplicaId("zulu") to 5L, ReplicaId("alpha") to 3L))
+        val ser = VersionVector.serializer()
+
+        assertAll(
+            {
+                assertTrue(
+                    forward.entries.keys.toList() != reverse.entries.keys.toList(),
+                    "the probe is vacuous unless the two maps iterate differently",
+                )
+            },
+            { assertEquals(forward, reverse, "sanity: the two vectors are the same value") },
+            {
+                assertEquals(
+                    cbor.encodeToByteArray(ser, forward).toList(),
+                    cbor.encodeToByteArray(ser, reverse).toList(),
+                    "VersionVector CBOR must be insertion-order-independent",
+                )
+            },
+        )
+    }
+
     /**
      * A replica that received `Remove(x)` **before** `Insert(x)` must serialize identically to one
      * that received them in causal order.

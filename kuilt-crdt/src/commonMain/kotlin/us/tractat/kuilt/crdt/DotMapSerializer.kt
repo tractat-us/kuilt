@@ -6,7 +6,7 @@ import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
-import us.tractat.kuilt.crdt.internal.serialKeyComparator
+import us.tractat.kuilt.crdt.internal.sortedByCanonicalKey
 
 /**
  * Custom [KSerializer] for [DotMap]`<K, S>` that emits [DotMap.entries] in a canonical
@@ -22,7 +22,7 @@ import us.tractat.kuilt.crdt.internal.serialKeyComparator
  * serializable key type — including data classes, inline value classes, and compound keys
  * — and is robust where a [toString]-based sort is not: [Double] (`-0.0`/`NaN`), [ByteArray]
  * (identity hash), and any type whose [toString] is not injective or platform-stable would
- * silently produce a non-canonical sort.  See [serialKeyComparator] (issue #752).
+ * silently produce a non-canonical sort.  See [sortedByCanonicalKey] (issues #752, #1964).
  *
  * The auto-generated serializer is delivery-order-dependent because [DotMap.join] builds
  * a [LinkedHashMap] whose iteration order depends on which side is `self` vs `other` in
@@ -35,15 +35,11 @@ public class DotMapSerializer<K, S : DotStore<S>>(
 ) : KSerializer<DotMap<K, S>> {
 
     private val mapSerializer = MapSerializer(kSerializer, sSerializer)
-    private val keyComparator: Comparator<K> = serialKeyComparator(kSerializer)
 
     override val descriptor: SerialDescriptor = mapSerializer.descriptor
 
     override fun serialize(encoder: Encoder, value: DotMap<K, S>) {
-        val sorted = value.entries.entries
-            .sortedWith(compareBy(keyComparator) { (key, _) -> key })
-            .associate { (key, v) -> key to v }
-        mapSerializer.serialize(encoder, sorted)
+        mapSerializer.serialize(encoder, value.entries.sortedByCanonicalKey(kSerializer))
     }
 
     override fun deserialize(decoder: Decoder): DotMap<K, S> =

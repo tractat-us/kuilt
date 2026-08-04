@@ -9,31 +9,46 @@ import kotlinx.serialization.modules.EmptySerializersModule
 import kotlinx.serialization.modules.SerializersModule
 
 /**
- * Returns a [Comparator] that orders values of type [K] by their canonical serialized form.
+ * Sorts by canonical serialized form — the ordering **every** canonical serializer in this
+ * module uses, so the sort lives in one place rather than being re-derived per type (#1964).
  *
- * Each key is serialized to a [List] of primitive leaf values via [PrimitiveLeafEncoder]
- * and the lists are compared lexicographically.  This produces a structural total
- * **preorder** — not a total order; see [leafListComparator] for what that costs a caller —
- * for any [K] that serializes to a finite, deterministic sequence of primitives, which
- * includes every data class, value class, and primitive key used in this module.
+ * Each element is serialized to a [List] of primitive leaf values via [PrimitiveLeafEncoder]
+ * and the lists are compared lexicographically.  This produces a structural total **preorder**
+ * — not a total order; see [leafListComparator] — for any [T] that serializes to a finite,
+ * deterministic sequence of primitives, which includes every data class, value class and
+ * primitive key used in this module.
  *
- * This is the correct replacement for a `.sortedBy { key.toString() }` comparator whose
- * correctness depended on `toString` being injective and platform-stable — a guarantee
- * that does not hold for [Double] (`-0.0`/`NaN`), [ByteArray] (identity hash), or any
- * compound type whose `toString` omits fields (issue #752).
+ * It is the correct replacement for a `.sortedBy { it.toString() }` sort whose correctness
+ * depended on `toString` being injective and platform-stable — a guarantee that does not hold
+ * for [Double] (`-0.0`/`NaN`), [ByteArray] (identity hash), or any compound type whose
+ * `toString` omits fields (issue #752).
  *
- * **Cost — prefer [serialLeaves] + [leafListComparator] when sorting.**  This comparator
- * re-serializes *both* operands on every call, so a `sortedWith` over n keys performs
- * ~2·n·log n serializations rather than n.  Callers that sort should decorate each element
- * with its [serialLeaves] once, sort on the decoration with [leafListComparator], and drop
- * it — which is what [us.tractat.kuilt.crdt.CanonicalSetSerializer] and
- * [us.tractat.kuilt.crdt.CanonicalMapSerializer] do.  This form remains for callers that
- * genuinely need a `Comparator<K>` (see `DotMapSerializer`, and issue #1964 for collapsing
- * those onto the decorated path).
+ * **Decorate-sort-undecorate: each element is serialized exactly once.**  A comparator that
+ * re-serializes both operands on every call costs ~2·n·log n serializations for n elements,
+ * each allocating a fresh encoder and leaf list; decorating up front makes it n.  The two are
+ * byte-identical because this is the same [leafListComparator] over the same [serialLeaves]
+ * and [sortedWith] is stable, so elements with identical leaf sequences keep their input order
+ * — pinned by `tiedElementsKeepInputOrder`.
  */
-@OptIn(ExperimentalSerializationApi::class)
-internal fun <K> serialKeyComparator(kSerializer: KSerializer<K>): Comparator<K> =
-    Comparator { a, b -> leafListComparator.compare(serialLeaves(a, kSerializer), serialLeaves(b, kSerializer)) }
+internal fun <T> Iterable<T>.sortedByCanonicalKey(serializer: KSerializer<T>): List<T> =
+    map { it to serialLeaves(it, serializer) }
+        .sortedWith(compareBy(leafListComparator) { it.second })
+        .map { it.first }
+
+/**
+ * The [Map] form of [sortedByCanonicalKey]: the same entries in canonical **key** order, in a
+ * [LinkedHashMap] so that order survives to the encoder.
+ *
+ * Key and value are read out of each entry eagerly, before the sort, so no assumption is made
+ * about whether a given platform's `entries` iterator hands back distinct entry objects.
+ */
+internal fun <K, V> Map<K, V>.sortedByCanonicalKey(kSerializer: KSerializer<K>): Map<K, V> {
+    val decorated = map { (key, value) -> Triple(serialLeaves(key, kSerializer), key, value) }
+        .sortedWith(compareBy(leafListComparator) { it.first })
+    val sorted = LinkedHashMap<K, V>(size)
+    decorated.forEach { (_, key, value) -> sorted[key] = value }
+    return sorted
+}
 
 /**
  * Serializes [key] to its sequence of primitive leaf values — the decoration half of a
