@@ -1564,15 +1564,7 @@ val forbidTightRunTestTimeout by tasks.registering {
         "kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/partition/SubTimeoutBlipResumeTest.kt" to 3,
         "kuilt-test/src/commonTest/kotlin/us/tractat/kuilt/test/FakeSeamTest.kt" to 5,
         "kuilt-warp-compiler/src/jvmTest/kotlin/us/tractat/kuilt/warp/RealVariantTieringTest.kt" to 1,
-        "kuilt-warp-otel/src/commonTest/kotlin/us/tractat/kuilt/warp/otel/WarpMetricsTest.kt" to 3,
-        "kuilt-warp-runtime/src/appleTest/kotlin/us/tractat/kuilt/warp/Wasm3RuntimeDispatchTest.kt" to 1,
-        "kuilt-warp-runtime/src/jvmTest/kotlin/us/tractat/kuilt/warp/ChicoryRuntimeDispatchTest.kt" to 1,
         "kuilt-warp-runtime/src/jvmTest/kotlin/us/tractat/kuilt/warp/ChicoryWasmRuntimeTest.kt" to 1,
-        "kuilt-warp-runtime/src/jvmTest/kotlin/us/tractat/kuilt/warp/ChicoryWasmRuntimeTimingTest.kt" to 1,
-        "kuilt-warp-runtime/src/jvmTest/kotlin/us/tractat/kuilt/warp/LazyFetchAndRunTest.kt" to 4,
-        "kuilt-warp-runtime/src/jvmTest/kotlin/us/tractat/kuilt/warp/SettleUntilRealIoTest.kt" to 1,
-        "kuilt-warp-runtime/src/wasmJsTest/kotlin/us/tractat/kuilt/warp/BrowserWasmRuntimeDispatchTest.kt" to 1,
-        "kuilt-warp-test/src/commonMain/kotlin/us/tractat/kuilt/warp/test/WasmRuntimeConformanceSuite.kt" to 10,
     )
     doLast {
         val found = sortedMapOf<String, List<Int>>()

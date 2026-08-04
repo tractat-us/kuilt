@@ -2,6 +2,7 @@ package us.tractat.kuilt.warp.test
 
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.warp.WasmException
 import us.tractat.kuilt.warp.WasmExecutionException
@@ -73,19 +74,19 @@ public abstract class WasmRuntimeConformanceSuite {
     // ── Happy path — the guards must not over-reject a well-behaved kernel ──────────────────
 
     @Test
-    public fun wellBehavedKernelRoundTrips(): TestResult = runTest(timeout = 10.seconds) {
+    public fun wellBehavedKernelRoundTrips(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val op = newRuntime().load(WasmKernelFixtures.REVERSE)
         assertContentEquals(byteArrayOf(4, 3, 2, 1), op.invoke(byteArrayOf(1, 2, 3, 4)))
     }
 
     @Test
-    public fun emptyInputReturnsEmpty(): TestResult = runTest(timeout = 10.seconds) {
+    public fun emptyInputReturnsEmpty(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val op = newRuntime().load(WasmKernelFixtures.REVERSE)
         assertContentEquals(byteArrayOf(), op.invoke(byteArrayOf()))
     }
 
     @Test
-    public fun repeatInvokeReusesTheInstance(): TestResult = runTest(timeout = 10.seconds) {
+    public fun repeatInvokeReusesTheInstance(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val op = newRuntime().load(WasmKernelFixtures.REVERSE)
         val input = "Hello, warp!".encodeToByteArray()
         val expected = input.reversedArray()
@@ -150,7 +151,7 @@ public abstract class WasmRuntimeConformanceSuite {
     // ── Run-time guards ──────────────────────────────────────────────────────────────────────
 
     @Test
-    public fun trapSurfacesAsExecutionException(): TestResult = runTest(timeout = 10.seconds) {
+    public fun trapSurfacesAsExecutionException(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val op = newRuntime().load(WasmKernelFixtures.TRAP)
         assertFailsWith<WasmExecutionException> { op.invoke(ByteArray(0)) }
     }
@@ -163,7 +164,7 @@ public abstract class WasmRuntimeConformanceSuite {
      * `runTest` timeout cannot pre-empt it; only the impl's own bound can.
      */
     @Test
-    public fun cpuBombIsBoundedByExecutionTimeout(): TestResult = runTest(timeout = 10.seconds) {
+    public fun cpuBombIsBoundedByExecutionTimeout(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val bounded = newRuntime(WasmSandboxConfig(executionTimeout = 250.milliseconds))
         val op = bounded.load(WasmKernelFixtures.CPU_BOMB)
         val ex = assertFailsWith<WasmExecutionException> { op.invoke(ByteArray(0)) }
@@ -182,7 +183,7 @@ public abstract class WasmRuntimeConformanceSuite {
      * budget and names it.
      */
     @Test
-    public fun startSectionCpuBombIsBoundedNotHung(): TestResult = runTest(timeout = 10.seconds) {
+    public fun startSectionCpuBombIsBoundedNotHung(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val bounded = newRuntime(WasmSandboxConfig(executionTimeout = 250.milliseconds))
         val ex = assertFailsWith<WasmException> {
             bounded.load(WasmKernelFixtures.START_CPU_BOMB).invoke(ByteArray(0))
@@ -253,7 +254,7 @@ public abstract class WasmRuntimeConformanceSuite {
      * load-time rejection alone does not bound that target's memory.
      */
     @Test
-    public fun growPastDeclaredMaxTraps(): TestResult = runTest(timeout = 10.seconds) {
+    public fun growPastDeclaredMaxTraps(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val op = newRuntime().load(WasmKernelFixtures.GROW_PAST_DECLARED_MAX)
         assertFailsWith<WasmExecutionException> { op.invoke(ByteArray(0)) }
     }
@@ -261,19 +262,19 @@ public abstract class WasmRuntimeConformanceSuite {
     // ── Guest-controlled ABI words (the OOB sandbox-escape vectors) ──────────────────────────
 
     @Test
-    public fun resultPointerWithHighBitSetIsBounded(): TestResult = runTest(timeout = 10.seconds) {
+    public fun resultPointerWithHighBitSetIsBounded(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val op = newRuntime().load(WasmKernelFixtures.HIGH_BIT_RESULT_POINTER)
         assertFailsWith<WasmExecutionException> { op.invoke(ByteArray(0)) }
     }
 
     @Test
-    public fun resultLengthWithHighBitSetIsBounded(): TestResult = runTest(timeout = 10.seconds) {
+    public fun resultLengthWithHighBitSetIsBounded(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val op = newRuntime().load(WasmKernelFixtures.HIGH_BIT_RESULT_LENGTH)
         assertFailsWith<WasmExecutionException> { op.invoke(ByteArray(0)) }
     }
 
     @Test
-    public fun allocPointerWithHighBitSetIsBounded(): TestResult = runTest(timeout = 10.seconds) {
+    public fun allocPointerWithHighBitSetIsBounded(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val op = newRuntime().load(WasmKernelFixtures.HIGH_BIT_ALLOC_POINTER)
         assertFailsWith<WasmExecutionException> { op.invoke(byteArrayOf(1, 2, 3, 4)) }
     }

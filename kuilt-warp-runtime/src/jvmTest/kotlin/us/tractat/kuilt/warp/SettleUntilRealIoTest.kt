@@ -26,13 +26,13 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 private val REAL_IO_CONFIG = QuilterConfig(
@@ -56,7 +56,7 @@ class SettleUntilRealIoTest {
 
     @Test
     fun settleUntilWaitsForASlowRealIoCompletion() =
-        runTest(StandardTestDispatcher(), timeout = 30.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val realDelayMs = 300L
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("settle-realio"))
