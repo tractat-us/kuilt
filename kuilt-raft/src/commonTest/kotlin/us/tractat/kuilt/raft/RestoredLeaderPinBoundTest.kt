@@ -44,6 +44,15 @@ import kotlin.test.assertTrue
  * control: green before and after the fix, it proves the refusal above is attributable to the missing
  * pin and not to something structural about a restarted, term-walked, partitioned node.
  *
+ * ### Discard and clamp are told apart by exactly one test
+ *
+ * The three tests built on [tornFutureTermPin] move the node **onto** the term the record names, so a
+ * clamp back to the restored term lands the pin on a term the node has already left and reads as
+ * inert — all three stay green against a clamping mutant, which is measured below, not assumed.
+ * [aTornPinAboveTheRestoredTermIsDiscardedRatherThanClampedDownOntoIt] is the one that kills it: it
+ * asserts at the term a clamp would move the record *onto*, with the record naming a voter that has
+ * never led anything.
+ *
  * The two variants of "reaches `T + 1`" differ in what contains them. Reached as a **Follower**
  * (these tests) the torn pin authorises a pre-vote-less election on demand, which is what
  * [aTornPinAboveTheRestoredTermCannotAuthoriseATimeoutNowAtTheTermItNames] closes. Reached by the
@@ -295,6 +304,94 @@ internal class RestoredLeaderPinBoundTest {
             "a torn record naming ${torn.recordedLeaderId} for term ${torn.reachedTerm} must not make this " +
                 "node refuse the AppendEntries of the node that actually leads it — §5.2 says nothing " +
                 "about a term the record's writer had not reached",
+        )
+    }
+
+    /**
+     * Discard, **not** clamp — and this is the only test in the suite that can tell the two apart.
+     *
+     * The three above all put the record's term one above the restored term and then move the node
+     * *onto* that term, so a clamp to `currentTerm` lands the pin back on a term the node has already
+     * left and reads as inert: every one of them stays green against a clamping mutant. What a clamp
+     * actually does is visible only at the term it clamps *onto*, and only when the record names
+     * someone the node has no other reason to hold — so the record here names the third voter, which
+     * has never led any term.
+     *
+     * Clamped, this node would hold `neverLeaderId` as the **established leader of the term it
+     * restored** and hand it a pre-vote-less election on demand: an authorization invented out of a
+     * lost write, which is [`clamp a quantity, discard a nonce`] (#1817) exactly. A leader identity has
+     * no conservative in-range reading, so there is no value to clamp *to*.
+     *
+     * No walk to a later term, and none needed. The positive control is
+     * `TimeoutNowAuthorityPinTest.timeoutNowSurvivesARestartOfTheTransferTarget`: the same crash and
+     * restart with an **intact** record for the restored term still accepts its leader's `TimeoutNow`,
+     * so the refusal here is attributable to the record being about a term the node had not reached,
+     * not to the restart.
+     */
+    @Test
+    fun aTornPinAboveTheRestoredTermIsDiscardedRatherThanClampedDownOntoIt() = raftRunTest {
+        val sim = raftSim(this, backgroundScope, n = 3)
+        val leaderId = sim.idOf(awaitLeader(sim))
+        val targetId = sim.nodeIds.first { it != leaderId }
+        val neverLeaderId = sim.nodeIds.first { it != leaderId && it != targetId }
+        sim.awaitTrue("$targetId recognises $leaderId") {
+            sim.nodes.getValue(targetId).leader.value == leaderId
+        }
+        val restoredTerm = sim.storages.getValue(targetId).term()
+
+        sim.partitionOff(targetId)
+        sim.crash(targetId)
+
+        // A record for the NEXT term naming a node that has never led any term. Clamping it onto
+        // `restoredTerm` would establish $neverLeaderId as that term's leader on this node alone.
+        val storage = sim.storages.getValue(targetId)
+        storage.saveLeaderForTerm(restoredTerm + 1, neverLeaderId)
+        assertEquals(
+            restoredTerm, storage.term(),
+            "precondition: the torn write leaves the durable term BEHIND the pin",
+        )
+
+        sim.restart(targetId)
+        sim.settle()
+
+        val target = sim.nodes.getValue(targetId)
+        val termOnRestore = sim.storages.getValue(targetId).term()
+        assertAll(
+            { assertEquals(restoredTerm, termOnRestore, "precondition: the node restores at the durable term") },
+            {
+                assertTrue(
+                    target.role.value is RaftRole.Follower,
+                    "precondition: a Follower, so onTimeoutNow guard 2 is structurally inert — role was " +
+                        "${target.role.value}",
+                )
+            },
+        )
+
+        val refusals = collectRefusals(sim)
+        sim.settle()   // let the collectors subscribe before the frame is injected
+        refusals.clear()
+
+        // At EXACTLY the restored term — the term a clamp would have moved the record down onto.
+        sim.deliverTimeoutNow(to = targetId, from = neverLeaderId, term = restoredTerm)
+        sim.settle()
+        val termAfter = sim.storages.getValue(targetId).term()
+
+        assertAll(
+            {
+                assertTrue(
+                    target.role.value is RaftRole.Follower,
+                    "a node that never saw $neverLeaderId lead term $restoredTerm must not campaign on its " +
+                        "TimeoutNow — role was ${target.role.value}",
+                )
+            },
+            { assertEquals(restoredTerm, termAfter, "a refused TimeoutNow must not bump the durable term") },
+            {
+                assertEquals(
+                    RefusalGate.TimeoutNowSenderNotEstablishedLeader, refusals.only(targetId).gate,
+                    "the discarded record must leave term $restoredTerm with NO established leader, so guard 4 " +
+                        "refuses every sender — a clamp would have made $neverLeaderId pass it",
+                )
+            },
         )
     }
 
