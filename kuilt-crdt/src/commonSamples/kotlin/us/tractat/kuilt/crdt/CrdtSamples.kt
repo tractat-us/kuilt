@@ -263,6 +263,41 @@ internal fun sampleORMap() {
     check("team" in merged.keys)                               // add-wins on the key
 }
 
+/**
+ * Ship the change, not the map — and note the two things the change has to say: only the value
+ * *you* passed, and the tags this put supersedes.
+ */
+@Suppress("unused")
+internal fun sampleORMapDelta() {
+    val a = ReplicaId("A")
+    val b = ReplicaId("B")
+
+    // Two peers have converged: "team" already holds a long roster, put there by B.
+    var alpha = ORMap.empty<String, GSet<String>>()
+        .put(b, "team", GSet.of("alice", "bob", "carol", "dan"))
+    var bravo = alpha
+
+    // A adds one member and puts only the change on the wire. The delta carries A's one name —
+    // not the merged roster — because the receiver re-does that merge against its own copy.
+    val hire = alpha.putDelta(a, "team", GSet.of("erin"))
+    check(hire.delta["team"] == GSet.of("erin"))
+
+    // The delta also names B's older tag, which the put supersedes, so both peers drop it.
+    alpha = alpha.piece(hire)
+    bravo = bravo.piece(hire)
+    check(alpha == bravo)
+    check(alpha["team"] == GSet.of("alice", "bob", "carol", "dan", "erin"))
+
+    // Now a remove lands everywhere, because both peers agree on which tag is live. Had the delta
+    // above kept quiet about B's tag, it would still be alive on bravo — and "team" would come
+    // back from the dead there.
+    val disband = alpha.removeDelta("team")
+    alpha = alpha.piece(disband)
+    bravo = bravo.piece(disband)
+    check("team" !in alpha.keys)
+    check("team" !in bravo.keys)
+}
+
 // ── BoundedCounter ────────────────────────────────────────────────────────────
 
 /** Each replica spends within its own quota; transfers redistribute budget. */
