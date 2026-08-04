@@ -255,7 +255,13 @@ class SeamRoomTest {
             hostRoom.roster.first { it.size == 1 }
             joinerRoom.roster.first { it.isNotEmpty() }
 
-            val appPayload = "real message".encodeToByteArray()
+            // Deliberately not "real message": `r` is 0x72, which [RoomFramePrefix.Relay] reserves
+            // (#2007/#1994), so that payload is now classified as a relay frame and dropped as
+            // malformed. That is the documented release note on the prefix, not a regression — but
+            // it is invisible here, because an unbounded `first()` turns the drop into a hang
+            // rather than a failure. Any first byte outside the registry keeps this a test about
+            // admitted-peer routing.
+            val appPayload = "message from an admitted peer".encodeToByteArray()
             val frameJob = async { hostRoom.incoming.first() }
             joinerRoom.broadcast(appPayload)
 

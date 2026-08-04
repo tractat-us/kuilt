@@ -1,0 +1,734 @@
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+
+package us.tractat.kuilt.session
+
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.test.assertAll
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
+
+/**
+ * The star relay (#1994): a host forwards a spoke's frame to its co-spokes **and** delivers to
+ * itself, and a spoke routes through the host once its roster outgrows what the transport can
+ * address.
+ *
+ * ## Every negative is paired with a positive control in the same test
+ *
+ * An earlier revision's two security tests were bare `assertTrue(seen.none { … })` assertions and
+ * were green *before any relay code existed* — an implementation that dropped every frame would
+ * have passed them. So each refusal here shares a test with a frame that must arrive, and the
+ * whole file is expected to be red before the feature and green after.
+ */
+class StarRelayTest {
+
+    /**
+     * A generous wedge backstop, **not** an assertion. It is wall-clock measured over a
+     * virtual-time trajectory, so tightening it measures the host machine rather than this code
+     * (#1739, #1891). Fast failure comes from the bounded awaits inside the harness and from
+     * [membershipBudget], both of which are bounded in *virtual* time.
+     */
+    private val backstop = 30.seconds
+
+    /**
+     * Virtual time allowed for a membership announcement to cross the star in §T13.
+     *
+     * Well under `admitFanOuts`'s own per-recipient budget (`reconnectWindow + timeout` = 10.6 s
+     * for [relayHeartbeat]) and far under what a relay flood parked on that queue would cost
+     * (64 × 10.6 s). Comfortably over what the announcement actually needs: one detector timeout
+     * (600 ms) plus a fan-out hop.
+     */
+    private val membershipBudget = 2.seconds
+
+    /**
+     * Virtual time allowed for a relay forward to clear one wedged recipient ahead of it in §T15.
+     *
+     * Five relay budgets ([relayHeartbeat]'s 200 ms interval), so a healthy forward has ample room
+     * — and ten times under the 10.6 s a membership-sized budget would cost, so adopting that
+     * budget fails here rather than merely being slower.
+     */
+    private val relayHeadOfLineBudget = 1.seconds
+
+    // ── The host is a recipient, not just a router (B1) ───────────────────────
+
+    /**
+     * §T1. The regression guard for B1, which survived an entire earlier test set because nothing
+     * asserted the host's own receipt.
+     *
+     * `admittedById` never contains `selfId`, so a resolver consulting it alone drops `One(host)`
+     * and fans `Everyone` *past* the host. And the relayed path **replaces** `seam.broadcast`,
+     * which reaches the host today — so getting this wrong does not merely fail to add delivery to
+     * the host, it removes it.
+     */
+    @Test
+    fun `a joiner's broadcast reaches the host and every co-joiner`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 2)
+
+            star.joinerA.room.broadcast(appPayload("hello"))
+            testScheduler.runCurrent()
+
+            assertAll(
+                {
+                    assertEquals(
+                        listOf("hello"),
+                        star.host.appFramesFrom(star.joinerAId),
+                        "the HOST must receive a joiner's broadcast. Today an un-relayed " +
+                            "seam.broadcast reaches it; the relay must not regress that",
+                    )
+                },
+                {
+                    assertEquals(
+                        listOf("hello"),
+                        star.joinerB.appFramesFrom(star.joinerAId),
+                        "and so must the co-joiner — the thing the relay adds",
+                    )
+                },
+                {
+                    assertTrue(
+                        star.joinerA.appFramesFrom(star.joinerAId).isEmpty(),
+                        "the origin must not receive its own broadcast back",
+                    )
+                },
+            )
+        }
+
+    /**
+     * §T2. B1 for the `One` case: a unicast addressed to the host must resolve to LOCAL delivery.
+     *
+     * The wire assertion is what makes this a test of the **resolver** rather than of the direct
+     * path. A diverged joiner relays everything (I2), so this unicast must cross the wire wrapped;
+     * without that assertion the test is green on a build with no relay at all, where `sendTo`
+     * simply hands the frame to the host directly and `One(host)` is never resolved by anyone.
+     */
+    @Test
+    fun `a joiner's unicast to the host reaches the host and no one else`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 2)
+
+            star.joinerA.room.sendTo(star.hostId, appPayload("to-host"))
+            testScheduler.runCurrent()
+
+            assertAll(
+                {
+                    val wire = star.wireFramesFrom(star.joinerAId)
+                    assertTrue(
+                        wire.isNotEmpty() && wire.all { RelayEnvelope.isRelayFrame(it) },
+                        "a diverged joiner relays even to the host, so this must cross the wire " +
+                            "wrapped — otherwise the resolver below is never exercised. " +
+                            "observed ${wire.size} data frames",
+                    )
+                },
+                {
+                    assertEquals(
+                        listOf("to-host"),
+                        star.host.appFramesFrom(star.joinerAId),
+                        "One(host) must resolve to LOCAL delivery — the host is not in its own " +
+                            "admittedById, so a roster-only resolver drops this silently",
+                    )
+                },
+                {
+                    assertTrue(
+                        star.joinerB.appFramesFrom(star.joinerAId).isEmpty(),
+                        "and must not be widened to the co-joiner",
+                    )
+                },
+            )
+        }
+
+    // ── The relay arm carries its own admission gate (B2) ─────────────────────
+
+    /**
+     * §T3. The relay arm fires **before** the `isAdmittedPeer(sender)` arm it precedes, so it
+     * inherits none of that arm's gating and must carry its own. Every other application-data path
+     * in `dispatchIncoming` is admit-gated; this must not be the first that is not.
+     *
+     * ## The host assertion is the one that pins the host's gate
+     *
+     * Asserting only that a *co-joiner* never sees the frame does **not** pin it, and a mutation
+     * proves so: delete the host's admission check and this test stays green, because the joiner's
+     * own fourth gate (origin must be an admitted member) discards the forward at the far end. Two
+     * guards in series, and the downstream one masks the upstream one — the paired-guard hazard
+     * this arm's ordering creates.
+     *
+     * What the host's gate uniquely owns is visible only *on the host*: without it the host
+     * **accepts and locally delivers** an unadmitted peer's payload (it is a recipient as well as a
+     * router), and lets that peer drive an N-recipient fan-out per frame whose cost is paid before
+     * any recipient discards anything.
+     */
+    @Test
+    fun `an unadmitted peer cannot drive a relay fan-out`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 3)
+
+            star.sendRelayFromUnadmitted(RelayDest.Everyone, appPayload("unadmitted"))
+            // Positive control from an ADMITTED peer, so total non-delivery cannot pass this.
+            star.joinerA.sendRelay(RelayDest.Everyone, appPayload("honest"))
+            testScheduler.runCurrent()
+
+            assertAll(
+                {
+                    assertEquals(
+                        listOf("honest"),
+                        star.joinerB.appFramesFrom(star.joinerAId),
+                        "an admitted peer's relay must work — the control",
+                    )
+                },
+                {
+                    assertTrue(
+                        star.host.appFrames().none { it == "unadmitted" },
+                        "the HOST must refuse it at the relay arm's own admission gate: the arm " +
+                            "fires BEFORE the isAdmittedPeer guard, so it carries its own. This " +
+                            "is the assertion that pins that gate — the co-joiner one below is " +
+                            "satisfied by the joiner-side origin check even when this gate is gone",
+                    )
+                },
+                {
+                    assertTrue(
+                        star.joinerB.appFrames().none { it == "unadmitted" },
+                        "and no co-joiner may be reached by it either",
+                    )
+                },
+            )
+        }
+
+    // ── Routing: the leak boundary ────────────────────────────────────────────
+
+    /** §T4. A unicast must reach its target and nobody else — including the host that forwarded it. */
+    @Test
+    fun `a unicast reaches only its target`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 3)
+
+            star.joinerA.sendRelay(RelayDest.One(star.joinerBId), appPayload("for-b"))
+            testScheduler.runCurrent()
+
+            assertAll(
+                // Positive control — without it, a relay that dropped everything passes the two
+                // negatives below.
+                {
+                    assertEquals(
+                        listOf("for-b"),
+                        star.joinerB.appFramesFrom(star.joinerAId),
+                        "the addressed peer must receive it",
+                    )
+                },
+                {
+                    assertTrue(
+                        star.joinerC.appFramesFrom(star.joinerAId).isEmpty(),
+                        "an unaddressed co-joiner must not observe a unicast — the leak boundary",
+                    )
+                },
+                {
+                    // Only meaningful now that §T1/§T2 prove the host receives relayed frames at
+                    // all; before them this negative was vacuous.
+                    assertTrue(
+                        star.host.appFramesFrom(star.joinerAId).isEmpty(),
+                        "the relaying host must not surface a unicast it merely forwarded",
+                    )
+                },
+            )
+        }
+
+    /** §T5. The first-hop rule: at the room layer there is no trusted relayer, so origin must equal sender. */
+    @Test
+    fun `a spoke cannot forge another peer's origin`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 3)
+
+            // A speaks for itself — accepted.
+            star.joinerA.sendRelay(RelayDest.Everyone, appPayload("honest"))
+            // A claims to be C — must be refused outright, not re-attributed.
+            star.joinerA.sendRelayForgingOrigin(star.joinerCId, RelayDest.Everyone, appPayload("forged"))
+            testScheduler.runCurrent()
+
+            assertAll(
+                {
+                    assertEquals(
+                        listOf("honest"),
+                        star.joinerB.appFramesFrom(star.joinerAId),
+                        "the honest frame must arrive — the positive control for the refusal below",
+                    )
+                },
+                {
+                    assertTrue(
+                        star.joinerB.appFramesFrom(star.joinerCId).isEmpty(),
+                        "a frame whose origin names another peer must be refused, not relayed",
+                    )
+                },
+            )
+        }
+
+    // ── Relayability is an allow-list (C1) ────────────────────────────────────
+
+    /**
+     * §T6. A relayed `Welcome` naming the sender as host must change nothing on the recipient.
+     *
+     * Re-entering the full `dispatchIncoming` would route any `0x61` payload to `handleAdmitFrame`,
+     * and `handleWelcome` is host-authoritative only *after* a host exists — so an admitted joiner
+     * could capture a co-joiner's `hostPeerId` and then drive every host-authoritative gate on it.
+     */
+    @Test
+    fun `a relayed admit frame changes nothing on the recipient`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 2)
+            val hostBefore = star.joinerB.hostPeer()
+
+            val forgedWelcome = AdmitMessage.encode(
+                AdmitMessage.Welcome(
+                    assignedPeerId = star.joinerAId.value,
+                    displayName = "attacker",
+                    sessionId = star.joinerAId.value,
+                ),
+            )
+            star.joinerA.sendRelay(RelayDest.One(star.joinerBId), forgedWelcome)
+            // …and one legitimate application frame, so total non-delivery cannot pass this test.
+            star.joinerA.sendRelay(RelayDest.One(star.joinerBId), appPayload("legit"))
+            testScheduler.runCurrent()
+
+            assertAll(
+                {
+                    assertEquals(
+                        listOf("legit"),
+                        star.joinerB.appFramesFrom(star.joinerAId),
+                        "the application frame must still arrive — otherwise this test is vacuous",
+                    )
+                },
+                {
+                    assertEquals(
+                        hostBefore,
+                        star.joinerB.hostPeer(),
+                        "a relayed Welcome must not capture the recipient's hostPeerId",
+                    )
+                },
+                {
+                    assertEquals(
+                        star.hostId,
+                        star.joinerB.hostPeer(),
+                        "sanity: the recipient's host is still the real host",
+                    )
+                },
+            )
+        }
+
+    /** §T7. A relay envelope nested inside a relay payload must be dropped, not unwrapped. */
+    @Test
+    fun `a nested relay envelope is not honoured`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 2)
+            val inner = RelayEnvelope.encode(
+                RelayEnvelope(star.joinerAId, RelayDest.Everyone, appPayload("nested")),
+            )
+
+            star.joinerA.sendRelay(RelayDest.Everyone, inner)
+            star.joinerA.sendRelay(RelayDest.Everyone, appPayload("plain"))
+            testScheduler.runCurrent()
+
+            assertEquals(
+                listOf("plain"),
+                star.joinerB.appFramesFrom(star.joinerAId),
+                "a relay envelope nested inside a relay payload must be dropped, not unwrapped; " +
+                    "the plain frame proves delivery works at all",
+            )
+        }
+
+    /** §T8. An unresolvable destination is dropped — never widened into a fan-out. */
+    @Test
+    fun `an unresolvable destination is dropped and never fanned`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 3)
+
+            star.joinerA.sendRelay(RelayDest.One(PeerId("ghost")), appPayload("nowhere"))
+            star.joinerA.sendRelay(RelayDest.One(star.joinerBId), appPayload("somewhere"))
+            testScheduler.runCurrent()
+
+            assertAll(
+                {
+                    assertEquals(
+                        listOf("somewhere"),
+                        star.joinerB.appFramesFrom(star.joinerAId),
+                        "the resolvable unicast must arrive",
+                    )
+                },
+                {
+                    assertTrue(
+                        star.joinerC.appFramesFrom(star.joinerAId).isEmpty(),
+                        "an unresolvable dest must be DROPPED, never widened into a fan-out",
+                    )
+                },
+            )
+        }
+
+    /**
+     * §T9. The property `RoomChannelSeam.incoming`'s admitted-sender filter and every `Quilter`'s
+     * per-replica accounting depend on: a relayed frame is credited to its **origin**, never to the
+     * host that carried it.
+     */
+    @Test
+    fun `a relayed frame is credited to its origin rather than to the relaying host`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 2)
+
+            star.joinerA.sendRelay(RelayDest.Everyone, appPayload("plain"))
+            testScheduler.runCurrent()
+
+            assertAll(
+                {
+                    assertEquals(
+                        listOf("plain"),
+                        star.joinerB.appFramesFrom(star.joinerAId),
+                        "the frame must be attributed to its ORIGIN",
+                    )
+                },
+                {
+                    assertTrue(
+                        star.joinerB.appFramesFrom(star.hostId).isEmpty(),
+                        "and never to the relaying host — crediting the host would misattribute " +
+                            "the whole relayed stream and defeat the admitted-sender filter",
+                    )
+                },
+            )
+        }
+
+    // ── The joiner-side gates ─────────────────────────────────────────────────
+
+    /** §T10. Only the identified host may relay to this member. */
+    @Test
+    fun `a joiner ignores a relay frame that did not come from its host`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 3)
+
+            // A genuine host-relayed frame (control), and a co-joiner injecting a relay frame
+            // directly onto B's link — the flat-loom / compromised-peer case.
+            star.joinerA.sendRelay(RelayDest.One(star.joinerBId), appPayload("honest"))
+            star.joinerC.injectRelayDirectlyTo(
+                star.joinerB,
+                RelayEnvelope(star.joinerAId, RelayDest.One(star.joinerBId), appPayload("forged")),
+            )
+            testScheduler.runCurrent()
+
+            assertEquals(
+                listOf("honest"),
+                star.joinerB.appFramesFrom(star.joinerAId),
+                "only the identified host may relay; a co-joiner's injected relay frame is refused",
+            )
+        }
+
+    /** §T11. `dest` is re-checked at the far end, so a misrouting host cannot widen a unicast. */
+    @Test
+    fun `a joiner ignores a relayed unicast addressed to someone else`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 3)
+
+            // The far-end leak-boundary re-check: the HOST is made to misroute, and the joiner
+            // refuses anyway. Paired with a One(self) that IS honoured.
+            star.hostRelayDirectlyTo(
+                star.joinerB,
+                RelayEnvelope(star.joinerAId, RelayDest.One(star.joinerCId), appPayload("forged")),
+            )
+            star.hostRelayDirectlyTo(
+                star.joinerB,
+                RelayEnvelope(star.joinerAId, RelayDest.One(star.joinerBId), appPayload("legit")),
+            )
+            testScheduler.runCurrent()
+
+            assertEquals(
+                listOf("legit"),
+                star.joinerB.appFramesFrom(star.joinerAId),
+                "dest is re-checked at the far end — a misrouting host cannot widen a unicast",
+            )
+        }
+
+    /**
+     * §T11b. The joiner's fourth gate: the **origin** must be an admitted member.
+     *
+     * `Room.incoming`'s documented contract is that frames from unadmitted peers never reach it,
+     * and for a plain application frame this gate is the only thing upholding it on the relayed
+     * path — `routeApplicationFrame` has no admitted-sender filter downstream (the channel views
+     * do, which is why the gate reads as redundant until you follow the non-channel branch).
+     */
+    @Test
+    fun `a joiner refuses a relayed frame whose origin is not an admitted member`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 3)
+
+            star.hostRelayDirectlyTo(
+                star.joinerB,
+                RelayEnvelope(PeerId("ghost"), RelayDest.One(star.joinerBId), appPayload("forged")),
+            )
+            star.hostRelayDirectlyTo(
+                star.joinerB,
+                RelayEnvelope(star.joinerAId, RelayDest.One(star.joinerBId), appPayload("legit")),
+            )
+            testScheduler.runCurrent()
+
+            assertEquals(
+                listOf("legit"),
+                star.joinerB.appFrames(),
+                "a relayed frame whose origin is in nobody's roster must be refused — otherwise " +
+                    "Room.incoming surfaces a frame credited to a non-member, which its own " +
+                    "contract forbids. The admitted origin proves delivery works at all",
+            )
+        }
+
+    // ── The send rules ────────────────────────────────────────────────────────
+
+    /**
+     * §T12 (I3). A host does **not** always satisfy `rosterPeers ⊆ seam.peers`: a member inside its
+     * reconnect window stays in the roster while the transport has dropped it (#1557/#1614). So the
+     * direct-send rule keys on the **role**, explicitly, and not on that subset test.
+     *
+     * A build that dropped the role check does not merely misroute here — `hostPeerId` is null on a
+     * host, so `relayHostOrNull` throws and the test fails on the exception rather than on an
+     * assertion. Either way it is red, which is what matters.
+     *
+     * The joiner half is the positive control, and it is not optional: "the host emitted no relay
+     * frame" is trivially true of a build that has no relay, so a same-star assertion that a
+     * *joiner* does relay is what turns the negative into an observation about the **role** rather
+     * than about the feature's absence.
+     */
+    @Test
+    fun `a host sends directly even while a member is inside its reconnect window`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 2)
+            star.partition(star.joinerBId) // in the roster, gone from seam.peers
+
+            star.host.room.broadcast(appPayload("plain"))
+            star.joinerA.room.broadcast(appPayload("honest"))
+            testScheduler.runCurrent()
+
+            assertAll(
+                {
+                    assertEquals(
+                        listOf("plain"),
+                        star.joinerA.appFramesFrom(star.hostId),
+                        "the healthy joiner still receives it",
+                    )
+                },
+                {
+                    assertTrue(
+                        star.wireFramesTo(star.joinerAId).none { RelayEnvelope.isRelayFrame(it) },
+                        "the host must take the DIRECT path — keyed on role, not on the subset " +
+                            "test, which a host with a partitioned member fails",
+                    )
+                },
+                {
+                    // Positive control: the SAME star, a member whose roster diverges identically,
+                    // and it does relay. Without this the negative above holds on a build with no
+                    // relay code at all.
+                    val wire = star.wireFramesFrom(star.joinerAId)
+                    assertTrue(
+                        wire.isNotEmpty() && wire.all { RelayEnvelope.isRelayFrame(it) },
+                        "a JOINER with the same diverged roster must relay — the control that " +
+                            "makes the host's direct path an observation about the role. " +
+                            "observed ${wire.size} data frames",
+                    )
+                },
+            )
+        }
+
+    /**
+     * §T13 (I2). Once any divergence exists, **everything** relays — including a frame to a peer
+     * that is directly reachable. Keying `broadcast` on the roster subset but `sendTo` on the
+     * individual peer would give one destination two different hop counts on a partial mesh, and a
+     * `Quilter`'s ack could then overtake the delta it acknowledges.
+     */
+    @Test
+    fun `a joiner relays both broadcast and unicast once its roster diverges`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 2)
+
+            star.joinerA.room.broadcast(appPayload("plain"))
+            star.joinerA.room.sendTo(star.joinerBId, appPayload("for-b"))
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertEquals(listOf("plain", "for-b"), star.joinerB.appFramesFrom(star.joinerAId)) },
+                {
+                    val wire = star.wireFramesFrom(star.joinerAId)
+                    assertTrue(
+                        wire.isNotEmpty() && wire.all { RelayEnvelope.isRelayFrame(it) },
+                        "BOTH call shapes must take the relayed path — mixing hop counts to one " +
+                            "destination lets a Quilter ack overtake the delta it acks. " +
+                            "observed ${wire.size} data frames",
+                    )
+                },
+            )
+        }
+
+    // ── Head-of-line: relay traffic has its own queue (B3 / C3) ───────────────
+
+    /**
+     * §T14. The C3 property asserted on the thing that actually matters: a wedged relay recipient
+     * must not stall the **membership** queue. Sharing one writer would — `admitFanOuts` is
+     * `UNLIMITED` with a `reconnectWindow + timeout` per-recipient budget, so 64 relay frames aimed
+     * at one black-holed spoke would park every `Paused`/`Unpaused`/`Farewell` behind them for
+     * minutes. That is the permanent roster divergence #1781 built the queue to prevent, reachable
+     * by one slow peer.
+     *
+     * The relay-frames-on-the-wire assertion is not decoration: without it this test is green
+     * *before the relay exists at all*, because a build with no relay has no relay traffic to
+     * stall anything with.
+     */
+    @Test
+    fun `a relay forward to a wedged spoke does not delay membership announcements`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 3, wedge = setOf("joiner-b"))
+
+            // Fill the relay queue toward a wedged recipient. RELAY_FLOOD exceeds the queue's
+            // capacity, so DROP_OLDEST is exercised too.
+            repeat(RELAY_FLOOD) {
+                star.joinerA.sendRelay(RelayDest.One(star.joinerBId), appPayload("plain"))
+            }
+            testScheduler.runCurrent()
+
+            // Now raise a membership transition and require it to land promptly.
+            star.partition(star.joinerCId)
+            testScheduler.advanceTimeBy(membershipBudget)
+            testScheduler.runCurrent()
+
+            assertAll(
+                {
+                    assertTrue(
+                        star.joinerA.sawPartitioned(star.joinerCId),
+                        "a Paused for C must reach A while relay traffic to a wedged B is " +
+                            "backed up — this is why relay does not share admitFanOuts",
+                    )
+                },
+                {
+                    // Positive control: relay traffic really was aimed at the wedged spoke. Without
+                    // this the test is green on a build that has no relay at all.
+                    assertTrue(
+                        star.wireFramesTo(star.joinerBId).any { RelayEnvelope.isRelayFrame(it) },
+                        "sanity: the host really did try to relay to the wedged spoke",
+                    )
+                },
+                {
+                    assertTrue(
+                        star.joinerB.appFramesFrom(star.joinerAId).isEmpty(),
+                        "sanity: B really is wedged",
+                    )
+                },
+            )
+        }
+
+    /**
+     * §T15. The relay writer's per-recipient budget is one [relayHeartbeat] interval, **not**
+     * `admitFanOuts`'s `reconnectWindow + timeout`.
+     *
+     * That looser budget is right for an announcement, which stays meaningful for the whole span of
+     * the hold it describes; it is wrong for a data frame, which the next one supersedes. Adopting
+     * it here would make one wedged spoke cost every *healthy* spoke behind it a full reconnect
+     * window per frame. Asserted in virtual time, so the bound measures the budget rather than the
+     * host machine.
+     */
+    @Test
+    fun `a relay forward to a wedged spoke does not delay one to a healthy spoke`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 3, wedge = setOf("joiner-b"))
+
+            // Queued first, and it will never complete: the healthy forward sits behind it.
+            star.joinerA.sendRelay(RelayDest.One(star.joinerBId), appPayload("plain"))
+            star.joinerA.sendRelay(RelayDest.One(star.joinerCId), appPayload("legit"))
+            testScheduler.advanceTimeBy(relayHeadOfLineBudget)
+            testScheduler.runCurrent()
+
+            assertAll(
+                {
+                    assertEquals(
+                        listOf("legit"),
+                        star.joinerC.appFramesFrom(star.joinerAId),
+                        "the healthy spoke must be served within a few relay budgets of the " +
+                            "wedged one — on the membership budget it would wait a reconnect window",
+                    )
+                },
+                {
+                    assertTrue(
+                        star.joinerB.appFramesFrom(star.joinerAId).isEmpty(),
+                        "sanity: B really is wedged",
+                    )
+                },
+            )
+        }
+
+    // ── Data is relayed; liveness is not (S2) ─────────────────────────────────
+
+    /**
+     * §T16. A relayed payload must **not** refresh the origin's liveness detector.
+     *
+     * `HeartbeatPartitionDetector` treats *any* inbound frame from a peer as proof that peer is
+     * alive. So if a relayed payload were emitted onto the stream the per-peer detectors collect,
+     * stamped with its origin, then A's relayed **data** would keep B's detector for A alive — and
+     * a genuinely dead A↔B link would never mature into a partition. That is the exact inverse of
+     * the carve-out, which is why relayed payloads go to a separate flow that only the channel
+     * views collect.
+     *
+     * Runs on a **flat mesh**, not the star, and that is load-bearing: the masking needs the
+     * subject to hold a *direct* edge to the origin, and on a star no spoke has a detector for a
+     * co-spoke at all (#1576). On a star this property is vacuously true, so a star test of it
+     * would pin nothing — which is precisely how it came to be unpinned.
+     */
+    @Test
+    fun `a relayed payload does not keep the origin's liveness detector alive`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val mesh = meshTrio()
+            assertTrue(
+                mesh.subjectHasDetectorFor(mesh.originId),
+                "precondition: on a mesh the subject holds a direct edge to the origin, so it " +
+                    "runs a detector for it — without this the test observes nothing",
+            )
+
+            // The origin's REAL traffic stops: its detector must now starve.
+            mesh.silenceIntoSubject(mesh.originId)
+
+            // …while the host keeps relaying the origin's DATA at better than heartbeat cadence.
+            // Channel frames specifically: that is the only branch that emits onto a Swatch stream,
+            // and therefore the only one that could reach a detector at all.
+            repeat(RELAY_KEEPALIVE_ROUNDS) {
+                mesh.relayChannelFrameToSubject("plain")
+                testScheduler.advanceTimeBy(relayHeartbeat.interval)
+                testScheduler.runCurrent()
+            }
+
+            assertAll(
+                {
+                    assertTrue(
+                        mesh.subject.sawPartitioned(mesh.originId),
+                        "the origin's detector must still starve — relayed DATA is not liveness " +
+                            "evidence. If this fails, relayed payloads are reaching the per-peer " +
+                            "detectors and a dead direct edge is being masked by relayed traffic",
+                    )
+                },
+                {
+                    // Positive control: the relayed frames really did arrive on the surface that is
+                    // supposed to see them. Without it, a build that dropped every relayed frame
+                    // would pass the assertion above for the opposite reason. Note this control
+                    // holds under the failure mode too — the channel view sees the frames either
+                    // way — so the partition assertion above is the sole discriminator, by design.
+                    assertTrue(
+                        mesh.subjectChannelFrames().isNotEmpty(),
+                        "sanity: the relayed channel frames were delivered to the channel view",
+                    )
+                },
+            )
+        }
+
+    private companion object {
+        /**
+         * Relay frames aimed at the wedged spoke in §T14. Exceeds the relay queue's capacity (64)
+         * so the `DROP_OLDEST` overflow path is exercised rather than merely declared.
+         */
+        const val RELAY_FLOOD = 80
+
+        /**
+         * Relay injections in §T16, one per heartbeat interval. Enough that their span comfortably
+         * exceeds `relayHeartbeat.timeout` (600 ms = 3 intervals), so a detector being kept alive
+         * by them is unambiguous rather than a race with the deadline.
+         */
+        const val RELAY_KEEPALIVE_ROUNDS = 8
+    }
+}

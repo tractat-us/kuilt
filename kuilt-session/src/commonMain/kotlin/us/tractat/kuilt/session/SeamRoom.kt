@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.CloseReason
@@ -38,6 +39,7 @@ import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.core.validFirstHop
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.ProtocolVersion
 import us.tractat.kuilt.session.admit.RejectCode
@@ -285,6 +287,14 @@ public class SeamRoomFactory(
  * yet bounded so a long-lived room never accumulates unbounded history.
  */
 private const val MEMBERSHIP_EVENT_REPLAY = 64
+
+/**
+ * Capacity of [SeamRoom.relayForwards] (#1994). Deep enough to hold several `Quilter` deltas in
+ * flight per recipient, shallow enough that a wedged link cannot accumulate unboundedly — past
+ * which [kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST] sheds the stalest frame, which
+ * anti-entropy heals.
+ */
+private const val RELAY_FORWARD_CAPACITY = 64
 
 /**
  * [Seam]-backed [Room] implementation.
@@ -556,6 +566,23 @@ internal class SeamRoom(
      */
     private val rawIncoming = MutableSharedFlow<Swatch>(extraBufferCapacity = 256)
 
+    /**
+     * Relayed payloads, delivered to **channel views only** — deliberately *not* [rawIncoming].
+     *
+     * [rawIncoming] feeds two consumers with different needs: [RoomChannelSeam.incoming], which must
+     * see relayed channel frames, and [PerPeerSeam], which feeds each peer's
+     * [HeartbeatPartitionDetector] — and that detector treats **any** inbound frame as proof of
+     * liveness. Emitting a relayed payload into [rawIncoming] stamped with its origin would let A's
+     * relayed *data* refresh B's detector for A.
+     *
+     * On a pure star that is inert (a joiner has no detector for an unroutable co-joiner), but the
+     * send rule relays **everything** once the roster diverges — so on a partial-mesh, composite or
+     * tiered topology where B does hold a direct edge to A, a dead A↔B link would be masked by
+     * relayed traffic and never mature into [PartitionEvent.PeerUnresponsive]. That is the exact
+     * inverse of the documented carve-out: **data is relayed; liveness is not** (#1592/#1576).
+     */
+    private val relayedIncoming = MutableSharedFlow<Swatch>(extraBufferCapacity = 256)
+
     private var loopJobs: List<Job> = emptyList()
 
     // Per-admitted-peer detector collection jobs, keyed by PeerId.
@@ -779,6 +806,10 @@ internal class SeamRoom(
         // per-call `scope.launch`es did, since [leave] never cancelled those either. (Only *may*: see
         // the close site in [leave].) Otherwise it dies with [scope].
         scope.launch { runAdmitFanOutWriter() }
+        // The relay forward writer, on the same discipline and for the same reason — but on its own
+        // queue, because relay traffic is per-frame and [admitFanOuts]'s growth bound is not. See
+        // [relayForwards].
+        scope.launch { runRelayForwardWriter() }
         val jobs = mutableListOf(
             scope.launch { runMainLoop() },
             scope.launch { runTornWatcher() },
@@ -1074,6 +1105,11 @@ internal class SeamRoom(
                 // [routeApplicationFrame] and surface as a bogus application [RoomFrame]. The lobby's own
                 // collector was cancel-and-joined before adopt, so nothing else consumes it.
             }
+            // Fires BEFORE the `isAdmittedPeer` arm below, so it inherits none of that arm's
+            // gating — which is precisely why [handleRelayFrame] carries its own admission check.
+            // This is the "an earlier guard un-pins an older test" shape; the two guards are
+            // mutated in combination, not separately.
+            RelayEnvelope.isRelayFrame(bytes) -> handleRelayFrame(sender, bytes)
             isAdmittedPeer(sender) -> routeApplicationFrame(sender, bytes)
             else -> { /* drop: application frame from unadmitted peer */ }
         }
@@ -1925,6 +1961,300 @@ internal class SeamRoom(
         fanOutToOtherMembers(peerId, AdmitMessage.Unpaused(peerId.value))
     }
 
+    // ── Star relay (#1994) ────────────────────────────────────────────────────
+
+    /**
+     * What a relayed frame resolves to on this host — **the outcome, carried in the type**.
+     *
+     * The cases name *what happens*, not just *to whom*, because the host is a **recipient as well
+     * as a router** and a resolver that only answers "which peers" cannot say so. [admittedById]
+     * never contains [selfId] — `addToRoster` is called only for other peers — so a `Set<PeerId>`
+     * resolver silently drops `One(host)` as unresolvable and fans `Everyone` past the host. That
+     * would stop a joiner's frames reaching the host at all, and no mesh test could see it.
+     *
+     * Cardinality stays in the type: [Exactly] *cannot* hold two peers, and removing a branch from
+     * the `when` that consumes this *cannot* compile. For per-recipient secrets (`:kuilt-deal`'s
+     * card deals) the security property **is** cardinality, so it belongs here.
+     */
+    private sealed interface Resolved {
+        /** Unknown, departed, or self-addressed-by-the-origin destination. Drop it. */
+        data object None : Resolved
+
+        /** Addressed to this host alone — deliver locally, forward to nobody. */
+        data object SelfOnly : Resolved
+
+        /** Forward to exactly one other member; not for us. */
+        data class Exactly(val peer: PeerId) : Resolved
+
+        /** Deliver locally **and** forward to [others] (which may legitimately be empty). */
+        data class SelfAndEvery(val others: Set<PeerId>) : Resolved
+    }
+
+    /**
+     * Whether a relayed payload may be honoured — an **allow-list**, deliberately not a deny-list.
+     *
+     * Honoured only if it is an explicit channel frame, or claims **no** registered prefix at all
+     * (a plain application frame). That excludes admit, lobby, heartbeat and a nested
+     * [RelayEnvelope] in one predicate — and excludes a *future* frame family by default rather
+     * than requiring someone to remember it.
+     *
+     * **Why not "re-dispatch with a synthesized sender".** That re-enters [dispatchIncoming], which
+     * routes any `0x61` payload to [handleAdmitFrame]. [handleWelcome] is host-authoritative only
+     * *after* a host exists, so any admitted joiner could relay a crafted `Welcome` naming itself
+     * and capture a co-joiner's `hostPeerId` — then drive every host-authoritative gate on the
+     * victim. #1180 hardened that on a flat loom; the four star fabrics were protected by
+     * *topology*, and a relay removes that protection on all of them.
+     *
+     * A relayed admit frame has no legitimate sender: the admit protocol is by construction
+     * host↔joiner over the direct edge.
+     */
+    private fun isRelayable(payload: ByteArray): Boolean =
+        RoomChannel.isChannelFrame(payload) || RoomFramePrefix.entries.none { it.matches(payload) }
+
+    /** Host-side: forward and/or deliver one relayed frame, or drop it. */
+    private fun handleRelayFrame(sender: PeerId, bytes: ByteArray) {
+        if (_role.value != SessionRole.Host) {
+            handleRelayedDelivery(sender, bytes)
+            return
+        }
+        // FIRST gate. This arm fires before the `isAdmittedPeer(sender)` arm it precedes, so it
+        // inherits none of that arm's gating and must carry its own: every other application-data
+        // path in dispatchIncoming is admit-gated, and an ungated relay lets a peer that never
+        // completed the handshake drive an N-recipient fan-out per frame.
+        if (!isAdmittedPeer(sender)) {
+            logger.debug {
+                "room.relay.drop self=${selfId.value} from=${sender.value} reason=sender-not-admitted"
+            }
+            return
+        }
+        val envelope = RelayEnvelope.decode(bytes) ?: run {
+            logger.debug { "room.relay.drop self=${selfId.value} from=${sender.value} reason=malformed" }
+            return
+        }
+        // No trusted relayer tier exists at the room layer, so `trusted` is empty by construction
+        // and the rule reduces to `origin == sender`: a spoke may speak only for itself. Shared
+        // with :kuilt-cluster, which passes its voter core.
+        if (!validFirstHop(sender = sender, origin = envelope.origin, trusted = emptySet())) {
+            logger.debug {
+                "room.relay.drop self=${selfId.value} from=${sender.value} " +
+                    "origin=${envelope.origin.value} reason=origin-spoof"
+            }
+            return
+        }
+        if (!isRelayable(envelope.payload)) {
+            logger.debug {
+                "room.relay.drop self=${selfId.value} origin=${envelope.origin.value} " +
+                    "reason=not-relayable"
+            }
+            return
+        }
+        // Forwards carry the ORIGINAL bytes unchanged — `dest` is meaningful on this hop only, so
+        // there is no per-recipient re-wrapping and `Everyone` stays `Everyone` on the wire.
+        when (val resolved = resolveRecipients(envelope)) {
+            Resolved.None ->
+                logger.debug {
+                    "room.relay.drop self=${selfId.value} origin=${envelope.origin.value} " +
+                        "dest=${envelope.dest} reason=unresolvable"
+                }
+            Resolved.SelfOnly -> deliverRelayedPayload(envelope)
+            is Resolved.Exactly -> enqueueRelayForward(listOf(resolved.peer), bytes)
+            is Resolved.SelfAndEvery -> {
+                deliverRelayedPayload(envelope)
+                if (resolved.others.isNotEmpty()) enqueueRelayForward(resolved.others.toList(), bytes)
+            }
+        }
+    }
+
+    /**
+     * Resolve a relayed frame's destination against the current roster **and this host itself**.
+     *
+     * A destination the origin addressed to itself, or one naming a peer this room does not hold,
+     * resolves to [Resolved.None] and is dropped — never widened into a fan-out, which is how a
+     * unicast would leak.
+     */
+    private fun resolveRecipients(envelope: RelayEnvelope): Resolved = lock.withLock {
+        if (closed) return@withLock Resolved.None
+        when (val dest = envelope.dest) {
+            RelayDest.Everyone ->
+                // `others` may legitimately be empty (a 2-peer room): the host is still a
+                // recipient, so this is SelfAndEvery(emptySet()), NOT None.
+                Resolved.SelfAndEvery(admittedById.keys.filterTo(mutableSetOf()) { it != envelope.origin })
+
+            is RelayDest.One -> when {
+                dest.peer == envelope.origin -> Resolved.None
+                dest.peer == selfId -> Resolved.SelfOnly
+                admittedById.containsKey(dest.peer) -> Resolved.Exactly(dest.peer)
+                else -> Resolved.None
+            }
+        }
+    }
+
+    /**
+     * Deliver a relayed payload to this member's own consumers, stamped with the **origin**.
+     *
+     * Shared by the host (which is a recipient of anything addressed to it) and the joiner (after
+     * its own gates in [handleRelayedDelivery]). Callers must have already applied [isRelayable].
+     *
+     * The two surfaces mirror [dispatchIncoming]'s own arms for these payload kinds — channel
+     * frames to the channel views, plain application frames to [routeApplicationFrame] — but this
+     * is a **narrow, explicit** re-implementation of exactly those two, deliberately *not* a call
+     * back into [dispatchIncoming], which would restore the admit-frame path the allow-list exists
+     * to remove.
+     */
+    private fun deliverRelayedPayload(envelope: RelayEnvelope) {
+        if (RoomChannel.isChannelFrame(envelope.payload)) {
+            val accepted = relayedIncoming.tryEmit(Swatch(envelope.payload, sender = envelope.origin))
+            if (!accepted) {
+                // Relayed delivery is the one place weaker than direct delivery: the direct path
+                // uses a suspending `emit` inside the collector, which this cannot. Absence has to
+                // be diagnosable off-device (#1781).
+                logger.debug {
+                    "room.relay.drop self=${selfId.value} origin=${envelope.origin.value} " +
+                        "reason=inbound-buffer-full"
+                }
+            }
+        } else {
+            routeApplicationFrame(envelope.origin, envelope.payload)
+        }
+    }
+
+    /**
+     * Joiner-side: accept a frame the host relayed on a co-member's behalf.
+     *
+     * Four gates, each of which must independently hold:
+     *
+     * 1. **The sender is our identified host.** A relay frame from anyone else is a co-joiner
+     *    injecting directly, which on a flat loom is reachable. Depends on `hostPeerId` being set
+     *    from the *first* Welcome — see [handleWelcome].
+     * 2. **`dest` names us.** The host already resolved this, but the leak boundary is re-checked
+     *    at the far end rather than trusting the host's routing — cheap, and it means a misrouting
+     *    host cannot silently widen a unicast.
+     * 3. **The payload is relayable.** The same allow-list the host applied, applied again: a host
+     *    is not trusted to have applied it.
+     * 4. **The origin is an admitted member.** Otherwise the frame would be credited to a peer
+     *    outside the roster, which the channel views' own `isAdmitted(sender)` filter would drop
+     *    anyway — failing here keeps the reason loggable.
+     */
+    private fun handleRelayedDelivery(sender: PeerId, bytes: ByteArray) {
+        val host = lock.withLock { hostPeerId }
+        if (host == null || sender != host) {
+            logger.debug {
+                "room.relay.drop self=${selfId.value} from=${sender.value} " +
+                    "host=${host?.value} reason=not-from-host"
+            }
+            return
+        }
+        val envelope = RelayEnvelope.decode(bytes) ?: run {
+            logger.debug { "room.relay.drop self=${selfId.value} reason=malformed" }
+            return
+        }
+        val addressed = when (val dest = envelope.dest) {
+            RelayDest.Everyone -> true
+            is RelayDest.One -> dest.peer == selfId
+        }
+        if (!addressed) {
+            logger.debug {
+                "room.relay.drop self=${selfId.value} dest=${envelope.dest} reason=not-addressed"
+            }
+            return
+        }
+        if (!isRelayable(envelope.payload)) {
+            logger.debug {
+                "room.relay.drop self=${selfId.value} origin=${envelope.origin.value} " +
+                    "reason=not-relayable"
+            }
+            return
+        }
+        if (!isAdmittedPeer(envelope.origin)) {
+            logger.debug {
+                "room.relay.drop self=${selfId.value} origin=${envelope.origin.value} " +
+                    "reason=origin-not-admitted"
+            }
+            return
+        }
+        deliverRelayedPayload(envelope)
+    }
+
+    /** One queued relay forward: the original envelope bytes plus its recipient snapshot. */
+    private class RelayForward(val recipients: List<PeerId>, val bytes: ByteArray)
+
+    /**
+     * Queued relay forwards, drained by [runRelayForwardWriter].
+     *
+     * **Separate from [admitFanOuts], deliberately.** That queue's growth analysis rests on *what
+     * enqueues*: membership **transitions**, "on the heartbeat timescale rather than per-frame".
+     * Relay traffic is exactly per-frame, so putting it there would invalidate the bound — with
+     * [Channel.UNLIMITED] and a `reconnectWindow + timeout` per-recipient budget, one black-holed
+     * spoke would delay every `Paused`/`Unpaused`/`Farewell` behind it, which is the permanent
+     * roster divergence #1781 built that queue to prevent.
+     *
+     * The policies differ because the contents do. A dropped `Unpaused` pins a recovered member
+     * [Liveness.Partitioned] in a remote roster **forever**, so that queue must never drop; a
+     * dropped relay frame is loss the [Room] contract already documents (lossy-without-error on a
+     * star) and that `Quilter` anti-entropy heals. So this one is **bounded** with
+     * [BufferOverflow.DROP_OLDEST] — back-pressure is unavailable here for the same reason it is
+     * there (enqueue happens from a non-suspending frame handler), and dropping the *oldest*
+     * relayed frame under sustained overload is strictly better than growing without bound.
+     */
+    private val relayForwards = Channel<RelayForward>(
+        capacity = RELAY_FORWARD_CAPACITY,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+
+    /**
+     * Per-recipient deadline for one relay forward — [HeartbeatConfig.interval], **not**
+     * [admitFanOuts]'s `reconnectWindow + timeout`.
+     *
+     * That budget is deliberately loose because an announcement stays meaningful for the whole span
+     * of the hold it describes. A relayed data frame does not: it is superseded by the next one,
+     * and `Quilter` anti-entropy heals the gap. A budget on the order of one heartbeat interval
+     * keeps a wedged spoke from consuming the writer while staying far above what a healthy link
+     * needs.
+     */
+    private val relaySendBudget: Duration get() = heartbeatConfig.interval
+
+    /** Drains [relayForwards]. Guard discipline is identical to [runAdmitFanOutWriter] — see its KDoc. */
+    private suspend fun runRelayForwardWriter() {
+        for (forward in relayForwards) {
+            for (recipient in forward.recipients) {
+                try {
+                    val accepted = withTimeoutOrNull(relaySendBudget) {
+                        seam.sendTo(recipient, forward.bytes)
+                    } != null
+                    if (!accepted) {
+                        logger.debug {
+                            "room.relay.drop self=${selfId.value} to=${recipient.value} " +
+                                "reason=send-budget-exceeded budget=$relaySendBudget"
+                        }
+                    }
+                } catch (failure: Throwable) {
+                    // Genuinely OUR cancellation ends the loop; anything else — including a
+                    // CancellationException a consumer's `sendTo` minted itself — is that
+                    // recipient's failure and must not kill the relay writer.
+                    currentCoroutineContext().ensureActive()
+                    logger.debug {
+                        "room.relay.drop self=${selfId.value} to=${recipient.value} " +
+                            "cause=${failure::class.simpleName}: ${failure.message}"
+                    }
+                }
+            }
+        }
+    }
+
+    /** Enqueue a relay forward. Never suspends; drops the oldest under sustained overload. */
+    private fun enqueueRelayForward(recipients: List<PeerId>, bytes: ByteArray) {
+        if (recipients.isEmpty()) return
+        val queued = relayForwards.trySend(RelayForward(recipients, bytes)).isSuccess
+        if (!queued) {
+            // DROP_OLDEST never refuses, so the only way `trySend` fails is a closed channel: the
+            // room went terminal. Logged for the same reason a dropped fan-out is (#1781).
+            logger.debug {
+                "room.relay.drop self=${selfId.value} reason=room-terminal " +
+                    "recipients=${recipients.size}"
+            }
+        }
+    }
+
     /** One queued admit fan-out: a frame encoded once, plus the recipient snapshot it was taken against. */
     private class AdmitFanOut(
         val recipients: List<PeerId>,
@@ -2347,38 +2677,87 @@ internal class SeamRoom(
     /**
      * Broadcast [bytes] to all admitted members.
      *
+     * On a star fabric a spoke's frame reaches only the host, so once this member's roster diverges
+     * from what the transport can address, the frame is wrapped and **relayed via the host**
+     * (#1994). [RoomChannelSeam] therefore needs no change: it already delegates here, so
+     * `peers = room.rosterPeers` becomes honest for free.
+     *
      * Silent no-op when the room is terminal (after [MembershipEvent.HostLost] or [leave]).
+     *
+     * **Lossy without error on a star.** An unresolvable destination is dropped with a debug log and
+     * a torn or wedged recipient's send is dropped by [runRelayForwardWriter]. On a mesh this call
+     * surfaces failures; relayed, it does not.
      */
     override suspend fun broadcast(bytes: ByteArray) {
         val terminal = lock.withLock { hostLost || closed }
         if (terminal) return
-        seam.broadcast(bytes)
+        val host = relayHostOrNull() ?: return seam.broadcast(bytes)
+        seam.sendTo(host, RelayEnvelope.encode(RelayEnvelope(selfId, RelayDest.Everyone, bytes)))
     }
 
     /**
-     * Send [bytes] to one specific admitted member.
+     * Send [bytes] to one specific admitted member, relaying via the host when the transport cannot
+     * address that member directly — see [broadcast] for the routing rule and the loss semantics.
      *
      * Silent no-op when the room is terminal (after [MembershipEvent.HostLost] or [leave]).
      */
     override suspend fun sendTo(peer: PeerId, bytes: ByteArray) {
         val terminal = lock.withLock { hostLost || closed }
         if (terminal) return
-        seam.sendTo(peer, bytes)
+        val host = relayHostOrNull() ?: return seam.sendTo(peer, bytes)
+        seam.sendTo(host, RelayEnvelope.encode(RelayEnvelope(selfId, RelayDest.One(peer), bytes)))
+    }
+
+    /**
+     * The host to relay through, or `null` to send directly.
+     *
+     * Returns `null` — direct — in two cases:
+     *
+     * - **This member is the host.** Keyed on the role *explicitly*, not on the subset test below.
+     *   A host does **not** always satisfy `rosterPeers ⊆ seam.peers`: a member inside its reconnect
+     *   window stays in the roster while the transport has dropped it (#1557/#1614), so a host with
+     *   one partitioned member would otherwise enter the relay branch and try to relay through
+     *   itself. An earlier revision was saved from that only by [hostPeerId] being incidentally
+     *   `null` on a host — which a plausible tidy-up would have broken.
+     * - **The roster is a subset of what the transport can address**, i.e. a full mesh.
+     *
+     * Otherwise **everything** relays, including frames to a peer that *is* directly reachable.
+     * Keying [broadcast] on the roster subset but [sendTo] on the individual peer would, on a
+     * partial mesh, give one destination two different hop counts — and a `Quilter`'s ack could
+     * then overtake the delta it acknowledges.
+     *
+     * **A null [hostPeerId] here throws.** It is an invariant violation on a joiner, not a
+     * degrade-quietly case: [handleWelcome] sets [hostPeerId] from the first accepted `Welcome`,
+     * which necessarily precedes any co-member entering the roster, so a diverged roster with no
+     * identified host means that invariant has already been broken upstream. Falling back to a
+     * direct send would re-create #1994's own symptom — silent non-delivery — and hide the cause.
+     */
+    private fun relayHostOrNull(): PeerId? {
+        if (_role.value == SessionRole.Host) return null
+        val (roster, host) = lock.withLock { _rosterPeers.value to hostPeerId }
+        if (roster.all { it in seam.peers.value }) return null
+        return requireNotNull(host) {
+            "relay required but no host identified — roster=${roster.map { it.value }} " +
+                "seamPeers=${seam.peers.value.map { it.value }}; hostPeerId must be set by the " +
+                "first accepted Welcome (see handleWelcome)"
+        }
     }
 
     /**
      * Returns a [Seam] view scoped to channel [id].
      *
      * The returned [RoomChannelSeam] sources its peer set from [rosterPeers] (admitted
-     * roster + self) and its inbound stream from [rawIncoming] filtered to channel frames
-     * with the sub-id derived from [id]. Idempotent: the same [Seam] instance is returned
-     * for each distinct [id].
+     * roster + self) and its inbound stream from [rawIncoming] **merged with** [relayedIncoming],
+     * filtered to channel frames with the sub-id derived from [id]. The merge is what lets a
+     * channel view see a co-spoke's relayed frames while the per-peer liveness detectors — which
+     * collect [rawIncoming] alone — do not (#1994; see [relayedIncoming]). Idempotent: the same
+     * [Seam] instance is returned for each distinct [id].
      */
     override fun channel(id: String): Seam {
         val subId = RoomChannel.channelSubId(id)
         return lock.withLock {
             channelViews.getOrPut(subId) {
-                RoomChannelSeam(room = this, subId = subId, sharedRaw = rawIncoming)
+                RoomChannelSeam(room = this, subId = subId, sharedRaw = merge(rawIncoming, relayedIncoming))
             }
         }
     }
@@ -2438,6 +2817,9 @@ internal class SeamRoom(
         // The `closed` flag set above already stops anything new being enqueued; a `trySend` that
         // races that gate fails against this closed channel instead of throwing at its caller.
         admitFanOuts.close()
+        // Same discipline, same reason (see above): close the queue rather than cancelling its
+        // writer, so [runRelayForwardWriter] completes on drain instead of dying mid-item.
+        relayForwards.close()
         jobsToCancel.forEach { it.cancel() }
         detectorJobsToCancel.forEach { it.cancel() }
         seam.close(
