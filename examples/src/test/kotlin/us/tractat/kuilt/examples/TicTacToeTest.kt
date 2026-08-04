@@ -13,9 +13,9 @@ import us.tractat.kuilt.game.TurnEvent
 import us.tractat.kuilt.game.TurnSequencer
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.test.FakeRaftNode
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Example: tic-tac-toe moves over [TurnSequencer] + [FakeRaftNode].
@@ -30,7 +30,7 @@ class TicTacToeTest {
     private data class Move(val row: Int, val col: Int)
 
     @Test
-    fun `moves are committed in order`() = runTest(timeout = 5.seconds) {
+    fun `moves are committed in order`() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         node.setRole(RaftRole.Leader)
         val game = TurnSequencer(node, serializer<Move>())

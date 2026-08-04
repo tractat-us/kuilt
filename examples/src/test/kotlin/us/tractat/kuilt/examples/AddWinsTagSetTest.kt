@@ -16,11 +16,11 @@ import us.tractat.kuilt.crdt.ORSet
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Example: an add-wins label set replicated across two peers using [ORSet]
@@ -64,7 +64,7 @@ class AddWinsTagSetTest {
 
     @Test
     fun `tags added by two peers converge to the union and removed tags disappear`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamAlice = loom.host(Pattern("or-tags"))
             val seamBob = loom.join(InMemoryTag("bob"))
@@ -110,7 +110,7 @@ class AddWinsTagSetTest {
 
     @Test
     fun `concurrent add beats a concurrent remove (add-wins)`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamAlice = loom.host(Pattern("or-tags-add-wins"))
             val seamBob = loom.join(InMemoryTag("bob"))

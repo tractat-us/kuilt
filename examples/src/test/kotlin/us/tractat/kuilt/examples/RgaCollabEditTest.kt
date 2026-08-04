@@ -20,9 +20,9 @@ import us.tractat.kuilt.crdt.RgaOp
 import us.tractat.kuilt.quilter.QuiltMessage
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Example: collaborative text editing replicated across two peers using [Rga]
@@ -101,7 +101,7 @@ class RgaCollabEditTest {
 
     @Test
     fun `concurrent inserts at different positions converge to the same text`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamAlice = loom.host(Pattern("collab-edit"))
             val seamBob = loom.join(InMemoryTag("bob"))
@@ -130,7 +130,7 @@ class RgaCollabEditTest {
 
     @Test
     fun `a deletion on one peer propagates and is reflected on the other`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamAlice = loom.host(Pattern("collab-delete"))
             val seamBob = loom.join(InMemoryTag("bob"))
@@ -161,7 +161,7 @@ class RgaCollabEditTest {
 
     @Test
     fun `concurrent inserts at the same position resolve deterministically`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamAlice = loom.host(Pattern("collab-concurrent"))
             val seamBob = loom.join(InMemoryTag("bob"))

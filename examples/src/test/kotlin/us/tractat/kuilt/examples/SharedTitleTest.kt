@@ -16,9 +16,9 @@ import us.tractat.kuilt.crdt.LWWRegister
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Example: a shared document title replicated across two peers using [LWWRegister]
@@ -58,7 +58,7 @@ class SharedTitleTest {
 
     @Test
     fun `a later write overrides an earlier one and both replicas converge`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamAlice = loom.host(Pattern("doc-title"))
             val seamBob = loom.join(InMemoryTag("bob"))
@@ -83,7 +83,7 @@ class SharedTitleTest {
 
     @Test
     fun `when timestamps tie the replica-id lexicographic tiebreak is deterministic`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamAlice = loom.host(Pattern("doc-title-tie"))
             val seamBob = loom.join(InMemoryTag("bob"))

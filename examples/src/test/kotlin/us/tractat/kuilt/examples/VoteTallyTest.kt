@@ -14,9 +14,9 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.PNCounter
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Example: a live up/down vote tally replicated across two peers using [PNCounter]
@@ -49,7 +49,7 @@ class VoteTallyTest {
 
     @Test
     fun `upvotes and downvotes from two peers converge to the correct net tally`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamAlice = loom.host(Pattern("vote-tally"))
             val seamBob = loom.join(InMemoryTag("bob"))
@@ -79,7 +79,7 @@ class VoteTallyTest {
 
     @Test
     fun `a downvote-heavy result can go negative and still converges`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamAlice = loom.host(Pattern("controversial-post"))
             val seamBob = loom.join(InMemoryTag("bob"))

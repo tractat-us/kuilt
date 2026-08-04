@@ -15,10 +15,10 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.GSet
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Example: a grow-only label set replicated across two peers using [GSet]
@@ -50,7 +50,7 @@ class GrowOnlyTagSetTest {
 
     @Test
     fun `tags added by two peers converge to the union`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamAlice = loom.host(Pattern("doc-tags"))
             val seamBob = loom.join(InMemoryTag("bob"))
@@ -88,7 +88,7 @@ class GrowOnlyTagSetTest {
 
     @Test
     fun `adding the same tag from both sides is idempotent`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamAlice = loom.host(Pattern("doc-tags-idempotent"))
             val seamBob = loom.join(InMemoryTag("bob"))
