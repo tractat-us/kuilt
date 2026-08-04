@@ -118,7 +118,8 @@ without either contradicting #2007 or splitting the prefix from the codec.
 **One follow-up, owned by Task 9:** the spec's Architecture bullet contradicts its own Decisions row.
 Fold this resolution back into the spec (a revision-3 note is enough) rather than leaving the deviation
 plan-level — a design of record left self-contradicting is the stale-body hazard this repo keeps
-re-learning.
+re-learning. **Done** — see the spec's "Revision 3 corrections, folded back from implementation",
+§R2, which carries this argument and the honest weakness below.
 
 ### An honest weakness to put in front of the reviewer
 
@@ -2626,6 +2627,22 @@ conjunct):
 | M7 | M3 ∧ M5 | at least one of M3's / M5's tests |
 | M8 | M1 ∧ M4 | at least one |
 
+**M1–M8 as written never reach `resolveRecipients`, and that is a blind spot, not a gap in
+coverage.** Every mutation above sits in `handleRelayFrame`'s gate chain; the resolver decides *who
+receives a frame that passed every gate*, which is where a widening bug leaks bytes rather than
+admitting them. The review gate extended the set there and found two survivors and one kill by a
+misleading assertion. Run these too:
+
+| # | Mutation | Expected to redden |
+|---|---|---|
+| M9 | `is RelayDest.One`: `admittedById.containsKey(dest.peer) -> Exactly` → `Exactly(dest.peer)` unconditionally | `an unresolvable unicast dest is dropped, never widened` — but **only** via its wire assertion. Roster-membership is the boundary, so the refusal must be asserted where the decision is: no forward leaves the host. A test that asserts only "no co-spoke received it" holds equally if the host faithfully forwarded to a non-member and the send failed on the wire — a different program, in which an admitted spoke can push bytes at any peer the host's transport can address but its roster does not hold. |
+| M10 | `is RelayDest.One`: `dest.peer == envelope.origin -> Resolved.None` → arm removed | `a relayed frame is never echoed back to its origin`. Without the arm a self-addressed unicast falls through to the roster arm, which matches — an origin *is* admitted — and the host forwards the frame straight back. `Room.incoming` then surfaces a frame credited to `selfId`, which a `Quilter` reads as a delta from a replica it *is*. |
+| M11 | `RelayDest.Everyone`: drop the `it != envelope.origin` exclusion | same test. Before it existed this was caught only by an unrelated §T12 wire assertion whose message speaks about the host's *direct* path — a red that names the wrong cause is barely better than a green. |
+
+M9–M11 are the "an earlier guard un-pins an older test" shape read one layer further in: the gates
+absorb every *inadmissible* frame, so the resolver's own guards are only ever exercised by frames
+that got through, and a test written against the gates never touches them.
+
 - [ ] **Step 1: For each mutation — apply, build, record, revert**
 
 ```bash
@@ -2664,9 +2681,11 @@ than one with two explained greens.
 - Modify: `docs/fabric-peer-routing.md` — four fabric rows, plus the liveness carve-out
 - Modify: `kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/Seam.kt` — `peers` KDoc
 - Modify: `kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/Room.kt` —
-  `broadcast`/`sendTo` KDoc
-- Modify: `kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/SeamRoom.kt:1524-1526` —
+  `broadcast`/`sendTo` KDoc, including the reserved leading bytes
+- Modify: `kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/SeamRoom.kt` —
   `startDetector`'s stale `TieredSeam` reason
+- Modify: `kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/RoomChannel.kt` —
+  `CHANNEL_PREFIX`'s promise of "namespace-collision guarantees"
 - Modify: `docs/agent-cookbook.md` — a symptom→primitive entry
 - Verify: `.claude/skills/kuilt-primitives/SKILL.md` still routes to it
 
@@ -2705,18 +2724,44 @@ Add to the `peers` KDoc:
 
 - [ ] **Step 3: `Room.broadcast` / `Room.sendTo` — the honest loss semantics**
 
-The KDoc must **not** promise "reaches that member on every fabric" (spec correction **I5**):
+The KDoc must **not** promise "reaches that member on every fabric" (spec correction **I5**).
 
-```kotlin
-     * **Reaches every admitted member**, relaying through the host on a star fabric where no
-     * direct route exists (#1994).
-     *
-     * **Lossy without error when relayed.** On a mesh, `sendTo` surfaces a failure as
-     * `PeerNotConnected`. Relayed, it does not: an unresolvable destination is dropped with a debug
-     * log, and a torn recipient's send is swallowed by the host's best-effort fan-out writer. A
-     * caller that needs delivery confirmation must get it from the application protocol, not from
-     * this call returning normally.
-```
+**The text this step originally prescribed is stale — do not paste it.** It said "`sendTo` surfaces
+a failure as `PeerNotConnected` on a mesh; relayed, it does not", which
+[`b242fb03`](https://github.com/tractat-us/kuilt/commit/b242fb03) resolved the other way while
+implementing Task 5. What shipped, and what the KDoc must match:
+
+- **`broadcast` is lossy without error.** When the relay hop throws `PeerNotConnected` it catches and
+  falls back to `seam.broadcast(bytes)`; it never throws. A `Quilter`'s timer-driven broadcast that
+  threw here would kill the coroutine driving anti-entropy — the mechanism that heals the gap.
+- **`sendTo` throws when relayed and the host hop fails**, and the exception names the **host**, not
+  the addressed peer, because the host is the hop that failed. An addressed send that silently
+  vanished would re-create #1994's own symptom at the send side.
+- **"Lossy without error" is true of the *second* hop only** — host → final recipient is a
+  best-effort fan-out, and nothing is reported back across it either way.
+
+Write the KDoc from the code, not from this plan. `SeamRoom.broadcast` / `SeamRoom.sendTo` carry the
+full argument; `Room`'s interface KDoc states the contract callers program against.
+
+- [ ] **Step 3b: Document the reserved byte space where a consumer actually reads it**
+
+`RoomFramePrefix` reserves ASCII `a c e k r` (`0x61 0x63 0x65 0x6b 0x72`) as leading payload bytes,
+and today that is documented **only** in the enum's own KDoc, which no consumer opens.
+`RoomChannel`'s class doc set the precedent — "Applications **must not** emit raw payloads starting
+with `0x63`" — for one byte; extend it to all five on `Room.broadcast` / `Room.sendTo`, where a
+caller composing a payload is actually looking.
+
+State the subtlety accurately rather than over-promising a blanket ban. `matches` is a single-byte
+test but each family's real classifier (`classifies`) differs, and the dispatcher runs the
+classifiers: `0x61`/`0x65`/`0x72` swallow **every** payload leading with them, `0x63` only payloads
+of 3 bytes or more, and `0x6b` only the literal `"kuilt.heartbeat.ping"`/`"…pong"` prefixes — so a
+bare `"keepalive"` is delivered. Say which rows are conditional and say not to build on them: the
+classifiers may move and the failure mode is a frame that vanishes with no error.
+
+While there, soften `RoomChannel.CHANNEL_PREFIX`'s KDoc, which still ends "See the class-level
+documentation for **namespace-collision guarantees**". The class doc now says the registry asserts
+distinctness and explicitly **cannot** assert safety — a pointer promising a guarantee at the far
+end of it is the same stale-claim shape as Step 4.
 
 - [ ] **Step 4: Correct the two live stale `TieredSeam` claims**
 

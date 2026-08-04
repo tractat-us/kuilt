@@ -28,9 +28,11 @@ import us.tractat.kuilt.core.Swatch
  * The codebase lives with it because room payloads are framed, not bare.
  *
  * Applications **must not** emit raw payloads starting with `0x63` via [Room.broadcast]
- * or [Room.sendTo] — that byte is reserved for channel framing. Application frames
- * that happen to start with `0x63` will be misclassified as channel frames and routed
- * (or silently dropped).
+ * or [Room.sendTo] — that byte is reserved for channel framing. An application frame of
+ * 3 bytes or more starting with `0x63` is misclassified as a channel frame and routed
+ * (or silently dropped); a 1- or 2-byte one survives, on the strength of the classifier's
+ * length test alone. Do not build on that. [Room.broadcast] carries the whole reserved
+ * byte space and which of it is conditional.
  *
  * ## Wire format
  *
@@ -47,8 +49,10 @@ public object RoomChannel {
     /**
      * First byte of every channel frame.
      *
-     * Value: `0x63` (ASCII 'c' for "channel"). See the class-level documentation
-     * for namespace-collision guarantees.
+     * Value: `0x63` (ASCII 'c' for "channel"). The class-level documentation
+     * describes the byte space this belongs to — note that the registry asserts
+     * **distinctness** between frame families and explicitly cannot assert safety
+     * against an application payload that happens to lead with the same byte.
      */
     public val CHANNEL_PREFIX: Byte = RoomFramePrefix.Channel.byte
 

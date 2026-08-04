@@ -1579,9 +1579,21 @@ internal class SeamRoom(
      * peer's presence is instead derived from the host's authoritative fan-out
      * ([AdmitMessage.Paused] / [AdmitMessage.Unpaused] / [AdmitMessage.Farewell], #1557).
      *
-     * The gate must not be keyed off catching [us.tractat.kuilt.core.PeerNotConnected]:
-     * `TieredSeam.sendTo` silently *drops* a peer owned by neither tier, so an exception-keyed
-     * check would miss it entirely.
+     * **#1994's relay does not widen this gate**, and the narrowness is the point: the relay moves
+     * *data* between spokes at the room layer ([broadcast] / [sendTo]), while a detector sends
+     * through [PerPeerSeam], which delegates straight to [seam]. Data is relayed; liveness is not —
+     * see [relayedIncoming] for the inbound half of the same carve-out, and
+     * `docs/fabric-peer-routing.md`.
+     *
+     * The gate is keyed on [Seam.peers] membership rather than on catching
+     * [us.tractat.kuilt.core.PeerNotConnected]. The original reason — that `TieredSeam.sendTo`
+     * *silently dropped* a peer owned by neither tier — is **no longer true**: #1935 is closed and
+     * `TieredSeam` now throws. The gate's design is still right, for a better reason: a membership
+     * test is a *positive* statement about reachability, while an exception-keyed check infers it
+     * from a failure and so cannot distinguish "no route" from "route, send failed".
+     *
+     * Kept as a worked example of the stale-citation hazard: a claim tied to an issue number
+     * silently inverts when that issue is fixed. Verify before resting an argument on one.
      *
      * Seam membership is dynamic, so [runDetectorRouteWatcher] re-runs this for every admitted
      * member whenever [Seam.peers] grows. A peer *leaving* [Seam.peers] deliberately does **not**

@@ -8,6 +8,10 @@ invariant, and gated its own de-risking prototype on a tautology. Those are corr
 deltas are recorded in [What revision 1 got wrong](#what-revision-1-got-wrong) so the reasoning is not
 lost.
 
+**Revision 3** — two corrections folded back from implementation, so this document is not left
+contradicting the code it describes. See
+[Revision 3 corrections](#revision-3-corrections-folded-back-from-implementation).
+
 ## The problem, restated
 
 `RoomChannelSeam` publishes the **roster** as `Seam.peers` (`RoomChannel.kt:133`) but routes `sendTo`
@@ -193,12 +197,14 @@ black-hole every relayed frame. That case is undefendable from this side and is 
 
 Neither is a blocker; both must be documented rather than papered over.
 
-- **Relay converts a throw into a silent drop.** An unresolvable `dest` resolves to `Resolved.None`
-  and is dropped with a debug log; a torn recipient's send is swallowed by
+- **Relay converts a throw into a silent drop — on the second hop.** An unresolvable `dest` resolves
+  to `Resolved.None` and is dropped with a debug log; a torn recipient's send is swallowed by
   `runAdmitFanOutWriter`'s best-effort discipline (and `RoomHubSeam.sendTo` already swallows its own
-  failures). So `Room.sendTo` throws `PeerNotConnected` on a mesh and is lossy-without-error on a
-  star. The KDoc must say so — revision 1's proposed text promised the opposite ("Reaches that member
-  on every fabric").
+  failures). Nothing is reported back across host → recipient either way. The KDoc must say so —
+  revision 1's proposed text promised the opposite ("Reaches that member on every fabric").
+  **Revision 3 narrows this**: it originally read "`Room.sendTo` throws `PeerNotConnected` on a mesh
+  and is lossy-without-error on a star", which is not what shipped — the *first* hop still throws.
+  See [R1](#revision-3-corrections-folded-back-from-implementation).
 - **The envelope is unbudgeted.** Revision 1 claimed "the `RELAY_HEADER_BUDGET` reservation is
   honoured". False: that constant is `internal` to `:kuilt-cluster` and invisible here, and there is no
   payload-limit surface at this layer. A payload that fits unrelayed can exceed the fabric's limit once
@@ -306,11 +312,75 @@ when that issue is fixed. Verify such a claim before resting an argument on it.
   filling that table's empty middle category for the first time, plus the liveness carve-out.
 - `Seam.peers` KDoc — membership versus routability: a peer in the set is reachable, but not
   necessarily in one hop.
-- `Room.broadcast`/`sendTo` KDoc — reaches every member; relayed sends are lossy-without-error on a
-  star.
+- `Room.broadcast`/`sendTo` KDoc — reaches every member; `broadcast` lossy-without-error, `sendTo`
+  reporting its own hop (R1). Plus the **reserved leading bytes**, which until now were documented
+  only in `RoomFramePrefix`'s own KDoc, where no consumer reads them: state all five and which two
+  are conditional on a classifier narrower than the byte.
+- `RoomChannel.CHANNEL_PREFIX` KDoc — stop pointing at "namespace-collision guarantees" the class doc
+  now says the registry explicitly cannot make.
 - `docs/agent-cookbook.md` entry plus a check that `.claude/skills/kuilt-primitives/SKILL.md` routes
   to it.
 - `startDetector`'s KDoc — why the route gate stays narrow after #1994.
+
+## Revision 3 corrections, folded back from implementation
+
+Two places where implementation reached a different answer than this document prescribes. Recorded
+here rather than left in the plan, because a design of record that contradicts the code is the stale-
+body hazard, and a reader trusts this file over a plan.
+
+### R1 — `Room.sendTo` throws on the first hop; only `broadcast` is lossy-without-error
+
+[Two honest asymmetries](#two-honest-asymmetries) originally concluded that `Room.sendTo` "is
+lossy-without-error on a star". What shipped splits the two calls by their contracts:
+
+- **`broadcast` never throws.** A failed relay hop is caught and degrades to a direct
+  `seam.broadcast`. The reason is concrete: a `Quilter`'s timer-driven broadcast that threw would
+  cancel the coroutine driving anti-entropy — the mechanism that heals the gap once the host returns.
+- **`sendTo` throws** when the hop this member must make fails, relayed or not, naming the **host**
+  when the host is the hop that failed. An addressed send that vanished silently would re-create
+  #1994's own symptom at the send side.
+- **Lossy-without-error describes the second hop only.** Host → recipient is a best-effort fan-out.
+
+I5 in the table below stands as written — the promise revision 1 made was wrong. The correction is
+that the honest replacement is per-call, not per-fabric.
+
+### R2 — the relay types live in `:kuilt-session`, `internal`, not `:kuilt-core`, public
+
+[Architecture](#architecture) places `RelayDest` and `RelayEnvelope` in `:kuilt-core`, public. Only
+`validFirstHop` was lifted; the envelope and the resolver stayed session-local and `internal`. Three
+reasons, all checkable:
+
+1. **`:kuilt-core` has no CBOR dependency and this track does not add one.** It declares
+   `kotlinx.serialization.core` only, and its charter is "depends on nothing but coroutines +
+   serialization". Adding a serialization *format* to the contract module for a type nothing outside
+   `:kuilt-session` consumes is a real cost against no benefit. `validFirstHop` is pure and generic
+   and needs no dependency at all.
+2. **The [Decisions](#decisions) table already said so** — "Reuse: *Lift `validFirstHop` only*", and
+   "there is consequently **no** cluster-migration follow-up". The Decisions row is the binding
+   statement; the Architecture bullets are the looser text, inherited from revision 1 (which lifted
+   the envelope, the rule *and* the resolver). Applying the decision consistently pulls the envelope
+   back too, so this resolves a contradiction internal to revision 2 rather than overturning it.
+3. **`RoomFramePrefix` must live in `:kuilt-session`.**
+   [#2007](https://github.com/tractat-us/kuilt/issues/2007) says verbatim "One registry in
+   `:kuilt-session` owning the byte space", and the families it reserves live in `:kuilt-session` and
+   `:kuilt-liveness`. An envelope in `:kuilt-core` framed behind `RoomFramePrefix.Relay` would invert
+   the dependency arrow — or force the prefix to be split from its codec.
+
+Independently reviewed and upheld. The review confirmed nothing outside `:kuilt-session` plausibly
+needs `RelayEnvelope` — `:kuilt-cluster` keeps its own `RaftRelay` dialect and delivers into a
+`MutableSharedFlow<RaftEnvelope>` rather than a peer set, and `:kuilt-gossip` decorates below the Room
+layer — and that `internal` blocks nothing today, while `internal` → `public` is a non-breaking
+one-line change pre-1.0.
+
+So the public surface this track adds is exactly `RoomFramePrefix` and `validFirstHop`.
+
+**The honest weakness, kept in view.** At the Room layer there is no trusted relayer set — every
+sender is a spoke — so the session's call is `validFirstHop(sender, origin, trusted = emptySet())`,
+which degenerates to `origin == sender`. The lift is justified by the **cluster** keeping its
+non-empty `voters` call, not by the session's. A reviewer who holds that a shared function with a
+degenerate instantiation is worse than an inline `origin == sender` plus a comment is making a
+legitimate call; it is adjacent to the tautology that sank revision 1 (C2), and it should be argued
+rather than assumed.
 
 ## What revision 1 got wrong
 

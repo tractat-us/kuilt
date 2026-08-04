@@ -132,6 +132,29 @@ public interface Room {
      * currently reach — including, on a star, the relaying host itself — is silently skipped. Use
      * the roster and the membership events to reason about who is present; do not read a returned
      * `Unit` as delivery. Deliberately weaker than [sendTo], which is addressed and does report.
+     *
+     * ## Reserved leading bytes
+     *
+     * The room protocol discriminates its own frames by the payload's **first byte**, so five
+     * values are spoken for — `0x61`, `0x63`, `0x65`, `0x6b`, `0x72`, ASCII `a c e k r`
+     * ([RoomFramePrefix]). A raw payload sent here or via [sendTo] that begins with one of them may
+     * be classified as a protocol frame at the far end and never surface on [incoming].
+     *
+     * The reservation is **not** uniform, because each family's real classifier differs:
+     *
+     * | Byte | Family | What is actually swallowed |
+     * |---|---|---|
+     * | `0x61` | admit handshake | **every** payload leading with it |
+     * | `0x65` | host election | **every** payload leading with it |
+     * | `0x72` | host relay | **every** payload leading with it |
+     * | `0x63` | channel framing | only payloads of **3 bytes or more** |
+     * | `0x6b` | liveness ping/pong | only the literal `"kuilt.heartbeat.ping"` / `"…pong"` prefixes |
+     *
+     * So a payload leading with `0x6b` is not necessarily swallowed — a bare `"keepalive"` is
+     * delivered — but relying on the two conditional rows trades a byte of payload space for a
+     * failure mode with no error attached: the classifiers may tighten or widen, and a frame that
+     * stops matching simply vanishes. Prefix your own payloads, or send them over a [channel] view,
+     * which frames them for you.
      */
     public suspend fun broadcast(bytes: ByteArray)
 
@@ -141,6 +164,9 @@ public interface Room {
      * **Reports an undeliverable first hop**, unlike [broadcast]: an addressed send names a peer,
      * so failing to reach it is information the caller asked for. Wrap in `runCatchingCancellable`
      * for best-effort semantics.
+     *
+     * The reserved leading bytes documented on [broadcast] apply here identically — the far end
+     * classifies every inbound frame the same way regardless of how it was addressed.
      *
      * @throws us.tractat.kuilt.core.PeerNotConnected if the hop this member must perform cannot be
      *   made. Where the frame is relayed via a host, the peer named is that **host** — the hop that
@@ -209,8 +235,10 @@ public interface Room {
      * are theoretically possible (1/65536 per pair) but negligible for typical usage
      * (< 100 channels).
      *
-     * Applications **must not** emit payloads starting with [RoomChannel.CHANNEL_PREFIX]
-     * on the Room's raw [broadcast] / [sendTo] — that byte is reserved for channel framing.
+     * Applications **must not** emit payloads of 3 bytes or more starting with
+     * [RoomChannel.CHANNEL_PREFIX] on the Room's raw [broadcast] / [sendTo] — that byte is reserved
+     * for channel framing. It is one of five reserved leading bytes; see [broadcast] for the whole
+     * set and for which of them are conditional.
      *
      * ## Idempotency
      *

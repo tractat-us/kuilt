@@ -53,6 +53,20 @@ public interface Seam {
      * this peer's own id. Remote peers are added when connections complete and removed
      * when connections drop.
      *
+     * ## Membership, not one-hop reachability
+     *
+     * A peer here is one this seam can carry a frame to — **not** necessarily over a direct link.
+     * A `Seam` may be a *view* whose route is longer than one hop: a room's channel view publishes
+     * the admitted roster, and on a star fabric a co-spoke in that roster is reached by relaying
+     * through the host (#1994). So do not read this set as "peers I hold a link to". On a star that
+     * is a strictly smaller set, and the gap between the two is what #1994 was: a view published the
+     * roster here while routing [sendTo] through the transport, so it named peers it could not then
+     * address.
+     *
+     * The obligation the set does carry is that pairing. A peer in `peers` must be addressable by
+     * [sendTo] — by whatever hop count the implementation uses — so an implementation that publishes
+     * a peer it has no route to is the bug, not the caller that believed it.
+     *
      * ## A Torn seam has no reachable peers — collapse this to `{ selfId }`
      *
      * Once the seam reaches [SeamState.Torn] this set **must** be exactly `{ selfId }`. A torn fabric

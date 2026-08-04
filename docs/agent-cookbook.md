@@ -23,6 +23,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | a "you are offline" / "your connection dropped" indicator, distinguishing *your* outage from *their* outage | `Room.localFabric` + `MembershipEvent.LocalFabricLost` | [Liveness & presence](#liveness--presence) |
 | a last-write-wins register, a grow-only set/counter, an add/remove set, a version vector, "merge these two states" | the CRDT zoo (`LWWRegister`, `GSet`, `PNCounter`, `ORSet`, …) | [Replicated data](#replicated-data) |
 | replicating a CRDT over a connection by hand | `Quilter` | [Replicated data](#replicated-data) |
+| a forwarding hop through the host so two guests can see each other — because a `Quilter` between two joiners never converges, or a peer is in the roster but unreachable | `Room.channel(id)` — the room already relays | [Replicated data](#replicated-data) |
 | averaging model updates from many devices without collecting their data — federated learning / federated analytics, "train locally, share only the update" | `FedAvg` + `TrainingUpdate` | [Replicated data](#replicated-data) |
 | checking two peers hold the same state across a process/socket boundary — hand-hashing a replicated state so you can compare it as one number | `canonicalDigest` | [Replicated data](#replicated-data) |
 | a `seenIds` set to skip already-handled messages | `GSet` / kuilt dedup | [Dedup](#dedup) |
@@ -271,6 +272,25 @@ internal fun sampleQuilterSetup() = runTest(
 
 See [`crdt-quilter.md`](../Writerside/topics/crdt-quilter.md) for `Quilter`'s wire protocol,
 late-joiner full-state sync, and scaling to many peers via `GossipSeam`.
+
+**Intent:** two guests in the same room never see each other's updates — a `Quilter` between two joiners never converges, one peer's messages reach the host and stop, or a co-member is in the roster but every send to it fails. Typically on Multipeer, Nearby, a WebSocket hub, or any "everybody connects to the host" wiring.
+**Primitive:** `Room.channel(id)` — and then nothing. The room relays through the host for you (#1994); don't build a forwarding protocol, and don't reach past the room to the raw fabric `Seam`.
+
+The distinction that decides it: a fabric `Seam` from `Loom.host`/`Loom.join` reports the peers it holds a **direct link** to, which on a star is just the host. A `Room`'s channel view reports the **admitted roster**, and `Room.broadcast` / `Room.sendTo` wrap anything the transport cannot address directly and send it to the host to forward. So run replicators over `room.channel(...)`, never over the fabric seam the room was built on. (`Seam.sendTo` to a co-spoke still throws `PeerNotConnected` on those fabrics, and that is correct — the link really is absent.)
+
+Two things the relay deliberately does not do. Presence is not relayed: a co-member with no direct link is watched by the host, not by you, so read `Room.roster` / `Room.events` rather than expecting a heartbeat to answer. And relayed delivery is best-effort past the first hop — `Room.broadcast` never throws, and `Room.sendTo` reports only the hop *this* member makes, naming the **host** when that is the hop that failed.
+
+<!-- verbatim from kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/StarQuilterConvergenceTest.kt#setReplicator -->
+```kotlin
+private fun setReplicator(room: Room, scope: CoroutineScope): Quilter<GSet<String>> = Quilter(
+    replica = ReplicaId(room.selfId.value),
+    seam = room.channel("star-set"),
+    initial = GSet.empty(),
+    messageSerializer = QuiltMessage.serializer(GSet.serializer(String.serializer())),
+    scope = scope,
+    config = quilterConfig,
+)
+```
 
 **Intent:** learn one shared model from data spread across many devices without collecting the data — federated learning / federated analytics, "each device trains locally and publishes only the update".
 **Primitive:** `FedAvg` + `TrainingUpdate` (`:kuilt-warp-ml`). The count-weighted mean across peers, as a CRDT: contributions merge in any order, duplicates are absorbed, and every replica reads the same model bit-for-bit. Don't hand-roll a `(Σweights, Σcount)` accumulator or a round barrier.
