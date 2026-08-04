@@ -396,8 +396,16 @@ class QuilterChaosTest {
             repA.apply(repA.state.value.inc(repA.replica, 1L))
             repB.apply(repB.state.value.inc(repB.replica, 1L))
         }
-        testScheduler.advanceUntilIdle()
-        testScheduler.advanceTimeBy(60L)
+        // Drain: retry opportunities with NO new deltas. Every round above minted a fresh pair of
+        // increments, so the last one's gaps only ever got the single retry that followed the loop
+        // — which is why this fixture sat one unlucky RNG draw away from red, and why one extra
+        // frame on the wire (#2006's first-contact digest) reshuffled the stream into it. Each
+        // drain round is one Resend retry per open gap, so a gap survives with probability
+        // 0.3^rounds ≈ 7e-5 at eight.
+        repeat(8) {
+            testScheduler.advanceUntilIdle()
+            testScheduler.advanceTimeBy(60L)
+        }
         testScheduler.advanceUntilIdle()
 
         // 20 + 5 = 25 increments per peer → total 50
@@ -451,6 +459,17 @@ class QuilterChaosTest {
      *
      * This exercises the FullState retry timer as the sole recovery mechanism for a late
      * joiner whose initial snapshot is lost before the delta-log has been GC'd.
+     *
+     * A's chaos wrapper is installed **before** its replicator, not after. The earlier shape stood
+     * a *second* `Quilter` for replica A on a chaos wrapper of the same seam — two instances for one
+     * `(replica, CRDT type)`, which this class's own precondition forbids, and two collectors on one
+     * `Seam.incoming`, which the single-collection contract does. What each of them ended up holding
+     * was then a function of how the fabric happened to split frames between them, and the
+     * assertion compared C against the wrong one of the two: it read a converged `10` only because
+     * that split happened to favour it, and one extra frame on the wire (#2006's first-contact
+     * digest) flipped it to `0`. `controlPlaneDropProbability` leaves `broadcast` alone, so wrapping
+     * A from the start still lets the A↔B delta exchange run clean — only the sendTo path that
+     * carries C's FullState is chaosed, which is what the test is about.
      */
     @Test
     fun lateJoinerConvergesViaFullStateRetryUnderDrop() = runTest(UnconfinedTestDispatcher()) {
@@ -458,9 +477,18 @@ class QuilterChaosTest {
         val rawA = loom.host(Pattern("chaos-fullstate-retry"))
         val rawB = loom.join(InMemoryTag("b"))
 
+        // 40% control-plane drops (FullState is a sendTo call); deltas ride broadcast, untouched.
+        val controlDropChaos = ChaosConfig(controlPlaneDropProbability = 0.4)
+        val chaosA = chaosWrap(rawA, controlDropChaos, backgroundScope, seed = 0xF5_A1L)
+        val retryInterval = 50.milliseconds
+        val chaosConfig = QuilterConfig(
+            fullStateRetryInterval = retryInterval,
+            expectVirtualTime = true,
+        )
+
         // A and B exchange ops first (C not yet present)
-        val repA = gcounterReplicator(rawA, backgroundScope)
-        val repB = gcounterReplicator(rawB, backgroundScope)
+        val repA = gcounterReplicator(chaosA, backgroundScope, config = chaosConfig)
+        val repB = gcounterReplicator(rawB, backgroundScope, config = chaosConfig)
 
         repeat(5) {
             repA.apply(repA.state.value.inc(repA.replica, 1L))
@@ -470,21 +498,9 @@ class QuilterChaosTest {
 
         // A and B each have 10; now C joins late
         val rawC = loom.join(InMemoryTag("c"))
-
-        // Wrap A's seam to inject 40% control-plane drops (FullState is a sendTo call)
-        val controlDropChaos = ChaosConfig(controlPlaneDropProbability = 0.4)
-        val chaosA = chaosWrap(rawA, controlDropChaos, backgroundScope, seed = 0xF5_A1L)
-
-        // Replace repA with a chaos-wrapped version (C will now be seen through chaosA's sendTo)
-        val retryInterval = 50.milliseconds
-        val chaosConfig = QuilterConfig(
-            fullStateRetryInterval = retryInterval,
-            expectVirtualTime = true,
-        )
-        val repAChaos = gcounterReplicator(chaosA, backgroundScope, config = chaosConfig)
         val repC = gcounterReplicator(rawC, backgroundScope, config = chaosConfig)
 
-        // A (chaos) now sees C; kick the retry loop enough times to break through the 40% drop.
+        // A now sees C; kick the retry loop enough times to break through the 40% drop.
         // 8 rounds: P(all 8 attempts dropped at 40%) ≈ 1.7%; with seed 0xF5_A1L this converges.
         repeat(8) {
             testScheduler.advanceUntilIdle()
@@ -493,9 +509,9 @@ class QuilterChaosTest {
         testScheduler.advanceUntilIdle()
 
         assertEquals(
-            repAChaos.state.value.value,
+            10L,
             repC.state.value.value,
-            "C must converge to A's state via FullState retry despite 40% drop rate",
+            "C must converge to A and B's ten increments via FullState retry despite 40% drop rate",
         )
     }
 
