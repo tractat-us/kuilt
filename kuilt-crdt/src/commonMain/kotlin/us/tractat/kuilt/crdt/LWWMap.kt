@@ -11,6 +11,10 @@ import kotlinx.serialization.Serializable
  * Suited to settings, ready-toggles, and similar small key→latest-value state
  * where surfacing concurrent edits (a la [MVRegister]) is unwanted.
  *
+ * Immutable: [set]/[remove] return a new map. [piece] is the per-key merge.
+ * [setDelta]/[removeDelta] return just the one cell that changed, which is what
+ * belongs on the wire.
+ *
  * **Clock-skew warning.** Wall-clock timestamps work only when clocks are
  * well-synchronized across all replicas. NTP-class drift will cause surprising
  * silent drops: a write with a lagging timestamp loses to an older write from a
@@ -68,6 +72,65 @@ public class LWWMap<K, V> private constructor(
         val current = cells[key] ?: LWWRegister.empty()
         return LWWMap(cells + (key to current.unset(replica, timestamp)))
     }
+
+    /**
+     * The **change** [set] would make, on its own — one key's cell — rather than
+     * the whole map.
+     *
+     * This is what to put on the wire. A replicator broadcasts a patch's delta
+     * verbatim, so `Patch(map.set(…))` ships every key on every write, at a cost
+     * that grows with the map; this frame carries one cell and its size does not
+     * depend on how many keys the map holds. The idiom is
+     * `quilter.mutate { it.setDelta(replica, timestamp, key, value) }` —
+     * read-modify-write inside the replicator's own lock.
+     *
+     * A delta is itself an [LWWMap], so a peer absorbs it with the ordinary
+     * [piece] join, in any order, with any repeats, and lands on a state that
+     * encodes byte-for-byte identically to the writer's [set] result. There is no
+     * causal context to carry and nothing to buffer: this map's merge is a per-key
+     * max of independent tags.
+     *
+     * **The tag-uniqueness precondition on [set] applies unchanged**, and the
+     * equivalence above holds exactly while it and a monotonic timestamp source
+     * are honoured — that is, while the write's `(timestamp, replica)` tag beats
+     * the key's current one. A write whose tag *loses* is one this map's own
+     * clock-skew warning says will be dropped: [set] shows it locally until the
+     * next merge takes it away, whereas this delta drops it immediately. Both
+     * replicas converge on the same value either way, because a delta is joined
+     * rather than assigned.
+     *
+     * @sample us.tractat.kuilt.crdt.sampleLWWMapDelta
+     */
+    public fun setDelta(replica: ReplicaId, timestamp: Long, key: K, value: V): Patch<LWWMap<K, V>> =
+        setPatch(replica, timestamp, key, value)
+
+    /**
+     * The **change** [remove] would make, on its own: one key's *tombstone* cell.
+     * Ship this rather than `Patch(map.remove(…))`, which is the whole map.
+     *
+     * **A removal's delta is a one-cell map, never an empty one.** A remove here
+     * is a write like any other — [remove] records a tombstone that competes on
+     * its tag — so the change to transmit is that tombstone. An empty map is the
+     * lattice identity: joining it says nothing at all, and the removal would
+     * never leave the replica that made it.
+     *
+     * Removing a key that was never set locally still ships a tombstone, matching
+     * [remove], so a concurrent earlier-tagged [set] arriving later still loses.
+     *
+     * The domination caveat on [setDelta] applies here too.
+     *
+     * @sample us.tractat.kuilt.crdt.sampleLWWMapDelta
+     */
+    public fun removeDelta(replica: ReplicaId, timestamp: Long, key: K): Patch<LWWMap<K, V>> =
+        removePatch(replica, timestamp, key)
+
+    // [LWWRegister.set]/[LWWRegister.unset] replace rather than merge, so the cell built from an
+    // empty register is the very cell [set]/[remove] would write — the delta needs no local state.
+    private fun setPatch(replica: ReplicaId, timestamp: Long, key: K, value: V): Patch<LWWMap<K, V>> =
+        Patch(LWWMap(mapOf(key to LWWRegister.empty<V>().set(replica, timestamp, value))))
+
+    private fun removePatch(replica: ReplicaId, timestamp: Long, key: K): Patch<LWWMap<K, V>> =
+        Patch(LWWMap(mapOf(key to LWWRegister.empty<V>().unset(replica, timestamp))))
 
     /** The join: per-key max-tag of the underlying registers. */
     override fun piece(other: LWWMap<K, V>): LWWMap<K, V> =
