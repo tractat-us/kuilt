@@ -2251,6 +2251,48 @@ internal class SeamRoom(
      */
     internal val relayForwardsDropped: Long get() = relayDropped.value
 
+    /** Frames this room refused to put on the wire because their encoded size exceeded the fabric's. */
+    private val oversizeDropped = atomic(0L)
+
+    /** One-shot latch so the first oversize drop is a `warn` and the rest are `debug`. */
+    private val oversizeWarned = atomic(false)
+
+    /**
+     * How many frames this room has dropped for exceeding the fabric's frame ceiling.
+     *
+     * **Why this is counted, and why the first one is a `warn`.** An oversize drop is *structural,
+     * not weather*: the same payload is over the same ceiling every time, so unlike a partition it
+     * never heals on its own. A `Quilter` whose anti-entropy frame outgrows the budget as state
+     * accretes stops converging **permanently** — roster alive, heartbeats flowing, no data moving
+     * — and at `debug` alone there is nothing above the noise floor to say so. This is the same
+     * argument [relayForwardsDropped] makes for overflow ("absence has to be diagnosable
+     * off-device", #1781), and the one `SeamRaftTransport` makes for logging its own over-budget
+     * drop at `warn`: misconfiguration, not weather.
+     *
+     * Latched rather than repeated so a per-frame drop cannot flood the log; the count carried in
+     * every line is what shows the scale.
+     *
+     * Exposed `internal` so a test can assert the drop *happened* rather than inferring it from
+     * absent delivery.
+     */
+    internal val oversizeFramesDropped: Long get() = oversizeDropped.value
+
+    /**
+     * Count an oversize drop and log it — the first at `warn`, subsequent ones at `debug`.
+     *
+     * [to] is null for a frame this member originated as a broadcast; non-null when this member is
+     * the host forwarding somebody else's envelope onward.
+     */
+    private fun recordOversizeDrop(reason: String, to: PeerId?, sizeBytes: Int, ceilingBytes: Int?) {
+        val total = oversizeDropped.incrementAndGet()
+        val first = oversizeWarned.compareAndSet(expect = false, update = true)
+        val line: () -> String = {
+            "room.send.drop self=${selfId.value} " + (to?.let { "to=${it.value} " } ?: "") +
+                "reason=$reason size=$sizeBytes ceiling=$ceilingBytes dropped=$total"
+        }
+        if (first) logger.warn(line) else logger.debug(line)
+    }
+
     /**
      * One recipient's relay lane: the frames waiting for that peer, and the writer draining them.
      *
@@ -2370,6 +2412,22 @@ internal class SeamRoom(
                 }
             }
             expectedSeq = forward.seq + 1
+            // The origin checked this frame against ITS ceiling; this hop is a different fabric and
+            // may be tighter (a `framed()` link with a smaller `maxFrameSize`, or a composite whose
+            // min is set by a narrower ply). Unchecked, the overflow is *destructive* rather than
+            // lossy: `MeshSeam.sendTo` swallows the throwable into `removePeer`, so a healthy
+            // recipient is evicted as though its link died — and the `catch` below never even sees
+            // it. A drop is squarely in contract here (the relay is documented lossy), so check.
+            val hopCeiling = seam.maxPayloadBytes
+            if (hopCeiling != null && forward.bytes.size > hopCeiling) {
+                recordOversizeDrop(
+                    reason = "forward-over-hop-ceiling",
+                    to = recipient,
+                    sizeBytes = forward.bytes.size,
+                    ceilingBytes = hopCeiling,
+                )
+                continue
+            }
             try {
                 val accepted = withTimeoutOrNull(relaySendBudget) {
                     seam.sendTo(recipient, forward.bytes)
@@ -2940,8 +2998,9 @@ internal class SeamRoom(
      *
      * **Lossy without error, relayed or not — this call never throws [PeerNotConnected], and never
      * throws [us.tractat.kuilt.core.PayloadTooLarge] either.** An unresolvable destination is
-     * dropped with a debug log; a payload whose encoded frame will not fit the fabric is dropped
-     * the same way ([oversizeOrNull]); a torn or wedged recipient's send is dropped by
+     * dropped with a debug log; a payload whose encoded frame will not fit the fabric is dropped by
+     * [oversizeOrNull] — **counted in [oversizeFramesDropped] and warned once**, because that one
+     * never heals on its own; a torn or wedged recipient's send is dropped by
      * [runRelayForwardWriter]; and if the relay hop itself is unreachable — the host gone from
      * [Seam.peers] while the roster still holds it — the frame degrades to a best-effort direct
      * [Seam.broadcast], which on a spoke that has lost its host link reaches nobody. (That degrade
@@ -2968,11 +3027,14 @@ internal class SeamRoom(
         if (tooLarge != null) {
             // Dropped, not thrown: this call is lossy-without-error by contract, and the caller
             // most likely to hit the ceiling is a Quilter's timer-driven anti-entropy broadcast,
-            // which a throw would silently kill (#2047).
-            logger.debug {
-                "room.send.drop self=${selfId.value} reason=payload-over-budget " +
-                    "${tooLarge.message} dest=Everyone"
-            }
+            // which a throw would silently kill (#2047). Counted and warned-once all the same —
+            // that Quilter would otherwise stop converging permanently and silently.
+            recordOversizeDrop(
+                reason = "payload-over-budget",
+                to = null,
+                sizeBytes = frame.size,
+                ceilingBytes = seam.maxPayloadBytes,
+            )
             return
         }
         if (host == null) return seam.broadcast(frame)

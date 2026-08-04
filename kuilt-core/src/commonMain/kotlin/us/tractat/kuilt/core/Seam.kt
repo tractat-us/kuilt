@@ -27,10 +27,12 @@ import us.tractat.kuilt.core.internal.MappedStateFlow
  *   send there throws, per the `Torn` rule below.)
  * - [sendTo] when the addressed peer is absent from [peers]: throws
  *   [PeerNotConnected].
- * - [sendTo] of a payload over [maxPayloadBytes]: throws [PayloadTooLarge]. [broadcast] instead
- *   drops it (best-effort, as above). This is the one refusal that does **not** depend on the
- *   seam's state — a `Woven` seam throws it — so a caller catching only [PeerNotConnected] does
- *   not cover addressed sends on a seam that publishes a budget.
+ * - [sendTo] of a payload over [maxPayloadBytes]: **should** throw [PayloadTooLarge]; [broadcast]
+ *   should instead drop it (best-effort, as above). An obligation on an implementation that
+ *   publishes a budget, not a guarantee every in-tree seam already meets — see [maxPayloadBytes].
+ *   Note it is the one refusal that does **not** depend on the seam's state — a `Woven` seam
+ *   raises it — so a caller catching only [PeerNotConnected] does not cover addressed sends on a
+ *   seam that publishes a budget.
  * - Either call when [SeamState.Torn]: throws [IllegalStateException]. `Torn` is the only
  *   *state-driven* refusal (it is unconditionally terminal — see [SeamState]); the payload-size
  *   refusal above is orthogonal to state.
@@ -140,6 +142,25 @@ public interface Seam {
      * An implementation that publishes a limit should refuse an over-budget payload with
      * [PayloadTooLarge] rather than letting a fabric-level error out, subject to each method's own
      * contract: [sendTo] is addressed and reports, [broadcast] is best-effort and drops.
+     *
+     * ## Publishing is not yet enforcing (#2069)
+     *
+     * The in-tree fabric seams publish this number but do **not** pre-check against it, and the
+     * consequence is worse than a leaked error. `LinkSeam.sendTo` enqueues and returns *success*;
+     * its write loop then meets the fabric's own oversize error and tears the whole seam down
+     * asynchronously, after the caller was told the send was accepted. `MeshSeam.sendTo` routes the
+     * same failure into `removePeer`, evicting a healthy recipient as though its link had died. The
+     * fix is a per-conn pre-check inside each seam against the **immutable**
+     * [us.tractat.kuilt.core.fabric.Connection.maxFrameBytes] rather than against this live
+     * aggregate — which also removes the check-then-send race, since a mesh's minimum can tighten
+     * between a caller's read and the write. Tracked in #2069, along with the missing TCK case that
+     * would have caught it.
+     *
+     * ## A reading, not a lease
+     *
+     * This value may move. A mesh reports the minimum across its live links, so a peer attaching
+     * over a tighter transport lowers it. Read it per send; a caller that reads once and trusts the
+     * value for a whole batch can be refused part-way through, correctly.
      */
     public val maxPayloadBytes: Int? get() = null
 
@@ -215,9 +236,11 @@ public interface Seam {
      * in-tree patterns.
      *
      * @throws PeerNotConnected if [peer] is absent from [peers].
-     * @throws PayloadTooLarge if [payload] exceeds [maxPayloadBytes]. Independent of [state] — a
-     *   `Woven` seam throws it — so a `catch (PeerNotConnected)` written against the state-driven
-     *   refusals alone does not cover it.
+     * @throws PayloadTooLarge if [payload] exceeds [maxPayloadBytes] — the obligation on a seam
+     *   that publishes a budget, and what a caller must be ready for. Independent of [state] (a
+     *   `Woven` seam raises it), so a `catch (PeerNotConnected)` written against the state-driven
+     *   refusals alone does not cover it. **Not yet met by the in-tree fabric seams**, which
+     *   publish a budget but do not pre-check it — see [maxPayloadBytes] and #2069.
      */
     public suspend fun sendTo(
         peer: PeerId,

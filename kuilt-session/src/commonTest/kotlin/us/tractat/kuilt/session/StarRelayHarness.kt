@@ -122,6 +122,9 @@ internal class StarMember(
     /** Relay forwards this member's room discarded to queue overflow. See [SeamRoom.relayForwardsDropped]. */
     fun relayForwardsDropped(): Long = (room as SeamRoom).relayForwardsDropped
 
+    /** Frames this member's room refused to put on the wire as oversize. See [SeamRoom.oversizeFramesDropped]. */
+    fun oversizeFramesDropped(): Long = (room as SeamRoom).oversizeFramesDropped
+
     /** Whether this member observed [peer] going [MembershipEvent.Partitioned]. */
     fun sawPartitioned(peer: PeerId): Boolean = peer in partitionedPeers
 

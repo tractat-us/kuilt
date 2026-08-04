@@ -842,20 +842,27 @@ That last clause is the whole point. On a star, a spoke's frame reaches only the
 
 The number is a **promise, not the refusal threshold** — refusal is measured on the frame that actually goes on the wire, so a payload above the budget that still fits (a direct send, where no envelope is applied) is delivered rather than rejected. Size to the budget anyway: it is the only number that holds whichever route the frame takes.
 
+It is also **a reading, not a lease.** Route-independent is not the same as time-independent: a mesh reports the minimum across its live links, so a peer attaching over a tighter transport lowers the number under you. Re-read it per send rather than once per batch.
+
 When a frame genuinely will not fit, each call keeps its own contract: `sendTo` raises `PayloadTooLarge` (addressed sends report), `broadcast` drops it with a debug log (it is lossy-without-error by contract). Neither lets the fabric's own oversize error out.
 
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#chunkToTheRoomsBudgetSample -->
 ```kotlin
-// null means "this fabric names no ceiling" — unknown, not unbounded. Pick your own chunk size.
-// Floored at 1: the budget is legitimately 0 on a fabric whose ceiling is under the reservation.
-val budget = (room.maxPayloadBytes ?: DEFAULT_CHUNK_BYTES).coerceAtLeast(1)
-// Index arithmetic, not `asSequence().chunked()` — the latter boxes every byte and builds an
-// ArrayList<Byte> per chunk. On a blob big enough to need chunking that is the whole point.
-for (start in blob.indices step budget) {
-    // In budget by construction, so this cannot raise PayloadTooLarge. Past the budget, sendTo
-    // reports it (addressed sends do) while broadcast drops it with a log (they are lossy by
-    // contract) — neither surfaces the fabric's own oversize error.
-    room.sendTo(peer, blob.copyOfRange(start, minOf(start + budget, blob.size)))
+var start = 0
+while (start < blob.size) {
+    // Re-read per chunk, not once for the loop: the budget is a reading, not a lease. On a mesh
+    // it is the minimum across live links, so a peer attaching over a tighter transport lowers
+    // it under you mid-blob. null means "this fabric names no ceiling" — unknown, not
+    // unbounded; floored at 1 because the budget is legitimately 0 on a fabric whose ceiling is
+    // under the relay reservation.
+    val budget = (room.maxPayloadBytes ?: DEFAULT_CHUNK_BYTES).coerceAtLeast(1)
+    val end = minOf(start + budget, blob.size)
+    // Index arithmetic, not `asSequence().chunked()` — the latter boxes every byte and builds
+    // an ArrayList<Byte> per chunk. On a blob big enough to need chunking that is the point.
+    // Past the budget, sendTo reports PayloadTooLarge (addressed sends do) while broadcast
+    // drops with a log (lossy by contract) — neither surfaces the fabric's own oversize error.
+    room.sendTo(peer, blob.copyOfRange(start, end))
+    start = end
 }
 ```
 

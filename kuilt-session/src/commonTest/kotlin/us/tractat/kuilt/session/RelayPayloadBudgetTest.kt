@@ -354,6 +354,73 @@ class RelayPayloadBudgetTest {
             )
         }
 
+    /**
+     * A `broadcast` drop is **structural, not weather** — the same payload is over the same ceiling
+     * every time — so it has to be countable off-device, not merely `debug`-logged.
+     *
+     * The failure this guards is a `Quilter` whose anti-entropy frame outgrows the budget as state
+     * accretes: it stops converging permanently, with a live roster and flowing heartbeats and
+     * nothing above the noise floor to say why. Same reasoning as [SeamRoom.relayForwardsDropped]
+     * (#1781): absence has to be diagnosable.
+     */
+    @Test
+    fun `an over-budget broadcast is counted rather than merely dropped`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 2)
+            star.joinerA.wire.limitFrames(fabricLimit)
+
+            star.joinerA.room.broadcast(appPayload("in-budget"))
+            testScheduler.runCurrent()
+            val beforeAnyDrop = star.joinerA.oversizeFramesDropped()
+
+            star.joinerA.room.broadcast(ByteArray(fabricLimit))
+            star.joinerA.room.broadcast(ByteArray(fabricLimit))
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertEquals(0L, beforeAnyDrop, "a delivered frame counts as nothing") },
+                { assertEquals(2L, star.joinerA.oversizeFramesDropped(), "both refusals are counted") },
+            )
+        }
+
+    /**
+     * The host forwards a spoke's envelope **verbatim** onto its own fabric, which can be tighter
+     * than the one the origin checked against — a `framed()` link with a smaller `maxFrameSize`, or
+     * a composite whose minimum is set by a narrower ply.
+     *
+     * Unchecked, that overflow is *destructive* rather than lossy: `MeshSeam.sendTo` routes the
+     * failure into `removePeer`, so a healthy recipient is evicted as though its link had died —
+     * and swallows the throwable, so the forward writer's own `catch` never fires and nothing is
+     * logged as oversize. If the origin retries (`Quilter` anti-entropy re-sending the same delta)
+     * the recipient is kicked again on every reconnect. A named drop is in contract; an eviction is
+     * not.
+     */
+    @Test
+    fun `the host drops a forward its own hop cannot carry`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            // Only the HOST's fabric is bounded, so the spoke's own check passes and the frame
+            // reaches the host — which is exactly the heterogeneous-ceiling case.
+            val star = relayStar(coJoiners = 2)
+            val hopCeiling = 512
+            star.host.wire.limitFrames(hopCeiling)
+
+            star.joinerA.room.broadcast(ByteArray(hopCeiling))
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertTrue(star.host.oversizeFramesDropped() > 0, "the host refused the forward it could not carry") },
+                {
+                    // The discriminator. Without the guard the host still *attempts* the send —
+                    // the tap records the frame and only then raises — so an empty log is what
+                    // proves the refusal happened before the fabric ever saw it.
+                    assertTrue(
+                        star.wireFramesTo(star.joinerBId).isEmpty(),
+                        "and never handed it to the fabric: ${star.wireFramesTo(star.joinerBId).map { it.size }}",
+                    )
+                },
+            )
+        }
+
     /** The envelope's real cost for [origin]/[dest] at a payload of exactly [payloadBytes]. */
     private fun relayOverhead(origin: PeerId, dest: RelayDest, payloadBytes: Int): Int =
         RelayEnvelope.encode(RelayEnvelope(origin, dest, ByteArray(payloadBytes))).size - payloadBytes

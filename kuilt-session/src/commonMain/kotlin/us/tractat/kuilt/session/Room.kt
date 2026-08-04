@@ -164,8 +164,19 @@ public interface Room {
      * cannot tell.
      *
      * `null` means **unknown, not unbounded** — the honest answer from a room over a fabric that
-     * names no frame ceiling. A non-null value is a promise: a payload of that size or smaller will
-     * not be refused for being too big, *whatever route the frame ends up taking*.
+     * names no frame ceiling. A non-null value is a promise about the **instant it is read**: a
+     * payload of that size or smaller will not be refused for being too big, *whatever route the
+     * frame ends up taking*.
+     *
+     * ## A reading, not a lease
+     *
+     * The promise is route-independent, not time-independent, and the two are different guarantees.
+     * A mesh fabric reports the **minimum** ceiling across its live links, so a peer attaching over
+     * a tighter transport lowers this number under a caller that has already read it — the refusal
+     * that follows is correct (the frame genuinely cannot reach the new peer), and it is the
+     * *caller's* cached value that went stale. Re-read per send rather than once per batch; a
+     * long chunking loop that reads the budget once and trusts it for every chunk is the shape
+     * that gets caught out.
      *
      * It is a promise, **not** the refusal threshold. The refusal is measured on the encoded frame,
      * so a payload above this budget that still fits the wire — a direct send on a full mesh, where
