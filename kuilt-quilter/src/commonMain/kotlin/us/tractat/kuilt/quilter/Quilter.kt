@@ -344,6 +344,16 @@ public class Quilter<S : Quilted<S>>(
     /** Sends one [QuiltMessage.RootDigest] to [peer], arming the solicited-request flag. Test-only. */
     internal fun sendRootDigestForTest(peer: PeerId): Unit = lock.withLock { sendRootDigestTo(peer) }
 
+    /**
+     * The root an emitted [QuiltMessage.RootDigest] would carry right now, taken under [lock].
+     *
+     * Exposed so a test compares against the production framing rather than re-deriving it: three
+     * independent hand-written mirrors of [stateRoot]'s expression existed before, and a mirror that
+     * drifts pins itself, not this function. `QuilterStateRootGoldenVectorTest` keeps one
+     * deliberately — that is its whole job — and asserts it against *this* value.
+     */
+    internal fun stateRootForTest(): Long = lock.withLock { stateRoot() }
+
     init {
         // `scope` here is the constructor parameter (the original parent scope).
         // `this.scope` is the owned child scope inherited from ScopedCloseable.
