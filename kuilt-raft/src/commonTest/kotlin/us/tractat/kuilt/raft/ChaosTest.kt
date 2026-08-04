@@ -9,7 +9,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 class ChaosTest {
     /**
@@ -30,7 +29,7 @@ class ChaosTest {
      *   3. The isolated node catches up (commitIndex reaches the proposal index on rejoin).
      *   4. checkInvariants() passes at the end of every round.
      */
-    @Test fun termStability_partitionedFollowerNeverDeposesLeader() = raftRunTest(timeout = 10.seconds) {
+    @Test fun termStability_partitionedFollowerNeverDeposesLeader() = raftRunTest {
         val sim = raftSim(backgroundScope, backgroundScope, n = 3)
 
         repeat(3) { round ->
@@ -153,7 +152,7 @@ class ChaosTest {
      * joint that straddles a partition) is covered deterministically by the rollback and
      * crash-leader-mid-joint tests in `MembershipTest`, not here.
      */
-    @Test fun randomMembershipChurnWithPartitionHeal_preservesSafety() = raftRunTest(timeout = 20.seconds) {
+    @Test fun randomMembershipChurnWithPartitionHeal_preservesSafety() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 5)
         awaitLeader(sim)
         val all = sim.nodeIds.toSet()

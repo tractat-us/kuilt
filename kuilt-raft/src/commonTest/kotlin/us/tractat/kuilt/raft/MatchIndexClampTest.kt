@@ -39,7 +39,7 @@ private fun clampTestConfig(): RaftConfig = RaftConfig(
 class MatchIndexClampTest {
 
     @Test
-    fun successResponsePastLeaderLogDoesNotCrashLeader() = raftRunTest(timeout = 5.seconds) {
+    fun successResponsePastLeaderLogDoesNotCrashLeader() = raftRunTest {
         val l = NodeId("l")
         val f1 = NodeId("f1")
         val network = InMemoryRaftNetwork()

@@ -1468,8 +1468,17 @@ val forbidBareRunCatching by tasks.registering {
 //   * A wrapper harness's own default (`fun simTest(timeout: Duration = 5.seconds)`) is invisible to
 //     a rule scoped to `runTest(` call sites — the wrapper passes `timeout = timeout`, which has no
 //     literal. That is how `warpSimTest`'s 5 s default hid on a published `commonMain` harness while
-//     applying to every call site. Both in-tree wrappers now use named constants; a third would need
-//     catching by review.
+//     applying to every call site. THIS BLIND SPOT IS NOT CLOSED, and the comment here previously
+//     said "both in-tree wrappers now use named constants", which was a count and was wrong. There
+//     are FOUR wrappers that feed `runTest`'s own timeout from a parameter default:
+//       - `raftSimTest`      (`:kuilt-raft-test`, commonMain)  → `RAFT_SIM_WEDGE_BACKSTOP`   OK
+//       - `warpSimTest`      (`:kuilt-warp-test`, commonMain)  → `WARP_SIM_WEDGE_BACKSTOP`   OK
+//       - `raftRunTest`      (`:kuilt-raft`,      commonTest)  → `TEST_WEDGE_BACKSTOP`       OK (#1739 slice)
+//       - `voterMeshSimTest` (`:kuilt-cluster`,   commonTest)  → bare `5.seconds`            LIVE
+//     `voterMeshSimTest` (`kuilt-cluster/src/commonTest/.../VoterMeshSim.kt`) is a known live
+//     instance: 4 call sites, none overriding, and its KDoc still argues for the defect
+//     ("default 5 s — keep it tight"). Tracked separately; do not read this guard as green for it.
+//     A FIFTH wrapper would be caught only by review — the scanner cannot see any of them.
 //   * `:spike` (only present under `-PincludeSpike`) and `build-logic/` are not scanned, same as the
 //     sibling guards.
 val forbidTightRunTestTimeout by tasks.registering {

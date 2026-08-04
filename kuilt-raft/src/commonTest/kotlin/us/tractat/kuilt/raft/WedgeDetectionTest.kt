@@ -13,7 +13,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 
 private val a = NodeId("a")
 private val b = NodeId("b")
@@ -84,14 +83,14 @@ internal class WedgeDetectionTest {
     }
 
     /**
-     * The 30-second ceiling is a **wedge backstop, not an assertion**. It is wall-clock over a
-     * virtual-time trajectory, so tightening it would measure the host rather than the code and
-     * manufacture load-sensitive false reds (#1891). What makes a failure here fast and legible is the
-     * bounded `awaitTrue` below plus `RaftSimulation.dumpState`, both of which are bounded in *virtual*
-     * time and so are indifferent to load.
+     * The ceiling inherited from [raftRunTest] (`TEST_WEDGE_BACKSTOP`) is a **wedge backstop, not an
+     * assertion**. It is wall-clock over a virtual-time trajectory, so tightening it would measure the host rather
+     * than the code and manufacture load-sensitive false reds (#1891). What makes a failure here
+     * fast and legible is the bounded `awaitTrue` below plus `RaftSimulation.dumpState`, both of
+     * which are bounded in *virtual* time and so are indifferent to load.
      */
     @Test
-    fun aVoterSetRotationPastAnAbsentNodeIsReportedOnTheMetricHook() = raftRunTest(timeout = 30.seconds) {
+    fun aVoterSetRotationPastAnAbsentNodeIsReportedOnTheMetricHook() = raftRunTest {
         val metricsBy = mutableMapOf<NodeId, MutableList<RaftMetric>>()
         val sim = rotationSim(metricsBy)
         awaitLeader(sim)
@@ -203,7 +202,7 @@ internal class WedgeDetectionTest {
      * stream alongside honest traffic, which is not what it claims to mean.
      */
     @Test
-    fun aHealthyClusterNeverReportsAWedge() = raftRunTest(timeout = 30.seconds) {
+    fun aHealthyClusterNeverReportsAWedge() = raftRunTest {
         val metricsBy = mutableMapOf<NodeId, MutableList<RaftMetric>>()
         val sim = rotationSim(metricsBy)
         awaitLeader(sim)
@@ -235,7 +234,7 @@ internal class WedgeDetectionTest {
      * from the gate that fired.
      */
     @Test
-    fun theRunThresholdAndTheTermClauseAreBothRequired() = raftRunTest(timeout = 30.seconds) {
+    fun theRunThresholdAndTheTermClauseAreBothRequired() = raftRunTest {
         val metricsBy = mutableMapOf<NodeId, MutableList<RaftMetric>>()
         val sim = raftSimWithMetrics(this, backgroundScope, metricsBy)
         val leaderNode = sim.awaitLeader()
@@ -342,7 +341,7 @@ internal class WedgeDetectionTest {
      * ran beyond what it can adopt and the frames that would catch it up are the ones it refuses.
      */
     @Test
-    fun aRefusalUnderTheTermJumpBoundNamesTheTermJumpGate() = raftRunTest(timeout = 30.seconds) {
+    fun aRefusalUnderTheTermJumpBoundNamesTheTermJumpGate() = raftRunTest {
         val metricsBy = mutableMapOf<NodeId, MutableList<RaftMetric>>()
         val raftCfg = fastRaftConfig()
         val sim = raftSimWithMetrics(this, backgroundScope, metricsBy, raftCfg)
@@ -450,7 +449,7 @@ internal class WedgeDetectionTest {
      *   live at this term and this sender, so the silence above is the type filter and nothing else.
      */
     @Test
-    fun aSustainedRefusalOfNonLeaderFramesIsNeverAWedge() = raftRunTest(timeout = 30.seconds) {
+    fun aSustainedRefusalOfNonLeaderFramesIsNeverAWedge() = raftRunTest {
         val metricsBy = mutableMapOf<NodeId, MutableList<RaftMetric>>()
         val raftCfg = fastRaftConfig()
         val sim = raftSimWithMetrics(this, backgroundScope, metricsBy, raftCfg)
@@ -594,7 +593,7 @@ internal class WedgeDetectionTest {
      *   the progress clause and nothing else.
      */
     @Test
-    fun aCommittingNodeIsNeverAWedgeHoweverLongItRefuses() = raftRunTest(timeout = 30.seconds) {
+    fun aCommittingNodeIsNeverAWedgeHoweverLongItRefuses() = raftRunTest {
         val metricsBy = mutableMapOf<NodeId, MutableList<RaftMetric>>()
         val sim = soloSimWithMetrics(this, backgroundScope, metricsBy)
         val victim = sim.awaitLeader()
@@ -725,7 +724,7 @@ internal class WedgeDetectionTest {
      *   silence above is the reset and nothing else.
      */
     @Test
-    fun aForgedStreamInterleavedWithHonestTrafficIsNeverAWedge() = raftRunTest(timeout = 30.seconds) {
+    fun aForgedStreamInterleavedWithHonestTrafficIsNeverAWedge() = raftRunTest {
         val metricsBy = mutableMapOf<NodeId, MutableList<RaftMetric>>()
         val sim = raftSimWithMetrics(this, backgroundScope, metricsBy)
         val leaderNode = sim.awaitLeader()

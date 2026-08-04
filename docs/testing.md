@@ -158,7 +158,7 @@ dump-on-failure:
 <!-- verbatim from kuilt-raft/src/commonTest/kotlin/us/tractat/kuilt/raft/ChaosTest.kt#termStability_partitionedFollowerNeverDeposesLeader -->
 
 ```kotlin
-    @Test fun termStability_partitionedFollowerNeverDeposesLeader() = raftRunTest(timeout = 10.seconds) {
+    @Test fun termStability_partitionedFollowerNeverDeposesLeader() = raftRunTest {
         val sim = raftSim(backgroundScope, backgroundScope, n = 3)
 
         repeat(3) { round ->

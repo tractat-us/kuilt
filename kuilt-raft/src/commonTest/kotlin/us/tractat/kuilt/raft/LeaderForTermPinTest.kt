@@ -8,7 +8,6 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * §5.2 Election Safety permits **at most one leader per term**, so two same-term leader→peer frames
@@ -29,10 +28,11 @@ import kotlin.time.Duration.Companion.seconds
  *   because the Election-Safety argument that they are safe was established by reading guards, not
  *   by driving them (#1906's decision comment).
  *
- * The `timeout` on each test is a **generous wedge backstop, not an assertion**: it is wall-clock
- * over a virtual-time trajectory, so it measures the host rather than the code (#1891). Fast failure
- * comes from the bounded `await*`/[RaftSimulation.settle] helpers, which are bounded in *virtual*
- * time and so are load-independent.
+ * Each test inherits [raftRunTest]'s `TEST_WEDGE_BACKSTOP` ceiling — a **generous wedge backstop,
+ * not an assertion**: it is wall-clock over a virtual-time trajectory, so it measures the host
+ * rather than the code (#1891).
+ * Fast failure comes from the bounded `await*`/[RaftSimulation.settle] helpers, which are bounded in
+ * *virtual* time and so are load-independent.
  */
 class LeaderForTermPinTest {
 
@@ -46,7 +46,7 @@ class LeaderForTermPinTest {
      * *repair* `_leader` behind the assertion — the injected frame is the only thing that runs.
      */
     @Test
-    fun sameTermAppendEntriesFromAnotherVoterDoesNotSeizeLeaderBelief() = raftRunTest(timeout = 30.seconds) {
+    fun sameTermAppendEntriesFromAnotherVoterDoesNotSeizeLeaderBelief() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 3)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -83,7 +83,7 @@ class LeaderForTermPinTest {
      * happen — so the frame is refused before it reaches `SnapshotReceiver` at all.
      */
     @Test
-    fun sameTermInstallSnapshotFromAnotherVoterNeitherSeizesBeliefNorInstalls() = raftRunTest(timeout = 30.seconds) {
+    fun sameTermInstallSnapshotFromAnotherVoterNeitherSeizesBeliefNorInstalls() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 3)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -131,7 +131,7 @@ class LeaderForTermPinTest {
      * refused twice over — see [TimeoutNowAuthorityPinTest] for the window that only the pin closes.
      */
     @Test
-    fun forgedLeaderBeliefThenSameTermTimeoutNowStartsNoElection() = raftRunTest(timeout = 30.seconds) {
+    fun forgedLeaderBeliefThenSameTermTimeoutNowStartsNoElection() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 3)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -173,7 +173,7 @@ class LeaderForTermPinTest {
      * the invariant by leaving a deposed leader still running its timers.
      */
     @Test
-    fun sameTermAppendEntriesWhileLeaderDemotesButDoesNotInstallTheSender() = raftRunTest(timeout = 30.seconds) {
+    fun sameTermAppendEntriesWhileLeaderDemotesButDoesNotInstallTheSender() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 3)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -223,7 +223,7 @@ class LeaderForTermPinTest {
      * counts — and is refused before it gets there.
      */
     @Test
-    fun aRefusedFrameCannotFalselyConfirmALeadershipTransfer() = raftRunTest(timeout = 30.seconds) {
+    fun aRefusedFrameCannotFalselyConfirmALeadershipTransfer() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 3)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -262,7 +262,7 @@ class LeaderForTermPinTest {
 
     /** First contact in a term: nothing is pinned yet, so the leader must be adopted. */
     @Test
-    fun freshNodeAdoptsTheLeaderOnFirstContactInATerm() = raftRunTest(timeout = 30.seconds) {
+    fun freshNodeAdoptsTheLeaderOnFirstContactInATerm() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 3)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -280,7 +280,7 @@ class LeaderForTermPinTest {
      * subsequent election could ever be recognised.
      */
     @Test
-    fun aHigherTermReopensAdoptionForADifferentLeader() = raftRunTest(timeout = 30.seconds) {
+    fun aHigherTermReopensAdoptionForADifferentLeader() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 3)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -316,7 +316,7 @@ class LeaderForTermPinTest {
      * it.
      */
     @Test
-    fun aCandidateThatLosesAdoptsTheWinnerAtTheSameTerm() = raftRunTest(timeout = 30.seconds) {
+    fun aCandidateThatLosesAdoptsTheWinnerAtTheSameTerm() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 3)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
@@ -351,7 +351,7 @@ class LeaderForTermPinTest {
      * restored.
      */
     @Test
-    fun aRestartedNodeAdoptsTheSittingLeaderAtTheTermItRestored() = raftRunTest(timeout = 30.seconds) {
+    fun aRestartedNodeAdoptsTheSittingLeaderAtTheTermItRestored() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 3)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }

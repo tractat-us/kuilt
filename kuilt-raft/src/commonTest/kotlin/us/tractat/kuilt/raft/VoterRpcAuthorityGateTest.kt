@@ -10,7 +10,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * §5.2 / §8 authority gate (issue #1383): `AppendEntries` and `InstallSnapshot` are
@@ -144,7 +143,7 @@ class VoterRpcAuthorityGateTest {
      */
     @Test
     fun preBootstrapLearnerSeed_acceptsTheLeadersFrames_catchesUp_andIsPromoted() =
-        raftRunTest(timeout = 30.seconds) {
+        raftRunTest {
             val sim = simWithPreBootstrapJoiner()
             awaitLeader(sim)
 
@@ -280,7 +279,7 @@ class VoterRpcAuthorityGateTest {
      */
     @Test
     fun timeoutNowFromNonVoter_isDroppedByThisGate_notByTheDownstreamLeaderIdentityCheck() =
-        raftRunTest(timeout = 30.seconds) {
+        raftRunTest {
             val metricsBy = mutableMapOf<NodeId, MutableList<RaftMetric>>()
             val sim = simWithMetrics(metricsBy)
             val leader = awaitLeader(sim)

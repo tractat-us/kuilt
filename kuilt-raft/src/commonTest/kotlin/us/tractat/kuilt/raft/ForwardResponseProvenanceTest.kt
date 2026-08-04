@@ -10,7 +10,6 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * `ForwardResponse` provenance (issue #1911, Raft §8 client interaction).
@@ -166,7 +165,7 @@ class ForwardResponseProvenanceTest {
      * the regression the `:kuilt-cluster` relay/failover suites would otherwise be the first to see.
      */
     @Test
-    fun parkedForward_flushedToTheLeaderThatAppearsLater_stillCommits() = raftRunTest(timeout = 10.seconds) {
+    fun parkedForward_flushedToTheLeaderThatAppearsLater_stillCommits() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         val v1 = sim.nodeIds[0]
         val v2 = sim.nodeIds[1]

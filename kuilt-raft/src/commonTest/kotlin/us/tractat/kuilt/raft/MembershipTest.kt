@@ -19,7 +19,6 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 
 
 // ── Node IDs ─────────────────────────────────────────────────────────────────
@@ -252,7 +251,7 @@ class MembershipTest {
      * Made to pass by the joint-consensus wiring in [onChangeMembership] / [onConfigCommitted].
      */
     @Test
-    fun grow3VotersTo5_viaJointConsensus() = raftRunTest(timeout = 10.seconds) {
+    fun grow3VotersTo5_viaJointConsensus() = raftRunTest {
         val sim = simWithVotersAndTwoBootstrappedLearners()
         val leader = awaitLeader(sim)
         val leaderId = sim.nodes.entries.first { it.value === leader }.key
@@ -329,7 +328,7 @@ class MembershipTest {
      * quorum (quorum of 4 = 3).
      */
     @Test
-    fun promoteLearnerToVoter_leavesLearnerRole_andJoinsQuorum() = raftRunTest(timeout = 10.seconds) {
+    fun promoteLearnerToVoter_leavesLearnerRole_andJoinsQuorum() = raftRunTest {
         val sim = simWithVotersAndBootstrappedLearner()
         awaitLeader(sim)
         assertIs<RaftRole.Learner>(sim.nodes.getValue(learnerNode).role.value)
@@ -359,7 +358,7 @@ class MembershipTest {
      * of the config, cannot commit the new entry themselves.
      */
     @Test
-    fun shrink5To3_removedVotersDropFromQuorum() = raftRunTest(timeout = 10.seconds) {
+    fun shrink5To3_removedVotersDropFromQuorum() = raftRunTest {
         val sim = simWithVotersAndTwoBootstrappedLearners()
         awaitLeader(sim)
 
@@ -396,7 +395,7 @@ class MembershipTest {
      * (removing the leader is covered by removeLeader_…).
      */
     @Test
-    fun replaceVoter_swapForLearner() = raftRunTest(timeout = 10.seconds) {
+    fun replaceVoter_swapForLearner() = raftRunTest {
         val sim = simWithVotersAndBootstrappedLearner()
         awaitLeader(sim)
 
@@ -428,7 +427,7 @@ class MembershipTest {
      * before PreVote settles; isolating it tests the in-scope outcome (clean survivor cluster).
      */
     @Test
-    fun removeLeader_stepsDownRemovedFromConfig_survivorsElect() = raftRunTest(timeout = 10.seconds) {
+    fun removeLeader_stepsDownRemovedFromConfig_survivorsElect() = raftRunTest {
         val sim = simWithVotersAndBootstrappedLearner() // learner unused here; 3 voters in play
         val leader = awaitLeader(sim)
         val leaderId = sim.nodes.entries.first { it.value === leader }.key
@@ -469,7 +468,7 @@ class MembershipTest {
      * against the change completing.
      */
     @Test
-    fun crashLeaderMidJoint_callerSeesLeadershipLost_survivorsConverge() = raftRunTest(timeout = 10.seconds) {
+    fun crashLeaderMidJoint_callerSeesLeadershipLost_survivorsConverge() = raftRunTest {
         val sim = simWithVotersAndTwoBootstrappedLearners()
         awaitLeader(sim)
         // Wire the learners in first so all five nodes share the pre-change config.
@@ -536,7 +535,7 @@ class MembershipTest {
      * voter config and never enters the Learner role.
      */
     @Test
-    fun installSnapshot_adoptsConfigCompactedAwayFromTheLog() = raftRunTest(timeout = 10.seconds) {
+    fun installSnapshot_adoptsConfigCompactedAwayFromTheLog() = raftRunTest {
         val sim = simWithVotersAndBootstrappedLearner() // 3 voters in play; the bootstrapped L1 is unused
         awaitLeader(sim)
         val demoted = v3                          // bootstrap config: a voter of {v1,v2,v3}
@@ -594,7 +593,7 @@ class MembershipTest {
      * mis-set scenario from hanging.
      */
     @Test
-    fun followerAdoptsUncommittedJoint_rollsBackWhenSuffixOverwritten() = raftRunTest(timeout = 10.seconds) {
+    fun followerAdoptsUncommittedJoint_rollsBackWhenSuffixOverwritten() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 5)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodes.entries.first { it.value === leader }.key

@@ -254,7 +254,7 @@ class ReadIndexTest {
      *    `failAll`, which must now complete the gated deferred exceptionally.
      */
     @Test
-    fun gatedReadIndexFailsWithLeadershipLostBeforeNoOpCommits() = raftRunTest(timeout = 10.seconds) {
+    fun gatedReadIndexFailsWithLeadershipLostBeforeNoOpCommits() = raftRunTest {
         val l = NodeId("l")
         val f1 = NodeId("f1")
         val f2 = NodeId("f2")
@@ -434,7 +434,7 @@ class ReadIndexTest {
      * assertFalse fires BEFORE f2's ACK to prove the stale f1 ACK alone did not confirm it.
      */
     @Test
-    fun roundSlipAckDoesNotConfirmReadIndex() = raftRunTest(timeout = 5.seconds) {
+    fun roundSlipAckDoesNotConfirmReadIndex() = raftRunTest {
         val l  = NodeId("l")
         val f1 = NodeId("f1")
         val f2 = NodeId("f2")
@@ -532,7 +532,7 @@ class ReadIndexTest {
      * use that term so they are not discarded by the stale-term guard.
      */
     @Test
-    fun staleAckDoesNotConfirmReadIndex() = raftRunTest(timeout = 5.seconds) {
+    fun staleAckDoesNotConfirmReadIndex() = raftRunTest {
         // Use raftSim so awaitLeader() gets whichever node wins — no need to predict v1.
         val sim = raftSim(this, backgroundScope, n = 5, config = slowElectionConfig())
         val leader = awaitLeader(sim)
@@ -616,7 +616,7 @@ class ReadIndexTest {
      *   self alone gives 1 < 2 → fast-path does NOT fire → read stays pending until step-down.
      */
     @Test
-    fun shrinkingJointFastPathDoesNotConfirmReadWithoutOldMajority() = raftRunTest(timeout = 15.seconds) {
+    fun shrinkingJointFastPathDoesNotConfirmReadWithoutOldMajority() = raftRunTest {
         val v1 = NodeId("v1")
         val v2 = NodeId("v2")
         val v3 = NodeId("v3")
@@ -699,7 +699,7 @@ class ReadIndexTest {
      * is never satisfied; the leader stays in Joint throughout the test.
      */
     @Test
-    fun jointConsensusReadRequiresBothOldAndNewMajority() = raftRunTest(timeout = 15.seconds) {
+    fun jointConsensusReadRequiresBothOldAndNewMajority() = raftRunTest {
         val v1 = NodeId("v1")
         val v2 = NodeId("v2")
         val v3 = NodeId("v3")

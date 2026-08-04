@@ -74,7 +74,7 @@ internal class NextIndexBackupClampTest {
      * the crash actually broke — the leader's log advancing while it still tracks the poisoned peer.
      */
     @Test
-    fun rejectionWithConflictIndexPastLeaderLogDoesNotCrashLeader() = raftRunTest(timeout = 5.seconds) {
+    fun rejectionWithConflictIndexPastLeaderLogDoesNotCrashLeader() = raftRunTest {
         val network = InMemoryRaftNetwork()
         val leaderStorage = InMemoryRaftStorage()
 
@@ -126,7 +126,7 @@ internal class NextIndexBackupClampTest {
      * *keeps sending AppendEntries* to the poisoned peer across subsequent heartbeats.
      */
     @Test
-    fun rejectionWithNegativeConflictIndexDoesNotWedgePeerIntoSnapshotDiversion() = raftRunTest(timeout = 5.seconds) {
+    fun rejectionWithNegativeConflictIndexDoesNotWedgePeerIntoSnapshotDiversion() = raftRunTest {
         val network = InMemoryRaftNetwork()
         val leaderStorage = InMemoryRaftStorage()
         val leader = backgroundScope.raftNode(

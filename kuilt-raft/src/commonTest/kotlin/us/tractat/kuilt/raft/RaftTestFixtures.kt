@@ -63,14 +63,15 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 /**
- * Run a `:kuilt-raft` consensus test under [StandardTestDispatcher] (virtual, deterministic time)
- * with a **tight 5-second default timeout**.
+ * Run a `:kuilt-raft` consensus test under [StandardTestDispatcher] (virtual, deterministic time),
+ * backstopped at [TEST_WEDGE_BACKSTOP].
  *
  * [StandardTestDispatcher] gives FIFO ordering at each virtual instant — see the banner above for
  * why that, not a wall-clock change, is what makes the suite deterministic. The dispatcher binds to
@@ -78,14 +79,31 @@ import kotlin.time.Duration.Companion.seconds
  * the [RaftSimulation] `await*` helpers (which suspend on virtual `delay`) drive time forward as
  * `runTest` auto-advances.
  *
+ * ## [timeout] is a wedge backstop, never an assertion (#1739)
+ *
  * The engine never quiesces (heartbeat/election timers perpetually re-arm), so `runTest` never
- * auto-idles — without a tight timeout the only backstop is the 60s default, which surfaces as an
- * opaque failure with zero state. This wrapper caps the wait at [timeout] and, paired with the
- * bounded await helpers, guarantees a fast, diagnosable failure instead of a hang. Never use
- * `advanceUntilIdle()`.
+ * auto-idles and a non-converging body would otherwise hang. **The bounded await helpers are what
+ * prevent that** — [RaftSimulation]'s `await*`/[RaftSimulation.settle] expire in *virtual* time and
+ * throw an `AssertionError` carrying a full cluster [RaftSimulation.dumpState]. That is fast (~1 s
+ * of wall clock) *and* diagnosable *and* indifferent to host load, because a virtual bound cannot
+ * be stretched by contention.
+ *
+ * [timeout] is only the outer ceiling behind them, for the residual wedge that happens *outside* an
+ * `await*` bound. It is **wall-clock over a virtual-time trajectory**, so it measures the host and
+ * not the code: a busy box inflates the wall time while the trajectory is bit-for-bit unchanged.
+ * Tightening it therefore asserts nothing about raft, and it pre-empts the legible detectors above
+ * with a bare `UncompletedCoroutinesError`. #1891 red-lit `apple-nightly` on `main` exactly this
+ * way — a 5 s ceiling with 1.8× headroom against a measured 2.65× contention degradation, i.e.
+ * *deterministically* under load rather than flakily.
+ *
+ * So do not lower [TEST_WEDGE_BACKSTOP] and do not reintroduce a per-call-site override below it.
+ * The property to hold is that **no real-time ceiling is load-bearing for a virtual-time test** —
+ * a rule naming a specific number is trivially evaded by picking the next one down, which is why
+ * `forbidTightRunTestTimeout` (root `build.gradle.kts`) rejects bare duration literals rather than
+ * any particular value. Never use `advanceUntilIdle()`.
  */
 internal fun raftRunTest(
-    timeout: Duration = 5.seconds,
+    timeout: Duration = TEST_WEDGE_BACKSTOP,
     body: suspend TestScope.() -> Unit,
 ): TestResult = runTest(StandardTestDispatcher(), timeout = timeout, testBody = body)
 
