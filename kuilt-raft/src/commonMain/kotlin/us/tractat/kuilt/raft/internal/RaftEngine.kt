@@ -414,9 +414,13 @@ internal class RaftEngine(
      * **Durable since #1900.** [pinLeaderForTerm] writes through to [RaftStorage.saveLeaderForTerm] and
      * the `init` restore reads it back, so a node that restarts inside a term comes back holding the
      * identity it established for it. That is what lets [onTimeoutNow] require a match outright
-     * instead of admitting the whole no-known-leader window; restoring it does **not** weaken the
-     * read-time staleness check below — a restored record for a term other than `currentTerm` is
-     * exactly as invisible as one left over from an earlier term in-process.
+     * instead of admitting the whole no-known-leader window.
+     *
+     * The restore keeps only a record whose term **equals** the term it restored (#2000), so it can
+     * seed no state an in-process [pinLeaderForTerm] could not. That is a bound in its own right, not
+     * a restatement of the staleness check below: a record for a term *above* the restored one is not
+     * made invisible by that check, it merely lies dormant until this node reaches the term it names.
+     * See the `init` block for the whole argument.
      */
     private val leaderForTerm: NodeId?
         get() = leaderForTermId.takeIf { leaderForTermTerm == state.currentTerm }
@@ -541,23 +545,62 @@ internal class RaftEngine(
             // Restore persisted state
             state.currentTerm = checkedRestoredTerm(storage.term())
             state.votedFor = storage.votedFor()
-            // Recover the per-term leader identity (#1900). Restored RAW, with no comparison to the
-            // term above and no bound of its own: [leaderForTerm] decides relevance at every read, and
-            // a record for any term but this one is invisible there — including a nonsensical one, for
-            // which "not equal to currentTerm" is the whole of the check that matters. The two cases a
-            // bound would have to distinguish are both already harmless: a record for an older term is
-            // the ordinary restart-across-a-term-boundary case, and one for a term this node has not
-            // reached can only come from storage that lost the accompanying term write, where the
-            // engine has already restored a term it must not decrease past.
+            // Recover the per-term leader identity (#1900) — keeping the record ONLY when it is a fact
+            // about the term just restored (#2000). Anything else is dropped, and this node relearns
+            // the term's leader from its first AppendEntries.
             //
-            // Unlike [checkedRestoredTerm] this needs no refuse-to-start bound, because the value is
-            // not §5.1/§5.2 safety state: a wrong pin costs *liveness* for the remainder of one term
-            // (this node refuses the real leader's AppendEntries and campaigns at the next term), where
-            // a wrong term costs a forgotten vote. Storage that can corrupt this can corrupt `votedFor`,
-            // and that is the check worth having.
+            // **Why not the raw seed this used to be.** The old argument was that [leaderForTerm]
+            // decides relevance at every read, so a record for any term but this one is invisible
+            // there. That reasons only about the term the node restores *at*, where its stated worst
+            // case does hold — a wrong pin there costs liveness for the remainder of that one term.
+            // But the read decides relevance by EQUALITY with `currentTerm`, so a record restored at
+            // `(T + 1, L)` while `currentTerm` is `T` is invisible only *at first*: it lies dormant
+            // and arms itself the moment this node reaches `T + 1`, which it does on its own — by
+            // adopting the term from a peer, or by winning its own election. The exposure is not "the
+            // remainder of one term"; it is a term the node had not seen when it restored.
+            //
+            // The state that reaches is one other guards' safety arguments assume cannot happen: a
+            // Candidate holding a live pin for its OWN term. [startRealElection] is the only site
+            // assigning [RaftRole.Candidate] and it runs `persistTermAndVote(currentTerm + 1, …)`
+            // first, which is exactly why a Candidate normally holds no pin for its own term. Today
+            // [onTimeoutNow]'s `|| Candidate` disjunct is what contains that variant, and its comment
+            // cites this restore as the one path that makes the arm live (#1999). Do not delete that
+            // arm on the strength of an unreachability argument: this bound is what would earn it,
+            // and a bound is not a reason to drop a guard that holds regardless.
+            //
+            // **Discard, never clamp.** A leader identity is an authorization token, not a
+            // measurement, so it has no conservative in-range reading: stamping the record with
+            // `currentTerm` would INVENT a pin for a term this node never observed — the
+            // forgery-laundering of #1817, and the disposition [adoptLeaderForTerm] already takes on
+            // the wire equivalent.
+            //
+            // **Kept on EQUALITY, not merely on `restored.term <= currentTerm`.** A record below
+            // `currentTerm` is already inert, so the two rules are behaviourally identical today — but
+            // the reason it is inert is an *argument* (the term only ever increases, and the read
+            // compares equality), and resting on one of those is what this line just paid for (#1965,
+            // #1886). Equality costs the same single comparison and buys a structural postcondition
+            // instead: after this, the in-memory pin is either absent or a fact about `currentTerm`,
+            // which is exactly what [pinLeaderForTerm] — the only other writer of these two fields —
+            // establishes. The restore can then produce no state an in-process write cannot.
+            //
+            // No refuse-to-start bound, unlike [checkedRestoredTerm]: this is not §5.1/§5.2 safety
+            // state, the input is the consumer's own torn storage rather than a hostile frame, and
+            // throwing would turn a lost write into a node that cannot boot. Storage that can corrupt
+            // this can corrupt `votedFor`, and that is the check worth having. Only the in-memory seed
+            // is gated — the durable record is left alone, and the next [pinLeaderForTerm] overwrites
+            // it. Logged at debug rather than traced because neither the actor nor its `trace` flow
+            // exists yet at this point in `init`.
             storage.leaderForTerm()?.let { restored ->
-                leaderForTermTerm = restored.term
-                leaderForTermId = restored.leaderId
+                if (restored.term == state.currentTerm) {
+                    leaderForTermTerm = restored.term
+                    leaderForTermId = restored.leaderId
+                } else {
+                    debug {
+                        "init-restore: DISCARD leaderForTerm(term=${restored.term}, " +
+                            "leader=${restored.leaderId.value}) — restored currentTerm is " +
+                            "${state.currentTerm}, so the record is not a fact about it"
+                    }
+                }
             }
             // Recover the snapshot baseline FIRST: a persisted snapshot is by definition committed, so
             // seed snapshotIndex/Term, the compaction floor, and commitIndex from it. This must happen
@@ -2915,9 +2958,11 @@ internal class RaftEngine(
         // — so a probing node is not a Candidate; (3) [adoptLeaderForTerm], the only pin site a peer
         // can drive, runs only after [demoteToFollowerOnLeaderContact] has cleared `Candidate`, in both
         // [onAppendEntries] and [onInstallSnapshot]. [adoptLeaderForTerm]'s KDoc argues the same thing
-        // from the other side. It is additionally conditional on storage honouring its own writes: the
-        // `init` restore seeds the pin RAW, so a record for a term above the restored `currentTerm` —
-        // the torn write that restore's KDoc contemplates — would put a Candidate on a live pin.
+        // from the other side. Until #2000 it was additionally conditional on storage honouring its
+        // own writes: the `init` restore seeded the pin RAW, so a record for a term above the restored
+        // `currentTerm` — a torn write that lost the accompanying term — armed itself once this node
+        // reached that term and put a Candidate on a live pin for its own term. The restore now drops
+        // any record that is not a fact about the term it restored, which closes that route.
         //
         // Retained precisely because it rests on none of that. An unreachability argument is a smell
         // here (#1965, #1886): a guard that holds regardless outlives the invariants it would otherwise
