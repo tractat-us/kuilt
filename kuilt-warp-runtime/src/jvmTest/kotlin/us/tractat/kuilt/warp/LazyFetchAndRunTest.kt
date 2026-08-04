@@ -29,6 +29,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.warp.test.WasmKernelFixtures
 import kotlin.test.Test
@@ -39,7 +40,6 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 private val C5B_QUILTER_CONFIG = QuilterConfig(
@@ -71,7 +71,7 @@ class LazyFetchAndRunTest {
 
     @Test
     fun fetchingNodeFetchesLoadsAndRunsAKernelItNeverHad() =
-        runTest(StandardTestDispatcher(), timeout = 30.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("c5b-lazyfetch"))
             val seamB = loom.join(InMemoryTag("b"))
@@ -143,7 +143,7 @@ class LazyFetchAndRunTest {
      */
     @Test
     fun loadTimeBrokenKernelRecordsTerminalErrorOnBothBoards() =
-        runTest(StandardTestDispatcher(), timeout = 30.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("c5b-terminal-load"))
             val seamB = loom.join(InMemoryTag("b"))
@@ -234,7 +234,7 @@ class LazyFetchAndRunTest {
      */
     @Test
     fun runTimeTrapKernelRecordsTerminalErrorOnBothBoards() =
-        runTest(StandardTestDispatcher(), timeout = 30.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("c5b-terminal-run"))
             val seamB = loom.join(InMemoryTag("b"))
@@ -326,7 +326,7 @@ class LazyFetchAndRunTest {
      */
     @Test
     fun symbolicOnlyNodeStandsByWhenLazyFetchAbsent() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("c5b-symbolic-only"))
             val seamB = loom.join(InMemoryTag("b"))

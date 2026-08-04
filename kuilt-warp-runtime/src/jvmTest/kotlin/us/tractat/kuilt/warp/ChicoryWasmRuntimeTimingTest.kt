@@ -5,6 +5,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.warp.test.WasmKernelFixtures
 import java.util.concurrent.TimeoutException
@@ -14,7 +15,6 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Deterministic regression tests for [ChicoryWasmRuntime]'s injectable [TimedGuestRunner].
@@ -113,7 +113,7 @@ class ChicoryWasmRuntimeTimingTest {
      * timeout before it ever ran.
      */
     @Test
-    fun concurrentOpGetsFreshTimeoutBudgetAfterFirstTimesOut() = runTest(timeout = 30.seconds) {
+    fun concurrentOpGetsFreshTimeoutBudgetAfterFirstTimesOut() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         // AtomicInteger because timedRunner.run() is called from Dispatchers.IO threads,
         // though invokeMutex ensures they are sequential (only one at a time).
         val callCount = AtomicInteger()

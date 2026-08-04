@@ -20,6 +20,7 @@ import us.tractat.kuilt.otel.InMemoryDurableStore
 import us.tractat.kuilt.otel.MetricKey
 import us.tractat.kuilt.otel.MetricKind
 import us.tractat.kuilt.otel.WarpMetricExporter
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.warp.ClaimStrategy
 import us.tractat.kuilt.warp.Creel
@@ -46,7 +47,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 import us.tractat.kuilt.quilter.QuilterConfig
 
@@ -138,7 +138,7 @@ class WarpMetricsTest {
 
     @Test
     fun recordWarpSurfacesCountersUnderExpectedKeys() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val node = makeSingleNode()
             val exporter = newExporter()
 
@@ -177,7 +177,7 @@ class WarpMetricsTest {
 
     @Test
     fun recordWarpExportsTierCounters() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamC = loom.host(Pattern("tier-otel"))   // compiler node
             val seamW = loom.join(InMemoryTag("w"))        // weak node (owns the tasks)
@@ -236,7 +236,7 @@ class WarpMetricsTest {
 
     @Test
     fun recordWarpIdempotentCallTwiceEqualCallOnce() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val node = makeSingleNode()
             val exporter = newExporter()
 
