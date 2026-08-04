@@ -815,6 +815,15 @@ public class WarpNode(
     internal fun intentTaskIds(): Set<TaskId> = intentQuilter.state.value.keys
 
     /**
+     * The [TaskId]s currently pending on the [CoordinationKind.Coordinated] queue, as seen by
+     * this peer.
+     *
+     * Test observability only: lets module tests assert that no coordinated enqueue is lost when
+     * several run concurrently (#2077).
+     */
+    internal fun coordinatedTaskIds(): Set<TaskId> = coordQueueQuilter.state.value.elements
+
+    /**
      * Close this node's Quilter connections and stop all detectors. Idempotent.
      */
     public fun close() {
