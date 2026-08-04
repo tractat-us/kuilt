@@ -1327,8 +1327,11 @@ internal class SeamRoom(
      * and for each existing member (bootstrapping the joiner's roster view).
      * Either way, add the described peer to our roster if not already there.
      *
-     * If [AdmitMessage.Welcome.assignedPeerId] matches [sender]'s value, this is the host's
-     * self-introduction — record [sender] as the host peer for [HostLost] detection.
+     * The **first** Welcome this member accepts identifies its host: every Welcome is minted by
+     * the host, so that first sender is the host, and it is recorded for [HostLost] detection
+     * (#1994). Waiting for the self-introduction shape instead left the host unidentified across
+     * the whole admit burst — see the comment on the assignment below, which also states what
+     * that narrowing costs on a flat loom.
      *
      * If [welcome.roomId] is set and [resumeToken] is not yet minted, mint it now using
      * [selfId] as the peer identifier and the received [RoomId].
@@ -1350,17 +1353,33 @@ internal class SeamRoom(
             val establishedHost = hostPeerId
             if (establishedHost != null && sender != establishedHost) return@withLock
 
+            // Identify the host from the FIRST Welcome we accept, whatever its shape (#1994).
+            //
+            // Any Welcome is by definition minted by the host, so the sender of the first one IS
+            // the host. Keying on the self-introduction instead (`assignedId == sender`) left
+            // `hostPeerId` null across `admitPeer`'s whole K+1-send burst — the roster-sync
+            // Welcome, one bootstrap Welcome per pre-existing member, and only THEN the host
+            // intro (`SeamRoom.kt:1250-1270`) — while `addToRoster` had already run under lock
+            // before the first of those sends (`:1215-1219`). Across that window a joiner holds
+            // co-members with no identified host, which is both:
+            //   * the capture window for a forged host identity, and
+            //   * a transient re-run of #1994 itself: a Quilter collecting `rosterPeers` fires
+            //     onPeersChanged -> sendFullStateTo(coJoiner) into PeerNotConnected.
+            //
+            // This does NOT weaken the #1180 gate above — it strengthens it, by arming it one
+            // send earlier. Trade, stated honestly: on a *flat* loom a foreign host whose Welcome
+            // arrives first now captures via any Welcome shape rather than only a self-intro. The
+            // real host's Welcomes are then rejected by the gate, so that surfaces as a failed
+            // join rather than a silent takeover; and on the star fabrics this track targets a
+            // joiner has exactly one edge, so it is unreachable there.
+            if (establishedHost == null) hostPeerId = sender
+
             // Self-admission welcome: mint the resume token (once) from the roomId carried here.
             if (assignedId == selfId) {
                 resumeMachine?.mintTokenIfAbsent(welcome.roomId)
                 // The host explicitly admitted us — disarm the admit deadline (#1178).
                 admitted.complete(Unit)
                 return@withLock
-            }
-
-            // Host self-intro: the described peer IS the sender.
-            if (assignedId == sender && hostPeerId == null) {
-                hostPeerId = sender
             }
 
             // Also mint resume token from host intro welcome if not yet minted.
@@ -2304,6 +2323,18 @@ internal class SeamRoom(
      * Accepting a nullable [PeerId] matches [Swatch.sender], which is nullable.
      */
     internal fun isAdmitted(peerId: PeerId?): Boolean = peerId != null && lock.withLock { admittedById.containsKey(peerId) }
+
+    /**
+     * The peer this member has identified as its host, or `null` before identification.
+     *
+     * Exposed `internal` for tests and for the host-authoritative gates layered above the room; the
+     * field itself stays `private var` and is only ever written under [lock].
+     *
+     * The identically-bodied `hostPeer()` on the anonymous [JoinerResumeHost] above is **not**
+     * reusable here: that object is a private member of `resumeMachine`, which is null for a host
+     * room, so it can neither be reached from outside nor answer for a host.
+     */
+    internal fun hostPeer(): PeerId? = lock.withLock { hostPeerId }
 
     // ── Application frame routing ─────────────────────────────────────────────
 
