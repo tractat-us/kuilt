@@ -120,8 +120,10 @@ class MerkleDigestCostModelTest {
 
     /**
      * The replica id a metered peer actually uses: [buildInMemoryMesh] names peers `peer-N` and
-     * [Quilter] defaults its replica to the seam's own peer id. Every id in a sub-10-node mesh is
-     * six characters, so one name prices every peer's frames.
+     * [Quilter] defaults its replica to the seam's own peer id. Every id up to
+     * [MAX_UNIFORMLY_PRICED_MESH] peers is six characters, so one name prices every peer's frames
+     * — enforced by [meterConvergedRounds] rather than left to the reader, because a longer id
+     * costs one more CBOR byte per frame and nothing about the printed figures would look wrong.
      */
     private val meshSender = ReplicaId("peer-0")
 
@@ -222,8 +224,18 @@ class MerkleDigestCostModelTest {
      *
      * Handshakes, the first-contact `FullState` exchange, and those reconvergence deltas are all
      * flushed *before* the meter is read, so the window holds anti-entropy traffic and nothing else.
+     *
+     * Bounded at [MAX_UNIFORMLY_PRICED_MESH] peers: past that the mesh contains an id longer than
+     * [meshSender], so every modelled frame this suite compares the meter against would be short
+     * by a byte, silently. Fail fast beats a precondition that is only true in a comment.
      */
     private suspend fun TestScope.meterConvergedRounds(n: Int, state: GSet<String>, rounds: Int): Long {
+        require(n <= MAX_UNIFORMLY_PRICED_MESH) {
+            "meterConvergedRounds prices every peer's frames with one sender id (${meshSender.value}), " +
+                "so it holds only while every peer id is that long. n = $n reaches peer-${n - 1}, " +
+                "whose extra character costs one more CBOR byte per frame — every figure below would " +
+                "be silently mis-priced. Cap at $MAX_UNIFORMLY_PRICED_MESH, or price per peer."
+        }
         val clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
         fun flush() = repeat(flushSteps) { testScheduler.advanceTimeBy(1); testScheduler.runCurrent() }
 
