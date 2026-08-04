@@ -21,10 +21,10 @@ import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.ProtocolVersion
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
@@ -65,7 +65,7 @@ class SeamRoomCloseResurrectionTest {
 
     @Test
     fun inFlightAdmitDuringLeaveDoesNotResurrectRoster() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val inbound = MutableSharedFlow<Swatch>(extraBufferCapacity = 16)
             val fakeSeam =
                 object : Seam {

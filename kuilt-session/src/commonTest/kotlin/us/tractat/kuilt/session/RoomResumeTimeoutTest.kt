@@ -18,6 +18,7 @@ import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.Direction
 import us.tractat.kuilt.test.FaultProfile
 import us.tractat.kuilt.test.FaultySeam
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertIs
@@ -53,7 +54,7 @@ class RoomResumeTimeoutTest {
      * hanging.
      */
     @Test
-    fun `direct resume against a silent host times out instead of hanging`() = runTest(timeout = 5.seconds) {
+    fun `direct resume against a silent host times out instead of hanging`() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val (joinerRoom, token, joinerSeam) = admittedJoiner()
 
         // Black-hole the joiner's link: the Resume broadcast is dropped (the host never sees it)
@@ -74,7 +75,7 @@ class RoomResumeTimeoutTest {
      * not just the owner.
      */
     @Test
-    fun `a joined concurrent resume also times out`() = runTest(timeout = 5.seconds) {
+    fun `a joined concurrent resume also times out`() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val (joinerRoom, token, joinerSeam) = admittedJoiner()
         joinerSeam.setFaultProfile(FaultProfile.DropAll(Direction.Both))
 

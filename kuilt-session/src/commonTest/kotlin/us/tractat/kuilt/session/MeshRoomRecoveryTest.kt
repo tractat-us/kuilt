@@ -14,6 +14,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.DefaultJoinerReconnectController
 import us.tractat.kuilt.test.FaultySeam
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -93,7 +94,7 @@ class MeshRoomRecoveryTest {
      */
     @Test
     fun `a dropped member that heals before the window recovers on the host`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val mesh = mesh()
 
             val partitionedForDropped = mutableListOf<MembershipEvent.Partitioned>()
@@ -170,7 +171,7 @@ class MeshRoomRecoveryTest {
      */
     @Test
     fun `a dropped member whose window expires is evicted while the survivor stays`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val mesh = mesh()
 
             val leftForDropped = mutableListOf<MembershipEvent.Left>()
@@ -248,7 +249,7 @@ class MeshRoomRecoveryTest {
      */
     @Test
     fun `host evicts a still-partitioned member on window expiry even when PeerLost never fires`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             // Detector window far longer than anything this test advances: PeerLost, the pre-fix
             // sole evictor, is effectively absent.
             val longDetectorWindow = HeartbeatConfig(

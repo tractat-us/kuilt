@@ -23,6 +23,7 @@ import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.test.FakeSeam
 import us.tractat.kuilt.test.FaultySeam
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -61,7 +62,7 @@ class LocalFabricTest {
 
     @Test
     fun availableToUnavailableToAvailableDrivesLevelAndEdges() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val capability = MutableStateFlow(
                 TransportCapability(emptySet(), FabricAvailability.Available),
             )
@@ -89,7 +90,7 @@ class LocalFabricTest {
     /** A consumer reacting to the edge must not be able to read a level that disagrees with it. */
     @Test
     fun levelIsVisibleFromInsideTheEdgeCollector() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val capability = MutableStateFlow(
                 TransportCapability(emptySet(), FabricAvailability.Available),
             )
@@ -121,7 +122,7 @@ class LocalFabricTest {
      */
     @Test
     fun levelTracksTheSeamWithNoDispatchInBetween() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val capability = MutableStateFlow(
                 TransportCapability(emptySet(), FabricAvailability.Available),
             )
@@ -142,7 +143,7 @@ class LocalFabricTest {
      */
     @Test
     fun aRoleOnlyChangeIsNotAnEmission() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val capability = MutableStateFlow(
                 TransportCapability(emptySet(), FabricAvailability.Available),
             )
@@ -160,7 +161,7 @@ class LocalFabricTest {
     /** Unknown is level-only: entering it claims neither loss nor restoration. */
     @Test
     fun unknownEmitsNoEdge() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val capability = MutableStateFlow(
                 TransportCapability(emptySet(), FabricAvailability.Available),
             )
@@ -190,7 +191,7 @@ class LocalFabricTest {
      */
     @Test
     fun unavailableThroughUnknownToAvailableStillRestores() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val capability = MutableStateFlow(
                 TransportCapability(emptySet(), FabricAvailability.Available),
             )
@@ -217,7 +218,7 @@ class LocalFabricTest {
      */
     @Test
     fun aSeamWithNoPathObserverReportsUnknownAndNoEdges() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val room = SeamRoom(
                 seam = FakeSeam(PeerId("self")),
                 role = SessionRole.Host,
@@ -256,7 +257,7 @@ class LocalFabricTest {
      */
     @Test
     fun aJoinerGetsItsOwnFabricEdgesToo() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val capability = MutableStateFlow(
                 TransportCapability(emptySet(), FabricAvailability.Available),
             )
@@ -289,7 +290,7 @@ class LocalFabricTest {
      */
     @Test
     fun aDropBeforeTheLoopStartsStillReportsLost() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val capability = MutableStateFlow(
                 TransportCapability(emptySet(), FabricAvailability.Available),
             )
@@ -328,7 +329,7 @@ class LocalFabricTest {
      */
     @Test
     fun ourOwnRadioDyingTagsBothPartitionedAndHostLostAsSelfAttributed() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val factory = SeamRoomFactory(loom, backgroundScope, virtualClock(), dropConfig)
             factory.host(Pattern("Table"))
@@ -379,7 +380,7 @@ class LocalFabricTest {
      */
     @Test
     fun aPeerDroppingWhileOurOwnFabricIsUpIsNotSelfAttributed() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val factory = SeamRoomFactory(loom, backgroundScope, virtualClock(), dropConfig)
 
@@ -424,7 +425,7 @@ class LocalFabricTest {
      */
     @Test
     fun theTagIsCurrentWithNoDispatchBetweenTheFabricChangeAndTheEmission() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             // Detection an order of magnitude beyond this test's advancement budget: no detector can
             // fire on its own, so the only Partitioned is the one the Paused frame drives, at the
@@ -474,7 +475,7 @@ class LocalFabricTest {
      */
     @Test
     fun aFabricWithNoPathObserverTagsTheEventsUnknown() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val factory = SeamRoomFactory(loom, backgroundScope, virtualClock(), dropConfig)
             factory.host(Pattern("Table"))

@@ -21,6 +21,7 @@ import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
 import us.tractat.kuilt.test.FakeSeam
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAbortsOnMidHandshakeCollapse
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -235,7 +236,7 @@ class SeamElectionLobbyTest {
 
     @Test
     fun `member awaitRoom aborts on a mid-handshake membership drain without a seam tear`() =
-        runTest(timeout = 5.seconds) {
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val self = PeerId("peer-z")
             val hostId = PeerId("peer-a")
             val seam = FakeSeam(selfId = self, initialPeers = setOf(self, hostId))
@@ -249,7 +250,7 @@ class SeamElectionLobbyTest {
 
     @Test
     fun `host start aborts on a mid-handshake membership drain without a seam tear`() =
-        runTest(timeout = 5.seconds) {
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
             // The host must surface a retryable signal, not silently commit a solo room (the #1468
             // host bug, which a transport-tear test masks because nw publishes peers→{self} before
             // any Torn latch — here there is no Torn at all).
@@ -272,7 +273,7 @@ class SeamElectionLobbyTest {
     // LobbyTornException INSIDE the freeze/commit window rather than hanging.
     @Test
     fun `member awaitRoom aborts via heartbeat when the elected host goes silent but stays present`() =
-        runTest(timeout = 5.seconds) {
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val self = PeerId("peer-z")
             val hostId = PeerId("peer-a")
             val seam = FakeSeam(selfId = self, initialPeers = setOf(self, hostId))

@@ -19,6 +19,7 @@ import us.tractat.kuilt.session.partition.JoinerReconnectEvent
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.test.FaultySeam
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -81,7 +82,7 @@ class StarTopologyPresenceFanoutTest {
      */
     @Test
     fun `a non-host member evicts a peer whose reconnect window expired`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val star = star()
             val observed = mutableListOf<MembershipEvent.Left>()
             backgroundScope.launch {
@@ -136,7 +137,7 @@ class StarTopologyPresenceFanoutTest {
      */
     @Test
     fun `a non-host member sees Partitioned and WindowOpened for a paused peer`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val star = star()
             val partitioned = mutableListOf<MembershipEvent.Partitioned>()
             val windows = mutableListOf<MembershipEvent.WindowOpened>()
@@ -190,7 +191,7 @@ class StarTopologyPresenceFanoutTest {
      */
     @Test
     fun `a mesh member that both detects locally and receives Paused emits once`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
             val factory = SeamRoomFactory(loom, backgroundScope, clock, hostConfig)
@@ -245,7 +246,7 @@ class StarTopologyPresenceFanoutTest {
      */
     @Test
     fun `an injected hold policy's deadline reaches a non-host member`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val sentinel = Instant.fromEpochMilliseconds(SENTINEL_EXPIRES_AT)
             val star = star(hostReconnectController = { SentinelHoldPolicy(SENTINEL_EXPIRES_AT) })
             val windows = mutableListOf<MembershipEvent.WindowOpened>()

@@ -24,6 +24,7 @@ import us.tractat.kuilt.session.SessionRole
 import us.tractat.kuilt.test.Direction
 import us.tractat.kuilt.test.FaultySeam
 import us.tractat.kuilt.test.FlakyLifecycleSeam
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -119,7 +120,7 @@ class SubTimeoutBlipResumeTest {
 
     @Test
     fun `a blip shorter than the host timeout completes as a local no-op resume`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             var nowMs = 0L
             val clock = { Instant.fromEpochMilliseconds(nowMs) }
             fun tick(count: Int = 1) = repeat(count) {
@@ -192,7 +193,7 @@ class SubTimeoutBlipResumeTest {
      */
     @Test
     fun `an outage that never returns still ends terminal`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             var nowMs = 0L
             val clock = { Instant.fromEpochMilliseconds(nowMs) }
             fun tick(count: Int = 1) = repeat(count) {
@@ -252,7 +253,7 @@ class SubTimeoutBlipResumeTest {
      */
     @Test
     fun `a drop the host also observes ends in a real resume`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             var nowMs = 0L
             val clock = { Instant.fromEpochMilliseconds(nowMs) }
             fun tick(count: Int = 1) = repeat(count) {

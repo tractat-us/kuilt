@@ -28,6 +28,7 @@ import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.Direction
 import us.tractat.kuilt.test.FaultProfile
 import us.tractat.kuilt.test.FaultySeam
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
 import us.tractat.kuilt.test.fabric.connectionPair
@@ -75,7 +76,7 @@ class ConcurrentResumeHangTest {
      * deferred — the first `await()` hung forever.
      */
     @Test
-    fun `two concurrent resume calls both complete with the shared result`() = runTest(timeout = 30.seconds) {
+    fun `two concurrent resume calls both complete with the shared result`() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         var clockMs = 0L
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
         val loom = InMemoryLoom()
@@ -131,7 +132,7 @@ class ConcurrentResumeHangTest {
      */
     @Test
     fun `public resume racing the internal auto-reconnect must not drive the room terminal`() =
-        runTest(StandardTestDispatcher(), timeout = 30.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val dispatcher = coroutineContext[ContinuationInterceptor]!!
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(0L) }
 

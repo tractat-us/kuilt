@@ -15,8 +15,8 @@ import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.RoomId
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 
 /**
  * Guards #1001: every coroutine a [SeamRoom] owns for a per-peer
@@ -29,7 +29,7 @@ class SeamRoomDetectorTeardownTest {
 
     @Test
     fun `leave cancels all per-peer detector coroutines`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(0L) }
 
             // Inspectable host-room scope: a child of backgroundScope so it inherits the test

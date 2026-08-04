@@ -14,6 +14,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.test.FaultySeam
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.fabric.InMemoryRoomFabric
 import kotlin.coroutines.ContinuationInterceptor
@@ -73,7 +74,7 @@ class LivenessRouteGateTest {
      */
     @Test
     fun `a joiner does not evict an unroutable co-joiner`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val star = star()
 
             val evictions = mutableListOf<MembershipEvent.Left>()
@@ -118,7 +119,7 @@ class LivenessRouteGateTest {
      */
     @Test
     fun `a joiner starts a detector for the host but not for an unroutable co-joiner`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val star = star()
             val a = star.joinerA as SeamRoom
 
@@ -158,7 +159,7 @@ class LivenessRouteGateTest {
      */
     @Test
     fun `a mesh member still evicts a genuinely silent peer it can reach`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
             val slowFactory = SeamRoomFactory(loom, backgroundScope, clock, slowConfig)

@@ -20,8 +20,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 
 /**
  * Resume-after-tear on the adopt path (#1618) — **the recovery half of Track A's self-detection.**
@@ -90,7 +90,7 @@ class AdoptTearTerminalTest {
      */
     @Test
     fun `adopted joiner with no reweave goes terminal on a transient tear without opening a window`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             // FIXED clock: the detector measures silence as clock() - lastSeen, so a frozen clock
             // makes a plain `Timeout` impossible — the ONLY partition the detector can report is the
             // peers-based `TransportClosed` (host gone from `peers`), which is exactly the transport
@@ -167,7 +167,7 @@ class AdoptTearTerminalTest {
      */
     @Test
     fun `adopted joiner with reweave resumes when a transient tear heals within the window`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             // Advancing clock: the host opens its reconnect window via a heartbeat-silence Timeout
             // while the joiner is away; the joiner's own tear is the peers-based TransportClosed
             // (independent of the clock) that reaches the reweave path.
@@ -238,7 +238,7 @@ class AdoptTearTerminalTest {
      */
     @Test
     fun `adopted joiner with reweave still goes HostLost when the tear outlasts the window`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             var nowMs = 0L
             val clock = { Instant.fromEpochMilliseconds(nowMs) }
             fun tick() {
