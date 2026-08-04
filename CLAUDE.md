@@ -134,7 +134,12 @@ still compiles but self-skips at runtime, so `./gradlew build` doesn't run it.
   the standard target set + Android namespace (`us.tractat.kuilt.<module>`);
   `kuilt.publish` wires the in-tree `TigrisStaging` (file://) Maven repo that
   `publish.yml` stages publications into. New modules apply
-  `id("kuilt.kmp-library")` and almost nothing else.
+  `id("kuilt.kmp-library")` and almost nothing else. A module that deliberately
+  does **not** — a bench harness, a KSP processor, a demo app — still has to be
+  linted, and gets that from one line: **`kuilt.detekt-jvm`** for a plain
+  Kotlin/JVM module, **`kuilt.detekt-kmp`** for a plain KMP one (declare it last
+  in `plugins { }`, so it applies after the Kotlin plugin). `forbidUnlintedModule`
+  in the root build fails on a module with Kotlin source and none of the three.
 - **KMP source-set hierarchy is wired by hand in `:kuilt-websocket`** — a manual
   `jvmAndAndroidMain` intermediate (Ktor server is JVM/Android-only) disables the
   plugin's default auto-wiring, so `iosMain`/`macosMain` intermediates are also
