@@ -1700,11 +1700,10 @@ val forbidTightRunTestTimeout by tasks.registering {
 // does it see a module whose sources live outside `src/`; the definition matches the sibling
 // guards above, and widening it to "any Kotlin file anywhere" would drag in `build/` output.
 //
-// The allowlist is the known backlog, not an escape hatch. Every entry cites the issue tracking it,
-// and each is there because wiring detekt is NOT a small change — all three are plain KMP modules,
-// where type-resolved analysis needs the ~70 lines of source-set folding `kuilt.kmp-library` does
-// (and `:demo-web`/`:spike` have no JVM target to fold into at all). A plain Kotlin/JVM module has
-// no excuse: apply `kuilt.detekt-jvm`, which is one line.
+// The allowlist is the known backlog, not an escape hatch — and since #2025 the citation rule on it
+// is enforced rather than requested (see the allowlist's own comment). No module needs to be there
+// on grounds of shape any more: `kuilt.detekt-jvm` covers a plain Kotlin/JVM module and
+// `kuilt.detekt-kmp` a plain KMP one, each in one line.
 val unlintedModuleProbes = mutableListOf<Triple<String, Boolean, FileTree>>()
 gradle.projectsEvaluated {
     rootProject.subprojects.forEach { sub ->
@@ -1729,6 +1728,36 @@ gradle.projectsEvaluated {
     }
 }
 
+// Known-unlinted modules, each with the issue that tracks wiring it up. An entry MUST cite an
+// issue — a bare exclusion turns this guard back into the silence it exists to break. Shrinks to
+// empty; do NOT add a plain-JVM module here, apply `kuilt.detekt-jvm` instead, and do NOT add a
+// plain KMP module here either, apply `kuilt.detekt-kmp` (#2016).
+//
+// The citation rule is CHECKED, not asked for (#2025). It used to be this comment plus a line in
+// the failure message, with the value a free-form `String` — so `":foo" to ""` or `":foo" to
+// "TODO"` was accepted in silence, which is the same shape as the defect the guard exists to end.
+// A guard rots at its escape hatch, so both directions are mechanical:
+//   - every value must CONTAIN an issue reference (`#<n>`, n ≥ 1) — validated eagerly below, at
+//     root-script configuration time rather than inside the task, so no invocation can skip it; and
+//   - every entry for a module that IS in this build must still be genuinely unlinted (in `doLast`,
+//     where the probes are) — so wiring a module up and forgetting to delete its entry fails
+//     instead of leaving a permanent hole. `:spike` is `-PincludeSpike`-gated and simply absent
+//     from most builds, which is why that half is scoped to modules actually present.
+val unlintedModuleAllowlist = mapOf(
+    ":spike" to "#1863", // plain KMP, appleMain-only; -PincludeSpike-gated
+)
+unlintedModuleAllowlist.forEach { (path, citation) ->
+    if (!citation.contains(Regex("#[1-9]\\d*"))) {
+        error(
+            "forbidUnlintedModule's allowlist entry for $path cites \"$citation\", which contains no " +
+                "issue reference. Every entry MUST cite the issue that tracks wiring the module up " +
+                "(e.g. \"#1863\") — a bare exclusion turns this guard back into the silence it exists " +
+                "to break (#2025). Fix the entry in the root `build.gradle.kts`, or delete it and " +
+                "apply `kuilt.detekt-jvm` / `kuilt.detekt-kmp` to $path instead.",
+        )
+    }
+}
+
 val forbidUnlintedModule by tasks.registering {
     group = "verification"
     description = "Fails if a subproject has Kotlin source but no detekt task — compiled but unlinted (#2005)."
@@ -1738,15 +1767,20 @@ val forbidUnlintedModule by tasks.registering {
     val stamp = layout.buildDirectory.file("verification/forbid-unlinted-module.ok")
     outputs.file(stamp)
     outputs.cacheIf { true }
-    // Known-unlinted modules, each with the issue that tracks wiring it up. An entry MUST cite an
-    // issue — a bare exclusion turns this guard back into the silence it exists to break. Shrinks to
-    // empty; do NOT add a plain-JVM module here, apply `kuilt.detekt-jvm` instead.
-    val allowlist = mapOf(
-        ":demo-shared" to "#2016", // plain KMP (jvm + wasmJs); needs the KMP source-set folding
-        ":demo-web" to "#2016", // plain KMP, wasmJs-only — no JVM target to type-resolve against
-        ":spike" to "#1863", // plain KMP, appleMain-only; -PincludeSpike-gated
-    )
+    val allowlist = unlintedModuleAllowlist
+    inputs.property("allowlist", allowlist)
     doLast {
+        val stale = probes
+            .filter { (path, linted, _) -> linted && path in allowlist }
+            .map { (path, _, _) -> "$path (allowlisted for ${allowlist.getValue(path)})" }
+        if (stale.isNotEmpty()) {
+            error(
+                "forbidUnlintedModule's allowlist names module(s) that ARE linted — a stale entry is a " +
+                    "standing hole in the guard, since it would also swallow a future regression " +
+                    "(#2025):\n  " + stale.joinToString("\n  ") +
+                    "\n  Delete the entry from `allowlist` in the root `build.gradle.kts`.",
+            )
+        }
         val offenders = probes
             .filter { (path, linted, tree) -> !linted && path !in allowlist && !tree.isEmpty }
             .map { (path, _, tree) -> "$path (${tree.files.size} Kotlin file(s) under src/)" }
@@ -1755,12 +1789,13 @@ val forbidUnlintedModule by tasks.registering {
                 "Module(s) contribute Kotlin source but register no detekt task — they compile, " +
                     "`./gradlew build` is green, and `detektAll` schedules NOTHING for them, which is " +
                     "indistinguishable from being clean (#2005):\n  " + offenders.joinToString("\n  ") +
-                    "\n  THE FIX for a plain Kotlin/JVM module is one line in its `plugins { }` block:\n" +
-                    "      id(\"kuilt.detekt-jvm\")\n" +
-                    "  A KMP module should apply `kuilt.kmp-library`, which registers detekt already.\n" +
-                    "  If neither fits, add the module to this guard's `allowlist` in the root " +
+                    "\n  THE FIX is one line in the module's `plugins { }` block — `id(\"kuilt.detekt-jvm\")` " +
+                    "for a plain Kotlin/JVM module, `id(\"kuilt.detekt-kmp\")` (declared LAST) for a plain " +
+                    "KMP one.\n" +
+                    "  A KMP library should apply `kuilt.kmp-library`, which registers detekt already.\n" +
+                    "  If none fits, add the module to this guard's `allowlist` in the root " +
                     "`build.gradle.kts` WITH the issue number tracking it — an entry without one is " +
-                    "not acceptable, because a silent exclusion is the exact failure this guard ends.",
+                    "REJECTED, because a silent exclusion is the exact failure this guard ends.",
             )
         }
         val out = stamp.get().asFile

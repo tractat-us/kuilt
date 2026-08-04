@@ -10,6 +10,11 @@ import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
     alias(libs.plugins.kotlinSerialization)
+    // Declared LAST so it applies after the Kotlin Multiplatform plugin — see the
+    // ordering note in `kuilt.detekt-kmp`. Gives this module the same type-resolved
+    // detekt coverage and the same `detektAll` entry point as a `kuilt.kmp-library`
+    // module (#2016).
+    id("kuilt.detekt-kmp")
 }
 
 kotlin {

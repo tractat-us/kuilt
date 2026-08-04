@@ -141,97 +141,12 @@ afterEvaluate {
     }
 }
 
-apply(plugin = "io.gitlab.arturbosch.detekt")
-
-configure<io.gitlab.arturbosch.detekt.extensions.DetektExtension> {
-    config.setFrom(rootProject.files("config/detekt/detekt.yml"))
-    buildUponDefaultConfig = false
-    allRules = false
-}
-
-// In KMP projects detekt generates per-sourceset tasks (detektMetadataCommonMain,
-// detektJvmMain, …); the plain `detekt` lifecycle task is NO-SOURCE (no default
-// JVM source dirs). The detekt plugin wires `check -> detekt`, so we must NOT
-// hang the heavy type-resolution sourceset tasks off `detekt` — that would drag
-// them into `./gradlew build`, where running them concurrently with the wasmJs-
-// browser + test tasks OOMs the CI runner (same constraint behind --max-workers=4
-// in ci.yml). Instead expose them via a dedicated `detektAll` task that CI runs
-// as its own parallel job, isolated from the build's memory footprint.
-afterEvaluate {
-    // Test-source detekt tasks use an extended config that also bans production
-    // dispatchers (Dispatchers.Default/IO/Main/Unconfined) and GlobalScope.
-    // Deliberate real-threading sites suppress with @Suppress("ForbiddenMethodCall").
-    val testDetektConfig = rootProject.files(
-        "config/detekt/detekt.yml",
-        "config/detekt/detekt-test.yml",
-    )
-    val testSourceSetTaskNames = listOf(
-        "detektJvmTest",
-        "detektAndroidDebugUnitTest",
-        "detektAndroidReleaseUnitTest",
-    )
-    testSourceSetTaskNames.mapNotNull { tasks.findByName(it) }.forEach { task ->
-        (task as io.gitlab.arturbosch.detekt.Detekt).config.setFrom(testDetektConfig)
-    }
-
-    // #1021: JVM/Android-only modules keep their production code in a manual
-    // intermediate source set (e.g. `jvmAndAndroidMain`, created to disable KMP
-    // hierarchy auto-wiring). detekt only generates a *metadata* task for such an
-    // intermediate, and metadata tasks run WITHOUT type resolution — so the
-    // nullability rules this repo enables (UnsafeCallOnNullableType, … — all of which
-    // REQUIRE type resolution) silently never fire on it. Meanwhile the type-resolved
-    // `detektJvmMain` is NO-SOURCE, because the leaf jvm source set is empty (the code
-    // lives in the intermediate). Net effect: the intermediate's production code is
-    // unlinted, yet detektAll reports "0 smells".
-    //
-    // Fix: fold each intermediate's source dirs into the type-resolved `detektJvmMain`
-    // task. That task already carries the jvm compile classpath — full type resolution,
-    // and the intermediate's compileOnly deps are on it since `jvmMain` dependsOn the
-    // intermediate — and is already a detektAll dependency, so the intermediate is now
-    // analyzed with exactly the same rules as any other jvm source. Discover the
-    // intermediate(s) generically by walking the dependsOn closure UP from the
-    // jvm/android leaves: that reaches only JVM/Android-path ancestors, never the
-    // apple/ios/native intermediates (which are ancestors of the native leaves), so
-    // standard all-target modules — whose jvm/android closure is just commonMain — are
-    // untouched and no module names are hard-coded.
-    fun org.jetbrains.kotlin.gradle.plugin.KotlinSourceSet.dependsOnClosure(): Set<org.jetbrains.kotlin.gradle.plugin.KotlinSourceSet> =
-        dependsOn + dependsOn.flatMap { it.dependsOnClosure() }
-    val jvmAndroidIntermediates = kmpExtension.sourceSets
-        .matching { it.name == "jvmMain" || it.name == "androidMain" }
-        .flatMap { it.dependsOnClosure() }
-        .filterNot { it.name == "commonMain" || it.name == "jvmMain" || it.name == "androidMain" }
-        .toSet()
-    // Also fold commonMain into the type-resolved detektJvmMain. detekt's own
-    // detektMetadataCommonMain analyses commonMain WITHOUT type resolution, so this
-    // repo's rules — all four (UnsafeCallOnNullableType, …) require type resolution —
-    // never fire on commonMain-only code, and (until wired below) detektAll skipped
-    // that task entirely. detektJvmMain carries the jvm compile classpath and its
-    // dependsOn-closure already pulls in commonMain via jvmMain, so this analyses
-    // commonMain with exactly the rules applied to jvm code. (#1416)
-    val commonMainSourceSets = kmpExtension.sourceSets.matching { it.name == "commonMain" }
-    (tasks.findByName("detektJvmMain") as? io.gitlab.arturbosch.detekt.Detekt)?.let { jvmDetekt ->
-        jvmAndroidIntermediates.forEach { intermediate -> jvmDetekt.source(intermediate.kotlin.srcDirs) }
-        commonMainSourceSets.forEach { commonMain -> jvmDetekt.source(commonMain.kotlin.srcDirs) }
-    }
-
-    // Wire the dependency by a live, name-matched task collection rather than an
-    // eager findByName snapshot. The KMP detekt plugin registers the commonMain
-    // *metadata* task (detektMetadataCommonMain) in a LATER afterEvaluate than this
-    // block, so an eager findByName here misses it — leaving commonMain silently
-    // unlinted by detektAll while detektJvmMain (registered earlier) is found. A
-    // `tasks.matching { }` collection is resolved at task-graph time, after every
-    // detekt task exists, and is robust to new source sets/modules.
-    val detektAllTaskNames = setOf("detektMetadataCommonMain", "detektJvmMain") + testSourceSetTaskNames
-    tasks.register("detektAll") {
-        group = "verification"
-        description = "Runs detekt on main sources (commonMain + jvmMain, incl. any jvmAndAndroidMain intermediate folded into the jvm task) and test sources (jvmTest, androidUnitTest) with type resolution. Not wired into check — CI runs it as a separate job to avoid OOM."
-        dependsOn(tasks.matching { it.name in detektAllTaskNames })
-    }
-    val detektBaselineLifecycle = tasks.findByName("detektBaseline") ?: return@afterEvaluate
-    listOf("detektBaselineMetadataCommonMain", "detektBaselineJvmMain").forEach { name ->
-        tasks.findByName(name)?.let { detektBaselineLifecycle.dependsOn(it) }
-    }
-}
+// Detekt — the KMP source-set folding + `detektAll` entry point live in their own
+// convention plugin so a plain KMP module (`:demo-shared`, `:demo-web`) that deliberately
+// does not apply THIS plugin can get identical lint coverage with one line (#2016).
+// Applied here rather than in the `plugins { }` block above so it lands AFTER the Kotlin
+// Multiplatform plugin — see the ordering note in `kuilt.detekt-kmp`.
+apply(plugin = "kuilt.detekt-kmp")
 
 // Generate the shared wasmJs Mocha/Karma timeout configuration into the build
 // directory so that every module gets an adequate per-test and socket budget by
