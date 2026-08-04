@@ -36,6 +36,19 @@ class ORMapTest {
     }
 
     @Test
+    fun aReplicasSecondPutKeepsItsFirst() {
+        // A put is additive over the value lattice, including across the putter's *own* writes. The
+        // second put supersedes the first's tag, so the fresh tag has to carry what that tag held —
+        // drop that fold and a replica silently loses its own history on every re-put.
+        val m = ORMap.empty<String, GCounter>()
+            .put(a, "votes", GCounter.of(a to 3L))
+            .put(a, "votes", GCounter.of(b to 4L))
+
+        assertEquals(7L, m["votes"]?.value)
+        assertEquals(1, m.tagsOn("votes").size, "…while still leaving the replica one tag on the key")
+    }
+
+    @Test
     fun removeMakesKeyAbsent() {
         val m = ORMap.empty<String, GCounter>().put(a, "votes", GCounter.of(a to 1L))
         assertFalse("votes" in m.remove("votes").keys)
