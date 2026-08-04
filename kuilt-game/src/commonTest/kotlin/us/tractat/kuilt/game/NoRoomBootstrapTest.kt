@@ -7,9 +7,9 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.raft.NodeId
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertNull
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * The raw, no-[us.tractat.kuilt.session.Room] bootstraps return a plain [GameSession] with **no**
@@ -21,7 +21,7 @@ class NoRoomBootstrapTest {
 
     @Test
     fun `gameNode returns a plain GameSession with no presence surface`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seam = loom.host(Pattern("solo"))
             val self = NodeId(seam.selfId.value)

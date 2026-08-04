@@ -21,17 +21,17 @@ import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.RaftNode
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 
 class GameNodeTest {
 
     @Test
-    fun gameNodeThreadsDurableIdentityIntoProposalDedupKey() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun gameNodeThreadsDurableIdentityIntoProposalDedupKey() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         // The bootstrap `identity` parameter must reach the engine so proposals are stamped under
         // the supplied durable ClientId — the propose-side half of #616's exactly-once guarantee.
         val loom = InMemoryLoom()
@@ -51,7 +51,7 @@ class GameNodeTest {
     }
 
     @Test
-    fun rosterGivenTwoPeersConverge() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun rosterGivenTwoPeersConverge() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val (hostSeam, joinSeam) = seats(loom, 2)
         val voters = setOf(NodeId(hostSeam.selfId.value), NodeId(joinSeam.selfId.value))
@@ -65,7 +65,7 @@ class GameNodeTest {
     }
 
     @Test
-    fun hostAdmitsOneJoiner() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun hostAdmitsOneJoiner() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val (hostSeam, joinSeam) = seats(loom, 2)
 
@@ -118,7 +118,7 @@ class GameNodeTest {
      * entries — see the [hostAdmitsOneJoiner] test for the canonical pattern.
      */
     @Test
-    fun latecomerJoinsAfterFirstCommit() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun latecomerJoinsAfterFirstCommit() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val (hostSeam, j1, j2) = seats(loom, 3)
 
@@ -182,7 +182,7 @@ class GameNodeTest {
      * channel's frames — the engine will eventually stall if it loses a frame it needs.
      */
     @Test
-    fun incomingGuardSingleCollectorSupportedByMuxSeam() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun incomingGuardSingleCollectorSupportedByMuxSeam() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val (hostSeam, joinSeam) = seats(loom, 2)
         val voters = setOf(NodeId(hostSeam.selfId.value), NodeId(joinSeam.selfId.value))
@@ -233,7 +233,7 @@ class GameNodeTest {
      * once the roster is already full is the separate, deferred concern in #587.)
      */
     @Test
-    fun quorumModeReturnsAtQuorumThenAdmitsLatecomer() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun quorumModeReturnsAtQuorumThenAdmitsLatecomer() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         // Only the host and one joiner are present initially: 2 of peerCount=3 = quorum.
         val hostSeam = loom.host(Pattern("game-bootstrap"))
@@ -275,7 +275,7 @@ class GameNodeTest {
     }
 
     @Test
-    fun rosterGivenThreePeersQuorumTwo() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun rosterGivenThreePeersQuorumTwo() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val seams = seats(loom, 3)
         val voters = seams.map { NodeId(it.selfId.value) }.toSet()
@@ -301,7 +301,7 @@ class GameNodeTest {
      * connecting after that exit point must be rejected loud and fast.
      */
     @Test
-    fun joinAfterRosterFullThrowsRosterFullException() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun joinAfterRosterFullThrowsRosterFullException() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val (hostSeam, j1Seam) = seats(loom, 2)
 
@@ -336,7 +336,7 @@ class GameNodeTest {
      * Neither flow fires; the backstop must be the only signal.
      */
     @Test
-    fun joinWithNoAdmissionSignalThrowsJoinTimeoutException() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun joinWithNoAdmissionSignalThrowsJoinTimeoutException() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         // The joiner's seam connects to an empty loom — no host, so nobody ever admits it
         // or publishes admissionClosed. The backstop is the only signal.

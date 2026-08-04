@@ -10,9 +10,9 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.test.Direction
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
@@ -23,7 +23,7 @@ class RoomGamePresenceTest {
 
     @Test
     fun `gameOverRoom presence surfaces the backing room's partition events`() =
-        runTest(timeout = 5.seconds) {
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
             var nowMs = 0L
             val clock = { Instant.fromEpochMilliseconds(nowMs) }
             fun tick() {

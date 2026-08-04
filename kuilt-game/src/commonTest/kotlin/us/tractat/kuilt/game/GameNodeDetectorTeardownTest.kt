@@ -16,9 +16,9 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.raft.NodeId
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
@@ -45,7 +45,7 @@ class GameNodeDetectorTeardownTest {
 
     @Test
     fun `cancelling the detector job tears down the inbound collector`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val self = PeerId("host")
             val target = PeerId("voter-1")
             val rawLiveness = MutableSharedFlow<Swatch>(extraBufferCapacity = 256)

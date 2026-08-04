@@ -19,13 +19,13 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Acceptance tests for [gameSpectate] — the permanent, non-voting learner entry point.
@@ -45,7 +45,7 @@ class GameSpectateTest {
      * - The spectator's [RaftRole] stays [RaftRole.Learner] for the entire session.
      */
     @Test
-    fun spectatorFollowsLiveGameButNeverVotes() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun spectatorFollowsLiveGameButNeverVotes() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val (hostSeam, j1Seam, spectateSeam) = seats(loom, 3)
 
@@ -89,7 +89,7 @@ class GameSpectateTest {
      * it MUST NOT consume a voter seat. The voter admission loop skips spectator NodeIds.
      */
     @Test
-    fun joinAfterRosterFullWithSpectatorStillThrowsRosterFullException() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun joinAfterRosterFullWithSpectatorStillThrowsRosterFullException() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val (hostSeam, j1Seam, spectateSeam) = seats(loom, 3)
 
@@ -129,7 +129,7 @@ class GameSpectateTest {
      * spectators-closed signal promptly, and [gameSpectate] observes it loud and fast.
      */
     @Test
-    fun spectateWithSpectatorsDisabledThrowsSpectatorsClosedException() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun spectateWithSpectatorsDisabledThrowsSpectatorsClosedException() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val (hostSeam, spectateSeam) = seats(loom, 2)
 
@@ -161,7 +161,7 @@ class GameSpectateTest {
      * spectator throws.
      */
     @Test
-    fun spectateOverCapThrowsSpectatorsClosedException() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun spectateOverCapThrowsSpectatorsClosedException() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val (hostSeam, j1Seam, s1Seam, s2Seam) = seats(loom, 4)
 
@@ -202,7 +202,7 @@ class GameSpectateTest {
      * diagnose "host gone / crashed" from "spectators are disabled / full".
      */
     @Test
-    fun spectateWithNoHostThrowsSpectateTimeoutException() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun spectateWithNoHostThrowsSpectateTimeoutException() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val spectateSeam = loom.host(Pattern("game-bootstrap"))
 

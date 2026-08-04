@@ -31,11 +31,11 @@ import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.test.FakeRaftNode
 import us.tractat.kuilt.session.SeamRoomFactory
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.fabric.InMemoryRoomFabric
 import kotlin.random.Random
 import kotlin.test.assertEquals
 import kotlin.time.Clock
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
@@ -65,7 +65,7 @@ import kotlin.time.Instant
  * `seam.incoming` (ADR-034 single-collection). A second collector races the Raft engine.
  */
 @Suppress("unused")
-internal fun sampleGameHostJoin() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+internal fun sampleGameHostJoin() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
     val loom = InMemoryLoom()
     val hostSeam = loom.host(Pattern("tic-tac-toe"))
     val joinSeam = loom.join(InMemoryTag("player-2"))
@@ -137,7 +137,7 @@ internal fun sampleGameHostJoin() = runTest(StandardTestDispatcher(), timeout = 
  * join without a fixed roster) see [sampleGameHostJoin].
  */
 @Suppress("unused")
-internal fun sampleGameNode() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+internal fun sampleGameNode() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
     val loom = InMemoryLoom()
     val seam1 = loom.host(Pattern("my-game"))
     val seam2 = loom.join(InMemoryTag("player-2"))
@@ -177,7 +177,7 @@ internal fun sampleGameNode() = runTest(StandardTestDispatcher(), timeout = 5.se
  * [GameSession.appChannel]) is identical to the phone-host placement.
  */
 @Suppress("unused")
-internal fun sampleServerCorePlacement() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+internal fun sampleServerCorePlacement() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
     val loom = InMemoryLoom()
     val server1 = loom.host(Pattern("hosted-game"))
     val server2 = loom.join(InMemoryTag("server-2"))
@@ -220,7 +220,7 @@ internal fun sampleServerCorePlacement() = runTest(StandardTestDispatcher(), tim
  * optimistically applied local moves on top); the UI can observe it directly.
  */
 @Suppress("unused")
-internal fun sampleSpeculativeSequencer() = runTest(timeout = 5.seconds) {
+internal fun sampleSpeculativeSequencer() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
     // A trivially pure game: state is a list of committed integers.
     val counterGame = object : SpeculativeGame<List<Int>, Int> {
         override fun apply(state: List<Int>, action: Int): List<Int> = state + action
@@ -264,7 +264,7 @@ internal fun sampleSpeculativeSequencer() = runTest(timeout = 5.seconds) {
  * to peers over a [us.tractat.kuilt.core.Seam].
  */
 @Suppress("unused")
-internal fun sampleTurnSequencer() = runTest(timeout = 5.seconds) {
+internal fun sampleTurnSequencer() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
     @Serializable data class Move(val row: Int, val col: Int)
 
     val node = FakeRaftNode()
@@ -301,7 +301,7 @@ internal fun sampleTurnSequencer() = runTest(timeout = 5.seconds) {
  * not replayed. Layer your own reliability on top if you need at-least-once delivery.
  */
 @Suppress("unused")
-internal fun sampleGameChat() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+internal fun sampleGameChat() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
     val loom = InMemoryLoom()
     val seamAlice = loom.host(Pattern("my-game"))
     val seamBob = loom.join(InMemoryTag("bob"))
@@ -365,7 +365,7 @@ internal fun sampleGameChat() = runTest(StandardTestDispatcher(), timeout = 5.se
  * absent from that room's fanout and membership.
  */
 @Suppress("unused")
-internal fun sampleGameRooms() = runTest(StandardTestDispatcher(), timeout = 10.seconds) {
+internal fun sampleGameRooms() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
     val dispatcher = requireNotNull(coroutineContext[kotlin.coroutines.ContinuationInterceptor])
     val fabric = InMemoryRoomFabric(backgroundScope, dispatcher, random = Random(0))
     val clock = { Instant.fromEpochMilliseconds(0) }
@@ -424,7 +424,7 @@ internal fun sampleGameRooms() = runTest(StandardTestDispatcher(), timeout = 10.
  * [RoomGameSession.close], never `room.leave()` directly.
  */
 @Suppress("unused")
-internal fun sampleGameOverRoom() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+internal fun sampleGameOverRoom() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
     val loom = InMemoryLoom()
     val clock = { Instant.fromEpochMilliseconds(0) }
     fun factory() = SeamRoomFactory(loom, backgroundScope, clock)

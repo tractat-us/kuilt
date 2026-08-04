@@ -24,6 +24,7 @@ import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.fabric.InMemoryRoomFabric
 import kotlin.coroutines.ContinuationInterceptor
@@ -31,7 +32,6 @@ import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Gating tests for the game-per-room composition ([gameHostedRoom] / [gameJoinRoom] /
@@ -56,7 +56,7 @@ class GameRoomTest {
      * and a player in one room is structurally invisible to the other.
      */
     @Test
-    fun oneServerRunsTwoIsolatedServerCoreGames() = runTest(StandardTestDispatcher(), timeout = 15.seconds) {
+    fun oneServerRunsTwoIsolatedServerCoreGames() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor])
         val fabric = InMemoryRoomFabric(backgroundScope, dispatcher, random = Random(1))
         val core = setOf(NodeId("server"))
@@ -133,7 +133,7 @@ class GameRoomTest {
      * CRDT converges spoke→hub→spoke exactly as on a dedicated `gameHosted` star.
      */
     @Test
-    fun hostedRoomRelaysAppChannelBetweenPlayers() = runTest(StandardTestDispatcher(), timeout = 15.seconds) {
+    fun hostedRoomRelaysAppChannelBetweenPlayers() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor])
         val fabric = InMemoryRoomFabric(backgroundScope, dispatcher, random = Random(2))
         val aliceLoom = fabric.clientLoom(PeerId("alice"), Random(31))

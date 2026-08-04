@@ -16,6 +16,7 @@ import us.tractat.kuilt.core.fabric.LinkAdmission
 import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.core.withPrincipal
 import us.tractat.kuilt.gossip.GossipSeam
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
 import us.tractat.kuilt.test.fabric.connectionPair
@@ -24,7 +25,6 @@ import kotlin.coroutines.CoroutineContext
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
@@ -42,7 +42,7 @@ class GameHostedAttestationTest {
 
     @Test
     fun principalsLandOnTheSessionAndSpoofedHelloNeverJoins() =
-        runTest(StandardTestDispatcher(), timeout = 30.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val dispatcher = coroutineContext[ContinuationInterceptor]!!
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(0) }
             val source = InMemoryConnectionSource()

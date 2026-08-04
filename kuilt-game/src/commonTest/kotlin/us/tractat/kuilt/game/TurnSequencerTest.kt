@@ -21,11 +21,11 @@ import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.Snapshot
 import us.tractat.kuilt.raft.test.FakeRaftNode
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 class TurnSequencerTest {
 
@@ -51,7 +51,7 @@ class TurnSequencerTest {
     // ── events: committed actions ───────────────────────────────────────────────
 
     @Test
-    fun proposedActionAppearsOnEventsFlow() = runTest(timeout = 5.seconds) {
+    fun proposedActionAppearsOnEventsFlow() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         node.setRole(RaftRole.Leader)
         val seq = sequencer(node)
@@ -64,7 +64,7 @@ class TurnSequencerTest {
     }
 
     @Test
-    fun proposeReturnsAssignedIndexAndAction() = runTest(timeout = 5.seconds) {
+    fun proposeReturnsAssignedIndexAndAction() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         node.setRole(RaftRole.Leader)
         val seq = sequencer(node)
@@ -76,7 +76,7 @@ class TurnSequencerTest {
     }
 
     @Test
-    fun proposedActionRoundTripsSerializer() = runTest(timeout = 5.seconds) {
+    fun proposedActionRoundTripsSerializer() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         node.setRole(RaftRole.Leader)
         val seq = sequencer(node)
@@ -89,7 +89,7 @@ class TurnSequencerTest {
     }
 
     @Test
-    fun multipleActionsAreOrderedByIndex() = runTest(timeout = 5.seconds) {
+    fun multipleActionsAreOrderedByIndex() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         node.setRole(RaftRole.Leader)
         val seq = sequencer(node)
@@ -105,7 +105,7 @@ class TurnSequencerTest {
     }
 
     @Test
-    fun externalCommitAppearsOnEventsFlow() = runTest(timeout = 5.seconds) {
+    fun externalCommitAppearsOnEventsFlow() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         val seq = sequencer(node)
 
@@ -119,7 +119,7 @@ class TurnSequencerTest {
     }
 
     @Test
-    fun indexedActionReflectsRaftLogIndex() = runTest(timeout = 5.seconds) {
+    fun indexedActionReflectsRaftLogIndex() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         node.setRole(RaftRole.Leader)
         val seq = sequencer(node)
@@ -132,7 +132,7 @@ class TurnSequencerTest {
     }
 
     @Test
-    fun propose_fromForwardingFollower_commits() = runTest(timeout = 5.seconds) {
+    fun propose_fromForwardingFollower_commits() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         // Simulate forwarding: follower node succeeds (as a real forwarding RaftNode would).
         node.proposeBehavior = { command -> node.pushCommitted(command) }
@@ -145,7 +145,7 @@ class TurnSequencerTest {
     }
 
     @Test
-    fun propose_onLeadershipLost_propagatesLeadershipLostException() = runTest(timeout = 5.seconds) {
+    fun propose_onLeadershipLost_propagatesLeadershipLostException() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         node.setRole(RaftRole.Leader)
         val raftCause = LeadershipLostException("lost during test")
@@ -161,7 +161,7 @@ class TurnSequencerTest {
     // ── (a) apply-side dedup: same DedupKey ⇒ exactly one admitted ───────────────
 
     @Test
-    fun duplicateDedupKeyAdmittedExactlyOnceThroughClientSessionTable() = runTest(timeout = 5.seconds) {
+    fun duplicateDedupKeyAdmittedExactlyOnceThroughClientSessionTable() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         val seq = sequencer(node)
 
@@ -182,7 +182,7 @@ class TurnSequencerTest {
     }
 
     @Test
-    fun distinctDedupKeysAllAdmitted() = runTest(timeout = 5.seconds) {
+    fun distinctDedupKeysAllAdmitted() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         val seq = sequencer(node)
 
@@ -202,7 +202,7 @@ class TurnSequencerTest {
     // ── (b) install surfacing: Committed.Install ⇒ TurnEvent.Reset ───────────────
 
     @Test
-    fun installSurfacesAsResetEvent() = runTest(timeout = 5.seconds) {
+    fun installSurfacesAsResetEvent() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         val seq = sequencer(node)
 
@@ -217,7 +217,7 @@ class TurnSequencerTest {
     }
 
     @Test
-    fun unkeyedCommittedEntryFailsLoud() = runTest(timeout = 5.seconds) {
+    fun unkeyedCommittedEntryFailsLoud() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         val seq = sequencer(node)
 
@@ -229,7 +229,7 @@ class TurnSequencerTest {
     }
 
     @Test
-    fun installInterleavesInOrderWithCommittedEntries() = runTest(timeout = 5.seconds) {
+    fun installInterleavesInOrderWithCommittedEntries() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         val seq = sequencer(node)
 
@@ -248,7 +248,7 @@ class TurnSequencerTest {
     // ── (c) propose stamps the dedup key ─────────────────────────────────────────
 
     @Test
-    fun proposeWithRequestIdStampsDedupKeyOnCommittedEvent() = runTest(timeout = 5.seconds) {
+    fun proposeWithRequestIdStampsDedupKeyOnCommittedEvent() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode(clientId = ClientId("durable-x"))
         node.setRole(RaftRole.Leader)
         val seq = sequencer(node)
@@ -260,7 +260,7 @@ class TurnSequencerTest {
     }
 
     @Test
-    fun proposeWithRequestId_overForwardingFollower_ridesTheKeyUnchanged() = runTest(timeout = 5.seconds) {
+    fun proposeWithRequestId_overForwardingFollower_ridesTheKeyUnchanged() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         // A follower forwards the proposal to the leader; the durable (clientId, requestId) must
         // ride the forward hop unchanged — this is the cross-crash exactly-once mechanism of #616.
         val node = FakeRaftNode(clientId = ClientId("durable-fwd"))
@@ -274,7 +274,7 @@ class TurnSequencerTest {
     }
 
     @Test
-    fun durableReplayOfSameRequestIdYieldsExactlyOneApply() = runTest(timeout = 5.seconds) {
+    fun durableReplayOfSameRequestIdYieldsExactlyOneApply() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         // End-to-end headline guarantee: a durable client that replays the SAME requestId after a
         // crash (here: a second propose under the same clientId+requestId) commits twice on the wire
         // but applies exactly once when folded through a ClientSessionTable.
@@ -295,7 +295,7 @@ class TurnSequencerTest {
     }
 
     @Test
-    fun proposeWithRequestIdReturnsStampedIndexedAction() = runTest(timeout = 5.seconds) {
+    fun proposeWithRequestIdReturnsStampedIndexedAction() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode(clientId = ClientId("durable-x"))
         node.setRole(RaftRole.Leader)
         val seq = sequencer(node)
@@ -307,7 +307,7 @@ class TurnSequencerTest {
     }
 
     @Test
-    fun autoSerialProposeStillStampsADedupKey() = runTest(timeout = 5.seconds) {
+    fun autoSerialProposeStillStampsADedupKey() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode(clientId = ClientId("auto-ish"))
         node.setRole(RaftRole.Leader)
         val seq = sequencer(node)
@@ -321,7 +321,7 @@ class TurnSequencerTest {
     // ── (d) clientId stability: same client across proposes ──────────────────────
 
     @Test
-    fun proposesUnderTheSameNodeShareClientId() = runTest(timeout = 5.seconds) {
+    fun proposesUnderTheSameNodeShareClientId() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode(clientId = ClientId("durable-stable"))
         node.setRole(RaftRole.Leader)
         val seq = sequencer(node)
