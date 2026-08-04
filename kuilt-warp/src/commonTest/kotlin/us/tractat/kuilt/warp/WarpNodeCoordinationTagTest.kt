@@ -29,13 +29,13 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.test.FakeRaftNode
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.drainAntiEntropy
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 private fun schedulerClock(scheduler: TestCoroutineScheduler): () -> Instant =
@@ -65,7 +65,7 @@ class WarpNodeCoordinationTagTest {
      * registry (the free path). The coordination-free path is unchanged — same results, same routing.
      */
     @Test
-    fun freeTaskRoutesToFreeExecutor() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun freeTaskRoutesToFreeExecutor() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("coord-tag-free"))
         val seamB = loom.join(InMemoryTag("b"))
@@ -117,7 +117,7 @@ class WarpNodeCoordinationTagTest {
      * coordinated executor, not the free registry.
      */
     @Test
-    fun coordinatedTaskRoutesToCoordinatedExecutor() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun coordinatedTaskRoutesToCoordinatedExecutor() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("coord-tag-coord"))
         val seamB = loom.join(InMemoryTag("b"))
@@ -170,7 +170,7 @@ class WarpNodeCoordinationTagTest {
      * to their respective paths without interference.
      */
     @Test
-    fun bothRoutingsCoexistOnSameNode() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun bothRoutingsCoexistOnSameNode() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("coord-tag-both"))
         val seamB = loom.join(InMemoryTag("b"))

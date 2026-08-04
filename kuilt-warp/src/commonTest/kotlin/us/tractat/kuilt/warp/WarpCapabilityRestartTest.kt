@@ -20,13 +20,13 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.FakeSeam
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.drainAntiEntropy
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 class WarpCapabilityRestartTest {
@@ -52,7 +52,7 @@ class WarpCapabilityRestartTest {
      * set, i.e. no permanent divergence. Fails on `main` (B stays pinned to the dead GPU slot).
      */
     @Test
-    fun restartedPeerReconvergesWithoutTtlAdvance() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun restartedPeerReconvergesWithoutTtlAdvance() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
 
         // Observer B.

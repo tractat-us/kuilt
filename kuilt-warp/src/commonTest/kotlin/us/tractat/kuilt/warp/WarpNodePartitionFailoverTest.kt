@@ -32,13 +32,13 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
@@ -95,7 +95,7 @@ class WarpNodePartitionFailoverTest {
      */
     @Test
     fun partitionedPeerTasksReHomeToSuccessor() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("partition-failover"))
             val seamB = loom.join(InMemoryTag("b"))
@@ -234,7 +234,7 @@ class WarpNodePartitionFailoverTest {
      */
     @Test
     fun departedPeerDetectorIsFullyStopped_noPingLeak() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("churn-test"))
             val seamB = loom.join(InMemoryTag("b"))

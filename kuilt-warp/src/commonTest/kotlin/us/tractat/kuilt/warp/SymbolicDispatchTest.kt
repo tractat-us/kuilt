@@ -26,6 +26,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.drainAntiEntropy
 import kotlin.test.Test
@@ -33,7 +34,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 private val DISPATCH_QUILTER_CONFIG = QuilterConfig(
@@ -66,7 +66,7 @@ class SymbolicDispatchTest {
      */
     @Test
     fun descriptorIsDispatchedByNameAndExecutedOnOwner() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("symbolic-dispatch"))
             val seamB = loom.join(InMemoryTag("b"))
@@ -121,7 +121,7 @@ class SymbolicDispatchTest {
      */
     @Test
     fun ownerWithoutTheOpStandsByEvenWhenEnqueuerHasIt() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("symbolic-standby"))
             val seamB = loom.join(InMemoryTag("b"))

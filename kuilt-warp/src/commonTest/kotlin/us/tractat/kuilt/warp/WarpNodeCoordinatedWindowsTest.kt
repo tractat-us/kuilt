@@ -37,6 +37,7 @@ import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.raft.LeadershipLostException
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.test.FakeRaftNode
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.drainAntiEntropy
 import kotlin.test.Test
@@ -44,7 +45,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 private val WINDOWS_TEST_QUILTER_CONFIG = QuilterConfig(
@@ -93,7 +93,7 @@ class WarpNodeCoordinatedWindowsTest {
      * intent-map entry forever. Coordinated tasks must bypass the intent election entirely.
      */
     @Test
-    fun coordinatedTaskLeavesNoIntentEntry() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun coordinatedTaskLeavesNoIntentEntry() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val seam = InMemoryLoom().host(Pattern("coord-intent-leak"))
         val fakeRaft = FakeRaftNode(initialRole = RaftRole.Leader)
         val executions = atomic(0)
@@ -131,7 +131,7 @@ class WarpNodeCoordinatedWindowsTest {
      */
     @Test
     fun deposedLeaderDoesNotExecuteCommittedCoordinatedTask() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val seam = InMemoryLoom().host(Pattern("coord-deposed-leader"))
             val fakeRaft = FakeRaftNode(initialRole = RaftRole.Leader)
             fakeRaft.readIndexBehavior = { throw LeadershipLostException("deposed: no quorum at this term") }
@@ -164,7 +164,7 @@ class WarpNodeCoordinatedWindowsTest {
      */
     @Test
     fun commitObservedWithoutLeadershipIsRedrivenOnAcquisition() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val seam = InMemoryLoom().host(Pattern("coord-redrive"))
             val fakeRaft = FakeRaftNode(initialRole = RaftRole.Follower)
             // Simulate Raft §8 forwarding: a remote leader commits the proposal and the entry

@@ -20,11 +20,11 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.quilter.QuilterConfig
 import kotlin.test.Test
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.drainAntiEntropy
 import kotlin.test.assertEquals
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /** Returns a clock that reads virtual time from [scheduler], keeping it in sync with `delay()` calls. */
@@ -65,7 +65,7 @@ class WarpIntentRegisterTest {
 
     /** RingWithIntent still executes every task exactly once and converges results. */
     @Test
-    fun ringWithIntentExecutesEveryTaskOnce() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun ringWithIntentExecutesEveryTaskOnce() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("intent-once"))
         val seamB = loom.join(InMemoryTag("b"))
@@ -104,7 +104,7 @@ class WarpIntentRegisterTest {
     @Test
     fun ringWithIntent_executorFailure_unclainsAndNodeRemainsAlive() = runTest(
         StandardTestDispatcher(),
-        timeout = 5.seconds,
+        timeout = TEST_WEDGE_BACKSTOP,
     ) {
         val loom = InMemoryLoom()
         val seam = loom.host(Pattern("intent-failure"))
@@ -166,7 +166,7 @@ class WarpIntentRegisterTest {
     @Test
     fun staleSelfRingClaim_winnerFollowsThrough_taskStillExecutes() = runTest(
         StandardTestDispatcher(),
-        timeout = 5.seconds,
+        timeout = TEST_WEDGE_BACKSTOP,
     ) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("intent-stale-claim")) // peer-1 — the lowest PeerId
@@ -235,7 +235,7 @@ class WarpIntentRegisterTest {
 
     /** A completed task's intent entry is tombstoned (register tracks only pending work). */
     @Test
-    fun completedTaskClearsItsIntentEntry() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun completedTaskClearsItsIntentEntry() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("intent-gc"))
         val clock = schedulerClock(testScheduler)

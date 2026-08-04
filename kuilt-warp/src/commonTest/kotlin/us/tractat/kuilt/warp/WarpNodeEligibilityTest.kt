@@ -26,6 +26,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.drainAntiEntropy
 import kotlin.test.Test
@@ -33,7 +34,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 private val ELIG_OP = OpId("echo")
@@ -79,7 +79,7 @@ class WarpNodeEligibilityTest {
      * GPU/us-east affinity.
      */
     @Test
-    fun eligibleSetBitIdenticalAcrossPeers() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun eligibleSetBitIdenticalAcrossPeers() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("elig-identical"))
         val seamB = loom.join(InMemoryTag("b"))
@@ -119,7 +119,7 @@ class WarpNodeEligibilityTest {
      * computation, proving placement hashes over the eligible subset — not the whole roster.
      */
     @Test
-    fun noLandingOnIneligiblePeer() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun noLandingOnIneligiblePeer() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("elig-no-ineligible"))
         val seamB = loom.join(InMemoryTag("b"))
@@ -174,7 +174,7 @@ class WarpNodeEligibilityTest {
      * already-completed task is neither re-executed nor lost; its single result is stable.
      */
     @Test
-    fun staleOrChangingViewAbsorbedByReHomeAndDedup() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun staleOrChangingViewAbsorbedByReHomeAndDedup() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("elig-rehome"))
         val seamB = loom.join(InMemoryTag("b"))
@@ -229,7 +229,7 @@ class WarpNodeEligibilityTest {
      * identical to the pre-H8 ring-assigned path — capability advertisements present but ignored.
      */
     @Test
-    fun noAffinityReproducesTodaysPlacementBitForBit() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun noAffinityReproducesTodaysPlacementBitForBit() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("elig-noaffinity"))
         val seamB = loom.join(InMemoryTag("b"))
