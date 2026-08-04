@@ -507,6 +507,9 @@ internal class WireTapSeam(
     override val state: StateFlow<SeamState> get() = delegate.state
     override val capability: StateFlow<TransportCapability> get() = delegate.capability
 
+    /** [limitFrames]'s ceiling when one is set, else the delegate's own. */
+    override val maxPayloadBytes: Int? get() = frameLimit.value ?: delegate.maxPayloadBytes
+
     /**
      * The delegate's inbound stream, minus [silence]d senders, merged with anything [inject]ed.
      *

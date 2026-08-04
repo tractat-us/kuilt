@@ -35,6 +35,23 @@ class FramedTest {
         assertFailsWith<FrameTooLargeException> { conn.send(ByteArray(17)) }
     }
 
+    /**
+     * The ceiling is **published**, not only enforced (#2047).
+     *
+     * Enforcement alone leaves every layer above to discover the limit by overflowing it, which on
+     * a star is a payload that fits until the moment the relay wraps it. Publishing it is what lets
+     * the seam above report a payload budget and the layers above that reserve room for their own
+     * headers.
+     */
+    @Test
+    fun publishesItsFrameCeilingSoTheLayersAboveCanBudget() = runTest {
+        val wire = Buffer()
+        assertAll(
+            { assertEquals(16, framed(source = wire, sink = wire, maxFrameSize = 16).maxFrameBytes) },
+            { assertEquals(DEFAULT_MAX_FRAME_SIZE, framed(source = wire, sink = wire).maxFrameBytes) },
+        )
+    }
+
     @Test
     fun cleanEofAtFrameBoundaryCompletesIncoming() = runTest {
         val wire = Buffer()

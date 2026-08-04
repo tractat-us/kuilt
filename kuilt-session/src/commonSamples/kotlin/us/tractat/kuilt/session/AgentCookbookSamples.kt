@@ -16,6 +16,29 @@ import kotlin.time.Duration.Companion.seconds
 // Keep each function tiny and self-contained; the cookbook copies the body.
 
 /**
+ * Chunk to the room's published budget instead of to the fabric's frame size.
+ *
+ * [Room.maxPayloadBytes] already holds back what the relay envelope costs, so a payload that
+ * respects it survives whichever route the frame takes. Sizing to the fabric's own limit instead is
+ * the #2047 trap: it fits until the roster diverges and the frame is relayed.
+ */
+public suspend fun chunkToTheRoomsBudgetSample(room: Room, peer: PeerId, blob: ByteArray) {
+    // null means "this fabric names no ceiling" — unknown, not unbounded. Pick your own chunk size.
+    val budget = room.maxPayloadBytes ?: DEFAULT_CHUNK_BYTES
+    blob.asSequence().chunked(budget) { chunk ->
+        chunk.toByteArray()
+    }.forEach { chunk ->
+        // In budget by construction, so this cannot raise PayloadTooLarge. Past the budget, sendTo
+        // reports it (addressed sends do) while broadcast drops it with a log (they are lossy by
+        // contract) — neither surfaces the fabric's own oversize error.
+        room.sendTo(peer, chunk)
+    }
+}
+
+/** A chunk size for a fabric that publishes no ceiling of its own. Small enough for any transport. */
+private const val DEFAULT_CHUNK_BYTES: Int = 16 * 1024
+
+/**
  * Reconnect after a transport drop by presenting the saved [ResumeToken], instead of
  * re-joining fresh (which would reset the slot). Don't re-track the grace window yourself.
  */

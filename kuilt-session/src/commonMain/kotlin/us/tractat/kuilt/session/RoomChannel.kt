@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.PayloadTooLarge
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
@@ -57,6 +58,15 @@ public object RoomChannel {
     public val CHANNEL_PREFIX: Byte = RoomFramePrefix.Channel.byte
 
     /**
+     * Bytes every channel frame spends on its header: [CHANNEL_PREFIX] plus the 2-byte sub-id.
+     *
+     * Doubles as the classifier's minimum length — a payload shorter than a whole header cannot be
+     * a channel frame — and as what a channel view holds back from the room's own payload budget
+     * (#2047).
+     */
+    internal const val HEADER_BYTES: Int = 3
+
+    /**
      * Derive a 2-byte wire sub-id from a channel [name].
      *
      * The derivation is:
@@ -81,11 +91,11 @@ public object RoomChannel {
 
     /** Returns `true` if [bytes] is a channel frame (starts with [CHANNEL_PREFIX]). */
     internal fun isChannelFrame(bytes: ByteArray): Boolean =
-        bytes.size >= 3 && bytes[0] == CHANNEL_PREFIX
+        bytes.size >= HEADER_BYTES && bytes[0] == CHANNEL_PREFIX
 
     /** Returns `true` if [swatch] carries a channel frame. Does not allocate. */
     internal fun isChannelFrame(swatch: Swatch): Boolean =
-        swatch.payloadSize >= 3 && swatch.byteAt(0) == CHANNEL_PREFIX
+        swatch.payloadSize >= HEADER_BYTES && swatch.byteAt(0) == CHANNEL_PREFIX
 
     /** Extracts the sub-id from a channel frame (bytes 1–2). Requires [isChannelFrame]. */
     internal fun subIdOf(bytes: ByteArray): Short =
@@ -97,16 +107,16 @@ public object RoomChannel {
 
     /** Wraps [payload] in channel framing for sub-id [subId]. */
     internal fun frame(subId: Short, payload: ByteArray): ByteArray {
-        val out = ByteArray(payload.size + 3)
+        val out = ByteArray(payload.size + HEADER_BYTES)
         out[0] = CHANNEL_PREFIX
         out[1] = (subId.toInt() ushr 8).toByte()
         out[2] = subId.toByte()
-        payload.copyInto(out, destinationOffset = 3)
+        payload.copyInto(out, destinationOffset = HEADER_BYTES)
         return out
     }
 
     /** Strips the 3-byte channel header from [swatch], returning the payload-only [Swatch]. */
-    internal fun stripped(swatch: Swatch): Swatch = swatch.dropFirst(3)
+    internal fun stripped(swatch: Swatch): Swatch = swatch.dropFirst(HEADER_BYTES)
 }
 
 /**
@@ -153,6 +163,17 @@ internal class RoomChannelSeam(
     override val state: StateFlow<SeamState> get() = room.seamState
 
     /**
+     * The room's own budget less this view's [RoomChannel.HEADER_BYTES] framing (#2047).
+     *
+     * A channel view is a [Seam] over a [Room], and both layers add bytes on the way down: the room
+     * may wrap the frame in a relay envelope, and this view has already prefixed it with a channel
+     * header. Each subtracts its own cost, so the number a `Quilter` over this view reads is one it
+     * can actually fill.
+     */
+    override val maxPayloadBytes: Int?
+        get() = room.maxPayloadBytes?.let { (it - RoomChannel.HEADER_BYTES).coerceAtLeast(0) }
+
+    /**
      * Incoming channel frames from admitted peers, payload de-framed.
      *
      * Filters [sharedRaw] to swatches whose sender is an admitted member and whose
@@ -169,8 +190,19 @@ internal class RoomChannelSeam(
     override suspend fun broadcast(payload: ByteArray) =
         room.broadcast(RoomChannel.frame(subId, payload))
 
-    override suspend fun sendTo(peer: PeerId, payload: ByteArray) =
+    /**
+     * Checked against [maxPayloadBytes] here rather than left to [room], so the error names the
+     * bytes the *caller* passed. Delegating would report the framed size against the room's budget
+     * — both numbers three larger than the pair this view published, for no reason the caller could
+     * see.
+     */
+    override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+        val budget = maxPayloadBytes
+        if (budget != null && payload.size > budget) {
+            throw PayloadTooLarge(payload.size, budget, RELAY_ENVELOPE_BUDGET + RoomChannel.HEADER_BYTES)
+        }
         room.sendTo(peer, RoomChannel.frame(subId, payload))
+    }
 
     /** No-op — the Room owns the lifecycle. */
     override suspend fun close(reason: CloseReason) = Unit

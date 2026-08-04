@@ -84,6 +84,13 @@ internal class LinkSeam(
     private val stateGate = SeamStateGate(SeamState.Woven)
     override val state: StateFlow<SeamState> = stateGate.state
 
+    /**
+     * The conn's own frame ceiling, unchanged: this seam writes the caller's `payload` to
+     * [Connection.send] byte for byte — there is no per-frame header on this hop — so the payload
+     * budget and the frame budget are the same number (#2047).
+     */
+    override val maxPayloadBytes: Int? get() = conn.maxFrameBytes
+
     private val inbox = Spool<Swatch>(policy)
     override val incoming: Flow<Swatch> = inbox.incoming
 

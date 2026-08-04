@@ -30,6 +30,7 @@ import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.PayloadTooLarge
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Principal
@@ -2956,6 +2957,16 @@ internal class SeamRoom(
     override suspend fun broadcast(bytes: ByteArray) {
         val terminal = lock.withLock { hostLost || closed }
         if (terminal) return
+        if (overBudget(bytes)) {
+            // Dropped, not thrown: this call is lossy-without-error by contract, and the caller
+            // most likely to hit the ceiling is a Quilter's timer-driven anti-entropy broadcast,
+            // which a throw would silently kill (#2047).
+            logger.debug {
+                "room.send.drop self=${selfId.value} reason=payload-over-budget " +
+                    "size=${bytes.size} budget=$maxPayloadBytes dest=Everyone"
+            }
+            return
+        }
         val host = relayHostOrNull() ?: return seam.broadcast(bytes)
         try {
             seam.sendTo(host, RelayEnvelope.encode(RelayEnvelope(selfId, RelayDest.Everyone, bytes)))
@@ -2994,8 +3005,36 @@ internal class SeamRoom(
     override suspend fun sendTo(peer: PeerId, bytes: ByteArray) {
         val terminal = lock.withLock { hostLost || closed }
         if (terminal) return
+        val budget = maxPayloadBytes
+        // Reported, not dropped: an addressed send names a peer, so an over-budget payload is
+        // information the caller asked for — and it gets the budget rather than the fabric's own
+        // frame error for framing it never asked for (#2047).
+        if (budget != null && bytes.size > budget) {
+            throw PayloadTooLarge(bytes.size, budget, RELAY_ENVELOPE_BUDGET)
+        }
         val host = relayHostOrNull() ?: return seam.sendTo(peer, bytes)
         seam.sendTo(host, RelayEnvelope.encode(RelayEnvelope(selfId, RelayDest.One(peer), bytes)))
+    }
+
+    /**
+     * The fabric's frame ceiling less what a relay envelope may cost — subtracted
+     * **unconditionally**, whatever this member's current routing is.
+     *
+     * Keying the budget on `relayHostOrNull() != null` would make it a TOCTOU trap: routing flips
+     * the instant the roster diverges from `Seam.peers`, so a caller that read a mesh-sized budget
+     * and then sent could still be relayed, and overflow. A member entering its reconnect window is
+     * enough to move it. The stable, conservative bound is the only one a caller can act on — the
+     * same reasoning that has `RoutedRaftTransport` subtract its header budget unconditionally.
+     *
+     * `null` when the fabric names no ceiling: unknown, not unbounded.
+     */
+    override val maxPayloadBytes: Int?
+        get() = seam.maxPayloadBytes?.let { (it - RELAY_ENVELOPE_BUDGET).coerceAtLeast(0) }
+
+    /** Whether [bytes] exceeds [maxPayloadBytes]. Always `false` on a fabric with no known ceiling. */
+    private fun overBudget(bytes: ByteArray): Boolean {
+        val budget = maxPayloadBytes ?: return false
+        return bytes.size > budget
     }
 
     /**
