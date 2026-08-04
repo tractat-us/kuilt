@@ -14,6 +14,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.test.FaultySeam
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -159,7 +160,7 @@ class MembershipEventDropContractTest {
      */
     @Test
     fun `a sustained silent drop pins both sides of the presence arc`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val d = drop(config)
 
             // Airplane mode: frames vanish both ways, seam untouched.
@@ -280,7 +281,7 @@ class MembershipEventDropContractTest {
      */
     @Test
     fun `a silent drop that heals in-window recovers on both sides and never resumes`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val d = drop(config)
 
             d.joinerLink.partition()

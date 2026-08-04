@@ -17,6 +17,7 @@ import us.tractat.kuilt.core.RoomAuthorizer
 import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.RoomId
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
 import us.tractat.kuilt.test.fabric.connectionPair
 import kotlin.coroutines.ContinuationInterceptor
@@ -25,7 +26,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 class TransportCloseWindowTest {
@@ -38,7 +38,7 @@ class TransportCloseWindowTest {
 
     @Test
     fun `host opens reconnect window on joiner transport close`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val dispatcher = coroutineContext[ContinuationInterceptor]!!
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(0L) }
 
@@ -90,7 +90,7 @@ class TransportCloseWindowTest {
 
     @Test
     fun `host reconnect window honors heartbeatConfig reconnectWindow`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val dispatcher = coroutineContext[ContinuationInterceptor]!!
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(0L) }
 
@@ -144,7 +144,7 @@ class TransportCloseWindowTest {
 
     @Test
     fun `joiner resumes within the window after transport close`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val dispatcher = coroutineContext[ContinuationInterceptor]!!
             var clockMs = 0L
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
@@ -217,7 +217,7 @@ class TransportCloseWindowTest {
 
     @Test
     fun `reconnect does not re-emit Joined for an already-admitted peer`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val dispatcher = coroutineContext[ContinuationInterceptor]!!
             var clockMs = 0L
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
@@ -300,7 +300,7 @@ class TransportCloseWindowTest {
 
     @Test
     fun `window expires to Left PartitionExpired when no resume`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val dispatcher = coroutineContext[ContinuationInterceptor]!!
             var clockMs = 0L
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }

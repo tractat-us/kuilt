@@ -31,6 +31,7 @@ import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.RoomId
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
 import us.tractat.kuilt.test.fabric.connectionPair
 import kotlin.coroutines.ContinuationInterceptor
@@ -43,7 +44,6 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
@@ -75,7 +75,7 @@ class JoinerReconnectTest {
 
     @Test
     fun `joiner auto-resumes over a resumable base within the reconnect window`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val dispatcher = coroutineContext[ContinuationInterceptor]!!
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(0L) }
 
@@ -150,7 +150,7 @@ class JoinerReconnectTest {
 
     @Test
     fun `joiner falls to HostLost when the base cannot re-weave within the window`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val dispatcher = coroutineContext[ContinuationInterceptor]!!
             var clockMs = 0L
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
@@ -219,7 +219,7 @@ class JoinerReconnectTest {
 
     @Test
     fun `host reject during resume relabels HostLost as Refused`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val dispatcher = coroutineContext[ContinuationInterceptor]!!
             var clockMs = 0L
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
@@ -304,7 +304,7 @@ class JoinerReconnectTest {
 
     @Test
     fun `joiner torn before admit goes straight to HostLost`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(0L) }
 
             // A joiner with no host to admit it: it never mints a resume token, so a tear must
@@ -339,7 +339,7 @@ class JoinerReconnectTest {
 
     @Test
     fun `joiner torn before admit reports HostLost Unrecoverable`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(0L) }
 
             // A joiner with no host to admit it: it never mints a resume token, so a tear takes the
@@ -371,7 +371,7 @@ class JoinerReconnectTest {
 
     @Test
     fun `joiner auto-resumes on repeated in-session tears`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(0L) }
             val h = reconnectHarness(clock)
 
@@ -402,7 +402,7 @@ class JoinerReconnectTest {
 
     @Test
     fun `the host-liveness detector is silenced during a reconnect and restarted on success`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             // The host detector runs on the SAME reconnectWindow budget as the reconnect. If it
             // keeps running during the reconnect it drives host-liveness on a DIFFERENT coroutine,
             // so under a multi-threaded dispatcher its PeerLost can race an in-flight resume into a
@@ -450,7 +450,7 @@ class JoinerReconnectTest {
 
     @Test
     fun `leave during an active reconnect stops the loop`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             // A leave() while a reconnect window is open must cancel the reconnect. Otherwise the
             // loop keeps re-weaving until the window elapses (each re-weave reopens the channel
             // leave() just closed) and then fires a spurious HostLost for a room that left cleanly.
@@ -483,7 +483,7 @@ class JoinerReconnectTest {
 
     @Test
     fun `a discarded re-wove seam over a non-conforming loom is closed`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             // SeamRoomFactory.join always supplies a reweave, so a joiner can sit over a
             // NON-resumable loom whose join() mints a NEW, unrelated seam. On a tear the reconnect
             // re-weaves once, detects the original seam is still Torn (the same-instance-heal check),

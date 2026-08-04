@@ -34,6 +34,7 @@ import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.partition.RoomId
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
 import us.tractat.kuilt.test.fabric.connectionPair
 import kotlin.coroutines.ContinuationInterceptor
@@ -102,7 +103,7 @@ class FastReconnectRaceTest {
 
     @Test
     fun `a resume refused for the whole window reports Refused and still retried`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(0L) }
             val h = gatedHostHarness(clock)
 
@@ -134,7 +135,7 @@ class FastReconnectRaceTest {
 
     @Test
     fun `a resume refused before the host opens its window is retried into success`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(0L) }
             val h = gatedHostHarness(clock)
 
@@ -181,7 +182,7 @@ class FastReconnectRaceTest {
      */
     @Test
     fun `a terminal reject surfaces HostLost without burning the joiner's window`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             var clockMs = 0L
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
             val h = gatedHostHarness(

@@ -23,6 +23,7 @@ import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.FaultySeam
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
 import us.tractat.kuilt.test.fabric.connectionPair
@@ -86,7 +87,7 @@ class WindowLevelTest {
      */
     @Test
     fun hostEmitsWindowOpenedForAnUnresponsiveJoiner() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val pair = hostFaultedPair()
             val windows = mutableListOf<MembershipEvent.WindowOpened>()
             backgroundScope.launch {
@@ -141,7 +142,7 @@ class WindowLevelTest {
      */
     @Test
     fun aLateSubscriberStillReadsTheDeadlineOffRoster() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val pair = joinerFaultedPair()
 
             // Deliberately NO events collector before or during the partition.
@@ -196,7 +197,7 @@ class WindowLevelTest {
      */
     @Test
     fun joinerHostTimeoutOpensAWindowWithADeadline() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val pair = joinerFaultedPair()
             val partitioned = mutableListOf<MembershipEvent.Partitioned>()
             val windows = mutableListOf<MembershipEvent.WindowOpened>()
@@ -259,7 +260,7 @@ class WindowLevelTest {
      */
     @Test
     fun hostPausedRefinesALocallyEstimatedDeadline() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val mesh = mesh(
                 hostConfig = fastConfig.copy(timeout = 700.milliseconds, reconnectWindow = 30.seconds),
                 joinerConfig = fastConfig.copy(reconnectWindow = 5.seconds),
@@ -327,7 +328,7 @@ class WindowLevelTest {
      */
     @Test
     fun hostPausedAnnouncesTheRefinedDeadline() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val mesh = mesh(
                 hostConfig = fastConfig.copy(timeout = 700.milliseconds, reconnectWindow = 30.seconds),
                 joinerConfig = fastConfig.copy(reconnectWindow = 5.seconds),
@@ -424,7 +425,7 @@ class WindowLevelTest {
      */
     @Test
     fun localDetectionDoesNotClobberAnEarlierHostPausedDeadline() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val mesh = mesh(
                 hostConfig = fastConfig.copy(reconnectWindow = 30.seconds),
                 joinerConfig = fastConfig.copy(timeout = 900.milliseconds, reconnectWindow = 2.seconds),
@@ -498,7 +499,7 @@ class WindowLevelTest {
      */
     @Test
     fun reDetectionReEmitsWindowOpenedWithoutRegressingTheDeadline() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val mesh = mesh(
                 hostConfig = fastConfig.copy(reconnectWindow = 30.seconds),
                 joinerConfig = fastConfig.copy(timeout = 900.milliseconds, reconnectWindow = 2.seconds),
@@ -574,7 +575,7 @@ class WindowLevelTest {
      */
     @Test
     fun joinerShowsItsHostPartitionedInTheRoster() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val h = resumableJoiner()
             val windows = mutableListOf<MembershipEvent.WindowOpened>()
             backgroundScope.launch {
@@ -634,7 +635,7 @@ class WindowLevelTest {
      */
     @Test
     fun aResumedJoinerShowsItsHostConnectedAgain() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val h = resumableJoiner()
 
             h.tearTransport()
@@ -692,7 +693,7 @@ class WindowLevelTest {
      */
     @Test
     fun aTearAfterATimeoutMovesTheDeadlineButNotFirstDetection() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val h = faultedResumableJoiner()
             val windows = mutableListOf<MembershipEvent.WindowOpened>()
             val partitions = mutableListOf<MembershipEvent.Partitioned>()

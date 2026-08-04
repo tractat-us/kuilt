@@ -15,6 +15,7 @@ import us.tractat.kuilt.core.RoomAuthorizer
 import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.RoomId
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
 import us.tractat.kuilt.test.fabric.connectionPair
 import kotlin.coroutines.ContinuationInterceptor
@@ -22,7 +23,6 @@ import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 class GracefulLeaveTest {
@@ -35,7 +35,7 @@ class GracefulLeaveTest {
 
     @Test
     fun `clean joiner leave emits Left Normal immediately with no window`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val dispatcher = coroutineContext[ContinuationInterceptor]!!
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(0L) }
 

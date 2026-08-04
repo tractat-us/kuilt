@@ -23,6 +23,7 @@ import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.FaultySeam
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
 import us.tractat.kuilt.test.fabric.connectionPair
 import kotlin.coroutines.ContinuationInterceptor
@@ -33,7 +34,6 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
@@ -133,7 +133,7 @@ class JoinerHostTimeoutRecoveryTest {
 
     @Test
     fun `joiner-host silence recovers via Recovered when frames resume in-window - no reweave`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             // The detector's recovery check is silenceMs = clock() - lastSeen, so the injected clock
             // must ADVANCE in lockstep with virtual time (a frozen clock never registers recovery).
             var clockMs = 0L
@@ -182,7 +182,7 @@ class JoinerHostTimeoutRecoveryTest {
 
     @Test
     fun `joiner-host sustained silence falls to HostLost WindowExpired - no reweave`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             var clockMs = 0L
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
             val h = timeoutHarness(clock)

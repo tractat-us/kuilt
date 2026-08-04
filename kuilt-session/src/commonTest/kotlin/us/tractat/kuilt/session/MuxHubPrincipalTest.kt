@@ -9,12 +9,12 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Principal
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.fabric.InMemoryRoomFabric
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
@@ -34,7 +34,7 @@ class MuxHubPrincipalTest {
 
     @Test
     fun `mux-hub admit carries the connection's verified principal onto the admitted member`(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor]) {
                 "no dispatcher (ContinuationInterceptor) in coroutine context"
             }

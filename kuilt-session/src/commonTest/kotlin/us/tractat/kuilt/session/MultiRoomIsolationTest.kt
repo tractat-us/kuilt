@@ -9,6 +9,7 @@ import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.fabric.InMemoryRoomFabric
 import kotlin.coroutines.ContinuationInterceptor
@@ -35,7 +36,7 @@ class MultiRoomIsolationTest {
 
     @Test
     fun `two host rooms over one server loom stay isolated and a joiner reaches only its room`(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor]) {
                 "no dispatcher (ContinuationInterceptor) in coroutine context"
             }
