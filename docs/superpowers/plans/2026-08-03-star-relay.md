@@ -76,6 +76,9 @@ Every task's requirements implicitly include this section.
   E2E tests.
 - **Cache-disabled verification before auto-merge:** `--rerun-tasks`, and confirm tasks are `EXECUTED`
   not `FROM-CACHE`.
+- **There is a mandatory REVIEW GATE after Task 5** — full build, an early anti-vacuity check, the
+  mutation set run early, and an independent adversarial review. Tasks 6–9 do not start until it
+  passes. See the gate's own section for why it is not a formality.
 
 ### Module placement: NO new dependency on `:kuilt-core` — a deliberate deviation from the spec
 
@@ -2201,6 +2204,69 @@ Part of #1994.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
+---
+
+## ⛔ REVIEW GATE — stop here. Do not start Task 6 until this passes.
+
+**Why this gate exists, stated so it is not waved through.** Two independent review rounds have each
+found a defect class the previous round missed, and **both landed in the same place**: the interaction
+between the relay and `SeamRoom`'s existing invariants. Revision 1 shipped a co-joiner `hostPeerId`
+takeover past a normal review. Revision 2 — written specifically to fix that — shipped a change that
+would have stopped a joiner's frames reaching the host at all, and did so *while passing its own test
+set*, because the test set had no positive control asserting the host receives anything.
+
+That is not a run of bad luck; it is a property of this task. Task 5 touches the one method every
+inbound room frame passes through (`dispatchIncoming`), reorders a guard chain, adds a second writer,
+adds a second inbound flow, and changes `RoomChannelSeam`'s constructor. The blast radius is the whole
+session layer, and the failure mode is *silent non-delivery* — which is #1994's own symptom, so a
+regression looks exactly like the bug not being fixed yet.
+
+**Do not fold this into the end-of-branch review.** By then Tasks 6–9 are built on top, and a design
+fault found there costs the rebuild of everything above it.
+
+- [ ] **Gate 1 — the full build actually ran, and was not cached**
+
+```bash
+JAVA_HOME=$HOME/.sdkman/candidates/java/21.0.5-tem timeout 600 ./gradlew build --rerun-tasks
+```
+
+Confirm the test-compile tasks show `EXECUTED`, not `FROM-CACHE`. A `:kuilt-session`-scoped build is a
+false green — `ClusterClient` rides `Room.channel("raft")`, which this task changes underneath it.
+
+- [ ] **Gate 2 — the anti-vacuity check, early**
+
+Run Task 7's `StarQuilterConvergenceTest` **now**, ahead of its own task, and run it both ways: as-is
+(must PASS) and with `relayHostOrNull()` forced to `return null` (must FAIL). If it passes both ways
+the relay is not doing the work and everything downstream is measuring nothing. Record both outputs.
+
+- [ ] **Gate 3 — the mutation set, early, on the guards Task 5 introduced**
+
+Run **M1–M5 and M6–M8** from Task 8 now rather than at the end. These are the guards whose ordering is
+the known hazard (the relay arm fires *before* `isAdmittedPeer`), and a surviving mutant here is a
+design fault, not a missing test — it is much cheaper to learn that before Tasks 6–9 exist. Abort on a
+non-zero build exit **before** parsing any results XML.
+
+- [ ] **Gate 4 — an independent adversarial review of the diff**
+
+Dispatch a `code-reviewer` on **opus** over `git diff origin/main...HEAD` for Task 5's commit, briefed
+with:
+
+- the spec (`docs/superpowers/specs/2026-08-03-star-relay-design.md`, revision 2) and this plan's
+  revision-3 defect table, so it knows what has already been gotten wrong twice;
+- the standing question: **"which existing `SeamRoom` invariant does this change break?"** — that is
+  where both prior defects lived. Name the invariants explicitly: `admittedById` excludes `selfId`
+  while `_rosterPeers` includes it; `rawIncoming` feeds both channel views and liveness detectors;
+  `admitFanOuts`'s growth bound assumes membership transitions only; guard order in
+  `dispatchIncoming`; `hostPeerId`'s consumers (`handleFarewell`, `handlePaused`, `handleResumeAck`,
+  `HostLost`, `runDetectorRouteWatcher`);
+- the instruction to check for **silent non-delivery** specifically — a path where a frame is dropped
+  with only a debug log and no test would notice.
+
+**If Gate 4 returns a blocking finding, fix it and re-run Gates 1–3 before proceeding.** If it returns
+nothing blocking, say so plainly in the PR and continue.
+
+Iain asked for this gate explicitly (2026-08-03). It is not optional and it is not a formality.
+
 ---
 
 ### Task 6: Protocol version 2, and close the `isSupported(null)` carve-out
