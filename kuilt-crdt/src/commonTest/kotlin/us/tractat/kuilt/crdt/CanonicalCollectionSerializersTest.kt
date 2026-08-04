@@ -124,6 +124,51 @@ class CanonicalCollectionSerializersTest {
         )
     }
 
+    /**
+     * The [Map] half of [tiedElementsKeepInputOrder], and **not** covered by it.
+     *
+     * `sortedByCanonicalKey` has two overloads — one over an [Iterable], one over a [Map] — and
+     * [tiedElementsKeepInputOrder] reaches only the first, through [CanonicalSetSerializer].
+     * Mutation-checked: reversing the input before the sort in the [Map] overload alone leaves the
+     * whole of `:kuilt-crdt` and `:kuilt-quilter` green, including all twelve golden vectors, so
+     * that overload's stability was load-bearing and unpinned. Same shape of blind spot as the
+     * single-entry `VersionVector` of #2010 — the property held, nothing was checking.
+     *
+     * It is reachable on public API: [CanonicalMapSerializer] takes any `KSerializer<K>`, and a
+     * consumer key type whose serializer emits the same leaves for two distinct values — [Sparse]
+     * here — makes the order decide the bytes.
+     */
+    @Test
+    fun tiedMapKeysKeepInputOrder() {
+        val ser = CanonicalMapSerializer(SparseSerializer, Long.serializer())
+        val aFirst = cbor.encodeToByteArray(ser, linkedMapOf(Sparse("x", null) to 1L, Sparse(null, "x") to 2L))
+        val bFirst = cbor.encodeToByteArray(ser, linkedMapOf(Sparse(null, "x") to 2L, Sparse("x", null) to 1L))
+
+        assertAll(
+            {
+                assertNotEquals(
+                    aFirst.toList(),
+                    bFirst.toList(),
+                    "precondition: the tie must be observable in the bytes, else this proves nothing",
+                )
+            },
+            {
+                assertEquals(
+                    listOf(Sparse("x", null), Sparse(null, "x")),
+                    cbor.decodeFromByteArray(ser, aFirst).keys.toList(),
+                    "a tied map key must retain input order",
+                )
+            },
+            {
+                assertEquals(
+                    listOf(Sparse(null, "x"), Sparse("x", null)),
+                    cbor.decodeFromByteArray(ser, bFirst).keys.toList(),
+                    "a tied map key must retain input order under the opposite input too",
+                )
+            },
+        )
+    }
+
     @Test
     fun tiedElementsKeepInputOrder() {
         // The sort is a total PREORDER, so tied elements are ordered by the sort's stability
