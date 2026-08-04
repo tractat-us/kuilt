@@ -185,7 +185,7 @@ class FanOutHeadOfLineTest {
      * and asserts on the first, and therefore passes on a build where the wedge blocks everything
      * behind it.
      *
-     * The cost being pinned is not hypothetical: `admitFanOuts`'s budget is
+     * The cost being pinned is not hypothetical: an admit lane's send budget is
      * `reconnectWindow + timeout`, 10.6 s here and 75 s on the shipped [us.tractat.kuilt.liveness.HeartbeatConfig]
      * defaults, per wedged recipient ahead of you.
      */

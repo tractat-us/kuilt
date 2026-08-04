@@ -302,7 +302,10 @@ private const val MEMBERSHIP_EVENT_REPLAY = 64
  * one wedged spoke and under-provisioned for N healthy ones at the same time. Keeping 64 per lane
  * makes the constant mean what it says. The cost is that the room's worst-case buffered frames are
  * now `64 × spokes` rather than 64; that is the honest price of isolation, it is still bounded, and
- * it is bounded by a quantity (the roster) the room already bounds.
+ * it is bounded by a quantity (the roster) the room already bounds — `relayLanes.keys` is a **subset
+ * of** `admittedById.keys`, which the lane factories' membership check and `discardLanes` maintain
+ * jointly. Without that check a departed peer's lane would survive its eviction and the bound would
+ * be the roster *plus every peer that ever left*, i.e. no bound at all on a long-lived host.
  */
 private const val RELAY_FORWARD_CAPACITY = 64
 
@@ -2292,19 +2295,37 @@ internal class SeamRoom(
     private val relayLanes = mutableMapOf<PeerId, RelayLane>()
 
     /**
-     * The relay lane for [recipient], created (and its writer launched) on first use — or null once
-     * the room is terminal, so no lane can outlive [leave].
+     * The relay lane for [recipient], created (and its writer launched) on first use — or null when
+     * [recipient] is no longer a member, or once the room is terminal.
      *
      * Lazy rather than created at admit time: a peer that is never relayed to costs nothing, and the
      * lane is by construction created before the first frame is enqueued on it, so per-recipient
      * order holds from the first frame without a start-up ordering rule.
+     *
+     * **The membership re-check is load-bearing, because the relay path takes [lock] TWICE.**
+     * [handleRelayFrame] resolves its recipients under one acquisition ([resolveRecipients]), drops
+     * the lock, and [enqueueRelayForward] takes it again to get here — so on a multi-threaded scope an
+     * eviction can land in the gap, and without this line `getOrPut` would mint a lane, and a writer,
+     * for a peer [removeFromRoster] has already reaped. Nothing would ever collect it: the eviction
+     * that would have called [discardLanes] has been and gone, and a later duplicate eviction returns
+     * early at `removed ?: return`. That is a leaked writer plus a 64-slot channel per departed peer
+     * on a long-lived host, and — worse — a re-admit of the same [PeerId] would be handed the *stale*
+     * lane, defeating exactly the fresh-lane property [discardLanes] exists to provide. This is not
+     * reachable under a single-threaded test dispatcher (no suspension point separates the two
+     * acquisitions), so the guard is not test-pinned and must not be "simplified" away.
+     *
+     * [admitLaneFor] carries the same check even though its one caller resolves membership and the
+     * lane in a *single* critical section and so cannot reach it. The invariant
+     * `lanes.keys ⊆ admittedById.keys` is worth having as a local property of the factory rather than
+     * an emergent property of one caller's locking shape — which is the same reason this file guards
+     * state with explicit primitives instead of relying on where coroutines happen to run.
      *
      * Callers must hold [lock] — the same discipline (and the same "launch a coroutine from inside
      * the critical section" shape) as [startDetector]. The launched body's first act is to receive
      * from an empty channel, so even an eager dispatcher runs it only as far as that suspension.
      */
     private fun relayLaneFor(recipient: PeerId): RelayLane? {
-        if (closed) return null
+        if (closed || recipient !in admittedById) return null
         return relayLanes.getOrPut(recipient) {
             val queue = Channel<RelayForward>(
                 capacity = RELAY_FORWARD_CAPACITY,
@@ -2483,17 +2504,24 @@ internal class SeamRoom(
     private val admitLanes = mutableMapOf<PeerId, AdmitLane>()
 
     /**
-     * The admit lane for [recipient], created (and its writer launched) on first use — or null once
-     * the room is terminal, so no lane can outlive [leave].
+     * The admit lane for [recipient], created (and its writer launched) on first use — or null when
+     * [recipient] is no longer a member, or once the room is terminal.
      *
      * Lazily, for the same reasons as [relayLaneFor]; see there. Ordering does not depend on when the
      * writer starts: the lane exists before the frame that created it is enqueued, and the channel is
      * unbounded, so anything queued before the writer is first dispatched is drained, not lost.
      *
+     * The membership check is **unreachable from the one caller** — [fanOutToOtherMembers] reads
+     * `admittedById.keys` and resolves every lane inside a *single* [lock] critical section, so a
+     * recipient it names is a member by construction. It is here anyway so
+     * `lanes.keys ⊆ admittedById.keys` is a local property of the factory rather than a fact about
+     * that caller's shape; see [relayLaneFor], whose path takes the lock twice and where the same
+     * line is genuinely load-bearing.
+     *
      * Callers must hold [lock].
      */
     private fun admitLaneFor(recipient: PeerId): Channel<AdmitFanOut>? {
-        if (closed) return null
+        if (closed || recipient !in admittedById) return null
         return admitLanes.getOrPut(recipient) {
             val queue = Channel<AdmitFanOut>(Channel.UNLIMITED)
             AdmitLane(queue, scope.launch { runAdmitFanOutWriter(recipient, queue) })
@@ -2854,11 +2882,14 @@ internal class SeamRoom(
     }
 
     private fun removeFromRoster(peerId: PeerId, reason: LeaveReason) {
-        // The fan-out lanes are torn down in the SAME critical section that removes the member, so a
-        // concurrent `fanOutToOtherMembers` either sees the peer (and resolves a lane that is still
-        // live) or does not see it at all — a lane can never be minted for a peer already gone. Tied
-        // to `removed != null` so a duplicate eviction cannot discard a lane a re-admit has since
-        // installed. See [discardLanes].
+        // The fan-out lanes are torn down in the SAME critical section that removes the member. That
+        // reaps every lane minted while the peer WAS a member; what stops a new one appearing after
+        // is the membership re-check in [admitLaneFor]/[relayLaneFor], not this line — the relay path
+        // resolves its recipients under a SEPARATE lock acquisition, so an eviction can land between
+        // the two and a check keyed only on `closed` would mint a lane for a peer already gone. The
+        // two together give the invariant `lanes.keys ⊆ admittedById.keys` at every point the lock is
+        // not held. Tied to `removed != null` so a duplicate eviction cannot discard a lane a re-admit
+        // has since installed. See [discardLanes].
         val removed = lock.withLock { admittedById.remove(peerId)?.also { discardLanes(peerId) } }
         removed ?: return // already removed, avoid duplicate Left events
         _roster.update { current -> current.filterNot { it.id == peerId }.toSet() }

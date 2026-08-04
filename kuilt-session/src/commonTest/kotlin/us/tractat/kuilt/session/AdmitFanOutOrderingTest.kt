@@ -359,7 +359,7 @@ class AdmitFanOutOrderingTest {
      * `runCatchingCancellable` rethrows every `CancellationException`, so guarding with it re-raised a
      * callee-minted one straight out of the per-recipient guard, the recipient loop, the queue loop and
      * the pump. And because the throwable *is* a cancellation, `scope.launch` **cancelled** the writer
-     * rather than failing it: no handler, no `state` change, no stack trace. [admitFanOuts] was never
+     * rather than failing it: no handler, no `state` change, no stack trace. The queue was never
      * closed, so every later `trySend` still reported success while every `Paused`/`Unpaused`/
      * `Farewell` for the room's life was enqueued and never sent — remote rosters diverging
      * permanently, silently, with the queue growing behind them.
