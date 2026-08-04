@@ -285,7 +285,7 @@ public class Fugue<V> private constructor(
     }
 
     /** Canonical sorted op list, cached across encodes. Used by [FugueSerializer]. */
-    internal val sortedOps: List<FugueOp<V>> by lazy { ops.sortedWith(compareBy { it.id }) }
+    internal val sortedOps: List<FugueOp<V>> by lazy { ops.sortedWith(fugueOpComparator()) }
 
     // ── Public API ────────────────────────────────────────────────────────────
 

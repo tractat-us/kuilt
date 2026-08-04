@@ -43,13 +43,18 @@ internal class FugueSerializer<V>(vSerializer: KSerializer<V>) : KSerializer<Fug
     }
 
     /**
-     * Serialize ops in canonical [FugueId] ascending order so that two replicas
-     * holding the same logical state (same op set, different delivery order) produce
-     * identical bytes. [FugueId] is [Comparable] — ascending lamport, then replicaId.
+     * Serialize ops in canonical order so that two replicas holding the same logical state (same
+     * op set, different delivery order) produce identical bytes. See [fugueOpComparator].
      *
-     * [FugueOp.id] is available on the sealed interface, so the sort key is uniform
-     * regardless of op variant. [FugueOp.Compact] uses [FugueId.HEAD] as its sentinel
-     * id and thus sorts before all real Insert/Remove ops — stable and deterministic.
+     * [FugueOp.id] is the primary key and is available on the sealed interface, so it applies
+     * uniformly across op variants: [FugueId] is [Comparable] — ascending lamport, then replicaId —
+     * and [FugueOp.Compact] reports the [FugueId.HEAD] sentinel, so it sorts before all real
+     * Insert/Remove ops.
+     *
+     * `id` alone is **not** deterministic, which is what [fugueOpComparator] exists to fix: it is
+     * shared by an Insert and its Remove, and by *every* [FugueOp.Compact], and a stable sort
+     * resolves those ties by the merge/arrival order of the `ops` set rather than by the value
+     * (#1978).
      *
      * [Fugue.lamport] is omitted from the wire; it is derived on decode via
      * [deriveLamport].
@@ -96,6 +101,46 @@ internal class FugueSerializer<V>(vSerializer: KSerializer<V>) : KSerializer<Fug
 }
 
 /**
+ * Orders [FugueOp]s canonically for [Fugue.sortedOps] — a **total** order, where the bare
+ * `compareBy { it.id }` this replaced was only a preorder.
+ *
+ * [FugueOp.id] stays the primary key, so [FugueOp.Compact] still sorts before every real op via
+ * the [FugueId.HEAD] sentinel and no already-tie-free log changes bytes. Two further terms resolve
+ * the ties `id` alone leaves, both of which are reachable and both of which made two *equal*
+ * `Fugue`s encode differently (#1978):
+ *
+ * - **Op type.** [FugueOp.Insert] and the [FugueOp.Remove] that tombstones it share an id. A
+ *   stable sort then falls back to the iteration order of `ops` — arrival order — so a consumer
+ *   that received the Remove first (out-of-order op delivery; [Fugue.apply] permits it, and
+ *   [Fugue.causalDots]' KDoc contemplates it) diverged on the wire from one that received the
+ *   Insert first.
+ * - **Positions.** *Every* [FugueOp.Compact] reports [FugueId.HEAD], so any two of them tied, and
+ *   the fallback was the merge order of the `ops` `LinkedHashSet`. Two replicas that each compacted
+ *   before merging reach this on the plain `piece` path, with no adversary.
+ *
+ * [Rga] never had either hole: `RgaSerializer.opComparator` keys on the op type *first*.
+ */
+internal fun fugueOpComparator(): Comparator<FugueOp<*>> = Comparator { a, b ->
+    val byId = a.id.compareTo(b.id)
+    if (byId != 0) return@Comparator byId
+    val typeA = fugueOpTypeOrdinal(a)
+    val typeB = fugueOpTypeOrdinal(b)
+    if (typeA != typeB) return@Comparator typeA - typeB
+    if (a is FugueOp.Compact && b is FugueOp.Compact) {
+        compareCompactPositions(a.positions, b.positions)
+    } else {
+        0
+    }
+}
+
+/** Ordinal used for intra-id ordering: Insert=0, Remove=1, Compact=2 — mirrors `RgaSerializer`. */
+private fun fugueOpTypeOrdinal(op: FugueOp<*>): Int = when (op) {
+    is FugueOp.Insert -> 0
+    is FugueOp.Remove -> 1
+    is FugueOp.Compact -> 2
+}
+
+/**
  * Custom [KSerializer] for [FugueOp]`<V>` that threads [vSerializer] through
  * [FugueOp.Insert.value].
  *
@@ -112,11 +157,15 @@ internal class FugueOpSerializer<V>(
     private val idSerializer: KSerializer<FugueId> = FugueId.serializer()
     private val sideSerializer: KSerializer<FugueSide> = FugueSide.serializer()
     /**
-     * Canonical, **not** a plain `MapSerializer` — [Fugue] carries the [RgaOpSerializer] defect
-     * byte for byte: [Fugue.compact] derives [FugueOp.Compact.positions] from a tombstone set that
-     * [Fugue.piece] builds with `Set.plus`, so two replicas at the same logical state hold *equal*
+     * Canonical, **not** a plain `MapSerializer`: [Fugue.compact] derives
+     * [FugueOp.Compact.positions] from a tombstone set that [Fugue.piece] builds with `Set.plus` —
+     * a `LinkedHashSet` in merge order — so two replicas at the same logical state hold *equal*
      * `Compact` ops that a plain map serializer would write in two different orders, inside the
      * serialized `ops` set (#1978).
+     *
+     * This is the identical mechanism [RgaOpSerializer] documents, at the identical position. It
+     * canonicalises the order *within* one map only; the order *between* several `Compact` ops is
+     * [fugueOpComparator]'s job, and was a second, distinct hole in this type that [Rga] never had.
      */
     private val positionsSerializer: KSerializer<Map<FugueId, FugueId>> =
         CanonicalMapSerializer(idSerializer, idSerializer)

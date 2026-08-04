@@ -103,6 +103,37 @@ internal class OpLogEngine<Id : Any, Op : Any>(
 }
 
 /**
+ * Order two compaction records by the **full sorted key-list** of their position maps, compared
+ * lexicographically and then by length. Shared by `RgaSerializer` and `FugueSerializer`, which both
+ * need a deterministic order between several `Compact` ops in one log.
+ *
+ * A `Compact` op carries no element id of its own, so it cannot be ordered by the id that orders
+ * `Insert` and `Remove`. Surviving `Compact` ops on a well-formed replica have **disjoint** key
+ * sets — each id is compacted into at most one op — so `keys.minOrNull()` would already be
+ * tie-free. Walking the whole sorted key-list instead guards a malformed remote that violates the
+ * disjointness invariant, where `minOrNull()` could tie and fall back to set-iteration order: the
+ * exact nondeterminism #713 fixed. O(N) in the compacted-id count, and `Compact` ops are rare and
+ * small.
+ *
+ * Reads only `keys.sorted()`, never the maps' iteration order, so it composes with — rather than
+ * duplicates — the `CanonicalMapSerializer` that canonicalises the order *within* each map (#1978).
+ *
+ * **Residual tie.** Two `Compact` ops with equal key-lists but different values still compare
+ * equal and fall back to input order. That needs a malformed remote — a given id's recorded
+ * position is fixed when its `Insert` is created, so two well-formed replicas always agree on it.
+ */
+internal fun <Id : Comparable<Id>> compareCompactPositions(a: Map<Id, Id>, b: Map<Id, Id>): Int {
+    val keysA = a.keys.sorted()
+    val keysB = b.keys.sorted()
+    val minLen = minOf(keysA.size, keysB.size)
+    for (i in 0 until minLen) {
+        val cmp = keysA[i].compareTo(keysB[i])
+        if (cmp != 0) return cmp
+    }
+    return keysA.size - keysB.size
+}
+
+/**
  * Chain-walk [positions] from [start] to the nearest ancestor that is still
  * [present] — or the [head] sentinel. This is the positional-reroot resolution
  * shared by [Rga]'s `computeSequence` and [Fugue]'s `buildTree`: when an insert's
