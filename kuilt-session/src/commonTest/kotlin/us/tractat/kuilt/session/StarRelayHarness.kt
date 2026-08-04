@@ -40,8 +40,9 @@ import kotlin.time.Instant
  * The shared star fixture for #1994's relay: one host plus N spokes over the real hub fabric
  * ([InMemoryRoomFabric]), with every member's wire tapped.
  *
- * Modelled on `LivenessRouteGateTest.star()` — deliberately **not** on its `timeout = 5.seconds`,
- * which is the known-bad real-time-ceiling-on-a-virtual-time-test pattern (#1739/#1891). Callers
+ * Modelled on `LivenessRouteGateTest.star()`, but deliberately **not** on the real-time-ceiling-on-a-
+ * virtual-time-test pattern that fixture used to carry — a bare `timeout = 5.seconds`, since retired
+ * onto `TEST_WEDGE_BACKSTOP` (`:kuilt-test`) along with the rest of this module (#1739/#1891). Callers
  * use a generous named backstop instead.
  *
  * ## What the tap buys

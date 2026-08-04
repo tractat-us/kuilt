@@ -13,7 +13,8 @@ import kotlin.time.Duration.Companion.milliseconds
 /**
  * Self-tests for [MultiNodeWarpSim] — proves the harness works end-to-end.
  *
- * Each test runs under [warpSimTest] (`StandardTestDispatcher` + 5 s timeout). These are
+ * Each test runs under [warpSimTest] (`StandardTestDispatcher` + the [WARP_SIM_WEDGE_BACKSTOP]
+ * wedge backstop). These are
  * deliberately narrow: they validate the harness machinery (deterministic convergence,
  * ownership targeting, fail-fast dumps), not warp correctness — that lives in
  * `:kuilt-warp`'s own suite.
