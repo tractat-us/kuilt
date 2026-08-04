@@ -50,15 +50,6 @@ class QuilterRootDigestTest {
     private fun decoded(bytes: ByteArray): QuiltMessage<GSet<String>> =
         Cbor.decodeFromByteArray(msgSer, bytes)
 
-    /**
-     * Must mirror `Quilter.stateRoot()` exactly: the root is FNV-1a over the state encoded inside a
-     * synthetic `FullState` with [ReplicaId.Bottom] and `upThrough = 0L`, because the class holds no
-     * `KSerializer<S>`. Hashing the bare state here instead would silently take the mismatch branch.
-     */
-    private fun expectedRoot(state: GSet<String>): Long = fnv1a64(
-        Cbor.encodeToByteArray(msgSer, QuiltMessage.FullState(ReplicaId.Bottom, state, upThrough = 0L)),
-    )
-
     private fun rootDigest(root: Long): ByteArray =
         encode(QuiltMessage.RootDigest(sender = peerReplica, root = root, upThrough = digestUpThrough))
 
@@ -84,11 +75,13 @@ class QuilterRootDigestTest {
     @Test
     fun matchingRootAcksAndShipsNoState() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val seam = FakeSeam(selfId = self, initialPeers = setOf(self, peer))
-        quilterOn(seam, backgroundScope, GSet.of("x"))
+        val quilter = quilterOn(seam, backgroundScope, GSet.of("x"))
         testScheduler.runCurrent()
 
         val before = seam.directed.size
-        seam.deliver(peer, rootDigest(expectedRoot(GSet.of("x"))))
+        // The production root, not a hand-written mirror of its framing (#2015). What pins the
+        // framing is `QuilterStateRootGoldenVectorTest`; what this test pins is the match branch.
+        seam.deliver(peer, rootDigest(quilter.stateRootForTest()))
         testScheduler.runCurrent()
 
         val sentAfter = seam.directed.drop(before).map { it.first to decoded(it.second) }
