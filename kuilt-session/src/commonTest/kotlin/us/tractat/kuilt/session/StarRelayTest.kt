@@ -363,6 +363,77 @@ class StarRelayTest {
                         "an unresolvable dest must be DROPPED, never widened into a fan-out",
                     )
                 },
+                {
+                    // The co-spoke assertions above observe only that nobody *else* received it, and
+                    // they hold just as well if the host faithfully forwarded to "ghost" and the
+                    // send failed on its own. That is a different program: `Resolved.Exactly` for an
+                    // unknown dest would let an admitted spoke push bytes at any peer the host's
+                    // transport can address but its roster does not hold — a peer mid-handshake, or
+                    // one already evicted. The membership boundary is `admittedById`, so the refusal
+                    // has to be asserted where the decision is: no forward may leave the host at all.
+                    assertTrue(
+                        star.wireFramesTo(PeerId("ghost")).none { RelayEnvelope.isRelayFrame(it) },
+                        "a dest outside the roster must be refused at the resolver, not forwarded " +
+                            "and left to fail on the wire — otherwise a spoke can reach a " +
+                            "transport-connected non-member through the host",
+                    )
+                },
+            )
+        }
+
+    /**
+     * §T8b. A relayed frame is never delivered back to the peer that originated it — on either
+     * call shape.
+     *
+     * Two guards enforce this and neither had a test of its own. `Everyone` excludes the origin
+     * from the fan-out set; `One(self)` resolves to [Resolved.None] rather than falling through to
+     * the roster-membership arm, which would match (an origin *is* admitted) and forward the frame
+     * straight back.
+     *
+     * Both mutants survived the guard set of Task 8 as written, and the echo they produce is not
+     * cosmetic: `Room.incoming` would surface a frame credited to `selfId`, which a `Quilter` reads
+     * as a delta from a replica it *is*, and every consumer that assumes `sender != selfId` on an
+     * inbound frame is entitled to that by the direct path's behaviour.
+     *
+     * The `Everyone` half is currently caught only by an unrelated test's wire assertion in §T12,
+     * whose message speaks about the host's direct path — a red there names the wrong cause. This
+     * states the property where it belongs.
+     */
+    @Test
+    fun `a relayed frame is never echoed back to its origin`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 2)
+
+            star.joinerA.sendRelay(RelayDest.Everyone, appPayload("plain"))
+            star.joinerA.sendRelay(RelayDest.One(star.joinerAId), appPayload("to-self"))
+            testScheduler.runCurrent()
+
+            assertAll(
+                {
+                    // Positive control: without it every negative below is green on a build whose
+                    // relay drops everything.
+                    assertEquals(
+                        listOf("plain"),
+                        star.joinerB.appFramesFrom(star.joinerAId),
+                        "the co-spoke must still receive the broadcast — otherwise this test is " +
+                            "vacuous",
+                    )
+                },
+                {
+                    assertTrue(
+                        star.joinerA.appFrames().isEmpty(),
+                        "neither call shape may come back to the origin; observed " +
+                            "${star.joinerA.appFrames()}",
+                    )
+                },
+                {
+                    assertTrue(
+                        star.wireFramesTo(star.joinerAId).none { RelayEnvelope.isRelayFrame(it) },
+                        "the host must not forward either frame back to joiner-a at all — asserted " +
+                            "on the wire so the refusal is pinned at the resolver rather than at " +
+                            "the origin's own inbound gates",
+                    )
+                },
             )
         }
 
