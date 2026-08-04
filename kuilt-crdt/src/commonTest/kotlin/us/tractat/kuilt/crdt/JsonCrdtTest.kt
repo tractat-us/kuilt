@@ -10,7 +10,6 @@ import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
-import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -450,22 +449,25 @@ class JsonCrdtTest {
 
     // ── associativity (#2086) ─────────────────────────────────────────────────────
     //
-    // VERDICT: JsonCrdt.piece is NOT associative. It inherits ORMap's defect, at every
-    // depth of the document, and the value it loses or resurrects is a whole subtree.
+    // VERDICT: JsonCrdt.piece is associative. It was not — it inherited ORMap's defect at every
+    // depth of the document, and what it lost or resurrected was a whole subtree.
     //
-    // These tests characterise the divergence as it stands today rather than assert the law.
-    // When #2086 fixes ORMapEntry.join, each `assertNotEquals` below must flip to the
-    // `assertEquals` its message names — that is the point of writing them this way. The
-    // trajectory test at the bottom already asserts the *other* half of the law (with removes
-    // taken out of the generator, JsonCrdt is associative over ~39k causally-related triples),
-    // so the fix has a green target to aim at as well as a red one to clear.
+    // These tests were written against the broken version, each `assertEquals(left, right)` below
+    // standing where an `assertNotEquals` characterising the divergence used to. They are kept in
+    // that shape on purpose: each one names a *reachable document* whose two groupings must agree,
+    // so a future change that reintroduces the hazard fails at the depth it reintroduces it —
+    // scalar leaf, nested object, nested Rga — rather than only in the aggregate count.
     //
-    // Why the divergence exists: ORMapEntry.join calls `value.piece(other.value)` whenever both
-    // sides hold the key, while ORMap.remove drops the value and keeps only the retired tags in
-    // the context. So whether the pre-remove value is still standing next to the post-remove one
-    // at the moment the join runs — which is exactly what the bracketing decides — decides
-    // whether it comes back. JsonNode.Object wraps ORMap<String, JsonNode>, and JsonCrdt's own
-    // root is one, so the same hazard exists once per object in the document.
+    // Why the divergence existed: an ORMapEntry was a tag set beside ONE value, so a join keeping
+    // both operands' writes had to blend them into that slot, and retiring one of the two tags
+    // afterwards kept the blend. Each tag now carries the write made under it, so a write survives
+    // exactly as long as its tag. JsonNode.Object wraps ORMap<String, JsonNode> and JsonCrdt's own
+    // root is one, so the fix reaches every object in the document — JsonNode's own algebra needed
+    // no change, which pieceIsAssociativeOverCausallyRelatedTrajectories' control arm pins.
+    //
+    // NOTE the semantic this settles, visible in pieceIsAssociativeAcrossAConcurrentSetAndRemove:
+    // a remove takes the writes it observed with it. The key still survives a concurrent write
+    // (add-wins), holding that write alone.
 
     /**
      * A leaf whose register dot is minted by [writer].
@@ -501,13 +503,13 @@ class JsonCrdtTest {
      * **The counterexample.** One replica sets a key, removes it, and sets it again — a single
      * trajectory, so every state is causally reachable from the last and no dot is minted twice.
      *
-     * `(x⊔y)⊔z` retires the first write before the third state is ever consulted, so only the
-     * second scalar survives. `x⊔(y⊔z)` builds a right-hand state that holds the key again, so the
-     * outer join finds the key on *both* sides, merges the values, and the first scalar comes back
-     * from the dead. The two results are different documents, reachable from the same history.
+     * `(x⊔y)⊔z` retires the first write before the third state is ever consulted. `x⊔(y⊔z)` builds
+     * a right-hand state that holds the key again, so the outer join finds the key on *both* sides
+     * — and used to merge the values, bringing the first scalar back from the dead. It no longer
+     * can: the first write hangs off the tag `y` retired, and goes with it under either grouping.
      */
     @Test
-    fun pieceIsNotAssociativeAcrossARemoveBetweenTwoSets() {
+    fun pieceIsAssociativeAcrossARemoveBetweenTwoSets() {
         val first = JsonCrdt.empty(a).set("k", scalar("W1", "v1"))
         val removed = first.remove("k")
         val reSet = removed.set("k", scalar("W2", "v2"))
@@ -517,11 +519,10 @@ class JsonCrdtTest {
 
         assertAll(
             {
-                assertNotEquals(
+                assertEquals(
                     left,
                     right,
-                    "#2086: when this passes, ORMap's value merge has been fixed — replace this " +
-                        "test with assertEquals(left, right)\n  (x⊔y)⊔z = $left\n  x⊔(y⊔z) = $right",
+                    "the two groupings must agree\n  (x⊔y)⊔z = $left\n  x⊔(y⊔z) = $right",
                 )
             },
             {
@@ -533,9 +534,9 @@ class JsonCrdtTest {
             },
             {
                 assertEquals(
-                    setOf<JsonValue>(JsonValue.Str("v1"), JsonValue.Str("v2")),
+                    setOf<JsonValue>(JsonValue.Str("v2")),
                     right.scalarsAt("k"),
-                    "x⊔(y⊔z): the removed write is resurrected and merged into the re-set leaf",
+                    "x⊔(y⊔z): …and must stay removed here too, which is the whole of #2086",
                 )
             },
             {
@@ -550,15 +551,16 @@ class JsonCrdtTest {
     }
 
     /**
-     * The same defect with a **subtree** in the value position: the thing that survives or does not
-     * is an entire nested object, not one scalar.
+     * The same shape with a **subtree** in the value position: what survives or does not is an
+     * entire nested object, not one scalar.
      *
-     * This is the amplification `ORMap` alone does not show. `ORMap<String, GSet<String>>` loses a
-     * handful of elements; here `x⊔(y⊔z)` brings back every key of a discarded JSON object —
-     * arbitrarily deep, arbitrarily large — and grafts it onto the replacement.
+     * This is the amplification `ORMap` alone does not show, and it is why the blast radius was
+     * worth pinning separately. `ORMap<String, GSet<String>>` lost a handful of elements; here
+     * `x⊔(y⊔z)` used to bring back every key of a discarded JSON object — arbitrarily deep,
+     * arbitrarily large — and graft it onto the replacement.
      */
     @Test
-    fun aRemovedSubtreeIsResurrectedInOneGroupingOnly() {
+    fun aRemovedSubtreeStaysDiscardedInEveryGrouping() {
         val first = JsonCrdt.empty(a).set("obj", objectNode("W1", "p" to scalar("W1", "p1"), "r" to scalar("W1", "r1")))
         val removed = first.remove("obj")
         val reSet = removed.set("obj", objectNode("W2", "q" to scalar("W2", "q1")))
@@ -567,13 +569,7 @@ class JsonCrdtTest {
         val right = first.piece(removed.piece(reSet))
 
         assertAll(
-            {
-                assertNotEquals(
-                    left,
-                    right,
-                    "#2086: when this passes, replace with assertEquals — nested subtree case",
-                )
-            },
+            { assertEquals(left, right, "the two groupings must agree — nested subtree case") },
             {
                 assertEquals(
                     setOf("q"),
@@ -583,21 +579,22 @@ class JsonCrdtTest {
             },
             {
                 assertEquals(
-                    setOf("p", "r", "q"),
+                    setOf("q"),
                     (right["obj"] as? JsonNode.Object)?.map?.keys,
-                    "x⊔(y⊔z): the whole discarded subtree is grafted back onto the replacement",
+                    "x⊔(y⊔z): …and is not grafted back onto the replacement here either",
                 )
             },
         )
     }
 
     /**
-     * The defect **recurses**: it is not a property of the document root. Here the outer key is
-     * never removed — only a key of the nested object is — and the two groupings still disagree,
-     * one level down. A document `n` objects deep has `n` independent instances of this hazard.
+     * The hazard **recursed**: it was never a property of the document root. Here the outer key is
+     * never removed — only a key of the nested object is — and the two groupings used to disagree
+     * one level down, so a document `n` objects deep had `n` independent instances. The fix reaches
+     * every one of them, because every one of them is an `ORMap`.
      */
     @Test
-    fun theDivergenceRecursesIntoANestedObject() {
+    fun theFixRecursesIntoANestedObject() {
         val inner = ORMap.empty<String, JsonNode>().put(ReplicaId("Q"), "p", scalar("W1", "p1"))
         val innerRemoved = inner.remove("p")
         val innerReSet = innerRemoved.put(ReplicaId("Q"), "p", scalar("W2", "p2"))
@@ -611,10 +608,10 @@ class JsonCrdtTest {
 
         assertAll(
             {
-                assertNotEquals(
+                assertEquals(
                     x.piece(y).piece(z),
                     x.piece(y.piece(z)),
-                    "#2086: when this passes, replace with assertEquals — nested-ORMap case",
+                    "the two groupings must agree — nested-ORMap case",
                 )
             },
             {
@@ -626,21 +623,22 @@ class JsonCrdtTest {
             },
             {
                 assertEquals(
-                    setOf<JsonValue>(JsonValue.Str("p1"), JsonValue.Str("p2")),
+                    setOf<JsonValue>(JsonValue.Str("p2")),
                     (rightInner as? JsonNode.Leaf)?.register?.values,
-                    "x⊔(y⊔z), one level down: the inner removed write is resurrected",
+                    "x⊔(y⊔z), one level down: the inner removed write must not come back",
                 )
             },
         )
     }
 
     /**
-     * The value position is a **merging lattice of its own** — an [Rga] — and the resurrection
-     * therefore lands *inside* the sequence: the replacement array grows an element that a
-     * `remove` had already discarded, in one grouping and not the other.
+     * The value position is a **merging lattice of its own** — an [Rga] — so the resurrection used
+     * to land *inside* the sequence: the replacement array grew an element that a `remove` had
+     * already discarded, in one grouping and not the other. Pinned separately because a fix that
+     * only reached scalar leaves would still be wrong here.
      */
     @Test
-    fun aRemovedArrayElementIsResurrectedInOneGroupingOnly() {
+    fun aRemovedArrayElementStaysGoneInEveryGrouping() {
         val first = JsonCrdt.empty(a).set("xs", arrayNode("W1", scalar("W1", "e1")))
         val removed = first.remove("xs")
         val reSet = removed.set("xs", arrayNode("W2", scalar("W2", "e2")))
@@ -649,26 +647,24 @@ class JsonCrdtTest {
         val right = (first.piece(removed.piece(reSet))["xs"] as? JsonNode.Array)?.rga
 
         assertAll(
-            {
-                assertNotEquals(
-                    left,
-                    right,
-                    "#2086: when this passes, replace with assertEquals — Rga-valued case",
-                )
-            },
+            { assertEquals(left, right, "the two groupings must agree — Rga-valued case") },
             { assertEquals(1, left?.size, "(x⊔y)⊔z: the removed array stays gone") },
-            { assertEquals(2, right?.size, "x⊔(y⊔z): the removed array's element joins the replacement") },
+            { assertEquals(1, right?.size, "x⊔(y⊔z): …and does not rejoin the replacement here either") },
         )
     }
 
     /**
-     * A *concurrent* set and remove is **not** enough to diverge, which is what makes the
-     * counterexample specific rather than "removes are broken".
+     * A *concurrent* set and remove, which is where the semantics the fix settles are visible.
      *
-     * Here the setter still holds the key when it writes, so [ORMap.put] merges the old value into
-     * the new one locally and carries it along — every grouping sees the same value. The divergence
-     * needs the re-set to happen on a state where the key is *absent*, so the merge is skipped at
-     * write time and re-appears at join time only under one bracketing.
+     * **Add-wins holds on the key**: the setter's write is tagged with a dot the remover never saw,
+     * so the key is present under every grouping. What it holds is that write **alone**. `v1` hangs
+     * off the tag the remover retired and goes with it — the remover observed `v1` and removed it,
+     * and the setter added `v2` rather than re-adding `v1`.
+     *
+     * This assertion read `{v1, v2}` before #2086, because a `set` on a state that still held the
+     * key merged the old value into the new one locally, past the reach of any later remove. That
+     * carrying-along is precisely the blend that made the bracketing matter, so it could not be
+     * kept and the law recovered at the same time.
      */
     @Test
     fun pieceIsAssociativeAcrossAConcurrentSetAndRemove() {
@@ -679,10 +675,17 @@ class JsonCrdtTest {
         assertAll(
             *associativityChecks("concurrent set/remove", remover, setter, start),
             {
+                assertContains(
+                    remover.piece(setter).piece(start).keys,
+                    "k",
+                    "add-wins: the concurrent write survives the remove",
+                )
+            },
+            {
                 assertEquals(
-                    setOf<JsonValue>(JsonValue.Str("v1"), JsonValue.Str("v2")),
+                    setOf<JsonValue>(JsonValue.Str("v2")),
                     remover.piece(setter).piece(start).scalarsAt("k"),
-                    "add-wins: the concurrent write survives the remove, carrying the value it saw",
+                    "…holding its own write alone — the remover took the write it had observed",
                 )
             },
         )
@@ -732,26 +735,33 @@ class JsonCrdtTest {
     }
 
     /**
-     * **The general law over causally-related trajectories, run twice.** With `remove` taken out of
-     * the generator, `JsonCrdt.piece` is associative across all 39,232 ordered triples drawn from
-     * shared histories — objects, arrays, scalars, cross-type overwrites, merges and all. Put
-     * `remove` back and 280 of the same 39,232 triples diverge, about one in a hundred.
+     * **The general law over causally-related trajectories, run twice — and the residual
+     * measurement that makes the fix credible.**
      *
-     * Two assertions, and each can fail on its own:
-     * - the *control* arm pins the null result — no part of `JsonNode`'s own algebra (the type
-     *   precedence rule, `Rga.piece`, `MVRegister.piece`) is non-associative;
-     * - the *positive* arm pins the defect, and keeps the control honest — a generator that
-     *   degenerated into producing nothing would make both arms zero, and the second arm would then
-     *   red-light rather than pass vacuously.
+     * A fix validated on a named counterexample looks complete and is not. This test was written
+     * against the broken `ORMap` and measured **280 violations in 39,232 triples** with `remove` in
+     * the generator, against 0 with it taken out. Both arms are now **0**, over the same seed and
+     * the same triples, which is the claim worth making: not "the counterexample passes" but "no
+     * randomly-drawn ancestor triple diverges at all".
+     *
+     * The distinction matters because a partial fix scores well here. A prototype that gated
+     * `ORMapEntry.join`'s value merge on which side's tags survived — the obvious repair — removed
+     * only about a tenth of the violations, leaving 0.73% on `JsonCrdt` and 0.85% on a bare
+     * `ORMap<String, GSet<String>>` against 0.96% unfixed. Nothing but a residual count separates
+     * that from a real fix.
+     *
+     * The control arm keeps its own value: it pins that no part of `JsonNode`'s own algebra (the
+     * type precedence rule, `Rga.piece`, `MVRegister.piece`) was ever non-associative, so an
+     * `ORMap`-level fix is the whole fix. The four vacuity guards below are what stop both arms
+     * reading zero because the generator stopped generating.
      *
      * This is the coverage the existing surfaces cannot give. [pieceIsAssociative] and
      * [crossTypePieceIsAssociative] fold each of their three documents from a separate
      * `JsonCrdt.empty()`, so no state is ever a causal ancestor of another and no dot is ever
-     * superseded across the triple — and neither uses `remove` at all. `ORMapLawsPropertyTest`
-     * (jvmTest, jqwik) is built the same way and passes on the `ORMap` that *is* non-associative.
+     * superseded across the triple — and neither uses `remove` at all.
      */
     @Test
-    fun removeIsTheOnlySourceOfNonAssociativity() {
+    fun pieceIsAssociativeOverCausallyRelatedTrajectories() {
         val control = searchTrajectories(allowRemove = false)
         val withRemoves = searchTrajectories(allowRemove = true)
 
@@ -765,12 +775,13 @@ class JsonCrdtTest {
                 )
             },
             {
-                assertTrue(
-                    withRemoves.violations > 0,
-                    "#2086: no violation found in ${withRemoves.triples} triples *with* removes. " +
-                        "Either ORMap has been fixed — in which case assert 0 here and flip the " +
-                        "assertNotEquals tests above — or the generator stopped producing the " +
-                        "re-set-after-remove shape (${withRemoves.reSetsAfterRemove} produced).",
+                assertEquals(
+                    0,
+                    withRemoves.violations,
+                    "#2086: ${withRemoves.violations} of ${withRemoves.triples} triples diverge with " +
+                        "removes in the generator. This arm measured 280 before the fix; anything " +
+                        "above zero is a residual, not a regression in something else.\n" +
+                        withRemoves.firstViolation,
                 )
             },
             {
