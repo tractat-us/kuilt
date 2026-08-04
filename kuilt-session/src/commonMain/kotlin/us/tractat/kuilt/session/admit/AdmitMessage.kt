@@ -7,6 +7,7 @@ import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.decodeFromByteArray
 import kotlinx.serialization.encodeToByteArray
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.session.RoomFramePrefix
 
 /**
  * Wire messages that implement the admit/identify handshake.
@@ -226,14 +227,8 @@ public sealed interface AdmitMessage {
     public data class Unpaused(val peerId: String) : AdmitMessage
 
     public companion object {
-        /**
-         * First byte of every encoded admit payload. Application frames must not
-         * begin with this byte so the receiver can distinguish protocol from app frames.
-         * Value: `0x61` (ASCII 'a' for "admit") — outside the CBOR major-type-7 range
-         * that serialization might produce as a bare byte, and unlikely to be the first
-         * byte of a legitimate non-CBOR application payload.
-         */
-        public const val PREFIX_BYTE: Byte = 0x61
+        /** First byte of every admit frame. Reserved by [RoomFramePrefix.Admit] (#2007). */
+        public val PREFIX_BYTE: Byte = RoomFramePrefix.Admit.byte
 
         /**
          * The shared CBOR codec for admit frames. `ignoreUnknownKeys = true` makes decode

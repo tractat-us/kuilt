@@ -17,11 +17,16 @@ import us.tractat.kuilt.core.Swatch
  * ## Reserved prefix
  *
  * Every channel frame begins with [CHANNEL_PREFIX] (`0x63`, ASCII 'c' for
- * "channel"). This value is:
- * - Distinct from the admit-protocol prefix (`0x61` / 'a').
- * - Outside the CBOR major-type-7 range (`0xe0`–`0xff`) used by serialization.
- * - Not emitted as the first byte of a heartbeat string (`kuilt.heartbeat.…`
- *   starts with `0x6b`).
+ * "channel"), reserved by [RoomFramePrefix.Channel] — the registry that owns the
+ * whole room frame-prefix byte space (#2007). It is distinct from every other
+ * claimed byte by construction.
+ *
+ * This KDoc previously claimed `0x63` is safe because it sits "outside the CBOR
+ * major-type-7 range (`0xe0`–`0xff`) used by serialization". **That was false.**
+ * CBOR text-string headers are `0x60 or len`, so a bare 3-character CBOR string
+ * begins `0x63` — and the same is true of every other prefix in the registry. The
+ * real collision band is `0x60..0x7f`; see [RoomFramePrefix] for the full table.
+ * The codebase lives with it because room payloads are framed, not bare.
  *
  * Applications **must not** emit raw payloads starting with `0x63` via [Room.broadcast]
  * or [Room.sendTo] — that byte is reserved for channel framing. Application frames
@@ -46,7 +51,7 @@ public object RoomChannel {
      * Value: `0x63` (ASCII 'c' for "channel"). See the class-level documentation
      * for namespace-collision guarantees.
      */
-    public const val CHANNEL_PREFIX: Byte = 0x63
+    public val CHANNEL_PREFIX: Byte = RoomFramePrefix.Channel.byte
 
     /**
      * Derive a 2-byte wire sub-id from a channel [name].
