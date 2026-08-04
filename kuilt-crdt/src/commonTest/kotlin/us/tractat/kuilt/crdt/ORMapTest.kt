@@ -50,9 +50,25 @@ class ORMapTest {
         val bob = start.put(b, "votes", GCounter.of(b to 1L)) // bob concurrently re-puts
         val merged = alice.piece(bob)
         assertTrue("votes" in merged.keys) // add wins: bob's presence tag (B,1) survives
-        // Bob's put pieced {a:1} with {b:1} — both GCounter slots survive (GCounter merge is max).
-        // Alice's remove only tombstoned the presence tag (A,1), not the GCounter value.
-        assertEquals(2L, merged["votes"]?.value)
+        // …and the value is bob's contribution alone. Alice's remove retired tag (A,1), and a tag
+        // takes the write made under it — so {a:1} goes with it, while bob's concurrent {b:1},
+        // whose tag she never saw, stays. Before #2086 this read 2: bob's put folded {a:1} into a
+        // single entry-level value that alice's remove could no longer reach, which is exactly the
+        // blend that made `piece` non-associative.
+        assertEquals(1L, merged["votes"]?.value)
+    }
+
+    @Test
+    fun aRemoveTakesTheWritesItObservedAndLeavesTheOnesItDidNot() {
+        // The same shape one step on: the key is put twice before the remove, so the removed
+        // contribution is a fold of two writes rather than one.
+        val start = ORMap.empty<String, GCounter>()
+            .put(a, "votes", GCounter.of(a to 1L))
+            .put(a, "votes", GCounter.of(a to 4L))
+        val bob = start.put(b, "votes", GCounter.of(b to 2L))
+        val merged = start.remove("votes").piece(bob)
+
+        assertEquals(2L, merged["votes"]?.value, "only the write the remover never observed survives")
     }
 
     @Test
@@ -65,8 +81,11 @@ class ORMapTest {
 
     @Test
     fun roundTripsThroughJson() {
+        // An entry keys its contributions by Dot, so plain JSON needs the structured-key flag —
+        // same as MVRegister and ResettableCounter. CBOR and Protobuf need nothing.
+        val json = Json { allowStructuredMapKeys = true }
         val m = ORMap.empty<String, GCounter>().put(a, "votes", GCounter.of(a to 1L))
         val ser = ORMap.serializer(String.serializer(), GCounter.serializer())
-        assertEquals(m, Json.decodeFromString(ser, Json.encodeToString(ser, m)))
+        assertEquals(m, json.decodeFromString(ser, json.encodeToString(ser, m)))
     }
 }

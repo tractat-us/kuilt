@@ -51,10 +51,11 @@ import kotlin.test.assertEquals
  * | `MovableTree.seqByReplica` | [MOVABLE_TREE] |
  * | `MovableTree.compactedDots` | [MOVABLE_TREE] |
  * | `DotMapSerializer`'s sort | [ORSET], [ORMAP] |
- * | `DotSetSerializer`'s sort | [ORMAP] |
+ * | `DotSetSerializer`'s sort | [ORSET] |
  * | `DotFunSerializer`'s sort | [MV_REGISTER] |
+ * | `ORMapEntrySerializer`'s sort | [ORMAP], [JSON_CRDT] |
  * | `DotContextSerializer`'s `vv` sort | [ORSET], [ORMAP], [MV_REGISTER], [DOT_CONTEXT], [JSON_CRDT] |
- * | `DotContextSerializer`'s `cloud` sort | [DOT_CONTEXT], [ORSET_ADD_DELTA], [ORSET_REMOVE_DELTA], [ORMAP_PUT_DELTA] |
+ * | `DotContextSerializer`'s `cloud` sort | [DOT_CONTEXT], [ORSET_ADD_DELTA], [ORSET_REMOVE_DELTA] |
  * | `VersionVector.entries` | [VERSION_VECTOR] |
  * | `RgaSerializer`'s op sort | [RGA], [JSON_CRDT] |
  * | `FugueSerializer`'s op sort | [FUGUE] |
@@ -75,7 +76,6 @@ import kotlin.test.assertEquals
  * **Still not pinned here: the `Compact` op sorts.** No construction below calls `Rga.compact` or
  * `Fugue.compact`, so neither `Compact.positions` nor the Compact-vs-Compact tiebreak is reached;
  * `rgaCompactPositionsAreDeliveryOrderIndependent` and its `Fugue` sibling cover them same-target.
- * The `ORSET` vector's `DotSet`s remain singletons, which is not a gap — see [orMap].
  *
  * **What the delta vectors deliberately do *not* claim.** `DotMapSerializer` and
  * `DotSetSerializer` are unreachable on them and always will be: a delta's store is one entry or
@@ -85,6 +85,17 @@ import kotlin.test.assertEquals
  * structural, because its vector is empty; on the other two it is an accident of one target, whose
  * `HashMap` happens to iterate their two entries in canonical order anyway. Neither is evidence
  * the sort is unnecessary, and neither earns a place in the `vv` row above.
+ *
+ * **#2086 moved three vectors and reassigned two rows above; both are deliberate.** An `ORMapEntry`
+ * is no longer a `DotSet` of tags beside one value — it maps each tag to the write made under it —
+ * so [ORMAP], [ORMAP_PUT_DELTA] and [JSON_CRDT] all encode differently, `ORMapEntrySerializer` is a
+ * new canonicalisation site with its own row, and `ORMap` stops reaching `DotSetSerializer`
+ * entirely. That sort would have been left with no vector at all, which is the silent-coverage-loss
+ * failure this file exists to prevent, so [orSet] now adds one element concurrently from two
+ * replicas to take the pin over. [ORMAP_PUT_DELTA] likewise leaves the `cloud`-sort row: a put
+ * delta's context now names only the sender's own tags, so it can never hold two replicas' dots and
+ * has nothing to order. Its cloud is still non-empty — the vacuity guard checks that — but the sort
+ * is pinned by the three vectors that remain on the row.
  *
  * **Regenerate only on a deliberate encoding change, and expect every vector to move together.**
  * A single vector changing on one target and not another is the exact defect this file exists to
@@ -250,8 +261,11 @@ class CanonicalGoldenVectorTest {
             { assertEquals(5, orSetRemoveDelta().wireContext().cloud.size, "ORSet removeDelta cloud") },
             { assertEquals(0, orSetRemoveDelta().wireContext().vv.size, "ORSet removeDelta vv") },
             { assertEquals(emptySet(), orSetRemoveDelta().elements, "ORSet removeDelta store") },
-            { assertEquals(3, orMapPutDelta().wireContext().cloud.size, "ORMap putDelta cloud") },
-            { assertEquals(2, orMapPutDelta().wireContext().vv.size, "ORMap putDelta vv") },
+            // A put delta's context names the sender's own prior tags on the key plus the fresh one,
+            // and nothing else (#2086) — so it is one replica's dots, and `zulu` has two private
+            // puts behind it, which puts both above the first seq and therefore in the cloud.
+            { assertEquals(2, orMapPutDelta().wireContext().cloud.size, "ORMap putDelta cloud") },
+            { assertEquals(0, orMapPutDelta().wireContext().vv.size, "ORMap putDelta vv") },
             { assertEquals(4, orMapPutDelta()[shared]?.replicas()?.size, "ORMap putDelta value slots") },
         )
     }
@@ -405,9 +419,18 @@ class CanonicalGoldenVectorTest {
      * exactly once, so every `DotSet` on the wire is a singleton and has only one order. See
      * [orMap] for the vector that does pin it.
      */
+    /**
+     * **This is the vector that pins `DotSetSerializer`** — it took that job over from [orMap] when
+     * #2086 replaced `ORMapEntry`'s `DotSet` with a dot-keyed map of contributions, so `ORMap` stops
+     * reaching that serializer at all. Both replicas add `"mike"` concurrently, so its dot set is a
+     * **two-dot** one carrying `zulu`'s dot and `alpha`'s, and the merge reaches it in insertion
+     * order `zulu` first against a canonical order of `alpha, zulu`. Every other element here is a
+     * singleton, so drop the shared add and that sort silently loses its only cross-target pin while
+     * every assertion in this file stays green after a re-record.
+     */
     private fun orSet(): ORSet<String> {
         val fromZulu = ORSet.empty<String>().add(zulu, "zulu").add(zulu, "mike").add(zulu, "gone")
-        val fromAlpha = ORSet.empty<String>().add(alpha, "alpha").add(alpha, "delta")
+        val fromAlpha = ORSet.empty<String>().add(alpha, "alpha").add(alpha, "delta").add(alpha, "mike")
         return fromZulu.remove("gone").piece(fromAlpha)
     }
 
@@ -417,16 +440,18 @@ class CanonicalGoldenVectorTest {
      * `HashMap` build inside `mergeMax` — in opposite insertion orders on the two sides. A
      * value both sides held identically would merge as `value.piece(value)` and be vacuous.
      *
-     * This is also the vector that pins `DotSetSerializer`. Because both replicas write both
-     * keys, each key's `tags` is a **two-dot** `DotSet` — key `"alpha"` carries `zulu`'s dot and
-     * `alpha`'s — and the merge reaches it in insertion order `zulu` first against a canonical
-     * order of `alpha, zulu`. [orSet]'s dot sets are all singletons, so this is the only place
-     * that sort is load-bearing.
+     * This is also the vector that pins `ORMapEntrySerializer`. Because both replicas write both
+     * keys, each key's entry holds **two contributions** — key `"alpha"` carries `zulu`'s dot and
+     * `alpha`'s, each with its own `GCounter` — and the merge reaches them in insertion order `zulu`
+     * first against a canonical order of `alpha, zulu`.
      *
      * **So "both replicas write both keys" is a requirement, not incidental phrasing** (#2038).
-     * Give each key a single writer and every `DotSet` on the wire becomes a singleton — one
-     * element, one order — and `DotSetSerializer` silently loses its only cross-target pin while
+     * Give each key a single writer and every entry on the wire becomes a single contribution — one
+     * pair, one order — and `ORMapEntrySerializer` silently loses its only cross-target pin while
      * every assertion in this file stays green after a re-record.
+     *
+     * Before #2086 this vector pinned `DotSetSerializer` for the same reason, an entry's tags being
+     * a `DotSet` back then. It no longer reaches that serializer at all; [orSet] took the job.
      */
     private fun orMap(): ORMap<String, GCounter> {
         val viewZulu = ORMap.empty<String, GCounter>()
@@ -702,7 +727,7 @@ class CanonicalGoldenVectorTest {
                     map.put(replica, "${replica.value}$n", GCounter.of(replica to n.toLong()))
                 }
                 .put(replica, shared, GCounter.of(replica to 1L))
-        val converged = view(zulu, priorPuts = 0)
+        val converged = view(zulu, priorPuts = 2)
             .piece(view(mike, priorPuts = 2))
             .piece(view(alpha, priorPuts = 1))
             .piece(view(delta, priorPuts = 0))
@@ -741,17 +766,16 @@ class CanonicalGoldenVectorTest {
                 "657374616d7001666f726967696e646d696b656576616c756501ff647a756c75bf6974696d657374616d7003666f7269" +
                 "67696e647a756c756576616c756503ffffff"
         const val ORSET =
-            "bf6663617573616cbf6573746f7265bf65616c7068619fbf677265706c69636165616c7068616373657101ffff656465" +
-                "6c74619fbf677265706c69636165616c7068616373657102ffff646d696b659fbf677265706c696361647a756c756373" +
-                "657102ffff647a756c759fbf677265706c696361647a756c756373657101ffffff67636f6e74657874bf627676bf6561" +
-                "6c70686102647a756c7503ff65636c6f75649fffffffff"
+            "bf6663617573616cbf6573746f7265bf65616c7068619fbf677265706c69636165616c7068616373657101ffff6564656c74" +
+                "619fbf677265706c69636165616c7068616373657102ffff646d696b659fbf677265706c69636165616c7068616373657103" +
+                "ffbf677265706c696361647a756c756373657102ffff647a756c759fbf677265706c696361647a756c756373657101ffffff" +
+                "67636f6e74657874bf627676bf65616c70686103647a756c7503ff65636c6f75649fffffffff"
         const val ORMAP =
-            "bf6663617573616cbf6573746f7265bf65616c706861bf64746167739fbf677265706c69636165616c70686163736571" +
-                "01ffbf677265706c696361647a756c756373657102ffff6576616c7565bf66636f756e7473bf65616c70686106656465" +
-                "6c746107646d696b6508647a756c7505ffffff647a756c75bf64746167739fbf677265706c69636165616c7068616373" +
-                "657102ffbf677265706c696361647a756c756373657101ffff6576616c7565bf66636f756e7473bf65616c7068610265" +
-                "64656c746104646d696b6503647a756c7501ffffffff67636f6e74657874bf627676bf65616c70686102647a756c7502" +
-                "ff65636c6f75649fffffffff"
+            "bf6663617573616cbf6573746f7265bf65616c706861bfbf677265706c69636165616c7068616373657101ffbf66636f756e" +
+                "7473bf65616c70686106646d696b6508ffffbf677265706c696361647a756c756373657102ffbf66636f756e7473bf656465" +
+                "6c746107647a756c7505ffffff647a756c75bfbf677265706c69636165616c7068616373657102ffbf66636f756e7473bf65" +
+                "616c706861026564656c746104ffffbf677265706c696361647a756c756373657101ffbf66636f756e7473bf646d696b6503" +
+                "647a756c7501ffffffff67636f6e74657874bf627676bf65616c70686102647a756c7502ff65636c6f75649fffffffff"
         const val BOUNDED_COUNTER =
             "bf67696e697469616cbf66636f756e7473bf65616c7068611819646d696b651832647a756c751864ffff697472616e73" +
                 "66657273bf65616c706861bf66636f756e7473bf6564656c746102ffff646d696b65bf66636f756e7473bf647a756c75" +
@@ -804,27 +828,27 @@ class CanonicalGoldenVectorTest {
                 "65706c6963614964606373657100ff6173655269676874ffbf617401626964bf676c616d706f727401697265706c6963" +
                 "614964647a756c756373657101ffffffff"
         const val JSON_CRDT =
-            "bf6663617573616cbf6573746f7265bf646c697374bf64746167739fbf677265706c69636165616c7068616373657101" +
-                "ffbf677265706c696361647a756c756373657101ffff6576616c7565bf6174016161bf636f70739fbf617400626964bf" +
-                "676c616d706f727401697265706c696361496465616c7068616373657101ff6176bf617402616cbf6663617573616cbf" +
-                "6573746f7265bfbf677265706c69636165616c7068616373657101ff9f63737472bf6576616c7565626131ffffff6763" +
-                "6f6e74657874bf627676bf65616c70686101ff65636c6f75649fffffffffff6161bf676c616d706f72743b7fffffffff" +
-                "ffffff697265706c6963614964606373657100ffffbf617400626964bf676c616d706f727401697265706c6963614964" +
-                "647a756c756373657101ff6176bf617402616cbf6663617573616cbf6573746f7265bfbf677265706c696361647a756c" +
-                "756373657101ff9f63737472bf6576616c7565627a31ffffff67636f6e74657874bf627676bf647a756c7501ff65636c" +
-                "6f75649fffffffffff6161bf676c616d706f72743b7fffffffffffffff697265706c6963614964606373657100ffffbf" +
-                "617400626964bf676c616d706f727402697265706c696361496465616c7068616373657102ff6176bf617402616cbf66" +
-                "63617573616cbf6573746f7265bfbf677265706c69636165616c7068616373657101ff9f63737472bf6576616c756562" +
-                "6132ffffff67636f6e74657874bf627676bf65616c70686101ff65636c6f75649fffffffffff6161bf676c616d706f72" +
-                "7401697265706c696361496465616c7068616373657101ffffbf617400626964bf676c616d706f727402697265706c69" +
-                "63614964647a756c756373657102ff6176bf617402616cbf6663617573616cbf6573746f7265bfbf677265706c696361" +
-                "647a756c756373657101ff9f63737472bf6576616c7565627a32ffffff67636f6e74657874bf627676bf647a756c7501" +
-                "ff65636c6f75649fffffffffff6161bf676c616d706f727401697265706c6963614964647a756c756373657101ffffff" +
-                "ffffff646e616d65bf64746167739fbf677265706c69636165616c7068616373657102ffbf677265706c696361647a75" +
-                "6c756373657102ffff6576616c7565bf617402616cbf6663617573616cbf6573746f7265bfbf677265706c6963616561" +
-                "6c7068616373657101ff9f63737472bf6576616c75656161ffffbf677265706c696361647a756c756373657101ff9f63" +
-                "737472bf6576616c7565617affffff67636f6e74657874bf627676bf65616c70686101647a756c7501ff65636c6f7564" +
-                "9fffffffffffffff67636f6e74657874bf627676bf65616c70686102647a756c7502ff65636c6f75649fffffffff"
+            "bf6663617573616cbf6573746f7265bf646c697374bfbf677265706c69636165616c7068616373657101ffbf6174016161bf" +
+                "636f70739fbf617400626964bf676c616d706f727401697265706c696361496465616c7068616373657101ff6176bf617402" +
+                "616cbf6663617573616cbf6573746f7265bfbf677265706c69636165616c7068616373657101ff9f63737472bf6576616c75" +
+                "65626131ffffff67636f6e74657874bf627676bf65616c70686101ff65636c6f75649fffffffffff6161bf676c616d706f72" +
+                "743b7fffffffffffffff697265706c6963614964606373657100ffffbf617400626964bf676c616d706f727402697265706c" +
+                "696361496465616c7068616373657102ff6176bf617402616cbf6663617573616cbf6573746f7265bfbf677265706c696361" +
+                "65616c7068616373657101ff9f63737472bf6576616c7565626132ffffff67636f6e74657874bf627676bf65616c70686101" +
+                "ff65636c6f75649fffffffffff6161bf676c616d706f727401697265706c696361496465616c7068616373657101ffffffff" +
+                "ffbf677265706c696361647a756c756373657101ffbf6174016161bf636f70739fbf617400626964bf676c616d706f727401" +
+                "697265706c6963614964647a756c756373657101ff6176bf617402616cbf6663617573616cbf6573746f7265bfbf67726570" +
+                "6c696361647a756c756373657101ff9f63737472bf6576616c7565627a31ffffff67636f6e74657874bf627676bf647a756c" +
+                "7501ff65636c6f75649fffffffffff6161bf676c616d706f72743b7fffffffffffffff697265706c69636149646063736571" +
+                "00ffffbf617400626964bf676c616d706f727402697265706c6963614964647a756c756373657102ff6176bf617402616cbf" +
+                "6663617573616cbf6573746f7265bfbf677265706c696361647a756c756373657101ff9f63737472bf6576616c7565627a32" +
+                "ffffff67636f6e74657874bf627676bf647a756c7501ff65636c6f75649fffffffffff6161bf676c616d706f727401697265" +
+                "706c6963614964647a756c756373657101ffffffffffff646e616d65bfbf677265706c69636165616c7068616373657102ff" +
+                "bf617402616cbf6663617573616cbf6573746f7265bfbf677265706c69636165616c7068616373657101ff9f63737472bf65" +
+                "76616c75656161ffffff67636f6e74657874bf627676bf65616c70686101ff65636c6f75649fffffffffffbf677265706c69" +
+                "6361647a756c756373657102ffbf617402616cbf6663617573616cbf6573746f7265bfbf677265706c696361647a756c7563" +
+                "73657101ff9f63737472bf6576616c7565617affffff67636f6e74657874bf627676bf647a756c7501ff65636c6f75649fff" +
+                "ffffffffffff67636f6e74657874bf627676bf65616c70686102647a756c7502ff65636c6f75649fffffffff"
         const val ORSET_ADD_DELTA =
             "bf6663617573616cbf6573746f7265bf667368617265649fbf677265706c696361647a756c756373657103ffffff6763" +
                 "6f6e74657874bf627676bf6564656c746101647a756c7501ff65636c6f75649fbf677265706c69636165616c70686163" +
@@ -836,11 +860,9 @@ class CanonicalGoldenVectorTest {
                 "73657102ffbf677265706c696361646d696b656373657104ffbf677265706c696361647a756c756373657102ffffffff" +
                 "ff"
         const val ORMAP_PUT_DELTA =
-            "bf6663617573616cbf6573746f7265bf66736861726564bf64746167739fbf677265706c696361647a756c7563736571" +
-                "02ffff6576616c7565bf66636f756e7473bf65616c706861066564656c746104646d696b6508647a756c7502ffffffff" +
-                "67636f6e74657874bf627676bf6564656c746101647a756c7502ff65636c6f75649fbf677265706c69636165616c7068" +
-                "616373657102ffbf677265706c69636165627261766f6373657104ffbf677265706c696361646d696b656373657103ff" +
-                "ffffffff"
+            "bf6663617573616cbf6573746f7265bf66736861726564bfbf677265706c696361647a756c756373657104ffbf66636f756e" +
+                "7473bf65616c706861066564656c746104646d696b6508647a756c7502ffffffff67636f6e74657874bf627676bfff65636c" +
+                "6f75649fbf677265706c696361647a756c756373657103ffbf677265706c696361647a756c756373657104ffffffffff"
     }
 }
 

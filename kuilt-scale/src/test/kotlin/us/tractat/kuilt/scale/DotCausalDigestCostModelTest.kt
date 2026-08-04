@@ -206,7 +206,7 @@ class DotCausalDigestCostModelTest {
         for (i in 0 until n) {
             val dot = dotFor(i, replicas)
             val value = LWWRegister.empty<String>().set(dot.replica, dot.seq, "value-$i")
-            entries[element(i)] = ORMapEntry(DotSet(setOf(dot)), value)
+            entries[element(i)] = ORMapEntry(mapOf(dot to value))
         }
         return Causal(DotMap(entries), contextOf(n, replicas))
     }
