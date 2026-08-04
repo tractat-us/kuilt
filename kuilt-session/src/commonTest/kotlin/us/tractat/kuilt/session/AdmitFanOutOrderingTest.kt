@@ -31,6 +31,7 @@ import us.tractat.kuilt.session.partition.JoinerReconnectEvent
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.test.FaultySeam
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -72,13 +73,25 @@ import kotlin.time.Instant
  *
  * ### The writer's own survival
  *
- * Ordering through one writer is only worth having if the writer cannot die, so the last test covers
+ * Ordering through a writer is only worth having if the writer cannot die, so the last two tests cover
  * the other half: a recipient whose `sendTo` hands back a `CancellationException` **it minted itself**
  * (the `withTimeout(sendTimeout)` idiom a consumer-implemented [Seam] is entitled to use). Guarded with
  * `runCatchingCancellable` that rethrow *cancelled* the writer — silently, since a cancellation neither
  * runs a handler nor prints a trace — and every announcement for the rest of the room's life was
- * enqueued and never sent. One writer makes that a room-wide failure where the per-call `scope.launch`
- * it replaced lost a single fan-out, so it is a blast-radius regression, not a pre-existing wart.
+ * enqueued and never sent.
+ *
+ * Since #2048 there is a writer **per recipient**, which shrinks that blast radius from the whole room
+ * to one member — and shrinking it is exactly what makes the guard easy to under-rate and to leave
+ * unpinned. Forever-silent-and-unbounded for one member is still the #1781 failure, so the pinning
+ * assertion is now on the recipient that *minted* the cancellation; the bystander test that used to
+ * carry it is kept as the cross-recipient statement it has become.
+ *
+ * ### Every fan-out in this file has exactly one recipient — except the last two
+ *
+ * The three ordering tests run on a three-peer star, so `admittedById` minus the subject is a single
+ * bystander and the `hostSeam` recording is that one recipient's stream. Per-recipient FIFO and a
+ * global FIFO are therefore indistinguishable here **by construction**, which is why per-[PeerId]
+ * keying left them untouched. The four-peer tests are the ones where the two differ.
  *
  * ### What these tests do *not* cover
  *
@@ -135,7 +148,7 @@ class AdmitFanOutOrderingTest {
      */
     @Test
     fun `a stalled Paused estimate cannot be overtaken by the refinement that supersedes it`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val star = star(
                 stall = 2.seconds,
                 hostReconnectController = { SentinelHoldPolicy(SENTINEL_EXPIRES_AT) },
@@ -199,7 +212,7 @@ class AdmitFanOutOrderingTest {
      */
     @Test
     fun `a stalled Paused cannot be overtaken by the Unpaused that releases it`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val star = star(stall = 2.seconds)
 
             star.droppedLink.partition()
@@ -251,7 +264,7 @@ class AdmitFanOutOrderingTest {
      */
     @Test
     fun `a Farewell cannot overtake the Paused for the same peer`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             // The stall must span the 500 ms window (so the Farewell is raised while the Paused is
             // still in flight — the property under test) yet stay inside the writer's per-send budget
             // of `reconnectWindow + timeout` = 800 ms, or the Paused is dropped rather than ordered.
@@ -284,6 +297,59 @@ class AdmitFanOutOrderingTest {
         }
 
     /**
+     * The same guard, asserted on the recipient that **minted** the cancellation — the half that
+     * per-recipient lanes (#2048) would otherwise leave unpinned.
+     *
+     * The test below asserts a *bystander* still gets its frames. That was the sharp assertion while
+     * one writer served the whole room: a mint killed the room's only sender and every remote roster
+     * diverged. With a lane per recipient it is no longer sharp — the healthy peer has its own writer
+     * and would be served whether or not the doomed peer's writer survived, so a build that deleted
+     * the guard entirely still passes it. What the guard now protects is narrower and still a #1781
+     * failure: without it the minting peer's own writer is silently **cancelled**, and every
+     * `Paused`/`Unpaused`/`Farewell` for the rest of the room's life is enqueued on its lane and
+     * never sent — that member pinned forever, with the lane growing behind it.
+     *
+     * So this one mints **once** and then behaves, and asserts the recipient receives the *later*
+     * announcement. A live writer delivers it; a cancelled one never dequeues again.
+     */
+    @Test
+    fun `a recipient that minted a cancellation still receives its later fan-outs`() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val star = starWithDoomedBystander(mintLimit = 1)
+
+            star.droppedLink.partition()
+            // Past the host's detection timeout: Paused is raised, and the doomed recipient mints its
+            // TimeoutCancellationException on it — its one and only mint.
+            testScheduler.advanceTimeBy(hostConfig.timeout + hostConfig.interval * 2)
+            testScheduler.runCurrent()
+            // Heal, so a LATER fan-out (Unpaused) is raised on a writer the mint may have killed.
+            star.droppedLink.heal()
+            testScheduler.advanceTimeBy(2.seconds)
+            testScheduler.runCurrent()
+
+            assertAll(
+                {
+                    assertEquals(
+                        listOf("Unpaused"),
+                        star.hostSeam.presenceFramesTo(star.doomedId),
+                        "the minting recipient's OWN writer must survive its mint — otherwise that " +
+                            "member's lane is silently dead for the room's life and it holds a " +
+                            "recovered peer as Partitioned forever. Observed " +
+                            "${star.hostSeam.presenceFramesTo(star.doomedId)}",
+                    )
+                },
+                {
+                    assertEquals(
+                        listOf("Paused", "Unpaused"),
+                        star.hostSeam.presenceFramesTo(star.healthyId),
+                        "sanity: a recipient that never threw saw the whole arc, so the assertion " +
+                            "above is about surviving the mint and not about an idle room",
+                    )
+                },
+            )
+        }
+
+    /**
      * The writer must survive a `CancellationException` the **callee** minted, not just an ordinary
      * throw — otherwise the room's single sender is the room's single point of silent failure.
      *
@@ -293,7 +359,7 @@ class AdmitFanOutOrderingTest {
      * `runCatchingCancellable` rethrows every `CancellationException`, so guarding with it re-raised a
      * callee-minted one straight out of the per-recipient guard, the recipient loop, the queue loop and
      * the pump. And because the throwable *is* a cancellation, `scope.launch` **cancelled** the writer
-     * rather than failing it: no handler, no `state` change, no stack trace. [admitFanOuts] was never
+     * rather than failing it: no handler, no `state` change, no stack trace. The queue was never
      * closed, so every later `trySend` still reported success while every `Paused`/`Unpaused`/
      * `Farewell` for the room's life was enqueued and never sent — remote rosters diverging
      * permanently, silently, with the queue growing behind them.
@@ -302,10 +368,15 @@ class AdmitFanOutOrderingTest {
      * to the doomed peer was always acceptable (delivery is best-effort), a dead writer never was.
      * It is also a strict blast-radius regression over the per-call `scope.launch` this queue replaced,
      * where the same throw cost one fan-out's remaining recipients rather than every future one.
+     *
+     * **Kept, but no longer the sharp assertion (#2048).** With a lane and writer per recipient the
+     * healthy bystander is served by its own writer regardless, so this passes on a build that deleted
+     * the guard. It stays as the cross-recipient statement — one peer's mint must not be visible at
+     * another — and the guard itself is pinned by the minting recipient's own arc, above.
      */
     @Test
     fun `a callee-minted cancellation from one recipient does not kill the fan-out writer`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val star = starWithDoomedBystander()
 
             star.droppedLink.partition()
@@ -443,12 +514,18 @@ class AdmitFanOutOrderingTest {
      * joined, which happens after this decorator is constructed. Non-presence frames (the admit
      * handshake, heartbeats) always pass through, so the mint cannot break session formation or
      * liveness detection.
+     *
+     * [mintLimit] caps how many presence frames to the doomed recipient are minted on; past it they
+     * deliver normally. A finite limit is what lets a test ask whether that recipient's *own* writer
+     * survived, which an always-minting seam cannot observe — nothing ever reaches it either way.
      */
     private class TimeoutMintingSeam(
         private val delegate: Seam,
+        private val mintLimit: Int = Int.MAX_VALUE,
         private val doomedRecipient: () -> PeerId?,
     ) : Seam {
         private val recorded = mutableListOf<Pair<PeerId, AdmitMessage>>()
+        private var minted = 0
 
         /** Presence frames that reached the fabric for [peer], in wire order, by subclass name. */
         fun presenceFramesTo(peer: PeerId): List<String> =
@@ -469,7 +546,8 @@ class AdmitFanOutOrderingTest {
                 delegate.sendTo(peer, payload)
                 return
             }
-            if (peer == doomedRecipient()) {
+            if (peer == doomedRecipient() && minted < mintLimit) {
+                minted++
                 // Escapes to our caller as a CancellationException without cancelling our own job —
                 // the whole trap. Nothing after this line runs for this recipient.
                 withTimeout(1.milliseconds) { awaitCancellation() }
@@ -495,19 +573,23 @@ class AdmitFanOutOrderingTest {
     )
 
     /**
-     * Builds the four-peer star for the callee-minted-cancellation test. The doomed bystander joins
-     * **first** so it precedes the healthy one in the fan-out's recipient order (`admittedById` is
-     * insertion-ordered), i.e. the throw happens before the healthy recipient is reached — the
-     * interleaving in which a dead writer actually costs the healthy peer its frames.
+     * Builds the four-peer star for the callee-minted-cancellation tests. The doomed bystander joins
+     * **first** so it precedes the healthy one in `admittedById`'s insertion order, i.e. the throw
+     * happens before the healthy recipient is reached — the interleaving in which a dead *shared*
+     * writer costs the healthy peer its frames. Since #2048 each recipient has its own lane, so that
+     * ordering no longer decides anything; it is kept because the assertions below quote it and
+     * because a fixture whose ordering is incidental is one nobody can reason about.
+     *
+     * [mintLimit] is forwarded to [TimeoutMintingSeam] — see there.
      */
-    private suspend fun TestScope.starWithDoomedBystander(): DoomedStar {
+    private suspend fun TestScope.starWithDoomedBystander(mintLimit: Int = Int.MAX_VALUE): DoomedStar {
         val loom = InMemoryLoom()
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
         val hostFactory = SeamRoomFactory(loom, backgroundScope, clock, hostConfig)
         val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, joinerConfig)
 
         var doomedId: PeerId? = null
-        val hostSeam = TimeoutMintingSeam(loom.host(Pattern("Host"))) { doomedId }
+        val hostSeam = TimeoutMintingSeam(loom.host(Pattern("Host")), mintLimit) { doomedId }
         val hostRoom = hostFactory.adopt(hostSeam, SessionRole.Host)
 
         // `Room.roster` excludes self, so a fully-formed four-peer session reads 3 everywhere. Joins

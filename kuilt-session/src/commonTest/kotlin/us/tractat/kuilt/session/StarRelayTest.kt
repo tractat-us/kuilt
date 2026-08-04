@@ -40,19 +40,19 @@ class StarRelayTest {
     /**
      * Virtual time allowed for a membership announcement to cross the star in §T13.
      *
-     * Well under `admitFanOuts`'s own per-recipient budget (`reconnectWindow + timeout` = 10.6 s
-     * for [relayHeartbeat]) and far under what a relay flood parked on that queue would cost
+     * Well under an admit lane's own send budget (`reconnectWindow + timeout` = 10.6 s for
+     * [relayHeartbeat]) and far under what a relay flood parked on that queue would cost
      * (64 × 10.6 s). Comfortably over what the announcement actually needs: one detector timeout
      * (600 ms) plus a fan-out hop.
      */
     private val membershipBudget = 2.seconds
 
     /**
-     * Virtual time allowed for a relay forward to clear one wedged recipient ahead of it in §T15.
+     * Virtual time allowed for the healthy spoke's forward to land in §T15.
      *
-     * Five relay budgets ([relayHeartbeat]'s 200 ms interval), so a healthy forward has ample room
-     * — and ten times under the 10.6 s a membership-sized budget would cost, so adopting that
-     * budget fails here rather than merely being slower.
+     * Five relay budgets ([relayHeartbeat]'s 200 ms interval) — generous by construction, since with
+     * a lane per recipient the forward lands at the instant it is enqueued. See §T15 for why this
+     * number no longer discriminates the relay budget from the membership one.
      */
     private val relayHeadOfLineBudget = 1.seconds
 
@@ -638,11 +638,11 @@ class StarRelayTest {
 
     /**
      * §T14. The C3 property asserted on the thing that actually matters: a wedged relay recipient
-     * must not stall the **membership** queue. Sharing one writer would — `admitFanOuts` is
-     * `UNLIMITED` with a `reconnectWindow + timeout` per-recipient budget, so 64 relay frames aimed
-     * at one black-holed spoke would park every `Paused`/`Unpaused`/`Farewell` behind them for
-     * minutes. That is the permanent roster divergence #1781 built the queue to prevent, reachable
-     * by one slow peer.
+     * must not stall the **membership** queue. Routing relay traffic onto the admit lanes would — an
+     * admit lane is `UNLIMITED` with a `reconnectWindow + timeout` send budget, so 64 relay frames
+     * aimed at one black-holed spoke would park every `Paused`/`Unpaused`/`Farewell` for that spoke
+     * behind them for minutes. That is the permanent roster divergence #1781 built the queue to
+     * prevent, reachable by one slow peer.
      *
      * The relay-frames-on-the-wire assertion is not decoration: without it this test is green
      * *before the relay exists at all*, because a build with no relay has no relay traffic to
@@ -670,7 +670,7 @@ class StarRelayTest {
                     assertTrue(
                         star.joinerA.sawPartitioned(star.joinerCId),
                         "a Paused for C must reach A while relay traffic to a wedged B is " +
-                            "backed up — this is why relay does not share admitFanOuts",
+                            "backed up — this is why relay does not share the admit lanes",
                     )
                 },
                 {
@@ -702,21 +702,28 @@ class StarRelayTest {
         }
 
     /**
-     * §T15. The relay writer's per-recipient budget is one [relayHeartbeat] interval, **not**
-     * `admitFanOuts`'s `reconnectWindow + timeout`.
+     * §T15. A forward to a healthy spoke is served while a wedged one is outstanding.
      *
-     * That looser budget is right for an announcement, which stays meaningful for the whole span of
-     * the hold it describes; it is wrong for a data frame, which the next one supersedes. Adopting
-     * it here would make one wedged spoke cost every *healthy* spoke behind it a full reconnect
-     * window per frame. Asserted in virtual time, so the bound measures the budget rather than the
-     * host machine.
+     * **This no longer pins the relay send budget, and the KDoc used to say it did (#2048).** It was
+     * written against a single shared writer, where a healthy spoke waited one budget behind each
+     * wedged item — so allowing five relay budgets (200 ms each) and forbidding a membership-sized
+     * one (10.6 s) discriminated the two. With a lane and writer per recipient the healthy spoke is
+     * served at the instant its forward is enqueued **whatever** the budget is, so this passes on a
+     * build that set `relaySendBudget` to `reconnectWindow + timeout`. What it still pins is that the
+     * two recipients do not share a queue — which `FanOutHeadOfLineTest` now asserts more sharply,
+     * with no virtual time allowed at all.
+     *
+     * Pinning the budget's *magnitude* after per-recipient keying needs a different shape: the budget
+     * now bounds only how long a wedged recipient's **own** next frame waits, so a test would have to
+     * heal the wedge and assert on a second frame to that same peer — which needs an `unwedge` the
+     * harness does not have. Deliberately not added here; tracked in #2068.
      */
     @Test
     fun `a relay forward to a wedged spoke does not delay one to a healthy spoke`() =
         runTest(StandardTestDispatcher(), timeout = backstop) {
             val star = relayStar(coJoiners = 3, wedge = setOf("joiner-b"))
 
-            // Queued first, and it will never complete: the healthy forward sits behind it.
+            // Queued first, and it will never complete.
             star.joinerA.sendRelay(RelayDest.One(star.joinerBId), appPayload("plain"))
             star.joinerA.sendRelay(RelayDest.One(star.joinerCId), appPayload("legit"))
             testScheduler.advanceTimeBy(relayHeadOfLineBudget)
@@ -727,8 +734,8 @@ class StarRelayTest {
                     assertEquals(
                         listOf("legit"),
                         star.joinerC.appFramesFrom(star.joinerAId),
-                        "the healthy spoke must be served within a few relay budgets of the " +
-                            "wedged one — on the membership budget it would wait a reconnect window",
+                        "the healthy spoke must be served while the wedged one is outstanding — it " +
+                            "has its own lane and does not queue behind another recipient",
                     )
                 },
                 {
