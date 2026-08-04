@@ -40,7 +40,6 @@ import us.tractat.kuilt.crdt.IncarnationClock
 import us.tractat.kuilt.crdt.LWWRegister
 import us.tractat.kuilt.crdt.ORMap
 import us.tractat.kuilt.crdt.ORSet
-import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
@@ -599,15 +598,13 @@ public class WarpNode(
     public fun enqueue(taskId: TaskId, descriptor: TaskDescriptor) {
         lock.withLock {
             val ts = ++timestampCounter
-            queueQuilter.apply(
-                Patch(
-                    queueQuilter.state.value.put(
-                        replica = replica,
-                        key = taskId,
-                        value = LWWRegister.empty<TaskDescriptor>().set(replica, ts, descriptor),
-                    )
+            queueQuilter.mutate { queue ->
+                queue.putDelta(
+                    replica = replica,
+                    key = taskId,
+                    value = LWWRegister.empty<TaskDescriptor>().set(replica, ts, descriptor),
                 )
-            )
+            }
         }
     }
 
@@ -724,15 +721,22 @@ public class WarpNode(
                     "WarpNode($selfId): raftNode is required to enqueue coordinated tasks — " +
                         "no RaftNode was supplied at construction time"
                 }
-                // Hold the WarpNode lock across the read-mint-apply, exactly as the free-path
-                // sibling above does. The coordinated queue is an ORSet, so `add` mints its dot
-                // from the context of the state it reads: two concurrent enqueues off the same
-                // snapshot mint the SAME dot, and the causal join then annihilates *both* tasks
-                // (each patch witnesses the shared dot but carries only its own key, so each
-                // reads the other's as retired). Guarding only the `apply` is not enough — the
-                // read is where the dot is minted (#2077).
+                // Keep the read, the dot mint and the write in ONE critical section, exactly as
+                // the free-path sibling above does. The coordinated queue is an ORSet, so `add`
+                // mints its dot from the context of the state it reads: two concurrent enqueues
+                // off the same snapshot mint the SAME dot, and the causal join then annihilates
+                // *both* tasks (each patch witnesses the shared dot but carries only its own
+                // element, so each reads the other's as retired). Guarding only the write is not
+                // enough — the read is where the dot is minted (#2077, which lost 919 of 1,200
+                // tasks; guarding the write alone still lost 61%).
+                //
+                // [Quilter.mutate] is itself `lock.withLock { apply(state.value.let(transform)) }`,
+                // so the transform's read and its patch land under the replicator's own lock —
+                // the atomicity #2077 needs, now held by the idiom rather than by this call site.
+                // The [WarpNode] lock stays as well: it is the established outer lock at every
+                // mutation site in this file, and holding it changes nothing about the ordering.
                 lock.withLock {
-                    coordQueueQuilter.apply(Patch(coordQueueQuilter.state.value.add(replica, taskId)))
+                    coordQueueQuilter.mutate { queue -> queue.addDelta(replica, taskId) }
                 }
             }
         }
@@ -1091,9 +1095,12 @@ public class WarpNode(
         val alreadyInFlight = lock.withLock { !inFlight.add(taskId) }
         if (alreadyInFlight) return
 
-        // Announce (free): union selfId into the claimant set. ORMap.put is additive.
+        // Announce (free): union selfId into the claimant set. ORMap.put is additive, and the
+        // delta ships only this peer's own singleton — every other claimant reached the receiver
+        // through that peer's own announcement, so nothing is uniquely carried by the sender's
+        // merged set. See the #2086 note on [removeFromQueue] for the one race where that differs.
         lock.withLock {
-            intentQuilter.apply(Patch(intentQuilter.state.value.put(replica, taskId, GSet.of(selfId))))
+            intentQuilter.mutate { intents -> intents.putDelta(replica, taskId, GSet.of(selfId)) }
         }
 
         val mustSettle = lock.withLock {
@@ -1505,13 +1512,17 @@ public class WarpNode(
     }
 
     private fun putResult(taskId: TaskId, opResult: OpResult) {
-        // Hold the WarpNode lock across the read-compute-apply so every concurrent
-        // executor coroutine mints a *unique* dot from the latest state. Without this,
-        // two concurrent `put` calls on the same base state each call `nextDot(replica)`,
-        // producing duplicate dots. When those patches are joined, the causal CRDT
-        // tombstoning logic silently drops one entry (the entry whose dot the other's
-        // context already witnesses). Bug: concurrent result recordings were losing
-        // results non-deterministically.
+        // Keep the read, the dot mint and the write in ONE critical section so every concurrent
+        // executor coroutine mints a *unique* dot from the latest state. Without that, two
+        // concurrent `put` calls on the same base state each call `nextDot(replica)`, producing
+        // duplicate dots. When those patches are joined, the causal CRDT tombstoning logic
+        // silently drops one entry (the entry whose dot the other's context already witnesses).
+        // Bug: concurrent result recordings were losing results non-deterministically.
+        //
+        // [Quilter.mutate] is that critical section — it reads `state.value`, runs the transform
+        // and applies the patch under the replicator's own lock. The [WarpNode] lock stays around
+        // it because [_duplicates] and [timestampCounter] are this node's state, not the
+        // Quilter's, and they must move with the write.
         lock.withLock {
             // A non-null existing entry means a peer (or this node in the dual-leader window)
             // already recorded a result for this task. The LWW ORMap backstop absorbs this
@@ -1520,36 +1531,43 @@ public class WarpNode(
                 _duplicates = _duplicates.piece(_duplicates.inc(replica).delta)
             }
             val ts = ++timestampCounter
-            resultsQuilter.apply(
-                Patch(
-                    resultsQuilter.state.value.put(
-                        replica = replica,
-                        key = taskId,
-                        value = LWWRegister.empty<OpResult>().set(replica, ts, opResult),
-                    )
+            resultsQuilter.mutate { board ->
+                board.putDelta(
+                    replica = replica,
+                    key = taskId,
+                    value = LWWRegister.empty<OpResult>().set(replica, ts, opResult),
                 )
-            )
+            }
         }
     }
 
     private fun removeFromQueue(taskId: TaskId, kind: CoordinationKind) {
-        // Hold the WarpNode lock so concurrent `remove` calls always operate on the
-        // latest state. Without this, two concurrent removes on the same base state
-        // would each produce a `remove` delta, both of which are correct (idempotent),
-        // but the key invariant below is that the state read happens atomically with
-        // the apply so the delta is always a subset of the current state.
+        // Each `mutate` reads and writes inside the replicator's own lock, so the retired tags a
+        // remove delta names are always exactly the ones live at the instant it is applied — the
+        // invariant that makes the delta a subset of the current state rather than of a snapshot
+        // that has since moved. The [WarpNode] lock stays as the established outer lock.
+        //
+        // **#2086 lives here.** A remove delta racing a `putDelta` on the same key of the same
+        // ORMap is order-dependent on the *value* axis: a peer that applied the remove first no
+        // longer has the old value to merge the put's value into. Of this node's three ORMaps,
+        // only the intent register can actually reach that race — [results] is never removed
+        // from, and a queue remove can only race an enqueue if a TaskId is reused while its own
+        // task is completing. The intent-register divergence is inert: the diverged key belongs
+        // to a task that has just completed and left the queue, and every read of the register
+        // ([winner], [isBindingClaimant]) is over ids still *in* a queue. It heals at the next
+        // anti-entropy round, when full states union the values.
         lock.withLock {
             when (kind) {
                 CoordinationKind.Free -> {
-                    queueQuilter.apply(Patch(queueQuilter.state.value.remove(taskId)))
-                    intentQuilter.apply(Patch(intentQuilter.state.value.remove(taskId)))
+                    queueQuilter.mutate { queue -> queue.removeDelta(taskId) }
+                    intentQuilter.mutate { intents -> intents.removeDelta(taskId) }
                 }
                 CoordinationKind.Coordinated -> {
-                    coordQueueQuilter.apply(Patch(coordQueueQuilter.state.value.remove(taskId)))
+                    coordQueueQuilter.mutate { queue -> queue.removeDelta(taskId) }
                     // Coordinated tasks no longer write intent entries (#873), but reclaim any
                     // stray entry a peer running a pre-#873 build may have replicated to us —
-                    // a no-op delta when the key is absent.
-                    intentQuilter.apply(Patch(intentQuilter.state.value.remove(taskId)))
+                    // the lattice identity when the key is absent.
+                    intentQuilter.mutate { intents -> intents.removeDelta(taskId) }
                 }
             }
         }
