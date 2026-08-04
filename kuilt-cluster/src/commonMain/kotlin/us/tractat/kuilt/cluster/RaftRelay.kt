@@ -8,24 +8,6 @@ import kotlinx.serialization.encodeToByteArray
 import us.tractat.kuilt.raft.NodeId
 
 /**
- * The first-hop origin-spoofing rule, shared by every point that accepts a relay
- * frame off a fabric — commit-safety-critical.
- *
- * `origin` rides inside a forgeable [RaftRelay] frame, so before it is ever handed
- * to an engine or forwarded on it is checked against the frame's fabric-sender:
- *
- * - A frame from **a spoke** ([sender] not in [core]) is accepted only if its
- *   [origin] equals that sender — a player may speak only for itself, never forge a
- *   vote or a `matchIndex`-advancing response on another node's behalf.
- * - A frame from **the core** ([sender] in [core]) is trusted to carry an
- *   already-validated [origin]; core servers preserve identity.
- *
- * @return `true` if the frame passes first-hop validation.
- */
-internal fun validFirstHop(sender: NodeId, origin: NodeId, core: Set<NodeId>): Boolean =
-    sender in core || origin == sender
-
-/**
  * One Raft message travelling across the server core with its **true sender kept
  * intact from end to end** — the relay envelope.
  *
