@@ -55,10 +55,11 @@ import kotlin.test.assertEquals
  * | `RgaSerializer`'s op sort | [RGA], [JSON_CRDT] |
  * | `FugueSerializer`'s op sort | [FUGUE] |
  *
- * The last four rows closed #2038: `cloud` is empty in [ORSET], [ORMAP] and [MV_REGISTER], so its
- * sort had no vector at all, and `Rga`, `Fugue` and `JsonCrdt` had no cross-target byte pin of any
- * kind — only same-target delivery-order probes, which by construction cannot see two targets
- * disagree. **Adding a type to that family does not inherit a pin from this file — add a vector.**
+ * The `cloud`, `RgaSerializer` and `FugueSerializer` rows closed #2038: `cloud` is empty in
+ * [ORSET], [ORMAP] and [MV_REGISTER], so its sort had no vector at all, and `Rga`, `Fugue` and
+ * `JsonCrdt` had no cross-target byte pin of any kind — only same-target delivery-order probes,
+ * which by construction cannot see two targets disagree.
+ * **Adding a type to that family does not inherit a pin from this file — add a vector.**
  *
  * **Still not pinned here: the `Compact` op sorts.** No construction below calls `Rga.compact` or
  * `Fugue.compact`, so neither `Compact.positions` nor the Compact-vs-Compact tiebreak is reached;
