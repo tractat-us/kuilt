@@ -1518,6 +1518,21 @@ class DotWireEncodingCostModelTest {
                             "grows",
                     )
                 },
+                // The `upThrough = 0` guard, restated per row. A replica that never applied a local
+                // mutation sends `upThrough = 0`, and the recipient's `resyncReceiveCursor` returns
+                // at its `<= 0L` early guard BEFORE acking — which prices a matched round at half
+                // and reads as a better result. The band above would catch that too; this says why.
+                {
+                    rows.forEach { (type, n, metered) ->
+                        assertTrue(
+                            metered.perRoundPerNode > rootDigestBytes(meshSender) * 1.2,
+                            "$type/$n: a matched round must carry the ack back, not the digest alone " +
+                                "(metered ${metered.perRoundPerNode} b vs one digest " +
+                                "${rootDigestBytes(meshSender)} b) — a harness whose nodes never wrote " +
+                                "prices this at half",
+                        )
+                    }
+                },
             )
         }
     // ---- J. the combination -------------------------------------------------------------------
