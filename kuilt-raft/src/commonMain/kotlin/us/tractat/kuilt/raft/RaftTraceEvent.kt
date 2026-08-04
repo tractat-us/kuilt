@@ -99,14 +99,43 @@ public sealed interface RaftTraceEvent {
         val term: Long,
     ) : RaftTraceEvent
 
-    /** Vote denied to a candidate. */
+    /**
+     * Vote denied to a candidate.
+     *
+     * [reasons] is the attribution to assert against; [reason] is a *derived* projection of it.
+     * See [DenyReason] for why a denial can carry more than one.
+     */
     public data class VoteDenied(
         override val clock: Long,
         val from: NodeId,
         val to: NodeId,
         val term: Long,
-        val reason: DenyReason,
-    ) : RaftTraceEvent
+        /**
+         * **Every** conjunct of the vote decision that failed, ordered most-specific-first by the
+         * responder. Never empty on a denial.
+         *
+         * A candidate can fail several at once — already having lost our vote *and* carrying a log
+         * behind ours is an ordinary split-vote outcome, not a corner case — and a single-valued field
+         * can only name one of them. Prefer `DenyReason.X in reasons` over equality on [reason]: the
+         * latter is blind to every conjunct that failed alongside the first, which is what made §5.4.1
+         * unattributable through this channel on exactly the trajectories where it mattered (#2052).
+         *
+         * A `Set` rather than a single value **and** the sole constructor parameter, deliberately.
+         * Were this an additive field defaulting to `setOf(reason)`, an emitter that set `reason` and
+         * forgot `reasons` would compile and silently report a one-element set — reintroducing, one
+         * level up, the exact silent-misattribution this exists to remove. There is no default to
+         * forget, so a new deny path must state its full attribution to compile.
+         */
+        val reasons: Set<DenyReason>,
+    ) : RaftTraceEvent {
+        /**
+         * The **first-failing** reason — the head of [reasons], not the only reason the vote failed.
+         *
+         * Derived rather than stored so it cannot drift from [reasons]; two stored views of one
+         * decision are what #2052 was. Throws if [reasons] is empty, which a denial never is.
+         */
+        public val reason: DenyReason get() = reasons.first()
+    }
 
     /** §7 InstallSnapshot chunk sent to a follower whose needed prefix has been compacted away. */
     public data class InstallSnapshot(
@@ -159,14 +188,23 @@ public sealed interface RaftTraceEvent {
         val proposedTerm: Long,
     ) : RaftTraceEvent
 
-    /** Node denied a pre-vote to a candidate. */
+    /**
+     * Node denied a pre-vote to a candidate.
+     *
+     * [reasons] is the attribution to assert against; [reason] is a *derived* projection of it.
+     * See [VoteDenied] and [DenyReason].
+     */
     public data class PreVoteDenied(
         override val clock: Long,
         val node: NodeId,
         val to: NodeId,
         val proposedTerm: Long,
-        val reason: DenyReason,
-    ) : RaftTraceEvent
+        /** **Every** conjunct of the pre-vote decision that failed — see [VoteDenied.reasons]. */
+        val reasons: Set<DenyReason>,
+    ) : RaftTraceEvent {
+        /** The **first-failing** reason — see [VoteDenied.reason]. Prefer `DenyReason.X in reasons`. */
+        public val reason: DenyReason get() = reasons.first()
+    }
 
     /**
      * The leader confirmed quorum freshness for a linearizable read at [readIndex] in [term].
@@ -297,7 +335,15 @@ public enum class StepDownReason {
     RemovedFromConfig,
 }
 
-/** Why a candidate's RequestVote or PreVote was denied by the responding node. */
+/**
+ * Why a candidate's RequestVote or PreVote was denied by the responding node.
+ *
+ * **A denial can have more than one of these at once**, which is why the trace events carry a
+ * `reasons: Set<DenyReason>` rather than a single value (#2052). The vote decision is a conjunction;
+ * a candidate can fail several of its clauses on one ordinary trajectory — [AlreadyVoted] together
+ * with [LogNotUpToDate] is just a split vote against a lagging candidate — and reporting only the
+ * first makes every other failing clause unobservable through this channel, including §5.4.1.
+ */
 public enum class DenyReason {
     /** The candidate's term is lower than the responder's current term. */
     StaleTerm,

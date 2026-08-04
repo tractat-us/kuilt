@@ -1343,25 +1343,44 @@ internal class RaftEngine(
         // voted checks below still run.
         val isTransferCandidate = _role.value is RaftRole.Leader && transfer.inFlightTarget == from
         if (!isTransferCandidate && !m.leadershipTransfer && leaderAlive && m.term > state.currentTerm) {
-            emitTrace(RaftTraceEvent.VoteDenied(nextClock(), transport.selfId, from, m.term, DenyReason.LeaderAlive))
+            // Sole reason by construction: this is an early return taken BEFORE any other conjunct is
+            // evaluated, so no other clause has an opinion yet.
+            emitTrace(RaftTraceEvent.VoteDenied(nextClock(), transport.selfId, from, m.term, setOf(DenyReason.LeaderAlive)))
             send(from, RaftMessage.RequestVoteResponse(state.currentTerm, false))
             return
         }
         if (m.term > state.currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
+        // #2052: each clause of the decision is evaluated ONCE into a named local, and the denial is
+        // attributed by testing those same locals. The reason was previously re-derived from `state` by
+        // a priority-ordered `when` whose last arm was a FALLTHROUGH — `else -> LogNotUpToDate` named
+        // §5.4.1 without ever consulting [logOk]. That was sound only by an argument about the
+        // `stepDown` above (it resolves `m.term > currentTerm`, so a false `grant` past the first two
+        // arms did imply `!logOk`) and about the conjunction being exactly these three clauses. Adding a
+        // fourth clause to `grant` and not to the `when` would have reported the new reason as
+        // `LogNotUpToDate` forever, with nothing failing. There is no fallthrough now, so there is no
+        // argument to keep true.
+        val termOk = m.term == state.currentTerm
         val logOk = isLogUpToDate(ours = state.lastLogPosition, candidate = m.lastLogPosition)
         // The candidate is [from] — the transport's origin — never a payload field (#1912).
-        val grant = m.term == state.currentTerm && logOk && (state.votedFor == null || state.votedFor == from)
+        val voteFree = state.votedFor == null || state.votedFor == from
+        val grant = termOk && logOk && voteFree
         if (grant) {
             persistVote(from)
             resetElectionTimeout()
             emitTrace(RaftTraceEvent.VoteGranted(nextClock(), transport.selfId, from, m.term))
         } else {
-            val reason = when {
-                m.term < state.currentTerm -> DenyReason.StaleTerm
-                state.votedFor != null && state.votedFor != from -> DenyReason.AlreadyVoted
-                else -> DenyReason.LogNotUpToDate
+            // `grant` is the conjunction of exactly these three locals, evaluated four lines up with no
+            // state mutation in between, so `!grant` is `!termOk || !logOk || !voteFree` by De Morgan
+            // and at least one branch below fires. That is a mechanical fact about names in scope, not
+            // an argument about a distant line — and if it were ever false, `reasons.first()` throws
+            // rather than mis-attributing. `!termOk` means BELOW our term: the `stepDown` above already
+            // adopted anything higher. Arm order fixes [RaftTraceEvent.VoteDenied.reason].
+            val reasons = buildSet {
+                if (!termOk) add(DenyReason.StaleTerm)
+                if (!voteFree) add(DenyReason.AlreadyVoted)
+                if (!logOk) add(DenyReason.LogNotUpToDate)
             }
-            emitTrace(RaftTraceEvent.VoteDenied(nextClock(), transport.selfId, from, m.term, reason))
+            emitTrace(RaftTraceEvent.VoteDenied(nextClock(), transport.selfId, from, m.term, reasons))
         }
         send(from, RaftMessage.RequestVoteResponse(state.currentTerm, grant))
     }
@@ -1381,17 +1400,25 @@ internal class RaftEngine(
      * Does NOT mutate term, votedFor, or timers — pre-vote is hypothesis-only.
      */
     private suspend fun onPreVote(from: NodeId, m: RaftMessage.PreVote) {
+        // #2052, as in [onRequestVote]: one evaluation per clause into a named local, attribution built
+        // from those locals, no fallthrough arm. `else -> StaleTerm` previously named the term clause
+        // without testing it.
+        val termOk = m.term > state.currentTerm
         val logOk = isLogUpToDate(ours = state.lastLogPosition, candidate = m.lastLogPosition)
-        val grant = m.term > state.currentTerm && logOk && !leaderAlive
+        val noLeader = !leaderAlive
+        val grant = termOk && logOk && noLeader
         if (grant) {
             emitTrace(RaftTraceEvent.PreVoteGranted(nextClock(), transport.selfId, from, m.term))
         } else {
-            val reason = when {
-                leaderAlive    -> DenyReason.LeaderAlive
-                !logOk         -> DenyReason.LogNotUpToDate
-                else           -> DenyReason.StaleTerm
+            // Arm order preserves what this handler has always reported first, which is NOT
+            // [onRequestVote]'s order: on the pre-vote path a live leader is the actionable signal, so
+            // it leads even though a stale term may have failed too.
+            val reasons = buildSet {
+                if (!noLeader) add(DenyReason.LeaderAlive)
+                if (!logOk) add(DenyReason.LogNotUpToDate)
+                if (!termOk) add(DenyReason.StaleTerm)
             }
-            emitTrace(RaftTraceEvent.PreVoteDenied(nextClock(), transport.selfId, from, m.term, reason))
+            emitTrace(RaftTraceEvent.PreVoteDenied(nextClock(), transport.selfId, from, m.term, reasons))
         }
         send(from, RaftMessage.PreVoteResponse(state.currentTerm, grant, m.term, m.round))
     }
