@@ -250,19 +250,25 @@ class ORSetDeltaMutatorLawTest {
     /**
      * A remove delta applied **before** the add it retires. `DotContext` is dot-exact — a
      * contiguous prefix per replica plus a cloud for the rest — so an early remove simply parks
-     * the retired dot in the cloud and the late add is dropped on arrival. Every order converges,
-     * byte-for-byte, to the same state as the author's.
+     * the retired dot in the cloud and the late add is dropped on arrival. No buffering, no
+     * causal-delivery requirement.
+     *
+     * The reference is built with the **full mutators**, not by folding the same deltas, so this
+     * is the byte-level law generalised over delivery order rather than a comparison of a delta
+     * path against itself.
      */
     @Test
     fun aRemoveDeltaAppliedBeforeTheAddItRetiresConverges() {
-        var author = ORSet.empty<String>()
-        val addPatch = author.addDelta(alpha, ELEMENT)
-        author = author.piece(addPatch)
-        val removePatch = author.removeDelta(ELEMENT)
-        author = author.piece(removePatch)
+        // A converged peer holding an unrelated element and an older copy of the one under test.
+        val peer = ORSet.empty<String>().add(bravo, "bystander").add(bravo, ELEMENT)
 
-        val add = addPatch.delta
-        val remove = removePatch.delta
+        // The author re-adds the element and then removes it, by the full mutators.
+        val author = peer.add(alpha, ELEMENT).remove(ELEMENT)
+
+        // The same two operations as deltas — the re-add supersedes bravo's dot.
+        val add = peer.addDelta(alpha, ELEMENT).delta
+        val remove = peer.add(alpha, ELEMENT).removeDelta(ELEMENT).delta
+
         val orders = mapOf(
             "add,remove" to listOf(add, remove),
             "remove,add" to listOf(remove, add),
@@ -273,10 +279,10 @@ class ORSetDeltaMutatorLawTest {
 
         val checks: List<() -> Unit> = orders.map { (name, order) ->
             {
-                val folded = order.fold(ORSet.empty<String>()) { acc, delta -> acc.piece(delta) }
+                val folded = order.fold(peer) { acc, delta -> acc.piece(delta) }
                 assertTrue(
                     bytes(folded).contentEquals(bytes(author)),
-                    "order [$name] must encode identically to the author's state " +
+                    "order [$name] must encode identically to the author's mutator-path state " +
                         "(got ${folded.elements}, author has ${author.elements})",
                 )
             }
@@ -291,7 +297,9 @@ class ORSetDeltaMutatorLawTest {
      */
     @Test
     fun aConcurrentAddSurvivesARemoveDeltaInEitherOrder() {
-        val start = ORSet.empty<String>().add(alpha, ELEMENT)
+        // "bystander" is here so the remove delta's context is a strict subset of the sender's
+        // history: a delta that over-claimed would take the bystander down with it.
+        val start = ORSet.empty<String>().add(alpha, "bystander").add(alpha, ELEMENT)
         val removal = start.removeDelta(ELEMENT).delta       // alpha retires the dot it can see
         val concurrent = start.addDelta(bravo, ELEMENT).delta // bravo re-adds, minting a fresh dot
 
@@ -301,6 +309,12 @@ class ORSetDeltaMutatorLawTest {
         assertAll(
             { assertTrue(removeFirst.contains(ELEMENT), "add must win when the remove lands first") },
             { assertTrue(addFirst.contains(ELEMENT), "add must win when the add lands first") },
+            {
+                assertTrue(
+                    removeFirst.contains("bystander") && addFirst.contains("bystander"),
+                    "a remove delta must not retire dots belonging to any other element",
+                )
+            },
             {
                 assertTrue(
                     bytes(removeFirst).contentEquals(bytes(addFirst)),
