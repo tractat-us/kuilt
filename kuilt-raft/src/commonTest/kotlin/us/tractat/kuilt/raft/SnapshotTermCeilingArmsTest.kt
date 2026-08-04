@@ -67,13 +67,27 @@ import kotlin.test.assertTrue
  *
  * ### Measured coverage at the time of writing
  *
- * Deleting the `MAX_PLAUSIBLE_TERM` arm (`termCeiling = m.term`) left the whole `:kuilt-raft` module
- * green — 486/486, `Math.min` absent from the compiled `snapshotChunkRefusal` by `javap` — so that arm
- * was pinned by nothing. Deleting the `m.term` arm (`termCeiling = MAX_PLAUSIBLE_TERM`) reddened two
- * `FrameRefusedTest` cases, whose fixtures happen to sit in the isolating range; that coverage is
- * incidental to what those tests assert (they measure *attribution*, and their KDoc does not mention
- * the isolation), so an edit moving `term + 1` to `Long.MAX_VALUE` would drop it silently. The tests
- * here make both isolations explicit and asserted.
+ * Before these tests: deleting the `MAX_PLAUSIBLE_TERM` arm (`termCeiling = m.term`) left the whole
+ * `:kuilt-raft` module green — 486/486, `Math.min` absent from the compiled
+ * `snapshotChunkRefusal-HfnLOkc` by `javap` — so that arm was pinned by nothing. Deleting the `m.term`
+ * arm (`termCeiling = MAX_PLAUSIBLE_TERM`) reddened two `FrameRefusedTest` cases, whose fixtures
+ * happen to sit in the isolating range. That coverage is **incidental**: those tests measure
+ * *attribution*, their KDoc does not mention the isolation, and moving `term + 1` to `Long.MAX_VALUE`
+ * — which is what every other forged-term fixture uses — would drop it silently.
+ *
+ * With them, each arm is red under its own deletion and **green under the sibling's**, which is what
+ * distinguishes two arm-specific pins from one more disjunction pin:
+ *
+ * | | `termCeiling = MAX_PLAUSIBLE_TERM` | `termCeiling = m.term` |
+ * |---|---|---|
+ * | [aTermAboveTheFrameTermButInsideTheAbsoluteCeilingIsRefused] | 🔴 | 🟢 |
+ * | [aTermAboveTheAbsoluteCeilingButAtTheFrameTermIsRefused] | 🟢 | 🔴 |
+ *
+ * Both reds are the frame **installing**, not merely going unrefused: `snapshotTerm` is persisted at
+ * `2^60` and `2^60 + 1` respectively, over a wiped log, with `commitIndex` fabricated from the frame.
+ * The second carries a consequence past §5.4.1 — adopting `m.term` writes a durable term of
+ * `2^60 + 1`, which is **above the storage ceiling `checkedRestoredTerm` enforces**, so the node
+ * refuses to start on its next boot.
  *
  * Every test holds the target still — partitioned off, and only [RaftSimulation.settle]ing after each
  * injection, never advancing virtual time — so no election timer fires and the injected frames are
@@ -173,16 +187,17 @@ internal class SnapshotTermCeilingArmsTest {
         sim.settle()
         val controlFloor = victim.compactionFloor.value
 
-        val refusal = refusals.only(victimId)
+        val hits = refusals.at(victimId)
         assertAll(
+            { assertEquals(1, hits.size, "exactly one refusal at $victimId; all refusals were $refusals") },
             {
                 assertEquals(
-                    RefusalGate.InstallSnapshotTermOutOfRange, refusal.gate,
+                    RefusalGate.InstallSnapshotTermOutOfRange, hits.singleOrNull()?.gate,
                     "only the m.term arm can refuse this frame, so the gate names it unambiguously here",
                 )
             },
-            { assertEquals(leaderId, refusal.from) },
-            { assertEquals(RaftMessageType.InstallSnapshot, refusal.messageType) },
+            { assertEquals(leaderId, hits.singleOrNull()?.from) },
+            { assertEquals(RaftMessageType.InstallSnapshot, hits.singleOrNull()?.messageType) },
             { assertEquals(logBefore, logAfterForgery, "a term above the frame's own must not wipe the durable log") },
             { assertEquals(floorBefore, floorAfterForgery, "the compaction floor must not jump to the forged boundary") },
             { assertEquals(commitBefore, commitAfterForgery, "commitIndex must not be fabricated from the forged frame") },
@@ -305,16 +320,17 @@ internal class SnapshotTermCeilingArmsTest {
         sim.settle()
         val controlFloor = victim.compactionFloor.value
 
-        val refusal = refusals.only(victimId)
+        val hits = refusals.at(victimId)
         assertAll(
+            { assertEquals(1, hits.size, "exactly one refusal at $victimId; all refusals were $refusals") },
             {
                 assertEquals(
-                    RefusalGate.InstallSnapshotTermOutOfRange, refusal.gate,
+                    RefusalGate.InstallSnapshotTermOutOfRange, hits.singleOrNull()?.gate,
                     "only the MAX_PLAUSIBLE_TERM arm can refuse this frame — lastIncludedTerm == m.term",
                 )
             },
-            { assertEquals(leaderId, refusal.from) },
-            { assertEquals(RaftMessageType.InstallSnapshot, refusal.messageType) },
+            { assertEquals(leaderId, hits.singleOrNull()?.from) },
+            { assertEquals(RaftMessageType.InstallSnapshot, hits.singleOrNull()?.messageType) },
             { assertEquals(logBefore, logAfterForgery, "a term above the absolute ceiling must not wipe the log") },
             { assertEquals(floorBefore, floorAfterForgery, "the compaction floor must not jump") },
             { assertEquals(commitBefore, commitAfterForgery, "commitIndex must not be fabricated") },
@@ -352,12 +368,19 @@ internal class SnapshotTermCeilingArmsTest {
         return out
     }
 
-    /** The one refusal recorded at [node] — asserting there is exactly one, so a second gate cannot hide. */
-    private fun List<RaftTraceEvent.FrameRefused>.only(node: NodeId): RaftTraceEvent.FrameRefused {
-        val hits = filter { it.node == node }
-        assertEquals(1, hits.size, "expected exactly one FrameRefused at $node, all refusals were $this")
-        return hits.first()
-    }
+    /**
+     * The refusals recorded at [node].
+     *
+     * Deliberately **not** `FrameRefusedTest.only`, which asserts the count and returns the single
+     * hit. That assertion has to run before the caller's `assertAll`, so on the mutation this class
+     * exists to catch — where the frame is *admitted* and there is no refusal at all — it throws first
+     * and the state assertions never execute. The failure then says "expected 1, was 0" and nothing
+     * about whether the forged snapshot installed, which is the evidence a reader wants. Returning the
+     * list lets the count assertion sit *inside* `assertAll` alongside the four state surfaces, so a
+     * red reports the whole picture at once.
+     */
+    private fun List<RaftTraceEvent.FrameRefused>.at(node: NodeId): List<RaftTraceEvent.FrameRefused> =
+        filter { it.node == node }
 
     private fun RaftSimulation.idOf(node: RaftNode): NodeId = nodeIds.first { nodes[it] === node }
 
