@@ -20,10 +20,10 @@ import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Example: collaborative JSON document sync using [JsonCrdt] + [Quilter].
@@ -57,7 +57,7 @@ class CollabDocTest {
 
     @Test
     fun `two peers editing different top-level fields converge`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamAlice = loom.host(Pattern("collab-doc"))
             val seamBob = loom.join(InMemoryTag("bob"))
@@ -98,7 +98,7 @@ class CollabDocTest {
 
     @Test
     fun `concurrent edits to different nested fields both survive`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamAlice = loom.host(Pattern("nested-doc"))
             val seamBob = loom.join(InMemoryTag("bob"))

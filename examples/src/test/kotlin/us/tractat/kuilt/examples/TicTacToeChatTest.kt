@@ -32,11 +32,11 @@ import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.raft.LeadershipLostException
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Integration example: tic-tac-toe (consensus via `gameNode`) **and** a convergent
@@ -114,7 +114,7 @@ class TicTacToeChatTest {
 
     @Test
     fun `game moves and chat log both converge across two real peers`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamAlice = loom.host(Pattern("ttt+chat"))
             val seamBob = loom.join(InMemoryTag("bob"))

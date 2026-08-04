@@ -25,10 +25,10 @@ import us.tractat.kuilt.raft.raftNode
 import us.tractat.kuilt.raft.test.MULTI_NODE_SIM_BASE_CONFIG
 import us.tractat.kuilt.raft.test.MULTI_NODE_SIM_SEED
 import us.tractat.kuilt.raft.test.MultiNodeRaftSim
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * M=1 exactly-once happy path (epic #485, S1c-1).
@@ -58,7 +58,7 @@ class ExactlyOnceHappyPathTest {
      */
     @Test
     fun `m1 single server - retry with same requestId is deduplicated`(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val voterId = NodeId("v1")
             val clientId = NodeId("client")
             val config = ClusterConfig(voters = setOf(voterId), learners = setOf(clientId))

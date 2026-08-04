@@ -15,11 +15,11 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.TwoPhaseSet
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Example: a tombstoned label set replicated across two peers using [TwoPhaseSet]
@@ -62,7 +62,7 @@ class TombstonedTagSetTest {
 
     @Test
     fun `labels added by two peers converge to the union and a removed label stays gone`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamAlice = loom.host(Pattern("2p-tags"))
             val seamBob = loom.join(InMemoryTag("bob"))
@@ -107,7 +107,7 @@ class TombstonedTagSetTest {
 
     @Test
     fun `a tombstoned label cannot be re-added (remove-wins permanently)`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamAlice = loom.host(Pattern("2p-tags-tombstone"))
             val seamBob = loom.join(InMemoryTag("bob"))

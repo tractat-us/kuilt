@@ -59,6 +59,7 @@ import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.RaftTraceEvent
 import us.tractat.kuilt.raft.test.FakeRaftNode
 import us.tractat.kuilt.test.FakeSeam
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
 import us.tractat.kuilt.test.fabric.InMemoryRoomFabric
 import us.tractat.kuilt.test.fabric.connectionPair
@@ -71,7 +72,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
@@ -97,10 +97,11 @@ import kotlin.time.Instant
  * These stand up real [RaftNode]s over the **seam under test** (the game bootstrap's own overlay),
  * so the transport cannot be `MultiNodeRaftSim`'s in-process network — the whole point is that Raft
  * rides the federated seam. This mirrors `:kuilt-game`'s `GameRoomTest`, the established pattern for
- * multi-node game-bootstrap tests: [StandardTestDispatcher] (FIFO virtual time), a tight per-test
- * timeout, **per-node seeded election RNG** ([fedRaftConfig]) for symmetry-breaking, everything
- * long-lived on child scopes of `backgroundScope`, and bounded suspending `first { }` awaits — never
- * `advanceUntilIdle()`.
+ * multi-node game-bootstrap tests: [StandardTestDispatcher] (FIFO virtual time), a generous
+ * [TEST_WEDGE_BACKSTOP] wall-clock ceiling (a wedge backstop, *not* a performance assertion — the
+ * fast, load-independent detectors are the virtual-time bounds below), **per-node seeded election
+ * RNG** ([fedRaftConfig]) for symmetry-breaking, everything long-lived on child scopes of
+ * `backgroundScope`, and bounded suspending `first { }` awaits — never `advanceUntilIdle()`.
  */
 class FederatedGamePerRoomE2ETest {
 
@@ -108,7 +109,7 @@ class FederatedGamePerRoomE2ETest {
 
     // ── Topology 1: in-memory mesh (players ARE the voters) ──────────────────────
     @Test
-    fun sameGameCode_inMemoryMesh() = runTest(StandardTestDispatcher(), timeout = 20.seconds) {
+    fun sameGameCode_inMemoryMesh() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val p1 = loom.host(Pattern(gameId))
         val p2 = loom.join(InMemoryTag(gameId))
@@ -123,7 +124,7 @@ class FederatedGamePerRoomE2ETest {
 
     // ── Topology 2: single-server hub (one server IS the whole core) ─────────────
     @Test
-    fun sameGameCode_singleServerHub() = runTest(StandardTestDispatcher(), timeout = 20.seconds) {
+    fun sameGameCode_singleServerHub() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val dispatcher = testDispatcher()
         val fabric = InMemoryRoomFabric(backgroundScope, dispatcher, random = Random(7))
         val core = setOf(NodeId("server"))
@@ -149,7 +150,7 @@ class FederatedGamePerRoomE2ETest {
     // ── Topology 3: three-server federation surviving one-server failover ────────
     @Test
     fun sameGameCode_threeServerFederation_survivesOneServerFailover() =
-        runTest(StandardTestDispatcher(), timeout = 30.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val dispatcher = testDispatcher()
             val ids = listOf(NodeId("s1"), NodeId("s2"), NodeId("s3"))
             val core = ids.toSet()
@@ -239,7 +240,7 @@ class FederatedGamePerRoomE2ETest {
      */
     @Test
     fun g1_playerBehindFollower_commitsEverywhereAndCreditsTrueOrigin() =
-        runTest(StandardTestDispatcher(), timeout = 30.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val dispatcher = testDispatcher()
             val ids = listOf(NodeId("s1"), NodeId("s2"), NodeId("s3"))
             val fed = backgroundScope.federation(ids, dispatcher, increasingMillisClock())
@@ -273,7 +274,7 @@ class FederatedGamePerRoomE2ETest {
      */
     @Test
     fun g2_relayDeliversLeaderProposedEntryToPlayerBehindFollower() =
-        runTest(StandardTestDispatcher(), timeout = 30.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val dispatcher = testDispatcher()
             val ids = listOf(NodeId("s1"), NodeId("s2"), NodeId("s3"))
             val fed = backgroundScope.federation(ids, dispatcher, increasingMillisClock())
@@ -297,7 +298,7 @@ class FederatedGamePerRoomE2ETest {
      * cannot cross into the other.
      */
     @Test
-    fun g3_twoFederatedGamesAreIsolated() = runTest(StandardTestDispatcher(), timeout = 30.seconds) {
+    fun g3_twoFederatedGamesAreIsolated() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val dispatcher = testDispatcher()
         val ids = listOf(NodeId("s1"), NodeId("s2"), NodeId("s3"))
         val gameA = "game-A"
@@ -353,7 +354,7 @@ class FederatedGamePerRoomE2ETest {
      */
     @Test
     fun g4_frameAddressedToOnePlayerNeverLeaksToAnother() =
-        runTest(StandardTestDispatcher(), timeout = 30.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val dispatcher = testDispatcher()
             val ids = listOf(NodeId("s1"), NodeId("s2"), NodeId("s3"))
             val fed = backgroundScope.federation(ids, dispatcher, increasingMillisClock())
@@ -409,7 +410,7 @@ class FederatedGamePerRoomE2ETest {
      */
     @Test
     fun g5_forgedFloodFrameNeverLaundersOntoRelayOrRosterChannels() =
-        runTest(StandardTestDispatcher(), timeout = 10.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val raw = FakeSeam(
                 selfId = PeerId("s1"),
                 initialPeers = setOf(PeerId("s1"), PeerId("s2"), PeerId("attacker")),
@@ -485,7 +486,7 @@ class FederatedGamePerRoomE2ETest {
      */
     @Test
     fun f8_playerBehindSurvivorServer_commitsAfterLeaderServerKilled() =
-        runTest(StandardTestDispatcher(), timeout = 30.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val dispatcher = testDispatcher()
             val ids = listOf(NodeId("s1"), NodeId("s2"), NodeId("s3"))
             val fed = backgroundScope.federation(ids, dispatcher, increasingMillisClock())

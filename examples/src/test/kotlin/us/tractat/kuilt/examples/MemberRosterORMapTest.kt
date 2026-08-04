@@ -17,11 +17,11 @@ import us.tractat.kuilt.crdt.ORMap
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Example: a member roster whose values are themselves CRDTs, replicated across two peers using
@@ -55,7 +55,7 @@ class MemberRosterORMapTest {
 
     @Test
     fun `two peers add different members and both appear in the converged roster`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamAlice = loom.host(Pattern("member-roster"))
             val seamBob = loom.join(InMemoryTag("bob"))
@@ -85,7 +85,7 @@ class MemberRosterORMapTest {
 
     @Test
     fun `nested GCounter values from both peers merge when both hold the same key`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamAlice = loom.host(Pattern("shared-counter"))
             val seamBob = loom.join(InMemoryTag("bob"))
@@ -108,7 +108,7 @@ class MemberRosterORMapTest {
 
     @Test
     fun `a concurrent put survives a concurrent remove — add-wins on the key`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamAlice = loom.host(Pattern("add-wins-roster"))
             val seamBob = loom.join(InMemoryTag("bob"))

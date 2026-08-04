@@ -14,9 +14,9 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Example: a grow-only reaction tally replicated across two peers using [GCounter]
@@ -50,7 +50,7 @@ class GCounterReactionTallyTest {
 
     @Test
     fun `reaction clicks from two peers converge to the correct total`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamAlice = loom.host(Pattern("reactions"))
             val seamBob = loom.join(InMemoryTag("bob"))
@@ -78,7 +78,7 @@ class GCounterReactionTallyTest {
 
     @Test
     fun `each replica's own slot is tracked independently`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamAlice = loom.host(Pattern("reactions-slots"))
             val seamBob = loom.join(InMemoryTag("bob"))

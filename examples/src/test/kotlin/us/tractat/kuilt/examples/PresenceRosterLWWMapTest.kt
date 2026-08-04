@@ -16,10 +16,10 @@ import us.tractat.kuilt.crdt.LWWMap
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Example: a presence/roster map replicated across two peers using [LWWMap] + [Quilter].
@@ -57,7 +57,7 @@ class PresenceRosterLWWMapTest {
 
     @Test
     fun `two peers update different members and both appear in the converged roster`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamAlice = loom.host(Pattern("presence-roster"))
             val seamBob = loom.join(InMemoryTag("bob"))
@@ -83,7 +83,7 @@ class PresenceRosterLWWMapTest {
 
     @Test
     fun `a status update on the same key wins by higher timestamp and converges`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamAlice = loom.host(Pattern("status-update"))
             val seamBob = loom.join(InMemoryTag("bob"))

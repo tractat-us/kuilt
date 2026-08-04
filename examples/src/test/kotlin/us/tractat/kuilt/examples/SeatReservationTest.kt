@@ -15,11 +15,11 @@ import us.tractat.kuilt.crdt.BoundedCounter
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Example: a concert-seat reservation system that NEVER oversells, even under concurrent
@@ -63,7 +63,7 @@ class SeatReservationTest {
 
     @Test
     fun `concurrent reservations from two box offices converge without overselling`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamNorth = loom.host(Pattern("seat-reservation"))
             val seamSouth = loom.join(InMemoryTag("south"))
@@ -97,7 +97,7 @@ class SeatReservationTest {
 
     @Test
     fun `an over-quota reservation is denied locally without any network round-trip`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamNorth = loom.host(Pattern("seat-reservation-deny"))
             val seamSouth = loom.join(InMemoryTag("south"))
@@ -129,7 +129,7 @@ class SeatReservationTest {
 
     @Test
     fun `quota transfer lets a busy replica borrow capacity from an idle one`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamNorth = loom.host(Pattern("seat-reservation-transfer"))
             val seamSouth = loom.join(InMemoryTag("south"))

@@ -16,9 +16,9 @@ import us.tractat.kuilt.crdt.MVRegister
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Example: surfacing concurrent edits to a shared field using [MVRegister]
@@ -58,7 +58,7 @@ class ConcurrentEditTest {
 
     @Test
     fun `concurrent writes from two peers are both retained until resolved`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamAlice = loom.host(Pattern("annotation"))
             val seamBob = loom.join(InMemoryTag("bob"))
@@ -81,7 +81,7 @@ class ConcurrentEditTest {
 
     @Test
     fun `a later write that observes the conflict resolves it to a single value`() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamAlice = loom.host(Pattern("annotation-resolve"))
             val seamBob = loom.join(InMemoryTag("bob"))
