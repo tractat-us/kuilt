@@ -1124,12 +1124,13 @@ internal class SeamRoom(
             is AdmitMessage.Hello -> {
                 if (_role.value == SessionRole.Host) {
                     val target = msg.targetRoom
-                    // Protocol-version gate (#1569). A joiner declaring a version outside this
-                    // build's supported range is refused at admit time with a terminal
-                    // ProtocolMismatch — better than completing the handshake and failing later on
-                    // a frame neither side can decode. A version-less Hello (a peer predating the
-                    // field) is legacy and stays permissive: ProtocolVersion.isSupported(null) is
-                    // true, so older peers are never locked out.
+                    // Protocol-version gate (#1569, tightened for #1994). A joiner declaring a
+                    // version outside this build's supported range is refused at admit time with a
+                    // terminal ProtocolMismatch — better than completing the handshake and failing
+                    // later on a frame neither side can decode. Since v2 a version-LESS Hello is
+                    // refused too: no declared version means the peer predates #1569 and therefore
+                    // cannot relay, which is exactly the population the bump excludes. See
+                    // ProtocolVersion's KDoc, including why a pre-#1569 HOST is undefendable.
                     if (!ProtocolVersion.isSupported(msg.protocolVersion)) {
                         logger.debug {
                             "Rejecting Hello from $sender: protocol-mismatch (${msg.protocolVersion})"

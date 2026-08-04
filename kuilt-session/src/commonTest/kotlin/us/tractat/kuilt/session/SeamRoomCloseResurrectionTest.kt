@@ -20,6 +20,7 @@ import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.ProtocolVersion
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertTrue
@@ -50,7 +51,14 @@ class SeamRoomCloseResurrectionTest {
     private fun helloFrame(joiner: PeerId): Swatch =
         Swatch(
             payload = AdmitMessage.encode(
-                AdmitMessage.Hello(displayName = joiner.value, sessionId = joiner.value, targetRoom = null),
+                AdmitMessage.Hello(
+                    displayName = joiner.value,
+                    sessionId = joiner.value,
+                    targetRoom = null,
+                    // Declare the current version so these Hellos clear the protocol gate (#1994);
+                    // the subject here is the post-close admit race, not versioning.
+                    protocolVersion = ProtocolVersion.CURRENT,
+                ),
             ),
             sender = joiner,
         )
