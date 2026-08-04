@@ -104,9 +104,10 @@ public class ORSet<E> private constructor(
 
     /**
      * The dots currently on [element]. Internal: the dot layer is an implementation detail, but
-     * tests need it to prove a generated state actually carries *concurrent* dots on an element —
-     * the only case in which [addDelta]'s superseded-dots term does any work, and so the case a
-     * law test is vacuous without.
+     * tests need it to prove a generated state actually carries *concurrent* dots on an element.
+     * A set grown by one replica never has more than one dot per element, so a generator built
+     * that way makes [addDelta]'s superseded-dots term a singleton every time and never exercises
+     * the case it exists for — another replica's dot travelling with the supersession.
      */
     internal fun dotsOn(element: E): Set<Dot> = causal.store.entries[element]?.dots ?: emptySet()
 
