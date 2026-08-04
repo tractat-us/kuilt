@@ -15,10 +15,17 @@ import us.tractat.kuilt.crdt.ReplicaId
  * Generator design note: each provider restricts ops to a single replica so that
  * independently-generated states occupy disjoint dot namespaces. This models
  * valid diverged-replica states and prevents dot collisions across generated values.
+ *
+ * **And that is why [pieceIsAssociative] passed for as long as it did while [ORMap] was not
+ * associative (#2086).** Disjoint namespaces mean no operand's context can ever witness a dot
+ * another operand still carries, so the one shape that fails — a remove sitting between two puts of
+ * the same key, each state derived from the last — is unreachable here by construction. The fix is
+ * not to abandon disjointness, which is protecting something real, but to add a second property
+ * over states drawn from **one** history: [pieceIsAssociativeAlongOneTrajectory].
  */
 internal class ORMapLawsPropertyTest {
 
-    private data class Op(val key: String, val isPut: Boolean)
+    private data class Op(val key: String, val isPut: Boolean, val weight: Long)
 
     /** State operated on only by replica A. */
     @Provide
@@ -32,20 +39,43 @@ internal class ORMapLawsPropertyTest {
     @Provide
     fun statesC(): Arbitrary<ORMap<String, GCounter>> = statesFor(ReplicaId("C"))
 
-    private fun statesFor(replica: ReplicaId): Arbitrary<ORMap<String, GCounter>> {
+    /** Replica A's running history — see [assertAssociativeAlongTrajectory]. */
+    @Provide
+    fun trajectories(): Arbitrary<List<ORMap<String, GCounter>>> = trajectoryFor(ReplicaId("A"))
+
+    private fun statesFor(replica: ReplicaId): Arbitrary<ORMap<String, GCounter>> =
+        trajectoryFor(replica).map { it.last() }
+
+    private fun trajectoryFor(replica: ReplicaId): Arbitrary<List<ORMap<String, GCounter>>> {
         val keyArb: Arbitrary<String> = Arbitraries.integers().between(0, 3).map { "k-$it" }
         val opArb: Arbitrary<Op> = keyArb.flatMap { key: String ->
-            Arbitraries.of(true, false).map { isPut: Boolean -> Op(key, isPut) }
+            // The value varies per op. A generator that always put the same value would make a lost
+            // contribution indistinguishable from a kept one — vacuous on the axis #2086 fails.
+            Arbitraries.of(true, false).flatMap { isPut: Boolean ->
+                Arbitraries.longs().between(1L, 4L).map { weight: Long -> Op(key, isPut, weight) }
+            }
         }
         return opArb.list().ofMinSize(0).ofMaxSize(6).map { ops: List<Op> ->
-            ops.fold(ORMap.empty<String, GCounter>()) { s: ORMap<String, GCounter>, op: Op ->
+            ops.runningFold(ORMap.empty<String, GCounter>()) { s: ORMap<String, GCounter>, op: Op ->
                 if (op.isPut) {
-                    s.put(replica, op.key, GCounter.of(replica to 1L))
+                    s.put(replica, op.key, GCounter.of(replica to op.weight))
                 } else {
                     s.remove(op.key)
                 }
             }
         }
+    }
+
+    /**
+     * The law over states that are causal *ancestors* of one another, which the three
+     * disjoint-replica providers above structurally cannot produce. This is the property that
+     * catches #2086.
+     */
+    @Property(tries = 100)
+    fun pieceIsAssociativeAlongOneTrajectory(
+        @ForAll("trajectories") trajectory: List<ORMap<String, GCounter>>,
+    ) {
+        assertAssociativeAlongTrajectory(trajectory)
     }
 
     @Property

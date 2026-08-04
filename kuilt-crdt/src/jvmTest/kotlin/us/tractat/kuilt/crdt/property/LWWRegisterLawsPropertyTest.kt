@@ -28,18 +28,28 @@ internal class LWWRegisterLawsPropertyTest {
      * any two independently-generated registers agree on value when they share a tag.
      */
     @Provide
-    fun states(): Arbitrary<LWWRegister<String>> {
+    fun states(): Arbitrary<LWWRegister<String>> = trajectories().map { it.last() }
+
+    /** One running history — see [assertAssociativeAlongTrajectory]. */
+    @Provide
+    fun trajectories(): Arbitrary<List<LWWRegister<String>>> {
         val tsArb: Arbitrary<Long> = Arbitraries.longs().between(0L, 20L)
         val opArb: Arbitrary<Op> = Arbitraries.integers().between(0, 2).flatMap { rIdx: Int ->
             tsArb.map { ts: Long -> Op(rIdx, ts) }
         }
         return opArb.list().ofMinSize(0).ofMaxSize(5).map { ops: List<Op> ->
-            ops.fold(LWWRegister.empty<String>()) { s: LWWRegister<String>, op: Op ->
+            ops.runningFold(LWWRegister.empty<String>()) { s: LWWRegister<String>, op: Op ->
                 // value is a pure function of tag — same tag always produces same value
                 val value = "v-${op.replicaIndex}-${op.timestamp}"
                 s.set(replicas[op.replicaIndex], op.timestamp, value)
             }
         }
+    }
+
+    /** The law over states that are causal ancestors of one another. */
+    @Property(tries = 100)
+    fun pieceIsAssociativeAlongOneTrajectory(@ForAll("trajectories") trajectory: List<LWWRegister<String>>) {
+        assertAssociativeAlongTrajectory(trajectory)
     }
 
     @Property

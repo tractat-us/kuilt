@@ -21,7 +21,11 @@ internal class LWWMapLawsPropertyTest {
     private data class Op(val replicaIndex: Int, val timestamp: Long, val key: String)
 
     @Provide
-    fun states(): Arbitrary<LWWMap<String, String>> {
+    fun states(): Arbitrary<LWWMap<String, String>> = trajectories().map { it.last() }
+
+    /** One running history — see [assertAssociativeAlongTrajectory]. */
+    @Provide
+    fun trajectories(): Arbitrary<List<LWWMap<String, String>>> {
         val tsArb: Arbitrary<Long> = Arbitraries.longs().between(0L, 20L)
         val keyArb: Arbitrary<String> = Arbitraries.integers().between(0, 3).map { "k-$it" }
         val opArb: Arbitrary<Op> = Arbitraries.integers().between(0, 2).flatMap { rIdx: Int ->
@@ -30,7 +34,7 @@ internal class LWWMapLawsPropertyTest {
             }
         }
         return opArb.list().ofMinSize(0).ofMaxSize(6).map { ops: List<Op> ->
-            ops.fold(LWWMap.empty<String, String>()) { s: LWWMap<String, String>, op: Op ->
+            ops.runningFold(LWWMap.empty<String, String>()) { s: LWWMap<String, String>, op: Op ->
                 // op kind and value are pure functions of (replicaIndex, timestamp, key) —
                 // deterministic, so shared tags always carry the same write (set or remove)
                 if ((op.timestamp + op.replicaIndex) % 4L == 3L) {
@@ -41,6 +45,12 @@ internal class LWWMapLawsPropertyTest {
                 }
             }
         }
+    }
+
+    /** The law over states that are causal ancestors of one another. */
+    @Property(tries = 100)
+    fun pieceIsAssociativeAlongOneTrajectory(@ForAll("trajectories") trajectory: List<LWWMap<String, String>>) {
+        assertAssociativeAlongTrajectory(trajectory)
     }
 
     @Property

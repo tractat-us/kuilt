@@ -17,16 +17,31 @@ internal class PNCounterLawsPropertyTest {
      * converges by the lattice laws.
      */
     @Provide
-    fun states(): Arbitrary<PNCounter> =
+    fun states(): Arbitrary<PNCounter> = trajectories().map { it.last() }
+
+    /** One running history — see [assertAssociativeAlongTrajectory]. */
+    @Provide
+    fun trajectories(): Arbitrary<List<PNCounter>> =
         Arbitraries.integers().between(0, 30).map { it.toLong() }
             .list().ofMinSize(0).ofMaxSize(6)
             .map { deltas: List<Long> ->
-                deltas.foldIndexed(PNCounter.ZERO) { i, acc, delta ->
+                deltas.foldIndexed(mutableListOf(PNCounter.ZERO)) { i, chain, delta ->
                     val replica = replicas[i % replicas.size]
-                    if (i % 2 == 0) acc.piece(acc.increment(replica, delta + 1L))
-                    else acc.piece(acc.decrement(replica, delta + 1L))
+                    val acc = chain.last()
+                    chain.apply {
+                        add(
+                            if (i % 2 == 0) acc.piece(acc.increment(replica, delta + 1L))
+                            else acc.piece(acc.decrement(replica, delta + 1L)),
+                        )
+                    }
                 }
             }
+
+    /** The law over states that are causal ancestors of one another. */
+    @Property(tries = 100)
+    fun pieceIsAssociativeAlongOneTrajectory(@ForAll("trajectories") trajectory: List<PNCounter>) {
+        assertAssociativeAlongTrajectory(trajectory)
+    }
 
     @Property
     fun pieceIsIdempotent(@ForAll("states") a: PNCounter) {

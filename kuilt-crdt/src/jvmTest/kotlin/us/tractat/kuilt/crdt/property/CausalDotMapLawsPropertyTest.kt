@@ -34,13 +34,22 @@ internal class CausalDotMapLawsPropertyTest {
     @Provide
     fun statesC(): Arbitrary<Causal<DotMap<String, DotSet>>> = statesFor(ReplicaId("C"))
 
-    private fun statesFor(replica: ReplicaId): Arbitrary<Causal<DotMap<String, DotSet>>> {
+    /** Replica A's running history — see [assertAssociativeAlongTrajectory]. */
+    @Provide
+    fun trajectories(): Arbitrary<List<Causal<DotMap<String, DotSet>>>> = trajectoryFor(ReplicaId("A"))
+
+    private fun statesFor(replica: ReplicaId): Arbitrary<Causal<DotMap<String, DotSet>>> =
+        trajectoryFor(replica).map { it.last() }
+
+    private fun trajectoryFor(replica: ReplicaId): Arbitrary<List<Causal<DotMap<String, DotSet>>>> {
         val keyArb: Arbitrary<String> = Arbitraries.integers().between(0, 3).map { "k-$it" }
         val opArb: Arbitrary<Op> = keyArb.flatMap { key: String ->
             Arbitraries.of(true, false).map { isAdd: Boolean -> Op(key, isAdd) }
         }
         return opArb.list().ofMinSize(0).ofMaxSize(6).map { ops: List<Op> ->
-            ops.fold(Causal(DotMap<String, DotSet>(), DotContext.EMPTY)) { causal: Causal<DotMap<String, DotSet>>, op: Op ->
+            ops.runningFold(
+                Causal(DotMap<String, DotSet>(), DotContext.EMPTY),
+            ) { causal: Causal<DotMap<String, DotSet>>, op: Op ->
                 if (op.isAdd) {
                     val dot = causal.context.nextDot(replica)
                     val existingDots = causal.store.entries[op.key]?.dots ?: emptySet()
@@ -52,6 +61,14 @@ internal class CausalDotMapLawsPropertyTest {
                 }
             }
         }
+    }
+
+    /** The law over states that are causal ancestors of one another. */
+    @Property(tries = 100)
+    fun pieceIsAssociativeAlongOneTrajectory(
+        @ForAll("trajectories") trajectory: List<Causal<DotMap<String, DotSet>>>,
+    ) {
+        assertAssociativeAlongTrajectory(trajectory)
     }
 
     @Property

@@ -16,14 +16,24 @@ internal class DotContextLawsPropertyTest {
      * introducing gaps so the cloud path is also exercised.
      */
     @Provide
-    fun states(): Arbitrary<DotContext> {
+    fun states(): Arbitrary<DotContext> = trajectories().map { it.last() }
+
+    /** One running history — see [assertAssociativeAlongTrajectory]. */
+    @Provide
+    fun trajectories(): Arbitrary<List<DotContext>> {
         // seq range 1..5 with gaps (not necessarily contiguous per replica)
         val dotArb = Arbitraries.integers().between(0, 2).flatMap { rIdx ->
             Arbitraries.longs().between(1L, 5L).map { seq -> Dot(replicas[rIdx], seq) }
         }
         return dotArb.list().ofMinSize(0).ofMaxSize(8).map { dots ->
-            dots.fold(DotContext.EMPTY) { ctx, dot -> ctx.add(dot) }
+            dots.runningFold(DotContext.EMPTY) { ctx, dot -> ctx.add(dot) }
         }
+    }
+
+    /** The law over states that are causal ancestors of one another. */
+    @Property(tries = 100)
+    fun pieceIsAssociativeAlongOneTrajectory(@ForAll("trajectories") trajectory: List<DotContext>) {
+        assertAssociativeAlongTrajectory(trajectory)
     }
 
     @Property

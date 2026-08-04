@@ -31,16 +31,29 @@ internal class ORSetLawsPropertyTest {
     @Provide
     fun statesC(): Arbitrary<ORSet<String>> = statesFor(ReplicaId("C"))
 
-    private fun statesFor(replica: ReplicaId): Arbitrary<ORSet<String>> {
+    /** Replica A's running history — see [assertAssociativeAlongTrajectory]. */
+    @Provide
+    fun trajectories(): Arbitrary<List<ORSet<String>>> = trajectoryFor(ReplicaId("A"))
+
+    private fun statesFor(replica: ReplicaId): Arbitrary<ORSet<String>> =
+        trajectoryFor(replica).map { it.last() }
+
+    private fun trajectoryFor(replica: ReplicaId): Arbitrary<List<ORSet<String>>> {
         val elemArb: Arbitrary<String> = Arbitraries.integers().between(0, 3).map { "elem-$it" }
         val opArb: Arbitrary<Op> = elemArb.flatMap { elem: String ->
             Arbitraries.of(true, false).map { isAdd: Boolean -> Op(elem, isAdd) }
         }
         return opArb.list().ofMinSize(0).ofMaxSize(6).map { ops: List<Op> ->
-            ops.fold(ORSet.empty<String>()) { s: ORSet<String>, op: Op ->
+            ops.runningFold(ORSet.empty<String>()) { s: ORSet<String>, op: Op ->
                 if (op.isAdd) s.add(replica, op.elem) else s.remove(op.elem)
             }
         }
+    }
+
+    /** The law over states that are causal ancestors of one another. */
+    @Property(tries = 100)
+    fun pieceIsAssociativeAlongOneTrajectory(@ForAll("trajectories") trajectory: List<ORSet<String>>) {
+        assertAssociativeAlongTrajectory(trajectory)
     }
 
     @Property

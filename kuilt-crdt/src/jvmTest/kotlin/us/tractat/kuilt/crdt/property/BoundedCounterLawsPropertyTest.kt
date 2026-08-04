@@ -32,9 +32,30 @@ internal class BoundedCounterLawsPropertyTest {
                 Arbitraries.integers().between(1, 5).map { amount: Int -> Op(rIdx, opType, amount.toLong()) }
             }
         }
+        return trajectories().map { it.last() }
+    }
+
+    /** One running history — see [assertAssociativeAlongTrajectory]. */
+    @Provide
+    fun trajectories(): Arbitrary<List<BoundedCounter>> {
+        val quotaArb: Arbitrary<Long> = Arbitraries.integers().between(0, 20).map { it.toLong() }
+        val seedArb: Arbitrary<BoundedCounter> = quotaArb.flatMap { q0: Long ->
+            quotaArb.flatMap { q1: Long ->
+                quotaArb.map { q2: Long ->
+                    BoundedCounter.init(
+                        mapOf(replicas[0] to q0, replicas[1] to q1, replicas[2] to q2),
+                    )
+                }
+            }
+        }
+        val opArb: Arbitrary<Op> = Arbitraries.integers().between(0, 2).flatMap { rIdx: Int ->
+            Arbitraries.integers().between(0, 2).flatMap { opType: Int ->
+                Arbitraries.integers().between(1, 5).map { amount: Int -> Op(rIdx, opType, amount.toLong()) }
+            }
+        }
         return seedArb.flatMap { seed: BoundedCounter ->
             opArb.list().ofMinSize(0).ofMaxSize(8).map { ops: List<Op> ->
-                ops.fold(seed) { s: BoundedCounter, op: Op ->
+                ops.runningFold(seed) { s: BoundedCounter, op: Op ->
                     when (op.opType) {
                         0 -> s.trySpend(replicas[op.replicaIndex], op.amount)?.let { s.piece(it) } ?: s
                         1 -> {
@@ -76,6 +97,12 @@ internal class BoundedCounterLawsPropertyTest {
         val joined = a.piece(b)
         check(joined == joined.piece(a)) { "left absorption failed: $a, $b" }
         check(joined == joined.piece(b)) { "right absorption failed: $a, $b" }
+    }
+
+    /** The law over states that are causal ancestors of one another. */
+    @Property(tries = 100)
+    fun pieceIsAssociativeAlongOneTrajectory(@ForAll("trajectories") trajectory: List<BoundedCounter>) {
+        assertAssociativeAlongTrajectory(trajectory)
     }
 
     private companion object {

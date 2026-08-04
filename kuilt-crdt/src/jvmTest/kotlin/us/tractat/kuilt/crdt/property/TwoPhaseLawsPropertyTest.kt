@@ -13,16 +13,26 @@ internal class TwoPhaseLawsPropertyTest {
     private data class Op(val elem: String, val isAdd: Boolean)
 
     @Provide
-    fun states(): Arbitrary<TwoPhaseSet<String>> {
+    fun states(): Arbitrary<TwoPhaseSet<String>> = trajectories().map { it.last() }
+
+    /** One running history — see [assertAssociativeAlongTrajectory]. */
+    @Provide
+    fun trajectories(): Arbitrary<List<TwoPhaseSet<String>>> {
         val elemArb: Arbitrary<String> = Arbitraries.integers().between(0, 5).map { "e-$it" }
         val opArb: Arbitrary<Op> = elemArb.flatMap { elem: String ->
             Arbitraries.of(true, false).map { isAdd: Boolean -> Op(elem, isAdd) }
         }
         return opArb.list().ofMinSize(0).ofMaxSize(6).map { ops: List<Op> ->
-            ops.fold(TwoPhaseSet.empty()) { s: TwoPhaseSet<String>, op: Op ->
+            ops.runningFold(TwoPhaseSet.empty<String>()) { s: TwoPhaseSet<String>, op: Op ->
                 if (op.isAdd) s.piece(s.add(op.elem)) else s.piece(s.remove(op.elem))
             }
         }
+    }
+
+    /** The law over states that are causal ancestors of one another. */
+    @Property(tries = 100)
+    fun pieceIsAssociativeAlongOneTrajectory(@ForAll("trajectories") trajectory: List<TwoPhaseSet<String>>) {
+        assertAssociativeAlongTrajectory(trajectory)
     }
 
     @Property

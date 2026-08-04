@@ -11,12 +11,22 @@ import us.tractat.kuilt.crdt.piece
 internal class GSetLawsPropertyTest {
 
     @Provide
-    fun states(): Arbitrary<GSet<String>> =
+    fun states(): Arbitrary<GSet<String>> = trajectories().map { it.last() }
+
+    /** One running history — see [assertAssociativeAlongTrajectory]. */
+    @Provide
+    fun trajectories(): Arbitrary<List<GSet<String>>> =
         Arbitraries.integers().between(0, 5).map { "e-$it" }
             .list().ofMinSize(0).ofMaxSize(6)
             .map { elems ->
-                elems.fold(GSet.empty<String>()) { s, e -> s.piece(s.add(e)) }
+                elems.runningFold(GSet.empty<String>()) { s, e -> s.piece(s.add(e)) }
             }
+
+    /** The law over states that are causal ancestors of one another. */
+    @Property(tries = 100)
+    fun pieceIsAssociativeAlongOneTrajectory(@ForAll("trajectories") trajectory: List<GSet<String>>) {
+        assertAssociativeAlongTrajectory(trajectory)
+    }
 
     @Property
     fun pieceIsIdempotent(@ForAll("states") a: GSet<String>) {

@@ -198,6 +198,17 @@ internal class RgaLawsPropertyTest {
         }
     }
 
+    /** Replica A's running history — see [assertAssociativeAlongTrajectory]. */
+    @Provide
+    fun trajectories(): Arbitrary<List<Rga<String>>> =
+        opsFor(ReplicaId("A")).map { ops -> ops.runningFold(Rga.empty()) { s, op -> s.apply(op) } }
+
+    /** The law over states that are causal ancestors of one another. */
+    @Property(tries = 100)
+    fun pieceIsAssociativeAlongOneTrajectory(@ForAll("trajectories") trajectory: List<Rga<String>>) {
+        assertAssociativeAlongTrajectory(trajectory)
+    }
+
     private fun statesFor(replica: ReplicaId): Arbitrary<Rga<String>> =
         opsFor(replica).map { ops -> ops.fold(Rga.empty()) { s, op -> s.apply(op) } }
 
