@@ -29,6 +29,9 @@ import kotlin.test.assertEquals
  * multi-entry value that both replicas hold *identically* degenerates to `value.piece(value)`,
  * seeding the merge from the same source on both sides. Each vector is therefore built by
  * merging replicas that contribute **different** slices, in a deliberately non-sorted order.
+ * The `*_DELTA` vectors are the one place a single-entry store appears, because that *is* the
+ * shape a delta has; what they exist to pin is the causal context riding with it, and every one
+ * of those is multi-dot and non-sorted on arrival.
  *
  * **Mutation-verified on `jvmTest`: every canonicalisation site #1957 introduced — the nine
  * `Canonical*Serializer` annotations — plus the three hand-written dot-family sorts the vectors do
@@ -41,7 +44,7 @@ import kotlin.test.assertEquals
  * | `GSet.elements` | [GSET] |
  * | `TwoPhaseSet.added` | [TWO_PHASE_SET] |
  * | `TwoPhaseSet.removed` | [TWO_PHASE_SET] |
- * | `GCounter.counts` | [GCOUNTER], [PNCOUNTER], [ORMAP], [BOUNDED_COUNTER] |
+ * | `GCounter.counts` | [GCOUNTER], [PNCOUNTER], [ORMAP], [BOUNDED_COUNTER], [ORMAP_PUT_DELTA] |
  * | `LWWMap.cells` | [LWWMAP] |
  * | `BoundedCounter.transfers` | [BOUNDED_COUNTER] |
  * | `EphemeralMap.entries` | [EPHEMERAL_MAP] |
@@ -50,8 +53,8 @@ import kotlin.test.assertEquals
  * | `DotMapSerializer`'s sort | [ORSET], [ORMAP] |
  * | `DotSetSerializer`'s sort | [ORMAP] |
  * | `DotFunSerializer`'s sort | [MV_REGISTER] |
- * | `DotContextSerializer`'s `vv` sort | [ORSET], [ORMAP], [MV_REGISTER], [DOT_CONTEXT] |
- * | `DotContextSerializer`'s `cloud` sort | [DOT_CONTEXT] |
+ * | `DotContextSerializer`'s `vv` sort | [ORSET], [ORMAP], [MV_REGISTER], [DOT_CONTEXT], [JSON_CRDT] |
+ * | `DotContextSerializer`'s `cloud` sort | [DOT_CONTEXT], [ORSET_ADD_DELTA], [ORSET_REMOVE_DELTA], [ORMAP_PUT_DELTA] |
  * | `VersionVector.entries` | [VERSION_VECTOR] |
  * | `RgaSerializer`'s op sort | [RGA], [JSON_CRDT] |
  * | `FugueSerializer`'s op sort | [FUGUE] |
@@ -62,10 +65,26 @@ import kotlin.test.assertEquals
  * which by construction cannot see two targets disagree.
  * **Adding a type to that family does not inherit a pin from this file — add a vector.**
  *
+ * The three `*_DELTA` rows closed #2044's half of that gap. A `DotContext` reaches a non-empty
+ * `cloud` on an `ORSet`/`ORMap` frame only when the frame is a **delta**: a delta's context starts
+ * empty and witnesses just the dots the operation asserts or retires, so any of them above the
+ * sender's first seq has a gap below it and cannot compact into the vector. Until the delta
+ * mutators landed, that shape could not be produced by any mutator at all, and the `cloud` sort was
+ * pinned only by [DOT_CONTEXT] — a `DotContext` standing alone, never one riding a CRDT frame.
+ *
  * **Still not pinned here: the `Compact` op sorts.** No construction below calls `Rga.compact` or
  * `Fugue.compact`, so neither `Compact.positions` nor the Compact-vs-Compact tiebreak is reached;
  * `rgaCompactPositionsAreDeliveryOrderIndependent` and its `Fugue` sibling cover them same-target.
  * The `ORSET` vector's `DotSet`s remain singletons, which is not a gap — see [orMap].
+ *
+ * **What the delta vectors deliberately do *not* claim.** `DotMapSerializer` and
+ * `DotSetSerializer` are unreachable on them and always will be: a delta's store is one entry or
+ * none, and that entry carries one dot, so there is exactly one order to choose from. [orSet] and
+ * [orMap] are what pin those. The `vv` sort is subtler and worth stating plainly — deleting it
+ * leaves all three delta vectors **green on `jvmTest`**. On [ORSET_REMOVE_DELTA] that is
+ * structural, because its vector is empty; on the other two it is an accident of one target, whose
+ * `HashMap` happens to iterate their two entries in canonical order anyway. Neither is evidence
+ * the sort is unnecessary, and neither earns a place in the `vv` row above.
  *
  * **Regenerate only on a deliberate encoding change, and expect every vector to move together.**
  * A single vector changing on one target and not another is the exact defect this file exists to
