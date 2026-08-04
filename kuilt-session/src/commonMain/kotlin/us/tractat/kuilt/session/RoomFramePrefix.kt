@@ -1,5 +1,9 @@
 package us.tractat.kuilt.session
 
+import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
+import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.election.LobbyMessage
+
 /**
  * The single source of truth for the **room frame-prefix byte space** (#2007).
  *
@@ -32,13 +36,24 @@ package us.tractat.kuilt.session
  */
 public enum class RoomFramePrefix(public val byte: Byte) {
     /** The admit handshake — `AdmitMessage`. `0x61`, ASCII 'a'. */
-    Admit(0x61),
+    Admit(0x61) {
+        override fun classifies(bytes: ByteArray): Boolean = AdmitMessage.isAdmitFrame(bytes)
+    },
 
-    /** A `Room.channel(id)` view's frames — `RoomChannel`. `0x63`, ASCII 'c'. */
-    Channel(0x63),
+    /**
+     * A `Room.channel(id)` view's frames — `RoomChannel`. `0x63`, ASCII 'c'.
+     *
+     * [classifies] is **narrower than [matches]**: a channel frame carries a 3-byte header, so a
+     * 1- or 2-byte payload leading with `0x63` claims the byte but is not a channel frame.
+     */
+    Channel(0x63) {
+        override fun classifies(bytes: ByteArray): Boolean = RoomChannel.isChannelFrame(bytes)
+    },
 
     /** Host election — `LobbyMessage`. `0x65`, ASCII 'e'. */
-    Lobby(0x65),
+    Lobby(0x65) {
+        override fun classifies(bytes: ByteArray): Boolean = LobbyMessage.isLobbyFrame(bytes)
+    },
 
     /**
      * Liveness ping/pong — `HeartbeatPartitionDetector`.
@@ -46,11 +61,22 @@ public enum class RoomFramePrefix(public val byte: Byte) {
      * The odd one out: heartbeat declares a *String* prefix (`"kuilt.heartbeat.ping"`) whose first
      * byte happens to be `0x6b`, and `:kuilt-liveness` cannot depend on `:kuilt-session` to derive
      * from here. The reservation is one-directional and pinned by test, not by construction.
+     *
+     * [classifies] is therefore **much** narrower than [matches] — the real test is the whole
+     * string, so every ordinary payload beginning with `k` (`"keepalive"`, `"key"`, …) claims this
+     * byte while being a perfectly ordinary application frame.
      */
-    Heartbeat(0x6b),
+    Heartbeat(0x6b) {
+        override fun classifies(bytes: ByteArray): Boolean =
+            HeartbeatPartitionDetector.isHeartbeatFrame(bytes)
+    },
 
     /**
      * A host-forwarded frame between two spokes of a star — `RelayEnvelope` (#1994). `0x72`, ASCII 'r'.
+     *
+     * The one family for which [classifies] and [matches] genuinely coincide:
+     * `RelayEnvelope.isRelayFrame` is *defined* as `Relay.matches`, so this entry inherits the
+     * default rather than delegating back into a definition that would only point here again.
      *
      * **Release note:** an application payload sent via `Room.broadcast` whose first byte is `0x72`
      * was previously legal and is now swallowed as a relay frame.
@@ -58,6 +84,26 @@ public enum class RoomFramePrefix(public val byte: Byte) {
     Relay(0x72),
     ;
 
-    /** Whether [bytes] is a frame of this family — i.e. its first byte is [byte]. Empty is never. */
+    /** Whether [bytes] **claims** this family's prefix byte — a single-byte test. Empty is never. */
     public fun matches(bytes: ByteArray): Boolean = bytes.isNotEmpty() && bytes[0] == byte
+
+    /**
+     * Whether [bytes] **is** a frame of this family, by the family's own real classifier.
+     *
+     * This is the predicate `SeamRoom.dispatchIncoming` actually dispatches on, and it is the one
+     * to use for any "which family is this?" question. [matches] answers the strictly weaker
+     * question "does this claim the byte?", and for two families the two answers differ:
+     * [Channel] additionally requires a 3-byte header, and [Heartbeat] requires the whole
+     * `"kuilt.heartbeat.ping"`/`"…pong"` string.
+     *
+     * **Why the registry carries the predicate rather than the byte alone.** A caller that asks
+     * "is this payload spoken for?" by folding [matches] over [entries] gets a *different* answer
+     * from the dispatcher for exactly those two families — and the disagreement is silent. #1994's
+     * relay allow-list was written that way and dropped a spoke's `"keepalive"` broadcast (byte
+     * `0x6b`) that the direct path delivers as ordinary application data. Registering each family's
+     * real classifier here makes the two planes agree by construction, while keeping the property
+     * that a *new* family must claim a byte — and so is excluded from the allow-list by default —
+     * rather than having to be remembered at every call site.
+     */
+    public open fun classifies(bytes: ByteArray): Boolean = matches(bytes)
 }

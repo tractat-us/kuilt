@@ -125,10 +125,28 @@ public interface Room {
      */
     public val localFabric: StateFlow<FabricAvailability>
 
-    /** Broadcast [bytes] to all other admitted members. */
+    /**
+     * Broadcast [bytes] to all other admitted members.
+     *
+     * **Best-effort: never throws for an undeliverable frame.** A member the transport cannot
+     * currently reach — including, on a star, the relaying host itself — is silently skipped. Use
+     * the roster and the membership events to reason about who is present; do not read a returned
+     * `Unit` as delivery. Deliberately weaker than [sendTo], which is addressed and does report.
+     */
     public suspend fun broadcast(bytes: ByteArray)
 
-    /** Send [bytes] to one specific admitted member. */
+    /**
+     * Send [bytes] to one specific admitted member.
+     *
+     * **Reports an undeliverable first hop**, unlike [broadcast]: an addressed send names a peer,
+     * so failing to reach it is information the caller asked for. Wrap in `runCatchingCancellable`
+     * for best-effort semantics.
+     *
+     * @throws us.tractat.kuilt.core.PeerNotConnected if the hop this member must perform cannot be
+     *   made. Where the frame is relayed via a host, the peer named is that **host** — the hop that
+     *   failed — rather than [peer], to which this member has no direct route. Delivery beyond the
+     *   first hop is not reported either way.
+     */
     public suspend fun sendTo(peer: PeerId, bytes: ByteArray)
 
     /**

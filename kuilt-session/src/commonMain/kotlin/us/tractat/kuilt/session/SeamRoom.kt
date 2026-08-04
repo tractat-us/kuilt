@@ -1,6 +1,7 @@
 package us.tractat.kuilt.session
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CompletableDeferred
@@ -30,6 +31,7 @@ import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Principal
 import us.tractat.kuilt.core.PrincipalRoster
 import us.tractat.kuilt.core.Rendezvous
@@ -2007,9 +2009,20 @@ internal class SeamRoom(
      *
      * A relayed admit frame has no legitimate sender: the admit protocol is by construction
      * host↔joiner over the direct edge.
+     *
+     * **Classified by [RoomFramePrefix.classifies], never by `matches`.** The two planes must agree
+     * byte-for-byte: whatever [dispatchIncoming] would deliver as application data on a direct edge
+     * must survive the relay, or a frame that works on a mesh vanishes on a star with no error.
+     * `matches` is a single-byte test and two of the five families are narrower than their byte —
+     * a channel frame needs a 3-byte header, a heartbeat needs the whole `"kuilt.heartbeat.ping"`
+     * string — so folding `matches` here silently dropped a spoke's `"keepalive"` broadcast (byte
+     * `0x6b`) and every 1–2 byte payload leading with `0x63`, both of which the direct path routes
+     * to [routeApplicationFrame]. Delegating to the registry's own classifiers keeps the allow-list
+     * shape — a *future* family claims a byte and is excluded by default — without letting the
+     * allow-list and the dispatcher drift apart.
      */
     private fun isRelayable(payload: ByteArray): Boolean =
-        RoomChannel.isChannelFrame(payload) || RoomFramePrefix.entries.none { it.matches(payload) }
+        RoomChannel.isChannelFrame(payload) || RoomFramePrefix.entries.none { it.classifies(payload) }
 
     /** Host-side: forward and/or deliver one relayed frame, or drop it. */
     private fun handleRelayFrame(sender: PeerId, bytes: ByteArray) {
@@ -2175,8 +2188,35 @@ internal class SeamRoom(
         deliverRelayedPayload(envelope)
     }
 
-    /** One queued relay forward: the original envelope bytes plus its recipient snapshot. */
-    private class RelayForward(val recipients: List<PeerId>, val bytes: ByteArray)
+    /**
+     * One queued relay forward: the original envelope bytes plus its recipient snapshot.
+     *
+     * [seq] is a gap-detector, not an ordering key — the channel already preserves order. It is
+     * assigned at enqueue from [relaySeq], so a hole in the sequence the writer dequeues is
+     * *exactly* the set of items [BufferOverflow.DROP_OLDEST] discarded. See [relayForwardsDropped].
+     */
+    private class RelayForward(val recipients: List<PeerId>, val bytes: ByteArray, val seq: Long)
+
+    /** Monotonic enqueue counter stamped onto each [RelayForward]. First forward is `1`. */
+    private val relaySeq = atomic(0L)
+
+    /** Total forwards discarded by [relayForwards]'s [BufferOverflow.DROP_OLDEST] overflow. */
+    private val relayDropped = atomic(0L)
+
+    /**
+     * How many relay forwards this room has silently dropped to overflow.
+     *
+     * **Why this is counted at all.** [BufferOverflow.DROP_OLDEST] never fails a `trySend`, so the
+     * overflow it exists to perform emits *nothing* — the one branch [enqueueRelayForward] can log
+     * is a closed channel. A test could therefore "exercise" the bound with a flood and pass
+     * identically against a build whose capacity was 4096, and an off-device report of missing
+     * frames could not distinguish overflow from any other drop. `deliverRelayedPayload` already
+     * argues this case for its own buffer: absence has to be diagnosable off-device (#1781).
+     *
+     * Exposed `internal` so a test can assert the drop *happened* rather than assuming a flood
+     * caused one.
+     */
+    internal val relayForwardsDropped: Long get() = relayDropped.value
 
     /**
      * Queued relay forwards, drained by [runRelayForwardWriter].
@@ -2215,7 +2255,18 @@ internal class SeamRoom(
 
     /** Drains [relayForwards]. Guard discipline is identical to [runAdmitFanOutWriter] — see its KDoc. */
     private suspend fun runRelayForwardWriter() {
+        // Writer-local: this is the only coroutine that ever dequeues, so no atomic is needed.
+        var expectedSeq = 1L
         for (forward in relayForwards) {
+            val dropped = forward.seq - expectedSeq
+            if (dropped > 0) {
+                val total = relayDropped.addAndGet(dropped)
+                logger.debug {
+                    "room.relay.drop self=${selfId.value} reason=queue-overflow " +
+                        "dropped=$dropped total=$total capacity=$RELAY_FORWARD_CAPACITY"
+                }
+            }
+            expectedSeq = forward.seq + 1
             for (recipient in forward.recipients) {
                 try {
                     val accepted = withTimeoutOrNull(relaySendBudget) {
@@ -2241,10 +2292,15 @@ internal class SeamRoom(
         }
     }
 
-    /** Enqueue a relay forward. Never suspends; drops the oldest under sustained overload. */
+    /**
+     * Enqueue a relay forward. Never suspends; drops the oldest under sustained overload.
+     *
+     * The overflow itself is invisible here by construction — `DROP_OLDEST` reports success for the
+     * very call that displaces an older item — so it is detected downstream as a gap in [RelayForward.seq].
+     */
     private fun enqueueRelayForward(recipients: List<PeerId>, bytes: ByteArray) {
         if (recipients.isEmpty()) return
-        val queued = relayForwards.trySend(RelayForward(recipients, bytes)).isSuccess
+        val queued = relayForwards.trySend(RelayForward(recipients, bytes, relaySeq.incrementAndGet())).isSuccess
         if (!queued) {
             // DROP_OLDEST never refuses, so the only way `trySend` fails is a closed channel: the
             // room went terminal. Logged for the same reason a dropped fan-out is (#1781).
@@ -2684,22 +2740,59 @@ internal class SeamRoom(
      *
      * Silent no-op when the room is terminal (after [MembershipEvent.HostLost] or [leave]).
      *
-     * **Lossy without error on a star.** An unresolvable destination is dropped with a debug log and
-     * a torn or wedged recipient's send is dropped by [runRelayForwardWriter]. On a mesh this call
-     * surfaces failures; relayed, it does not.
+     * **Lossy without error, relayed or not — this call never throws [PeerNotConnected].** An
+     * unresolvable destination is dropped with a debug log; a torn or wedged recipient's send is
+     * dropped by [runRelayForwardWriter]; and if the relay hop itself is unreachable — the host
+     * gone from [Seam.peers] while the roster still holds it — the frame degrades to a best-effort
+     * direct [Seam.broadcast], which on a spoke that has lost its host link reaches nobody.
+     *
+     * That last case is not a narrow window. [runJoinerTornWatcher] responds to [SeamState.Torn] by
+     * attempting a reconnect and does **not** set `hostLost`, so it spans the whole reconnect window
+     * (60 s by default), and it fires on a plain **2-peer** room too: the host leaving [Seam.peers]
+     * diverges the roster, and the relay branch would then try to relay through the very peer it
+     * cannot reach. Before #1994 that was a silent no-op, and it must stay one — a `Quilter`'s
+     * timer-driven broadcast that threw here would kill the coroutine that drives anti-entropy,
+     * which is precisely the mechanism that heals the gap once the host returns.
+     *
+     * Contrast [sendTo], which is addressed and therefore **does** throw.
      */
     override suspend fun broadcast(bytes: ByteArray) {
         val terminal = lock.withLock { hostLost || closed }
         if (terminal) return
         val host = relayHostOrNull() ?: return seam.broadcast(bytes)
-        seam.sendTo(host, RelayEnvelope.encode(RelayEnvelope(selfId, RelayDest.Everyone, bytes)))
+        try {
+            seam.sendTo(host, RelayEnvelope.encode(RelayEnvelope(selfId, RelayDest.Everyone, bytes)))
+        } catch (unreachable: PeerNotConnected) {
+            // Caught rather than pre-checked `host in seam.peers.value`: the pre-check is a TOCTOU
+            // race the send itself resolves authoritatively. Narrow by type — a wedged link throws
+            // CancellationException instead, and that must still propagate.
+            logger.debug {
+                "room.relay.drop self=${selfId.value} to=${unreachable.peer.value} " +
+                    "reason=relay-hop-unreachable dest=Everyone"
+            }
+            seam.broadcast(bytes)
+        }
     }
 
     /**
      * Send [bytes] to one specific admitted member, relaying via the host when the transport cannot
-     * address that member directly — see [broadcast] for the routing rule and the loss semantics.
+     * address that member directly — see [broadcast] for the routing rule.
      *
      * Silent no-op when the room is terminal (after [MembershipEvent.HostLost] or [leave]).
+     *
+     * **Throws, unlike [broadcast].** An addressed send that cannot be delivered is reported: this
+     * is [Seam.sendTo]'s documented contract, and swallowing it would re-create #1994's own symptom
+     * — silent non-delivery — at the send side. The two methods differ deliberately because their
+     * contracts differ; a caller that wants best-effort semantics for an addressed send wraps this
+     * in `runCatchingCancellable`.
+     *
+     * The frame is still lossy *after* the first hop: once the host has accepted the envelope, an
+     * unresolvable destination or a wedged recipient is dropped with a debug log and nothing is
+     * reported back. Only the hop this member performs itself can throw.
+     *
+     * @throws PeerNotConnected if the hop this member must perform cannot be made. On a relayed
+     *   send the peer it names is the **host** — the hop that actually failed — not [peer], which
+     *   this member has no direct route to by construction.
      */
     override suspend fun sendTo(peer: PeerId, bytes: ByteArray) {
         val terminal = lock.withLock { hostLost || closed }

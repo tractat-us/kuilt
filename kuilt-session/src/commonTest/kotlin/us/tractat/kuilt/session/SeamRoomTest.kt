@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.runCatchingCancellable
@@ -21,7 +22,9 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Acceptance tests for [SeamRoom] + [SeamRoomFactory] against [InMemoryLoom].
@@ -257,15 +260,23 @@ class SeamRoomTest {
 
             // Deliberately not "real message": `r` is 0x72, which [RoomFramePrefix.Relay] reserves
             // (#2007/#1994), so that payload is now classified as a relay frame and dropped as
-            // malformed. That is the documented release note on the prefix, not a regression — but
-            // it is invisible here, because an unbounded `first()` turns the drop into a hang
-            // rather than a failure. Any first byte outside the registry keeps this a test about
-            // admitted-peer routing.
+            // malformed. That is the documented release note on the prefix, not a regression. Any
+            // first byte outside the registry keeps this a test about admitted-peer routing.
+            //
+            // The await is BOUNDED, in virtual time, for the same reason: an unbounded `first()`
+            // turns any future classification change that drops this payload into a 60-second hang
+            // rather than a failure, and a hang is the one outcome that reports nothing about why.
+            // The bound measures the test scheduler, not the host machine, so it is neither
+            // load-sensitive nor a real-time ceiling (#1739/#1891).
             val appPayload = "message from an admitted peer".encodeToByteArray()
-            val frameJob = async { hostRoom.incoming.first() }
+            val frameJob = async { withTimeoutOrNull(APP_FRAME_BUDGET) { hostRoom.incoming.first() } }
             joinerRoom.broadcast(appPayload)
 
-            val frame = frameJob.await()
+            val frame = assertNotNull(
+                frameJob.await(),
+                "no application frame reached the host within $APP_FRAME_BUDGET of virtual time — " +
+                    "the payload was classified as something other than application data",
+            )
             assertTrue(appPayload.contentEquals(frame.payload))
 
             joinerRoom.leave()
@@ -386,6 +397,19 @@ class SeamRoomTest {
             )
             room.leave()
         }
+
+    private companion object {
+        /**
+         * Virtual time allowed for a broadcast application frame to reach the host.
+         *
+         * Bounded in **virtual** time, so it measures the scheduler rather than the host machine
+         * and is not the load-bearing real-time ceiling this repo bans (#1739/#1891). Generous
+         * against what the delivery needs — which is zero virtual time — and its only job is to
+         * turn a payload that stops being classified as application data into a *failure* with a
+         * message instead of a wait for `runTest`'s own ceiling.
+         */
+        val APP_FRAME_BUDGET = 5.seconds
+    }
 }
 
 /** Test stub: [Loom] that always throws the given [error] from [weave]. */

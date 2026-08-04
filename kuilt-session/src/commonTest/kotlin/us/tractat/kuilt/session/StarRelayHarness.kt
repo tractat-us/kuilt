@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -21,6 +22,7 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
@@ -53,12 +55,21 @@ import kotlin.time.Instant
  *
  * ## Payload-byte trap
  *
- * A plain-text payload is relayable only because it claims no registered [RoomFramePrefix]. The
+ * A plain-text payload is relayable only because [RoomFramePrefix] does not *classify* it. The
  * lowercase letters `a`, `c`, `e`, `k`, `r` **are** the five reserved bytes `0x61`, `0x63`, `0x65`,
- * `0x6b`, `0x72`, so a payload starting with one of them is not a plain application frame. Every
- * string these tests use ("hello", "legit", "plain", "nested", "for-b", "for-host", "somewhere",
- * "honest", "forged", "nowhere", "unadmitted", "to-host") is safe; do not add one starting with
- * those letters.
+ * `0x6b`, `0x72`, and three of the five families classify on that byte alone — so a payload
+ * starting with `a`, `e`, or `r` is **not** a plain application frame and will not be relayed.
+ *
+ * The other two are narrower than their byte, and the gap is deliberate rather than incidental:
+ * `Channel` also requires a 3-byte header and `Heartbeat` requires the whole
+ * `"kuilt.heartbeat.ping"`/`"…pong"` string, so `"keepalive"` and a 2-byte `0x63` payload are
+ * ordinary application data on both the direct and the relayed plane. Getting *that* wrong is the
+ * defect §T17/§T18 exist to pin, and those two tests choose their payloads on purpose.
+ *
+ * So: safe to add a payload starting with `c` or `k` (as long as it is not literally a heartbeat
+ * frame); **never** add one starting with `a`, `e`, or `r` unless the test is about it being
+ * refused. The plain strings in use are "hello", "legit", "plain", "nested", "for-b", "for-host",
+ * "somewhere", "honest", "forged", "nowhere", "unadmitted", "to-host", "keepalive".
  */
 internal fun appPayload(text: String): ByteArray = text.encodeToByteArray()
 
@@ -95,8 +106,21 @@ internal class StarMember(
     /** Every application payload this member received, from any sender. */
     fun appFrames(): List<String> = received.map { it.payload.decodeToString() }
 
+    /**
+     * Application payloads received **credited to [peer]**, as raw bytes.
+     *
+     * For payloads that are not valid text — a 2-byte frame whose first byte is one of the
+     * reserved prefixes, say — where [appFramesFrom]'s `decodeToString` would compare replacement
+     * characters rather than the bytes under test.
+     */
+    fun rawAppFramesFrom(peer: PeerId): List<ByteArray> =
+        received.filter { it.sender == peer }.map { it.payload }
+
     /** This member's identified host, or null before identification. */
     fun hostPeer(): PeerId? = (room as SeamRoom).hostPeer()
+
+    /** Relay forwards this member's room discarded to queue overflow. See [SeamRoom.relayForwardsDropped]. */
+    fun relayForwardsDropped(): Long = (room as SeamRoom).relayForwardsDropped
 
     /** Whether this member observed [peer] going [MembershipEvent.Partitioned]. */
     fun sawPartitioned(peer: PeerId): Boolean = peer in partitionedPeers
@@ -410,13 +434,17 @@ private fun TestScope.observe(room: Room, wire: WireTapSeam): StarMember {
  * roster alone, which is the one state in which `rosterPeers ⊆ seam.peers` is false on a host.
  *
  * - [exclude] — drop a peer from [peers] (a member inside its reconnect window).
+ * - [disconnect] — as [exclude], **and** make [sendTo] to that peer throw [PeerNotConnected].
  * - [silence] — drop that peer's inbound frames, so a liveness detector matures the silence.
  * - [wedge] — make [sendTo] to that peer never return, the black-holed link of #1655.
  * - [inject] — put a frame on this member's inbound stream with an arbitrary stamped sender.
  *
- * Mutable state is held in [MutableStateFlow]s rather than plain fields: they are a genuinely
- * thread-safe primitive, so this decorator stays correct under a multi-threaded dispatcher rather
- * than resting on the test dispatcher happening to be single-threaded.
+ * Mutable state is held in [MutableStateFlow]s, and **every mutation goes through
+ * [MutableStateFlow.update]** rather than `value = value + …`. The distinction is the whole claim:
+ * `MutableStateFlow` makes each individual `value` read and each `value` write atomic, but a
+ * read-modify-write built from the two is not, so concurrent `record` calls under a multi-threaded
+ * dispatcher would lose frames. `update` performs the read-modify-write as a CAS loop, which is
+ * what actually makes this decorator correct off the test dispatcher.
  */
 internal class WireTapSeam(
     private val delegate: Seam,
@@ -433,6 +461,7 @@ internal class WireTapSeam(
 
     private val sent = MutableStateFlow<List<SentFrame>>(emptyList())
     private val excluded = MutableStateFlow<Set<PeerId>>(emptySet())
+    private val unreachable = MutableStateFlow<Set<PeerId>>(emptySet())
     private val silenced = MutableStateFlow<Set<PeerId>>(emptySet())
     private val wedged = MutableStateFlow<Set<PeerId>>(emptySet())
     /**
@@ -448,8 +477,15 @@ internal class WireTapSeam(
         scope.launch { delegate.peers.collect { recomputePeers() } }
     }
 
+    /**
+     * Recompute [peers] from the delegate minus [excluded].
+     *
+     * Written through [MutableStateFlow.update] even though the lambda ignores its argument: the
+     * CAS retry is what forces a concurrent [exclude] to be re-read rather than lost, since the
+     * sources are read *inside* the block.
+     */
     private fun recomputePeers() {
-        _peers.value = delegate.peers.value - excluded.value
+        _peers.update { delegate.peers.value - excluded.value }
     }
 
     override val selfId: PeerId get() = delegate.selfId
@@ -482,6 +518,9 @@ internal class WireTapSeam(
         // point of a black hole is that the caller cannot tell it from a very slow link.
         record(to = peer, bytes = payload)
         if (peer in wedged.value) awaitCancellation()
+        // Checked after the wedge and before the delegate, so a peer that is both wedged and
+        // disconnected still models the black hole (the harsher of the two).
+        if (peer in unreachable.value) throw PeerNotConnected(peer)
         delegate.sendTo(peer, payload)
     }
 
@@ -491,7 +530,7 @@ internal class WireTapSeam(
     }
 
     private fun record(to: PeerId?, bytes: ByteArray) {
-        sent.value = sent.value + SentFrame(to, bytes)
+        sent.update { it + SentFrame(to, bytes) }
     }
 
     /**
@@ -509,18 +548,32 @@ internal class WireTapSeam(
     }
 
     fun exclude(peer: PeerId) {
-        excluded.value = excluded.value + peer
+        excluded.update { it + peer }
         // Recomputed synchronously so a `peers.value` read on the very next line already sees it,
         // rather than waiting for the collector above to be dispatched.
         recomputePeers()
     }
 
+    /**
+     * As [exclude], but [sendTo] to [peer] additionally throws [PeerNotConnected].
+     *
+     * This is the **contract-honest** shape of a dropped link: `Seam.sendTo` "when the addressed
+     * peer is absent from `peers`: throws `PeerNotConnected`" (`Seam` KDoc). [exclude] deliberately
+     * does *not* do this — it models only the room-level state in which a member inside its
+     * reconnect window outlives the transport's peer set, and several tests need the host's
+     * fan-out to that member to keep landing. Use this one when the link itself is the subject.
+     */
+    fun disconnect(peer: PeerId) {
+        unreachable.update { it + peer }
+        exclude(peer)
+    }
+
     fun silence(peer: PeerId) {
-        silenced.value = silenced.value + peer
+        silenced.update { it + peer }
     }
 
     fun wedge(peer: PeerId) {
-        wedged.value = wedged.value + peer
+        wedged.update { it + peer }
     }
 
     fun clearSentLog() {

@@ -5,10 +5,13 @@ package us.tractat.kuilt.session
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PeerNotConnected
+import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 
@@ -613,6 +616,17 @@ class StarRelayTest {
                         "sanity: B really is wedged",
                     )
                 },
+                {
+                    // Without this the "DROP_OLDEST is exercised" claim above the flood is a
+                    // comment, not a test: the overflow emits nothing observable of its own, so
+                    // this test passed identically against a build whose capacity was 4096.
+                    assertTrue(
+                        star.host.relayForwardsDropped() > 0,
+                        "the flood must actually overflow the bounded queue — $RELAY_FLOOD frames " +
+                            "against a capacity of 64. observed " +
+                            "${star.host.relayForwardsDropped()} drops",
+                    )
+                },
             )
         }
 
@@ -712,6 +726,211 @@ class StarRelayTest {
                     assertTrue(
                         mesh.subjectChannelFrames().isNotEmpty(),
                         "sanity: the relayed channel frames were delivered to the channel view",
+                    )
+                },
+            )
+        }
+
+    // ── The allow-list agrees with the dispatcher's classifier (C1) ───────────
+
+    /**
+     * §T17. A plain application payload that merely **claims** a reserved prefix byte, without
+     * being a frame of that family, must survive the relay — because the direct path delivers it.
+     *
+     * `"keepalive"` leads with `0x6b`, which [RoomFramePrefix.Heartbeat] reserves. But the real
+     * classifier `HeartbeatPartitionDetector.isHeartbeatFrame` is a **full-string** test, so
+     * `dispatchIncoming` falls through to `routeApplicationFrame` and the host receives it on a
+     * mesh and on the direct edge today. An allow-list folding the single-byte `matches` over the
+     * registry disagreed, and the frame vanished on a star with a debug log and no error — the B1
+     * failure class, invisible to every other test in this file because the harness deliberately
+     * steers its payloads away from the reserved bytes.
+     *
+     * Asserted on **both** hops: the host is a recipient, not just a router, and the co-spoke is
+     * the whole point of the relay.
+     */
+    @Test
+    fun `a payload that only claims a reserved byte still reaches the host and a co-spoke`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 2)
+
+            star.joinerA.room.broadcast(appPayload("keepalive"))
+            testScheduler.runCurrent()
+
+            assertAll(
+                {
+                    assertEquals(
+                        listOf("keepalive"),
+                        star.host.appFramesFrom(star.joinerAId),
+                        "the HOST must receive it — this is the frame class the direct path " +
+                            "delivers and the relay silently swallowed",
+                    )
+                },
+                {
+                    assertEquals(
+                        listOf("keepalive"),
+                        star.joinerB.appFramesFrom(star.joinerAId),
+                        "and so must the co-spoke",
+                    )
+                },
+            )
+        }
+
+    /**
+     * §T18. The same disagreement, one family over: [RoomFramePrefix.Channel] claims `0x63` but
+     * `RoomChannel.isChannelFrame` additionally requires the 3-byte header.
+     *
+     * So a 1- or 2-byte payload leading with `0x63` is ordinary application data to
+     * `dispatchIncoming` — and was refused by an allow-list keyed on the byte alone. Compared as
+     * raw bytes rather than text: `decodeToString` would turn the second byte into a replacement
+     * character and compare something other than what was sent.
+     */
+    @Test
+    fun `a short payload leading with the channel byte still reaches the host and a co-spoke`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 2)
+            val shortPayload = byteArrayOf(RoomFramePrefix.Channel.byte, 0x01)
+
+            star.joinerA.room.broadcast(shortPayload)
+            testScheduler.runCurrent()
+
+            assertAll(
+                {
+                    val received = star.host.rawAppFramesFrom(star.joinerAId)
+                    assertTrue(
+                        received.size == 1 && received.single().contentEquals(shortPayload),
+                        "the host must receive a 2-byte 0x63 payload — too short to be a channel " +
+                            "frame, so the direct path routes it as application data. " +
+                            "observed ${received.size} frames",
+                    )
+                },
+                {
+                    val received = star.joinerB.rawAppFramesFrom(star.joinerAId)
+                    assertTrue(
+                        received.size == 1 && received.single().contentEquals(shortPayload),
+                        "and so must the co-spoke. observed ${received.size} frames",
+                    )
+                },
+            )
+        }
+
+    /**
+     * §T19. The security half of the same change: widening the allow-list to agree with the
+     * dispatcher must not make a **genuine** reserved frame relayable.
+     *
+     * [RoomFramePrefix.Heartbeat]'s classifier narrowed from "leads with `0x6b`" to "is a heartbeat
+     * frame", so this is the guard that the narrowing stopped exactly where it should. A relayed
+     * heartbeat would be liveness evidence minted by a peer that is not the one being vouched for;
+     * a relayed admit frame is the `Welcome`-capture of #1180 that the allow-list exists to block.
+     */
+    @Test
+    fun `a genuine heartbeat or admit frame is still never relayed`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 2)
+            val genuinePing = HeartbeatPartitionDetector.PING_PREFIX.encodeToByteArray()
+            val genuineWelcome = AdmitMessage.encode(
+                AdmitMessage.Welcome(
+                    assignedPeerId = star.joinerAId.value,
+                    displayName = "attacker",
+                    sessionId = star.joinerAId.value,
+                ),
+            )
+
+            star.joinerA.sendRelay(RelayDest.Everyone, genuinePing)
+            star.joinerA.sendRelay(RelayDest.Everyone, genuineWelcome)
+            // The positive control, without which both negatives hold on a build that relays nothing.
+            star.joinerA.sendRelay(RelayDest.Everyone, appPayload("plain"))
+            testScheduler.runCurrent()
+
+            assertAll(
+                {
+                    assertEquals(
+                        listOf("plain"),
+                        star.joinerB.appFramesFrom(star.joinerAId),
+                        "only the plain frame may cross — a relayed heartbeat or admit frame must " +
+                            "be refused, and the plain one proves the relay is working at all",
+                    )
+                },
+                {
+                    assertEquals(
+                        listOf("plain"),
+                        star.host.appFramesFrom(star.joinerAId),
+                        "the same holds for the host's own local delivery",
+                    )
+                },
+            )
+        }
+
+    // ── broadcast is lossy without error; sendTo reports (Room contract) ──────
+
+    /**
+     * §T20. A spoke whose host link has dropped must still be able to [Room.broadcast] without
+     * throwing — the contract is lossy-without-error, and this is the window in which it bites.
+     *
+     * `runJoinerTornWatcher` responds to a tear by attempting reconnect and does **not** set
+     * `hostLost`, so the roster keeps the host and the relay branch stays selected for the whole
+     * reconnect window. Relaying through a peer `Seam.peers` no longer holds throws
+     * [PeerNotConnected] — from a call that was a silent no-op before #1994, and that a `Quilter`
+     * drives on a timer. Killing that coroutine would take out the anti-entropy that heals the very
+     * gap the drop opened.
+     */
+    @Test
+    fun `a spoke's broadcast is lossy without error once its host link drops`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 2)
+
+            star.joinerA.room.broadcast(appPayload("plain"))
+            testScheduler.runCurrent()
+
+            star.joinerA.wire.disconnect(star.hostId)
+            // Must not throw. The assertion for that is the test completing.
+            star.joinerA.room.broadcast(appPayload("nowhere"))
+            testScheduler.runCurrent()
+
+            assertEquals(
+                listOf("plain"),
+                star.joinerB.appFramesFrom(star.joinerAId),
+                "control: with the host link up the relay delivers, so the relay branch really " +
+                    "was selected — and the frame broadcast after the link dropped is genuinely " +
+                    "lost rather than queued, which is what lossy-without-error means",
+            )
+        }
+
+    /**
+     * §T21. The other half of the split: an **addressed** send does report an undeliverable hop.
+     *
+     * This pins the behaviour deliberately *not* changed alongside §T20, and the pair is the point
+     * — `broadcast` and `sendTo` differ because their contracts differ. Swallowing an addressed
+     * send would re-create #1994's own symptom, silent non-delivery, at the send side.
+     *
+     * The peer named is the **host**: that is the hop that failed, and this member has no direct
+     * route to [RelayStar.joinerBId] by construction.
+     */
+    @Test
+    fun `a spoke's unicast reports an undeliverable hop once its host link drops`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 2)
+
+            star.joinerA.room.sendTo(star.joinerBId, appPayload("for-b"))
+            testScheduler.runCurrent()
+
+            star.joinerA.wire.disconnect(star.hostId)
+            val thrown = assertFailsWith<PeerNotConnected> {
+                star.joinerA.room.sendTo(star.joinerBId, appPayload("nowhere"))
+            }
+
+            assertAll(
+                {
+                    assertEquals(
+                        listOf("for-b"),
+                        star.joinerB.appFramesFrom(star.joinerAId),
+                        "control: the same call relays and lands while the host link is up",
+                    )
+                },
+                {
+                    assertEquals(
+                        star.hostId,
+                        thrown.peer,
+                        "the peer named is the failed hop — the host — not the addressed co-spoke",
                     )
                 },
             )
