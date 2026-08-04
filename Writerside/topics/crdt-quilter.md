@@ -66,7 +66,9 @@ grows, while Quilter's anti-entropy reconcile still converges every peer. See
 - `Resend(fromSeq)` — request to re-send deltas from `fromSeq` when a gap is detected.
 - `RootDigest(root, upThrough)` — the background reconcile tick: a 64-bit hash of the
   state rather than the state itself, so a round between peers that already agree costs
-  two small frames — this one out, and an `Ack` back.
+  two small frames — this one out, and an `Ack` back. Also sent on first contact, as a way
+  of saying "I can read these"; a peer that has never said it back is still sent the whole
+  state each round, since it may be running an older version that cannot read a hash.
 - `FullStateRequest` — the reply a peer sends when its own hash differs, asking for the
   state it is missing.
 - `Delivered(vector)` — a peer's own summary of what it has applied from everyone, gossiped

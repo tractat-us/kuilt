@@ -114,10 +114,13 @@ private object SystemMonotonicMillis : MonotonicMillis {
  * - On receiving an [QuiltMessage.Ack], the acker's progress is recorded; once every
  *   known peer has acked through a seq, all deltas at or below that seq are GC'd.
  * - On first contact with a new peer, a [QuiltMessage.FullState] is sent so the
- *   late joiner converges immediately without waiting for a delta replay.
+ *   late joiner converges immediately without waiting for a delta replay, plus a
+ *   [QuiltMessage.RootDigest] announcing that this side speaks the digest exchange.
  * - On the anti-entropy tick, a [QuiltMessage.RootDigest] — a hash of the state, not the
  *   state — goes to one random peer, which replies with a [QuiltMessage.FullStateRequest]
  *   only when its own root differs; that request is answered with a [QuiltMessage.FullState].
+ *   A peer that has never sent a digest of its own may be running a build that cannot read
+ *   one, so it is sent the state alongside the digest until it proves otherwise (#2006).
  * - A [QuiltMessage.Delivered] gossips this replica's contiguous delivered version vector,
  *   the matrix-clock row that drives causal-stability GC for dot-carrying CRDTs.
  *
@@ -325,6 +328,31 @@ public class Quilter<S : Quilted<S>>(
      */
     private val digestOutstanding: MutableSet<PeerId> = mutableSetOf()
 
+    /**
+     * Peers that have **sent us** a [QuiltMessage.RootDigest], and are therefore running a build
+     * that can read one (#2006). A peer absent from this set is *unproven*, not *old*: the tick
+     * ships it the whole state as well as the digest, which is exactly what the tick did before
+     * #1955.
+     *
+     * The discriminator is one-directional, and that is the whole point. *Silence in reply* to a
+     * digest is ambiguous — a converged current peer answers a matched root with nothing at all,
+     * which is what #1955 bought — but *having sent one* is not, because
+     * [reconcileWithRandomPeer] emits digests unconditionally and a build predating #1955 emits
+     * none. So there is no false positive that costs anything: an unproven peer gets the
+     * pre-#1955 behaviour, never worse than it.
+     *
+     * Monotonic within a peer's membership; dropped on eviction ([evictStalePeers]) because the
+     * proof is about the software behind a [PeerId], and a rejoining id may be attached to
+     * different software.
+     *
+     * **Limit, deliberately not engineered around:** a peer that *downgrades* mid-session keeps
+     * its latch and stops being healed by this side's tick, exactly as it would have before this
+     * mechanism existed. A version handshake on [QuiltMessage] — of which there is none today —
+     * subsumes all of this and remains the better long-term shape; this is the cheap correct-now
+     * option, not the last word on it.
+     */
+    private val everSentUsDigest: MutableSet<PeerId> = mutableSetOf()
+
     /** Counts anti-entropy iterations; logged each tick so virtual-time cycling is visible. */
     private var antiEntropyCount = 0L
 
@@ -531,7 +559,9 @@ public class Quilter<S : Quilted<S>>(
      * *selects* it, and converges without replaying the missing deltas. One peer is drawn per
      * tick, so that is a coupon-collector wait rather than the very next tick.
      *
-     * Sends a [QuiltMessage.RootDigest] — a hash of the state, not the state (#1955). The peer
+     * Sends a [QuiltMessage.RootDigest] — a hash of the state, not the state (#1955) — to a peer
+     * proven to be able to read one ([everSentUsDigest]; an unproven peer is also sent the state,
+     * which is the pre-#1955 cost, never worse). The peer
      * replies with a [QuiltMessage.FullStateRequest] only if its own root differs, so a converged
      * round costs two small frames instead of the whole CRDT: the digest out (~54–57 b) and the
      * matched peer's [QuiltMessage.Ack] of `upThrough` back (~40–46 b), ~94–103 b in total.
@@ -569,7 +599,38 @@ public class Quilter<S : Quilted<S>>(
      */
     private fun reconcileWithRandomPeer() {
         if (knownPeers.isEmpty()) return
-        sendRootDigestTo(knownPeers.elementAt(random.nextInt(knownPeers.size)))
+        val peer = knownPeers.elementAt(random.nextInt(knownPeers.size))
+        // The digest goes to every peer, proven or not. It is the only probe that can ever set
+        // [everSentUsDigest] from this side's point of view, so withholding it from unproven peers
+        // — the shape #2006's discussion first reached for — would wedge every peer unproven
+        // forever and revert #1955 outright, in both directions at once.
+        sendRootDigestTo(peer)
+        if (peer !in everSentUsDigest) sendUnprovenPeerFullState(peer)
+    }
+
+    /**
+     * The #2006 fallback: ship the whole state to a peer that has never sent us a
+     * [QuiltMessage.RootDigest] and may therefore be unable to read one.
+     *
+     * A build predating #1955 hits the unknown-variant path and drops the digest with no error, no
+     * log and no negotiation, so anti-entropy from this side towards it stops dead. Convergence
+     * survives — the older peer's own full-state ticks continue and `onFullState`'s push-back heals
+     * both directions — but initiation becomes one-sided and the rate halves. This restores it.
+     *
+     * Ships directly rather than through [sendFullStateTo], for the same reason
+     * [onFullStateRequest] does: that helper arms [scheduleFullStateRetry], which exists for the
+     * first-contact path, and re-arming it on a recurring tick would stack a second retry machine
+     * on a peer that already has one. No retry is needed here — the next round that draws this peer
+     * is the retry.
+     *
+     * Must be called under [lock]; the suspending send is launched on [scope] outside it.
+     */
+    private fun sendUnprovenPeerFullState(peer: PeerId) {
+        val bytes = encode(QuiltMessage.FullState(sender = replica, state = _state.value, upThrough = nextSeq))
+        scope.launch {
+            runCatchingCancellable { seam.sendTo(peer, bytes) }
+                .onFailure { logger.debug { "unproven-peer fullState to $peer failed: ${it.message}" } }
+        }
     }
 
     /**
@@ -596,10 +657,16 @@ public class Quilter<S : Quilted<S>>(
         ),
     )
 
-    /** Ships a [QuiltMessage.RootDigest] to [peer] and arms the solicited-request flag. Under [lock]. */
-    private fun sendRootDigestTo(peer: PeerId) {
+    /**
+     * Ships a [QuiltMessage.RootDigest] to [peer]. Under [lock].
+     *
+     * @param armGrant when `true` (the anti-entropy tick), arms the one-shot solicited-request
+     *   flag so the peer's [QuiltMessage.FullStateRequest] is answered. The first-contact
+     *   announcement passes `false`: see [announceDigestTo].
+     */
+    private fun sendRootDigestTo(peer: PeerId, armGrant: Boolean = true) {
         val bytes = encode(QuiltMessage.RootDigest(sender = replica, root = stateRoot(), upThrough = nextSeq))
-        digestOutstanding.add(peer)
+        if (armGrant) digestOutstanding.add(peer)
         scope.launch {
             runCatchingCancellable { seam.sendTo(peer, bytes) }
                 .onFailure { logger.debug { "rootDigest to $peer failed: ${it.message}" } }
@@ -630,6 +697,7 @@ public class Quilter<S : Quilted<S>>(
             lastSeenAt.remove(peer)
             cancelFullStateRetry(peer)
             digestOutstanding.remove(peer)
+            everSentUsDigest.remove(peer)
         }
         recomputeUniversalAck()
         recomputeCut()
@@ -652,12 +720,38 @@ public class Quilter<S : Quilted<S>>(
     private fun onPeersChanged(currentPeers: Set<PeerId>): Unit = lock.withLock {
         val newPeers = currentPeers - seam.selfId - knownPeers
         knownPeers += currentPeers - seam.selfId
-        newPeers.forEach { peer -> sendFullStateTo(peer) }
+        newPeers.forEach { peer ->
+            sendFullStateTo(peer)
+            announceDigestTo(peer)
+        }
         // A new peer that has not gossiped contributes EMPTY to `min over live` — but the
         // cut is monotonic, so it cannot lower `S`. Safe: the joiner is FullState-synced and
         // has no concurrent history to orphan (ADR §4.5). Recompute so membership is reflected.
         if (newPeers.isNotEmpty()) recomputeCut()
     }
+
+    /**
+     * A first-contact "I speak the digest exchange" beacon (#2006), sent alongside the
+     * first-contact [QuiltMessage.FullState].
+     *
+     * Without it, [everSentUsDigest] could only be set by the *peer's own* tick happening to draw
+     * us, which is a coupon-collector wait of `O(N log N)` rounds — about 70 minutes at N = 20 with
+     * the default one-minute interval. Throughout that window a mesh of entirely current peers
+     * would take the unproven-peer fallback on nearly every round, i.e. #1955's saving would be off
+     * for an hour after every join. One 50-odd-byte frame per new peer collapses that to a single
+     * round; the tick's own digest remains the retry if this one is lost.
+     *
+     * **Grant-free, deliberately.** Arming [digestOutstanding] here would hand every peer a
+     * redeemable one-shot full-state coupon from the moment it joined, retiring the
+     * unsolicited-[QuiltMessage.FullStateRequest] guard that is the amplification lever #1955
+     * closed. The cost of not arming it is that a peer whose root legitimately differs may answer
+     * with a request that is dropped and debug-logged; the state it wanted is already on its way in
+     * the first-contact [QuiltMessage.FullState] beside this frame, and the next tick re-drives the
+     * exchange with a grant.
+     *
+     * Must be called under [lock].
+     */
+    private fun announceDigestTo(peer: PeerId) = sendRootDigestTo(peer, armGrant = false)
 
     private fun sendFullStateTo(peer: PeerId) {
         val msg = QuiltMessage.FullState(sender = replica, state = _state.value, upThrough = nextSeq)
@@ -907,8 +1001,15 @@ public class Quilter<S : Quilted<S>>(
      * covering it; if the request or its reply were then lost we would be stale *and* cut off from
      * that history via the delta path. The requested [QuiltMessage.FullState] carries its own
      * `upThrough` and resyncs exactly as it does today.
+     *
+     * Whichever branch runs, the arrival itself proves [sender] runs a build that can read a digest
+     * — the [everSentUsDigest] latch (#2006). It is latched on the frame being *sent to us*, not on
+     * the peer *answering* one of ours: an answer is ambiguous (a converged peer answers a matched
+     * root with silence) and a mismatch reply would only ever prove capability for peers that
+     * happen to disagree with us.
      */
     private fun onRootDigest(sender: PeerId, msg: QuiltMessage.RootDigest<S>) {
+        everSentUsDigest.add(sender)
         if (msg.root == stateRoot()) {
             resyncReceiveCursor(sender, msg.sender, msg.upThrough)
             return

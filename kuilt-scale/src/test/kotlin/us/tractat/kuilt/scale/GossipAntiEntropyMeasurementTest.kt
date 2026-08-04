@@ -9,9 +9,13 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.cbor.Cbor
+import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.crdt.GSet
+import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.gossip.GossipSeam
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.quilter.QuiltMessage
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
 import kotlin.random.Random
@@ -51,6 +55,9 @@ import kotlin.time.Instant
  * re-arm forever).
  */
 class GossipAntiEntropyMeasurementTest {
+
+    /** The one node in [singleReconcilerMesh] that holds a replica; [buildInMemoryMesh] names it. */
+    private val originPeer = PeerId("peer-0")
 
     private val noHeartbeat = HeartbeatConfig(interval = 1.hours, timeout = 1.hours, reconnectWindow = 1.hours)
     private val antiEntropyInterval = 50.milliseconds
@@ -98,8 +105,32 @@ class GossipAntiEntropyMeasurementTest {
             random = Random(100),
         )
         flush()
+
+        // Each peer states, once, that it is on a build that can read a digest (#2006). The origin
+        // now ships the whole state to any peer that has never sent it one — a peer that emits
+        // nothing at all is indistinguishable from a build predating #1955, which is exactly what
+        // that fallback is for. These peers hold no replica and so would never emit a digest on
+        // their own, and without this the sweep below would price the fallback rather than the
+        // digest it exists to price. The frame goes in through the origin's real decode/dispatch
+        // path, and lands before any meter opens.
+        (1 until n).forEach { i -> mesh.seams[i].sendTo(originPeer, capabilityProof(PeerId("peer-$i"))) }
+        flush()
         return mesh to origin
     }
+
+    /**
+     * A [QuiltMessage.RootDigest] as a current-build peer's own anti-entropy tick would emit.
+     *
+     * The root is a placeholder the origin's real root will not match, so the origin answers with a
+     * [QuiltMessage.FullStateRequest] — which it holds no grant for and drops. That is deliberate:
+     * the frame's only job here is to prove capability, and a mismatch keeps it from pulling state
+     * that would land in the setup phase for no reason.
+     */
+    private fun capabilityProof(peer: PeerId): ByteArray =
+        Cbor.encodeToByteArray(
+            QuiltMessage.serializer(GSet.serializer(String.serializer())),
+            QuiltMessage.RootDigest<GSet<String>>(sender = ReplicaId(peer.value), root = 0L, upThrough = 0L),
+        )
 
     private fun gsetOf(size: Int): GSet<String> {
         var acc = GSet.empty<String>()

@@ -95,6 +95,12 @@ private suspend fun craftFullStateRequest(from: Seam, target: ReplicaId) {
     from.broadcast(Cbor.encodeToByteArray(AUDIT_MSG_SER, msg))
 }
 
+/** A digest of [root], as a peer's own anti-entropy tick emits — the #2006 capability proof. */
+private suspend fun craftRootDigest(from: Seam, root: Long) {
+    val msg = QuiltMessage.RootDigest<Rga<String>>(sender = ReplicaId(from.selfId.value), root = root, upThrough = 3L)
+    from.broadcast(Cbor.encodeToByteArray(AUDIT_MSG_SER, msg))
+}
+
 class QuilterEvictionWiringAuditTest {
 
     // ---- Hypothesis 1: W1 under the REAL eviction path (anti-entropy tick) ----
@@ -533,6 +539,92 @@ class QuilterEvictionWiringAuditTest {
             seenByB.drop(before).none { it is QuiltMessage.FullState },
             "eviction must clear the digest grant — otherwise a peer that vanishes mid-exchange keeps a " +
                 "redeemable full-state coupon across its whole absence and spends it on rejoin (#1955)",
+        )
+    }
+
+    // ---- Hypothesis 8: eviction must also drop the digest-capability latch (#2006) ----
+
+    /**
+     * H8 VERDICT: SOUND. `evictStalePeers` clears `everSentUsDigest` alongside the other per-peer
+     * rows, so an evicted peer id carries no capability proof across its absence.
+     *
+     * The #2006 latch records that a peer has *sent* us a [QuiltMessage.RootDigest], which proves it
+     * runs a build that can read one; the tick then trusts it with a digest alone instead of falling
+     * back to the whole state. That proof is about the software behind a [PeerId], and eviction is
+     * the point where the id may come back attached to different software — a downgraded rejoin. A
+     * latch that survived eviction would silently keep the fallback off for a peer that can no
+     * longer read a digest, which is the one way this mechanism goes wrong.
+     *
+     * Load-bearing invariant: `everSentUsDigest.remove(peer)` inside `evictStalePeers`. Deleting
+     * that one line leaves the post-rejoin tick shipping a bare digest, and this probe red.
+     *
+     * Bounded virtual time only (`advanceTimeBy` + `runCurrent`) — the anti-entropy timer re-arms
+     * forever, so `advanceUntilIdle` is not available to this probe.
+     */
+    @Test
+    fun probe8_evictionDropsTheDigestCapabilityLatch() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val seamA = loom.host(Pattern("h8-digest-latch"))
+        val rawB = loom.join(InMemoryTag("b"))
+        val bPeer = PeerId(rawB.selfId.value)
+
+        val controlledPeers = MutableStateFlow(loom.peers.value)
+        val clock = AuditFakeClock()
+        val repA = auditRep(
+            AuditControllableSeam(seamA, controlledPeers),
+            backgroundScope,
+            clock,
+            // fullStateRetryLimit = 0 isolates the tick: a first-contact retry would otherwise put
+            // FullStates on the wire that say nothing about the latch.
+            config = QuilterConfig(
+                expectVirtualTime = true,
+                evictionAfter = 100.milliseconds,
+                antiEntropyInterval = 50.milliseconds,
+                fullStateRetryLimit = 0,
+            ),
+        )
+        controlledPeers.value = loom.peers.value
+
+        val seenByB = mutableListOf<QuiltMessage<Rga<String>>>()
+        rawB.incoming
+            .onEach { swatch -> seenByB += swatch.decode(Cbor, AUDIT_MSG_SER) }
+            .launchIn(backgroundScope)
+        testScheduler.runCurrent()
+
+        // B proves it speaks the digest exchange, with a root that matches A's — the converged
+        // case, where a reply would have told A nothing at all.
+        craftRootDigest(rawB, repA.stateRootForTest())
+        testScheduler.runCurrent()
+
+        var before = seenByB.size
+        testScheduler.advanceTimeBy(60L)
+        testScheduler.runCurrent()
+        assertFalse(
+            seenByB.drop(before).any { it is QuiltMessage.FullState },
+            "precondition: a proven peer's round ships a digest, not the state — otherwise the " +
+                "assertion below could not tell a cleared latch from one that was never set",
+        )
+
+        // B goes silent long enough for the real tick to evict it.
+        controlledPeers.value = controlledPeers.value - bPeer
+        clock.advanceBy(150L)
+        testScheduler.advanceTimeBy(60L)
+        testScheduler.runCurrent()
+        assertFalse(bPeer in repA.knownPeersForTest, "precondition: B was evicted by the real tick")
+
+        // B rejoins — possibly, as far as A can tell, on a build that predates #1955.
+        controlledPeers.value = controlledPeers.value + bPeer
+        clock.advanceBy(10L)
+        testScheduler.runCurrent()
+
+        before = seenByB.size // the rejoin's own first-contact FullState is not what this probe reads
+        testScheduler.advanceTimeBy(60L)
+        testScheduler.runCurrent()
+
+        assertTrue(
+            seenByB.drop(before).any { it is QuiltMessage.FullState },
+            "eviction must drop the capability latch — otherwise a rejoining peer id inherits the " +
+                "departed build's proof and is never sent state again (#2006)",
         )
     }
 }
