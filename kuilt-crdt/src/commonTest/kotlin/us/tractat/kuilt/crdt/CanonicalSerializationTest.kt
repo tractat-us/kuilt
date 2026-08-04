@@ -8,6 +8,7 @@ import kotlinx.serialization.json.Json
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 /**
@@ -55,22 +56,62 @@ class CanonicalSerializationTest {
     }
 
     /**
-     * DotContext with a cloud (non-contiguous dots) is also canonical.
+     * `DotContext` with a **non-empty, multi-entry** cloud is canonical — in both formats.
+     *
+     * This was the weakest of the canonical probes (#2038): it asserted JSON only, and it took no
+     * position on the cloud actually holding anything. A dot only stays in the cloud while a gap
+     * sits below it, so the whole property hangs off [DotContext]'s compaction rule — and if a
+     * change to that rule ever folded these dots into `vv`, an assertion comparing two encodings
+     * of an *empty* cloud would still pass, having tested nothing. The two guards below say what
+     * the construction must keep: both dots present, and the two clouds iterating differently.
+     *
+     * CBOR matters here beyond breadth: it is the format `CanonicalGoldenVectorTest` pins, so a
+     * JSON-only assertion left the cloud sort unchecked in the encoding that actually ships.
      */
     @Test
     fun dotContextWithCloudIsCanonical() {
-        // (A,3) without (A,1),(A,2) → stays in cloud
+        // Each dot sits above a gap — no (A,1)/(A,2), no (B,1) — so compaction cannot fold either
+        // into `vv`. Two of them, because a one-dot cloud has exactly one order and pins nothing.
         val dotA3 = Dot(a, 3L)
         val dotB2 = Dot(b, 2L)
 
         val ctx1 = DotContext.EMPTY.add(dotA3).add(dotB2)
         val ctx2 = DotContext.EMPTY.add(dotB2).add(dotA3)
+        val ser = DotContext.serializer()
 
-        assertEquals(ctx1, ctx2)
-
-        val jsonBytes1 = json.encodeToString(DotContext.serializer(), ctx1)
-        val jsonBytes2 = json.encodeToString(DotContext.serializer(), ctx2)
-        assertEquals(jsonBytes1, jsonBytes2, "DotContext cloud JSON must be delivery-order-independent")
+        assertAll(
+            { assertEquals(ctx1, ctx2, "sanity: the two contexts must be the same logical state") },
+            {
+                assertEquals(
+                    setOf(dotA3, dotB2),
+                    ctx1.cloud,
+                    "vacuity guard: both gapped dots must still be in the cloud, else the sort " +
+                        "under test never runs",
+                )
+            },
+            {
+                assertNotEquals(
+                    ctx1.cloud.toList(),
+                    ctx2.cloud.toList(),
+                    "vacuity guard: the two clouds must iterate differently, else the sort is not " +
+                        "what makes the bytes agree",
+                )
+            },
+            {
+                assertEquals(
+                    json.encodeToString(ser, ctx1),
+                    json.encodeToString(ser, ctx2),
+                    "DotContext cloud JSON must be delivery-order-independent",
+                )
+            },
+            {
+                assertEquals(
+                    cbor.encodeToByteArray(ser, ctx1).toList(),
+                    cbor.encodeToByteArray(ser, ctx2).toList(),
+                    "DotContext cloud CBOR must be delivery-order-independent",
+                )
+            },
+        )
     }
 
     // ── ORSet (via DotFun / DotSet) ───────────────────────────────────────────

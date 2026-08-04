@@ -32,7 +32,7 @@ import us.tractat.kuilt.crdt.internal.sortedByCanonicalKey
  * those keys the encoding is history-dependent again.
  *
  * **Precondition — this class canonicalises the key ORDER, nothing else.** The bytes are
- * canonical only if [K] and [V] each serialize canonically in their own right. Three traps:
+ * canonical only if [K] and [V] each serialize canonically in their own right. Two traps:
  *
  * - A key or value reaching an unordered [Set] or [Map] field through a non-canonical
  *   serializer is not canonical, and neither is the whole. Two *equal* keys of a type like
@@ -40,10 +40,11 @@ import us.tractat.kuilt.crdt.internal.sortedByCanonicalKey
  * - **Values are passed through `vSerializer` untouched.** A `Map<String, GCounter>` is
  *   canonical here only once `GCounter` itself encodes canonically; wrapping the outer map is
  *   not sufficient.
- * - **[K] must be serializable without a `SerializersModule`.** The sort runs each key through
- *   an internal encoder whose module is empty, so a `@Contextual` or open-polymorphic key that
- *   the *format's* module would have resolved throws at encode time here instead. (Threading the
- *   real module through is tracked as #2035.)
+ *
+ * **[K] may be `@Contextual` or polymorphic.** The sort reads the *format's* `SerializersModule`
+ * off the encoder and hands it to the internal leaf encoder, so a key resolves in the sort exactly
+ * as it resolves in the format (#2035). It contributes its class discriminator as an ordinary leaf,
+ * so polymorphic keys order by discriminator first and payload second.
  *
  * Wire format is unchanged — the same map layout, with entries reordered.
  */
@@ -58,7 +59,7 @@ public class CanonicalMapSerializer<K, V>(
     override val descriptor: SerialDescriptor = mapSerializer.descriptor
 
     override fun serialize(encoder: Encoder, value: Map<K, V>) {
-        mapSerializer.serialize(encoder, value.sortedByCanonicalKey(kSerializer))
+        mapSerializer.serialize(encoder, value.sortedByCanonicalKey(kSerializer, encoder.serializersModule))
     }
 
     override fun deserialize(decoder: Decoder): Map<K, V> = mapSerializer.deserialize(decoder)
@@ -78,15 +79,13 @@ public class CanonicalMapSerializer<K, V>(
  *
  * Sort order, and its total-preorder caveat, are as described on [CanonicalMapSerializer].
  *
- * **Precondition — this class canonicalises the element ORDER, nothing else.** Two traps:
+ * **Precondition — this class canonicalises the element ORDER, nothing else.** The bytes are
+ * canonical only if [E] itself serializes canonically: an [E] that reaches an unordered [Set] or
+ * [Map] field through a non-canonical serializer makes the whole encoding non-canonical, however
+ * this class orders the elements around it.
  *
- * - The bytes are canonical only if [E] itself serializes canonically: an [E] that reaches an
- *   unordered [Set] or [Map] field through a non-canonical serializer makes the whole encoding
- *   non-canonical, however this class orders the elements around it.
- * - **[E] must be serializable without a `SerializersModule`.** The sort runs each element
- *   through an internal encoder whose module is empty, so a `@Contextual` or open-polymorphic
- *   element that the *format's* module would have resolved throws at encode time here instead.
- *   (Threading the real module through is tracked as #2035.)
+ * **[E] may be `@Contextual` or polymorphic**, on the same terms as [CanonicalMapSerializer]'s
+ * key (#2035).
  */
 @OptIn(ExperimentalSerializationApi::class)
 public class CanonicalSetSerializer<E>(
@@ -98,7 +97,7 @@ public class CanonicalSetSerializer<E>(
     override val descriptor: SerialDescriptor = listSerializer.descriptor
 
     override fun serialize(encoder: Encoder, value: Set<E>) {
-        listSerializer.serialize(encoder, value.sortedByCanonicalKey(eSerializer))
+        listSerializer.serialize(encoder, value.sortedByCanonicalKey(eSerializer, encoder.serializersModule))
     }
 
     override fun deserialize(decoder: Decoder): Set<E> =

@@ -49,14 +49,22 @@ import kotlin.test.assertEquals
  * | `DotMapSerializer`'s sort | [ORSET], [ORMAP] |
  * | `DotSetSerializer`'s sort | [ORMAP] |
  * | `DotFunSerializer`'s sort | [MV_REGISTER] |
- * | `DotContextSerializer`'s `vv` sort | [ORSET], [ORMAP], [MV_REGISTER] |
+ * | `DotContextSerializer`'s `vv` sort | [ORSET], [ORMAP], [MV_REGISTER], [DOT_CONTEXT] |
+ * | `DotContextSerializer`'s `cloud` sort | [DOT_CONTEXT] |
  * | `VersionVector.entries` | [VERSION_VECTOR] |
+ * | `RgaSerializer`'s op sort | [RGA], [JSON_CRDT] |
+ * | `FugueSerializer`'s op sort | [FUGUE] |
  *
- * **Not pinned here — the rest of the older #713 dot-family sorts.** No vector reaches
- * `RgaSerializer`'s or `FugueSerializer`'s op sort, or `DotContextSerializer`'s `cloud` sort
- * (`cloud` is empty in [ORSET], [ORMAP] and [MV_REGISTER]).
- * So `Rga`, `Fugue` and `JsonCrdt` have no cross-target byte pin: adding a type to that family
- * does **not** inherit one from this file — add a vector.
+ * The `cloud`, `RgaSerializer` and `FugueSerializer` rows closed #2038: `cloud` is empty in
+ * [ORSET], [ORMAP] and [MV_REGISTER], so its sort had no vector at all, and `Rga`, `Fugue` and
+ * `JsonCrdt` had no cross-target byte pin of any kind — only same-target delivery-order probes,
+ * which by construction cannot see two targets disagree.
+ * **Adding a type to that family does not inherit a pin from this file — add a vector.**
+ *
+ * **Still not pinned here: the `Compact` op sorts.** No construction below calls `Rga.compact` or
+ * `Fugue.compact`, so neither `Compact.positions` nor the Compact-vs-Compact tiebreak is reached;
+ * `rgaCompactPositionsAreDeliveryOrderIndependent` and its `Fugue` sibling cover them same-target.
+ * The `ORSET` vector's `DotSet`s remain singletons, which is not a gap — see [orMap].
  *
  * **Regenerate only on a deliberate encoding change, and expect every vector to move together.**
  * A single vector changing on one target and not another is the exact defect this file exists to
@@ -125,6 +133,10 @@ class CanonicalGoldenVectorTest {
                 )
             },
             { assertEquals(VERSION_VECTOR, hex(VersionVector.serializer(), versionVector()), "VersionVector") },
+            { assertEquals(DOT_CONTEXT, hex(DotContext.serializer(), dotContext()), "DotContext") },
+            { assertEquals(RGA, hex(Rga.wireSerializer(String.serializer()), rga()), "Rga") },
+            { assertEquals(FUGUE, hex(Fugue.wireSerializer(String.serializer()), fugue()), "Fugue") },
+            { assertEquals(JSON_CRDT, hex(JsonCrdt.serializer(), jsonCrdt()), "JsonCrdt") },
         )
     }
 
@@ -171,7 +183,38 @@ class CanonicalGoldenVectorTest {
             { assertEquals(2, movableTree().compactedDotCount(), "MovableTree compactedDots") },
             { assertEquals(4, mvRegister().values.size, "MVRegister concurrent values") },
             { assertEquals(4, versionVector().entries.size, "VersionVector authors") },
+            { assertEquals(4, dotContext().cloud.size, "DotContext cloud") },
+            { assertEquals(2, dotContext().vv.size, "DotContext vv") },
+            { assertEquals(5, rga().ops.size, "Rga ops") },
+            { assertEquals(4, rga().insertAuthors().size, "Rga insert authors") },
+            { assertEquals(1, rga().tombstoneCount(), "Rga tombstone") },
+            { assertEquals(5, fugue().ops.size, "Fugue ops") },
+            { assertEquals(4, fugue().insertAuthors().size, "Fugue insert authors") },
+            { assertEquals(1, fugue().tombstoneCount(), "Fugue tombstone") },
+            { assertEquals(2, jsonCrdt().keys.size, "JsonCrdt keys") },
+            { assertEquals(4, jsonCrdt().arrayAt("list").ops.size, "JsonCrdt nested Rga ops") },
+            { assertEquals(2, jsonCrdt().arrayAt("list").insertAuthors().size, "JsonCrdt nested Rga authors") },
         )
+    }
+
+    /** The distinct authors of this log's [RgaOp.Insert]s — a single-replica collapse drops to 1. */
+    private fun Rga<*>.insertAuthors(): Set<ReplicaId> =
+        ops.mapNotNull { op -> (op as? RgaOp.Insert)?.id?.replicaId }.toSet()
+
+    /** How many [RgaOp.Remove]s this log carries; `0` if the tombstone is ever dropped. */
+    private fun Rga<*>.tombstoneCount(): Int = ops.count { it is RgaOp.Remove<*> }
+
+    /** The [Fugue] mirror of [insertAuthors]. */
+    private fun Fugue<*>.insertAuthors(): Set<ReplicaId> =
+        ops.mapNotNull { op -> (op as? FugueOp.Insert)?.id?.replicaId }.toSet()
+
+    /** The [Fugue] mirror of [tombstoneCount]. */
+    private fun Fugue<*>.tombstoneCount(): Int = ops.count { it is FugueOp.Remove }
+
+    /** The [Rga] behind array-valued key [key] — the nested op-log the [JSON_CRDT] vector reaches. */
+    private fun JsonCrdt.arrayAt(key: String): Rga<JsonNode> {
+        val node = this[key] ?: error("the $key key must be present")
+        return (node as? JsonNode.Array)?.rga ?: error("the $key key must hold an Array")
     }
 
     /**
@@ -297,6 +340,11 @@ class CanonicalGoldenVectorTest {
      * `alpha`'s — and the merge reaches it in insertion order `zulu` first against a canonical
      * order of `alpha, zulu`. [orSet]'s dot sets are all singletons, so this is the only place
      * that sort is load-bearing.
+     *
+     * **So "both replicas write both keys" is a requirement, not incidental phrasing** (#2038).
+     * Give each key a single writer and every `DotSet` on the wire becomes a singleton — one
+     * element, one order — and `DotSetSerializer` silently loses its only cross-target pin while
+     * every assertion in this file stays green after a re-record.
      */
     private fun orMap(): ORMap<String, GCounter> {
         val viewZulu = ORMap.empty<String, GCounter>()
@@ -403,6 +451,91 @@ class CanonicalGoldenVectorTest {
             .ceilWith(VersionVector.of(mapOf(delta to 2L)))
 
     /**
+     * The only construction here with a **non-empty cloud** — the gap `DotContextSerializer`'s
+     * second sort exists for, and which [orSet], [orMap] and [mvRegister] all leave empty (#2038).
+     *
+     * A dot stays in the cloud exactly while a gap sits below it, so every cloud dot here is minted
+     * above one: `zulu`'s `seq=3` over a vector at `1`, and `mike`, `alpha`, `delta` each at a seq
+     * their vector never reaches. Four of them, contributed by two replicas and merged `zulu` first,
+     * so `cloud` arrives in insertion order `zulu:3, mike:7, alpha:4, delta:2` against a canonical
+     * order of `alpha:4, delta:2, mike:7, zulu:3` — no two adjacent.
+     *
+     * `vv` is load-bearing too: a two-entry map that `DotContext`'s own `compact` rebuilds as a
+     * [HashMap], reached in insertion order `zulu, alpha` against a canonical order `alpha, zulu`.
+     */
+    private fun dotContext(): DotContext =
+        DotContext.of(Dot(zulu, 1L), Dot(zulu, 3L), Dot(mike, 7L))
+            .piece(DotContext.of(Dot(alpha, 1L), Dot(alpha, 4L), Dot(delta, 2L)))
+
+    /**
+     * Four replicas each insert one element after `HEAD`, and `zulu` also tombstones its own —
+     * merged `zulu` first, so `ops` reaches insertion order
+     * `I(zulu), R(zulu), I(mike), I(alpha), I(delta)` against a canonical order of
+     * `I(alpha), I(delta), I(mike), I(zulu), R(zulu)`.
+     *
+     * **This is [Rga]'s first cross-target byte pin.** `rgaSerializationIsDeliveryOrderIndependent`
+     * and its `Compact.positions` siblings compare two values in *one process on one target*, so a
+     * platform-dependent encoding is self-consistent on each side while the bytes differ between
+     * them — the exact defect that would make #1955's root digest report permanent false divergence
+     * between a JVM peer and a Native one (#2038).
+     *
+     * The tombstone is minted **before** the merge on purpose. `RgaSerializer.opComparator` keys on
+     * the op type first, so every `Remove` sorts after every `Insert`; a `Remove` appended to the
+     * merged log would already be last and its position would pin nothing. Minted first, it arrives
+     * second and has to move to fifth.
+     */
+    private fun rga(): Rga<String> {
+        fun slice(replica: ReplicaId, value: String): Rga<String> =
+            Rga.empty<String>().insertAfter(replica, RgaId.HEAD, value).first
+        val fromZulu = slice(zulu, "z").let { inserted ->
+            inserted.removeAt(0)?.first ?: error("the freshly-inserted element must be removable")
+        }
+        return fromZulu.piece(slice(mike, "m")).piece(slice(alpha, "a")).piece(slice(delta, "d"))
+    }
+
+    /**
+     * [Fugue]'s mirror of [rga], and its first cross-target byte pin for the same reason.
+     *
+     * The comparator differs — [fugueOpComparator] keys on the **id** first and the op type only as
+     * a tiebreak — so `zulu`'s `Remove` stays adjacent to its `Insert` and the canonical order is
+     * `I(alpha), I(delta), I(mike), I(zulu), R(zulu)` reached from insertion order
+     * `I(zulu), R(zulu), I(mike), I(alpha), I(delta)`. Both terms of that comparator are load-bearing
+     * here: the four ids order the log, and the type tiebreak orders `zulu`'s two ops, which share one.
+     */
+    private fun fugue(): Fugue<String> {
+        fun slice(replica: ReplicaId, value: String): Fugue<String> =
+            Fugue.empty<String>().insertAt(replica, 0, value).first
+        val fromZulu = slice(zulu, "z").let { inserted ->
+            inserted.removeAt(0)?.first ?: error("the freshly-inserted element must be removable")
+        }
+        return fromZulu.piece(slice(mike, "m")).piece(slice(alpha, "a")).piece(slice(delta, "d"))
+    }
+
+    /**
+     * The recursive case: a two-key document whose `"list"` key holds a [JsonNode.Array], so this
+     * vector reaches [RgaSerializer]'s op sort *through* [JsonCrdt]'s `ORMap` — the composition that
+     * had no cross-target pin at any level (#2038).
+     *
+     * Both replicas write both keys, following [orMap]'s rule, so the outer `ORMap`'s per-key
+     * `DotSet`s are two-dot and its `DotMap` is multi-entry. The nested `Rga` merges `zulu`'s
+     * two-element slice against `alpha`'s two-element slice **`zulu` first**, against a canonical
+     * order that puts `alpha`'s ops first.
+     */
+    private fun jsonCrdt(): JsonCrdt {
+        fun view(replica: ReplicaId, tag: String): JsonCrdt {
+            val rga = listOf("${tag}1", "${tag}2").fold(Rga.empty<JsonNode>()) { acc, value ->
+                val after = acc.sequence.lastOrNull() ?: RgaId.HEAD
+                acc.insertAfter(replica, after, JsonNode.Leaf(MVRegister.empty<JsonValue>()
+                    .set(replica, JsonValue.Str(value)))).first
+            }
+            return JsonCrdt.empty(replica)
+                .set("list", JsonNode.Array(rga))
+                .set("name", JsonNode.Leaf(MVRegister.empty<JsonValue>().set(replica, JsonValue.Str(tag))))
+        }
+        return view(zulu, "z").piece(view(alpha, "a"))
+    }
+
+    /**
      * `compactedDots` is private, but every compacted dot is re-emitted through [Quilted.causalDots]
      * alongside the surviving log ops — so the compacted count is the total minus [moveLogSize],
      * the merged log. Each replica records four ops (`ts=1, 2, 3, 4`) and its own compaction drops
@@ -470,5 +603,50 @@ class CanonicalGoldenVectorTest {
                 "6f75649fffffffff"
         const val VERSION_VECTOR =
             "bf67656e7472696573bf65616c706861046564656c746102646d696b6501647a756c7503ffff"
+        const val DOT_CONTEXT =
+            "bf627676bf65616c70686101647a756c7501ff65636c6f75649fbf677265706c69636165616c7068616373657104ffbf" +
+                "677265706c6963616564656c74616373657102ffbf677265706c696361646d696b656373657107ffbf677265706c6963" +
+                "61647a756c756373657103ffffff"
+        const val RGA =
+            "bf636f70739fbf617400626964bf676c616d706f727401697265706c696361496465616c7068616373657101ff617661" +
+                "616161bf676c616d706f72743b7fffffffffffffff697265706c6963614964606373657100ffffbf617400626964bf67" +
+                "6c616d706f727401697265706c69636149646564656c74616373657101ff617661646161bf676c616d706f72743b7fff" +
+                "ffffffffffff697265706c6963614964606373657100ffffbf617400626964bf676c616d706f727401697265706c6963" +
+                "614964646d696b656373657101ff6176616d6161bf676c616d706f72743b7fffffffffffffff697265706c6963614964" +
+                "606373657100ffffbf617400626964bf676c616d706f727401697265706c6963614964647a756c756373657101ff6176" +
+                "617a6161bf676c616d706f72743b7fffffffffffffff697265706c6963614964606373657100ffffbf617401626964bf" +
+                "676c616d706f727401697265706c6963614964647a756c756373657101ffffffff"
+        const val FUGUE =
+            "bf636f70739fbf617400626964bf676c616d706f727401697265706c696361496465616c7068616373657101ff617661" +
+                "616170bf676c616d706f72743b7fffffffffffffff697265706c6963614964606373657100ff6173655269676874ffbf" +
+                "617400626964bf676c616d706f727401697265706c69636149646564656c74616373657101ff617661646170bf676c61" +
+                "6d706f72743b7fffffffffffffff697265706c6963614964606373657100ff6173655269676874ffbf617400626964bf" +
+                "676c616d706f727401697265706c6963614964646d696b656373657101ff6176616d6170bf676c616d706f72743b7fff" +
+                "ffffffffffff697265706c6963614964606373657100ff6173655269676874ffbf617400626964bf676c616d706f7274" +
+                "01697265706c6963614964647a756c756373657101ff6176617a6170bf676c616d706f72743b7fffffffffffffff6972" +
+                "65706c6963614964606373657100ff6173655269676874ffbf617401626964bf676c616d706f727401697265706c6963" +
+                "614964647a756c756373657101ffffffff"
+        const val JSON_CRDT =
+            "bf6663617573616cbf6573746f7265bf646c697374bf64746167739fbf677265706c69636165616c7068616373657101" +
+                "ffbf677265706c696361647a756c756373657101ffff6576616c7565bf6174016161bf636f70739fbf617400626964bf" +
+                "676c616d706f727401697265706c696361496465616c7068616373657101ff6176bf617402616cbf6663617573616cbf" +
+                "6573746f7265bfbf677265706c69636165616c7068616373657101ff9f63737472bf6576616c7565626131ffffff6763" +
+                "6f6e74657874bf627676bf65616c70686101ff65636c6f75649fffffffffff6161bf676c616d706f72743b7fffffffff" +
+                "ffffff697265706c6963614964606373657100ffffbf617400626964bf676c616d706f727401697265706c6963614964" +
+                "647a756c756373657101ff6176bf617402616cbf6663617573616cbf6573746f7265bfbf677265706c696361647a756c" +
+                "756373657101ff9f63737472bf6576616c7565627a31ffffff67636f6e74657874bf627676bf647a756c7501ff65636c" +
+                "6f75649fffffffffff6161bf676c616d706f72743b7fffffffffffffff697265706c6963614964606373657100ffffbf" +
+                "617400626964bf676c616d706f727402697265706c696361496465616c7068616373657102ff6176bf617402616cbf66" +
+                "63617573616cbf6573746f7265bfbf677265706c69636165616c7068616373657101ff9f63737472bf6576616c756562" +
+                "6132ffffff67636f6e74657874bf627676bf65616c70686101ff65636c6f75649fffffffffff6161bf676c616d706f72" +
+                "7401697265706c696361496465616c7068616373657101ffffbf617400626964bf676c616d706f727402697265706c69" +
+                "63614964647a756c756373657102ff6176bf617402616cbf6663617573616cbf6573746f7265bfbf677265706c696361" +
+                "647a756c756373657101ff9f63737472bf6576616c7565627a32ffffff67636f6e74657874bf627676bf647a756c7501" +
+                "ff65636c6f75649fffffffffff6161bf676c616d706f727401697265706c6963614964647a756c756373657101ffffff" +
+                "ffffff646e616d65bf64746167739fbf677265706c69636165616c7068616373657102ffbf677265706c696361647a75" +
+                "6c756373657102ffff6576616c7565bf617402616cbf6663617573616cbf6573746f7265bfbf677265706c6963616561" +
+                "6c7068616373657101ff9f63737472bf6576616c75656161ffffbf677265706c696361647a756c756373657101ff9f63" +
+                "737472bf6576616c7565617affffff67636f6e74657874bf627676bf65616c70686101647a756c7501ff65636c6f7564" +
+                "9fffffffffffffff67636f6e74657874bf627676bf65616c70686102647a756c7502ff65636c6f75649fffffffff"
     }
 }
