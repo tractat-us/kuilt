@@ -184,16 +184,17 @@ still compiles but self-skips at runtime, so `./gradlew build` doesn't run it.
     - **`runTest`'s `timeout` is a GENEROUS wedge backstop, never a tight assertion.** It is
       **wall-clock over a virtual-time trajectory**, so it measures the *host*, not the code — a
       contended box inflates it while the trajectory is unchanged. Tightening it asserts nothing and
-      manufactures load-sensitive false reds. Use a named, generously-sized constant (30 s is the
-      established value here) and say in its KDoc that it is a backstop. What makes a hang *fast* and
-      *legible* is the next bullet's bounded `await*`/`settle()` plus the harness's `dumpState()` —
-      not the ceiling.
-      **Receipt:** learned on #1382, left uncorrected here, and so recurred — #1891 red-lit
-      `apple-nightly` on `main` at a 5 s ceiling with only 1.8× headroom against a measured 2.65×
-      contention degradation, i.e. *deterministically* under load, not flakily. Mutation-verified: 5 s
-      → 4/4 fail reproducing the CI signature, 30 s → 4/4 pass, same binary, load the only variable.
-      Third module hit; #1739 counts 293 such sites. The property to hold is **"no real-time ceiling
-      is load-bearing for a virtual-time test"** — a rule naming `5.seconds` is evaded by `4.seconds`.
+      manufactures load-sensitive false reds. What makes a hang *fast* and *legible* is the next
+      bullet's bounded `await*`/`settle()` plus the harness's `dumpState()` — not the ceiling.
+      **Use `TEST_WEDGE_BACKSTOP`** (`:kuilt-test`, `us.tractat.kuilt.test`) — or a sim harness's own
+      equivalent, `RAFT_SIM_WEDGE_BACKSTOP` / `WARP_SIM_WEDGE_BACKSTOP`. Its KDoc carries the value,
+      the rationale and the mutation receipt; **this file deliberately names none of them**, because a
+      number copied into prose rots the moment the constant moves and nothing fails when it does.
+      `forbidTightRunTestTimeout` (root `build.gradle.kts`, wired into `check`) enforces it against a
+      grandfathered baseline — sweep a file all-or-none and drop its baseline entry (#1739).
+      The property to hold is **"no real-time ceiling is load-bearing for a virtual-time test"** — a
+      rule naming `5.seconds` is evaded by `4.seconds`, and a 1-minute ceiling has failed here too.
+      Learned on #1382, left uncorrected, and so recurred on #1891 and after.
     - **Bounded `await*` / `settle()` only — NEVER `advanceUntilIdle()`.** Election/heartbeat timers
       re-arm forever, so the idle state is never reached; advance virtual time in bounded steps.
       These are the real fast-failure mechanism: they fail in ~1.4 s either way, independent of host
