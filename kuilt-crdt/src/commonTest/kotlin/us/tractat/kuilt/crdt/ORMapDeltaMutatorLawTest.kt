@@ -35,6 +35,12 @@ import kotlin.test.assertTrue
  * Also pinned here: the two delta shapes proposed in #2044, each reconstructed from public API as a
  * negative control, so that reinstating either in production turns a named test red rather than
  * quietly diverging replicas.
+ *
+ * **One property [ORMap] does not have, and this suite does not claim.** Delivery order is
+ * irrelevant to which keys are present and to their tags, but *not* to a key's value: [ORMap.piece]
+ * is not associative on the value axis, a pre-existing defect reproducible on `main` with no delta
+ * code at all (#2086). See [aRemoveDeltaRacingAPutDeltaIsOrderDependentOnTheValueAxis], which pins
+ * the behaviour as measured rather than asserting a convergence [ORMap] cannot deliver.
  */
 @OptIn(ExperimentalSerializationApi::class)
 class ORMapDeltaMutatorLawTest {
@@ -393,49 +399,58 @@ class ORMapDeltaMutatorLawTest {
     // ── delivery-order independence ───────────────────────────────────────────────
 
     /**
-     * Three replicas, random op streams, every delta delivered **shuffled and duplicated**. The
+     * Three replicas, random **put** streams, every delta delivered **shuffled and duplicated**. The
      * result must be byte-identical to the straight in-order fold. This is what licenses the
      * design's claim that no causal delivery, buffering or de-duplication is required above the
      * lattice: a delta is an element of the same semilattice as the state.
      */
     @Test
-    fun deltasConvergeUnderShuffledAndDuplicatedDelivery() {
+    fun putDeltasConvergeUnderShuffledAndDuplicatedDelivery() {
         val random = Random(23)
-        var removeDeltas = 0
 
         repeat(CONVERGENCE_TRIALS) { trial ->
-            val replicas = listOf(alpha, bravo, charlie)
-            val local = replicas.associateWith { ORMap.empty<String, GSet<String>>() }.toMutableMap()
-            val deltas = mutableListOf<ORMap<String, GSet<String>>>()
+            val deltas = randomDeltaStream(random, withRemoves = false)
 
-            repeat(random.nextInt(3, 10)) {
-                val author = replicas.random(random)
-                val key = KEYS.random(random)
-                val state = local.getValue(author)
-
-                val patch = if (key in state.keys && random.nextInt(3) == 0) {
-                    removeDeltas++
-                    state.removeDelta(key)
-                } else {
-                    state.putDelta(author, key, GSet.of(VALUES.random(random)))
-                }
-                local[author] = state.piece(patch)
-                deltas += patch.delta
-
-                // Deliver eagerly to some peers, so later ops supersede tags minted elsewhere.
-                replicas.filter { it != author && random.nextBoolean() }.forEach { peer ->
-                    local[peer] = local.getValue(peer).piece(patch)
-                }
-            }
-
-            val inOrder = deltas.fold(ORMap.empty<String, GSet<String>>()) { acc, delta -> acc.piece(delta) }
-            val jumbled = (deltas + deltas).shuffled(random)
-            val outOfOrder = jumbled.fold(ORMap.empty<String, GSet<String>>()) { acc, delta -> acc.piece(delta) }
+            val inOrder = fold(deltas)
+            val outOfOrder = fold((deltas + deltas).shuffled(random))
 
             assertTrue(
                 bytes(inOrder).contentEquals(bytes(outOfOrder)),
-                "trial $trial: ${deltas.size} deltas, delivered shuffled and duplicated, must encode " +
-                    "identically to the in-order fold (in-order=${inOrder.keys}, jumbled=${outOfOrder.keys})",
+                "trial $trial: ${deltas.size} put deltas, delivered shuffled and duplicated, must " +
+                    "encode identically to the in-order fold (in-order=${inOrder.keys}, " +
+                    "jumbled=${outOfOrder.keys})",
+            )
+        }
+    }
+
+    /**
+     * The same with removes mixed in. **Key presence and the map's tags** converge under any
+     * delivery order, with any repeats — that is the observed-remove lattice doing its job, and it
+     * is the part the delta shapes are responsible for.
+     *
+     * The **values** do not, and that is not this change's doing: [ORMap.piece] is not associative
+     * on the value axis, because [ORMap.remove] discards a key's value while `ORMapEntry.join`
+     * merges it whenever both sides still hold the key. Reproducible on `main` with no delta code at
+     * all — see #2086, and [aRemoveDeltaRacingAPutDeltaIsOrderDependentOnTheValueAxis] for the
+     * minimal case. Asserting byte-identity here would be asserting a property [ORMap] does not
+     * have, so this test asserts the one it does.
+     */
+    @Test
+    fun removeDeltasConvergeOnKeyPresenceAndTagsUnderShuffledDelivery() {
+        val random = Random(29)
+        var removeDeltas = 0
+
+        repeat(CONVERGENCE_TRIALS) { trial ->
+            val deltas = randomDeltaStream(random, withRemoves = true) { removeDeltas++ }
+
+            val inOrder = fold(deltas)
+            val outOfOrder = fold((deltas + deltas).shuffled(random))
+
+            assertEquals(
+                tagsByKey(inOrder),
+                tagsByKey(outOfOrder),
+                "trial $trial: ${deltas.size} deltas, delivered shuffled and duplicated, must agree " +
+                    "on which keys are present and on their tags",
             )
         }
 
@@ -493,34 +508,85 @@ class ORMapDeltaMutatorLawTest {
     /**
      * Add-wins on the key survives the delta path. A concurrent put mints a tag the remover never
      * witnessed, so it is absent from the remove delta's context and lives through the join — in
-     * either order, to byte-identical states.
+     * either order, with the same tags.
      */
     @Test
-    fun aConcurrentPutSurvivesARemoveDeltaInEitherOrder() {
-        // "bystander" is here so the remove delta's context is a strict subset of the sender's
-        // history: a delta that over-claimed would take the bystander down with it.
-        val start = ORMap.empty<String, GSet<String>>()
-            .put(alpha, "bystander", GSet.of("b"))
-            .put(alpha, KEY, GSet.of("v1"))
-        val removal = start.removeDelta(KEY).delta                      // alpha retires the tag it can see
+    fun aConcurrentPutDeltaSurvivesARemoveDeltaInEitherOrder() {
+        val start = racingStart()
+        val removal = start.removeDelta(KEY).delta                       // alpha retires the tag it can see
         val concurrent = start.putDelta(bravo, KEY, GSet.of("v2")).delta // bravo re-puts, minting a fresh tag
 
         val removeFirst = start.piece(removal).piece(concurrent)
-        val addFirst = start.piece(concurrent).piece(removal)
+        val putFirst = start.piece(concurrent).piece(removal)
 
         assertAll(
             { assertTrue(KEY in removeFirst.keys, "the put must win when the remove lands first") },
-            { assertTrue(KEY in addFirst.keys, "the put must win when the put lands first") },
+            { assertTrue(KEY in putFirst.keys, "the put must win when the put lands first") },
             {
                 assertTrue(
-                    "bystander" in removeFirst.keys && "bystander" in addFirst.keys,
+                    "bystander" in removeFirst.keys && "bystander" in putFirst.keys,
                     "a remove delta must not retire tags belonging to any other key",
                 )
             },
             {
-                assertTrue(
-                    bytes(removeFirst).contentEquals(bytes(addFirst)),
-                    "both orders must encode identically",
+                assertEquals(
+                    tagsByKey(removeFirst),
+                    tagsByKey(putFirst),
+                    "both orders must agree on which keys are present and on their tags",
+                )
+            },
+        )
+    }
+
+    /**
+     * **A pre-existing [ORMap] defect, pinned rather than papered over — see #2086.** [ORMap.piece]
+     * is not associative on the value axis: [ORMap.remove] drops a key's value along with its tags,
+     * while `ORMapEntry.join` merges the two values whenever both sides still hold the key. So
+     * whether the removed replica's value survives depends on the order the two operations are
+     * applied in.
+     *
+     * It reproduces on `main` with **no delta code at all** — `start.piece(removed).piece(rePut)`
+     * against `start.piece(removed.piece(rePut))`, where `rePut` is a peer that removed the key and
+     * then put it back. What the delta form changes is how easy it is to reach: because a put delta
+     * carries the *supplied* value rather than the sender's locally merged one (deliberately — that
+     * is where the saving lives), **any** remove racing a put on the same key now lands here,
+     * instead of only a peer that did remove-then-put locally.
+     *
+     * The two peers do reconcile: the next anti-entropy round joins their full states and unions the
+     * values. Until then their `Quilter.stateRoot()`s disagree and #1955's gate is off for the pair.
+     *
+     * This test asserts the behaviour as measured. If #2086 changes it, this test is meant to go red.
+     */
+    @Test
+    fun aRemoveDeltaRacingAPutDeltaIsOrderDependentOnTheValueAxis() {
+        val start = racingStart()
+        val removal = start.removeDelta(KEY).delta
+        val concurrent = start.putDelta(bravo, KEY, GSet.of("v2")).delta
+
+        val removeFirst = start.piece(removal).piece(concurrent)
+        val putFirst = start.piece(concurrent).piece(removal)
+
+        assertAll(
+            {
+                assertEquals(
+                    setOf("v2"),
+                    assertNotNull(removeFirst[KEY]).elements,
+                    "remove-then-put: the removed replica's value is gone, so the delta's value stands alone",
+                )
+            },
+            {
+                assertEquals(
+                    setOf("v1", "v2"),
+                    assertNotNull(putFirst[KEY]).elements,
+                    "put-then-remove: the key was still present when the delta landed, so the values merged",
+                )
+            },
+            {
+                assertFalse(
+                    bytes(removeFirst).contentEquals(bytes(putFirst)),
+                    "if these now encode identically, #2086 has been fixed — delete this test, " +
+                        "restore the byte assertion in aConcurrentPutDeltaSurvivesARemoveDeltaInEitherOrder, " +
+                        "and drop the concurrent-remove caveat from ORMap.putDelta's KDoc",
                 )
             },
         )
@@ -585,6 +651,57 @@ class ORMapDeltaMutatorLawTest {
         return merged
     }
 
+    /**
+     * The starting point for the two remove-races-put tests: `alpha` holds [KEY] and one bystander.
+     * The bystander is there so a remove delta's context is a strict subset of the sender's history
+     * — a delta that over-claimed would take the bystander down with it.
+     */
+    private fun racingStart(): ORMap<String, GSet<String>> =
+        ORMap.empty<String, GSet<String>>()
+            .put(alpha, "bystander", GSet.of("b"))
+            .put(alpha, KEY, GSet.of("v1"))
+
+    /**
+     * A stream of deltas produced by three replicas writing concurrently, with each delta delivered
+     * eagerly to a random subset of peers so that later operations supersede tags minted elsewhere.
+     */
+    private fun randomDeltaStream(
+        random: Random,
+        withRemoves: Boolean,
+        onRemove: () -> Unit = {},
+    ): List<ORMap<String, GSet<String>>> {
+        val replicas = listOf(alpha, bravo, charlie)
+        val local = replicas.associateWith { ORMap.empty<String, GSet<String>>() }.toMutableMap()
+        val deltas = mutableListOf<ORMap<String, GSet<String>>>()
+
+        repeat(random.nextInt(3, 10)) {
+            val author = replicas.random(random)
+            val key = KEYS.random(random)
+            val state = local.getValue(author)
+
+            val patch = if (withRemoves && key in state.keys && random.nextInt(3) == 0) {
+                onRemove()
+                state.removeDelta(key)
+            } else {
+                state.putDelta(author, key, GSet.of(VALUES.random(random)))
+            }
+            local[author] = state.piece(patch)
+            deltas += patch.delta
+
+            replicas.filter { it != author && random.nextBoolean() }.forEach { peer ->
+                local[peer] = local.getValue(peer).piece(patch)
+            }
+        }
+        return deltas
+    }
+
+    private fun fold(deltas: List<ORMap<String, GSet<String>>>): ORMap<String, GSet<String>> =
+        deltas.fold(ORMap.empty()) { acc, delta -> acc.piece(delta) }
+
+    /** Every present key with the map tags currently on it — the observed-remove lattice's content. */
+    private fun tagsByKey(map: ORMap<String, GSet<String>>): Map<String, Set<Dot>> =
+        map.keys.associateWith { map.tagsOn(it) }
+
     /** [KEY] plus [otherKeys] unrelated keys, all tagged by the same replica in the same order. */
     private fun bulkyMap(otherKeys: Int): ORMap<String, GSet<String>> {
         val withTarget = ORMap.empty<String, GSet<String>>().put(alpha, KEY, GSet.of("v1"))
@@ -610,13 +727,13 @@ class ORMapDeltaMutatorLawTest {
         const val CONVERGENCE_TRIALS = 200
 
         /**
-         * The floor the generator must clear for a law test to mean anything. **Measured: see the
-         * PR body** on seed 11. Set at roughly half of the measured figure, so an incidental
-         * generator tweak does not red-light the suite, but a generator that stopped producing
-         * concurrent tags — and with it every case in which [ORMap.putDelta]'s superseded-tags term
-         * does any work — fails loudly instead of passing vacuously.
+         * The floor the generator must clear for a law test to mean anything. **Measured: 103 of
+         * 400 for `put` and 102 of 400 for `remove`** on seed 11. Set at roughly half of that, so an
+         * incidental generator tweak does not red-light the suite, but a generator that stopped
+         * producing concurrent tags — and with it every case in which [ORMap.putDelta]'s
+         * superseded-tags term does any work — fails loudly instead of passing vacuously.
          */
-        const val MIN_MULTI_TAG_TRIALS = 60
+        const val MIN_MULTI_TAG_TRIALS = 50
 
         /** A small pool, so branches collide and keys accumulate concurrent tags. */
         val KEYS = listOf("a", "b", "c", "d", "e", "f")
