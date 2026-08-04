@@ -122,6 +122,9 @@ internal class StarMember(
     /** Relay forwards this member's room discarded to queue overflow. See [SeamRoom.relayForwardsDropped]. */
     fun relayForwardsDropped(): Long = (room as SeamRoom).relayForwardsDropped
 
+    /** Frames this member's room refused to put on the wire as oversize. See [SeamRoom.oversizeFramesDropped]. */
+    fun oversizeFramesDropped(): Long = (room as SeamRoom).oversizeFramesDropped
+
     /** Whether this member observed [peer] going [MembershipEvent.Partitioned]. */
     fun sawPartitioned(peer: PeerId): Boolean = peer in partitionedPeers
 
@@ -426,7 +429,19 @@ private fun TestScope.observe(room: Room, wire: WireTapSeam): StarMember {
 }
 
 /**
- * A [Seam] decorator that records what a member wrote, and can bend the link three ways.
+ * The oversize error a framed fabric raises, as this module can observe it.
+ *
+ * Stands in for `:kuilt-stream`'s `FrameTooLargeException` — the real thing a length-prefixed
+ * fabric throws once a frame exceeds its limit — which `:kuilt-session` does not depend on. The
+ * **identity of the type** is what the payload-budget tests assert on: a fabric-level oversize
+ * error escaping a room send is the #2047 symptom, so a test that merely counted failures could
+ * not tell the bug from its fix.
+ */
+internal class FabricFrameTooLarge(size: Int, max: Int) :
+    Exception("frame length $size exceeds fabric max $max")
+
+/**
+ * A [Seam] decorator that records what a member wrote, and can bend the link five ways.
  *
  * Every capability here exists for one property under test and none of them is a general-purpose
  * fault model — reach for `FaultySeam` for that. What this adds that `FaultySeam` cannot is
@@ -437,6 +452,7 @@ private fun TestScope.observe(room: Room, wire: WireTapSeam): StarMember {
  * - [disconnect] — as [exclude], **and** make [sendTo] to that peer throw [PeerNotConnected].
  * - [silence] — drop that peer's inbound frames, so a liveness detector matures the silence.
  * - [wedge] — make [sendTo] to that peer never return, the black-holed link of #1655.
+ * - [limitFrames] — bound the frame size this fabric accepts, as a length-prefixed one does.
  * - [inject] — put a frame on this member's inbound stream with an arbitrary stamped sender.
  *
  * Mutable state is held in [MutableStateFlow]s, and **every mutation goes through
@@ -464,6 +480,7 @@ internal class WireTapSeam(
     private val unreachable = MutableStateFlow<Set<PeerId>>(emptySet())
     private val silenced = MutableStateFlow<Set<PeerId>>(emptySet())
     private val wedged = MutableStateFlow<Set<PeerId>>(emptySet())
+    private val frameLimit = MutableStateFlow<Int?>(null)
     /**
      * Injected inbound frames. **Bounded**, per the repo's `forbidUnboundedSwatchDelivery` guard —
      * and the bound is honest rather than evasive: a test injects a frame or two, so anything
@@ -493,6 +510,9 @@ internal class WireTapSeam(
     override val state: StateFlow<SeamState> get() = delegate.state
     override val capability: StateFlow<TransportCapability> get() = delegate.capability
 
+    /** [limitFrames]'s ceiling when one is set, else the delegate's own. */
+    override val maxPayloadBytes: Int? get() = frameLimit.value ?: delegate.maxPayloadBytes
+
     /**
      * The delegate's inbound stream, minus [silence]d senders, merged with anything [inject]ed.
      *
@@ -510,6 +530,7 @@ internal class WireTapSeam(
 
     override suspend fun broadcast(payload: ByteArray) {
         record(to = null, bytes = payload)
+        enforceFrameLimit(payload)
         delegate.broadcast(payload)
     }
 
@@ -517,6 +538,7 @@ internal class WireTapSeam(
         // Recorded BEFORE the wedge, so a test can still prove the send was attempted — the whole
         // point of a black hole is that the caller cannot tell it from a very slow link.
         record(to = peer, bytes = payload)
+        enforceFrameLimit(payload)
         if (peer in wedged.value) awaitCancellation()
         // Checked after the wedge and before the delegate, so a peer that is both wedged and
         // disconnected still models the black hole (the harsher of the two).
@@ -574,6 +596,23 @@ internal class WireTapSeam(
 
     fun wedge(peer: PeerId) {
         wedged.update { it + peer }
+    }
+
+    /**
+     * Bound the frames this fabric accepts to [max] bytes, as a length-prefixed transport does.
+     *
+     * A bigger frame raises [FabricFrameTooLarge] from `broadcast`/`sendTo` — the shape
+     * `:kuilt-stream`'s `framed()` has, and the shape the star relay can walk a caller into: a
+     * payload that fits a direct send no longer fits once the [RelayEnvelope] is wrapped around it
+     * (#2047).
+     */
+    fun limitFrames(max: Int) {
+        frameLimit.value = max
+    }
+
+    private fun enforceFrameLimit(payload: ByteArray) {
+        val max = frameLimit.value ?: return
+        if (payload.size > max) throw FabricFrameTooLarge(payload.size, max)
     }
 
     fun clearSentLog() {

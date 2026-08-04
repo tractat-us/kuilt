@@ -33,6 +33,40 @@ internal sealed interface RelayDest {
 }
 
 /**
+ * Bytes held back from the fabric's frame ceiling on **every** [Room] send, to pay for the
+ * [RelayEnvelope] that wraps a relayed one (#2047).
+ *
+ * ## Where the number comes from
+ *
+ * Measured against the encoding [RelayEnvelope.encode] actually produces, at a 100-byte payload:
+ *
+ * | origin / dest | overhead |
+ * |---|---|
+ * | 1-byte id, [RelayDest.Everyone] | 35 B |
+ * | 1-byte id, [RelayDest.One] of a 1-byte id | 42 B |
+ * | uuid, [RelayDest.One] of a uuid | 114 B |
+ * | 100-byte id, [RelayDest.One] of a 100-byte id | 242 B |
+ *
+ * So the structural cost — the [RoomFramePrefix.Relay] byte, the CBOR map header, the
+ * `origin`/`dest`/`payload` field-name keys, the [RelayDest] discriminator that
+ * [RelayDest]'s `@SerialName`s keep short, and three length prefixes — is ~42 B, and everything
+ * above that is the two peer ids. [RelayDest.One] is the worst case of the two because it carries
+ * a second id.
+ *
+ * 256 covers ids of about 107 bytes each. `PeerId`s are short, controlled identifiers by
+ * convention (a name or a uuid), so that is generous headroom rather than a tight fit — chosen to
+ * match `:kuilt-raft`'s `RELAY_HEADER_BUDGET`, which reserves the same 256 B for the same shape of
+ * wrapper over the same shape of ids. A pathologically long pair of ids could still exceed it; the
+ * arithmetic is pinned by `RelayPayloadBudgetTest` so a change to the envelope's wire shape that
+ * eats the margin fails a test rather than a fabric.
+ *
+ * Not public API — `Room.maxPayloadBytes` is. A caller that subtracted this itself would be doing
+ * the library's arithmetic a second time, and would have to redo it on every change to the
+ * envelope.
+ */
+internal const val RELAY_ENVELOPE_BUDGET: Int = 256
+
+/**
  * One frame travelling spoke → host → spoke, with the **true originator kept intact** (#1994).
  *
  * On a star fabric a joiner's frame reaches only the host; nothing forwards it onward, so a

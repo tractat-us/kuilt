@@ -26,6 +26,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | a forwarding hop through the host so two guests can see each other — because a `Quilter` between two joiners never converges, or a peer is in the roster but unreachable | `Room.channel(id)` — the room already relays | [Replicated data](#replicated-data) |
 | averaging model updates from many devices without collecting their data — federated learning / federated analytics, "train locally, share only the update" | `FedAvg` + `TrainingUpdate` | [Replicated data](#replicated-data) |
 | checking two peers hold the same state across a process/socket boundary — hand-hashing a replicated state so you can compare it as one number | `canonicalDigest` | [Replicated data](#replicated-data) |
+| splitting a big blob into frames — picking a chunk size, or chasing a `FrameTooLargeException` that only appears once a peer drops | `Room.maxPayloadBytes` / `Seam.maxPayloadBytes` | [Payload limits](#payload-limits) |
 | a `seenIds` set to skip already-handled messages | `GSet` / kuilt dedup | [Dedup](#dedup) |
 | merging several mDNS/Multipeer discovery feeds into one lobby roster | `discoveryRoster` | [Discovery](#discovery) |
 | a weighted / fair-share scheduler — "give this group 3× the share", "who runs the next quantum", a hoarder-proof round-robin | `HeddlePolicy` + `HeddleNode` | [Fair share & placement](#fair-share--placement) |
@@ -828,6 +829,41 @@ cache, a "who has these bytes" protocol, or a sandbox.
     )
     check(lazyFetch.opToBobbin(OpId("reverse")) == hash)
     check(lazyFetch.opToBobbin(OpId("unknown")) == null) // nothing to fetch — the task stands by
+```
+
+## Payload limits
+
+**Intent:** pick a chunk size for a big payload — or explain a `FrameTooLargeException` that appears only after somebody drops out.
+**Primitive:** `Room.maxPayloadBytes` (`:kuilt-session`), and `Seam.maxPayloadBytes` (`:kuilt-core`) one layer down. Size to that, not to the fabric's frame limit.
+
+`null` means **unknown, not unbounded** — the honest answer from a fabric that names no ceiling. A non-null value is a promise: a payload that size or smaller will not be refused for being too big, *whatever route the frame takes*.
+
+That last clause is the whole point. On a star, a spoke's frame reaches only the host, so once the roster diverges from what the transport can address the payload is wrapped in a relay envelope and forwarded — and the wrapper costs bytes. The budget holds them back **unconditionally**, even while no relay is in use, because routing flips the instant a member enters its reconnect window: a limit that moved with the route would be a trap for a caller that checked it and then sent. A `room.channel(id)` view reports a further-reduced budget, since its own framing costs bytes too.
+
+The number is a **promise, not the refusal threshold** — refusal is measured on the frame that actually goes on the wire, so a payload above the budget that still fits (a direct send, where no envelope is applied) is delivered rather than rejected. Size to the budget anyway: it is the only number that holds whichever route the frame takes.
+
+It is also **a reading, not a lease.** Route-independent is not the same as time-independent: a mesh reports the minimum across its live links, so a peer attaching over a tighter transport lowers the number under you. Re-read it per send rather than once per batch.
+
+When a frame genuinely will not fit, each call keeps its own contract: `sendTo` raises `PayloadTooLarge` (addressed sends report), `broadcast` drops it with a debug log (it is lossy-without-error by contract). Neither lets the fabric's own oversize error out.
+
+<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#chunkToTheRoomsBudgetSample -->
+```kotlin
+var start = 0
+while (start < blob.size) {
+    // Re-read per chunk, not once for the loop: the budget is a reading, not a lease. On a mesh
+    // it is the minimum across live links, so a peer attaching over a tighter transport lowers
+    // it under you mid-blob. null means "this fabric names no ceiling" — unknown, not
+    // unbounded; floored at 1 because the budget is legitimately 0 on a fabric whose ceiling is
+    // under the relay reservation.
+    val budget = (room.maxPayloadBytes ?: DEFAULT_CHUNK_BYTES).coerceAtLeast(1)
+    val end = minOf(start + budget, blob.size)
+    // Index arithmetic, not `asSequence().chunked()` — the latter boxes every byte and builds
+    // an ArrayList<Byte> per chunk. On a blob big enough to need chunking that is the point.
+    // Past the budget, sendTo reports PayloadTooLarge (addressed sends do) while broadcast
+    // drops with a log (lossy by contract) — neither surfaces the fabric's own oversize error.
+    room.sendTo(peer, blob.copyOfRange(start, end))
+    start = end
+}
 ```
 
 ## Dedup

@@ -129,9 +129,10 @@ public interface Room {
      * Broadcast [bytes] to all other admitted members.
      *
      * **Best-effort: never throws for an undeliverable frame.** A member the transport cannot
-     * currently reach — including, on a star, the relaying host itself — is silently skipped. Use
-     * the roster and the membership events to reason about who is present; do not read a returned
-     * `Unit` as delivery. Deliberately weaker than [sendTo], which is addressed and does report.
+     * currently reach — including, on a star, the relaying host itself — is silently skipped, and
+     * so is a payload over [maxPayloadBytes]. Use the roster and the membership events to reason
+     * about who is present; do not read a returned `Unit` as delivery. Deliberately weaker than
+     * [sendTo], which is addressed and does report.
      *
      * ## Reserved leading bytes
      *
@@ -159,6 +160,58 @@ public interface Room {
     public suspend fun broadcast(bytes: ByteArray)
 
     /**
+     * The largest [bytes] a single [broadcast] or [sendTo] may carry, or `null` when this room
+     * cannot tell.
+     *
+     * `null` means **unknown, not unbounded** — the honest answer from a room over a fabric that
+     * names no frame ceiling. A non-null value is a promise about the **instant it is read**: a
+     * payload of that size or smaller will not be refused for being too big, *whatever route the
+     * frame ends up taking*.
+     *
+     * ## A reading, not a lease
+     *
+     * The promise is route-independent, not time-independent, and the two are different guarantees.
+     * A mesh fabric reports the **minimum** ceiling across its live links, so a peer attaching over
+     * a tighter transport lowers this number under a caller that has already read it — the refusal
+     * that follows is correct (the frame genuinely cannot reach the new peer), and it is the
+     * *caller's* cached value that went stale. Re-read per send rather than once per batch; a
+     * long chunking loop that reads the budget once and trusts it for every chunk is the shape
+     * that gets caught out.
+     *
+     * It is a promise, **not** the refusal threshold. The refusal is measured on the encoded frame,
+     * so a payload above this budget that still fits the wire — a direct send on a full mesh, where
+     * no envelope is applied — is delivered rather than rejected. The budget under-promises by
+     * design; that is the safe direction, and it is what makes the number route-independent.
+     *
+     * ## Why it is smaller than the fabric's own limit, always
+     *
+     * On a star, a spoke's frame reaches only the host, so once this member's roster diverges from
+     * what the transport can address the payload is wrapped in a relay envelope and forwarded
+     * ([broadcast]). That wrapper costs bytes, and this budget holds them back **unconditionally**
+     * — not only while a relay is actually in use.
+     *
+     * The unconditional part is the whole point. Routing flips the instant the roster diverges, and
+     * a member entering its reconnect window is enough to do it. A budget that moved with the route
+     * would be a TOCTOU trap: a caller that read it, found its payload in budget, and then sent
+     * would still overflow, because the route changed in between. So the number is stable and
+     * conservative, and a payload that respects it survives both routes. This mirrors
+     * `RoutedRaftTransport`, which subtracts its own header budget on the same reasoning.
+     *
+     * A [channel] view reports a further-reduced budget — its framing costs bytes too.
+     *
+     * ## What happens past it
+     *
+     * Each send keeps its own contract. [sendTo] is addressed, so it reports:
+     * [us.tractat.kuilt.core.PayloadTooLarge], named for the overflow and carrying the budget.
+     * [broadcast] is lossy-without-error, so it drops the frame with a debug log and returns
+     * normally — a `Quilter`'s timer-driven broadcast that threw would kill the coroutine driving
+     * anti-entropy.
+     *
+     * Defaults to `null` so a test double is not obliged to model a fabric ceiling it does not have.
+     */
+    public val maxPayloadBytes: Int? get() = null
+
+    /**
      * Send [bytes] to one specific admitted member.
      *
      * **Reports an undeliverable first hop**, unlike [broadcast]: an addressed send names a peer,
@@ -168,6 +221,9 @@ public interface Room {
      * The reserved leading bytes documented on [broadcast] apply here identically — the far end
      * classifies every inbound frame the same way regardless of how it was addressed.
      *
+     * @throws us.tractat.kuilt.core.PayloadTooLarge if [bytes] exceeds [maxPayloadBytes]. Raised
+     *   before the frame is built, so the caller gets the budget it should have respected rather
+     *   than the fabric's own frame error.
      * @throws us.tractat.kuilt.core.PeerNotConnected if the hop this member must perform cannot be
      *   made. Where the frame is relayed via a host, the peer named is that **host** — the hop that
      *   failed — rather than [peer], to which this member has no direct route. Delivery beyond the

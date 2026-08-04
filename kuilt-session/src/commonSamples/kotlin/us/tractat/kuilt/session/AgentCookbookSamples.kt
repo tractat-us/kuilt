@@ -16,6 +16,35 @@ import kotlin.time.Duration.Companion.seconds
 // Keep each function tiny and self-contained; the cookbook copies the body.
 
 /**
+ * Chunk to the room's published budget instead of to the fabric's frame size.
+ *
+ * [Room.maxPayloadBytes] already holds back what the relay envelope costs, so a payload that
+ * respects it survives whichever route the frame takes. Sizing to the fabric's own limit instead is
+ * the #2047 trap: it fits until the roster diverges and the frame is relayed.
+ */
+public suspend fun chunkToTheRoomsBudgetSample(room: Room, peer: PeerId, blob: ByteArray) {
+    var start = 0
+    while (start < blob.size) {
+        // Re-read per chunk, not once for the loop: the budget is a reading, not a lease. On a mesh
+        // it is the minimum across live links, so a peer attaching over a tighter transport lowers
+        // it under you mid-blob. null means "this fabric names no ceiling" — unknown, not
+        // unbounded; floored at 1 because the budget is legitimately 0 on a fabric whose ceiling is
+        // under the relay reservation.
+        val budget = (room.maxPayloadBytes ?: DEFAULT_CHUNK_BYTES).coerceAtLeast(1)
+        val end = minOf(start + budget, blob.size)
+        // Index arithmetic, not `asSequence().chunked()` — the latter boxes every byte and builds
+        // an ArrayList<Byte> per chunk. On a blob big enough to need chunking that is the point.
+        // Past the budget, sendTo reports PayloadTooLarge (addressed sends do) while broadcast
+        // drops with a log (lossy by contract) — neither surfaces the fabric's own oversize error.
+        room.sendTo(peer, blob.copyOfRange(start, end))
+        start = end
+    }
+}
+
+/** A chunk size for a fabric that publishes no ceiling of its own. Small enough for any transport. */
+private const val DEFAULT_CHUNK_BYTES: Int = 16 * 1024
+
+/**
  * Reconnect after a transport drop by presenting the saved [ResumeToken], instead of
  * re-joining fresh (which would reset the slot). Don't re-track the grace window yourself.
  */

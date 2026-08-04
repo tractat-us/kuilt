@@ -31,6 +31,21 @@ public interface Connection {
     public val incoming: Flow<ByteArray>
 
     /**
+     * The largest frame [send] accepts, or `null` when this link cannot name a ceiling.
+     *
+     * This is where a frame limit *enters* kuilt: a length-prefixed transport knows its own bound
+     * (`:kuilt-stream`'s `framed()` takes `maxFrameSize` and throws `FrameTooLargeException` past
+     * it), and publishing it here is what lets the seam above surface it as
+     * [us.tractat.kuilt.core.Seam.maxPayloadBytes] and the layers above that reserve room for their
+     * own headers (#2047). `null` means unknown, never "unbounded" — see
+     * [us.tractat.kuilt.core.Seam.maxPayloadBytes] for what a caller may infer.
+     *
+     * A [Connection] decorator that adds no bytes to a frame delegates this unchanged; one that
+     * adds bytes subtracts them, floored at zero.
+     */
+    public val maxFrameBytes: Int? get() = null
+
+    /**
      * Close the link. Idempotent. Completes [incoming].
      *
      * A close failure must **not** be reported as a cancellation — see [us.tractat.kuilt.core.Seam.close].

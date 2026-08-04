@@ -19,18 +19,27 @@ import kotlin.coroutines.ContinuationInterceptor
  * Each direction is a bounded [Spool] (default [DeliveryPolicy.Reliable]); there is no
  * `Channel.UNLIMITED` path. `Spool<ByteArray>` because a [Connection] carries raw byte frames,
  * a layer below the Swatch/Seam abstraction.
+ *
+ * @param maxFrameBytes what each end reports as [Connection.maxFrameBytes] — the frame ceiling a
+ *   length-prefixed transport would have. Defaults to `null` (this in-memory pair has no ceiling of
+ *   its own); pass a value to drive the payload-budget arithmetic the seams above derive from it.
+ *   **Reported, not enforced** — an oversize frame still crosses, so a test asserts on the budget
+ *   rather than on a rejection it would have to fake.
  */
 public fun connectionPair(
     policy: DeliveryPolicy = DeliveryPolicy.Reliable,
+    maxFrameBytes: Int? = null,
 ): Pair<Connection, Connection> {
     val aToB = Spool<ByteArray>(policy)
     val bToA = Spool<ByteArray>(policy)
-    return ChannelConnection(out = aToB, inn = bToA) to ChannelConnection(out = bToA, inn = aToB)
+    return ChannelConnection(out = aToB, inn = bToA, maxFrameBytes = maxFrameBytes) to
+        ChannelConnection(out = bToA, inn = aToB, maxFrameBytes = maxFrameBytes)
 }
 
 private class ChannelConnection(
     private val out: Spool<ByteArray>,
     private val inn: Spool<ByteArray>,
+    override val maxFrameBytes: Int?,
 ) : Connection {
     override suspend fun send(frame: ByteArray) { out.deliver(frame) }
     override val incoming: Flow<ByteArray> = inn.incoming

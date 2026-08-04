@@ -31,6 +31,8 @@ internal fun tcpConnection(socket: Socket, ioDispatcher: CoroutineDispatcher): C
     val framed = framed(source, sink)
     return object : Connection {
         override suspend fun send(frame: ByteArray) = framed.send(frame)
+        // Only the read side is re-dispatched; the frame ceiling is [framed]'s, unchanged (#2047).
+        override val maxFrameBytes: Int? get() = framed.maxFrameBytes
         override val incoming: Flow<ByteArray> = framed.incoming.flowOn(ioDispatcher)
         override suspend fun close() {
             framed.close()

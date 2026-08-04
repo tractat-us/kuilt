@@ -67,6 +67,10 @@ private class SingleCollectionConnection(
 
     override suspend fun send(frame: ByteArray) = delegate.send(frame)
 
+    // Adds nothing to a frame — only to how `incoming` is consumed — so the delegate's ceiling
+    // passes through unchanged.
+    override val maxFrameBytes: Int? get() = delegate.maxFrameBytes
+
     override val incoming: Flow<ByteArray> = inbox.incoming
 
     // Best-effort teardown: cancel the pump, then close the delegate. close() is idempotent

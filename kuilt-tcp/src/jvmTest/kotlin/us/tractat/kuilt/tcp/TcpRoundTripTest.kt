@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.stream.DEFAULT_MAX_FRAME_SIZE
 import java.net.ServerSocket as JvmServerSocket
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
@@ -64,6 +65,34 @@ class TcpRoundTripTest {
 
                 assertEquals("from-host", joinerReceives.await().decodeToString())
                 assertEquals("from-joiner", hostReceives.await().decodeToString())
+
+                host.close(us.tractat.kuilt.core.CloseReason.Normal)
+                joiner.close(us.tractat.kuilt.core.CloseReason.Normal)
+            }
+        }
+    }
+
+    /**
+     * A real fabric populates [us.tractat.kuilt.core.Seam.maxPayloadBytes] (#2047).
+     *
+     * The whole budget mechanism is inert unless some fabric names a number, and this is the end of
+     * the chain that carries it: `framed()`'s `maxFrameSize` → `Connection.maxFrameBytes` → the
+     * seam `handshaking` returns. A build in which every layer kept the `null` default would still
+     * pass every unit test of the arithmetic above it, and fail here.
+     */
+    @Test
+    fun aWovenSeamPublishesTheFramingCeiling() = runBlocking {
+        val hostLoom = TcpLoom.host(serverSocket, PeerId("host"), selector)
+        val joinerLoom = TcpLoom.join(PeerId("joiner"), selector)
+
+        withTimeout(10.seconds) {
+            coroutineScope {
+                val hostDeferred = async { hostLoom.host(us.tractat.kuilt.core.Pattern("host")) }
+                val joiner = joinerLoom.join(TcpAddress("127.0.0.1", port))
+                val host = hostDeferred.await()
+
+                assertEquals(DEFAULT_MAX_FRAME_SIZE, host.maxPayloadBytes, "host seam")
+                assertEquals(DEFAULT_MAX_FRAME_SIZE, joiner.maxPayloadBytes, "joiner seam")
 
                 host.close(us.tractat.kuilt.core.CloseReason.Normal)
                 joiner.close(us.tractat.kuilt.core.CloseReason.Normal)

@@ -27,8 +27,15 @@ import us.tractat.kuilt.core.internal.MappedStateFlow
  *   send there throws, per the `Torn` rule below.)
  * - [sendTo] when the addressed peer is absent from [peers]: throws
  *   [PeerNotConnected].
- * - Either call when [SeamState.Torn]: throws [IllegalStateException]. `Torn` is the *only*
- *   send-state that throws (it is unconditionally terminal — see [SeamState]).
+ * - [sendTo] of a payload over [maxPayloadBytes]: **should** throw [PayloadTooLarge]; [broadcast]
+ *   should instead drop it (best-effort, as above). An obligation on an implementation that
+ *   publishes a budget, not a guarantee every in-tree seam already meets — see [maxPayloadBytes].
+ *   Note it is the one refusal that does **not** depend on the seam's state — a `Woven` seam
+ *   raises it — so a caller catching only [PeerNotConnected] does not cover addressed sends on a
+ *   seam that publishes a budget.
+ * - Either call when [SeamState.Torn]: throws [IllegalStateException]. `Torn` is the only
+ *   *state-driven* refusal (it is unconditionally terminal — see [SeamState]); the payload-size
+ *   refusal above is orthogonal to state.
  *
  * ## Collecting incoming frames
  *
@@ -103,6 +110,61 @@ public interface Seam {
     public val state: StateFlow<SeamState>
 
     /**
+     * The largest `payload` a single [broadcast] or [sendTo] may carry, or `null` when this seam
+     * cannot tell.
+     *
+     * `null` means **unknown, not unbounded** — it is the honest answer from a fabric with no frame
+     * ceiling it can name, and a caller must treat it as "no guidance", never as "any size is
+     * fine". A non-null value is a promise: a payload of that size or smaller will not be refused
+     * by this seam *for being too big*. (It may still fail for every other reason a send can fail.)
+     *
+     * ## Why the contract needs this at all
+     *
+     * A framed fabric rejects an oversize frame — `:kuilt-stream`'s `framed()` throws
+     * `FrameTooLargeException` — and every layer that *wraps* a payload before handing it down
+     * spends some of that ceiling on its own header. Without a published limit those two facts meet
+     * only at run time, in the failure: a payload that fits when sent directly overflows once a
+     * decorator wraps it, and the caller learns the difference from a fabric-level error it had no
+     * way to anticipate (#2047). Publishing the number lets a wrapper subtract its own cost and
+     * hand the caller a bound it can actually respect.
+     *
+     * ## What a decorator owes
+     *
+     * A [Seam] that decorates another and adds bytes reports the delegate's limit **less its own
+     * overhead**, floored at zero — the idiom `inner.maxPayloadBytes?.let { (it - cost).coerceAtLeast(0) }`.
+     * Subtract **unconditionally**, even when the overhead is only paid on some routes: a limit
+     * that moves with routing is a TOCTOU trap, because the route can change between the caller's
+     * check and its send. A stable, conservative bound is the only useful one.
+     *
+     * A decorator that adds no bytes delegates unchanged. Leaving the default in place is safe but
+     * lossy — it discards a bound the fabric underneath does know.
+     *
+     * An implementation that publishes a limit should refuse an over-budget payload with
+     * [PayloadTooLarge] rather than letting a fabric-level error out, subject to each method's own
+     * contract: [sendTo] is addressed and reports, [broadcast] is best-effort and drops.
+     *
+     * ## Publishing is not yet enforcing (#2069)
+     *
+     * The in-tree fabric seams publish this number but do **not** pre-check against it, and the
+     * consequence is worse than a leaked error. `LinkSeam.sendTo` enqueues and returns *success*;
+     * its write loop then meets the fabric's own oversize error and tears the whole seam down
+     * asynchronously, after the caller was told the send was accepted. `MeshSeam.sendTo` routes the
+     * same failure into `removePeer`, evicting a healthy recipient as though its link had died. The
+     * fix is a per-conn pre-check inside each seam against the **immutable**
+     * [us.tractat.kuilt.core.fabric.Connection.maxFrameBytes] rather than against this live
+     * aggregate — which also removes the check-then-send race, since a mesh's minimum can tighten
+     * between a caller's read and the write. Tracked in #2069, along with the missing TCK case that
+     * would have caught it.
+     *
+     * ## A reading, not a lease
+     *
+     * This value may move. A mesh reports the minimum across its live links, so a peer attaching
+     * over a tighter transport lowers it. Read it per send; a caller that reads once and trusts the
+     * value for a whole batch can be refused part-way through, correctly.
+     */
+    public val maxPayloadBytes: Int? get() = null
+
+    /**
      * Per-ply lifecycle breakdown. Single-ply fabrics report a one-entry map
      * keyed by [PlyId.Sole]. Invariant: `state.value` equals the rollup of
      * `plies.value.values` under "any ply Woven ⇒ Woven".
@@ -140,6 +202,10 @@ public interface Seam {
     /**
      * Send to all other peers. Suspends until accepted by the local transport.
      *
+     * A payload over [maxPayloadBytes] is **dropped**, not reported — this call is best-effort, and
+     * its most common caller is a timer-driven replication loop that a throw would kill. Read the
+     * budget and size to it; [sendTo] is the call that tells you.
+     *
      * A send failure must **not** be reported as a cancellation — see [sendTo].
      */
     public suspend fun broadcast(payload: ByteArray)
@@ -168,6 +234,13 @@ public interface Seam {
      * should guard with `try`/`catch` plus `currentCoroutineContext().ensureActive()` rather than
      * [runCatchingCancellable]; `CompositeSeam.reconcile` and `SeamRoom`'s admit fan-out writer are the
      * in-tree patterns.
+     *
+     * @throws PeerNotConnected if [peer] is absent from [peers].
+     * @throws PayloadTooLarge if [payload] exceeds [maxPayloadBytes] — the obligation on a seam
+     *   that publishes a budget, and what a caller must be ready for. Independent of [state] (a
+     *   `Woven` seam raises it), so a `catch (PeerNotConnected)` written against the state-driven
+     *   refusals alone does not cover it. **Not yet met by the in-tree fabric seams**, which
+     *   publish a budget but do not pre-check it — see [maxPayloadBytes] and #2069.
      */
     public suspend fun sendTo(
         peer: PeerId,

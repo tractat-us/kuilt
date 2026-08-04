@@ -47,6 +47,10 @@ private class FramedConnection(
     private val sink: Sink,
     private val maxFrameSize: Int,
 ) : Connection {
+    // Publishing the ceiling is what lets the seam above report a payload budget instead of
+    // leaving every caller to discover it as a FrameTooLargeException (#2047).
+    override val maxFrameBytes: Int = maxFrameSize
+
     override suspend fun send(frame: ByteArray) {
         if (frame.size > maxFrameSize) throw FrameTooLargeException(frame.size, maxFrameSize)
         sink.writeInt(frame.size)
