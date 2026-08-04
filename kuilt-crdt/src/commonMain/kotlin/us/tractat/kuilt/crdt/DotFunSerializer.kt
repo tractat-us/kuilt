@@ -37,7 +37,10 @@ public class DotFunSerializer<V>(
     override val descriptor: SerialDescriptor = mapSerializer.descriptor
 
     override fun serialize(encoder: Encoder, value: DotFun<V>) {
-        mapSerializer.serialize(encoder, value.values.sortedByCanonicalKey(Dot.serializer()))
+        mapSerializer.serialize(
+            encoder,
+            value.values.sortedByCanonicalKey(Dot.serializer(), encoder.serializersModule),
+        )
     }
 
     override fun deserialize(decoder: Decoder): DotFun<V> =

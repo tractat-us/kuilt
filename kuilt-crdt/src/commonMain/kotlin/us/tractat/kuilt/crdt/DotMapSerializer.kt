@@ -39,7 +39,7 @@ public class DotMapSerializer<K, S : DotStore<S>>(
     override val descriptor: SerialDescriptor = mapSerializer.descriptor
 
     override fun serialize(encoder: Encoder, value: DotMap<K, S>) {
-        mapSerializer.serialize(encoder, value.entries.sortedByCanonicalKey(kSerializer))
+        mapSerializer.serialize(encoder, value.entries.sortedByCanonicalKey(kSerializer, encoder.serializersModule))
     }
 
     override fun deserialize(decoder: Decoder): DotMap<K, S> =

@@ -5,7 +5,6 @@ import kotlinx.serialization.KSerializer
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.AbstractEncoder
 import kotlinx.serialization.encoding.CompositeEncoder
-import kotlinx.serialization.modules.EmptySerializersModule
 import kotlinx.serialization.modules.SerializersModule
 
 /**
@@ -23,6 +22,12 @@ import kotlinx.serialization.modules.SerializersModule
  * for [Double] (`-0.0`/`NaN`), [ByteArray] (identity hash), or any compound type whose
  * `toString` omits fields (issue #752).
  *
+ * [module] is the **format's** [SerializersModule], read off the encoder at `serialize` time and
+ * handed to [PrimitiveLeafEncoder] so a `@Contextual` or open-polymorphic key resolves here exactly
+ * as it would in the format itself (#2035).  It is a required parameter rather than one defaulting
+ * to an empty module: a default would let a new call site silently reintroduce that gap, and every
+ * caller already holds an [kotlinx.serialization.encoding.Encoder].
+ *
  * **Decorate-sort-undecorate: each element is serialized exactly once.**  A comparator that
  * re-serializes both operands on every call costs ~2·n·log n serializations for n elements,
  * each allocating a fresh encoder and leaf list; decorating up front makes it n.  The two are
@@ -30,8 +35,11 @@ import kotlinx.serialization.modules.SerializersModule
  * and [sortedWith] is stable, so elements with identical leaf sequences keep their input order
  * — pinned by `tiedElementsKeepInputOrder`.
  */
-internal fun <T> Iterable<T>.sortedByCanonicalKey(serializer: KSerializer<T>): List<T> =
-    map { it to serialLeaves(it, serializer) }
+internal fun <T> Iterable<T>.sortedByCanonicalKey(
+    serializer: KSerializer<T>,
+    module: SerializersModule,
+): List<T> =
+    map { it to serialLeaves(it, serializer, module) }
         .sortedWith(compareBy(leafListComparator) { it.second })
         .map { it.first }
 
@@ -42,8 +50,11 @@ internal fun <T> Iterable<T>.sortedByCanonicalKey(serializer: KSerializer<T>): L
  * Key and value are read out of each entry eagerly, before the sort, so no assumption is made
  * about whether a given platform's `entries` iterator hands back distinct entry objects.
  */
-internal fun <K, V> Map<K, V>.sortedByCanonicalKey(kSerializer: KSerializer<K>): Map<K, V> {
-    val decorated = map { (key, value) -> Triple(serialLeaves(key, kSerializer), key, value) }
+internal fun <K, V> Map<K, V>.sortedByCanonicalKey(
+    kSerializer: KSerializer<K>,
+    module: SerializersModule,
+): Map<K, V> {
+    val decorated = map { (key, value) -> Triple(serialLeaves(key, kSerializer, module), key, value) }
         .sortedWith(compareBy(leafListComparator) { it.first })
     val sorted = LinkedHashMap<K, V>(size)
     decorated.forEach { (_, key, value) -> sorted[key] = value }
@@ -53,9 +64,11 @@ internal fun <K, V> Map<K, V>.sortedByCanonicalKey(kSerializer: KSerializer<K>):
 /**
  * Serializes [key] to its sequence of primitive leaf values — the decoration half of a
  * decorate-sort-undecorate over [leafListComparator].
+ *
+ * [module] is the format's own [SerializersModule]; see [sortedByCanonicalKey].
  */
-internal fun <K> serialLeaves(key: K, kSerializer: KSerializer<K>): List<Any?> {
-    val encoder = PrimitiveLeafEncoder()
+internal fun <K> serialLeaves(key: K, kSerializer: KSerializer<K>, module: SerializersModule): List<Any?> {
+    val encoder = PrimitiveLeafEncoder(module)
     kSerializer.serialize(encoder, key)
     return encoder.leaves
 }
@@ -102,16 +115,22 @@ private fun compareLeaves(a: Any?, b: Any?): Int = when {
  * a [KSerializer] into [leaves].  Structural delimiters (begin/end class, list, map)
  * are accepted silently — only the scalar payload values are collected.
  *
- * This is intentionally narrow: it is only valid for key types that serialize to a
- * finite sequence of primitives with no polymorphism.  Using it with a polymorphic
- * or nullable serializer that emits class discriminators or special null markers
- * will produce a valid (though possibly unexpected) leaf sequence.
+ * [serializersModule] is the **format's** module, not an empty one (#2035).  A
+ * `ContextualSerializer` or `PolymorphicSerializer` resolves its delegate by reading
+ * `encoder.serializersModule`, so with an empty module a key the format itself encodes
+ * perfectly well threw here instead — the sort was strictly narrower than the format
+ * wrapped around it.
+ *
+ * What stays narrow is the *shape* of the leaf sequence, not which serializers resolve:
+ * a polymorphic key contributes its class-discriminator string as an ordinary leaf, so
+ * such keys order by discriminator first and payload second.  That is a well-defined
+ * order, merely not the one a reader assuming "sorted by payload" would guess.
  */
 @OptIn(ExperimentalSerializationApi::class)
-private class PrimitiveLeafEncoder : AbstractEncoder() {
+private class PrimitiveLeafEncoder(
+    override val serializersModule: SerializersModule,
+) : AbstractEncoder() {
     val leaves = mutableListOf<Any?>()
-
-    override val serializersModule: SerializersModule = EmptySerializersModule()
 
     override fun encodeBoolean(value: Boolean) { leaves += value }
     override fun encodeByte(value: Byte) { leaves += value }

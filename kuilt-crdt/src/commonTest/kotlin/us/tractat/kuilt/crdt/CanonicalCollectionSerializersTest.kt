@@ -13,6 +13,7 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.encoding.decodeStructure
 import kotlinx.serialization.encoding.encodeStructure
+import kotlinx.serialization.modules.EmptySerializersModule
 import kotlinx.serialization.modules.SerializersModule
 import kotlinx.serialization.modules.contextual
 import us.tractat.kuilt.crdt.internal.sortedByCanonicalKey
@@ -290,7 +291,7 @@ class CanonicalCollectionSerializersTest {
             {
                 assertEquals(
                     dots.sorted(),
-                    dots.sortedByCanonicalKey(Dot.serializer()),
+                    dots.sortedByCanonicalKey(Dot.serializer(), EmptySerializersModule()),
                     "Dot's Comparable order and the canonical leaf order must agree",
                 )
             },
@@ -304,7 +305,8 @@ class CanonicalCollectionSerializersTest {
             {
                 assertEquals(
                     listOf(1L, 2L, 10L),
-                    dots.sortedByCanonicalKey(Dot.serializer()).filter { it.replica == ReplicaId("a") }.map { it.seq },
+                    dots.sortedByCanonicalKey(Dot.serializer(), EmptySerializersModule())
+                        .filter { it.replica == ReplicaId("a") }.map { it.seq },
                     "the probe is vacuous unless seq sorts numerically — a text sort would give [1, 10, 2]",
                 )
             },

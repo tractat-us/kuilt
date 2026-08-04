@@ -36,7 +36,10 @@ public class DotSetSerializer : KSerializer<DotSet> {
     override val descriptor: SerialDescriptor = listSerializer.descriptor
 
     override fun serialize(encoder: Encoder, value: DotSet) {
-        listSerializer.serialize(encoder, value.dots.sortedByCanonicalKey(Dot.serializer()))
+        listSerializer.serialize(
+            encoder,
+            value.dots.sortedByCanonicalKey(Dot.serializer(), encoder.serializersModule),
+        )
     }
 
     override fun deserialize(decoder: Decoder): DotSet =
