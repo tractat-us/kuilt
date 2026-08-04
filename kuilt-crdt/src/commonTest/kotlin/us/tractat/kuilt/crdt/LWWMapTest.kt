@@ -154,18 +154,22 @@ class LWWMapTest {
     // ── associativity of the join ─────────────────────────────────────────────────
     //
     // `(x ⊔ y) ⊔ z == x ⊔ (y ⊔ z)`: what lets a peer absorb whatever it is handed in whatever
-    // grouping the network happens to deliver. `ORMap.piece` turned out to lack it (#2086) — a
-    // `remove` between two concurrent `put`s of one key makes the answer depend on the bracketing,
-    // because `remove` discards the value while a two-sided merge keeps it — and nothing in that
-    // type's suite could see it: there was no associativity test, the one in `QuiltedLawsTest` is
-    // over `IntMax` (a total order, where the law cannot fail), and `CrdtConvergenceSuite` only
-    // asserts that a *full* exchange converges, which the broken type still does.
+    // grouping the network happens to deliver.
     //
-    // So these tests are built to be able to fail. Each triple resolves through a mechanism that
-    // could plausibly be order-sensitive — a winning tombstone, an equal-timestamp tie-break, a
-    // write that moves its own replica DOWN the lattice (#2087) — and each asserts on the encoded
-    // form as well as on `equals`, because #1955's anti-entropy gate compares state *hashes*: two
-    // bracketings that agree by value and disagree by bytes would switch that gate off for the pair.
+    // `LWWMapLawsPropertyTest` (jvmTest) already asserts this law and already passes — but it is
+    // green over a region that cannot contain a counterexample, so it is not evidence. Its provider
+    // folds every generated state independently from `empty()`, so no operand is ever a **causal
+    // ancestor** of another; and it derives each value deterministically from `(replica, timestamp,
+    // key)`, so a repeated tag always carries the same write. `ORMapLawsPropertyTest` is green in
+    // exactly the same way on an `ORMap` that is provably non-associative (#2086), where the
+    // counterexample is a three-state ancestor chain — `a`, `a.remove(k)`, `a.remove(k).put(k, …)`
+    // — that its generator cannot construct. Seven of the fourteen property suites share the design.
+    //
+    // So these tests deliberately cover what that one cannot: ancestor chains (below), reused tags,
+    // and writes that move a replica DOWN the lattice (#2087). Each triple resolves through a
+    // mechanism that could plausibly be order-sensitive, and each asserts on the encoded form as
+    // well as on `equals`, because #1955's anti-entropy gate compares state *hashes*: two bracketings
+    // that agree by value and disagree by bytes would switch that gate off for the pair.
 
     /**
      * The [ORMap] shape, applied to this type: a `remove` sits between two concurrent `set`s of one
@@ -268,6 +272,101 @@ class LWWMapTest {
                     "vacuity guard: lang by timestamp, tz by the replica tie-break, theme by tombstone",
                 )
             },
+        )
+    }
+
+    /**
+     * The `ORMap` counterexample transplanted **as an ancestor chain**, exhaustively over its tags:
+     * `start`, `start.remove(k)`, and `start.remove(k).set(k, …)` — each state derived from the
+     * previous one, all six orderings, every combination of three timestamps and three replicas.
+     *
+     * This is the region `LWWMapLawsPropertyTest` structurally cannot reach, and it is where
+     * `ORMap`'s violation lives. [LWWMap] has no violation to find here for a structural reason:
+     * unlike `ORMap`, it carries **no causal context** — a state is exhaustively described by its
+     * per-key `(timestamp, origin, value)` cells and records nothing about where it came from — so a
+     * derived state is just another map, and provenance cannot change how it joins.
+     */
+    @Test
+    fun pieceIsAssociativeOverTheOrMapCounterexampleShapeAsAnAncestorChain() {
+        var chains = 0
+        var derivedStatesBelowTheirAncestor = 0
+
+        for (first in CHAIN_TAGS) {
+            for (second in CHAIN_TAGS) {
+                for (third in CHAIN_TAGS) {
+                    val start = LWWMap.empty<String, String>().set(first.second, first.first, "k", "v1")
+                    val removed = start.remove(second.second, second.first, "k")
+                    val rePut = removed.set(third.second, third.first, "k", "v2")
+                    chains++
+                    if (removed.piece(start) != removed) derivedStatesBelowTheirAncestor++
+                    if (rePut.piece(removed) != rePut) derivedStatesBelowTheirAncestor++
+                    assertAssociativeInEveryOrdering(
+                        start,
+                        removed,
+                        rePut,
+                        "ancestor chain set→remove→set, tags $first → $second → $third",
+                    )
+                }
+            }
+        }
+
+        assertAll(
+            { assertEquals(CHAIN_TAGS.size * CHAIN_TAGS.size * CHAIN_TAGS.size, chains, "every tag triple covered") },
+            {
+                assertNotVacuous(
+                    derivedStatesBelowTheirAncestor,
+                    1,
+                    "chain steps landing BELOW their own ancestor (the #2087 down-move the chain must contain)",
+                )
+            },
+        )
+    }
+
+    /**
+     * Randomised **trajectories**: each state is reached *from* the previous one, so every operand in
+     * every triple is a causal ancestor or descendant of the others — again, the region the existing
+     * property suite cannot generate, searched here rather than argued.
+     *
+     * Only `equals` is compared, not the encoded form: at this triple count the encoding would
+     * dominate the runtime on every target, and the encoded axis is already asserted by every other
+     * test above.
+     */
+    @Test
+    fun pieceIsAssociativeOverRandomisedAncestorChains() {
+        val random = Random(CHAIN_SEED)
+        var triples = 0
+        var downMoves = 0
+
+        repeat(CHAIN_TRAJECTORIES) {
+            val chain = ArrayList<LWWMap<String, String>>(CHAIN_LENGTH + 1)
+            var current = LWWMap.empty<String, String>()
+            chain += current
+            repeat(CHAIN_LENGTH) {
+                val next = current.applied(randomOp(random))
+                if (next.piece(current) != next) downMoves++
+                current = next
+                chain += current
+            }
+            chain.forEach { x ->
+                chain.forEach { y ->
+                    chain.forEach { z ->
+                        triples++
+                        assertEquals(x.piece(y.piece(z)), x.piece(y).piece(z), "not associative in a chain: $chain")
+                    }
+                }
+            }
+        }
+
+        val statesPerChain = CHAIN_LENGTH + 1
+        assertAll(
+            {
+                assertEquals(
+                    CHAIN_TRAJECTORIES * statesPerChain * statesPerChain * statesPerChain,
+                    triples,
+                    "every triple of every trajectory must be searched",
+                )
+            },
+            { assertNotVacuous(downMoves, MIN_CHAIN_DOWN_MOVES, "chain steps landing below their own ancestor") },
         )
     }
 
@@ -413,10 +512,25 @@ class LWWMapTest {
     }
 
     /**
+     * Both bracketings agree in each of the six orderings — associativity alone, which is all that
+     * survives a violated tag-uniqueness precondition. Returns the six results for a caller that
+     * also wants to compare them.
+     */
+    private fun assertAssociativeInEveryOrdering(
+        x: LWWMap<String, String>,
+        y: LWWMap<String, String>,
+        z: LWWMap<String, String>,
+        because: String,
+    ): List<LWWMap<String, String>> = listOf(
+        Triple(x, y, z), Triple(x, z, y), Triple(y, x, z),
+        Triple(y, z, x), Triple(z, x, y), Triple(z, y, x),
+    ).map { (p, q, r) -> assertAssociative(p, q, r, because) }
+
+    /**
      * All six orderings and both bracketings of a three-way join agree — associativity *and*
      * commutativity, which together are the property a replicator actually relies on. Only valid for
      * operands honouring [LWWMap.set]'s tag-uniqueness precondition; outside it, use
-     * [assertAssociative], which is all that survives.
+     * [assertAssociativeInEveryOrdering], which is all that survives.
      */
     private fun assertOrderIndependent(
         x: LWWMap<String, String>,
@@ -424,11 +538,7 @@ class LWWMapTest {
         z: LWWMap<String, String>,
         because: String,
     ) {
-        val orderings = listOf(
-            Triple(x, y, z), Triple(x, z, y), Triple(y, x, z),
-            Triple(y, z, x), Triple(z, x, y), Triple(z, y, x),
-        )
-        val merged = orderings.map { (p, q, r) -> assertAssociative(p, q, r, because) }
+        val merged = assertAssociativeInEveryOrdering(x, y, z, because)
         merged.forEach { assertEquals(merged.first(), it, "not commutative — $because") }
         merged.forEach { assertEquals(encoded(merged.first()), encoded(it), "commutative by value, not bytes — $because") }
     }
@@ -438,8 +548,8 @@ class LWWMapTest {
     private fun assertNotVacuous(observed: Int, floor: Int, what: String) {
         assertTrue(
             observed >= floor,
-            "ran vacuously: only $observed $what across $ASSOCIATIVITY_TRIALS trials (need $floor) — " +
-                "the generator has drifted onto inputs where the join does no work",
+            "ran vacuously: $observed $what, below the floor of $floor — the inputs have drifted onto " +
+                "cases where the join does no work, so the law above is being asserted for free",
         )
     }
 
@@ -464,15 +574,23 @@ class LWWMapTest {
         val used = mutableSetOf<Triple<String, ReplicaId, Long>>()
         return buildList {
             repeat(random.nextInt(MIN_OPS, MAX_OPS)) {
-                val key = KEYS.random(random)
-                val replica = REPLICAS.random(random)
-                val timestamp = random.nextLong(1L, TIMESTAMP_CEILING)
-                if (used.add(Triple(key, replica, timestamp))) {
-                    val tombstone = random.nextInt(REMOVE_IN) == 0
-                    add(Op(key, replica, timestamp, if (tombstone) null else VALUES.random(random)))
-                }
+                val op = randomOp(random)
+                if (used.add(Triple(op.key, op.replica, op.timestamp))) add(op)
             }
         }
+    }
+
+    /**
+     * One write over the same small space. Used un-deduplicated by the ancestor-chain search, where
+     * a repeated tag is *wanted*: associativity is the only law claimed there, and it is the law
+     * that survives the precondition being violated.
+     */
+    private fun randomOp(random: Random): Op {
+        val key = KEYS.random(random)
+        val replica = REPLICAS.random(random)
+        val timestamp = random.nextLong(1L, TIMESTAMP_CEILING)
+        val tombstone = random.nextInt(REMOVE_IN) == 0
+        return Op(key, replica, timestamp, if (tombstone) null else VALUES.random(random))
     }
 
     private fun assignToPeers(ops: List<Op>, random: Random): List<List<Op>> {
@@ -513,13 +631,35 @@ class LWWMapTest {
 
         // Floors for the non-vacuity counters, set at roughly half of what seed 31 measures, so an
         // incidental generator tweak does not red-light the suite but a drift onto uncontested inputs
-        // does. Measured on seed 31 over 300 trials: contested keys 517, replica tie-breaks 163,
-        // tombstone winners 204, regressed peers 162.
-        const val MIN_CONTESTED_KEYS = 250
+        // does. Measured on seed 31 over 300 trials: contested keys 526, replica tie-breaks 162,
+        // tombstone winners 206, regressed peers 144.
+        const val MIN_CONTESTED_KEYS = 260
         const val MIN_REPLICA_TIE_BREAKS = 80
         const val MIN_TOMBSTONE_WINNERS = 100
-        const val MIN_REGRESSED_PEERS = 80
+        const val MIN_REGRESSED_PEERS = 70
 
         const val COUNTEREXAMPLES_TO_REPORT = 5
+
+        // ── ancestor-chain search ────────────────────────────────────────────────
+        //
+        // The region `LWWMapLawsPropertyTest` cannot generate: states derived from one another
+        // rather than folded independently from `empty()`.
+
+        /** Every `(timestamp, replica)` the chain search walks each of its three positions over. */
+        val CHAIN_TAGS = listOf(1L, 2L, 3L).flatMap { timestamp ->
+            listOf(ReplicaId("A"), ReplicaId("B"), ReplicaId("C")).map { timestamp to it }
+        }
+
+        const val CHAIN_SEED = 71
+        const val CHAIN_TRAJECTORIES = 150
+        const val CHAIN_LENGTH = 6
+
+        /**
+         * Chain steps that land strictly below the state they were derived from — the #2087
+         * down-move. Without them the trajectories would all be monotone climbs and the chain search
+         * would cover nothing the independent generators do not already reach. **Measured on seed
+         * 71: 244 of the 900 steps taken.**
+         */
+        const val MIN_CHAIN_DOWN_MOVES = 120
     }
 }
