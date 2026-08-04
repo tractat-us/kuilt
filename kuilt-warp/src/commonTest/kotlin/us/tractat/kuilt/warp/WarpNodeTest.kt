@@ -39,13 +39,13 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.quilter.QuilterConfig
 import kotlin.test.Test
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.drainAntiEntropy
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /** Returns a clock that reads virtual time from [scheduler], keeping it in sync with `delay()` calls. */
@@ -98,7 +98,7 @@ class WarpNodeTest {
      * This proves the roster source is the injected flow, not a hardcoded seam binding.
      */
     @Test
-    fun injectedRosterFlowDrivesRingRebuild() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun injectedRosterFlowDrivesRingRebuild() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("roster-inject-test"))
         val seamB = loom.join(InMemoryTag("b"))
@@ -192,7 +192,7 @@ class WarpNodeTest {
      * each executes only the tasks it owns on the ring; results converge to all 10.
      */
     @Test
-    fun ownerExecutesItsAssignedTasks() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun ownerExecutesItsAssignedTasks() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("warp-test"))
         val seamB = loom.join(InMemoryTag("b"))
@@ -248,7 +248,7 @@ class WarpNodeTest {
      * clockwise on the ring — the surviving nodes cover the full ring.
      */
     @Test
-    fun survivorPicksUpTasksWhenOwnerIsPartitioned() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun survivorPicksUpTasksWhenOwnerIsPartitioned() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("failover-test"))
         val seamB = loom.join(InMemoryTag("b"))
@@ -297,7 +297,7 @@ class WarpNodeTest {
      * contain all completed tasks with the correct results.
      */
     @Test
-    fun resultsBoardConvergesAcrossAllPeers() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun resultsBoardConvergesAcrossAllPeers() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("results-test"))
         val seamB = loom.join(InMemoryTag("b"))
@@ -347,7 +347,7 @@ class WarpNodeTest {
      * the results board converges to exactly one entry per task.
      */
     @Test
-    fun duplicateExecutionAbsorbedByResultsBackstop() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun duplicateExecutionAbsorbedByResultsBackstop() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("dedup-test"))
         val seamB = loom.join(InMemoryTag("b"))
@@ -401,7 +401,7 @@ class WarpNodeTest {
      */
     @Test
     fun rawIncomingFanOutDeliversFramesToBothSubscriberAndCrdtChannels() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("raw-fanout-test"))
             val seamB = loom.join(InMemoryTag("b"))

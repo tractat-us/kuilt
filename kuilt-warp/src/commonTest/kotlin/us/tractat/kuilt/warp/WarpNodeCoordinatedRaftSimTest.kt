@@ -37,6 +37,7 @@ import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.test.FakeRaftNode
 import us.tractat.kuilt.raft.test.raftSimTest
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.drainAntiEntropy
 import kotlin.test.Test
@@ -87,7 +88,7 @@ class WarpNodeCoordinatedRaftSimTest {
      */
     @Test
     fun coordinatedTaskProposesToRaftBeforeExecuting() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seam = loom.host(Pattern("raft-unit-test"))
             // Single-node ring: nodeA is the sole peer and therefore owns every task.
@@ -162,7 +163,7 @@ class WarpNodeCoordinatedRaftSimTest {
      */
     @Test
     fun coordinatedTaskWithoutRaftNodeFailsLoud() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seam = loom.host(Pattern("raft-required-test"))
 

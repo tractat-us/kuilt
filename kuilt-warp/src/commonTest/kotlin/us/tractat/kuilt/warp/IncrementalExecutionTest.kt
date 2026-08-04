@@ -7,13 +7,13 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Tests for incremental/threshold-read execution (E-5).
@@ -86,7 +86,7 @@ class IncrementalExecutionTest {
     // ── IncrementalResult: threshold reads ───────────────────────────────────
 
     @Test
-    fun awaitThresholdReturnsImmediatelyIfAlreadySatisfied() = runTest(timeout = 5.seconds) {
+    fun awaitThresholdReturnsImmediatelyIfAlreadySatisfied() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val result = IncrementalResult(GCounter.of(alice to 10L))
 
         val resolved = result.awaitThreshold { it.value >= 5L }
@@ -95,7 +95,7 @@ class IncrementalExecutionTest {
     }
 
     @Test
-    fun awaitThresholdSuspendsUntilCrossed() = runTest(timeout = 5.seconds) {
+    fun awaitThresholdSuspendsUntilCrossed() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val result = IncrementalResult(GCounter.ZERO)
         var thresholdResult: GCounter? = null
 
@@ -121,7 +121,7 @@ class IncrementalExecutionTest {
     }
 
     @Test
-    fun awaitThresholdResolutionIsStableUnderFurtherContributions() = runTest(timeout = 5.seconds) {
+    fun awaitThresholdResolutionIsStableUnderFurtherContributions() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val result = IncrementalResult(GCounter.ZERO)
         var crossingValue: GCounter? = null
 
@@ -144,7 +144,7 @@ class IncrementalExecutionTest {
     // ── ConvergentExecution: Draft-linked async execution ────────────────────
 
     @Test
-    fun executionLinksMonotoneDraftToConvergentResult() = runTest(timeout = 5.seconds) {
+    fun executionLinksMonotoneDraftToConvergentResult() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val draft = Warp.shuttle(OpId("source")).map(OpId("score")).filter(OpId("threshold"))
         val exec = ConvergentExecution(draft = draft, scope = backgroundScope, initial = GCounter.ZERO)
 
@@ -160,7 +160,7 @@ class IncrementalExecutionTest {
     }
 
     @Test
-    fun executionConvergesRegardlessOfSubmitOrder() = runTest(timeout = 5.seconds) {
+    fun executionConvergesRegardlessOfSubmitOrder() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val draft = Warp.shuttle(OpId("source"))
         val d1 = GCounter.of(alice to 7L)
         val d2 = GCounter.of(bob to 3L)
@@ -179,7 +179,7 @@ class IncrementalExecutionTest {
     }
 
     @Test
-    fun executionThresholdReadOverAsyncContributions() = runTest(timeout = 5.seconds) {
+    fun executionThresholdReadOverAsyncContributions() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val draft = Warp.shuttle(OpId("source"))
         val exec = ConvergentExecution(draft, backgroundScope, GCounter.ZERO)
         var resolved: GCounter? = null

@@ -9,13 +9,13 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.drainAntiEntropy
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 
 private val VM_QUILTER_CONFIG = QuilterConfig(
     antiEntropyInterval = 100.milliseconds,
@@ -35,7 +35,7 @@ class VariantManifestTest {
      */
     @Test
     fun compiledVariantGossipsWithProvenanceAndIsFetchable() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("variant-gossip"))
             val seamB = loom.join(InMemoryTag("b"))

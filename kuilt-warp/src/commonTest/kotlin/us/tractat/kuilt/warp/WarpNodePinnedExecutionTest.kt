@@ -28,6 +28,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.drainAntiEntropy
 import kotlin.test.Test
@@ -35,7 +36,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 private val PIN_OP = OpId("echo")
@@ -80,7 +80,7 @@ class WarpNodePinnedExecutionTest {
      * result lands on the converged board.
      */
     @Test
-    fun pinnedTaskRunsOnItsOwnerNotTheRingOwner() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun pinnedTaskRunsOnItsOwnerNotTheRingOwner() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("pinned-owner-test"))
         val seamB = loom.join(InMemoryTag("b"))
@@ -125,7 +125,7 @@ class WarpNodePinnedExecutionTest {
      * proving the system is live and it is specifically the pin holding the pinned task back.
      */
     @Test
-    fun pinnedTaskDoesNotReHomeWhenOwnerAbsentThenRunsOnReturn() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun pinnedTaskDoesNotReHomeWhenOwnerAbsentThenRunsOnReturn() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("pinned-no-rehome-test"))
         val seamB = loom.join(InMemoryTag("b"))
@@ -176,7 +176,7 @@ class WarpNodePinnedExecutionTest {
      * with no pin still ring-assigns and executes exactly as before.
      */
     @Test
-    fun unpinnedTasksStillRingAssign() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun unpinnedTasksStillRingAssign() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("unpinned-regression-test"))
         val seamB = loom.join(InMemoryTag("b"))
@@ -210,7 +210,7 @@ class WarpNodePinnedExecutionTest {
      * regardless of which peer the hash ring would otherwise assign it to.
      */
     @Test
-    fun enqueueLocalPinsToSelf() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun enqueueLocalPinsToSelf() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("enqueue-local-test"))
         val seamB = loom.join(InMemoryTag("b"))
@@ -252,7 +252,7 @@ class WarpNodePinnedExecutionTest {
      * travelled, so what the gate sees is what the pin preserved.
      */
     @Test
-    fun enqueueLocalPreservesTheWholeEnvelope() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun enqueueLocalPreservesTheWholeEnvelope() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val seam = InMemoryLoom().host(Pattern("enqueue-local-envelope-test"))
         val roster = MutableStateFlow(setOf(seam.selfId))
         val lock = reentrantLock()

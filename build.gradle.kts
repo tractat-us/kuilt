@@ -1574,23 +1574,6 @@ val forbidTightRunTestTimeout by tasks.registering {
         "kuilt-warp-runtime/src/jvmTest/kotlin/us/tractat/kuilt/warp/SettleUntilRealIoTest.kt" to 1,
         "kuilt-warp-runtime/src/wasmJsTest/kotlin/us/tractat/kuilt/warp/BrowserWasmRuntimeDispatchTest.kt" to 1,
         "kuilt-warp-test/src/commonMain/kotlin/us/tractat/kuilt/warp/test/WasmRuntimeConformanceSuite.kt" to 10,
-        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/BobbinExchangeTest.kt" to 7,
-        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/BoundedLazyFetchTest.kt" to 1,
-        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/CompileOpDispatchTest.kt" to 2,
-        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/IncrementalExecutionTest.kt" to 6,
-        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/SymbolicDispatchTest.kt" to 2,
-        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/TieredCompilationGoNoGoTest.kt" to 1,
-        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/VariantManifestTest.kt" to 1,
-        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/WarpCapabilityRestartTest.kt" to 1,
-        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/WarpIntentRegisterTest.kt" to 4,
-        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/WarpNodeCoordinatedRaftSimTest.kt" to 2,
-        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/WarpNodeCoordinatedWindowsTest.kt" to 3,
-        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/WarpNodeCoordinationTagTest.kt" to 3,
-        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/WarpNodeEligibilityTest.kt" to 4,
-        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/WarpNodePartitionFailoverTest.kt" to 2,
-        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/WarpNodePinnedExecutionTest.kt" to 5,
-        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/WarpNodeTest.kt" to 6,
-        "kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/WarpNodeTieringTest.kt" to 1,
     )
     doLast {
         val found = sortedMapOf<String, List<Int>>()
