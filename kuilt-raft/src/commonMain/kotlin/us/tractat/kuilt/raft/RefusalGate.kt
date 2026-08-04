@@ -1,7 +1,7 @@
 package us.tractat.kuilt.raft
 
 /**
- * Which dispatch-boundary guard refused a frame — the `gate` of [RaftTraceEvent.FrameRefused].
+ * Which guard refused an inbound frame — the `gate` of [RaftTraceEvent.FrameRefused].
  *
  * Every guard named here refuses by `return`ing, so without this its only observable is the
  * **absence** of a state change. An absence carries no attribution: as soon as two guards refuse the
@@ -21,9 +21,40 @@ package us.tractat.kuilt.raft
  * `FrameRefusedTest` suite's reachability test is the other half, and it fails on an entry no emit
  * site produces.
  *
- * Ordered as the engine evaluates them: the two implausible-term arms and the §5.2/§8 leader-authority
- * gate run at the dispatch boundary in `RaftEngine.onMessage`, before any handler; the five
- * `TimeoutNow*` guards run inside `RaftEngine.onTimeoutNow`, after that boundary, in the order listed.
+ * ### What no type can close, and the slice that is closed anyway
+ *
+ * The guard above runs in **one direction only**, and the next reader must not assume otherwise.
+ * `FrameRefusedTest.everyRefusalGateIsReachable` proves **declared→emitted**: every value below has a
+ * live emit site. The converse — **emitted→declared**, that every refusal of an inbound frame names a
+ * gate — is *not* compile-time enforceable in general (#2033). "This `return` refuses a frame" is a
+ * property of control flow, not of a type; Kotlin has no effect system, so nothing stops a new
+ * `if (…) return` in a handler body from dropping a frame silently, and no test that inspects only
+ * declared values can see it. Funnelling every refusal through `RaftEngine.refuseFrame` does not
+ * change that either — a funnel catches only what someone chooses to route into it.
+ *
+ * What *is* enforced is the slice where the whole gap actually lived. Every factored validator on the
+ * inbound path returns `RefusalGate?` — `null` admits, non-null names the gate that refused —
+ * (`RaftEngine.batchRefusal`, `snapshotChunkRefusal`, `committedTermFloorRefusal`,
+ * `adoptLeaderForTerm`), so a refusing clause added to one of them **cannot compile** without naming
+ * a gate: `return false` has stopped being expressible there. Keep it that way — when a handler grows
+ * a new frame refusal, factor it into a validator of that shape rather than writing a bare `return`
+ * in the handler body.
+ *
+ * Two alternatives were weighed and rejected. A sealed `Disposition` return on the eleven handlers
+ * converts a silent skip into a *lying* `Processed` — visible in a diff, still unenforced, and a large
+ * blast radius for that. A lexical detekt/Gradle scanner in the shape of
+ * `forbidRunCatchingCancellableUnderNonCancellable` would key on the `debug { }` log text rather than
+ * on control flow, so rewording a message evades it: a smell detector, not a proof.
+ *
+ * ### Order
+ *
+ * Grouped by where the engine evaluates them, and in evaluation order within each group. The two
+ * implausible-term arms and the §5.2/§8 leader-authority gate run at the dispatch boundary in
+ * `RaftEngine.onMessage`, before any handler. The five `TimeoutNow*` guards run inside
+ * `RaftEngine.onTimeoutNow`. The `AppendEntries*` and `InstallSnapshot*` guards run inside their own
+ * handlers, ahead of every side-effect those handlers have. [ForgedLeaderForTerm] is last because it
+ * is shared: both of those two handlers reach it, and both reach it after their own frame-shape
+ * bounds.
  */
 public enum class RefusalGate {
     /**
@@ -138,6 +169,123 @@ public enum class RefusalGate {
      * argument — a cross-guard dependency no state-effect test in either location can express.
      */
     TimeoutNowSelfLearner,
+
+    /**
+     * `RaftEngine.batchRefusal` bound 1 (#1832): an `AppendEntries` whose `prevLogIndex` is outside
+     * `0 .. Long.MAX_VALUE - entries.size - 1` — a probe point below the log origin, or one so high
+     * that computing the batch's expected indices would overflow.
+     *
+     * **One gate for a two-clause bound, deliberately** — and the same choice is made at
+     * [AppendEntriesEntryTermOutOfRange], [InstallSnapshotIndexOutOfRange] and
+     * [InstallSnapshotTermOutOfRange]. Each of those is a range test written `x < lo || x > hi`, whose
+     * two arms are **mutually exclusive on any one frame**: no `prevLogIndex` is both negative and
+     * above `Long.MAX_VALUE - entries.size - 1`. Mutual exclusivity is the precise reason a shared
+     * gate is safe here and not merely cheap — the shadowing this enum exists to undo needs *two*
+     * guards refusing the *same* frame, and arms that cannot co-fire can never stand in for one
+     * another. Delete either arm and its own probe is admitted outright, so a suite carrying one probe
+     * per arm still reddens; `AppendEntriesBatchValidationTest` and `InstallSnapshotMetaValidationTest`
+     * carry exactly that (#2022, #2031). What the shared gate does give up is *diagnostic* resolution:
+     * a trace reader is told the probe index was out of range, not which end. Split the value in two if
+     * that ever matters operationally — the arms are already separate expressions.
+     *
+     * Currently silent apart from a `debug { }`, which is why attribution is worth more here than a
+     * state-effect assertion: #2031's receipt is that deleting the overflow arm leaves the frame
+     * *processed and answered*, rejected a screen later by the §5.3 consistency check with
+     * `AppendEntriesRejected(conflictIndex = 8)` and never reaching the log. A log-based assertion at
+     * that site is not ambiguous, it is blind.
+     */
+    AppendEntriesPrevLogIndexOutOfRange,
+
+    /**
+     * `RaftEngine.batchRefusal` bound 2 (#1832): an `AppendEntries` batch that is not contiguous from
+     * its own probe point — some `entries[i].index != prevLogIndex + 1 + i`.
+     *
+     * `RaftEngine.logEntryAt` computes its offset as `index - (snapshotIndex + 1)`, valid only because
+     * indices ascend with no gaps, so a log holding `[… 7, MAX-1]` resolves the wrong slot or falls out
+     * of range for every later lookup. Checkable without trust: the leader states `prevLogIndex` in the
+     * same frame, so the required indices are fully determined by the frame itself.
+     */
+    AppendEntriesNonContiguousBatch,
+
+    /**
+     * `RaftEngine.batchRefusal` bound 3 (#1832): an `AppendEntries` carrying an entry whose `term` is
+     * outside `0..term` — a term no honest leader could have stamped, since no entry may carry a term
+     * above the leader's own.
+     *
+     * The §5.4.1 lever: `RaftState.lastLogPosition` is built from the last entry and up-to-dateness
+     * compares `(term, index)` lexicographically, so an accepted entry at `Long.MAX_VALUE` makes the
+     * victim unbeatable by any honest node — it then wins every election it enters while its log does
+     * *not* hold the committed entries a legitimate leader must.
+     *
+     * Two arms under one gate, for the reason set out at [AppendEntriesPrevLogIndexOutOfRange]; here
+     * mutual exclusivity rests on `term >= 0`, which the dispatch boundary's
+     * [ImplausibleNegativeTerm] has already established for any frame that reaches a handler.
+     */
+    AppendEntriesEntryTermOutOfRange,
+
+    /**
+     * `RaftEngine.snapshotChunkRefusal` bound 1 (#1868): an `InstallSnapshot` whose `lastIncludedIndex`
+     * is outside `0..MAX_PLAUSIBLE_INDEX`.
+     *
+     * The snapshot lane's half of the §5.4.1 domination the batch lane closes with
+     * [AppendEntriesEntryTermOutOfRange]. `LogPosition` orders lexicographically, so tying on term and
+     * winning on index dominates just as surely as a huge term does — bounding `lastIncludedTerm` alone
+     * left the violation fully reachable at `lastIncludedTerm == term`, with the attack moved into the
+     * index. Two arms under one gate, as at [AppendEntriesPrevLogIndexOutOfRange].
+     *
+     * The frame is **dropped, not acked**, so this gate and the two below it are mutually
+     * indiscriminable without attribution: all three leave no reply and no state change at all.
+     */
+    InstallSnapshotIndexOutOfRange,
+
+    /**
+     * `RaftEngine.snapshotChunkRefusal` bound 2 (#1868): an `InstallSnapshot` whose `lastIncludedTerm`
+     * is outside `0..min(term, MAX_PLAUSIBLE_TERM)`.
+     *
+     * A snapshot's `lastIncludedTerm` is the term of a log entry the sender held, and a node's log
+     * never carries a term above its own `currentTerm` — which the frame states as `term`. So
+     * `lastIncludedTerm <= term` is checkable from the frame alone, the identical §5.3 argument
+     * [AppendEntriesEntryTermOutOfRange] makes on its own lane. The `MAX_PLAUSIBLE_TERM` ceiling is
+     * folded into the same bound and enforced here rather than inherited, which is what makes the check
+     * survive #1897 unchanged. Two arms under one gate, as at [AppendEntriesPrevLogIndexOutOfRange].
+     */
+    InstallSnapshotTermOutOfRange,
+
+    /**
+     * `RaftEngine.committedTermFloorRefusal` (#1910): an `InstallSnapshot` advancing our commit
+     * frontier whose `lastIncludedTerm` is **below the term of our own entry at `commitIndex`**.
+     *
+     * The tighter sibling of [InstallSnapshotTermOutOfRange], and the reason it is a separate value
+     * rather than folded into it: that bound is frame-internal and admits any term a *stale, replayed
+     * or forged* frame naming a real earlier term needs; this one is a cross-check against local
+     * committed state, so the two refuse disjoint populations and a reader wants to know which fired.
+     * By Leader Completeness (§5.4 / Figure 3.2) a snapshot that legitimately covers an index above our
+     * commit frontier compacts a prefix containing it, and terms are non-decreasing along a log — so
+     * the floor never rejects a legitimate snapshot.
+     *
+     * Gated on the snapshot actually advancing the frontier: an honest *behind-commit* duplicate (§7's
+     * retransmission case) is legitimately below the floor, is inert, and must keep being acked rather
+     * than dropped, so it is exempted rather than laundered through a bound that does not apply to it.
+     */
+    InstallSnapshotBelowCommittedTermFloor,
+
+    /**
+     * `RaftEngine.adoptLeaderForTerm` (#1906): a same-term `AppendEntries` or `InstallSnapshot` from a
+     * peer that is **not** the node already established as this term's leader.
+     *
+     * §5.2 permits one leader per term, so one of the two frames is forged — which one is not locally
+     * decidable, and the pin is first-claim-wins. Dropped rather than clamped (an identity has no
+     * conservative in-range reading, and clamping one launders a forgery into the most favourable valid
+     * value, #1817) and rather than answered (the recipient cannot tell the two senders apart, so it
+     * has nothing to say the honest one could act on).
+     *
+     * **The value with the largest gap between its safety weight and its observability**, which is why
+     * #2033 named it first. `RaftEngine.demoteToFollowerOnLeaderContact` runs immediately before it and
+     * emits `BecomeFollower` *only* if this node was still Leader or Candidate; reaching it as an
+     * ordinary Follower — the overwhelmingly common case — the refusal produced **nothing at all**, and
+     * the dropped frame was indistinguishable from one the §5.3 consistency check drops a screen later.
+     */
+    ForgedLeaderForTerm,
     ;
 
     /**
@@ -146,16 +294,26 @@ public enum class RefusalGate {
      *
      * **The one place the two vocabularies meet, and the reason they stay two types.**
      * [RaftMetric.WedgeSuspected] is a *diagnosis of a sustained condition*, raised only by the two
-     * gates that sit at `RaftEngine.onMessage`'s dispatch boundary. Widening its `Gate` to the eight
+     * gates that sit at `RaftEngine.onMessage`'s dispatch boundary. Widening its `Gate` to the fifteen
      * values here would put values in the metric's type that the metric can never carry — a worse lie
      * than the duplication it would avoid. Expressing the relation here instead makes
      * `WedgeSuspected.Gate` a **subset the compiler checks**: this `when` has no `else`, so a new
      * entry above cannot compile without saying which side of it it is on.
      *
-     * `null` is the honest answer for all five `TimeoutNow*` guards. They run *past* the dispatch
-     * boundary, downstream of the two gates the wedge report is built from; a refusal there says
-     * nothing about this node being unable to make progress, which is the only thing that report
-     * means.
+     * `null` is the honest answer for every gate past the dispatch boundary — the five `TimeoutNow*`
+     * guards and the seven handler-lane guards alike. They run downstream of the two gates the wedge
+     * report is built from; a refusal there says nothing about this node being unable to make progress,
+     * which is the only thing that report means.
+     *
+     * For the handler-lane gates that is not only a policy call, it is **forced by the mechanism**, and
+     * the check is worth recording because the opposite reading looks plausible: a node that pinned a
+     * forger and now drops the honest leader's every frame at [ForgedLeaderForTerm] really is jammed.
+     * It still cannot be reported here. `RaftEngine.onMessage` zeroes `refusedLeaderFrameRun` for any
+     * leader→peer frame at or above our term that clears **both** dispatch gates — and every frame that
+     * reaches a handler has cleared both by definition. So the run is reset immediately before each of
+     * these gates sees the frame, and `noteRefusedLeaderFrame` could never accumulate the
+     * `WEDGE_SUSPECTED_RUN` consecutive refusals a report requires. Naming a wedge gate here would
+     * declare a report that structurally cannot fire.
      *
      * [ImplausibleNegativeTerm] maps to [RaftMetric.WedgeSuspected.Gate.TermJump] because that is
      * where it is reported today — it shared an `if` with [ImplausibleTermJump] before #1989 split
@@ -174,5 +332,12 @@ public enum class RefusalGate {
             TimeoutNowFutureTerm -> null
             TimeoutNowSenderNotEstablishedLeader -> null
             TimeoutNowSelfLearner -> null
+            AppendEntriesPrevLogIndexOutOfRange -> null
+            AppendEntriesNonContiguousBatch -> null
+            AppendEntriesEntryTermOutOfRange -> null
+            InstallSnapshotIndexOutOfRange -> null
+            InstallSnapshotTermOutOfRange -> null
+            InstallSnapshotBelowCommittedTermFloor -> null
+            ForgedLeaderForTerm -> null
         }
 }

@@ -46,7 +46,7 @@ import kotlin.time.Duration.Companion.seconds
  *
  * `MAX_PLAUSIBLE_TERM` is untouched by all of this. It keeps its job on the storage and
  * well-formedness paths (`checkedRestoredTerm`, `checkedRestoredSnapshotMeta`,
- * `isWellFormedSnapshotChunk`), where a value is read back off a disk or unpacked from a frame rather
+ * `snapshotChunkRefusal`), where a value is read back off a disk or unpacked from a frame rather
  * than compared against our own progress.
  *
  * ### Method

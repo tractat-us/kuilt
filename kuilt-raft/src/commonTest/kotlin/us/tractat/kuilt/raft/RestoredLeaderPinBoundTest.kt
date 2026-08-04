@@ -279,9 +279,10 @@ internal class RestoredLeaderPinBoundTest {
      * every `AppendEntries` from whoever *actually* leads that term.
      *
      * Asserted as an **acceptance**, which needs no gate to be attributable: `_leader` is assigned
-     * only after `adoptLeaderForTerm` returns true, so seeing the real leader's id there means every
-     * guard on the path passed. [tornFutureTermPin] pins `leader == null` beforehand so the transition
-     * is unambiguous.
+     * only after `adoptLeaderForTerm` admits the frame (returns `null` — since #2033 it returns the
+     * [RefusalGate] that refused, or nothing), so seeing the real leader's id there means every guard
+     * on the path passed. [tornFutureTermPin] pins `leader == null` beforehand so the transition is
+     * unambiguous.
      *
      * This is the variant that also reaches a node which walked to `reachedTerm` by winning its own
      * pre-vote — the Candidate-on-a-live-pin state (#1999) — since `demoteToFollowerOnLeaderContact`
