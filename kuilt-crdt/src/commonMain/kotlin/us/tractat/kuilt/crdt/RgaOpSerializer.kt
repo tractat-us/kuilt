@@ -42,7 +42,7 @@ public class RgaOpSerializer<V>(
      * *equal* ops that a plain map serializer would write in two different orders, and a `Compact`
      * op rides inside the serialized `ops` set — this is converged state on the wire (#1978).
      *
-     * Composes with, rather than duplicates, [RgaSerializer]'s `compareCompactOps`: that orders
+     * Composes with, rather than duplicates, [compareCompactPositions]: that orders
      * *between* several `Compact` ops, this orders *within* one op's map. The two use different
      * key orders — natural [RgaId] order there, serialized-leaf order here — but each is a pure
      * function of the logical value, so the composition is canonical.
