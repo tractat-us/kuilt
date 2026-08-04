@@ -9,6 +9,9 @@ plugins {
     // Measurement suites declare their own @Serializable probe messages to price a
     // not-yet-built wire protocol against the real codec (see MerkleDigestCostModelTest).
     alias(libs.plugins.kotlinSerialization)
+    // Detekt does NOT come with kotlinJvm — it is registered by `kuilt.kmp-library`, which
+    // this module deliberately doesn't apply, so it was compiled but unlinted (#2005).
+    id("kuilt.detekt-jvm")
 }
 
 dependencies {

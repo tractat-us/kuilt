@@ -1,6 +1,8 @@
 plugins {
     alias(libs.plugins.kotlinJvm)
     alias(libs.plugins.kotlinSerialization)
+    // Detekt is registered by `kuilt.kmp-library`, which this module doesn't apply (#2005).
+    id("kuilt.detekt-jvm")
 }
 
 dependencies {

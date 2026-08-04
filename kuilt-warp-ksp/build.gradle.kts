@@ -17,7 +17,10 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 plugins {
     alias(libs.plugins.kotlinJvm)
     id("kuilt.publish")
-    alias(libs.plugins.detekt)
+    // Was a hand-rolled detekt + `detektAll` block; the convention plugin is the
+    // same wiring, shared with every other plain-JVM module (#2005), and also
+    // applies detekt-test.yml to the test source set.
+    id("kuilt.detekt-jvm")
 }
 
 kotlin {
@@ -39,21 +42,4 @@ mavenPublishing {
 dependencies {
     implementation(libs.ksp.api)
     testImplementation(libs.kotlin.test)
-}
-
-detekt {
-    config.setFrom(rootProject.files("config/detekt/detekt.yml"))
-    buildUponDefaultConfig = false
-    allRules = false
-}
-
-// Match the KMP modules' `detektAll` entry point so `./gradlew detektAll` (CI's
-// lint job) covers this module too. `detektMain`/`detektTest` are the
-// type-resolution variants, mirroring what the kmp-library convention wires.
-afterEvaluate {
-    tasks.register("detektAll") {
-        group = "verification"
-        description = "Runs detekt with type resolution on main and test sources."
-        dependsOn(listOfNotNull(tasks.findByName("detektMain"), tasks.findByName("detektTest")))
-    }
 }

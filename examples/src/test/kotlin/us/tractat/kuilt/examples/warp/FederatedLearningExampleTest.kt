@@ -1,4 +1,5 @@
 @file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+@file:Suppress("ForbiddenImport") // deliberate: the WebSocket variant runs against a real embedded Ktor server — real sockets need a real dispatcher
 
 package us.tractat.kuilt.examples.warp
 
