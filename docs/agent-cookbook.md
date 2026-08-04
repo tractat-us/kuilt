@@ -562,7 +562,7 @@ Four things to know before you bind this to a UI:
 
 <!-- verbatim from kuilt-game/src/commonSamples/kotlin/us/tractat/kuilt/game/GameSamples.kt#sampleGameHostJoin -->
 ```kotlin
-internal fun sampleGameHostJoin() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+internal fun sampleGameHostJoin() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
     val loom = InMemoryLoom()
     val hostSeam = loom.host(Pattern("tic-tac-toe"))
     val joinSeam = loom.join(InMemoryTag("player-2"))

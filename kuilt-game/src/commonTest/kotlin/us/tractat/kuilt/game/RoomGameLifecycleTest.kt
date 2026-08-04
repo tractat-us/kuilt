@@ -6,10 +6,10 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
@@ -21,7 +21,7 @@ class RoomGameLifecycleTest {
 
     @Test
     fun `close leaves the backing room and is idempotent`() =
-        runTest(timeout = 5.seconds) {
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
             var nowMs = 0L
             val clock = { Instant.fromEpochMilliseconds(nowMs) }
             fun tick() {

@@ -15,13 +15,13 @@ import us.tractat.kuilt.test.FaultySeam
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.raft.NodeId
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 
 class GamePresenceTest {
 
@@ -30,7 +30,7 @@ class GamePresenceTest {
      * on one is visible on the other after Quilter delta delivery.
      */
     @Test
-    fun hostDeclarationConverges() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+    fun hostDeclarationConverges() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val (s1, s2) = seats(loom, 2)
 
@@ -53,7 +53,7 @@ class GamePresenceTest {
      * to s2 before either checks, making the detection deterministic under virtual time.
      */
     @Test
-    fun secondHostFailsFast() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun secondHostFailsFast() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val (s1, s2) = seats(loom, 2)
         val cfg = fastRaftConfig(seed = 1L)
@@ -83,7 +83,7 @@ class GamePresenceTest {
      * declaration is observed and [DuplicateHostException] is thrown.
      */
     @Test
-    fun secondHostDetectedDespiteDeliveryLatency() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun secondHostDetectedDespiteDeliveryLatency() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val (raw1, raw2) = seats(loom, 2)
         val s1 = FaultySeam(raw1, backgroundScope, FaultProfile.DelayAll(50.milliseconds))
@@ -110,7 +110,7 @@ class GamePresenceTest {
      * leaving the session with no host at all.
      */
     @Test
-    fun simultaneousHostsArbitrateToLowestNodeId() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun simultaneousHostsArbitrateToLowestNodeId() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val (s1, s2) = seats(loom, 2)
         val cfg = fastRaftConfig(seed = 1L)
@@ -134,7 +134,7 @@ class GamePresenceTest {
      */
     @Test
     fun admissionClosedRoundTripsNodeIdsContainingDelimiters() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val s1 = seats(loom, 1).single()
             val presence = GamePresence(s1, backgroundScope)

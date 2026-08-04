@@ -20,12 +20,12 @@ import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
@@ -49,7 +49,7 @@ class GameReplacementTest {
      * 3. The replacement replays the committed log.
      */
     @Test
-    fun lostVoterSeatFreedAndReplacedByNewJoin() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun lostVoterSeatFreedAndReplacedByNewJoin() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val (hostRaw, j1Raw, deadRaw) = seats(loom, 3)
 
@@ -108,7 +108,7 @@ class GameReplacementTest {
      * signal bypasses the dead-man's-switch timeout. The seat is freed, a replacement joins.
      */
     @Test
-    fun gracefulLeaveFreedSeatWithoutWaitingReconnectWindow() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun gracefulLeaveFreedSeatWithoutWaitingReconnectWindow() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val (hostRaw, j1Raw, leavingRaw) = seats(loom, 3)
 
@@ -173,7 +173,7 @@ class GameReplacementTest {
      * exists in the log yet (a collect with timeout would find nothing).
      */
     @Test
-    fun transientBlipDoesNotEvict() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun transientBlipDoesNotEvict() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val (hostRaw, j1Raw, blipRaw) = seats(loom, 3)
 
@@ -222,7 +222,7 @@ class GameReplacementTest {
      * existing admission-closed signal.
      */
     @Test
-    fun rosterFullExceptionStillThrownWithLivenessEnabled() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun rosterFullExceptionStillThrownWithLivenessEnabled() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val (hostRaw, j1Raw) = seats(loom, 2)
 
@@ -255,7 +255,7 @@ class GameReplacementTest {
      * Liveness monitoring only covers voter seats.
      */
     @Test
-    fun spectatorNeverCountsAsVoterAfterReplacement() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun spectatorNeverCountsAsVoterAfterReplacement() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val (hostRaw, j1Raw, spectateRaw) = seats(loom, 3)
 

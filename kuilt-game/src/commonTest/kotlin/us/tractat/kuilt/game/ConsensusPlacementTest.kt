@@ -19,6 +19,7 @@ import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.test.FakeRaftNode
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -26,7 +27,6 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 class ConsensusPlacementTest {
 
@@ -37,7 +37,7 @@ class ConsensusPlacementTest {
      * layer ([TurnSequencer]).
      */
     @Test
-    fun preBuiltPlacementHandsTheSessionTheProvidedNode() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun preBuiltPlacementHandsTheSessionTheProvidedNode() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val seam = loom.host(Pattern("fake-node-game"))
         val self = NodeId(seam.selfId.value)
@@ -58,7 +58,7 @@ class ConsensusPlacementTest {
 
     /** The appoint-the-host path accepts a pre-built node too — presence and admission run against it. */
     @Test
-    fun gameHostBootstrapsAgainstAPreBuiltNode() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun gameHostBootstrapsAgainstAPreBuiltNode() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val hostSeam = loom.host(Pattern("fake-host-game"))
         val fake = FakeRaftNode(NodeId(hostSeam.selfId.value), initialRole = RaftRole.Leader)
@@ -82,7 +82,7 @@ class ConsensusPlacementTest {
      * forwarding) — never holding a voter seat.
      */
     @Test
-    fun serverCoreAllServersVoteAndPlayerRidesAsLearner() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun serverCoreAllServersVoteAndPlayerRidesAsLearner() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val seams = seats(loom, 4)
         val serverSeams = seams.take(3)
@@ -141,7 +141,7 @@ class ConsensusPlacementTest {
      * picks up the decorator and that wrapping is a byte-inert drop-in off a real federation.
      */
     @Test
-    fun federatedCoreIsADropInForServerCore_overAnAllDirectMesh() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun federatedCoreIsADropInForServerCore_overAnAllDirectMesh() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val seams = seats(loom, 4)
         val serverSeams = seams.take(3)
@@ -187,7 +187,7 @@ class ConsensusPlacementTest {
      * keeps today's precondition).
      */
     @Test
-    fun sessionOwnedGameNodeStillRequiresSelfInRoster() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun sessionOwnedGameNodeStillRequiresSelfInRoster() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val seam = loom.host(Pattern("roster-guard"))
 
@@ -206,7 +206,7 @@ class ConsensusPlacementTest {
      * loudly before touching the seam (server-core bootstraps via [gameNode] today).
      */
     @Test
-    fun hostPathsRejectCoreVoterSeating() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun hostPathsRejectCoreVoterSeating() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val seam = loom.host(Pattern("seating-guard"))
         val placement = ConsensusPlacement.serverCore(setOf(NodeId("s1"), NodeId("s2")))

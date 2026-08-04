@@ -16,11 +16,11 @@ import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.test.FakeRaftNode
 import us.tractat.kuilt.test.FakeSeam
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * End-to-end commit-safety regression for #1370, exercising the **real [gameNode] bootstrap wiring**
@@ -78,7 +78,7 @@ class CommitSafetyLaunderingE2ETest {
     }
 
     @Test
-    fun forgedGossipFrameIsNotLaunderedIntoTheRaftChannel() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun forgedGossipFrameIsNotLaunderedIntoTheRaftChannel() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val raw = FakeSeam(selfId = PeerId("H"), initialPeers = setOf(PeerId("H"), PeerId("V"), PeerId("X")))
         val spy = RaftChannelSpy()
 

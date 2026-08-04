@@ -8,12 +8,12 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Principal
 import us.tractat.kuilt.raft.NodeId
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.fabric.InMemoryRoomFabric
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * #1352 — the game-per-room composition (`GameRoom` → `starOverlay(RoomHubSeam)` → `GameSession`)
@@ -32,7 +32,7 @@ class GameRoomPrincipalTest {
 
     @Test
     fun `game-per-room over the mux hub surfaces the verified principal on the session roster`() =
-        runTest(StandardTestDispatcher(), timeout = 15.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor])
             val fabric = InMemoryRoomFabric(backgroundScope, dispatcher, random = Random(1))
             val core = setOf(NodeId("server"))

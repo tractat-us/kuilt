@@ -24,10 +24,10 @@ import us.tractat.kuilt.raft.NotLeaderException
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.Snapshot
 import us.tractat.kuilt.raft.test.FakeRaftNode
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Tests for [SpeculativeSequencer]. Each test uses [FakeRaftNode] with explicit
@@ -72,7 +72,7 @@ class SpeculativeSequencerTest {
     // ── Initial state ─────────────────────────────────────────────────────────
 
     @Test
-    fun initialSpeculativeStateMatchesInitialState() = runTest(timeout = 5.seconds) {
+    fun initialSpeculativeStateMatchesInitialState() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         val seq = speculative(node, initial = GameState(42), scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
         assertEquals(42, seq.speculativeState.value.total)
@@ -81,7 +81,7 @@ class SpeculativeSequencerTest {
     // ── Speculative apply visible before commit ───────────────────────────────
 
     @Test
-    fun speculativeStateVisibleBeforeCommitArrives() = runTest(timeout = 5.seconds) {
+    fun speculativeStateVisibleBeforeCommitArrives() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         node.setRole(RaftRole.Leader)
 
@@ -107,7 +107,7 @@ class SpeculativeSequencerTest {
     // ── Matching commit confirms pending (happy path) ─────────────────────────
 
     @Test
-    fun matchingCommitConfirmsPendingAndLeavesStateUnchanged() = runTest(timeout = 5.seconds) {
+    fun matchingCommitConfirmsPendingAndLeavesStateUnchanged() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         node.setRole(RaftRole.Leader)
         val seq = speculative(node, scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
@@ -120,7 +120,7 @@ class SpeculativeSequencerTest {
     }
 
     @Test
-    fun multipleMatchingCommitsAccumulateWithNoPendingRemaining() = runTest(timeout = 5.seconds) {
+    fun multipleMatchingCommitsAccumulateWithNoPendingRemaining() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         node.setRole(RaftRole.Leader)
         val seq = speculative(node, scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
@@ -136,7 +136,7 @@ class SpeculativeSequencerTest {
     // ── Foreign commit triggers rollback + replay ─────────────────────────────
 
     @Test
-    fun foreignCommitWithNoPendingAdvancesAuthoritativeState() = runTest(timeout = 5.seconds) {
+    fun foreignCommitWithNoPendingAdvancesAuthoritativeState() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         val seq = speculative(node, scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
 
@@ -148,7 +148,7 @@ class SpeculativeSequencerTest {
     }
 
     @Test
-    fun foreignCommitWhilePendingExistsTriggerRollbackThenReplay() = runTest(timeout = 5.seconds) {
+    fun foreignCommitWhilePendingExistsTriggerRollbackThenReplay() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         node.setRole(RaftRole.Leader)
 
@@ -176,7 +176,7 @@ class SpeculativeSequencerTest {
     }
 
     @Test
-    fun multiplePendingAreReplayed_afterForeignCommit() = runTest(timeout = 5.seconds) {
+    fun multiplePendingAreReplayed_afterForeignCommit() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         node.setRole(RaftRole.Leader)
 
@@ -206,7 +206,7 @@ class SpeculativeSequencerTest {
     // ── Propose failure does not corrupt speculative state ────────────────────
 
     @Test
-    fun notLeaderRejectionDoesNotApplySpeculativeState() = runTest(timeout = 5.seconds) {
+    fun notLeaderRejectionDoesNotApplySpeculativeState() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode() // Follower — FakeRaftNode throws NotLeaderException
         val seq = speculative(node, scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
 
@@ -219,7 +219,7 @@ class SpeculativeSequencerTest {
     }
 
     @Test
-    fun leadershipLostRejectionDoesNotLeavePhantomPendingInput() = runTest(timeout = 5.seconds) {
+    fun leadershipLostRejectionDoesNotLeavePhantomPendingInput() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         node.setRole(RaftRole.Leader)
         val raftCause = LeadershipLostException("lost during test")
@@ -237,7 +237,7 @@ class SpeculativeSequencerTest {
     // ── Deterministic replay produces correct state across rounds ─────────────
 
     @Test
-    fun consecutiveForeignCommitsProduceDeterministicFinalState() = runTest(timeout = 5.seconds) {
+    fun consecutiveForeignCommitsProduceDeterministicFinalState() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         node.setRole(RaftRole.Leader)
 
@@ -271,7 +271,7 @@ class SpeculativeSequencerTest {
     // ── speculativeState emits on each change ─────────────────────────────────
 
     @Test
-    fun speculativeStateFlowEmitsOnEveryStateChange() = runTest(timeout = 5.seconds) {
+    fun speculativeStateFlowEmitsOnEveryStateChange() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         node.setRole(RaftRole.Leader)
         val seq = speculative(node, scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
@@ -325,7 +325,7 @@ class SpeculativeSequencerTest {
     )
 
     @Test
-    fun snapshotInstallResetRehydratesAuthoritativeState() = runTest(timeout = 5.seconds) {
+    fun snapshotInstallResetRehydratesAuthoritativeState() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         val seq = rehydrating(node, initial = GameState(0), scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
 
@@ -343,7 +343,7 @@ class SpeculativeSequencerTest {
     }
 
     @Test
-    fun snapshotInstallResetClearsPendingBuffer() = runTest(timeout = 5.seconds) {
+    fun snapshotInstallResetClearsPendingBuffer() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         node.setRole(RaftRole.Leader)
 
@@ -367,7 +367,7 @@ class SpeculativeSequencerTest {
     }
 
     @Test
-    fun commitsAfterSnapshotInstallApplyOnTopOfRehydratedState() = runTest(timeout = 5.seconds) {
+    fun commitsAfterSnapshotInstallApplyOnTopOfRehydratedState() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         val seq = rehydrating(node, scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
 
@@ -385,7 +385,7 @@ class SpeculativeSequencerTest {
     // ── Part 1: Internal exactly-once dedup ───────────────────────────────────
 
     @Test
-    fun duplicateDedupKeyAppliedOnlyOnce() = runTest(timeout = 5.seconds) {
+    fun duplicateDedupKeyAppliedOnlyOnce() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         val seq = speculative(node, scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
 
@@ -405,7 +405,7 @@ class SpeculativeSequencerTest {
     }
 
     @Test
-    fun distinctDedupKeysAreEachApplied() = runTest(timeout = 5.seconds) {
+    fun distinctDedupKeysAreEachApplied() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         val seq = speculative(node, scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
 
@@ -423,7 +423,7 @@ class SpeculativeSequencerTest {
     }
 
     @Test
-    fun localPendingConfirmsCorrectlyWithDedup() = runTest(timeout = 5.seconds) {
+    fun localPendingConfirmsCorrectlyWithDedup() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         node.setRole(RaftRole.Leader)
         val seq = speculative(node, scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
@@ -437,7 +437,7 @@ class SpeculativeSequencerTest {
     }
 
     @Test
-    fun foreignDuplicateOfLocallyConfirmedKeyIsNotDoubleApplied() = runTest(timeout = 5.seconds) {
+    fun foreignDuplicateOfLocallyConfirmedKeyIsNotDoubleApplied() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         // Regression: a locally-proposed action confirmed via the pending buffer must still record
         // its key in the dedup table, so a later forwarded duplicate of that SAME key (arriving with
         // no matching pending entry → foreign path) is dropped, not double-applied.
@@ -468,7 +468,7 @@ class SpeculativeSequencerTest {
     // ── Part 2: propose(action, requestId) overload ───────────────────────────
 
     @Test
-    fun proposeWithRequestIdSucceeds() = runTest(timeout = 5.seconds) {
+    fun proposeWithRequestIdSucceeds() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         node.setRole(RaftRole.Leader)
         val seq = speculative(node, scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
@@ -481,7 +481,7 @@ class SpeculativeSequencerTest {
     }
 
     @Test
-    fun proposeWithRequestIdRollsBackOnFailure() = runTest(timeout = 5.seconds) {
+    fun proposeWithRequestIdRollsBackOnFailure() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         node.setRole(RaftRole.Leader)
         val cause = LeadershipLostException("lost")
@@ -499,7 +499,7 @@ class SpeculativeSequencerTest {
     // ── Part 4: awaitConfirmedCount uses StateFlow suspension ─────────────────
 
     @Test
-    fun confirmedCountExposedAsStateFlow() = runTest(timeout = 5.seconds) {
+    fun confirmedCountExposedAsStateFlow() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         val seq = speculative(node, scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
 
@@ -513,7 +513,7 @@ class SpeculativeSequencerTest {
     }
 
     @Test
-    fun awaitConfirmedCountSuspendsUntilThresholdReached() = runTest(timeout = 5.seconds) {
+    fun awaitConfirmedCountSuspendsUntilThresholdReached() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val node = FakeRaftNode()
         val seq = speculative(node, scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
 

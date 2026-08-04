@@ -16,12 +16,12 @@ import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.SeamRaftTransport
 import us.tractat.kuilt.raft.raftNode
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertIs
 import kotlin.time.Instant
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Proves the harness wiring: two real [raftNode]s over [InMemoryLoom] seams converge to
@@ -32,7 +32,7 @@ import kotlin.time.Duration.Companion.seconds
 class HarnessSmokeTest {
 
     @Test
-    fun twoSeatStaticClusterElectsLeader() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun twoSeatStaticClusterElectsLeader() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val (aSeam, bSeam) = seats(loom, 2)
 

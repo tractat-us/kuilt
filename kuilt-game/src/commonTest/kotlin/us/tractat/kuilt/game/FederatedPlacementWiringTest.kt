@@ -23,13 +23,13 @@ import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.RaftEnvelope
 import us.tractat.kuilt.raft.RaftTransport
 import us.tractat.kuilt.test.FakeSeam
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Task-2 wiring: [ConsensusPlacement.federatedCore] seats the game with a **routing decorator**
@@ -48,7 +48,7 @@ class FederatedPlacementWiringTest {
 
     @Test
     fun federatedCoreWrapsServerAndPlayerInRoutingDecorator_offFederationDoesNot() =
-        runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val server = NodeId("s1")
             val player = NodeId("p1")
             val core = setOf(server, NodeId("s2"))
@@ -72,7 +72,7 @@ class FederatedPlacementWiringTest {
 
     @Test
     fun playerFederatedTransportRelaysToItsSingleServer_whileSessionOwnedGoesStraightToInner() =
-        runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val player = NodeId("p1")
             val server = NodeId("s1")
             val leader = NodeId("leader-elsewhere") // not a direct inner peer of the player
@@ -102,7 +102,7 @@ class FederatedPlacementWiringTest {
 
     @Test
     fun playerRelayChannelHasExactlyOneServerPeer_andIdentityMatchesAcrossLayers() =
-        runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             // A player's session seam is point-to-point: its one peer is its server. Model it with a
             // 2-seat in-memory loom, wrapped in the same star overlay gameNodeRoom composes, then carve
             // the RAFT_RELAY channel exactly as gameNode does over that session seam.

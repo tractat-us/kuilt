@@ -23,6 +23,7 @@ import us.tractat.kuilt.gossip.GossipSeam
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.fabric.Star
 import us.tractat.kuilt.test.fabric.connectionPair
 import us.tractat.kuilt.test.fabric.inMemoryStarOf
@@ -32,7 +33,6 @@ import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
@@ -46,7 +46,7 @@ import kotlin.time.Instant
 class HostedHubReplicationTest {
 
     @Test
-    fun clientChatRgaReachesAllOtherClientsPromptly() = runTest(StandardTestDispatcher(), timeout = 30.seconds) {
+    fun clientChatRgaReachesAllOtherClientsPromptly() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val game = setupStarGame(n = 3)
 
         // Client 0 appends m0, m1, m2 at the tail so order is preserved.
@@ -61,7 +61,7 @@ class HostedHubReplicationTest {
     }
 
     @Test
-    fun droppedClientSurvivesAndClusterKeepsReplicating() = runTest(StandardTestDispatcher(), timeout = 30.seconds) {
+    fun droppedClientSurvivesAndClusterKeepsReplicating() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val game = setupStarGame(n = 3)
 
         // 1. Establish history; all converge.
@@ -112,7 +112,7 @@ class HostedHubReplicationTest {
      * FullState push-back can converge within the ~600 ms of virtual time advanced below.
      */
     @Test
-    fun reconnectingClientConvergesViaPromptFullState() = runTest(StandardTestDispatcher(), timeout = 30.seconds) {
+    fun reconnectingClientConvergesViaPromptFullState() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         // Virtual-time clock the host's heartbeat detectors read; the test advances `nowMs`
         // alongside advanceTimeBy so silence is measured against the same virtual clock.
         val liveness = fastLivenessConfig()

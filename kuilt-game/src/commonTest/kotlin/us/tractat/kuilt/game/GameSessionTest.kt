@@ -11,11 +11,11 @@ import kotlinx.serialization.builtins.serializer
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.raft.NodeId
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Tests for [GameSession] — the return type of [gameNode]/[gameHost]/[gameJoin]. Verifies that
@@ -32,7 +32,7 @@ import kotlin.time.Duration.Companion.seconds
 class GameSessionTest {
 
     @Test
-    fun appChannelRoundTripsHostJoiner() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun appChannelRoundTripsHostJoiner() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val (hostSeam, joinSeam) = seats(loom, 2)
 
@@ -52,7 +52,7 @@ class GameSessionTest {
     }
 
     @Test
-    fun raftUnaffectedByConcurrentAppTraffic() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun raftUnaffectedByConcurrentAppTraffic() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val (hostSeam, joinSeam) = seats(loom, 2)
         val voters = setOf(NodeId(hostSeam.selfId.value), NodeId(joinSeam.selfId.value))
@@ -78,7 +78,7 @@ class GameSessionTest {
     }
 
     @Test
-    fun sameNameConvergesDifferentNamesIsolated() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun sameNameConvergesDifferentNamesIsolated() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val (hostSeam, joinSeam) = seats(loom, 2)
         val voters = setOf(NodeId(hostSeam.selfId.value), NodeId(joinSeam.selfId.value))
@@ -97,7 +97,7 @@ class GameSessionTest {
     }
 
     @Test
-    fun closeStopsNodeAndSeamIdempotently() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun closeStopsNodeAndSeamIdempotently() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val (hostSeam, joinSeam) = seats(loom, 2)
         val voters = setOf(NodeId(hostSeam.selfId.value), NodeId(joinSeam.selfId.value))
