@@ -508,6 +508,10 @@ private class MeshSeam(
      * `null` means "unknown", so a mesh of one bounded and one unknown link is still bounded by
      * what it does know. An empty (or wholly unknown) link set reports `null` — there is nothing to
      * be bounded by yet, and a mesh's link set grows.
+     *
+     * So this value **tightens over a mesh's life**: a hub with no links yet, or a peer-mesh still
+     * `Weaving`, reports "unknown", and the number appears — and may shrink again — as links
+     * attach. Read it per send rather than caching it at construction.
      */
     override val maxPayloadBytes: Int?
         get() = lock.withLock { links.values.mapNotNull { it.conn.maxFrameBytes }.minOrNull() }

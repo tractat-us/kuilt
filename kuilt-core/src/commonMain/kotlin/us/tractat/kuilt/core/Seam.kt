@@ -27,8 +27,13 @@ import us.tractat.kuilt.core.internal.MappedStateFlow
  *   send there throws, per the `Torn` rule below.)
  * - [sendTo] when the addressed peer is absent from [peers]: throws
  *   [PeerNotConnected].
- * - Either call when [SeamState.Torn]: throws [IllegalStateException]. `Torn` is the *only*
- *   send-state that throws (it is unconditionally terminal — see [SeamState]).
+ * - [sendTo] of a payload over [maxPayloadBytes]: throws [PayloadTooLarge]. [broadcast] instead
+ *   drops it (best-effort, as above). This is the one refusal that does **not** depend on the
+ *   seam's state — a `Woven` seam throws it — so a caller catching only [PeerNotConnected] does
+ *   not cover addressed sends on a seam that publishes a budget.
+ * - Either call when [SeamState.Torn]: throws [IllegalStateException]. `Torn` is the only
+ *   *state-driven* refusal (it is unconditionally terminal — see [SeamState]); the payload-size
+ *   refusal above is orthogonal to state.
  *
  * ## Collecting incoming frames
  *
@@ -176,6 +181,10 @@ public interface Seam {
     /**
      * Send to all other peers. Suspends until accepted by the local transport.
      *
+     * A payload over [maxPayloadBytes] is **dropped**, not reported — this call is best-effort, and
+     * its most common caller is a timer-driven replication loop that a throw would kill. Read the
+     * budget and size to it; [sendTo] is the call that tells you.
+     *
      * A send failure must **not** be reported as a cancellation — see [sendTo].
      */
     public suspend fun broadcast(payload: ByteArray)
@@ -204,6 +213,11 @@ public interface Seam {
      * should guard with `try`/`catch` plus `currentCoroutineContext().ensureActive()` rather than
      * [runCatchingCancellable]; `CompositeSeam.reconcile` and `SeamRoom`'s admit fan-out writer are the
      * in-tree patterns.
+     *
+     * @throws PeerNotConnected if [peer] is absent from [peers].
+     * @throws PayloadTooLarge if [payload] exceeds [maxPayloadBytes]. Independent of [state] — a
+     *   `Woven` seam throws it — so a `catch (PeerNotConnected)` written against the state-driven
+     *   refusals alone does not cover it.
      */
     public suspend fun sendTo(
         peer: PeerId,

@@ -169,6 +169,9 @@ internal class RoomChannelSeam(
      * may wrap the frame in a relay envelope, and this view has already prefixed it with a channel
      * header. Each subtracts its own cost, so the number a `Quilter` over this view reads is one it
      * can actually fill.
+     *
+     * Like the room's, this is a promise rather than the refusal threshold — see [sendTo] for why
+     * enforcement is left to the layer that knows the route.
      */
     override val maxPayloadBytes: Int?
         get() = room.maxPayloadBytes?.let { (it - RoomChannel.HEADER_BYTES).coerceAtLeast(0) }
@@ -191,17 +194,27 @@ internal class RoomChannelSeam(
         room.broadcast(RoomChannel.frame(subId, payload))
 
     /**
-     * Checked against [maxPayloadBytes] here rather than left to [room], so the error names the
-     * bytes the *caller* passed. Delegating would report the framed size against the room's budget
-     * — both numbers three larger than the pair this view published, for no reason the caller could
-     * see.
+     * The room decides whether the frame fits — it is the layer that knows the route and therefore
+     * what the frame will really weigh — and this view only re-expresses the refusal in the
+     * **caller's** terms, discounting its own header from both numbers.
+     *
+     * Deliberately not a pre-check against [maxPayloadBytes]. That budget is published
+     * conservatively and route-independently (see `SeamRoom.maxPayloadBytes`), so refusing against
+     * it here would reject payloads the wire carries fine — the same over-enforcement that stopped
+     * a full-mesh room dead. Delegating without the translation would be correct but would report
+     * the *framed* size against the *room's* budget: both numbers three larger than the pair this
+     * view published, for no reason the caller could see.
      */
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
-        val budget = maxPayloadBytes
-        if (budget != null && payload.size > budget) {
-            throw PayloadTooLarge(payload.size, budget, RELAY_ENVELOPE_BUDGET + RoomChannel.HEADER_BYTES)
+        try {
+            room.sendTo(peer, RoomChannel.frame(subId, payload))
+        } catch (tooLarge: PayloadTooLarge) {
+            throw PayloadTooLarge(
+                payloadBytes = payload.size,
+                budgetBytes = (tooLarge.budgetBytes - RoomChannel.HEADER_BYTES).coerceAtLeast(0),
+                reservedBytes = tooLarge.reservedBytes + RoomChannel.HEADER_BYTES,
+            )
         }
-        room.sendTo(peer, RoomChannel.frame(subId, payload))
     }
 
     /** No-op — the Room owns the lifecycle. */

@@ -2,14 +2,18 @@
 
 package us.tractat.kuilt.raft
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
+import us.tractat.kuilt.core.PayloadTooLarge
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
+
+private val log = KotlinLogging.logger("us.tractat.kuilt.raft.SeamRaftTransport")
 
 private fun Set<PeerId>.toNodeIds(): Set<NodeId> = mapTo(mutableSetOf()) { NodeId(it.value) }
 
@@ -57,6 +61,21 @@ public class SeamRaftTransport(private val seam: Seam) : RaftTransport {
             // replication/heartbeat round. Swallowing here keeps a dropped follower from
             // crashing the engine. PeerNotConnected is an IllegalStateException, never a
             // CancellationException, so structured-concurrency cancellation still propagates.
+        } catch (tooLarge: PayloadTooLarge) {
+            // A seam that publishes a payload budget refuses an over-budget frame while Woven
+            // (#2047) — a refusal independent of peer reachability, and one this transport cannot
+            // let escape: `RaftEngine.send` invokes this **unguarded**, so a throw here fails the
+            // engine coroutine rather than one message.
+            //
+            // Dropped, therefore, but loudly: unlike a partition this is a misconfiguration, not
+            // weather. The engine will retry the frame forever and never make progress on that
+            // peer, so the log line is the only thing that names why. The structural fix is for
+            // this transport to publish `maxPayloadBytes` so the engine chunks to fit — a
+            // consensus-behaviour change, tracked separately rather than smuggled in here.
+            log.warn {
+                "raft.send.drop self=${selfId.value} to=${peer.value} " +
+                    "reason=payload-over-budget ${tooLarge.message}"
+            }
         }
     }
 

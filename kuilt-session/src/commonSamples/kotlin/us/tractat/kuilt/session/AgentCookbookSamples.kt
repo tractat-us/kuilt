@@ -24,14 +24,15 @@ import kotlin.time.Duration.Companion.seconds
  */
 public suspend fun chunkToTheRoomsBudgetSample(room: Room, peer: PeerId, blob: ByteArray) {
     // null means "this fabric names no ceiling" — unknown, not unbounded. Pick your own chunk size.
-    val budget = room.maxPayloadBytes ?: DEFAULT_CHUNK_BYTES
-    blob.asSequence().chunked(budget) { chunk ->
-        chunk.toByteArray()
-    }.forEach { chunk ->
+    // Floored at 1: the budget is legitimately 0 on a fabric whose ceiling is under the reservation.
+    val budget = (room.maxPayloadBytes ?: DEFAULT_CHUNK_BYTES).coerceAtLeast(1)
+    // Index arithmetic, not `asSequence().chunked()` — the latter boxes every byte and builds an
+    // ArrayList<Byte> per chunk. On a blob big enough to need chunking that is the whole point.
+    for (start in blob.indices step budget) {
         // In budget by construction, so this cannot raise PayloadTooLarge. Past the budget, sendTo
         // reports it (addressed sends do) while broadcast drops it with a log (they are lossy by
         // contract) — neither surfaces the fabric's own oversize error.
-        room.sendTo(peer, chunk)
+        room.sendTo(peer, blob.copyOfRange(start, minOf(start + budget, blob.size)))
     }
 }
 

@@ -101,22 +101,94 @@ class RelayPayloadBudgetTest {
             )
         }
 
-    /** What the addressed send reports instead: the budget the caller could have read beforehand. */
+    /**
+     * What the addressed send reports instead: the frame's **actual** envelope cost, and a budget
+     * reconstructed from it that really would have fitted.
+     *
+     * The reservation reported here is what *this* envelope cost for *these two* peer ids, not the
+     * flat [RELAY_ENVELOPE_BUDGET] — refusal is measured on the encoded frame, so the numbers
+     * handed back are the ones the wire actually saw.
+     */
     @Test
     fun `an over-budget addressed send names the payload and the budget`() =
         runTest(StandardTestDispatcher(), timeout = backstop) {
             val star = relayStar(coJoiners = 2)
             star.joinerA.wire.limitFrames(fabricLimit)
-            val budget = assertNotNull(star.joinerA.room.maxPayloadBytes)
+            val envelope = relayOverhead(star.joinerAId, RelayDest.One(star.joinerBId), fabricLimit)
 
             val refusal = assertFailsWith<PayloadTooLarge> {
-                star.joinerA.room.sendTo(star.joinerBId, ByteArray(budget + 1))
+                star.joinerA.room.sendTo(star.joinerBId, ByteArray(fabricLimit))
             }
 
             assertAll(
-                { assertEquals(budget + 1, refusal.payloadBytes, "the payload that was refused") },
-                { assertEquals(budget, refusal.budgetBytes, "the budget it should have respected") },
-                { assertEquals(RELAY_ENVELOPE_BUDGET, refusal.reservedBytes, "and what the reservation buys") },
+                { assertEquals(fabricLimit, refusal.payloadBytes, "the payload that was refused") },
+                { assertEquals(envelope, refusal.reservedBytes, "what this envelope actually cost") },
+                {
+                    assertEquals(
+                        fabricLimit - envelope,
+                        refusal.budgetBytes,
+                        "and a budget reconstructed from it, which would have fitted",
+                    )
+                },
+            )
+        }
+
+    /**
+     * The published budget does **not** move with routing — the design call `SeamRoom.maxPayloadBytes`
+     * argues for, and the one every other test in this file is blind to.
+     *
+     * Every `relayStar` spoke has a diverged roster by construction, so `relayHostOrNull()` is
+     * non-null for all of them and a route-conditional budget would pass unnoticed. The **host** is
+     * the counter-example: it never relays (`relayHostOrNull()` returns `null` on role alone), so a
+     * budget that subtracted only while relaying would report the raw ceiling here. Asserting host
+     * and spoke agree over the same fabric ceiling is the property itself.
+     *
+     * Mutation-checked: making the subtraction conditional on `relayHostOrNull() != null` reddens
+     * this test and leaves the other six green.
+     */
+    @Test
+    fun `the published budget is the same whether or not this member relays`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 2)
+            star.host.wire.limitFrames(fabricLimit)
+            star.joinerA.wire.limitFrames(fabricLimit)
+
+            val hostBudget = assertNotNull(star.host.room.maxPayloadBytes, "the host's fabric named a ceiling")
+            val spokeBudget = assertNotNull(star.joinerA.room.maxPayloadBytes, "the spoke's fabric named a ceiling")
+
+            // Observed, not assumed: prove the host really is the non-relaying member by watching
+            // its wire carry a raw payload rather than an envelope. Snapshotted BEFORE the spoke
+            // sends, because the host's wire also carries the forwards it makes *as* the relay —
+            // those are the host relaying for somebody else, not for itself.
+            star.host.room.broadcast(appPayload("host-direct"))
+            testScheduler.runCurrent()
+            val hostFrames = star.wireFramesFrom(star.hostId)
+
+            star.joinerA.room.broadcast(appPayload("spoke-relayed"))
+            testScheduler.runCurrent()
+            val spokeFrames = star.wireFramesFrom(star.joinerAId)
+
+            assertAll(
+                {
+                    assertTrue(
+                        hostFrames.isNotEmpty() && hostFrames.none { RelayEnvelope.isRelayFrame(it) },
+                        "the host wrote only direct frames: ${hostFrames.size} frame(s)",
+                    )
+                },
+                {
+                    assertTrue(
+                        spokeFrames.isNotEmpty() && spokeFrames.all { RelayEnvelope.isRelayFrame(it) },
+                        "while the spoke relayed every one: ${spokeFrames.size} frame(s)",
+                    )
+                },
+                {
+                    assertEquals(
+                        fabricLimit - RELAY_ENVELOPE_BUDGET,
+                        hostBudget,
+                        "the host reserves the envelope it will never send",
+                    )
+                },
+                { assertEquals(hostBudget, spokeBudget, "so a relaying spoke publishes the same number") },
             )
         }
 
@@ -199,8 +271,8 @@ class RelayPayloadBudgetTest {
 
     /**
      * A channel view is a [us.tractat.kuilt.core.Seam] over a [Room] and both layers add bytes, so
-     * it reserves its own header on top of the room's reservation — and reports the overflow with
-     * the **caller's** numbers, not the framed ones.
+     * it reserves its own header on top of the room's reservation — and re-expresses the room's
+     * refusal with the **caller's** numbers, not the framed ones.
      */
     @Test
     fun `a channel view reserves its own header on top of the room's budget`() =
@@ -213,7 +285,9 @@ class RelayPayloadBudgetTest {
 
             view.sendTo(star.joinerBId, ByteArray(viewBudget))
             testScheduler.runCurrent()
-            val refusal = assertFailsWith<PayloadTooLarge> { view.sendTo(star.joinerBId, ByteArray(viewBudget + 1)) }
+            // Sized to overflow the wire, not merely to exceed the published budget — the published
+            // number under-promises deliberately, so a payload one byte past it still fits.
+            val refusal = assertFailsWith<PayloadTooLarge> { view.sendTo(star.joinerBId, ByteArray(fabricLimit)) }
 
             assertAll(
                 { assertEquals(roomBudget - RoomChannel.HEADER_BYTES, viewBudget, "the channel header is reserved") },
@@ -223,8 +297,64 @@ class RelayPayloadBudgetTest {
                         "a budget-filling channel frame still fits the fabric once framed and relayed",
                     )
                 },
-                { assertEquals(viewBudget + 1, refusal.payloadBytes, "the refusal names what the caller passed") },
-                { assertEquals(viewBudget, refusal.budgetBytes, "and the budget the caller could have read") },
+                { assertEquals(fabricLimit, refusal.payloadBytes, "the refusal names what the caller passed") },
+                {
+                    assertTrue(
+                        refusal.reservedBytes > RoomChannel.HEADER_BYTES,
+                        "and charges the channel header on top of the room's own reservation: " +
+                            "${refusal.reservedBytes} B",
+                    )
+                },
+                {
+                    assertEquals(
+                        fabricLimit - refusal.reservedBytes,
+                        refusal.budgetBytes,
+                        "so the budget it reports is one the caller could have filled",
+                    )
+                },
             )
         }
+
+    /**
+     * The exactness that keeps a **non-relaying** room working: a payload above the published budget
+     * but still inside the fabric's ceiling is delivered, because nothing wraps a direct send.
+     *
+     * Enforcing the published reservation on this path would silently stop a full-mesh room — the
+     * whole band `(ceiling − RELAY_ENVELOPE_BUDGET, ceiling]` would vanish, and on any fabric whose
+     * ceiling is under the reservation, everything would.
+     */
+    @Test
+    fun `a direct send is charged no envelope it does not pay`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 2)
+            star.host.wire.limitFrames(fabricLimit)
+            val budget = assertNotNull(star.host.room.maxPayloadBytes)
+            val overBudgetButOnTheWire = ByteArray(fabricLimit)
+
+            star.host.room.sendTo(star.joinerAId, overBudgetButOnTheWire)
+            star.host.room.broadcast(overBudgetButOnTheWire)
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertTrue(fabricLimit > budget, "the payload is past the published budget: $fabricLimit > $budget") },
+                {
+                    assertEquals(
+                        listOf(fabricLimit, fabricLimit),
+                        star.wireFramesFrom(star.hostId).map { it.size },
+                        "yet both sends reached the wire, unwrapped and unrefused",
+                    )
+                },
+                {
+                    assertEquals(
+                        listOf(fabricLimit, fabricLimit),
+                        star.joinerA.rawAppFramesFrom(star.hostId).map { it.size },
+                        "and were delivered",
+                    )
+                },
+            )
+        }
+
+    /** The envelope's real cost for [origin]/[dest] at a payload of exactly [payloadBytes]. */
+    private fun relayOverhead(origin: PeerId, dest: RelayDest, payloadBytes: Int): Int =
+        RelayEnvelope.encode(RelayEnvelope(origin, dest, ByteArray(payloadBytes))).size - payloadBytes
 }

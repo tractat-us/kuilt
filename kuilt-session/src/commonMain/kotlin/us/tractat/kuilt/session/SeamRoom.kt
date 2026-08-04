@@ -2938,11 +2938,15 @@ internal class SeamRoom(
      *
      * Silent no-op when the room is terminal (after [MembershipEvent.HostLost] or [leave]).
      *
-     * **Lossy without error, relayed or not — this call never throws [PeerNotConnected].** An
-     * unresolvable destination is dropped with a debug log; a torn or wedged recipient's send is
-     * dropped by [runRelayForwardWriter]; and if the relay hop itself is unreachable — the host
-     * gone from [Seam.peers] while the roster still holds it — the frame degrades to a best-effort
-     * direct [Seam.broadcast], which on a spoke that has lost its host link reaches nobody.
+     * **Lossy without error, relayed or not — this call never throws [PeerNotConnected], and never
+     * throws [us.tractat.kuilt.core.PayloadTooLarge] either.** An unresolvable destination is
+     * dropped with a debug log; a payload whose encoded frame will not fit the fabric is dropped
+     * the same way ([oversizeOrNull]); a torn or wedged recipient's send is dropped by
+     * [runRelayForwardWriter]; and if the relay hop itself is unreachable — the host gone from
+     * [Seam.peers] while the roster still holds it — the frame degrades to a best-effort direct
+     * [Seam.broadcast], which on a spoke that has lost its host link reaches nobody. (That degrade
+     * is size-safe by construction: the raw payload is strictly smaller than the envelope that just
+     * cleared the ceiling.)
      *
      * That last case is not a narrow window. [runJoinerTornWatcher] responds to [SeamState.Torn] by
      * attempting a reconnect and does **not** set `hostLost`, so it spans the whole reconnect window
@@ -2957,19 +2961,23 @@ internal class SeamRoom(
     override suspend fun broadcast(bytes: ByteArray) {
         val terminal = lock.withLock { hostLost || closed }
         if (terminal) return
-        if (overBudget(bytes)) {
+        val host = relayHostOrNull()
+        val frame =
+            if (host == null) bytes else RelayEnvelope.encode(RelayEnvelope(selfId, RelayDest.Everyone, bytes))
+        val tooLarge = oversizeOrNull(bytes.size, frame.size)
+        if (tooLarge != null) {
             // Dropped, not thrown: this call is lossy-without-error by contract, and the caller
             // most likely to hit the ceiling is a Quilter's timer-driven anti-entropy broadcast,
             // which a throw would silently kill (#2047).
             logger.debug {
                 "room.send.drop self=${selfId.value} reason=payload-over-budget " +
-                    "size=${bytes.size} budget=$maxPayloadBytes dest=Everyone"
+                    "${tooLarge.message} dest=Everyone"
             }
             return
         }
-        val host = relayHostOrNull() ?: return seam.broadcast(bytes)
+        if (host == null) return seam.broadcast(frame)
         try {
-            seam.sendTo(host, RelayEnvelope.encode(RelayEnvelope(selfId, RelayDest.Everyone, bytes)))
+            seam.sendTo(host, frame)
         } catch (unreachable: PeerNotConnected) {
             // Caught rather than pre-checked `host in seam.peers.value`: the pre-check is a TOCTOU
             // race the send itself resolves authoritatively. Narrow by type — a wedged link throws
@@ -2998,6 +3006,9 @@ internal class SeamRoom(
      * unresolvable destination or a wedged recipient is dropped with a debug log and nothing is
      * reported back. Only the hop this member performs itself can throw.
      *
+     * @throws PayloadTooLarge if the encoded frame will not fit the fabric — measured on the frame,
+     *   so a direct send is charged no envelope and a relayed one is charged exactly what its own
+     *   envelope cost. See [oversizeOrNull].
      * @throws PeerNotConnected if the hop this member must perform cannot be made. On a relayed
      *   send the peer it names is the **host** — the hop that actually failed — not [peer], which
      *   this member has no direct route to by construction.
@@ -3005,36 +3016,70 @@ internal class SeamRoom(
     override suspend fun sendTo(peer: PeerId, bytes: ByteArray) {
         val terminal = lock.withLock { hostLost || closed }
         if (terminal) return
-        val budget = maxPayloadBytes
+        val host = relayHostOrNull()
+        val frame =
+            if (host == null) bytes else RelayEnvelope.encode(RelayEnvelope(selfId, RelayDest.One(peer), bytes))
         // Reported, not dropped: an addressed send names a peer, so an over-budget payload is
         // information the caller asked for — and it gets the budget rather than the fabric's own
         // frame error for framing it never asked for (#2047).
-        if (budget != null && bytes.size > budget) {
-            throw PayloadTooLarge(bytes.size, budget, RELAY_ENVELOPE_BUDGET)
-        }
-        val host = relayHostOrNull() ?: return seam.sendTo(peer, bytes)
-        seam.sendTo(host, RelayEnvelope.encode(RelayEnvelope(selfId, RelayDest.One(peer), bytes)))
+        val tooLarge = oversizeOrNull(bytes.size, frame.size)
+        if (tooLarge != null) throw tooLarge
+        if (host == null) return seam.sendTo(peer, frame)
+        seam.sendTo(host, frame)
     }
 
     /**
      * The fabric's frame ceiling less what a relay envelope may cost — subtracted
      * **unconditionally**, whatever this member's current routing is.
      *
-     * Keying the budget on `relayHostOrNull() != null` would make it a TOCTOU trap: routing flips
-     * the instant the roster diverges from `Seam.peers`, so a caller that read a mesh-sized budget
-     * and then sent could still be relayed, and overflow. A member entering its reconnect window is
-     * enough to move it. The stable, conservative bound is the only one a caller can act on — the
-     * same reasoning that has `RoutedRaftTransport` subtract its header budget unconditionally.
+     * Keying the *published* budget on `relayHostOrNull() != null` would make it a TOCTOU trap:
+     * routing flips the instant the roster diverges from [Seam.peers], so a caller that read a
+     * mesh-sized budget and then sent could still be relayed, and overflow. A member entering its
+     * reconnect window is enough to move it. The stable, conservative bound is the only one a
+     * caller can act on — the same reasoning that has `RoutedRaftTransport` subtract its header
+     * budget unconditionally. Pinned by `RelayPayloadBudgetTest`'s route-independence test, which
+     * a route-conditional revision fails.
+     *
+     * ## Published conservatively, enforced exactly
+     *
+     * This number is what a caller may *rely* on; it is **not** the refusal threshold. Refusing
+     * against it would charge the envelope to a **direct** send, where nothing wraps the payload —
+     * so a full-mesh room on a 32 KiB fabric would silently stop delivering anything in
+     * `(32 KiB − 256, 32 KiB]`, and any room on a fabric with a ≤ 256 B ceiling would deliver
+     * nothing at all. [oversizeOrNull] therefore measures the **encoded frame**: stable promise,
+     * exact refusal.
+     *
+     * The gap between the two is deliberate slack. A payload above this budget but still fitting
+     * the wire is delivered rather than refused — the budget under-promises, which is the safe
+     * direction.
+     *
+     * [RELAY_ENVELOPE_BUDGET] covers `PeerId`s of about 107 bytes each, and nothing in the library
+     * bounds a `PeerId`. Past that the promise can over-reach: a payload at exactly this budget may
+     * still overflow once wrapped. Because the refusal is measured on the frame, the consequence is
+     * a typed [PayloadTooLarge] — **not** the fabric error that would tear the seam (#2047).
      *
      * `null` when the fabric names no ceiling: unknown, not unbounded.
      */
     override val maxPayloadBytes: Int?
         get() = seam.maxPayloadBytes?.let { (it - RELAY_ENVELOPE_BUDGET).coerceAtLeast(0) }
 
-    /** Whether [bytes] exceeds [maxPayloadBytes]. Always `false` on a fabric with no known ceiling. */
-    private fun overBudget(bytes: ByteArray): Boolean {
-        val budget = maxPayloadBytes ?: return false
-        return bytes.size > budget
+    /**
+     * The refusal for a send whose encoded [frameBytes] overflows the fabric, or `null` if it fits.
+     *
+     * Measures what actually goes on the wire, so a **direct** send is charged nothing and a
+     * relayed one is charged exactly what its envelope cost for *these two* peer ids — closing both
+     * the silent-drop regression a fixed reservation caused on a full mesh and the long-`PeerId`
+     * hole a fixed reservation could not cover. The reported budget is reconstructed the same way
+     * (`ceiling − reserved`), so the caller is told a number that would have fitted.
+     *
+     * The cost is that the frame is encoded before it can be refused. That is inherent to an exact
+     * check and is the right trade: the alternative refuses frames the fabric would have carried.
+     */
+    private fun oversizeOrNull(payloadBytes: Int, frameBytes: Int): PayloadTooLarge? {
+        val ceiling = seam.maxPayloadBytes ?: return null
+        if (frameBytes <= ceiling) return null
+        val reserved = frameBytes - payloadBytes
+        return PayloadTooLarge(payloadBytes, (ceiling - reserved).coerceAtLeast(0), reserved)
     }
 
     /**

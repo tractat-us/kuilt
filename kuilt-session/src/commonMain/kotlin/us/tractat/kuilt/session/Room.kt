@@ -167,6 +167,11 @@ public interface Room {
      * names no frame ceiling. A non-null value is a promise: a payload of that size or smaller will
      * not be refused for being too big, *whatever route the frame ends up taking*.
      *
+     * It is a promise, **not** the refusal threshold. The refusal is measured on the encoded frame,
+     * so a payload above this budget that still fits the wire — a direct send on a full mesh, where
+     * no envelope is applied — is delivered rather than rejected. The budget under-promises by
+     * design; that is the safe direction, and it is what makes the number route-independent.
+     *
      * ## Why it is smaller than the fabric's own limit, always
      *
      * On a star, a spoke's frame reaches only the host, so once this member's roster diverges from
