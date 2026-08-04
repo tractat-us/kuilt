@@ -5,6 +5,7 @@
 
 package us.tractat.kuilt.scale
 
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.KSerializer
@@ -20,14 +21,18 @@ import us.tractat.kuilt.crdt.DotContext
 import us.tractat.kuilt.crdt.DotMap
 import us.tractat.kuilt.crdt.DotSet
 import us.tractat.kuilt.crdt.GSet
+import us.tractat.kuilt.crdt.LWWMap
+import us.tractat.kuilt.crdt.ORMap
 import us.tractat.kuilt.crdt.ORSet
 import us.tractat.kuilt.crdt.Patch
+import us.tractat.kuilt.crdt.Quilted
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.gossip.GossipSeam
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.quilter.QuiltMessage
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -37,7 +42,7 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.ZERO
 import kotlin.time.Duration.Companion.hours
-import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
@@ -108,6 +113,14 @@ class DotWireEncodingCostModelTest {
     /** Entry counts swept, matching #1955/#1986 so all three tables are directly comparable. */
     private val sizes = listOf(1, 10, 100, 1_000, 10_000, 100_000)
 
+    /**
+     * Entry counts part (I) meters one write against, on a real mesh. Shorter than [sizes] and
+     * 4x-spaced: each row stands a mesh up and floods a full state across it, and the property
+     * under test — flatness — needs a wide span rather than many points. Quoted at exactly these
+     * three in #2044's design, so the two tables are directly comparable.
+     */
+    private val writeSweepSizes = listOf(100, 400, WRITE_SWEEP_MAX)
+
     /** Replica counts swept. Interning's table cost is O(R); its saving is O(entries). */
     private val replicaCounts = listOf(1, 2, 4, 8, 16, 64, 256)
 
@@ -124,8 +137,21 @@ class DotWireEncodingCostModelTest {
     /** [buildInMemoryMesh] names peers `peer-N`, and [Quilter] defaults its replica to the peer id. */
     private val meshSender = ReplicaId("peer-0")
 
-    /** Anti-entropy interval for the metered rounds; far below `fullStateRetryInterval`. */
-    private val antiEntropyInterval = 50.milliseconds
+    /**
+     * Anti-entropy interval for the metered rounds. Bracketed on both sides, and the bracket is
+     * load-bearing for every number in part (I):
+     *
+     * - **Above** the virtual time a mesh spends before the round window opens (six [flush]es, so
+     *   `6 * flushSteps` ms) — otherwise a round lands *inside* a metered write window and adds a
+     *   digest-plus-ack of noise to it. At 50 ms it did: the pre-#2044 run metered one 400-entry
+     *   full-state write at 228,297 b against a 25,330 b state, i.e. 9.01 link crossings rather
+     *   than the 9 the flood actually makes, the excess being ~1.8 stray rounds. Harmless against
+     *   a 228 kB signal; 12% against the ~1.6 kB delta this part now has to resolve.
+     * - **Below** `QuilterConfig.resendRetryInterval` / `fullStateRetryInterval` (30 s each)
+     *   divided by [ANTI_ENTROPY_ROUNDS], so twenty rounds of virtual time cannot trip a retry
+     *   and charge the round window for a full state.
+     */
+    private val antiEntropyInterval = 1.seconds
 
     /** Virtual-time steps used to settle handshakes and first-contact traffic. */
     private val flushSteps = 32
@@ -916,9 +942,15 @@ class DotWireEncodingCostModelTest {
     private fun digestRoundBytes(sender: ReplicaId = replica): Int = rootDigestBytes(sender) + ackBytes(sender)
 
     /**
-     * What a single `ORSet` add would cost **if** `ORSet` exposed a delta mutator: the one entry
-     * plus the one dot that names it. It does not — see [oneMutationShipsTheEntireStateNotADelta] —
-     * so this row is the counterfactual the budget in this part is measured against.
+     * What a single `ORSet` add costs on the delta path: the one entry plus the one dot that names
+     * it. Priced on the raw `Causal` mirror part (B) pins, like every other column in this part, so
+     * the ratio against the full-state column is like-for-like.
+     *
+     * When this part was written the row was a **counterfactual** — `ORSet` had no delta mutator,
+     * so `Patch(state.add(…))` put the entire state on the wire once per write. It grew one in
+     * #2044, and part (I) now meters both paths on a real mesh. The model is no longer free to
+     * drift: [theOnPerMutationFullStateDominatesBootstrapAndSteadyStateAlike] pins it against what
+     * [ORSet.addDelta] really produces.
      */
     private fun minimalDeltaBytes(width: Int = DEFAULT_ID_WIDTH): Int = bytesOf(
         QuiltMessage.serializer(orSetCausalSerializer),
@@ -929,6 +961,20 @@ class DotWireEncodingCostModelTest {
                 DotMap(mapOf(element(0) to DotSet(setOf(Dot(ReplicaId(replicaIdOf(0, width)), 1L))))),
                 DotContext.of(Dot(ReplicaId(replicaIdOf(0, width)), 1L)),
             ),
+        ),
+    )
+
+    /**
+     * The same add, through the real [ORSet.addDelta] and [Quilter]'s own frame. Differs from
+     * [minimalDeltaBytes] only by `ORSet`'s one-field serialization wrapper — `Causal` reached
+     * through a `{"causal": …}` map rather than directly — which is [ORSET_WRAPPER_SLACK] bytes.
+     */
+    private fun realDeltaBytes(width: Int = DEFAULT_ID_WIDTH): Int = bytesOf(
+        orSetFrame,
+        QuiltMessage.Delta(
+            sender = replica,
+            seq = 1L,
+            delta = ORSet.empty<String>().addDelta(ReplicaId(replicaIdOf(0, width)), element(0)).delta,
         ),
     )
 
@@ -948,9 +994,10 @@ class DotWireEncodingCostModelTest {
 
         println("\n  Cluster-wide bytes/hour at n = 100,000 over $replicas peers. J = joins/hr, M = writes/hr.")
         println("  A join costs ${replicas - 1} full states (each existing peer unicasts one to the joiner).")
-        println("  A write costs a full state too — `ORSet` has no delta mutator — and this row is a")
+        println("  A write costs a full state too ON THE `Patch(state.add(...))` PATH — and that row is a")
         println("  LOWER bound: it charges ${replicas - 1} links, while part (I) meters the gossip flood at")
-        println("  three times that. The last column is the same workload with a minimal delta.")
+        println("  three times that. The last column is the same workload written through `ORSet.addDelta`,")
+        println("  which #2044 added: no longer a counterfactual, and metered end-to-end in part (I).")
         val full = frameBytes(namedFrame, namedCausal(100_000, replicas, DEFAULT_ID_WIDTH)).toDouble()
         val antiEntropyPerHour = replicas * SECONDS_PER_HOUR / ANTI_ENTROPY_SECONDS * digestRound
         println("  %6s %6s %18s %18s %18s %14s".format(
@@ -963,11 +1010,14 @@ class DotWireEncodingCostModelTest {
                 writes * minimalDeltaBytes().toDouble() * (replicas - 1)))
         }
 
-        println("\n  Read the table, not the issue's framing. Bootstrap and the write path ship the")
-        println("  IDENTICAL frame; what separates them is frequency, and a join is the rare event.")
-        println("  At one write per minute a 100k-entry ORSet moves " +
+        println("\n  Read the table, not the issue's framing. Bootstrap and the FULL-STATE write path ship")
+        println("  the IDENTICAL frame; what separates them is frequency, and a join is the rare event.")
+        println("  At one write per minute a 100k-entry ORSet moved " +
             "${"%.0f".format(60 * full * (replicas - 1) / 1e6)} MB/hr cluster-wide, which")
         println("  60 joins per hour would have to match to compete — and no room joins once a minute.")
+        println("  Through `addDelta` the same workload is " +
+            "${"%.0f".format(60 * minimalDeltaBytes().toDouble() * (replicas - 1) / 1e3)} kB/hr, and the")
+        println("  join column is what is left to optimise. That reordering is what #2044 bought.")
 
         assertAll(
             // The steady-state anti-entropy path is already negligible — #1955 took it, and #1986
@@ -979,8 +1029,8 @@ class DotWireEncodingCostModelTest {
                         "than ONE full state (${full.toLong()} b) — the quiescent path is done",
                 )
             },
-            // The counterfactual that makes the finding actionable: a minimal delta is four orders
-            // of magnitude below the full state that ships in its place today.
+            // The finding that made this actionable: a minimal delta is four orders of magnitude
+            // below the full state that used to ship in its place.
             {
                 assertTrue(
                     full / minimalDeltaBytes() > 1_000,
@@ -989,22 +1039,155 @@ class DotWireEncodingCostModelTest {
                         "encoding, is the headline",
                 )
             },
+            // And the model is now pinned to production rather than to a sketch of it. If
+            // `ORSet.addDelta` ever regressed to shipping state, the delta column of this budget
+            // would silently keep quoting the sketch; this is what stops that.
+            {
+                assertTrue(
+                    realDeltaBytes() - minimalDeltaBytes() in 0..ORSET_WRAPPER_SLACK,
+                    "the modelled minimal delta (${minimalDeltaBytes()} b) must still be what " +
+                        "ORSet.addDelta really produces (${realDeltaBytes()} b, one `causal` " +
+                        "wrapper wider) — otherwise this whole column is a sketch of a method " +
+                        "that exists and can be measured",
+                )
+            },
         )
     }
 
     // ---- I. grounding: what a MeteredSeam actually counts on each path ------------------------
 
-    @Test
-    fun oneMutationCostsMoreThanAdmittingANewPeer() = runTest(UnconfinedTestDispatcher()) {
-        val n = 4
-        val stateSize = 400
+    /**
+     * One `(type, state size)` mesh run, metered on **both** write paths.
+     *
+     * Every field is a byte count a [MeteredSeam] actually counted, never a wall-clock reading, so
+     * the whole of part (I) reproduces unchanged on a saturated box. That is deliberate: a timing
+     * number here would have to be re-measured against `uptime` to mean anything, and the property
+     * under test — how many bytes one write puts on the wire — has no time in it.
+     *
+     * @property fullAdd cluster egress for one `Patch(state.add(…))`: the whole state, flooded.
+     * @property deltaAdd cluster egress for the same write through the type's delta mutator.
+     * @property fullRemove cluster egress for one `Patch(state.remove(…))`.
+     * @property deltaRemove cluster egress for the same removal through the delta mutator.
+     * @property fullState the frame one converged replica's whole state occupies at the end.
+     * @property seededState the same, at the moment the mesh bootstrapped.
+     * @property bootstrap cluster egress for the whole first-contact burst.
+     * @property perRoundPerNode converged anti-entropy, per node per round — the #1955 figure.
+     */
+    private data class MeteredPaths(
+        val fullAdd: Long,
+        val deltaAdd: Long,
+        val fullRemove: Long,
+        val deltaRemove: Long,
+        val fullState: Int,
+        val seededState: Int,
+        val bootstrap: Long,
+        val perRoundPerNode: Double,
+    ) {
+        /** What admitting one new peer costs: each existing peer unicasts it one full state. */
+        fun oneJoin(nodes: Int): Double = fullState.toDouble() * (nodes - 1)
+    }
+
+    /**
+     * The four writes a type must expose to be metered here, plus how to build a state of a given
+     * size. One shape for all three types so they go through the **identical** mesh script — a
+     * per-type harness is how one type quietly ends up measured on a different path, and the point
+     * of this part is a table whose rows are comparable.
+     *
+     * [addFull]/[removeFull] are the `Patch(state.mutator(…))` spelling every consumer used before
+     * #2044; [addDelta]/[removeDelta] are the delta mutators it added. The `timestamp` argument is
+     * ignored by the two causal types and is [LWWMap]'s write tag.
+     */
+    @Suppress("LongParameterList")
+    private class WriteProbe<S : Quilted<S>>(
+        val label: String,
+        val serializer: KSerializer<S>,
+        val seed: (Int) -> S,
+        val addFull: (S, ReplicaId, String, Long) -> S,
+        val addDelta: (S, ReplicaId, String, Long) -> Patch<S>,
+        val removeFull: (S, ReplicaId, String, Long) -> S,
+        val removeDelta: (S, ReplicaId, String, Long) -> Patch<S>,
+        val holds: (S, String) -> Boolean,
+    )
+
+    /** Seed values for the two map probes. Fixed width, so entry count is the only axis moving. */
+    private fun seedValue(i: Int) = "seed-value-$i"
+
+    private val orSetProbe = WriteProbe(
+        label = "ORSet",
+        serializer = ORSet.serializer(string),
+        seed = { n ->
+            (0 until n).fold(ORSet.empty<String>()) { set, i -> set.add(replicaId(i % SEED_REPLICAS), element(i)) }
+        },
+        addFull = { set, r, key, _ -> set.add(r, key) },
+        addDelta = { set, r, key, _ -> set.addDelta(r, key) },
+        removeFull = { set, _, key, _ -> set.remove(key) },
+        removeDelta = { set, _, key, _ -> set.removeDelta(key) },
+        holds = { set, key -> set.contains(key) },
+    )
+
+    private val orMapProbe = WriteProbe(
+        label = "ORMap",
+        serializer = ORMap.serializer(string, GSet.serializer(string)),
+        seed = { n ->
+            (0 until n).fold(ORMap.empty<String, GSet<String>>()) { map, i ->
+                map.put(replicaId(i % SEED_REPLICAS), element(i), GSet.of(seedValue(i)))
+            }
+        },
+        addFull = { map, r, key, _ -> map.put(r, key, GSet.of(PROBE_VALUE)) },
+        addDelta = { map, r, key, _ -> map.putDelta(r, key, GSet.of(PROBE_VALUE)) },
+        removeFull = { map, _, key, _ -> map.remove(key) },
+        removeDelta = { map, _, key, _ -> map.removeDelta(key) },
+        holds = { map, key -> map[key] != null },
+    )
+
+    private val lwwMapProbe = WriteProbe(
+        label = "LWWMap",
+        serializer = LWWMap.serializer(string, string),
+        seed = { n ->
+            (0 until n).fold(LWWMap.empty<String, String>()) { map, i ->
+                map.set(replicaId(i % SEED_REPLICAS), i + 1L, element(i), seedValue(i))
+            }
+        },
+        addFull = { map, r, key, at -> map.set(r, at, key, PROBE_VALUE) },
+        addDelta = { map, r, key, at -> map.setDelta(r, at, key, PROBE_VALUE) },
+        removeFull = { map, r, key, at -> map.remove(r, at, key) },
+        removeDelta = { map, r, key, at -> map.removeDelta(r, at, key) },
+        holds = { map, key -> map[key] != null },
+    )
+
+    /**
+     * Stand a [MESH_NODES]-node gossip mesh up on a [stateSize]-entry state of [probe]'s type and
+     * meter, in order: the bootstrap burst, one add on each path, one remove on each path, and
+     * [ANTI_ENTROPY_ROUNDS] converged anti-entropy rounds.
+     *
+     * **Everything metered here is asserted to have happened.** A byte count is only a measurement
+     * of the path you think it is if that path ran, and the failure mode is not a red test — it is
+     * a *smaller, better-looking* number. Two guards, both of which have caught something in this
+     * tree before:
+     *
+     * - Each write is followed by a check that every peer's state actually moved. A frame nobody
+     *   received still costs its sender bytes and would be priced as a successful write.
+     * - Every node writes once before the meter opens, so `nextSeq > 0` everywhere. A replica that
+     *   has never applied a local mutation sends `upThrough = 0`, and the recipient's
+     *   `resyncReceiveCursor` returns at its `<= 0L` early guard **before** acking — which prices a
+     *   matched anti-entropy round at half and reads as a better result. That guard has gone
+     *   unnoticed three times, once inside a measurement harness.
+     *
+     * The warm-up uses the delta path because it is outside every measured window and the full one
+     * would ship four whole states for nothing.
+     */
+    @Suppress("LongMethod")
+    private suspend fun <S : Quilted<S>> TestScope.meterBothPaths(
+        probe: WriteProbe<S>,
+        stateSize: Int,
+    ): MeteredPaths {
         val clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
         fun flush() = repeat(flushSteps) { testScheduler.advanceTimeBy(1); testScheduler.runCurrent() }
 
-        var seeded = ORSet.empty<String>()
-        for (i in 0 until stateSize) seeded = seeded.add(replicaId(i % 4), element(i))
+        val messageSerializer = QuiltMessage.serializer(probe.serializer)
+        val seeded = probe.seed(stateSize)
 
-        val mesh = buildInMemoryMesh(n)
+        val mesh = buildInMemoryMesh(MESH_NODES)
         val gossips = mesh.seams.mapIndexed { i, base ->
             GossipSeam(
                 base = base,
@@ -1025,126 +1208,318 @@ class DotWireEncodingCostModelTest {
             Quilter(
                 seam = gossip,
                 initial = seeded,
-                valueSerializer = ORSet.serializer(string),
+                valueSerializer = probe.serializer,
                 scope = backgroundScope,
                 config = QuilterConfig(expectVirtualTime = true, antiEntropyInterval = antiEntropyInterval),
                 random = Random(100),
             )
         }
         flush()
-        val bootstrapBytes = mesh.clusterMetrics().totalBytesOut - beforeBootstrap
+        val bootstrap = mesh.clusterMetrics().totalBytesOut - beforeBootstrap
 
-        // Every node writes once before the converged meter opens. This is the `upThrough = 0`
-        // guard the sibling suites document: a replica that has never applied a local mutation
-        // sits at `nextSeq == 0`, its digest carries `upThrough = 0`, and the recipient's
-        // `resyncReceiveCursor` returns at its `<= 0` early guard BEFORE acking — which prices a
-        // matched round at half and looks like a better result.
-        quilters.forEachIndexed { i, q -> q.mutate { Patch(it.add(ReplicaId("peer-$i"), "warm-$i")) } }
+        quilters.forEachIndexed { i, quilter ->
+            quilter.mutate { probe.addDelta(it, ReplicaId("peer-$i"), "warm-up-$i", PROBE_TIMESTAMP_BASE + i) }
+        }
         flush()
         assertEquals(
             1,
             quilters.map { it.state.value }.toSet().size,
-            "the mesh must be converged before the meter opens",
+            "${probe.label}/$stateSize: the mesh must be converged before the meter opens",
         )
 
-        // ---- (ii) one local write ----
-        val beforeWrite = mesh.clusterMetrics().totalBytesOut
-        quilters[0].mutate { Patch(it.add(meshSender, "the-one-new-element")) }
-        flush()
-        val writeBytes = mesh.clusterMetrics().totalBytesOut - beforeWrite
+        // ---- (ii) one write, each of four ways ----
+        fun window(write: (Quilter<S>) -> Unit): Long {
+            val before = mesh.clusterMetrics().totalBytesOut
+            write(quilters[0])
+            flush()
+            return mesh.clusterMetrics().totalBytesOut - before
+        }
+
+        fun assertEveryPeer(key: String, present: Boolean, what: String) {
+            assertTrue(
+                quilters.all { probe.holds(it.state.value, key) == present },
+                "${probe.label}/$stateSize: $what must have reached every peer — a frame nobody " +
+                    "received still costs its sender bytes, and would be metered as a write. " +
+                    "Holds `$key`: ${quilters.map { probe.holds(it.state.value, key) }}, wanted " +
+                    "$present everywhere",
+            )
+        }
+
+        val fullAdd = window { q ->
+            q.mutate { Patch(probe.addFull(it, meshSender, FULL_PATH_KEY, PROBE_TIMESTAMP_BASE + FULL_ADD_TICK)) }
+        }
+        assertEveryPeer(FULL_PATH_KEY, present = true, what = "the full-state add")
+
+        val deltaAdd = window { q ->
+            q.mutate { probe.addDelta(it, meshSender, DELTA_PATH_KEY, PROBE_TIMESTAMP_BASE + DELTA_ADD_TICK) }
+        }
+        assertEveryPeer(DELTA_PATH_KEY, present = true, what = "the delta add")
+
+        val fullRemove = window { q ->
+            q.mutate { Patch(probe.removeFull(it, meshSender, FULL_PATH_KEY, PROBE_TIMESTAMP_BASE + FULL_REMOVE_TICK)) }
+        }
+        assertEveryPeer(FULL_PATH_KEY, present = false, what = "the full-state remove")
+
+        val deltaRemove = window { q ->
+            q.mutate { probe.removeDelta(it, meshSender, DELTA_PATH_KEY, PROBE_TIMESTAMP_BASE + DELTA_REMOVE_TICK) }
+        }
+        assertEveryPeer(DELTA_PATH_KEY, present = false, what = "the delta remove")
+
+        // The #1955 gate, stated where it can fail: `Quilter.stateRoot()` hashes the state as it
+        // appears on the wire, so two peers that agree logically but encode differently never match
+        // roots and anti-entropy silently degrades to shipping full states forever. Comparing the
+        // encodings directly is the same check without the hash in the way.
+        val encodings = quilters.map { bytes(probe.serializer, it.state.value) }
+        encodings.forEach {
+            assertContentEquals(
+                encodings.first(), it,
+                "${probe.label}/$stateSize: every peer must ENCODE the converged state identically " +
+                    "after a mixed full-state/delta workload — equal-but-differently-encoded is " +
+                    "exactly what #1955's root-hash gate cannot see past",
+            )
+        }
 
         // ---- (iii) converged anti-entropy rounds, for scale ----
         val beforeRounds = mesh.clusterMetrics().totalBytesOut
-        val rounds = 20
-        repeat(rounds) {
+        repeat(ANTI_ENTROPY_ROUNDS) {
             testScheduler.advanceTimeBy(antiEntropyInterval.inWholeMilliseconds)
             testScheduler.runCurrent()
         }
         val roundBytes = mesh.clusterMetrics().totalBytesOut - beforeRounds
 
-        val settled = quilters.map { it.state.value }
-        assertTrue(
-            settled.all { "the-one-new-element" in it.elements },
-            "the metered write must actually have propagated — otherwise the number above is the " +
-                "cost of a frame nobody received",
-        )
-        val fullState = frameBytes(orSetFrame, settled.first(), meshSender)
-        // The bootstrap window shipped the SEEDED state, before the four warm-up writes, so it is
-        // priced against that snapshot rather than against the settled one.
-        val seededState = frameBytes(orSetFrame, seeded, meshSender)
-        val perRoundPerNode = roundBytes.toDouble() / (rounds * n)
-        val oneJoin = fullState.toDouble() * (n - 1)
+        val fullState = frameBytes(messageSerializer, quilters.first().state.value, meshSender)
+        val seededState = frameBytes(messageSerializer, seeded, meshSender)
+
+        quilters.forEach { it.close() }
+        gossips.forEach { it.close() }
         mesh.close()
 
-        println("\n=== #2037 grounding (I): the three paths, metered, $stateSize entries, $n nodes ===")
-        println("  full state at that moment      : $fullState b (at bootstrap: $seededState b)")
-        println("  (i)   bootstrap burst, whole mesh: $bootstrapBytes b " +
-            "= ${"%.2f".format(bootstrapBytes / seededState.toDouble())} full states " +
-            "(modelled ${n * (n - 1)} first-contact frames; the excess is handshake/heartbeat)")
-        println("  (i')  ONE join into a live mesh  : ${oneJoin.toLong()} b " +
-            "(${n - 1} existing peers each ship one full state)")
-        println("  (ii)  ONE local write            : $writeBytes b " +
-            "= ${"%.1f".format(writeBytes / fullState.toDouble())} full states, " +
-            "${"%.1f".format(writeBytes / oneJoin)}x a join")
-        println("  (iii) converged round, per node  : ${"%.1f".format(perRoundPerNode)} b " +
-            "(modelled ${digestRoundBytes(meshSender)} b) — one write = " +
-            "${"%.0f".format(writeBytes / perRoundPerNode)} of these")
-        println("  a minimal delta would have been : ${minimalDeltaBytes()} b " +
-            "(${"%.0f".format(writeBytes.toDouble() / minimalDeltaBytes())}x smaller)")
-        println()
-        println("  #2037 asks whether the JOINING PEER is the real consumer. It is not — the LOCAL")
-        println("  WRITE is, and by a multiple. Two compounding causes, neither an encoding problem:")
-        println("    1. `Quilter.apply` broadcasts `patch.delta` verbatim and `ORSet.add` returns the")
-        println("       whole new set, so `Patch(state.add(...))` — the form every test, sample and")
-        println("       doc in this tree uses — puts the ENTIRE state on the wire once per write.")
-        println("    2. A write goes out by `broadcast`, which GossipSeam floods with dedup, so the")
-        println("       full state crosses ${"%.1f".format(writeBytes / fullState.toDouble())} links; " +
-            "a join is a unicast `sendTo` and crosses ${n - 1}.")
-        println("  Every candidate in #2037 is a constant factor on a term that is O(n) per write.")
-
-        assertAll(
-            // The finding, grounded: a single add really does ship the whole state, and the flood
-            // multiplies it — so it costs strictly more than admitting a brand-new peer.
-            {
-                assertTrue(
-                    writeBytes > oneJoin,
-                    "one add ($writeBytes b) must cost more than admitting a new peer " +
-                        "(${oneJoin.toLong()} b) — if this ever inverts, ORSet grew a delta mutator " +
-                        "and part (H)'s budget is stale",
-                )
-            },
-            // And the scale of it against the path #1955 already optimised.
-            {
-                assertTrue(
-                    writeBytes > perRoundPerNode * 100,
-                    "one write ($writeBytes b) must cost orders of magnitude more than a converged " +
-                        "round ($perRoundPerNode b/node) — the encoding tax is a rounding error " +
-                        "beside it",
-                )
-            },
-            // The `upThrough = 0` guard, as an assertion rather than a comment: a matched round is
-            // digest-out PLUS ack-back, and a silent no-op resync halves it.
-            {
-                assertTrue(
-                    perRoundPerNode > rootDigestBytes(meshSender) * 1.2,
-                    "a matched round must carry the ack back, not the digest alone (metered " +
-                        "$perRoundPerNode b vs one digest ${rootDigestBytes(meshSender)} b) — a " +
-                        "harness whose nodes never wrote prices this at half",
-                )
-            },
-            // The bootstrap path, grounded against its model: n(n-1) first-contact full states.
-            {
-                val modelled = seededState.toDouble() * n * (n - 1)
-                assertTrue(
-                    bootstrapBytes in modelled.toLong()..(modelled * 1.1).toLong(),
-                    "the bootstrap burst ($bootstrapBytes b) must carry ${n * (n - 1)} full states " +
-                        "(${modelled.toLong()} b) plus only handshake noise — one per ordered pair, " +
-                        "which is what makes a join O(peers) full states",
-                )
-            },
+        return MeteredPaths(
+            fullAdd = fullAdd,
+            deltaAdd = deltaAdd,
+            fullRemove = fullRemove,
+            deltaRemove = deltaRemove,
+            fullState = fullState,
+            seededState = seededState,
+            bootstrap = bootstrap,
+            perRoundPerNode = roundBytes.toDouble() / (ANTI_ENTROPY_ROUNDS * MESH_NODES),
         )
     }
 
+    /**
+     * The standing assertion of this file, **inverted on purpose**.
+     *
+     * It used to read *"one add must cost more than admitting a new peer — if this ever inverts,
+     * `ORSet` grew a delta mutator and part (H)'s budget is stale"*. #2044 grew it one. The
+     * inversion is therefore the finding, not a regression, and deleting the assertion would have
+     * thrown away the only thing in this suite that was watching for it.
+     *
+     * Both directions are asserted on the **same mesh, in the same run**, which is what keeps the
+     * new one honest: the old property still holds on the `Patch(state.add(…))` path, so a harness
+     * that had stopped measuring anything would fail the control rather than pass the inversion.
+     */
+    @Test
+    fun oneWriteNoLongerCostsMoreThanAdmittingANewPeer() =
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val stateSize = 400
+            val paths = meterBothPaths(orSetProbe, stateSize)
+            val oneJoin = paths.oneJoin(MESH_NODES)
+
+            println("\n=== #2044 grounding (I): the paths, metered, $stateSize entries, $MESH_NODES nodes ===")
+            println("  full state at that moment      : ${paths.fullState} b (at bootstrap: ${paths.seededState} b)")
+            println("  (i)   bootstrap burst, whole mesh: ${paths.bootstrap} b " +
+                "= ${"%.2f".format(paths.bootstrap / paths.seededState.toDouble())} full states " +
+                "(modelled ${MESH_NODES * (MESH_NODES - 1)} first-contact frames; the excess is handshake)")
+            println("  (i')  ONE join into a live mesh  : ${oneJoin.toLong()} b " +
+                "(${MESH_NODES - 1} existing peers each ship one full state)")
+            println("  (ii)  ONE add,   Patch(add(...)) : ${paths.fullAdd} b " +
+                "= ${"%.1f".format(paths.fullAdd / paths.fullState.toDouble())} full states, " +
+                "${"%.1f".format(paths.fullAdd / oneJoin)}x a join")
+            println("  (ii') ONE add,   addDelta(...)   : ${paths.deltaAdd} b " +
+                "= ${"%.3f".format(paths.deltaAdd / oneJoin)}x a join, " +
+                "${"%.0f".format(paths.fullAdd.toDouble() / paths.deltaAdd)}x smaller than the full-state form")
+            println("  (iii) converged round, per node  : ${"%.1f".format(paths.perRoundPerNode)} b " +
+                "(modelled ${digestRoundBytes(meshSender)} b) — one delta write = " +
+                "${"%.0f".format(paths.deltaAdd / paths.perRoundPerNode)} of these")
+            println()
+            println("  #2037 asked whether the JOINING PEER is the real consumer. On the path this file")
+            println("  was written against it was not — the LOCAL WRITE was, and by a multiple, for two")
+            println("  compounding reasons: `ORSet.add` returned the whole new set, so `Patch(state.add(...))`")
+            println("  broadcast the ENTIRE state once per write; and a broadcast is flooded, so it crossed")
+            println("  ${"%.1f".format(paths.fullAdd / paths.fullState.toDouble())} links where a join's unicast crosses ${MESH_NODES - 1}.")
+            println("  Through `addDelta` the flood factor is unchanged and the frame is not, so the write")
+            println("  path drops BELOW the join and the ranking #2037 assumed is restored — by removing the")
+            println("  O(state) term, not by shrinking it. Every candidate in #2037 was a constant factor on")
+            println("  a term that no longer has to be paid at all.")
+
+            assertAll(
+                // The inversion. Named for what it means rather than for the number, because the
+                // number is the whole set and the property is that the write no longer carries it.
+                {
+                    assertTrue(
+                        paths.deltaAdd < oneJoin,
+                        "one add through ORSet.addDelta (${paths.deltaAdd} b) must now cost LESS than " +
+                            "admitting a new peer (${oneJoin.toLong()} b). This assertion used to run the " +
+                            "other way; #2044 gave ORSet a delta mutator and it inverted on purpose",
+                    )
+                },
+                // The control that keeps the inversion honest: the old direction, same mesh, same
+                // run. A meter that had gone silent would fail here rather than pass above.
+                {
+                    assertTrue(
+                        paths.fullAdd > oneJoin,
+                        "the OLD path must still cost more than a join (${paths.fullAdd} b vs " +
+                            "${oneJoin.toLong()} b) — if this stopped holding the meter has gone " +
+                            "silent and the inversion above proves nothing",
+                    )
+                },
+                // The scale of the change on one wire, stated as a ratio so it survives any future
+                // re-encoding of the frame.
+                {
+                    assertTrue(
+                        paths.fullAdd > paths.deltaAdd * DELTA_HEADLINE_RATIO,
+                        "at $stateSize entries the delta path (${paths.deltaAdd} b) must be at least " +
+                            "${DELTA_HEADLINE_RATIO.toInt()}x below the full-state path (${paths.fullAdd} b)",
+                    )
+                },
+                // The `upThrough = 0` guard, as an assertion rather than a comment: a matched round
+                // is digest-out PLUS ack-back, and a silent no-op resync halves it.
+                {
+                    assertTrue(
+                        paths.perRoundPerNode > rootDigestBytes(meshSender) * 1.2,
+                        "a matched round must carry the ack back, not the digest alone (metered " +
+                            "${paths.perRoundPerNode} b vs one digest ${rootDigestBytes(meshSender)} b) — a " +
+                            "harness whose nodes never wrote prices this at half",
+                    )
+                },
+                // The bootstrap path, grounded against its model: n(n-1) first-contact full states.
+                {
+                    val modelled = paths.seededState.toDouble() * MESH_NODES * (MESH_NODES - 1)
+                    assertTrue(
+                        paths.bootstrap in modelled.toLong()..(modelled * 1.1).toLong(),
+                        "the bootstrap burst (${paths.bootstrap} b) must carry " +
+                            "${MESH_NODES * (MESH_NODES - 1)} full states (${modelled.toLong()} b) plus only " +
+                            "handshake noise — one per ordered pair, which is what makes a join " +
+                            "O(peers) full states",
+                    )
+                },
+            )
+        }
+
+    /**
+     * The property #2044 actually bought, on all three types that got a delta mutator: **the
+     * metered cost of one write is flat in state size.**
+     *
+     * *Cheaper than before* would have been the easy assertion and the wrong one — it passes a
+     * future change that reintroduces an O(entries) term with a better constant, which is precisely
+     * the regression worth catching. Flatness does not.
+     *
+     * It also cannot be satisfied vacuously by a delta that ships the whole state, which is what
+     * makes this test the load-bearing one for `ORSet`. The delta-mutator law
+     * `X.piece(mᵟ(X)) == m(X)` is satisfied **perfectly** by shipping the entire state — `m(X)`
+     * joined onto `X` is exactly `m(X)` — so a no-op delta leaves every law test in `:kuilt-crdt`
+     * green. It was verified so while Task 3 of #2044's plan was being written. Only a frame-size
+     * assertion sees it, and for `ORSet` this is the only one there is.
+     *
+     * Three guards make the flatness claim mean something:
+     *
+     * 1. **A negative control on the same rows.** The full-state path must grow at least
+     *    [O_N_CONTROL]× between the smallest and largest state. A harness that had stopped
+     *    measuring would report *both* paths flat, and pass a one-sided test.
+     * 2. **Both mutators.** An add and a remove are different shapes — one mints a dot and
+     *    supersedes the dots it observed, the other retires them and (for `LWWMap`) writes a
+     *    tombstone.
+     * 3. **The anti-entropy round, unchanged.** Step 3 of the plan and the reason this test is a
+     *    #1955 safety check rather than a nicety: a delta path that desynchronised the root hash
+     *    would show up here as full states in the round window, not as digests.
+     */
+    @Test
+    fun oneWriteCostsTheSameOnAOneHundredAndAOneThousandSixHundredEntryState() =
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val rows = mutableListOf<Triple<String, Int, MeteredPaths>>()
+            for (n in writeSweepSizes) rows += Triple(orSetProbe.label, n, meterBothPaths(orSetProbe, n))
+            for (n in writeSweepSizes) rows += Triple(orMapProbe.label, n, meterBothPaths(orMapProbe, n))
+            for (n in writeSweepSizes) rows += Triple(lwwMapProbe.label, n, meterBothPaths(lwwMapProbe, n))
+
+            println("\n=== #2044 (I): one write, metered on both paths, $MESH_NODES nodes ===")
+            println("  Cluster-wide bytes a MeteredSeam counted for ONE write, flood included. `today` is")
+            println("  `Patch(state.mutator(...))`; `delta'd` is the mutator #2044 added. No wall clock is")
+            println("  read anywhere in this table.")
+            println("  %8s %9s %14s %14s %14s %14s %12s".format(
+                "type", "entries", "add today", "add delta'd", "remove today", "remove delta'd", "round b/node"))
+            rows.forEach { (type, n, m) ->
+                println("  %8s %9d %14d %14d %14d %14d %12.1f".format(
+                    type, n, m.fullAdd, m.deltaAdd, m.fullRemove, m.deltaRemove, m.perRoundPerNode))
+            }
+            println()
+            println("  The `today` columns grow with the state; the `delta'd` columns do not move at all.")
+            println("  `LWWMap`'s removal is a TOMBSTONE write, so its `remove today` matches its `add")
+            println("  today` — the map does not shrink — and its delta is a one-cell map, never an empty one.")
+
+            assertAll(
+                *rows.groupBy { it.first }.map { (type, byType) ->
+                    {
+                        val small = byType.first { it.second == writeSweepSizes.first() }.third
+                        val large = byType.first { it.second == writeSweepSizes.last() }.third
+                        assertAll(
+                            {
+                                assertTrue(
+                                    large.deltaAdd <= small.deltaAdd * FLAT_TOLERANCE,
+                                    "$type: an add through the delta mutator must be FLAT in state size — " +
+                                        "${large.deltaAdd} b at ${writeSweepSizes.last()} entries against " +
+                                        "${small.deltaAdd} b at ${writeSweepSizes.first()}, tolerance " +
+                                        "${FLAT_TOLERANCE}x. Not 'smaller than before': that would pass a " +
+                                        "change that reintroduced O(entries) with a better constant",
+                                )
+                            },
+                            {
+                                assertTrue(
+                                    large.deltaRemove <= small.deltaRemove * FLAT_TOLERANCE,
+                                    "$type: a remove through the delta mutator must be FLAT in state size — " +
+                                        "${large.deltaRemove} b at ${writeSweepSizes.last()} entries against " +
+                                        "${small.deltaRemove} b at ${writeSweepSizes.first()}",
+                                )
+                            },
+                            // The negative control. Without it a harness that had gone silent would
+                            // report every column flat and pass the two assertions above.
+                            {
+                                assertTrue(
+                                    large.fullAdd >= small.fullAdd * O_N_CONTROL,
+                                    "$type: the FULL-STATE add must still grow with the state " +
+                                        "(${small.fullAdd} b -> ${large.fullAdd} b over a " +
+                                        "${writeSweepSizes.last() / writeSweepSizes.first()}x state) — if it " +
+                                        "does not, this harness cannot see an O(entries) term and the " +
+                                        "flatness above is vacuous",
+                                )
+                            },
+                        )
+                    }
+                }.toTypedArray(),
+                // Step 3 of #2044's plan: the #1955 gate is still engaged. Anti-entropy on the delta
+                // path must still be a digest and an ack, at every state size and for every type —
+                // a root-hash desynchronisation would show up here as full states instead.
+                {
+                    val rounds = rows.map { it.third.perRoundPerNode }
+                    assertTrue(
+                        rounds.all { it in CONVERGED_ROUND_BYTES - CONVERGED_ROUND_SLACK..CONVERGED_ROUND_BYTES + CONVERGED_ROUND_SLACK },
+                        "converged anti-entropy must still cost ~$CONVERGED_ROUND_BYTES b/node/round on the " +
+                            "delta path (measured $rounds) — that is #1955's digest-plus-ack, and a delta " +
+                            "path that desynchronised the root hash would show up here as FULL STATES",
+                    )
+                },
+                // Stronger than the band above, and the form that actually names the property: the
+                // round is a digest, so entry count must not reach it AT ALL.
+                {
+                    val rounds = rows.map { it.third.perRoundPerNode }
+                    assertEquals(
+                        rounds.min(), rounds.max(),
+                        "the converged round must be identical at every state size and for every type " +
+                            "(measured $rounds) — it carries a root hash and a cursor, and nothing that " +
+                            "grows",
+                    )
+                },
+            )
+        }
     // ---- J. the combination -------------------------------------------------------------------
 
     @Test
@@ -1244,3 +1619,72 @@ private const val TABLE_SLACK = 8
 
 /** Seed for the scrambled key scheme in part (F). */
 private const val SCRAMBLE_SEED = 20_370
+
+/** Nodes in every metered mesh in part (I) — the sibling suites' shape. */
+private const val MESH_NODES = 4
+
+/** Replicas the seeded states in part (I) are written by, round-robin, as elsewhere in this file. */
+private const val SEED_REPLICAS = 4
+
+/** Converged anti-entropy rounds metered in part (I). */
+private const val ANTI_ENTROPY_ROUNDS = 20
+
+/**
+ * `LWWMap` write tags in part (I) start here: above every seeded tag (which run `1..entries`, so
+ * at most [WRITE_SWEEP_MAX]) and — the reason for the round number — **the same width at every
+ * state size**, so entry count cannot reach the delta frame through the varint that encodes it.
+ */
+private const val PROBE_TIMESTAMP_BASE = 1_000_000L
+
+/** Offsets from [PROBE_TIMESTAMP_BASE], one per metered write, so no two share a tag. */
+private const val FULL_ADD_TICK = 10L
+private const val DELTA_ADD_TICK = 11L
+private const val FULL_REMOVE_TICK = 12L
+private const val DELTA_REMOVE_TICK = 13L
+
+/** The largest state part (I) sweeps; [PROBE_TIMESTAMP_BASE] must clear it. */
+private const val WRITE_SWEEP_MAX = 1_600
+
+/** The one key part (I) writes through `Patch(state.mutator(…))`. */
+private const val FULL_PATH_KEY = "probe-key-written-through-the-full-state-path"
+
+/** The one key part (I) writes through the delta mutator. Same width, so neither is favoured. */
+private const val DELTA_PATH_KEY = "probe-key-written-through-the-delta-mutator--"
+
+/** The value the two map probes write. Fixed, so entry count is the only axis that moves. */
+private const val PROBE_VALUE = "probe-value"
+
+/**
+ * How much a delta write may grow between the smallest and largest state before it stops being
+ * flat. Generous on purpose: the frames are *identical* in practice, and the point of the bound is
+ * to fail an O(entries) term, not to pin a byte count.
+ */
+private const val FLAT_TOLERANCE = 1.2
+
+/**
+ * How much the full-state write must grow over the same span. The negative control on flatness:
+ * a harness that had stopped measuring would report every column flat and pass a one-sided test.
+ * Well under the 16x the state itself grows, so it fails on silence rather than on encoding drift.
+ */
+private const val O_N_CONTROL = 3.0
+
+/** The margin by which the delta path must beat the full-state path at 400 entries. */
+private const val DELTA_HEADLINE_RATIO = 50.0
+
+/**
+ * Converged anti-entropy, per node per round: a `RootDigest` out and an `Ack` back. #1955 took this
+ * path to a digest exchange and #1986 confirmed the dot-based types inherited it; part (I) asserts
+ * the delta path did not disturb it. Re-record from part (I)'s `round b/node` column if the frame
+ * itself changes — but check first that it is the frame and not a full state leaking in.
+ */
+private const val CONVERGED_ROUND_BYTES = 94.0
+
+/** Slack on [CONVERGED_ROUND_BYTES]. A full state leaking into the round window is ~250x this. */
+private const val CONVERGED_ROUND_SLACK = 4.0
+
+/**
+ * The bytes `ORSet`'s generated serializer adds over the raw `Causal` it wraps: a one-entry CBOR
+ * map keyed `"causal"`. Part (H) prices its columns on the `Causal` mirror and pins them against
+ * the real `ORSet` frame across this constant.
+ */
+private const val ORSET_WRAPPER_SLACK = 16
