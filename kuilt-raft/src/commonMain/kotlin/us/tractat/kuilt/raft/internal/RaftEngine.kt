@@ -2310,10 +2310,30 @@ internal class RaftEngine(
         }
     }
 
+    /**
+     * Leader: advance `commitIndex` to the highest index a voter quorum holds — subject to §5.4.2.
+     *
+     * The quorum half and the §5.4.2 half live in two different places, and the split is easy to
+     * misread in the other direction:
+     *
+     * - [MembershipState.committedIndex] is **quorum arithmetic only** — Simple vs Joint, self-credit
+     *   per voter set (§6.4.1). Its entire input is a `matchIndex` map, the leader's last index and
+     *   its own id; it is handed no term and reads no log, and neither is anything it delegates to
+     *   (`simpleCommittedIndex`, `majorityCommitIndex`). No term reaches that call path at all, so it
+     *   cannot bound one — and never has.
+     * - The `entry.term == state.currentTerm` conjunct below **is §5.4.2 in its entirety** (the
+     *   Figure 8 commit restriction): an entry from an *earlier* term must never be committed by
+     *   counting replicas, because a later leader can still overwrite it. Such an entry commits only
+     *   by implication — once an entry from *this* term commits above it, Log Matching carries the
+     *   whole prefix with it. That is what [appendNoOp] exists to provoke.
+     *
+     * So the conjunct is not a redundant re-check of a bound already applied upstream. Deleting it
+     * removes Raft's Figure 8 protection outright, and it is invisible to any test that asserts a
+     * commit eventually *happens* — the guard only ever *withholds* one, so dropping it strictly
+     * enlarges the green set (the rest of this module stayed green under the deletion, #2021). The
+     * withholding direction is pinned by `Figure8CommitRestrictionTest`.
+     */
     private suspend fun tryAdvanceLeaderCommit() {
-        // membershipState.committedIndex accounts for Simple vs Joint quorum, self-credit per voter set,
-        // and the §5.4.2 term-guard (only entries from currentTerm can be used to advance commit
-        // via replica-count — older entries only commit by implication via Log Matching).
         val majorityIdx = state.membershipState.committedIndex(state.matchIndex, state.lastLogIndex, transport.selfId) ?: return
         val entry = state.entryAt(majorityIdx)
         if (entry != null && entry.term == state.currentTerm && majorityIdx > state.currentCommitIndex) {
