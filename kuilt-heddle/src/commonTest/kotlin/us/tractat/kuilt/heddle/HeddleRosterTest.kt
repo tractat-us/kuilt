@@ -20,6 +20,7 @@ import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.test.FakeRaftNode
 import us.tractat.kuilt.raft.test.MultiNodeRaftSim
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -43,8 +44,9 @@ import kotlin.time.Instant
  * no roster act touches the replicated entitlement ledger.
  *
  * **Test discipline (repo CLAUDE.md).** Consensus tests run through the canonical `MultiNodeRaftSim`
- * from `:kuilt-raft-test` — never a hand-rolled cluster network: `StandardTestDispatcher`, tight 5 s
- * timeout, node coroutines on `backgroundScope`, per-node seeded election RNG, bounded `await*`
+ * from `:kuilt-raft-test` — never a hand-rolled cluster network: `StandardTestDispatcher`, a generous
+ * `TEST_WEDGE_BACKSTOP` wedge ceiling (never a tight real-time cap, #1739), node coroutines on
+ * `backgroundScope`, per-node seeded election RNG, bounded `await*`
  * helpers only (never `advanceUntilIdle`). Single-node determinism tests use a [FakeRaftNode].
  */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -138,7 +140,7 @@ class HeddleRosterTest {
     // ═══════════════════════════════════════════════════════════════════════════
 
     @Test
-    fun enrollAppliesFromTheLogAndIsIdempotent() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun enrollAppliesFromTheLogAndIsIdempotent() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val plane = soloPlane(backgroundScope, RecordingSink())
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Enroll(a)))
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Enroll(a))) // idempotent, still Applied
@@ -147,7 +149,7 @@ class HeddleRosterTest {
     }
 
     @Test
-    fun departOfAnotherReplicaIsRefused() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun departOfAnotherReplicaIsRefused() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         // Depart SHRINKS the fence quantifier, so only the departing replica may promise it will
         // never author another slot (§6.1: "only the promiser can make it"). A third party cannot
         // retire a peer's authority — that is the unshipped RevocationSeam's problem (§6.5 #1).
@@ -163,7 +165,7 @@ class HeddleRosterTest {
     }
 
     @Test
-    fun departOfSelfLeavesTheRoster() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun departOfSelfLeavesTheRoster() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val plane = soloPlane(backgroundScope, RecordingSink())
         val solo = ReplicaId("solo")
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Enroll(solo)))
@@ -173,7 +175,7 @@ class HeddleRosterTest {
     }
 
     @Test
-    fun rosterActsNeverTouchTheEntitlementLedger() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun rosterActsNeverTouchTheEntitlementLedger() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         // Slice 2 relocates nothing: the roster lives BESIDE the projection (design §8 "fence state
         // beside the projection"), so no roster act publishes a patch or moves a counter.
         val sink = RecordingSink()
@@ -189,7 +191,7 @@ class HeddleRosterTest {
 
     @Test
     fun aDifferentlyIdentifiedObserverReplaysTheIdenticalRoster() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             // The roster is a function of the LOG, not of who reads it: a fresh plane with a
             // different `self`, replaying the same committed prefix, derives the identical roster —
             // including the self-service Depart, which is decided from the committed proposer.
@@ -210,7 +212,7 @@ class HeddleRosterTest {
         }
 
     @Test
-    fun enrolledAtACommitIndexExcludesAMidFenceJoiner() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun enrolledAtACommitIndexExcludesAMidFenceJoiner() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         // The §6.2 quantifier against real log indices: a barrier committed at index `barrier` acks
         // over the set enrolled at `barrier`; `b`, enrolling afterwards, is not in that set. (Mint
         // stands in for the slice-3 `Quiesce` — this slice ships the quantifier, not the fence.)
@@ -233,7 +235,7 @@ class HeddleRosterTest {
 
     @Test
     fun everyPeerDerivesTheIdenticalRosterFromTheSameLogPrefix() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val ids = (1..3).map { NodeId("v$it") }
             val sim = MultiNodeRaftSim(nodeIds = ids, scope = this, nodeScope = backgroundScope)
             val planes = ids.associateWith { plane(sim.nodes.getValue(it), it, RecordingSink(), backgroundScope) }
@@ -266,7 +268,7 @@ class HeddleRosterTest {
         }
 
     @Test
-    fun aPartitionedMinorityCannotShrinkTheRoster() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun aPartitionedMinorityCannotShrinkTheRoster() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         // A departing peer must reach quorum to leave: a minority-side Depart never commits, so the
         // majority's fence keeps quantifying over it (safe direction — the fence refuses, never
         // completes without a promise it needed).
@@ -299,7 +301,7 @@ class HeddleRosterTest {
 
     @Test
     fun everyAppliedEnrollSignalsTheNodeIncludingAnIdempotentOne() =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             // A peer that crashed is ALREADY enrolled, so its re-enroll on restart appends no roster
             // transition — yet that act is exactly the one that must re-attach its detector. The
             // signal therefore rides the applied *command*, not the fold's delta.
@@ -311,7 +313,7 @@ class HeddleRosterTest {
         }
 
     @Test
-    fun departAndRefusedActsSignalNothingToTheNode() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun departAndRefusedActsSignalNothingToTheNode() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         // A departed peer's entitlement stays stranded like a crashed peer's (§8.1), so it must keep
         // counting toward the §8.2 bound — dropping it from the node's roster would understate the
         // bound exactly when its divergence risk is highest. And a refused act changes nothing at all.
@@ -329,7 +331,7 @@ class HeddleRosterTest {
     // ═══════════════════════════════════════════════════════════════════════════
 
     @Test
-    fun governedEnrollAndDepartVerbs() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun governedEnrollAndDepartVerbs() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         val loom = InMemoryLoom()
         val seam: Seam = loom.host(Pattern("heddle-roster-governed"))
