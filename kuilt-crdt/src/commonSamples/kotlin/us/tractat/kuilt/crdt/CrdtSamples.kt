@@ -122,6 +122,36 @@ internal fun sampleORSet() {
     check(merged.contains("alice"))         // add-wins
 }
 
+/**
+ * Ship the change, not the set — and note that a re-add's delta also retires the dots it
+ * supersedes, which is what stops a later remove from resurrecting the element.
+ */
+@Suppress("unused")
+internal fun sampleORSetDelta() {
+    val a = ReplicaId("A")
+    val b = ReplicaId("B")
+
+    // Two peers have converged: "alice" is present on both, added by B.
+    var alpha = ORSet.empty<String>().add(b, "alice")
+    var bravo = alpha
+
+    // A re-adds "alice" and puts only the change on the wire. The delta names A's new dot
+    // *and* B's older one, which the re-add supersedes — so both peers drop the old dot.
+    val readd = alpha.addDelta(a, "alice")
+    alpha = alpha.piece(readd)
+    bravo = bravo.piece(readd)
+    check(alpha == bravo)
+
+    // Now a remove lands everywhere, because both peers agree on which dot is live. Had the
+    // delta above kept quiet about B's dot, it would still be alive on bravo — and "alice"
+    // would come back from the dead there.
+    val forget = alpha.removeDelta("alice")
+    alpha = alpha.piece(forget)
+    bravo = bravo.piece(forget)
+    check(!alpha.contains("alice"))
+    check(!bravo.contains("alice"))
+}
+
 // ── LWWRegister ───────────────────────────────────────────────────────────────
 
 /** Higher-timestamped write wins on merge. */
