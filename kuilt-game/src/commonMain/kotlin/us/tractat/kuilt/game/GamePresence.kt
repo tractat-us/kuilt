@@ -66,6 +66,13 @@ private const val SPECTATORS_CLOSED_SUFFIX = ":sc"
 private val VOTER_LIST_SERIALIZER = ListSerializer(String.serializer())
 
 /**
+ * The patch a refused declaration publishes: the presence board's bottom element, which every
+ * `piece` returns unchanged. See `GamePresence.declareIf` for why a refusal goes through the
+ * Quilter at all rather than short-circuiting ahead of its lock.
+ */
+private val NO_DECLARATION: Patch<EphemeralMap<String>> = Patch(EphemeralMap.empty())
+
+/**
  * Lobby presence over [seam], backed by an [EphemeralMap] replicated by [Quilter].
  *
  * Carries each peer's host-declaration flag so the game host entry point can fail
@@ -183,11 +190,16 @@ public class GamePresence(
      * via [admissionClosed].
      */
     public fun declareAdmissionClosed(voters: Set<NodeId>) {
-        val scSuffix = if (spectatorsClosedFrom(quilter.state.value)) SPECTATORS_CLOSED_SUFFIX else ""
         // Hex-encoded CBOR: the body is [0-9a-f] only, so it can carry any NodeId content —
-        // commas, ':sc', anything — without colliding with the prefix/suffix framing.
+        // commas, ':sc', anything — without colliding with the prefix/suffix framing. It does not
+        // depend on the board, so it is encoded here rather than inside the locked section.
         val body = Cbor.encodeToByteArray(VOTER_LIST_SERIALIZER, voters.map { it.value }).toHexString()
-        declare(ADMISSION_CLOSED_PREFIX + body + scSuffix)
+        // The `:sc` read must share a critical section with the write, or a concurrent
+        // declareSpectatorsClosed lands between them and this write retracts its signal (#2083).
+        declareIf { board ->
+            val scSuffix = if (spectatorsClosedFrom(board)) SPECTATORS_CLOSED_SUFFIX else ""
+            ADMISSION_CLOSED_PREFIX + body + scSuffix
+        }
     }
 
     /**
@@ -200,8 +212,10 @@ public class GamePresence(
      * The signal is monotone — once published it is never retracted.
      */
     public fun declareSpectatorsClosed() {
-        val current = quilter.state.value.entries[quilter.replica]?.value ?: HOST_DECLARED
-        if (!current.endsWith(SPECTATORS_CLOSED_SUFFIX)) declare(current + SPECTATORS_CLOSED_SUFFIX)
+        declareIf { board ->
+            val current = board.entries[quilter.replica]?.value ?: HOST_DECLARED
+            if (current.endsWith(SPECTATORS_CLOSED_SUFFIX)) null else current + SPECTATORS_CLOSED_SUFFIX
+        }
     }
 
     /**
@@ -237,13 +251,53 @@ public class GamePresence(
      * holds [HOST_DECLARED].
      */
     public fun declareAdmissionOpen() {
-        val current = quilter.state.value.entries[quilter.replica]?.value
-        if (current != HOST_DECLARED) declare(HOST_DECLARED)
+        declareIf { board ->
+            if (board.entries[quilter.replica]?.value == HOST_DECLARED) null else HOST_DECLARED
+        }
     }
 
-    private fun declare(value: String) {
-        val nextClock = (quilter.state.value.entries[quilter.replica]?.clock ?: 0L) + 1L
-        quilter.apply(Patch(quilter.state.value.put(quilter.replica, value, nextClock)))
+    /** Publish [value] under this peer's slot at the next clock. */
+    private fun declare(value: String): Unit = declareIf { value }
+
+    /**
+     * The one path that writes this peer's presence slot: read the board, decide what to publish,
+     * publish it — as a single atomic step.
+     *
+     * [next] receives the current board and returns the value to publish, or `null` to publish
+     * nothing. It runs inside [Quilter.mutate], so the board it sees is the board its patch lands
+     * on: no other declaration can slip between the decision and the write.
+     *
+     * **Both halves have to be in here, and both for the same reason (#2083).** The board is an
+     * [EphemeralMap], whose join keeps the higher clock and, at an equal clock for one replica,
+     * keeps the entry already applied. Reading the clock outside the write therefore drops a
+     * declaration outright — two callers read `c`, both publish at `c + 1`, and only one survives.
+     * Reading the *value* outside is the same defect one layer up: [declareSpectatorsClosed] and
+     * [declareAdmissionClosed] both run on the host, from independent coroutines, and both derive
+     * what they publish from what is already there — so a stale read makes the loser overwrite a
+     * signal that is documented never to be retracted. Guarding only the write leaves that intact.
+     *
+     * [next] runs in the Quilter's locked section, so it must stay pure and cheap: derive the
+     * value from [board] only, and do any encoding before the call.
+     *
+     * A `null` decision still enters [Quilter.mutate] and publishes [NO_DECLARATION], the board's
+     * bottom element — an identity join everywhere, at the cost of one empty delta frame. That
+     * keeps the refusal decision itself inside the critical section, which a fast-refuse ahead of
+     * the lock would not: [declareAdmissionOpen] must leave admission open when it returns, and a
+     * pre-lock read could refuse against a board that has already moved on. Both refusable
+     * declarations are cold — one per eviction, one per session — so the frame is not worth
+     * trading that for. ([us.tractat.kuilt.heddle.HeddleNode] takes the fast-refuse instead
+     * because its equivalent is on a hot path and its refusal is not a postcondition.)
+     */
+    private fun declareIf(next: (EphemeralMap<String>) -> String?) {
+        quilter.mutate { board ->
+            val value = next(board)
+            if (value == null) {
+                NO_DECLARATION
+            } else {
+                val nextClock = (board.entries[quilter.replica]?.clock ?: 0L) + 1L
+                Patch(board.put(quilter.replica, value, nextClock))
+            }
+        }
     }
 
     /**
