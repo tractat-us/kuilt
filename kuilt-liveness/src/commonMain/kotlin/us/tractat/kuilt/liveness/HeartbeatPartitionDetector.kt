@@ -179,22 +179,39 @@ public class HeartbeatPartitionDetector(
         // (at the transition), never every loop, so the reader sees exactly how stale the peer's last
         // inbound frame was when the detector gave up — distinguishing a genuine `timeout`-length silence
         // (pongs stopped) from a `TransportClosed`/`Backpressure` edge that fired with lastSeen still fresh.
-        val silenceMs = clock().toEpochMilliseconds() - lastSeenEpochMs
+        val lastSeenAtUnresponsive = lastSeenEpochMs
+        val silenceMs = clock().toEpochMilliseconds() - lastSeenAtUnresponsive
         logger.info {
             "heartbeat.unresponsive peer=${peerId.value} reason=$reason silenceMs=$silenceMs " +
-                "timeoutMs=${config.timeout.inWholeMilliseconds} → PeerUnresponsive"
+                "timeoutMs=${config.timeout.inWholeMilliseconds} lastSeenAtMs=$lastSeenAtUnresponsive → PeerUnresponsive"
         }
         emitIfOpen(PartitionEvent.PeerUnresponsive(peerId, clock(), reason))
-        return awaitRecoveryOrLoss()
+        return awaitRecoveryOrLoss(lastSeenAtUnresponsive)
     }
 
     /**
      * Polls until the peer recovers or the reconnect window expires.
      *
+     * Recovery requires **evidence**, not merely elapsed time: [lastSeenAtUnresponsive] is the
+     * value of [lastSeenEpochMs] captured at the Healthy→Unresponsive transition, and a frame must
+     * have arrived *since* then — a strict advance — before [PartitionEvent.PeerRecovered] fires.
+     * That is the contract [PartitionEvent.PeerRecovered] already documents ("has resumed sending
+     * frames") and the one the elapsed-time test alone did not hold (#1966): the edge-triggered
+     * reasons [PartitionEvent.Reason.TransportClosed] and [PartitionEvent.Reason.Backpressure] fire
+     * with `lastSeen` still fresher than [HeartbeatConfig.timeout], so `silenceMs < timeoutMs` was
+     * *already true* at the first poll and announced a recovery that never happened. On real
+     * hardware the outer loop then re-observed the same absence and re-fired within microseconds,
+     * flapping presence once per [HeartbeatConfig.interval] and re-arming the consumer's reconnect
+     * window each cycle.
+     *
+     * [PartitionEvent.Reason.Timeout] is unaffected: that lane fires *because* of silence, so the
+     * only thing that can drop the silence back under the timeout is an inbound frame — which
+     * advances [lastSeenEpochMs] by construction.
+     *
      * Returns `true` if the peer recovered (the outer loop should resume normal monitoring).
      * Returns `false` if [PartitionEvent.PeerLost] was emitted (the outer loop should stop).
      */
-    private suspend fun awaitRecoveryOrLoss(): Boolean {
+    private suspend fun awaitRecoveryOrLoss(lastSeenAtUnresponsive: Long): Boolean {
         val windowMs = config.reconnectWindow.inWholeMilliseconds
         val pollMs = config.interval.inWholeMilliseconds
         val timeoutMs = config.timeout.inWholeMilliseconds
@@ -211,17 +228,21 @@ public class HeartbeatPartitionDetector(
             elapsed += pollMs
 
             val nowMs = clock().toEpochMilliseconds()
-            val silenceMs = nowMs - lastSeenEpochMs
+            val lastSeenNowMs = lastSeenEpochMs
+            val silenceMs = nowMs - lastSeenNowMs
+            val heardSinceUnresponsive = lastSeenNowMs > lastSeenAtUnresponsive
             val clockDeltaMs = nowMs - prevClockMs
             prevClockMs = nowMs
             logger.debug {
                 "awaitRecoveryOrLoss.poll peer=${peerId.value} elapsedMs=$elapsed windowMs=$windowMs " +
                     "silenceMs=$silenceMs timeoutMs=$timeoutMs pollMs=$pollMs clockDeltaMs=$clockDeltaMs " +
+                    "heardSinceUnresponsive=$heardSinceUnresponsive lastSeenAtMs=$lastSeenNowMs " +
                     "suspected_suspension=${clockDeltaMs > pollMs * 2}"
             }
-            if (silenceMs < timeoutMs) {
+            if (heardSinceUnresponsive && silenceMs < timeoutMs) {
                 logger.debug {
-                    "awaitRecoveryOrLoss.recovered peer=${peerId.value} silenceMs=$silenceMs elapsedMs=$elapsed"
+                    "awaitRecoveryOrLoss.recovered peer=${peerId.value} silenceMs=$silenceMs elapsedMs=$elapsed " +
+                        "lastSeenAtMs=$lastSeenNowMs wasLastSeenAtMs=$lastSeenAtUnresponsive"
                 }
                 emitIfOpen(PartitionEvent.PeerRecovered(peerId, clock()))
                 return true
