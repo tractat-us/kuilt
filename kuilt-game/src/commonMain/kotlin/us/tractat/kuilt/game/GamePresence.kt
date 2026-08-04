@@ -16,6 +16,7 @@ import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.decodeFromByteArray
 import kotlinx.serialization.encodeToByteArray
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.crdt.EphemeralEntry
 import us.tractat.kuilt.crdt.EphemeralMap
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
@@ -244,6 +245,19 @@ public class GamePresence(
         val nextClock = (quilter.state.value.entries[quilter.replica]?.clock ?: 0L) + 1L
         quilter.apply(Patch(quilter.state.value.put(quilter.replica, value, nextClock)))
     }
+
+    /**
+     * This peer's own presence slot — the value it last declared and the clock that
+     * declaration was published at — or `null` if it has never declared.
+     *
+     * Test observability only. The two properties module tests need are exactly the two the
+     * public [StateFlow]s cannot give them: the raw [EphemeralEntry.clock] (which counts this
+     * replica's declarations, so `clock < declarations` *is* a lost update), and a slot read
+     * that does not go through a `stateIn` collector — under a virtual-time dispatcher those
+     * collectors have not run, so [admissionClosed] / [spectatorsClosed] still hold their
+     * construction-time seed (#2083).
+     */
+    internal fun selfSlot(): EphemeralEntry<String>? = quilter.state.value.entries[quilter.replica]
 
     /**
      * The converged set of replicas that have declared themselves host.
