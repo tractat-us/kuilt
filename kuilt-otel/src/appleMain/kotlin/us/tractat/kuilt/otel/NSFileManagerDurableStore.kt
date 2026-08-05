@@ -19,7 +19,9 @@ import platform.Foundation.writeToFile
 import platform.posix.memcpy
 
 /**
- * A crash-safe [DurableStore] for iOS and macOS backed by `NSFileManager`.
+ * A file-backed [DurableStore] for iOS and macOS backed by `NSFileManager`.
+ *
+ * It is **not** fully crash-safe today — see the known durability gap below.
  *
  * Each [StoreKey] maps to a single file under [directory]. Writes use a
  * write-temp-then-rename strategy:
@@ -39,9 +41,15 @@ import platform.posix.memcpy
  * no code — which is why a field occurrence of the silent-death bug could not be
  * diagnosed from the device's own logs (#1860). Keep the causes wired.
  *
- * A crash after step 2 returns means the renamed file is on disk; the next
- * [read] returns the committed bytes. A crash before step 2 leaves only the
- * `.tmp` file, which is ignored on the next open.
+ * ## Known durability gap — the destination is unlinked before the rename (#2120)
+ *
+ * A crash after step 2 returns means the renamed file is on disk and the next
+ * [read] returns the committed bytes. **Step 2 is not crash-safe, though:**
+ * `moveItemAtPath` refuses to replace an existing file, so [write] calls
+ * `removeItemAtPath(dest)` first. Between that unlink and the rename — or if the
+ * rename merely returns `false` — there is no destination file at all, and every
+ * previously committed record is gone rather than merely stale. Tracked in #2120;
+ * the fix is a genuinely replacing write, not this remove-then-move pair.
  *
  * ## Directory
  *
@@ -96,6 +104,11 @@ public class NSFileManagerDurableStore(private val directory: String) : DurableS
             // rather than replacing an existing file. The remove is expected to fail
             // on the first write (nothing to remove), so its error is only reported
             // if the rename then also fails, where it is usually the explanation.
+            //
+            // This unlink-then-rename pair is NOT crash-safe: between the two there
+            // is no destination file, so a crash there loses every committed record
+            // rather than leaving the previous version. Tracked in #2120 — the fix
+            // is a replacing write, and is deliberately out of scope here.
             val removeError = alloc<ObjCObjectVar<NSError?>>()
             fm.removeItemAtPath(dest, error = removeError.ptr)
             val moveError = alloc<ObjCObjectVar<NSError?>>()
