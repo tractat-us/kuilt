@@ -64,7 +64,11 @@
 
 ### Task 1: `DROP_NEWEST` rejects the incoming record
 
-`BufferPolicy.DROP_NEWEST` documents "**Drop the newest** span when the buffer is full" — the *incoming* record. The shipped code drops the **second**-newest: `maybeEvict` removes visible index `visibleCount - 1`, then `export` inserts the incoming record anyway. Restoring the contract makes the log freeze at the first `maxRecords` records, so `DROP_NEWEST` never evicts and never compacts — which is what makes every remaining compacted set downward-closed.
+At a full buffer the newest record is the one *arriving*. `DROP_NEWEST` will now refuse it, instead of evicting the newest record already buffered (`maybeEvict` removes visible index `visibleCount - 1`, then `export` inserts the arrival anyway).
+
+**This is a deliberate behaviour change, not a typo being corrected — do not present it as one.** Both readings fit the enum's one-line KDoc; the shipped behaviour is what `WarpSpanExporter` does with the same shared enum (`WarpSpanExporter.kt:226-239`) and what a deliberate test with an explaining comment pins (`WarpLogRecordExporterTest.kt:288`). It is argued on its payoff: refusing the arrival makes a full buffer inert — no eviction, no tombstone, no further op — so every compacted set #2127 goes on to produce is a downward-closed `DROP_OLDEST` prefix. That is what lets the compaction record be an O(authors) `VersionVector` floor instead of a per-replica range with a bespoke merge, its own canonical serializer, and a range-shaped capability.
+
+**Scope: the log exporter only.** `WarpSpanExporter` shares `BufferPolicy` and keeps its semantics.
 
 **Files:**
 - Modify: `kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpLogRecordExporter.kt` (`export` ~447-477, `maybeEvict` ~652-684)
