@@ -463,6 +463,18 @@ public class Quilter<S : Quilted<S>>(
         apply(state.value.let(transform))
     }
 
+    /**
+     * PLACEHOLDER (#2090) — the status-quo workaround, hoisted verbatim so the new signature
+     * exists and `QuilterMutateOrSkipTest` compiles and fails for the reason it is about to
+     * pin: a declined transform still publishes an identity patch, so it still burns a seq
+     * and still broadcasts a `Delta`. Replaced by the real skip in the next commit.
+     */
+    public fun mutateOrSkip(transform: (S) -> Patch<S>?): Boolean = lock.withLock {
+        val patch = transform(state.value)
+        apply(patch ?: Patch(state.value))
+        patch != null
+    }
+
     // ---- private helpers ----
 
     /**
