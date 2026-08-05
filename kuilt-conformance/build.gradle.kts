@@ -17,10 +17,10 @@ kotlin {
             api(project(":kuilt-raft"))
             api(project(":kuilt-crdt"))
             api(project(":kuilt-test"))
-            // The convergence harness asserts byte-level canonicality of encoded CRDT
+            // The lattice-law harness asserts byte-level canonicality of encoded CRDT
             // states (#1957), so it needs a concrete BinaryFormat. CBOR matches Quilter's
             // default wire format. `implementation`, not `api`: Cbor appears only inside
-            // CrdtConvergenceHarness's private members, so no consumer of this module needs
+            // LatticeLawHarness's private members, so no consumer of this module needs
             // it on their compile classpath (KSerializer itself comes from
             // serialization-core, already api-transitive via :kuilt-crdt).
             implementation(libs.kotlinx.serialization.cbor)

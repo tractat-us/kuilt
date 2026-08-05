@@ -1,4 +1,4 @@
-package us.tractat.kuilt.conformance.convergence
+package us.tractat.kuilt.conformance.lattice
 
 import us.tractat.kuilt.crdt.Dot
 import us.tractat.kuilt.crdt.DotContext
@@ -35,8 +35,8 @@ private const val PEER_SEQ_SPREAD = 5
  * introducing gaps so the cloud path is also exercised". Every op below is guaranteed to move the
  * state, so no step is spent re-witnessing something already witnessed.
  */
-internal class DotContextConvergenceTest : CrdtConvergenceSuite<DotContext>() {
-    override fun newHarness(): CrdtConvergenceHarness<DotContext> = CrdtConvergenceHarness(
+internal class DotContextConvergenceTest : LatticeLawSuite<DotContext>() {
+    override fun newHarness(): LatticeLawHarness<DotContext> = LatticeLawHarness(
         initial = DotContext.EMPTY,
         alphabet = listOf(
             // The contiguous step: seq = vv + 1, so it extends the vector AND cascades through any

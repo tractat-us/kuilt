@@ -1,4 +1,4 @@
-package us.tractat.kuilt.conformance.convergence
+package us.tractat.kuilt.conformance.lattice
 
 import us.tractat.kuilt.crdt.Quilted
 import kotlin.test.Test
@@ -13,10 +13,10 @@ import kotlin.test.Test
  *
  * Multiplatform: runs on JVM, wasmJs, and native.
  */
-public abstract class CrdtConvergenceSuite<S : Quilted<S>> {
+public abstract class LatticeLawSuite<S : Quilted<S>> {
 
     /** Build and return the harness under test — called once per test method. */
-    public abstract fun newHarness(): CrdtConvergenceHarness<S>
+    public abstract fun newHarness(): LatticeLawHarness<S>
 
     /** Run 32 seeds (~6 permutations each at replicaCount=3 → 192 convergence assertions). */
     @Test
@@ -44,7 +44,7 @@ public abstract class CrdtConvergenceSuite<S : Quilted<S>> {
      * root-hash gate rests on.
      *
      * **Which law broke is named by the failure, not by the test.** The two messages
-     * [CrdtConvergenceHarness.runAssociativeLaws] raises are deliberately different: *NOT EQUAL*
+     * [LatticeLawHarness.runAssociativeLaws] raises are deliberately different: *NOT EQUAL*
      * for an associativity defect, *EQUAL but encode to DIFFERENT bytes* for a canonicality one.
      * They stopped being separate test methods when the two passes were folded into one — running
      * them apart meant computing every join twice, for 18% of this module's Kotlin/Native budget.
@@ -52,7 +52,7 @@ public abstract class CrdtConvergenceSuite<S : Quilted<S>> {
      * `0..7`, and one in [associativeJoinLawsHoldOverUpperSeeds] in `8..15`, which halves the range
      * a repro has to sweep.
      *
-     * See [CrdtConvergenceHarness.runAssociativeLaws].
+     * See [LatticeLawHarness.runAssociativeLaws].
      */
     @Test
     public fun associativeJoinLawsHoldOverLowerSeeds() {
@@ -84,7 +84,7 @@ public abstract class CrdtConvergenceSuite<S : Quilted<S>> {
      * the JVM-only suite this one replaces. A shrinker narrows *one* failure it happened to find,
      * to a locally minimal synthetic operand list. Enumerating short words instead gives the
      * **globally** shortest reachable trajectory, and gives it as a word that reproduces on its own.
-     * See [CrdtConvergenceHarness.runExhaustiveSmall].
+     * See [LatticeLawHarness.runExhaustiveSmall].
      *
      * It is cheap for the same reason it is shallow — it only proves the laws over words of a few
      * ops, which is why it does not replace the seed-ranged pair. Neither subsumes the other: this
@@ -102,7 +102,7 @@ public abstract class CrdtConvergenceSuite<S : Quilted<S>> {
      *
      * Breadth, not depth: they read 0 violations on a lattice broken in the way #2086 was broken,
      * where associativity over the same pool reads 500. See
-     * [CrdtConvergenceHarness.runOtherJoinLaws] for what that means, and for why commutativity is
+     * [LatticeLawHarness.runOtherJoinLaws] for what that means, and for why commutativity is
      * asserted with no per-binding waiver.
      *
      * Separate from the bracketing tests because it is `O(pool²)` where those are `O(pool³)`: it

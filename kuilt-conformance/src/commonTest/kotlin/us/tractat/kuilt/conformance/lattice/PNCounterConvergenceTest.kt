@@ -1,4 +1,4 @@
-package us.tractat.kuilt.conformance.convergence
+package us.tractat.kuilt.conformance.lattice
 
 import us.tractat.kuilt.crdt.PNCounter
 import us.tractat.kuilt.crdt.ReplicaId
@@ -6,8 +6,8 @@ import us.tractat.kuilt.crdt.piece
 
 // Mixed increments and decrements populate both backing GCounters, so both are exercised
 // for canonical encoding. Mirrors GCounterConvergenceTest.
-internal class PNCounterConvergenceTest : CrdtConvergenceSuite<PNCounter>() {
-    override fun newHarness(): CrdtConvergenceHarness<PNCounter> = CrdtConvergenceHarness(
+internal class PNCounterConvergenceTest : LatticeLawSuite<PNCounter>() {
+    override fun newHarness(): LatticeLawHarness<PNCounter> = LatticeLawHarness(
         initial = PNCounter.ZERO,
         // `decrement` is NOT a RETIRE. It withdraws nothing: a PNCounter is two grow-only counters
         // and a decrement adds to the second one, so the observable value falls while every prior

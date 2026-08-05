@@ -1,4 +1,4 @@
-package us.tractat.kuilt.conformance.convergence
+package us.tractat.kuilt.conformance.lattice
 
 import kotlinx.serialization.builtins.serializer
 import us.tractat.kuilt.crdt.GCounter
@@ -18,8 +18,8 @@ private const val FOCUS_KEY = "k-0"
 private const val HIGH_COUNT = 4L
 private const val LOW_COUNT = 1L
 
-internal class ORMapConvergenceTest : CrdtConvergenceSuite<ORMap<String, GCounter>>() {
-    override fun newHarness(): CrdtConvergenceHarness<ORMap<String, GCounter>> = CrdtConvergenceHarness(
+internal class ORMapConvergenceTest : LatticeLawSuite<ORMap<String, GCounter>>() {
+    override fun newHarness(): LatticeLawHarness<ORMap<String, GCounter>> = LatticeLawHarness(
         initial = ORMap.empty(),
         // Declaration order is load-bearing: `defaultCriticalShapes` takes the first two ASSERT ops
         // and the first RETIRE, so this alphabet's default shape is `put-high · remove · put-low`

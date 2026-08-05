@@ -1,11 +1,11 @@
-package us.tractat.kuilt.conformance.convergence
+package us.tractat.kuilt.conformance.lattice
 
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.piece
 
-internal class GCounterConvergenceTest : CrdtConvergenceSuite<GCounter>() {
-    override fun newHarness(): CrdtConvergenceHarness<GCounter> = CrdtConvergenceHarness(
+internal class GCounterConvergenceTest : LatticeLawSuite<GCounter>() {
+    override fun newHarness(): LatticeLawHarness<GCounter> = LatticeLawHarness(
         initial = GCounter.ZERO,
         // Grow-only: no RETIRE op exists, so `defaultCriticalShapes` yields none. That is the
         // honest reading — there is nothing to retire and re-assert.

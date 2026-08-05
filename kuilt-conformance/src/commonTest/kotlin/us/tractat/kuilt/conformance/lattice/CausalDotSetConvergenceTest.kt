@@ -1,4 +1,4 @@
-package us.tractat.kuilt.conformance.convergence
+package us.tractat.kuilt.conformance.lattice
 
 import us.tractat.kuilt.crdt.Causal
 import us.tractat.kuilt.crdt.DotContext
@@ -13,8 +13,8 @@ import us.tractat.kuilt.crdt.ReplicaId
  * `true` and dropping **all** dots while keeping the context on `false`. Both branches survive here
  * verbatim; what is added is that the interesting word is now constructed rather than drawn.
  */
-internal class CausalDotSetConvergenceTest : CrdtConvergenceSuite<Causal<DotSet>>() {
-    override fun newHarness(): CrdtConvergenceHarness<Causal<DotSet>> = CrdtConvergenceHarness(
+internal class CausalDotSetConvergenceTest : LatticeLawSuite<Causal<DotSet>>() {
+    override fun newHarness(): LatticeLawHarness<Causal<DotSet>> = LatticeLawHarness(
         initial = Causal(DotSet(), DotContext.EMPTY),
         alphabet = listOf(
             // Mint the replica's next dot and enable the flag under it. `nextDot` reads the

@@ -31,7 +31,7 @@ private const val FNV_PRIME: Long = 1099511628211L
  *
  * Correctness rests on the encoding being canonical — a digest over a non-canonical encoding
  * reports permanent false divergence. *Within* one target that is enforced by the byte assertion
- * in `CrdtConvergenceHarness` (every merge order must encode identically) and, per CRDT type, by
+ * in `LatticeLawHarness` (every merge order must encode identically) and, per CRDT type, by
  * `CanonicalSerializationTest` in `:kuilt-crdt`'s `commonTest` (issue #1957).
  *
  * **The cross-target dimension is pinned as well**, by `CanonicalGoldenVectorTest` in the same

@@ -1,4 +1,4 @@
-package us.tractat.kuilt.conformance.convergence
+package us.tractat.kuilt.conformance.lattice
 
 import us.tractat.kuilt.crdt.JsonCrdt
 import us.tractat.kuilt.crdt.JsonNode
@@ -22,7 +22,7 @@ import us.tractat.kuilt.crdt.piece
  * A fixed key pool forces concurrent type-changing and removal collisions across
  * replicas, exercising the full cross-type tiebreak under every delivery permutation.
  */
-internal class JsonCrdtConvergenceTest : CrdtConvergenceSuite<JsonCrdt>() {
+internal class JsonCrdtConvergenceTest : LatticeLawSuite<JsonCrdt>() {
 
     private val replicaIds = List(3) { ReplicaId("R$it") }
     private val keys = listOf("k0", "k1", "k2")
@@ -30,7 +30,7 @@ internal class JsonCrdtConvergenceTest : CrdtConvergenceSuite<JsonCrdt>() {
     /** The key the critical shape's three steps agree on — see the alphabet's comment. */
     private val focusKey get() = keys[0]
 
-    override fun newHarness(): CrdtConvergenceHarness<JsonCrdt> = CrdtConvergenceHarness(
+    override fun newHarness(): LatticeLawHarness<JsonCrdt> = LatticeLawHarness(
         initial = JsonCrdt.empty(replicaIds[0]),
         // The derived shape is `set-leaf · remove · set-obj` on the focus key: assert a scalar,
         // retire it, then re-assert a node of a *different* type. Coming back as an object rather
