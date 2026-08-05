@@ -12,8 +12,10 @@ import kotlinx.serialization.Serializable
  * Built as a thin wrapper over `Causal<DotMap<E, DotSet>>`: each element key maps
  * to the set of dots that added it; it is present iff that set is non-empty.
  *
- * Immutable: [add]/[remove] return a new set. [piece] is the causal merge.
- * [addDelta]/[removeDelta] return just the change, which is what belongs on the wire.
+ * Immutable, and **every mutator returns the change rather than a new set**: [add] and [remove]
+ * hand back a [Patch] holding just the element they touched, which is what belongs on the wire.
+ * [piece] is the causal merge — it absorbs a patch, and it is also how a caller who wants the
+ * resulting whole set gets one: `set.piece(set.add(replica, element))`.
  *
  * @sample us.tractat.kuilt.crdt.sampleORSet
  */
@@ -29,64 +31,68 @@ public class ORSet<E> private constructor(
     public fun contains(element: E): Boolean = element in causal.store.entries
 
     /**
-     * Add [element] on behalf of [replica], minting a fresh dot. The new dot
-     * supersedes this element's prior dots locally; concurrent adds on other
-     * replicas still survive the merge.
-     */
-    public fun add(replica: ReplicaId, element: E): ORSet<E> {
-        val dot = causal.context.nextDot(replica)
-        val entries = causal.store.entries + (element to DotSet(setOf(dot)))
-        return ORSet(Causal(DotMap(entries), causal.context.add(dot)))
-    }
-
-    /**
-     * Remove [element]: drop the dots currently on it. The context is unchanged
-     * (those dots stay witnessed, so the removal propagates on merge).
-     */
-    public fun remove(element: E): ORSet<E> {
-        if (element !in causal.store.entries) return this
-        return ORSet(Causal(DotMap(causal.store.entries - element), causal.context))
-    }
-
-    /**
-     * The **change** [add] would make, on its own — one element and a short causal note —
-     * rather than the whole new set.
+     * Add [element] on behalf of [replica], minting a fresh dot — and return **the change**, one
+     * element and a short causal note, rather than the whole new set.
      *
-     * This is what to put on the wire. A replicator broadcasts a patch's delta verbatim, so
-     * `Patch(set.add(…))` ships every element of the set on every write, at a cost that grows
-     * with the set; this frame's size does not depend on how large the set is. The idiom is
-     * `quilter.mutate { it.addDelta(replica, element) }` — read-modify-write inside the
-     * replicator's own lock.
+     * This is what to put on the wire. A replicator broadcasts a patch's delta verbatim, so a
+     * mutator that handed back the new set would ship every element on every write, at a cost that
+     * grows with the set; this frame's size does not depend on how large the set is. The idiom is
+     * `quilter.mutate { it.add(replica, element) }` — read-modify-write inside the replicator's
+     * own lock. To hold the resulting set locally, absorb the patch: `set.piece(set.add(…))`.
      *
      * A delta is itself an [ORSet], so a peer absorbs it with the ordinary [piece] join, in any
      * order, with any repeats, and lands on a state that encodes byte-for-byte identically to
-     * the sender's [add] result. Nothing has to be buffered or delivered in causal order.
+     * the author's own. Nothing has to be buffered or delivered in causal order.
      *
      * **The delta's context names the minted dot *and the dots this add supersedes*, and that
-     * second term must not be simplified away.** [add] replaces an element's dots rather than
+     * second term must not be simplified away.** An add replaces an element's dots rather than
      * growing them, so a delta announcing only the new dot would leave the superseded ones
      * alive on every receiver — and a later remove, retiring only the dot it knew about, would
      * resurrect the element. That failure was measured while designing this method (#2044) and
      * is pinned by `ORSetDeltaMutatorLawTest`.
      *
-     * @sample us.tractat.kuilt.crdt.sampleORSetDelta
+     * @sample us.tractat.kuilt.crdt.sampleORSet
      */
-    public fun addDelta(replica: ReplicaId, element: E): Patch<ORSet<E>> = addPatch(replica, element)
+    public fun add(replica: ReplicaId, element: E): Patch<ORSet<E>> = addPatch(replica, element)
 
     /**
-     * The **change** [remove] would make, on its own: the dots currently on [element], retired,
-     * and nothing else. Ship this rather than `Patch(set.remove(…))`, which is the whole set.
+     * Remove [element] — and return **the change**: the dots currently on it, retired, and nothing
+     * else. Absorbing that patch drops the element; the retired dots stay witnessed, so the removal
+     * propagates on merge. To hold the resulting set locally, `set.piece(set.remove(…))`.
      *
      * The context carries exactly [element]'s live dots — never the sender's full history. A
      * delta that carried the whole context would be indistinguishable from *"I have removed
      * everything I ever saw"*, and joining it would empty the receiver's set.
      *
      * Removing an element that is absent yields the lattice identity — an empty store and an
-     * empty context — so absorbing it changes nothing, matching [remove]'s own no-op.
+     * empty context — so absorbing it changes nothing.
      *
-     * @sample us.tractat.kuilt.crdt.sampleORSetDelta
+     * @sample us.tractat.kuilt.crdt.sampleORSet
      */
-    public fun removeDelta(element: E): Patch<ORSet<E>> = removePatch(element)
+    public fun remove(element: E): Patch<ORSet<E>> = removePatch(element)
+
+    /**
+     * The whole set an [add] produces — the reference semantics [add]'s delta must reproduce
+     * under [piece], byte for byte.
+     *
+     * Deliberately **not public**: it is the O(set) spelling this type exists to keep off the
+     * wire. Two callers need it: `ORSetDeltaMutatorLawTest`, which cannot state the
+     * delta-mutator law without a reference independent of the delta path it is testing; and
+     * `ORSetTest.pieceIsAssociativeOverCausallyRelatedTrajectories`, whose generator walks the
+     * whole-state and delta paths in the same trajectory — take this away and both arms become
+     * the delta path and the test compares it against itself.
+     */
+    internal fun addWhole(replica: ReplicaId, element: E): ORSet<E> {
+        val dot = causal.context.nextDot(replica)
+        val entries = causal.store.entries + (element to DotSet(setOf(dot)))
+        return ORSet(Causal(DotMap(entries), causal.context.add(dot)))
+    }
+
+    /** The whole set a [remove] produces. Internal for the same reason as [addWhole]. */
+    internal fun removeWhole(element: E): ORSet<E> {
+        if (element !in causal.store.entries) return this
+        return ORSet(Causal(DotMap(causal.store.entries - element), causal.context))
+    }
 
     private fun addPatch(replica: ReplicaId, element: E): Patch<ORSet<E>> {
         val dot = causal.context.nextDot(replica)
@@ -106,7 +112,7 @@ public class ORSet<E> private constructor(
      * The dots currently on [element]. Internal: the dot layer is an implementation detail, but
      * tests need it to prove a generated state actually carries *concurrent* dots on an element.
      * A set grown by one replica never has more than one dot per element, so a generator built
-     * that way makes [addDelta]'s superseded-dots term a singleton every time and never exercises
+     * that way makes [add]'s superseded-dots term a singleton every time and never exercises
      * the case it exists for — another replica's dot travelling with the supersession.
      */
     internal fun dotsOn(element: E): Set<Dot> = causal.store.entries[element]?.dots ?: emptySet()

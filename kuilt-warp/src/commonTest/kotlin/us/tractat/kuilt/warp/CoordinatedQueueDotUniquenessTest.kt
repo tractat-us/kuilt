@@ -2,6 +2,7 @@ package us.tractat.kuilt.warp
 
 import us.tractat.kuilt.crdt.ORSet
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.piece
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -36,8 +37,8 @@ class CoordinatedQueueDotUniquenessTest {
     fun sameSnapshotAddsReuseADotAndAnnihilateEachOther() {
         val snapshot = ORSet.empty<TaskId>()
 
-        val first = snapshot.add(replica, alpha)
-        val second = snapshot.add(replica, beta)
+        val first = snapshot.piece { it.add(replica, alpha) }
+        val second = snapshot.piece { it.add(replica, beta) }
 
         assertAll(
             { assertEquals(setOf(alpha), first.elements, "each patch alone carries its own task") },
@@ -56,8 +57,8 @@ class CoordinatedQueueDotUniquenessTest {
     fun serialisedAddsMintDistinctDotsAndBothSurvive() {
         val snapshot = ORSet.empty<TaskId>()
 
-        val first = snapshot.add(replica, alpha)
-        val second = first.add(replica, beta)
+        val first = snapshot.piece { it.add(replica, alpha) }
+        val second = first.piece { it.add(replica, beta) }
 
         assertAll(
             { assertEquals(setOf(alpha, beta), second.elements, "serialised adds accumulate") },

@@ -106,46 +106,35 @@ internal fun sampleTwoPhaseSet() {
 
 // ── ORSet ─────────────────────────────────────────────────────────────────────
 
-/** Concurrent add beats a concurrent remove (add-wins). */
+/**
+ * Ship the change, not the set. Every mutator returns a [Patch] — the one element it touched —
+ * and a re-add's delta also retires the dots it supersedes, which is what stops a later remove
+ * from resurrecting the element. Absorbing a patch locally is `set.piece { … }`.
+ */
 @Suppress("unused")
 internal fun sampleORSet() {
     val a = ReplicaId("A")
     val b = ReplicaId("B")
 
-    // Shared start: "alice" is present on both replicas.
-    val start = ORSet.empty<String>().add(a, "alice")
-
-    val alice = start.remove("alice")       // Alice concurrently removes
-    val bob = start.add(b, "alice")         // Bob concurrently re-adds
-
-    val merged = alice.piece(bob)
-    check(merged.contains("alice"))         // add-wins
-}
-
-/**
- * Ship the change, not the set — and note that a re-add's delta also retires the dots it
- * supersedes, which is what stops a later remove from resurrecting the element.
- */
-@Suppress("unused")
-internal fun sampleORSetDelta() {
-    val a = ReplicaId("A")
-    val b = ReplicaId("B")
-
     // Two peers have converged: "alice" is present on both, added by B.
-    var alpha = ORSet.empty<String>().add(b, "alice")
+    var alpha = ORSet.empty<String>().piece { it.add(b, "alice") }
     var bravo = alpha
 
     // A re-adds "alice" and puts only the change on the wire. The delta names A's new dot
     // *and* B's older one, which the re-add supersedes — so both peers drop the old dot.
-    val readd = alpha.addDelta(a, "alice")
+    val readd = alpha.add(a, "alice")
     alpha = alpha.piece(readd)
     bravo = bravo.piece(readd)
     check(alpha == bravo)
 
-    // Now a remove lands everywhere, because both peers agree on which dot is live. Had the
-    // delta above kept quiet about B's dot, it would still be alive on bravo — and "alice"
-    // would come back from the dead there.
-    val forget = alpha.removeDelta("alice")
+    // A concurrent add beats a concurrent remove: B's re-add mints a dot A's remove never saw.
+    val concurrent = alpha.add(b, "alice")
+    check(alpha.piece(alpha.remove("alice")).piece(concurrent).contains("alice"))
+
+    // A remove lands everywhere, because both peers agree on which dot is live. Had the delta
+    // above kept quiet about B's dot, it would still be alive on bravo — and "alice" would come
+    // back from the dead there.
+    val forget = alpha.remove("alice")
     alpha = alpha.piece(forget)
     bravo = bravo.piece(forget)
     check(!alpha.contains("alice"))
@@ -189,56 +178,35 @@ internal fun sampleMVRegister() {
 
 // ── LWWMap ────────────────────────────────────────────────────────────────────
 
-/** Per-key last-writer-wins semantics. */
+/**
+ * Ship the change, not the map. Every mutator returns a [Patch] carrying the one cell it wrote —
+ * and a removal ships a *tombstone cell*, not an absence: an empty map says nothing at all, so
+ * the removal would never leave the writer. Absorbing a patch locally is `map.piece { … }`.
+ */
 @Suppress("unused")
 internal fun sampleLWWMap() {
     val a = ReplicaId("A")
     val b = ReplicaId("B")
 
-    val left = LWWMap.empty<String, Int>()
-        .set(a, timestamp = 1L, key = "score", value = 10)
-    val right = LWWMap.empty<String, Int>()
-        .set(b, timestamp = 2L, key = "score", value = 20)
-
-    val merged = left.piece(right)
-    check(merged["score"] == 20)  // ts=2 wins for this key
-
-    // remove is a write like any other: a later remove hides the key…
-    val removed = merged.remove(a, timestamp = 3L, key = "score")
-    check(removed["score"] == null)
-
-    // …and a concurrent later set beats a concurrent earlier remove.
-    val rewritten = merged.set(b, timestamp = 4L, key = "score", value = 30)
-    check(removed.piece(rewritten)["score"] == 30)
-}
-
-/**
- * Ship the change, not the map — and note that a removal ships a *tombstone cell*, not an
- * absence: an empty map says nothing at all, so the removal would never leave the writer.
- */
-@Suppress("unused")
-internal fun sampleLWWMapDelta() {
-    val a = ReplicaId("A")
-    val b = ReplicaId("B")
-
     // Two peers have converged on a settings map.
     var alpha = LWWMap.empty<String, String>()
-        .set(a, timestamp = 1L, key = "lang", value = "en")
-        .set(a, timestamp = 2L, key = "tz", value = "UTC")
-        .set(a, timestamp = 3L, key = "theme", value = "dark")
+        .piece { it.set(a, timestamp = 1L, key = "lang", value = "en") }
+        .piece { it.set(a, timestamp = 2L, key = "tz", value = "UTC") }
+        .piece { it.set(a, timestamp = 3L, key = "theme", value = "dark") }
     var bravo = alpha
 
     // B changes one setting and puts only that cell on the wire. The frame is the same size
     // whether the map holds three keys or ten thousand, and the other keys are untouched.
-    val change = alpha.setDelta(b, timestamp = 4L, key = "theme", value = "light")
+    val change = alpha.set(b, timestamp = 4L, key = "theme", value = "light")
     alpha = alpha.piece(change)
     bravo = bravo.piece(change)
     check(alpha == bravo)
     check(alpha["theme"] == "light")
     check(alpha["lang"] == "en")
 
-    // A removal is a write too, so its delta is a one-cell tombstone map…
-    val forget = bravo.removeDelta(b, timestamp = 5L, key = "lang")
+    // Per key the higher (timestamp, replica) tag wins, and a remove is a write like any other,
+    // so its delta is a one-cell tombstone map…
+    val forget = bravo.remove(b, timestamp = 5L, key = "lang")
     check(alpha.piece(forget)["lang"] == null)
 
     // …and never an empty map, which is the lattice identity and carries no removal at all.
@@ -247,39 +215,24 @@ internal fun sampleLWWMapDelta() {
 
 // ── ORMap ─────────────────────────────────────────────────────────────────────
 
-/** Observed-remove map: a concurrent put survives a concurrent remove. */
+/**
+ * Ship the change, not the map. Every mutator returns a [Patch], and the change has two things to
+ * say: only the value *you* passed, and the tags of yours this put supersedes. Absorbing a patch
+ * locally is `map.piece { … }`.
+ */
 @Suppress("unused")
 internal fun sampleORMap() {
     val a = ReplicaId("A")
     val b = ReplicaId("B")
 
-    val start = ORMap.empty<String, GSet<String>>()
-        .put(a, "team", GSet.of("alice"))
-
-    val alice = start.remove("team")                          // Alice removes the key
-    val bob = start.put(b, "team", GSet.of("bob"))            // Bob concurrently adds
-
-    val merged = alice.piece(bob)
-    check("team" in merged.keys)                               // add-wins on the key
-}
-
-/**
- * Ship the change, not the map — and note the two things the change has to say: only the value
- * *you* passed, and the tags of yours this put supersedes.
- */
-@Suppress("unused")
-internal fun sampleORMapDelta() {
-    val a = ReplicaId("A")
-    val b = ReplicaId("B")
-
     // Two peers have converged: "team" already holds a long roster, put there by B.
     var alpha = ORMap.empty<String, GSet<String>>()
-        .put(b, "team", GSet.of("alice", "bob", "carol", "dan"))
+        .piece { it.put(b, "team", GSet.of("alice", "bob", "carol", "dan")) }
     var bravo = alpha
 
     // A adds one member and puts only the change on the wire. The delta carries A's one name —
     // not the merged roster — because the receiver re-does that merge against its own copy.
-    val hire = alpha.putDelta(a, "team", GSet.of("erin"))
+    val hire = alpha.put(a, "team", GSet.of("erin"))
     check(hire.delta["team"] == GSet.of("erin"))
 
     // A's tag joins B's rather than replacing it, so the key's value is both writes together.
@@ -288,10 +241,14 @@ internal fun sampleORMapDelta() {
     check(alpha == bravo)
     check(alpha["team"] == GSet.of("alice", "bob", "carol", "dan", "erin"))
 
-    // Now a remove lands everywhere, because both peers agree on which tags are live. Had A already
-    // held a tag on "team" and the delta kept quiet about it, that older tag would still be alive on
-    // bravo — and "team" would come back from the dead there.
-    val disband = alpha.removeDelta("team")
+    // A concurrent put beats a concurrent remove: B's put mints a tag A's remove never saw.
+    val concurrent = alpha.put(b, "team", GSet.of("frank"))
+    check("team" in alpha.piece(alpha.remove("team")).piece(concurrent).keys)
+
+    // A remove lands everywhere, because both peers agree on which tags are live. Had A already
+    // held a tag on "team" and the delta kept quiet about it, that older tag would still be alive
+    // on bravo — and "team" would come back from the dead there.
+    val disband = alpha.remove("team")
     alpha = alpha.piece(disband)
     bravo = bravo.piece(disband)
     check("team" !in alpha.keys)

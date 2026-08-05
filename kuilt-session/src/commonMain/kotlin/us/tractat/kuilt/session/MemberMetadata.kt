@@ -3,6 +3,7 @@ package us.tractat.kuilt.session
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.crdt.LWWMap
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.piece
 
 /**
  * Per-member display names tracked with last-writer-wins semantics, backed by
@@ -46,7 +47,7 @@ public class MemberMetadata private constructor(
      * is unchanged.
      */
     public fun set(peer: PeerId, displayName: String, timestamp: Long, replica: ReplicaId): MemberMetadata =
-        MemberMetadata(map.set(replica, timestamp, peer, displayName))
+        MemberMetadata(map.piece { it.set(replica, timestamp, peer, displayName) })
 
     /**
      * Merge another replica's metadata into this one.

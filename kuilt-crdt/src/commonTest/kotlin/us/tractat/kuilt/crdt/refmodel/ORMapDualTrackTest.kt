@@ -58,7 +58,7 @@ class ORMapDualTrackTest {
         val increment = random.nextLong(1L, 4L)
         // Each replica only touches its own GCounter slot — avoids slot-ownership violations.
         val delta = GCounter.of(rId to ((sut[r][key]?.count(rId) ?: 0L) + increment))
-        sut[r] = sut[r].put(rId, key, delta)
+        sut[r] = sut[r].piece { it.put(rId, key, delta) }
         ref[r] = ref[r].put(rId, key, delta)
     }
 
@@ -71,7 +71,7 @@ class ORMapDualTrackTest {
         val candidates = (sut[r].keys + ref[r].keys).toList()
         if (candidates.isEmpty()) return
         val key = candidates.random(random)
-        sut[r] = sut[r].remove(key)
+        sut[r] = sut[r].piece { it.remove(key) }
         ref[r] = ref[r].remove(key)
     }
 

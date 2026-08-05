@@ -4,6 +4,7 @@ import kotlin.random.Random
 import kotlin.test.Test
 import us.tractat.kuilt.crdt.ORSet
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.piece
 
 /**
  * Dual-track test: runs [ORSet] (SUT) and [NaiveORSet] (reference model) in
@@ -50,7 +51,7 @@ class ORSetDualTrackTest {
         random: Random,
     ) {
         val e = "e-${random.nextInt(0, 4)}"
-        sut[r] = sut[r].add(rId, e)
+        sut[r] = sut[r].piece { it.add(rId, e) }
         ref[r] = ref[r].add(rId, e)
     }
 
@@ -63,7 +64,7 @@ class ORSetDualTrackTest {
         val candidates = (sut[r].elements + ref[r].elements).toList()
         if (candidates.isEmpty()) return
         val e = candidates.random(random)
-        sut[r] = sut[r].remove(e)
+        sut[r] = sut[r].piece { it.remove(e) }
         ref[r] = ref[r].remove(e)
     }
 

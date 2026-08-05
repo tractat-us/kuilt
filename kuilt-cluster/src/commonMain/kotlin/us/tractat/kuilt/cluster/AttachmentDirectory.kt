@@ -5,7 +5,6 @@ import kotlinx.coroutines.CoroutineScope
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.crdt.LWWMap
-import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.gossip.TwoTier
 import us.tractat.kuilt.quilter.Quilter
@@ -99,7 +98,7 @@ public class AttachmentDirectory internal constructor(
      * this one under last-writer-wins.
      */
     public fun attach(client: PeerId) {
-        quilter.mutate { Patch(it.set(quilter.replica, nextTimestamp(), client, self)) }
+        quilter.mutate { it.set(quilter.replica, nextTimestamp(), client, self) }
     }
 
     /**
@@ -107,7 +106,7 @@ public class AttachmentDirectory internal constructor(
      * tombstone that removes them from the table once it wins under tag order.
      */
     public fun detach(client: PeerId) {
-        quilter.mutate { Patch(it.remove(quilter.replica, nextTimestamp(), client)) }
+        quilter.mutate { it.remove(quilter.replica, nextTimestamp(), client) }
     }
 
     /**

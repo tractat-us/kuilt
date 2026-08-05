@@ -17,6 +17,7 @@ import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.crdt.GSet
 import us.tractat.kuilt.crdt.LWWMap
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.piece
 import us.tractat.kuilt.gossip.GossipSeam
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.quilter.QuiltMessage
@@ -151,7 +152,7 @@ class MerkleDigestCostModelTest {
     private fun lwwMapOf(size: Int): LWWMap<String, String> {
         if (size == 0) return LWWMap.empty()
         fun single(i: Int): LWWMap<String, String> =
-            LWWMap.empty<String, String>().set(replica, i.toLong(), "entity-$i.attribute", "value-$i")
+            LWWMap.empty<String, String>().piece { it.set(replica, i.toLong(), "entity-$i.attribute", "value-$i") }
         fun build(from: Int, to: Int): LWWMap<String, String> {
             if (to - from == 1) return single(from)
             val mid = (from + to) / 2

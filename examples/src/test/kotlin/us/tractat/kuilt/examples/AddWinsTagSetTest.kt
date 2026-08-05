@@ -47,15 +47,16 @@ import kotlin.test.assertTrue
  * `ORSet.serializer(String.serializer())`. The convenience [Quilter] factory
  * accepts this directly as `valueSerializer`.
  *
- * [ORSet.add] and [ORSet.remove] return a new full [ORSet] rather than a
- * [Patch], so mutations are expressed as
- * `replicator.mutate { s -> Patch(s.add(replicator.replica, element)) }`.
+ * [ORSet.add] and [ORSet.remove] return a [Patch] — the one element they
+ * touched — so a mutation is expressed as
+ * `replicator.mutate { s -> s.add(replicator.replica, element) }` and only
+ * that element goes on the wire, whatever the set already holds.
  *
  * ## API surface exercised
  *
  * - [InMemoryLoom] + `host`/`join` for in-process transport
  * - [Quilter] convenience factory with a parameterised element serializer
- * - [Quilter.mutate] wrapping [ORSet.add] / [ORSet.remove] in a [Patch]
+ * - [Quilter.mutate] driving [ORSet.add] / [ORSet.remove], which return a [Patch]
  * - [Quilter.state] (`StateFlow<ORSet<String>>`) to read converged elements
  */
 class AddWinsTagSetTest {
@@ -86,9 +87,9 @@ class AddWinsTagSetTest {
 
             delay(1) // let collectors subscribe under StandardTestDispatcher
 
-            aliceTags.mutate { s -> Patch(s.add(aliceTags.replica, "kotlin")) }
-            aliceTags.mutate { s -> Patch(s.add(aliceTags.replica, "networking")) }
-            bobTags.mutate { s -> Patch(s.add(bobTags.replica, "multiplatform")) }
+            aliceTags.mutate { s -> s.add(aliceTags.replica, "kotlin") }
+            aliceTags.mutate { s -> s.add(aliceTags.replica, "networking") }
+            bobTags.mutate { s -> s.add(bobTags.replica, "multiplatform") }
 
             delay(10) // advance virtual time so all delta broadcasts deliver
 
@@ -100,7 +101,7 @@ class AddWinsTagSetTest {
             assertEquals(aliceTags.state.value.elements, bobTags.state.value.elements)
 
             // Bob removes a tag he no longer needs; Alice has no conflicting add.
-            bobTags.mutate { s -> Patch(s.remove("networking")) }
+            bobTags.mutate { s -> s.remove("networking") }
 
             delay(10) // allow the remove delta to propagate
 
@@ -133,8 +134,8 @@ class AddWinsTagSetTest {
             delay(1) // let collectors subscribe under StandardTestDispatcher
 
             // Both peers add "featured" so both have it locally before any sync.
-            aliceTags.mutate { s -> Patch(s.add(aliceTags.replica, "featured")) }
-            bobTags.mutate { s -> Patch(s.add(bobTags.replica, "featured")) }
+            aliceTags.mutate { s -> s.add(aliceTags.replica, "featured") }
+            bobTags.mutate { s -> s.add(bobTags.replica, "featured") }
 
             delay(10) // let the adds propagate — both peers now agree it is present
 
@@ -144,8 +145,8 @@ class AddWinsTagSetTest {
             // Alice removes "featured" while Bob concurrently re-adds it.
             // Because Bob's re-add mints a new dot that Alice's remove never witnessed,
             // the add wins and "featured" survives the merge.
-            aliceTags.mutate { s -> Patch(s.remove("featured")) }
-            bobTags.mutate { s -> Patch(s.add(bobTags.replica, "featured")) }
+            aliceTags.mutate { s -> s.remove("featured") }
+            bobTags.mutate { s -> s.add(bobTags.replica, "featured") }
 
             delay(10) // let the concurrent operations propagate and merge
 

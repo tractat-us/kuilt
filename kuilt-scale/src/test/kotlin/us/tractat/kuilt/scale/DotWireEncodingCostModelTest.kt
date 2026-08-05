@@ -27,6 +27,7 @@ import us.tractat.kuilt.crdt.ORSet
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.Quilted
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.piece
 import us.tractat.kuilt.gossip.GossipSeam
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.quilter.QuiltMessage
@@ -950,7 +951,7 @@ class DotWireEncodingCostModelTest {
      * so `Patch(state.add(…))` put the entire state on the wire once per write. It grew one in
      * #2044, and part (I) now meters both paths on a real mesh. The model is no longer free to
      * drift: [theOnPerMutationFullStateDominatesBootstrapAndSteadyStateAlike] pins it against what
-     * [ORSet.addDelta] really produces.
+     * [ORSet.add] really produces.
      */
     private fun minimalDeltaBytes(width: Int = DEFAULT_ID_WIDTH): Int = bytesOf(
         QuiltMessage.serializer(orSetCausalSerializer),
@@ -965,7 +966,7 @@ class DotWireEncodingCostModelTest {
     )
 
     /**
-     * The same add, through the real [ORSet.addDelta] and [Quilter]'s own frame. Differs from
+     * The same add, through the real [ORSet.add] and [Quilter]'s own frame. Differs from
      * [minimalDeltaBytes] only by `ORSet`'s one-field serialization wrapper — `Causal` reached
      * through a `{"causal": …}` map rather than directly — which is [ORSET_WRAPPER_SLACK] bytes.
      */
@@ -974,7 +975,7 @@ class DotWireEncodingCostModelTest {
         QuiltMessage.Delta(
             sender = replica,
             seq = 1L,
-            delta = ORSet.empty<String>().addDelta(ReplicaId(replicaIdOf(0, width)), element(0)).delta,
+            delta = ORSet.empty<String>().add(ReplicaId(replicaIdOf(0, width)), element(0)).delta,
         ),
     )
 
@@ -996,8 +997,8 @@ class DotWireEncodingCostModelTest {
         println("  A join costs ${replicas - 1} full states (each existing peer unicasts one to the joiner).")
         println("  A write costs a full state too ON THE `Patch(state.add(...))` PATH — and that row is a")
         println("  LOWER bound: it charges ${replicas - 1} links, while part (I) meters the gossip flood at")
-        println("  three times that. The last column is the same workload written through `ORSet.addDelta`,")
-        println("  which #2044 added: no longer a counterfactual, and metered end-to-end in part (I).")
+        println("  three times that. The last column is the same workload written through `ORSet.add`,")
+        println("  which #2044 made a delta mutator: no longer a counterfactual, and metered in part (I).")
         val full = frameBytes(namedFrame, namedCausal(100_000, replicas, DEFAULT_ID_WIDTH)).toDouble()
         val antiEntropyPerHour = replicas * SECONDS_PER_HOUR / ANTI_ENTROPY_SECONDS * digestRound
         println("  %6s %6s %18s %18s %18s %14s".format(
@@ -1015,7 +1016,7 @@ class DotWireEncodingCostModelTest {
         println("  At one write per minute a 100k-entry ORSet moved " +
             "${"%.0f".format(60 * full * (replicas - 1) / 1e6)} MB/hr cluster-wide, which")
         println("  60 joins per hour would have to match to compete — and no room joins once a minute.")
-        println("  Through `addDelta` the same workload is " +
+        println("  Through `add`'s delta the same workload is " +
             "${"%.0f".format(60 * minimalDeltaBytes().toDouble() * (replicas - 1) / 1e3)} kB/hr, and the")
         println("  join column is what is left to optimise. That reordering is what #2044 bought.")
 
@@ -1040,13 +1041,13 @@ class DotWireEncodingCostModelTest {
                 )
             },
             // And the model is now pinned to production rather than to a sketch of it. If
-            // `ORSet.addDelta` ever regressed to shipping state, the delta column of this budget
+            // `ORSet.add` ever regressed to shipping state, the delta column of this budget
             // would silently keep quoting the sketch; this is what stops that.
             {
                 assertTrue(
                     realDeltaBytes() - minimalDeltaBytes() in 0..ORSET_WRAPPER_SLACK,
                     "the modelled minimal delta (${minimalDeltaBytes()} b) must still be what " +
-                        "ORSet.addDelta really produces (${realDeltaBytes()} b, one `causal` " +
+                        "ORSet.add really produces (${realDeltaBytes()} b, one `causal` " +
                         "wrapper wider) — otherwise this whole column is a sketch of a method " +
                         "that exists and can be measured",
                 )
@@ -1094,8 +1095,10 @@ class DotWireEncodingCostModelTest {
      * of this part is a table whose rows are comparable.
      *
      * [addFull]/[removeFull] are the `Patch(state.mutator(…))` spelling every consumer used before
-     * #2044; [addDelta]/[removeDelta] are the delta mutators it added. The `timestamp` argument is
-     * ignored by the two causal types and is [LWWMap]'s write tag.
+     * #2044 — reconstructed as `state.piece(state.mutator(…))`, which the delta-mutator law makes
+     * byte-identical to what that spelling produced. [addDelta]/[removeDelta] are the delta
+     * mutators. The `timestamp` argument is ignored by the two causal types and is [LWWMap]'s
+     * write tag.
      */
     @Suppress("LongParameterList")
     private class WriteProbe<S : Quilted<S>>(
@@ -1116,12 +1119,14 @@ class DotWireEncodingCostModelTest {
         label = "ORSet",
         serializer = ORSet.serializer(string),
         seed = { n ->
-            (0 until n).fold(ORSet.empty<String>()) { set, i -> set.add(replicaId(i % SEED_REPLICAS), element(i)) }
+            (0 until n).fold(ORSet.empty<String>()) { set, i ->
+                set.piece { it.add(replicaId(i % SEED_REPLICAS), element(i)) }
+            }
         },
-        addFull = { set, r, key, _ -> set.add(r, key) },
-        addDelta = { set, r, key, _ -> set.addDelta(r, key) },
-        removeFull = { set, _, key, _ -> set.remove(key) },
-        removeDelta = { set, _, key, _ -> set.removeDelta(key) },
+        addFull = { set, r, key, _ -> set.piece(set.add(r, key)) },
+        addDelta = { set, r, key, _ -> set.add(r, key) },
+        removeFull = { set, _, key, _ -> set.piece(set.remove(key)) },
+        removeDelta = { set, _, key, _ -> set.remove(key) },
         holds = { set, key -> set.contains(key) },
     )
 
@@ -1130,13 +1135,13 @@ class DotWireEncodingCostModelTest {
         serializer = ORMap.serializer(string, GSet.serializer(string)),
         seed = { n ->
             (0 until n).fold(ORMap.empty<String, GSet<String>>()) { map, i ->
-                map.put(replicaId(i % SEED_REPLICAS), element(i), GSet.of(seedValue(i)))
+                map.piece { it.put(replicaId(i % SEED_REPLICAS), element(i), GSet.of(seedValue(i))) }
             }
         },
-        addFull = { map, r, key, _ -> map.put(r, key, GSet.of(PROBE_VALUE)) },
-        addDelta = { map, r, key, _ -> map.putDelta(r, key, GSet.of(PROBE_VALUE)) },
-        removeFull = { map, _, key, _ -> map.remove(key) },
-        removeDelta = { map, _, key, _ -> map.removeDelta(key) },
+        addFull = { map, r, key, _ -> map.piece(map.put(r, key, GSet.of(PROBE_VALUE))) },
+        addDelta = { map, r, key, _ -> map.put(r, key, GSet.of(PROBE_VALUE)) },
+        removeFull = { map, _, key, _ -> map.piece(map.remove(key)) },
+        removeDelta = { map, _, key, _ -> map.remove(key) },
         holds = { map, key -> map[key] != null },
     )
 
@@ -1145,13 +1150,13 @@ class DotWireEncodingCostModelTest {
         serializer = LWWMap.serializer(string, string),
         seed = { n ->
             (0 until n).fold(LWWMap.empty<String, String>()) { map, i ->
-                map.set(replicaId(i % SEED_REPLICAS), i + 1L, element(i), seedValue(i))
+                map.piece { it.set(replicaId(i % SEED_REPLICAS), i + 1L, element(i), seedValue(i)) }
             }
         },
-        addFull = { map, r, key, at -> map.set(r, at, key, PROBE_VALUE) },
-        addDelta = { map, r, key, at -> map.setDelta(r, at, key, PROBE_VALUE) },
-        removeFull = { map, r, key, at -> map.remove(r, at, key) },
-        removeDelta = { map, r, key, at -> map.removeDelta(r, at, key) },
+        addFull = { map, r, key, at -> map.piece(map.set(r, at, key, PROBE_VALUE)) },
+        addDelta = { map, r, key, at -> map.set(r, at, key, PROBE_VALUE) },
+        removeFull = { map, r, key, at -> map.piece(map.remove(r, at, key)) },
+        removeDelta = { map, r, key, at -> map.remove(r, at, key) },
         holds = { map, key -> map[key] != null },
     )
 
@@ -1335,7 +1340,7 @@ class DotWireEncodingCostModelTest {
             println("  (ii)  ONE add,   Patch(add(...)) : ${paths.fullAdd} b " +
                 "= ${"%.1f".format(paths.fullAdd / paths.fullState.toDouble())} full states, " +
                 "${"%.1f".format(paths.fullAdd / oneJoin)}x a join")
-            println("  (ii') ONE add,   addDelta(...)   : ${paths.deltaAdd} b " +
+            println("  (ii') ONE add,   add(...) delta  : ${paths.deltaAdd} b " +
                 "= ${"%.3f".format(paths.deltaAdd / oneJoin)}x a join, " +
                 "${"%.0f".format(paths.fullAdd.toDouble() / paths.deltaAdd)}x smaller than the full-state form")
             println("  (iii) converged round, per node  : ${"%.1f".format(paths.perRoundPerNode)} b " +
@@ -1347,7 +1352,7 @@ class DotWireEncodingCostModelTest {
             println("  compounding reasons: `ORSet.add` returned the whole new set, so `Patch(state.add(...))`")
             println("  broadcast the ENTIRE state once per write; and a broadcast is flooded, so it crossed")
             println("  ${"%.1f".format(paths.fullAdd / paths.fullState.toDouble())} links where a join's unicast crosses ${MESH_NODES - 1}.")
-            println("  Through `addDelta` the flood factor is unchanged and the frame is not, so the write")
+            println("  Through `add`'s delta the flood factor is unchanged and the frame is not, so the write")
             println("  path drops BELOW the join and the ranking #2037 assumed is restored — by removing the")
             println("  O(state) term, not by shrinking it. Every candidate in #2037 was a constant factor on")
             println("  a term that no longer has to be paid at all.")
@@ -1358,7 +1363,7 @@ class DotWireEncodingCostModelTest {
                 {
                     assertTrue(
                         paths.deltaAdd < oneJoin,
-                        "one add through ORSet.addDelta (${paths.deltaAdd} b) must now cost LESS than " +
+                        "one add through ORSet.add's delta (${paths.deltaAdd} b) must now cost LESS than " +
                             "admitting a new peer (${oneJoin.toLong()} b). This assertion used to run the " +
                             "other way; #2044 gave ORSet a delta mutator and it inverted on purpose",
                     )

@@ -92,7 +92,7 @@ internal fun sampleQuilterMutateOrSkip() = runTest(
     // writer can take the seat between the check and the publish.
     fun claim(seat: String, player: String, at: Long): Boolean =
         seats.mutateOrSkip { board ->
-            if (board[seat] != null) null else board.setDelta(seats.replica, at, seat, player)
+            if (board[seat] != null) null else board.set(seats.replica, at, seat, player)
         }
 
     assertEquals(true, claim("north", "alice", 1L), "the seat was free — published")
@@ -175,9 +175,10 @@ internal fun sampleQuilterSessionMetadata() = runTest(
     kotlinx.coroutines.delay(1)
 
     // Each peer writes its own display name. LWWMap gives per-key last-writer-wins.
-    // LWWMap.set returns a new LWWMap (the merged state), so wrap it in Patch.
-    aliceRep.apply(Patch(aliceRep.state.value.set(aliceRep.replica, timestamp = 1L, key = seamAlice.selfId, value = "Alice")))
-    bobRep.apply(Patch(bobRep.state.value.set(bobRep.replica, timestamp = 1L, key = seamBob.selfId, value = "Bob")))
+    // LWWMap.set returns a Patch — the one cell it wrote — and mutate broadcasts exactly
+    // that, so the frame is the same size whatever the map already holds.
+    aliceRep.mutate { it.set(aliceRep.replica, timestamp = 1L, key = seamAlice.selfId, value = "Alice") }
+    bobRep.mutate { it.set(bobRep.replica, timestamp = 1L, key = seamBob.selfId, value = "Bob") }
 
     kotlinx.coroutines.delay(10)
 

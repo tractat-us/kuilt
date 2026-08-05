@@ -3,6 +3,7 @@ package us.tractat.kuilt.conformance.convergence
 import kotlinx.serialization.builtins.serializer
 import us.tractat.kuilt.crdt.ORSet
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.piece
 
 // Fixed element pool forces frequent concurrency collisions — exactly the pattern that reveals
 // add-wins vs remove-wins ambiguity bugs.
@@ -15,9 +16,9 @@ internal class ORSetConvergenceTest : CrdtConvergenceSuite<ORSet<String>>() {
             val replica = ReplicaId("R$replicaIndex")
             val element = ELEMENTS[random.nextInt(ELEMENTS.size)]
             if (state.contains(element) && random.nextBoolean()) {
-                state.remove(element)
+                state.piece { it.remove(element) }
             } else {
-                state.add(replica, element)
+                state.piece { it.add(replica, element) }
             }
         },
         serializer = ORSet.serializer(String.serializer()),

@@ -227,19 +227,69 @@ check(counter.value == 7L)
 **Intent:** a shared set where peers add and remove concurrently, and a concurrent re-add should beat a concurrent remove rather than silently vanishing.
 **Primitive:** `ORSet` (`us.tractat.kuilt.crdt`).
 
+`add`/`remove` return a `Patch` — the one element they touched — so a write costs the same whether
+the set holds ten entries or ten thousand. Ship it with `quilter.mutate { it.add(replica, x) }`;
+absorb it locally with `set.piece { it.add(replica, x) }`.
+
 <!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleORSet -->
 ```kotlin
-val a = ReplicaId("A")
-val b = ReplicaId("B")
+// Two peers have converged: "alice" is present on both, added by B.
+var alpha = ORSet.empty<String>().piece { it.add(b, "alice") }
+var bravo = alpha
 
-// Shared start: "alice" is present on both replicas.
-val start = ORSet.empty<String>().add(a, "alice")
+// A re-adds "alice" and puts only the change on the wire. The delta names A's new dot
+// *and* B's older one, which the re-add supersedes — so both peers drop the old dot.
+val readd = alpha.add(a, "alice")
+alpha = alpha.piece(readd)
+bravo = bravo.piece(readd)
+check(alpha == bravo)
 
-val alice = start.remove("alice")       // Alice concurrently removes
-val bob = start.add(b, "alice")         // Bob concurrently re-adds
+// A concurrent add beats a concurrent remove: B's re-add mints a dot A's remove never saw.
+val concurrent = alpha.add(b, "alice")
+check(alpha.piece(alpha.remove("alice")).piece(concurrent).contains("alice"))
+```
 
-val merged = alice.piece(bob)
-check(merged.contains("alice"))         // add-wins
+**Intent:** a shared **map** whose keys peers add and remove concurrently, each key holding a value that merges in its own right — a roster, a task board, a nested document.
+**Primitive:** `ORMap` (`us.tractat.kuilt.crdt`).
+
+Same story one level up: `put`/`remove` return a `Patch` carrying one key, and a put's delta carries
+**only the value you passed** — the receiver re-does the merge against its own copy, so a nested
+`ORMap<K, ORSet<X>>` ships one element rather than the whole roster.
+
+<!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleORMap -->
+```kotlin
+// Two peers have converged: "team" already holds a long roster, put there by B.
+var alpha = ORMap.empty<String, GSet<String>>()
+    .piece { it.put(b, "team", GSet.of("alice", "bob", "carol", "dan")) }
+var bravo = alpha
+
+// A adds one member and puts only the change on the wire. The delta carries A's one name —
+// not the merged roster — because the receiver re-does that merge against its own copy.
+val hire = alpha.put(a, "team", GSet.of("erin"))
+check(hire.delta["team"] == GSet.of("erin"))
+```
+
+**Intent:** a shared **settings**-shaped map — key → latest value, last writer wins per key, concurrent edits resolved rather than surfaced.
+**Primitive:** `LWWMap` (`us.tractat.kuilt.crdt`).
+
+`set`/`remove` return a one-cell `Patch`; a removal ships a *tombstone cell*, never an empty map
+(an empty map is the lattice identity and would say nothing at all).
+
+<!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleLWWMap -->
+```kotlin
+// Two peers have converged on a settings map.
+var alpha = LWWMap.empty<String, String>()
+    .piece { it.set(a, timestamp = 1L, key = "lang", value = "en") }
+    .piece { it.set(a, timestamp = 2L, key = "tz", value = "UTC") }
+    .piece { it.set(a, timestamp = 3L, key = "theme", value = "dark") }
+var bravo = alpha
+
+// B changes one setting and puts only that cell on the wire. The frame is the same size
+// whether the map holds three keys or ten thousand, and the other keys are untouched.
+val change = alpha.set(b, timestamp = 4L, key = "theme", value = "light")
+alpha = alpha.piece(change)
+bravo = bravo.piece(change)
+check(alpha == bravo)
 ```
 
 **Intent:** replicating a CRDT live over a `Seam` by hand — collecting inbound deltas, merging them, broadcasting outbound deltas, and exposing the converged value as a `StateFlow`.
@@ -284,7 +334,7 @@ late-joiner full-state sync, and scaling to many peers via `GossipSeam`.
     // writer can take the seat between the check and the publish.
     fun claim(seat: String, player: String, at: Long): Boolean =
         seats.mutateOrSkip { board ->
-            if (board[seat] != null) null else board.setDelta(seats.replica, at, seat, player)
+            if (board[seat] != null) null else board.set(seats.replica, at, seat, player)
         }
 
     assertEquals(true, claim("north", "alice", 1L), "the seat was free — published")

@@ -46,7 +46,7 @@ class JsonCrdtTest {
      */
     private fun obj(replica: ReplicaId, vararg pairs: Pair<String, JsonNode>): JsonNode.Object {
         val map = pairs.fold(ORMap.empty<String, JsonNode>()) { acc, (k, v) ->
-            acc.put(replica, k, v)
+            acc.piece { it.put(replica, k, v) }
         }
         return JsonNode.Object(map)
     }
@@ -487,7 +487,9 @@ class JsonCrdtTest {
     /** An object node whose keys are minted by [writer], so nested dot spaces stay disjoint. */
     private fun objectNode(writer: String, vararg pairs: Pair<String, JsonNode>): JsonNode.Object =
         JsonNode.Object(
-            pairs.fold(ORMap.empty<String, JsonNode>()) { acc, (k, v) -> acc.put(ReplicaId(writer), k, v) },
+            pairs.fold(ORMap.empty<String, JsonNode>()) { acc, (k, v) ->
+                acc.piece { it.put(ReplicaId(writer), k, v) }
+            },
         )
 
     /** An array node whose insert ops are minted by [writer]. */
@@ -598,9 +600,9 @@ class JsonCrdtTest {
      */
     @Test
     fun theFixRecursesIntoANestedObject() {
-        val inner = ORMap.empty<String, JsonNode>().put(ReplicaId("Q"), "p", scalar("W1", "p1"))
-        val innerRemoved = inner.remove("p")
-        val innerReSet = innerRemoved.put(ReplicaId("Q"), "p", scalar("W2", "p2"))
+        val inner = ORMap.empty<String, JsonNode>().piece { it.put(ReplicaId("Q"), "p", scalar("W1", "p1")) }
+        val innerRemoved = inner.piece { it.remove("p") }
+        val innerReSet = innerRemoved.piece { it.put(ReplicaId("Q"), "p", scalar("W2", "p2")) }
 
         val x = JsonCrdt.empty(a).set("obj", JsonNode.Object(inner))
         val y = JsonCrdt.empty(a).set("obj", JsonNode.Object(innerRemoved))

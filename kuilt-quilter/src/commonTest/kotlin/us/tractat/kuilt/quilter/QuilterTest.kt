@@ -21,7 +21,6 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ORSet
-import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -104,15 +103,15 @@ class QuilterTest {
         val repB = orSetRep(seamB)
         val repC = orSetRep(seamC)
 
-        repA.apply(Patch(repA.state.value.add(repA.replica, "apple")))
-        repB.apply(Patch(repB.state.value.add(repB.replica, "banana")))
-        repC.apply(Patch(repC.state.value.add(repC.replica, "cherry")))
+        repA.mutate { it.add(repA.replica, "apple") }
+        repB.mutate { it.add(repB.replica, "banana") }
+        repC.mutate { it.add(repC.replica, "cherry") }
 
         // Let B's add propagate to A before A removes "banana".
         testScheduler.advanceUntilIdle()
 
         // A removes "banana" — the remove wins because A has seen B's dot.
-        repA.apply(Patch(repA.state.value.remove("banana")))
+        repA.mutate { it.remove("banana") }
 
         testScheduler.advanceUntilIdle()
 

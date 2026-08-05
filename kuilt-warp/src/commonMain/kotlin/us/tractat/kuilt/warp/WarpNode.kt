@@ -599,7 +599,7 @@ public class WarpNode(
         lock.withLock {
             val ts = ++timestampCounter
             queueQuilter.mutate { queue ->
-                queue.putDelta(
+                queue.put(
                     replica = replica,
                     key = taskId,
                     value = LWWRegister.empty<TaskDescriptor>().set(replica, ts, descriptor),
@@ -736,7 +736,7 @@ public class WarpNode(
                 // The [WarpNode] lock stays as well: it is the established outer lock at every
                 // mutation site in this file, and holding it changes nothing about the ordering.
                 lock.withLock {
-                    coordQueueQuilter.mutate { queue -> queue.addDelta(replica, taskId) }
+                    coordQueueQuilter.mutate { queue -> queue.add(replica, taskId) }
                 }
             }
         }
@@ -1100,7 +1100,7 @@ public class WarpNode(
         // through that peer's own announcement, so nothing is uniquely carried by the sender's
         // merged set. See the #2086 note on [removeFromQueue] for the one race where that differs.
         lock.withLock {
-            intentQuilter.mutate { intents -> intents.putDelta(replica, taskId, GSet.of(selfId)) }
+            intentQuilter.mutate { intents -> intents.put(replica, taskId, GSet.of(selfId)) }
         }
 
         val mustSettle = lock.withLock {
@@ -1532,7 +1532,7 @@ public class WarpNode(
             }
             val ts = ++timestampCounter
             resultsQuilter.mutate { board ->
-                board.putDelta(
+                board.put(
                     replica = replica,
                     key = taskId,
                     value = LWWRegister.empty<OpResult>().set(replica, ts, opResult),
@@ -1547,7 +1547,7 @@ public class WarpNode(
         // invariant that makes the delta a subset of the current state rather than of a snapshot
         // that has since moved. The [WarpNode] lock stays as the established outer lock.
         //
-        // **#2086 lives here.** A remove delta racing a `putDelta` on the same key of the same
+        // **#2086 lives here.** A remove delta racing a `put` delta on the same key of the same
         // ORMap is order-dependent on the *value* axis: a peer that applied the remove first no
         // longer has the old value to merge the put's value into. Of this node's three ORMaps,
         // only the intent register can actually reach that race — [results] is never removed
@@ -1559,15 +1559,15 @@ public class WarpNode(
         lock.withLock {
             when (kind) {
                 CoordinationKind.Free -> {
-                    queueQuilter.mutate { queue -> queue.removeDelta(taskId) }
-                    intentQuilter.mutate { intents -> intents.removeDelta(taskId) }
+                    queueQuilter.mutate { queue -> queue.remove(taskId) }
+                    intentQuilter.mutate { intents -> intents.remove(taskId) }
                 }
                 CoordinationKind.Coordinated -> {
-                    coordQueueQuilter.mutate { queue -> queue.removeDelta(taskId) }
+                    coordQueueQuilter.mutate { queue -> queue.remove(taskId) }
                     // Coordinated tasks no longer write intent entries (#873), but reclaim any
                     // stray entry a peer running a pre-#873 build may have replicated to us —
                     // the lattice identity when the key is absent.
-                    intentQuilter.mutate { intents -> intents.removeDelta(taskId) }
+                    intentQuilter.mutate { intents -> intents.remove(taskId) }
                 }
             }
         }

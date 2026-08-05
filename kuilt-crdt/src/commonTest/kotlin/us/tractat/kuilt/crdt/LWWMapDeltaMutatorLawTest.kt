@@ -19,8 +19,10 @@ import kotlin.test.assertTrue
  * X.piece(mᵟ(X)) == m(X)
  * ```
  *
- * for every state `X` and every mutator `m` — [LWWMap.set] against [LWWMap.setDelta],
- * [LWWMap.remove] against [LWWMap.removeDelta].
+ * for every state `X` and every mutator `m` — [LWWMap.set]'s delta against [LWWMap.setWhole],
+ * [LWWMap.remove]'s against [LWWMap.removeWhole]. The reference side is deliberately the internal
+ * whole-state form: comparing the delta path against itself would prove nothing — and here it is
+ * also the only way to find the edge of the law's domain, which two tests below do.
  *
  * **Why bytes and not just `equals`.** Two states can compare equal and still encode two ways. The
  * anti-entropy gate hashes the state *as it appears on the wire*, so a delta path that left two
@@ -31,7 +33,7 @@ import kotlin.test.assertTrue
  * **Why this type needs no causal reasoning.** Unlike `ORSet`/`ORMap`, [LWWMap] has no causal
  * context: [LWWMap.piece] is a per-key max of independent `(timestamp, replica)` tags, and
  * `LWWRegister.set` *replaces* rather than merges, so the cell a delta carries is the very cell
- * [LWWMap.set] would write. The delta is one cell and nothing else. Two shapes are nonetheless easy
+ * [LWWMap.setWhole] would write. The delta is one cell and nothing else. Two shapes are nonetheless easy
  * to get wrong, and both are pinned below: a removal's delta is a one-cell **tombstone** map rather
  * than an empty one, and the law's domain is exactly a write whose tag *dominates* the key's
  * current tag — which is what [LWWMap.set]'s own precondition already requires.
@@ -64,8 +66,8 @@ class LWWMapDeltaMutatorLawTest {
             if (state.tags.containsKey(key)) contended++
             if (state.tags[key]?.timestamp == tag.timestamp) tieBreaks++
 
-            val viaFull = state.map.set(tag.replica, tag.timestamp, key, value)
-            val viaDelta = state.map.piece(state.map.setDelta(tag.replica, tag.timestamp, key, value))
+            val viaFull = state.map.setWhole(tag.replica, tag.timestamp, key, value)
+            val viaDelta = state.map.piece(state.map.set(tag.replica, tag.timestamp, key, value))
 
             assertEquals(viaFull, viaDelta, "trial $trial: set law by equality, key=$key tag=$tag")
             assertTrue(
@@ -91,8 +93,8 @@ class LWWMapDeltaMutatorLawTest {
             if (state.tags.containsKey(key)) contended++
             if (state.tags[key]?.timestamp == tag.timestamp) tieBreaks++
 
-            val viaFull = state.map.remove(tag.replica, tag.timestamp, key)
-            val viaDelta = state.map.piece(state.map.removeDelta(tag.replica, tag.timestamp, key))
+            val viaFull = state.map.removeWhole(tag.replica, tag.timestamp, key)
+            val viaDelta = state.map.piece(state.map.remove(tag.replica, tag.timestamp, key))
 
             assertEquals(viaFull, viaDelta, "trial $trial: remove law by equality, key=$key tag=$tag")
             assertTrue(
@@ -118,10 +120,10 @@ class LWWMapDeltaMutatorLawTest {
     @Test
     fun aRemoveDeltaIsAOneCellTombstoneNotAnEmptyMap() {
         val converged = LWWMap.empty<String, String>()
-            .set(alpha, 1L, "lang", "en")
-            .set(alpha, 2L, "tz", "UTC")
+            .setWhole(alpha, 1L, "lang", "en")
+            .setWhole(alpha, 2L, "tz", "UTC")
 
-        val delta = converged.removeDelta(bravo, 3L, "lang").delta
+        val delta = converged.remove(bravo, 3L, "lang").delta
         val emptyShape = LWWMap.empty<String, String>()
         val received = converged.piece(delta)
 
@@ -143,7 +145,7 @@ class LWWMapDeltaMutatorLawTest {
             },
             {
                 assertTrue(
-                    bytes(delta).contentEquals(bytes(LWWMap.empty<String, String>().remove(bravo, 3L, "lang"))),
+                    bytes(delta).contentEquals(bytes(LWWMap.empty<String, String>().removeWhole(bravo, 3L, "lang"))),
                     "the delta is exactly the one-cell map a remove on an empty map produces",
                 )
             },
@@ -151,21 +153,22 @@ class LWWMapDeltaMutatorLawTest {
     }
 
     /**
-     * [LWWMap.remove] records a tombstone even for a key it has never seen, so its delta does too.
-     * This is where the analogy with `ORSet.removeDelta` — whose no-op *is* the lattice identity,
+     * [LWWMap.removeWhole] records a tombstone even for a key it has never seen, so its delta does
+     * too.
+     * This is where the analogy with `ORSet.remove`'s delta — whose no-op *is* the lattice identity,
      * because there are no dots to retire — stops holding.
      */
     @Test
     fun removingAKeyThatWasNeverSetStillShipsATombstone() {
-        val map = LWWMap.empty<String, String>().set(alpha, 1L, "tz", "UTC")
-        val delta = map.removeDelta(bravo, 5L, "lang").delta
-        val peerWithAnEarlierSet = LWWMap.empty<String, String>().set(alpha, 2L, "lang", "en")
+        val map = LWWMap.empty<String, String>().setWhole(alpha, 1L, "tz", "UTC")
+        val delta = map.remove(bravo, 5L, "lang").delta
+        val peerWithAnEarlierSet = LWWMap.empty<String, String>().setWhole(alpha, 2L, "lang", "en")
 
         assertAll(
-            { assertEquals(map.remove(bravo, 5L, "lang"), map.piece(delta), "the law still holds for an absent key") },
+            { assertEquals(map.removeWhole(bravo, 5L, "lang"), map.piece(delta), "the law still holds for an absent key") },
             {
                 assertTrue(
-                    bytes(map.remove(bravo, 5L, "lang")).contentEquals(bytes(map.piece(delta))),
+                    bytes(map.removeWhole(bravo, 5L, "lang")).contentEquals(bytes(map.piece(delta))),
                     "…and holds on bytes",
                 )
             },
@@ -187,19 +190,19 @@ class LWWMapDeltaMutatorLawTest {
      *
      * Honour it and the two paths agree byte for byte. Violate it — reuse one `(replica, timestamp)`
      * for two different values on one key — and they disagree, because `LWWRegister.piece` breaks an
-     * equal tag with `else -> this` while [LWWMap.set] assigns unconditionally. That disagreement is
+     * equal tag with `else -> this` while [LWWMap.setWhole] assigns unconditionally. That disagreement is
      * the documented non-determinism, not a new hazard: the delta form must not be read as making a
      * reused tag safe.
      */
     @Test
     fun theDeltaFormNeitherWeakensNorWaivesTheTagUniquenessPrecondition() {
-        val honoured = LWWMap.empty<String, String>().set(alpha, 1L, "k", "first")
+        val honoured = LWWMap.empty<String, String>().setWhole(alpha, 1L, "k", "first")
 
-        val freshFull = honoured.set(alpha, 2L, "k", "second")
-        val freshDelta = honoured.piece(honoured.setDelta(alpha, 2L, "k", "second"))
+        val freshFull = honoured.setWhole(alpha, 2L, "k", "second")
+        val freshDelta = honoured.piece(honoured.set(alpha, 2L, "k", "second"))
 
-        val reusedFull = honoured.set(alpha, 1L, "k", "different")
-        val reusedDelta = honoured.piece(honoured.setDelta(alpha, 1L, "k", "different"))
+        val reusedFull = honoured.setWhole(alpha, 1L, "k", "different")
+        val reusedDelta = honoured.piece(honoured.set(alpha, 1L, "k", "different"))
 
         assertAll(
             { assertEquals(freshFull, freshDelta, "a unique tag: the paths agree") },
@@ -220,7 +223,7 @@ class LWWMapDeltaMutatorLawTest {
      * The law's domain is exactly a write whose tag beats the key's current one, and outside it **no
      * delta can exist** — not this one, not a cleverer one.
      *
-     * A delta is *joined*, and a join can only move up the lattice. [LWWMap.set] *assigns*, so a
+     * A delta is *joined*, and a join can only move up the lattice. [LWWMap.setWhole] *assigns*, so a
      * write with a losing tag moves the writer's own state strictly **down**: below its starting
      * point, hence below anything reachable by joining. The delta path is where the full path ends
      * up anyway — one merge with any peer still holding the winning tag takes the assignment away,
@@ -228,10 +231,10 @@ class LWWMapDeltaMutatorLawTest {
      */
     @Test
     fun aWriteWhoseTagLosesHasNoDeltaAndBothPathsConvergeAnyway() {
-        val converged = LWWMap.empty<String, String>().set(bravo, 10L, "k", "winner")
+        val converged = LWWMap.empty<String, String>().setWhole(bravo, 10L, "k", "winner")
 
-        val laggingFull = converged.set(alpha, 5L, "k", "lagging")
-        val laggingDelta = converged.piece(converged.setDelta(alpha, 5L, "k", "lagging"))
+        val laggingFull = converged.setWhole(alpha, 5L, "k", "lagging")
+        val laggingDelta = converged.piece(converged.set(alpha, 5L, "k", "lagging"))
 
         assertAll(
             { assertEquals("lagging", laggingFull["k"], "set assigns, so a losing write shows up locally…") },
@@ -279,12 +282,12 @@ class LWWMapDeltaMutatorLawTest {
                 val timestamp = clock.tick()
                 if (random.nextInt(REMOVE_IN) == 0) {
                     removeDeltas++
-                    deltas += author.removeDelta(replica, timestamp, key).delta
-                    author = author.remove(replica, timestamp, key)
+                    deltas += author.remove(replica, timestamp, key).delta
+                    author = author.removeWhole(replica, timestamp, key)
                 } else {
                     val value = VALUES.random(random)
-                    deltas += author.setDelta(replica, timestamp, key, value).delta
-                    author = author.set(replica, timestamp, key, value)
+                    deltas += author.set(replica, timestamp, key, value).delta
+                    author = author.setWhole(replica, timestamp, key, value)
                 }
             }
 
@@ -304,16 +307,16 @@ class LWWMapDeltaMutatorLawTest {
 
     /**
      * The property the whole change buys: one write's frame is **flat** in the size of the map,
-     * while `Patch(map.set(…))` is O(keys). "Smaller than before" would pass a change that
+     * while `Patch(map.setWhole(…))` is O(keys). "Smaller than before" would pass a change that
      * reintroduced O(keys) with a better constant; identical bytes at every size will not.
      */
     @Test
     fun theDeltasEncodedSizeDoesNotGrowWithTheMap() {
         val maps = MAP_SIZES.map { n ->
-            (1..n).fold(LWWMap.empty<String, String>()) { map, i -> map.set(alpha, i.toLong(), "k$i", "v$i") }
+            (1..n).fold(LWWMap.empty<String, String>()) { map, i -> map.setWhole(alpha, i.toLong(), "k$i", "v$i") }
         }
-        val deltaSizes = maps.map { bytes(it.setDelta(bravo, LATE_TIMESTAMP, "k1", "changed").delta).size }
-        val fullSizes = maps.map { bytes(it.set(bravo, LATE_TIMESTAMP, "k1", "changed")).size }
+        val deltaSizes = maps.map { bytes(it.set(bravo, LATE_TIMESTAMP, "k1", "changed").delta).size }
+        val fullSizes = maps.map { bytes(it.setWhole(bravo, LATE_TIMESTAMP, "k1", "changed")).size }
 
         assertAll(
             {
@@ -367,9 +370,9 @@ class LWWMapDeltaMutatorLawTest {
             val replica = REPLICAS.random(random)
             val tag = Tag(clock.tick(), replica)
             map = if (random.nextInt(REMOVE_IN) == 0) {
-                map.remove(replica, tag.timestamp, key)
+                map.removeWhole(replica, tag.timestamp, key)
             } else {
-                map.set(replica, tag.timestamp, key, VALUES.random(random))
+                map.setWhole(replica, tag.timestamp, key, VALUES.random(random))
             }
             tags[key] = tag
         }

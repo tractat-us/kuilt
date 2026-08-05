@@ -15,6 +15,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ORMap
 import us.tractat.kuilt.crdt.Patch
+import us.tractat.kuilt.crdt.piece
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
@@ -66,10 +67,10 @@ class MemberRosterORMapTest {
             delay(1) // let collectors subscribe under StandardTestDispatcher
 
             // Alice adds herself with a check-in count of 1.
-            aliceRoster.apply(Patch(aliceRoster.state.value.put(aliceRoster.replica, "alice", GCounter.of(aliceRoster.replica to 1L))))
+            aliceRoster.mutate { it.put(aliceRoster.replica, "alice", GCounter.of(aliceRoster.replica to 1L)) }
 
             // Bob adds himself with a check-in count of 2.
-            bobRoster.apply(Patch(bobRoster.state.value.put(bobRoster.replica, "bob", GCounter.of(bobRoster.replica to 2L))))
+            bobRoster.mutate { it.put(bobRoster.replica, "bob", GCounter.of(bobRoster.replica to 2L)) }
 
             delay(10) // advance virtual time so all delta broadcasts deliver
 
@@ -96,8 +97,8 @@ class MemberRosterORMapTest {
             delay(1) // let collectors subscribe under StandardTestDispatcher
 
             // Both peers put "shared-task" with their own GCounter slot — these merge via GCounter.piece.
-            aliceRoster.apply(Patch(aliceRoster.state.value.put(aliceRoster.replica, "shared-task", GCounter.of(aliceRoster.replica to 3L))))
-            bobRoster.apply(Patch(bobRoster.state.value.put(bobRoster.replica, "shared-task", GCounter.of(bobRoster.replica to 5L))))
+            aliceRoster.mutate { it.put(aliceRoster.replica, "shared-task", GCounter.of(aliceRoster.replica to 3L)) }
+            bobRoster.mutate { it.put(bobRoster.replica, "shared-task", GCounter.of(bobRoster.replica to 5L)) }
 
             delay(10) // advance virtual time so all delta broadcasts deliver
 
@@ -119,16 +120,16 @@ class MemberRosterORMapTest {
             delay(1) // let collectors subscribe under StandardTestDispatcher
 
             // Alice puts "charlie" on her replica.
-            aliceRoster.apply(Patch(aliceRoster.state.value.put(aliceRoster.replica, "charlie", GCounter.of(aliceRoster.replica to 1L))))
+            aliceRoster.mutate { it.put(aliceRoster.replica, "charlie", GCounter.of(aliceRoster.replica to 1L)) }
 
             delay(10) // let the put propagate to Bob
 
             // Bob observes "charlie" and then removes it.
             assertTrue("charlie" in bobRoster.state.value.keys)
-            bobRoster.apply(Patch(bobRoster.state.value.remove("charlie")))
+            bobRoster.mutate { it.remove("charlie") }
 
             // Alice concurrently puts "charlie" again with a fresh tag — Bob hasn't seen this tag.
-            aliceRoster.apply(Patch(aliceRoster.state.value.put(aliceRoster.replica, "charlie", GCounter.of(aliceRoster.replica to 2L))))
+            aliceRoster.mutate { it.put(aliceRoster.replica, "charlie", GCounter.of(aliceRoster.replica to 2L)) }
 
             delay(10) // advance virtual time so all delta broadcasts deliver
 

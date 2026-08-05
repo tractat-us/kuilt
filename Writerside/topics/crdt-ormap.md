@@ -12,21 +12,44 @@ That is what makes a delivery order irrelevant. When one replica removes a key a
 
 One consequence worth knowing before you rely on removal to erase something. Writing to a key again *moves* that replica's earlier writes onto the new dot, so they are no longer sitting where a concurrent remover can reach them: if A writes, B sees it, and then A writes again while B removes the key, A's first write survives. It rode a dot B never saw. Removal erases what it observed at the dot it observed it on — it is not a guarantee that a value is gone everywhere for good.
 
+## What each change costs to send
+
+Adding one name to one team should cost about as much as one name. So `put` and `remove` hand you
+back **the change** — the one key you touched — and that is what goes to the other devices. The size
+of what travels does not depend on how many keys the map holds, nor on how much everybody else has
+already written under that key.
+
+In code, both mutators return a `Patch<ORMap<K, S>>`. Hand it to a replicator with
+`quilter.mutate { it.put(replica, key, value) }`; to hold the resulting whole map outside a
+replicator, absorb the patch: `map.piece { it.put(replica, key, value) }`.
+
+A put's delta carries **the value you passed**, not the merged result of your value and what was
+already stored. The receiver re-does that merge against its own copy, which is the copy that
+matters there — so on a nested `ORMap<String, ORSet<String>>` a device adding one member ships one
+name, not the roster. What the delta cannot leave out is the sender's own earlier writes to that
+key, because the tag this put mints supersedes them and has to carry what they held; a replica
+growing one key alone therefore pays for its own history each time
+([issue 2102](https://github.com/tractat-us/kuilt/issues/2102)).
+
 ## Code example
 
 <!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleORMap -->
 ```kotlin
-val a = ReplicaId("A")
-val b = ReplicaId("B")
+// Two peers have converged: "team" already holds a long roster, put there by B.
+var alpha = ORMap.empty<String, GSet<String>>()
+    .piece { it.put(b, "team", GSet.of("alice", "bob", "carol", "dan")) }
+var bravo = alpha
 
-val start = ORMap.empty<String, GSet<String>>()
-    .put(a, "team", GSet.of("alice"))
+// A adds one member and puts only the change on the wire. The delta carries A's one name —
+// not the merged roster — because the receiver re-does that merge against its own copy.
+val hire = alpha.put(a, "team", GSet.of("erin"))
+check(hire.delta["team"] == GSet.of("erin"))
 
-val alice = start.remove("team")                          // Alice removes the key
-val bob = start.put(b, "team", GSet.of("bob"))            // Bob concurrently adds
-
-val merged = alice.piece(bob)
-check("team" in merged.keys)                               // add-wins on the key
+// A's tag joins B's rather than replacing it, so the key's value is both writes together.
+alpha = alpha.piece(hire)
+bravo = bravo.piece(hire)
+check(alpha == bravo)
+check(alpha["team"] == GSet.of("alice", "bob", "carol", "dan", "erin"))
 ```
 
 ## When to use

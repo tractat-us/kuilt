@@ -82,7 +82,7 @@ public class JsonCrdt internal constructor(
         require(replica.value.isNotEmpty()) {
             "Cannot mutate a JsonCrdt with an empty replica id — call withReplica() after deserialization."
         }
-        return JsonCrdt(root.put(replica, key, node), replica)
+        return JsonCrdt(root.piece { it.put(replica, key, node) }, replica)
     }
 
     /**
@@ -97,7 +97,7 @@ public class JsonCrdt internal constructor(
         require(replica.value.isNotEmpty()) {
             "Cannot mutate a JsonCrdt with an empty replica id — call withReplica() after deserialization."
         }
-        return JsonCrdt(root.remove(key), replica)
+        return JsonCrdt(root.piece { it.remove(key) }, replica)
     }
 
     override fun piece(other: JsonCrdt): JsonCrdt =

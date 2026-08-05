@@ -32,10 +32,11 @@ import kotlin.time.Instant
  *
  * [WarpNode] replicates its queue, its results board and its intent register through
  * [us.tractat.kuilt.quilter.Quilter]s, and a replicator broadcasts a patch's delta verbatim.
- * Handing it `Patch(state.value.put(…))` therefore ships the *whole* map on every write — so a
- * node with a thousand tasks pending paid a thousand tasks' worth of bytes to enqueue the
- * thousand-and-first. Every mutation site now goes through `quilter.mutate { it.putDelta(…) }`
- * (part of #2044), whose frame carries only the touched entry.
+ * Handing it a patch built from the whole new map therefore ships that whole map on every write
+ * — so a node with a thousand tasks pending paid a thousand tasks' worth of bytes to enqueue
+ * the thousand-and-first. `ORMap.put` now returns the delta itself, so every mutation site goes
+ * through `quilter.mutate { it.put(…) }` (part of #2044), whose frame carries only the touched
+ * entry.
  *
  * Measured here — bytes node A hands to [Seam.broadcast] across one task's whole lifecycle
  * (enqueue → execute → result → queue and intent removal), with `resident` other tasks parked

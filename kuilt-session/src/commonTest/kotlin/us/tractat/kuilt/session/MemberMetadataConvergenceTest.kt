@@ -15,7 +15,6 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.crdt.LWWMap
-import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.quilter.QuiltMessage
 import us.tractat.kuilt.quilter.Quilter
@@ -79,8 +78,8 @@ class MemberMetadataConvergenceTest {
             // Derive ReplicaId from PeerId to match MemberMetadata.set's tie-break contract.
             val hostReplica = ReplicaId(hostRoom.selfId.value)
             val joinerReplica = ReplicaId(joinerRoom.selfId.value)
-            val hostPatch = Patch(LWWMap.empty<PeerId, String>().set(hostReplica, 1L, hostRoom.selfId, "Alice"))
-            val joinerPatch = Patch(LWWMap.empty<PeerId, String>().set(joinerReplica, 1L, joinerRoom.selfId, "Bob"))
+            val hostPatch = LWWMap.empty<PeerId, String>().set(hostReplica, 1L, hostRoom.selfId, "Alice")
+            val joinerPatch = LWWMap.empty<PeerId, String>().set(joinerReplica, 1L, joinerRoom.selfId, "Bob")
 
             repHost.apply(hostPatch)
             repJoiner.apply(joinerPatch)

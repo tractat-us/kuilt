@@ -22,7 +22,7 @@ class ORMapTest {
 
     @Test
     fun putThenContains() {
-        val m = ORMap.empty<String, GCounter>().put(a, "votes", GCounter.of(a to 1L))
+        val m = ORMap.empty<String, GCounter>().piece { it.put(a, "votes", GCounter.of(a to 1L)) }
         assertTrue("votes" in m.keys)
         assertEquals(1L, m["votes"]?.value)
     }
@@ -30,8 +30,8 @@ class ORMapTest {
     @Test
     fun valuesMergeViaTheirOwnPiece() {
         // Alice and Bob each insert their own per-replica GCounter under "votes"; merge sums them.
-        val mA = ORMap.empty<String, GCounter>().put(a, "votes", GCounter.of(a to 3L))
-        val mB = ORMap.empty<String, GCounter>().put(b, "votes", GCounter.of(b to 5L))
+        val mA = ORMap.empty<String, GCounter>().piece { it.put(a, "votes", GCounter.of(a to 3L)) }
+        val mB = ORMap.empty<String, GCounter>().piece { it.put(b, "votes", GCounter.of(b to 5L)) }
         val merged = mA.piece(mB)
         assertEquals(8L, merged["votes"]?.value)
     }
@@ -42,8 +42,8 @@ class ORMapTest {
         // second put supersedes the first's tag, so the fresh tag has to carry what that tag held —
         // drop that fold and a replica silently loses its own history on every re-put.
         val m = ORMap.empty<String, GCounter>()
-            .put(a, "votes", GCounter.of(a to 3L))
-            .put(a, "votes", GCounter.of(b to 4L))
+            .piece { it.put(a, "votes", GCounter.of(a to 3L)) }
+            .piece { it.put(a, "votes", GCounter.of(b to 4L)) }
 
         assertEquals(7L, m["votes"]?.value)
         assertEquals(1, m.tagsOn("votes").size, "…while still leaving the replica one tag on the key")
@@ -51,17 +51,17 @@ class ORMapTest {
 
     @Test
     fun removeMakesKeyAbsent() {
-        val m = ORMap.empty<String, GCounter>().put(a, "votes", GCounter.of(a to 1L))
-        assertFalse("votes" in m.remove("votes").keys)
-        assertNull(m.remove("votes")["votes"])
+        val m = ORMap.empty<String, GCounter>().piece { it.put(a, "votes", GCounter.of(a to 1L)) }
+        assertFalse("votes" in m.piece { it.remove("votes") }.keys)
+        assertNull(m.piece { it.remove("votes") }["votes"])
     }
 
     @Test
     fun addWinsOverConcurrentRemove() {
         // shared start: alice puts "votes" -> {a:1}
-        val start = ORMap.empty<String, GCounter>().put(a, "votes", GCounter.of(a to 1L))
-        val alice = start.remove("votes")            // alice removes what she saw
-        val bob = start.put(b, "votes", GCounter.of(b to 1L)) // bob concurrently re-puts
+        val start = ORMap.empty<String, GCounter>().piece { it.put(a, "votes", GCounter.of(a to 1L)) }
+        val alice = start.piece { it.remove("votes") }            // alice removes what she saw
+        val bob = start.piece { it.put(b, "votes", GCounter.of(b to 1L)) } // bob concurrently re-puts
         val merged = alice.piece(bob)
         assertTrue("votes" in merged.keys) // add wins: bob's presence tag (B,1) survives
         // …and the value is bob's contribution alone. Alice's remove retired tag (A,1), and a tag
@@ -77,10 +77,10 @@ class ORMapTest {
         // The same shape one step on: the key is put twice before the remove, so the tag the
         // remover retires is carrying a fold of two writes rather than one, and both go.
         val start = ORMap.empty<String, GCounter>()
-            .put(a, "votes", GCounter.of(a to 1L))
-            .put(a, "votes", GCounter.of(a to 4L))
-        val bob = start.put(b, "votes", GCounter.of(b to 2L))
-        val merged = start.remove("votes").piece(bob)
+            .piece { it.put(a, "votes", GCounter.of(a to 1L)) }
+            .piece { it.put(a, "votes", GCounter.of(a to 4L)) }
+        val bob = start.piece { it.put(b, "votes", GCounter.of(b to 2L)) }
+        val merged = start.piece { it.remove("votes") }.piece(bob)
 
         assertEquals(2L, merged["votes"]?.value, "only the write the remover never observed survives")
     }
@@ -103,9 +103,9 @@ class ORMapTest {
      */
     @Test
     fun aReplicasRePutCarriesItsEarlierWriteBeyondAConcurrentRemove() {
-        val start = ORMap.empty<String, GCounter>().put(a, "votes", GCounter.of(a to 1L))
-        val alice = start.put(a, "votes", GCounter.of(b to 4L)) // supersedes (A,1), re-homes {a:1}
-        val bob = start.remove("votes")                         // retires (A,1) — all bob can see
+        val start = ORMap.empty<String, GCounter>().piece { it.put(a, "votes", GCounter.of(a to 1L)) }
+        val alice = start.piece { it.put(a, "votes", GCounter.of(b to 4L)) } // supersedes (A,1), re-homes {a:1}
+        val bob = start.piece { it.remove("votes") }                         // retires (A,1) — all bob can see
 
         val merged = alice.piece(bob)
 
@@ -123,9 +123,9 @@ class ORMapTest {
 
     @Test
     fun mergeIsCommutative() {
-        val start = ORMap.empty<String, GCounter>().put(a, "votes", GCounter.of(a to 1L))
-        val alice = start.remove("votes")
-        val bob = start.put(b, "votes", GCounter.of(b to 1L))
+        val start = ORMap.empty<String, GCounter>().piece { it.put(a, "votes", GCounter.of(a to 1L)) }
+        val alice = start.piece { it.remove("votes") }
+        val bob = start.piece { it.put(b, "votes", GCounter.of(b to 1L)) }
         assertEquals(alice.piece(bob), bob.piece(alice))
     }
 
@@ -134,7 +134,7 @@ class ORMapTest {
         // An entry keys its contributions by Dot, so plain JSON needs the structured-key flag —
         // same as MVRegister and ResettableCounter. CBOR and Protobuf need nothing.
         val json = Json { allowStructuredMapKeys = true }
-        val m = ORMap.empty<String, GCounter>().put(a, "votes", GCounter.of(a to 1L))
+        val m = ORMap.empty<String, GCounter>().piece { it.put(a, "votes", GCounter.of(a to 1L)) }
         val ser = ORMap.serializer(String.serializer(), GCounter.serializer())
         assertEquals(m, json.decodeFromString(ser, json.encodeToString(ser, m)))
     }

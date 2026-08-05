@@ -13,21 +13,40 @@ Every `add(replica, element)` tags the element with a unique dot `(replica, coun
 
 This is why add wins over a *concurrent* remove: a concurrent remove only witnessed dots it already had. A new dot minted by the concurrent add was never seen by the remover, so it survives.
 
+## What each change costs to send
+
+Ticking one item off a four-hundred-item list should cost about as much as one item, not four
+hundred. So `add` and `remove` hand you back **the change** — the element you touched, and a short
+note about which older versions of it this replaces — and that is what goes to the other devices.
+The size of what travels does not depend on how big the set is.
+
+In code, both mutators return a `Patch<ORSet<E>>`. Hand it to a replicator with
+`quilter.mutate { it.add(replica, element) }`, which reads the current state under the replicator's
+own lock and broadcasts only the delta. If you are holding a set outside a replicator and want the
+resulting whole set, absorb the patch: `set.piece { it.add(replica, element) }`.
+
+An add's delta names the dot it mints **and the dots that add supersedes**. That second part is not
+an optimisation detail — leave it out and a later remove retires only the dot the remover knew
+about, and the element comes back from the dead on every other device.
+
 ## Code example
 
 <!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleORSet -->
 ```kotlin
-val a = ReplicaId("A")
-val b = ReplicaId("B")
+// Two peers have converged: "alice" is present on both, added by B.
+var alpha = ORSet.empty<String>().piece { it.add(b, "alice") }
+var bravo = alpha
 
-// Shared start: "alice" is present on both replicas.
-val start = ORSet.empty<String>().add(a, "alice")
+// A re-adds "alice" and puts only the change on the wire. The delta names A's new dot
+// *and* B's older one, which the re-add supersedes — so both peers drop the old dot.
+val readd = alpha.add(a, "alice")
+alpha = alpha.piece(readd)
+bravo = bravo.piece(readd)
+check(alpha == bravo)
 
-val alice = start.remove("alice")       // Alice concurrently removes
-val bob = start.add(b, "alice")         // Bob concurrently re-adds
-
-val merged = alice.piece(bob)
-check(merged.contains("alice"))         // add-wins
+// A concurrent add beats a concurrent remove: B's re-add mints a dot A's remove never saw.
+val concurrent = alpha.add(b, "alice")
+check(alpha.piece(alpha.remove("alice")).piece(concurrent).contains("alice"))
 ```
 
 ## When to use

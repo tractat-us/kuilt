@@ -7,6 +7,7 @@ import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.crdt.Dot
 import us.tractat.kuilt.crdt.ORSet
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.piece
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -114,7 +115,7 @@ class CausalLinkInferenceTest {
         val serializer = ORSet.serializer(SpanRecord.serializer())
         val stamped = span(1, 2, parent = 1, stamp = CausalStamp(dot(2), setOf(dot(1))))
 
-        val set = ORSet.empty<SpanRecord>().add(replica, stamped)
+        val set = ORSet.empty<SpanRecord>().piece { it.add(replica, stamped) }
         val bytes = cbor.encodeToByteArray(serializer, set)
         val decoded = cbor.decodeFromByteArray(serializer, bytes)
 

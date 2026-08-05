@@ -7,6 +7,7 @@ import net.jqwik.api.Property
 import net.jqwik.api.Provide
 import us.tractat.kuilt.crdt.LWWMap
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.piece
 
 /**
  * Lattice law properties for [LWWMap].
@@ -38,10 +39,10 @@ internal class LWWMapLawsPropertyTest {
                 // op kind and value are pure functions of (replicaIndex, timestamp, key) —
                 // deterministic, so shared tags always carry the same write (set or remove)
                 if ((op.timestamp + op.replicaIndex) % 4L == 3L) {
-                    s.remove(replicas[op.replicaIndex], op.timestamp, op.key)
+                    s.piece { it.remove(replicas[op.replicaIndex], op.timestamp, op.key) }
                 } else {
                     val value = "v-${op.replicaIndex}-${op.timestamp}-${op.key}"
-                    s.set(replicas[op.replicaIndex], op.timestamp, op.key, value)
+                    s.piece { it.set(replicas[op.replicaIndex], op.timestamp, op.key, value) }
                 }
             }
         }

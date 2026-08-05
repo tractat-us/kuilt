@@ -33,6 +33,7 @@ import us.tractat.kuilt.crdt.LWWRegister
 import us.tractat.kuilt.crdt.ORMap
 import us.tractat.kuilt.crdt.ORSet
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.piece
 import kotlin.math.absoluteValue
 import kotlin.random.Random
 
@@ -243,7 +244,7 @@ private fun runDVariant(
 
     // Seed the initial join ORSet — all initial peers are in it, added by peer-0.
     val initialJoins = initialIds.fold(ORSet.empty<String>()) { acc, id ->
-        acc.add(initialIds[0], id.value)
+        acc.piece { it.add(initialIds[0], id.value) }
     }
 
     var peers = initialIds.map { id ->
@@ -372,7 +373,7 @@ private fun runDVariant(
                     val newClock = current.clock + 1L
                     val register = LWWRegister.empty<String>().set(peer.id, newClock, "result-by-${peer.id.value}")
                     current = current.copy(
-                        results = current.results.put(peer.id, taskId, register),
+                        results = current.results.piece { it.put(peer.id, taskId, register) },
                         clock = newClock,
                     )
                 }
@@ -387,7 +388,7 @@ private fun runDVariant(
             val witness = peers[0]
             var addedQueue = witness.queue
             repeat(tasksPerRound) {
-                addedQueue = addedQueue.add(witness.id, TaskId("task-$nextTaskIdx"))
+                addedQueue = addedQueue.piece { it.add(witness.id, TaskId("task-$nextTaskIdx")) }
                 nextTaskIdx++
             }
             totalTaskCount += tasksPerRound
@@ -467,7 +468,7 @@ private fun applyChurn(
             val peerIdx = updatedPeers.indexOfFirst { it.id.value == id }
             if (peerIdx >= 0) {
                 val peer = updatedPeers[peerIdx]
-                val newSet = newPartitioned.add(peer.id, id)
+                val newSet = newPartitioned.piece { it.add(peer.id, id) }
                 newPartitioned = newSet
                 // The partitioned peer knows it's partitioned immediately (self-detection).
                 updatedPeers[peerIdx] = peer.copy(partitioned = newSet)
@@ -484,7 +485,7 @@ private fun applyChurn(
                 val peer = updatedPeers[peerIdx]
                 // Departing peer writes its id to the leave ORSet and removes itself.
                 // The delta will propagate to others via gossip.
-                newLeaves = newLeaves.add(peer.id, id)
+                newLeaves = newLeaves.piece { it.add(peer.id, id) }
                 updatedPeers.removeAt(peerIdx)
             }
             leaveCount++
@@ -496,7 +497,7 @@ private fun applyChurn(
         val newId = ReplicaId("peer-$nextIdx")
         nextIdx++
         // Joiner adds itself to the join set — delta propagates to others via gossip.
-        newJoins = newJoins.add(newId, newId.value)
+        newJoins = newJoins.piece { it.add(newId, newId.value) }
         val newPeer = DPeerState(
             id = newId,
             memberJoins = newJoins,
@@ -678,7 +679,7 @@ private fun buildDInitialQueue(
     var queue = ORSet.empty<TaskId>()
     for (i in 0 until taskCount) {
         val owner = replicaIds[rng.nextInt(peerCount)]
-        queue = queue.add(owner, TaskId("task-$i"))
+        queue = queue.piece { it.add(owner, TaskId("task-$i")) }
     }
     return queue
 }

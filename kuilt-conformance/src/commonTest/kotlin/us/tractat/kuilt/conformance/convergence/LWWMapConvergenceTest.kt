@@ -3,6 +3,7 @@ package us.tractat.kuilt.conformance.convergence
 import kotlinx.serialization.builtins.serializer
 import us.tractat.kuilt.crdt.LWWMap
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.piece
 
 internal class LWWMapConvergenceTest : CrdtConvergenceSuite<LWWMap<String, String>>() {
     override fun newHarness(): CrdtConvergenceHarness<LWWMap<String, String>> = CrdtConvergenceHarness(
@@ -13,7 +14,7 @@ internal class LWWMapConvergenceTest : CrdtConvergenceSuite<LWWMap<String, Strin
             val ts = random.nextLong(0L, 10L)
             val key = "k-${random.nextInt(0, 3)}"
             val value = "v-${random.nextInt(0, 10)}"
-            state.set(r, ts, key, value)
+            state.piece { it.set(r, ts, key, value) }
         },
         serializer = LWWMap.serializer(String.serializer(), String.serializer()),
         replicaCount = 3,

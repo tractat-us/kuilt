@@ -18,8 +18,9 @@ import kotlin.test.assertTrue
  * X.piece(mᵟ(X)) == m(X)
  * ```
  *
- * for every state `X` and every mutator `m` — [ORMap.put] against [ORMap.putDelta], [ORMap.remove]
- * against [ORMap.removeDelta].
+ * for every state `X` and every mutator `m` — [ORMap.put]'s delta against [ORMap.putWhole],
+ * [ORMap.remove]'s against [ORMap.removeWhole]. The reference side is deliberately the internal
+ * whole-state form: comparing the delta path against itself would prove nothing.
  *
  * **Why bytes and not just `equals`.** Two states can compare equal and still encode two ways. The
  * anti-entropy gate hashes the state *as it appears on the wire*, so a delta path that left two
@@ -27,8 +28,8 @@ import kotlin.test.assertTrue
  * — and every round drawing them would fall back to shipping full states, which is the cost this
  * whole mechanism exists to avoid. `equals` cannot see that; a byte comparison can.
  *
- * **Why the law alone is not enough here.** `Patch(map.put(…))` — the whole state — satisfies the
- * law perfectly; that is what ships today. So does a delta carrying the sender's *locally merged*
+ * **Why the law alone is not enough here.** `Patch(map.putWhole(…))` — the whole state — satisfies
+ * the law perfectly; that is what shipped before this change. So does a delta carrying the sender's *locally merged*
  * value instead of the caller's. Both converge and both throw the saving away, and no law, no
  * convergence property and no negative control in this file can tell. The law tests are therefore
  * paired with tests that measure **what actually goes on the wire** — see
@@ -78,8 +79,8 @@ class ORMapDeltaMutatorLawTest {
             val value = GSet.of(VALUES.random(random))
             if (state.tagsOn(key).size > 1) multiTagTrials++
 
-            val viaFull = state.put(charlie, key, value)
-            val viaDelta = state.piece(state.putDelta(charlie, key, value))
+            val viaFull = state.putWhole(charlie, key, value)
+            val viaDelta = state.piece(state.put(charlie, key, value))
 
             assertEquals(viaFull, viaDelta, "trial $trial: put law by equality, key=$key")
             assertTrue(
@@ -101,8 +102,8 @@ class ORMapDeltaMutatorLawTest {
             val key = KEYS.random(random)
             if (state.tagsOn(key).size > 1) multiTagTrials++
 
-            val viaFull = state.remove(key)
-            val viaDelta = state.piece(state.removeDelta(key))
+            val viaFull = state.removeWhole(key)
+            val viaDelta = state.piece(state.remove(key))
 
             assertEquals(viaFull, viaDelta, "trial $trial: remove law by equality, key=$key")
             assertTrue(
@@ -117,9 +118,9 @@ class ORMapDeltaMutatorLawTest {
     @Test
     fun removingAnAbsentKeyYieldsTheLatticeIdentity() {
         val state = ORMap.empty<String, GSet<String>>()
-            .put(alpha, "kept", GSet.of("x"))
-            .put(bravo, "also-kept", GSet.of("y"))
-        val identity = state.removeDelta("never-put")
+            .putWhole(alpha, "kept", GSet.of("x"))
+            .putWhole(bravo, "also-kept", GSet.of("y"))
+        val identity = state.remove("never-put")
 
         assertAll(
             {
@@ -157,12 +158,12 @@ class ORMapDeltaMutatorLawTest {
     @Test
     fun putDeltaCarriesTheSuppliedValueNotTheLocallyMergedOne() {
         val contributed = GSet.of("fresh")
-        val small = ORMap.empty<String, GSet<String>>().put(alpha, KEY, GSet.of("x", "y"))
+        val small = ORMap.empty<String, GSet<String>>().putWhole(alpha, KEY, GSet.of("x", "y"))
         val large = ORMap.empty<String, GSet<String>>()
-            .put(alpha, KEY, GSet.of(*Array(BULKY_VALUE_SIZE) { "e$it" }))
+            .putWhole(alpha, KEY, GSet.of(*Array(BULKY_VALUE_SIZE) { "e$it" }))
 
-        val fromSmall = small.putDelta(bravo, KEY, contributed)
-        val fromLarge = large.putDelta(bravo, KEY, contributed)
+        val fromSmall = small.put(bravo, KEY, contributed)
+        val fromLarge = large.put(bravo, KEY, contributed)
 
         assertAll(
             {
@@ -182,14 +183,14 @@ class ORMapDeltaMutatorLawTest {
             {
                 // …and the receiver still lands on the merged value, because it re-does the merge.
                 assertEquals(
-                    large.put(bravo, KEY, contributed),
+                    large.putWhole(bravo, KEY, contributed),
                     large.piece(fromLarge),
                     "the receiver re-does the value merge, so the law still holds",
                 )
             },
             {
                 assertTrue(
-                    bytes(large.put(bravo, KEY, contributed)).contentEquals(bytes(large.piece(fromLarge))),
+                    bytes(large.putWhole(bravo, KEY, contributed)).contentEquals(bytes(large.piece(fromLarge))),
                     "…byte-for-byte",
                 )
             },
@@ -206,8 +207,8 @@ class ORMapDeltaMutatorLawTest {
         val small = bulkyMap(otherKeys = 1)
         val large = bulkyMap(otherKeys = BULKY_KEY_COUNT)
 
-        val fromSmall = small.removeDelta(KEY)
-        val fromLarge = large.removeDelta(KEY)
+        val fromSmall = small.remove(KEY)
+        val fromLarge = large.remove(KEY)
 
         assertAll(
             {
@@ -226,7 +227,7 @@ class ORMapDeltaMutatorLawTest {
             },
             {
                 assertEquals(
-                    large.remove(KEY),
+                    large.removeWhole(KEY),
                     large.piece(fromLarge),
                     "absorbing it must retire exactly that key",
                 )
@@ -238,8 +239,8 @@ class ORMapDeltaMutatorLawTest {
 
     /**
      * The point of the whole change, and **the one thing the law cannot see**: a delta's frame is
-     * *flat* in the size of the state it was built from. `Patch(map.put(…))` — the whole state —
-     * satisfies `X.piece(mᵟ(X)) == m(X)` perfectly, so every law test, every convergence test and
+     * *flat* in the size of the state it was built from. `Patch(map.putWhole(…))` — the whole state
+     * — satisfies `X.piece(mᵟ(X)) == m(X)` perfectly, so every law test, every convergence test and
      * every negative control in this file stays green while nothing at all has been saved.
      *
      * Measured at two map sizes an order of magnitude apart. Flatness, not "smaller than the full
@@ -252,23 +253,23 @@ class ORMapDeltaMutatorLawTest {
         val large = mapOfSize(LARGE_STATE)
 
         assertFlat(
-            small = bytes(small.putDelta(bravo, "k-0", GSet.of("fresh")).delta),
-            large = bytes(large.putDelta(bravo, "k-0", GSet.of("fresh")).delta),
-            fullState = bytes(large.put(bravo, "k-0", GSet.of("fresh"))),
+            small = bytes(small.put(bravo, "k-0", GSet.of("fresh")).delta),
+            large = bytes(large.put(bravo, "k-0", GSet.of("fresh")).delta),
+            fullState = bytes(large.putWhole(bravo, "k-0", GSet.of("fresh"))),
             what = "put delta over a $SMALL_STATE-key vs a $LARGE_STATE-key map",
         )
     }
 
-    /** The same for [ORMap.removeDelta]. */
+    /** The same for [ORMap.remove]'s delta. */
     @Test
     fun aRemoveDeltasFrameIsFlatInMapSize() {
         val small = mapOfSize(SMALL_STATE)
         val large = mapOfSize(LARGE_STATE)
 
         assertFlat(
-            small = bytes(small.removeDelta("k-0").delta),
-            large = bytes(large.removeDelta("k-0").delta),
-            fullState = bytes(large.remove("k-0")),
+            small = bytes(small.remove("k-0").delta),
+            large = bytes(large.remove("k-0").delta),
+            fullState = bytes(large.removeWhole("k-0")),
             what = "remove delta over a $SMALL_STATE-key vs a $LARGE_STATE-key map",
         )
     }
@@ -284,14 +285,14 @@ class ORMapDeltaMutatorLawTest {
      */
     @Test
     fun aPutDeltasFrameIsFlatInTheStoredValuesSize() {
-        val contributed = ORSet.empty<String>().add(bravo, "fresh")
+        val contributed = ORSet.empty<String>().addWhole(bravo, "fresh")
         val small = nestedMapWithValueOfSize(SMALL_STATE)
         val large = nestedMapWithValueOfSize(LARGE_STATE)
 
         assertFlat(
-            small = nestedBytes(small.putDelta(bravo, KEY, contributed).delta),
-            large = nestedBytes(large.putDelta(bravo, KEY, contributed).delta),
-            fullState = nestedBytes(large.put(bravo, KEY, contributed)),
+            small = nestedBytes(small.put(bravo, KEY, contributed).delta),
+            large = nestedBytes(large.put(bravo, KEY, contributed).delta),
+            fullState = nestedBytes(large.putWhole(bravo, KEY, contributed)),
             what = "put delta over a $SMALL_STATE-element vs a $LARGE_STATE-element nested value",
         )
     }
@@ -315,22 +316,22 @@ class ORMapDeltaMutatorLawTest {
     @Test
     fun aPutDeltaCarriesTheSendersOwnRunningContributionToTheKey() {
         // Each put contributes one element carrying a *fresh* inner dot. Handing `put` a series of
-        // `ORSet.empty().add(…)` values instead would reuse `(replica, 1)` every time, and folding
+        // `ORSet.empty().addWhole(…)` values instead would reuse `(replica, 1)` every time, and folding
         // two of those retires both elements — a degenerate fixture that measures nothing.
         fun grownBy(replica: ReplicaId, elements: Int): ORMap<String, ORSet<String>> {
             var inner = ORSet.empty<String>()
             var map = ORMap.empty<String, ORSet<String>>()
             repeat(elements) { index ->
-                val patch = inner.addDelta(replica, "own-$index")
+                val patch = inner.add(replica, "own-$index")
                 inner = inner.piece(patch)
-                map = map.put(replica, KEY, patch.delta)
+                map = map.putWhole(replica, KEY, patch.delta)
             }
             return map
         }
 
-        val contributed = ORSet.empty<String>().add(alpha, "fresh")
-        val afterOne = nestedBytes(grownBy(alpha, 1).putDelta(alpha, KEY, contributed).delta).size.toLong()
-        val afterMany = nestedBytes(grownBy(alpha, LARGE_STATE).putDelta(alpha, KEY, contributed).delta).size.toLong()
+        val contributed = ORSet.empty<String>().addWhole(alpha, "fresh")
+        val afterOne = nestedBytes(grownBy(alpha, 1).put(alpha, KEY, contributed).delta).size.toLong()
+        val afterMany = nestedBytes(grownBy(alpha, LARGE_STATE).put(alpha, KEY, contributed).delta).size.toLong()
 
         assertAll(
             {
@@ -344,10 +345,10 @@ class ORMapDeltaMutatorLawTest {
             {
                 // …and one more replica's separate history does not add to it.
                 val alongsideBravo = grownBy(alpha, LARGE_STATE)
-                    .put(bravo, KEY, ORSet.empty<String>().add(bravo, "theirs"))
+                    .putWhole(bravo, KEY, ORSet.empty<String>().addWhole(bravo, "theirs"))
                 assertEquals(
                     afterMany,
-                    nestedBytes(alongsideBravo.putDelta(alpha, KEY, contributed).delta).size.toLong(),
+                    nestedBytes(alongsideBravo.put(alpha, KEY, contributed).delta).size.toLong(),
                     "another replica's contribution to the same key must not appear in alpha's delta",
                 )
             },
@@ -363,7 +364,7 @@ class ORMapDeltaMutatorLawTest {
      *
      * **The reconstruction this test used to perform is no longer expressible, and that is worth
      * saying out loud rather than quietly dropping.** #2044's shape was
-     * `Patch(ORMap.empty().put(alpha, KEY, v))` — the minted tag and nothing else — and it was a
+     * `Patch(ORMap.empty().putWhole(alpha, KEY, v))` — the minted tag and nothing else — and it was a
      * faithful stand-in while a put superseded *every* tag on the key, because then an omitting
      * delta always differed from the correct one. A put now supersedes only the sender's own tags
      * (#2086), and a fresh map always mints seq 1, so for the reconstruction's dot to be the one the
@@ -377,13 +378,13 @@ class ORMapDeltaMutatorLawTest {
     @Test
     fun aPutDeltaSupersedesTheSendersOwnPriorTagsAndNoOthers() {
         val start = ORMap.empty<String, GSet<String>>()
-            .put(alpha, KEY, GSet.of("v0"))
-            .put(bravo, KEY, GSet.of("v1"))
+            .putWhole(alpha, KEY, GSet.of("v0"))
+            .putWhole(bravo, KEY, GSet.of("v1"))
         val alphaPrior = start.tagsOn(KEY).single { it.replica == alpha }
         val bravoTag = start.tagsOn(KEY).single { it.replica == bravo }
 
-        val receiver = start.piece(start.putDelta(alpha, KEY, GSet.of("v2")))
-        val author = start.put(alpha, KEY, GSet.of("v2"))
+        val receiver = start.piece(start.put(alpha, KEY, GSet.of("v2")))
+        val author = start.putWhole(alpha, KEY, GSet.of("v2"))
 
         assertAll(
             {
@@ -402,7 +403,7 @@ class ORMapDeltaMutatorLawTest {
             },
             {
                 assertFalse(
-                    replayRePutThenRemove { state -> state.putDelta(alpha, KEY, GSet.of("v2")) },
+                    replayRePutThenRemove { state -> state.put(alpha, KEY, GSet.of("v2")) },
                     "end to end: after a correct remove the key must be gone on the receiver too",
                 )
             },
@@ -421,15 +422,15 @@ class ORMapDeltaMutatorLawTest {
     fun aRemoveDeltaCarryingTheWholeContextWouldWipeTheReceiver() {
         val four = listOf("k1", "k2", "k3", "k4")
         val converged = four.fold(ORMap.empty<String, GSet<String>>()) { map, key ->
-            map.put(alpha, key, GSet.of("v-$key"))
+            map.putWhole(alpha, key, GSet.of("v-$key"))
         }
 
-        val patch = converged.removeDelta("k3")
-        val sender = converged.remove("k3")     // the author's own mutator
+        val patch = converged.remove("k3")
+        val sender = converged.removeWhole("k3")     // the author's own mutator
         val receiver = converged.piece(patch)   // a converged peer absorbing the delta
 
         // The issue's shape: everything removed, context untouched.
-        val issueShape = sender.keys.fold(sender) { map, key -> map.remove(key) }
+        val issueShape = sender.keys.fold(sender) { map, key -> map.removeWhole(key) }
 
         assertAll(
             {
@@ -443,7 +444,7 @@ class ORMapDeltaMutatorLawTest {
                 assertEquals(
                     setOf("k1", "k2", "k4"),
                     receiver.keys,
-                    "removeDelta must retire k3's tags and no others",
+                    "the remove delta must retire k3's tags and no others",
                 )
             },
             {
@@ -469,15 +470,15 @@ class ORMapDeltaMutatorLawTest {
      */
     @Test
     fun aNestedValuesDotSpaceDoesNotLeakIntoTheMapsContext() {
-        val innerByCharlie = ORSet.empty<String>().add(charlie, "c1").add(charlie, "c2")
+        val innerByCharlie = ORSet.empty<String>().addWhole(charlie, "c1").addWhole(charlie, "c2")
         val map = ORMap.empty<String, ORSet<String>>()
-            .put(charlie, "other", ORSet.empty<String>().add(alpha, "x"))   // map tag (charlie,1)
-            .put(charlie, "third", ORSet.empty<String>().add(alpha, "y"))   // map tag (charlie,2)
-            .put(alpha, KEY, innerByCharlie)                                // map tag (alpha,1)
+            .putWhole(charlie, "other", ORSet.empty<String>().addWhole(alpha, "x"))   // map tag (charlie,1)
+            .putWhole(charlie, "third", ORSet.empty<String>().addWhole(alpha, "y"))   // map tag (charlie,2)
+            .putWhole(alpha, KEY, innerByCharlie)                                // map tag (alpha,1)
 
-        val contributed = ORSet.empty<String>().add(bravo, "b1")            // one element, one inner dot
-        val patch = map.putDelta(bravo, KEY, contributed)
-        val viaFull = map.put(bravo, KEY, contributed)
+        val contributed = ORSet.empty<String>().addWhole(bravo, "b1")            // one element, one inner dot
+        val patch = map.put(bravo, KEY, contributed)
+        val viaFull = map.putWhole(bravo, KEY, contributed)
         val viaDelta = map.piece(patch)
 
         assertAll(
@@ -516,11 +517,11 @@ class ORMapDeltaMutatorLawTest {
     @Test
     fun removingANestedKeyRetiresOnlyItsMapTags() {
         val map = ORMap.empty<String, ORSet<String>>()
-            .put(charlie, "other", ORSet.empty<String>().add(charlie, "x"))
-            .put(alpha, KEY, ORSet.empty<String>().add(charlie, "c1"))
+            .putWhole(charlie, "other", ORSet.empty<String>().addWhole(charlie, "x"))
+            .putWhole(alpha, KEY, ORSet.empty<String>().addWhole(charlie, "c1"))
 
-        val patch = map.removeDelta(KEY)
-        val viaFull = map.remove(KEY)
+        val patch = map.remove(KEY)
+        val viaFull = map.removeWhole(KEY)
         val viaDelta = map.piece(patch)
 
         assertAll(
@@ -546,12 +547,12 @@ class ORMapDeltaMutatorLawTest {
 
     /**
      * Three replicas, random **put** streams, every delta delivered **shuffled and duplicated**, and
-     * the result compared byte-for-byte against the same op script folded through the **full
-     * mutators** — the path that ships today. This is what licenses the design's claim that no
+     * the result compared byte-for-byte against the same op script folded through the **whole-state
+     * mutators** — the path that shipped before this change. This is what licenses the design's claim that no
      * causal delivery, buffering or de-duplication is required above the lattice: a delta is an
      * element of the same semilattice as the state.
      *
-     * The reference is deliberately the full-mutator fold and not the in-order *delta* fold. A delta
+     * The reference is deliberately the whole-state fold and not the in-order *delta* fold. A delta
      * fold compared against itself is self-consistent under any mutation of the delta shape — it
      * passes just as happily when both sides are equally wrong, and pins nothing.
      */
@@ -568,14 +569,14 @@ class ORMapDeltaMutatorLawTest {
             assertTrue(
                 bytes(reference).contentEquals(bytes(outOfOrder)),
                 "trial $trial: ${deltas.size} put deltas, delivered shuffled and duplicated, must " +
-                    "encode identically to the full-mutator fold (reference=${reference.keys}, " +
+                    "encode identically to the whole-state fold (reference=${reference.keys}, " +
                     "jumbled=${outOfOrder.keys})",
             )
         }
     }
 
     /**
-     * The same with removes mixed in, again against the **full-mutator fold**, and now asserted on
+     * The same with removes mixed in, again against the **whole-state fold**, and now asserted on
      * **bytes**.
      *
      * Until #2086 this test could only compare key presence and tags. The values did not agree,
@@ -598,7 +599,7 @@ class ORMapDeltaMutatorLawTest {
             assertTrue(
                 bytes(reference).contentEquals(bytes(outOfOrder)),
                 "trial $trial: ${deltas.size} deltas, delivered shuffled and duplicated, must encode " +
-                    "identically to the full-mutator fold (reference=${reference.keys}, " +
+                    "identically to the whole-state fold (reference=${reference.keys}, " +
                     "jumbled=${outOfOrder.keys})",
             )
         }
@@ -615,23 +616,23 @@ class ORMapDeltaMutatorLawTest {
      * in the cloud and the late put is dropped on arrival. No buffering, no causal-delivery
      * requirement.
      *
-     * The reference is built with the **full mutators**, not by folding the same deltas, so this is
-     * the byte-level law generalised over delivery order rather than a comparison of a delta path
-     * against itself.
+     * The reference is built with the **whole-state mutators**, not by folding the same deltas, so
+     * this is the byte-level law generalised over delivery order rather than a comparison of a delta
+     * path against itself.
      */
     @Test
     fun aRemoveDeltaAppliedBeforeThePutItRetiresConverges() {
         // A converged peer holding an unrelated key and an older copy of the one under test.
         val peer = ORMap.empty<String, GSet<String>>()
-            .put(bravo, "bystander", GSet.of("b"))
-            .put(bravo, KEY, GSet.of("v1"))
+            .putWhole(bravo, "bystander", GSet.of("b"))
+            .putWhole(bravo, KEY, GSet.of("v1"))
 
-        // The author re-puts the key and then removes it, by the full mutators.
-        val author = peer.put(alpha, KEY, GSet.of("v2")).remove(KEY)
+        // The author re-puts the key and then removes it, by the whole-state mutators.
+        val author = peer.putWhole(alpha, KEY, GSet.of("v2")).removeWhole(KEY)
 
         // The same two operations as deltas — the re-put supersedes bravo's tag.
-        val put = peer.putDelta(alpha, KEY, GSet.of("v2")).delta
-        val remove = peer.put(alpha, KEY, GSet.of("v2")).removeDelta(KEY).delta
+        val put = peer.put(alpha, KEY, GSet.of("v2")).delta
+        val remove = peer.putWhole(alpha, KEY, GSet.of("v2")).remove(KEY).delta
 
         val orders = mapOf(
             "put,remove" to listOf(put, remove),
@@ -668,8 +669,8 @@ class ORMapDeltaMutatorLawTest {
     @Test
     fun aConcurrentPutDeltaSurvivesARemoveDeltaInEitherOrder() {
         val start = racingStart()
-        val removal = start.removeDelta(KEY).delta                       // alpha retires the tag it can see
-        val concurrent = start.putDelta(bravo, KEY, GSet.of("v2")).delta // bravo re-puts, minting a fresh tag
+        val removal = start.remove(KEY).delta                       // alpha retires the tag it can see
+        val concurrent = start.put(bravo, KEY, GSet.of("v2")).delta // bravo re-puts, minting a fresh tag
 
         val removeFirst = start.piece(removal).piece(concurrent)
         val putFirst = start.piece(concurrent).piece(removal)
@@ -714,7 +715,7 @@ class ORMapDeltaMutatorLawTest {
      *
      * 1. `alpha` and `bravo` converge on `{k ↦ (bravo,1)}`.
      * 2. `alpha` re-puts `k` locally and ships [rePutDelta].
-     * 3. `alpha` removes `k` and ships a correct [ORMap.removeDelta].
+     * 3. `alpha` removes `k` and ships a correct [ORMap.remove] delta.
      *
      * The author ends up without `k` under either delta shape; the question is the receiver.
      */
@@ -723,16 +724,16 @@ class ORMapDeltaMutatorLawTest {
     ): Boolean {
         // alpha holds a tag of its own, so the re-put has something to supersede.
         val start = ORMap.empty<String, GSet<String>>()
-            .put(alpha, KEY, GSet.of("v0"))
-            .put(bravo, KEY, GSet.of("v1"))
+            .putWhole(alpha, KEY, GSet.of("v0"))
+            .putWhole(bravo, KEY, GSet.of("v1"))
         var author = start
         var receiver = start
 
         val rePut = rePutDelta(author)
-        author = author.put(alpha, KEY, GSet.of("v2"))
+        author = author.putWhole(alpha, KEY, GSet.of("v2"))
         receiver = receiver.piece(rePut)
 
-        val removal = author.removeDelta(KEY)
+        val removal = author.remove(KEY)
         author = author.piece(removal)
         receiver = receiver.piece(removal)
 
@@ -744,25 +745,28 @@ class ORMapDeltaMutatorLawTest {
      * A random state, built as the merge of two independently-grown branches so that keys both
      * branches touched carry **more than one** tag.
      *
-     * That is the whole point of the shape: [ORMap.put] mints a single tag and supersedes the key's
-     * previous ones, so a state built by one replica alone never has a multi-tag key,
-     * [ORMap.putDelta]'s superseded-tags term is always a singleton, and the law would hold
-     * vacuously against precisely the defect it exists to catch.
+     * That is the whole point of the shape: a put mints a single tag and supersedes the key's
+     * previous ones, so a state built by one replica alone never has a multi-tag key, [ORMap.put]'s
+     * superseded-tags term is always a singleton, and the law would hold vacuously against precisely
+     * the defect it exists to catch.
+     *
+     * Built with the whole-state mutators so the generator never depends on the mechanism the law is
+     * testing.
      */
     private fun randomState(random: Random): ORMap<String, GSet<String>> {
         var left = ORMap.empty<String, GSet<String>>()
         var right = ORMap.empty<String, GSet<String>>()
         repeat(random.nextInt(2, 8)) {
-            left = left.put(alpha, KEYS.random(random), GSet.of(VALUES.random(random)))
-            right = right.put(bravo, KEYS.random(random), GSet.of(VALUES.random(random)))
+            left = left.putWhole(alpha, KEYS.random(random), GSet.of(VALUES.random(random)))
+            right = right.putWhole(bravo, KEYS.random(random), GSet.of(VALUES.random(random)))
         }
         var merged = left.piece(right)
         repeat(random.nextInt(0, 3)) {
             val key = KEYS.random(random)
             merged = if (random.nextBoolean()) {
-                merged.put(charlie, key, GSet.of(VALUES.random(random)))
+                merged.putWhole(charlie, key, GSet.of(VALUES.random(random)))
             } else {
-                merged.remove(key)
+                merged.removeWhole(key)
             }
         }
         return merged
@@ -775,16 +779,16 @@ class ORMapDeltaMutatorLawTest {
      */
     private fun racingStart(): ORMap<String, GSet<String>> =
         ORMap.empty<String, GSet<String>>()
-            .put(alpha, "bystander", GSet.of("b"))
-            .put(alpha, KEY, GSet.of("v1"))
+            .putWhole(alpha, "bystander", GSet.of("b"))
+            .putWhole(alpha, KEY, GSet.of("v1"))
 
     /**
      * One random op script run by three replicas writing concurrently, emitted **twice**: once as
-     * the minimal deltas and once as the whole-state patches the full mutators produce today. Each
+     * the minimal deltas and once as the whole-state patches [ORMap.putWhole] produces. Each
      * op's full state is delivered eagerly to a random subset of peers, so later operations
      * supersede tags minted elsewhere.
      *
-     * Replicas advance along the **full-mutator** path, which makes that stream the independent
+     * Replicas advance along the **whole-state** path, which makes that stream the independent
      * reference the delta stream is checked against. The two paths agree at every step anyway — that
      * is the law — so the deltas are derived from exactly the states their authors held.
      */
@@ -805,12 +809,12 @@ class ORMapDeltaMutatorLawTest {
 
             val advanced = if (withRemoves && key in state.keys && random.nextInt(3) == 0) {
                 onRemove()
-                deltas += state.removeDelta(key).delta
-                state.remove(key)
+                deltas += state.remove(key).delta
+                state.removeWhole(key)
             } else {
                 val value = GSet.of(VALUES.random(random))
-                deltas += state.putDelta(author, key, value).delta
-                state.put(author, key, value)
+                deltas += state.put(author, key, value).delta
+                state.putWhole(author, key, value)
             }
             local[author] = advanced
             fullStates += advanced
@@ -832,15 +836,15 @@ class ORMapDeltaMutatorLawTest {
     /** A map of [keyCount] keys, each holding a small value, all put by one replica. */
     private fun mapOfSize(keyCount: Int): ORMap<String, GSet<String>> =
         (0 until keyCount).fold(ORMap.empty()) { map, index ->
-            map.put(alpha, "k-$index", GSet.of("v-$index"))
+            map.putWhole(alpha, "k-$index", GSet.of("v-$index"))
         }
 
     /** A one-key nested map whose value is an [ORSet] of [elementCount] elements. */
     private fun nestedMapWithValueOfSize(elementCount: Int): ORMap<String, ORSet<String>> {
         val value = (0 until elementCount).fold(ORSet.empty<String>()) { set, index ->
-            set.add(charlie, "e-$index")
+            set.addWhole(charlie, "e-$index")
         }
-        return ORMap.empty<String, ORSet<String>>().put(alpha, KEY, value)
+        return ORMap.empty<String, ORSet<String>>().putWhole(alpha, KEY, value)
     }
 
     /**
@@ -858,9 +862,9 @@ class ORMapDeltaMutatorLawTest {
 
     /** [KEY] plus [otherKeys] unrelated keys, all tagged by the same replica in the same order. */
     private fun bulkyMap(otherKeys: Int): ORMap<String, GSet<String>> {
-        val withTarget = ORMap.empty<String, GSet<String>>().put(alpha, KEY, GSet.of("v1"))
+        val withTarget = ORMap.empty<String, GSet<String>>().putWhole(alpha, KEY, GSet.of("v1"))
         return (0 until otherKeys).fold(withTarget) { map, index ->
-            map.put(bravo, "other-$index", GSet.of("v-$index"))
+            map.putWhole(bravo, "other-$index", GSet.of("v-$index"))
         }
     }
 
@@ -884,8 +888,8 @@ class ORMapDeltaMutatorLawTest {
          * The floor the generator must clear for a law test to mean anything. **Measured: 103 of
          * 400 for `put` and 102 of 400 for `remove`** on seed 11. Set at roughly half of that, so an
          * incidental generator tweak does not red-light the suite, but a generator that stopped
-         * producing concurrent tags — and with it every case in which [ORMap.putDelta]'s
-         * superseded-tags term does any work — fails loudly instead of passing vacuously.
+         * producing concurrent tags — and with it every case in which [ORMap.put]'s superseded-tags
+         * term does any work — fails loudly instead of passing vacuously.
          */
         const val MIN_MULTI_TAG_TRIALS = 50
 

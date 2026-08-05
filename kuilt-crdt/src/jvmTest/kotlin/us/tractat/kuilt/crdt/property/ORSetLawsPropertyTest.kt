@@ -7,6 +7,7 @@ import net.jqwik.api.Property
 import net.jqwik.api.Provide
 import us.tractat.kuilt.crdt.ORSet
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.piece
 
 /**
  * Lattice law properties for [ORSet].
@@ -45,7 +46,7 @@ internal class ORSetLawsPropertyTest {
         }
         return opArb.list().ofMinSize(0).ofMaxSize(6).map { ops: List<Op> ->
             ops.runningFold(ORSet.empty<String>()) { s: ORSet<String>, op: Op ->
-                if (op.isAdd) s.add(replica, op.elem) else s.remove(op.elem)
+                if (op.isAdd) s.piece { it.add(replica, op.elem) } else s.piece { it.remove(op.elem) }
             }
         }
     }

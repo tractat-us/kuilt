@@ -290,7 +290,7 @@ class ORSetScalingTest {
             val before = mesh.clusterMetrics()
 
             quilters.forEachIndexed { i, q ->
-                q.mutate { state -> Patch(state.add(q.replica, "elem-$i")) }
+                q.mutate { state -> state.add(q.replica, "elem-$i") }
             }
 
             testScheduler.advanceUntilIdle()
@@ -341,7 +341,7 @@ class LWWMapScalingTest {
                 repeat(3) { k ->
                     val ts = (i * 10L) + k
                     q.mutate { state ->
-                        Patch(state.set(q.replica, timestamp = ts, key = "peer-$i-key-$k", value = "v$ts"))
+                        state.set(q.replica, timestamp = ts, key = "peer-$i-key-$k", value = "v$ts")
                     }
                 }
             }
@@ -393,7 +393,8 @@ class ORMapScalingTest {
             quilters.forEachIndexed { i, q ->
                 repeat(2) { k ->
                     q.mutate { state ->
-                        Patch(state.put(q.replica, key = "peer-$i-key-$k", value = GCounter.ZERO.inc(q.replica, (i + 1).toLong()).delta))
+                        val slice = GCounter.ZERO.inc(q.replica, (i + 1).toLong()).delta
+                        state.put(q.replica, key = "peer-$i-key-$k", value = slice)
                     }
                 }
             }

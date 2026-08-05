@@ -16,6 +16,7 @@ import us.tractat.kuilt.crdt.GSet
 import us.tractat.kuilt.crdt.LWWMap
 import us.tractat.kuilt.crdt.Quilted
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.piece
 import us.tractat.kuilt.test.FakeSeam
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
@@ -59,8 +60,8 @@ class QuilterStateRootGoldenVectorTest {
     private val gsetVector = GSet.of("alpha", "beta", "gamma")
 
     private val lwwVector = LWWMap.empty<String, String>()
-        .set(replica, 1L, "k1", "v1")
-        .set(replica, 2L, "k2", "v2")
+        .piece { it.set(replica, 1L, "k1", "v1") }
+        .piece { it.set(replica, 2L, "k2", "v2") }
 
     /** Mirrors `Quilter.stateRoot()`: the state encoded inside a fixed synthetic `FullState`. */
     private fun <S> rootOf(ser: KSerializer<QuiltMessage<S>>, state: S): Long =

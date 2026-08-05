@@ -68,10 +68,10 @@ class PresenceRosterLWWMapTest {
             delay(1) // let collectors subscribe under StandardTestDispatcher
 
             // Alice marks herself as "online".
-            aliceRoster.apply(Patch(aliceRoster.state.value.set(aliceRoster.replica, timestamp = 1L, key = "alice", value = "online")))
+            aliceRoster.mutate { it.set(aliceRoster.replica, timestamp = 1L, key = "alice", value = "online") }
 
             // Bob marks himself as "busy".
-            bobRoster.apply(Patch(bobRoster.state.value.set(bobRoster.replica, timestamp = 1L, key = "bob", value = "busy")))
+            bobRoster.mutate { it.set(bobRoster.replica, timestamp = 1L, key = "bob", value = "busy") }
 
             delay(10) // advance virtual time so all delta broadcasts deliver
 
@@ -94,10 +94,10 @@ class PresenceRosterLWWMapTest {
             delay(1) // let collectors subscribe under StandardTestDispatcher
 
             // Alice sets a status with timestamp 5 — "away".
-            aliceRoster.apply(Patch(aliceRoster.state.value.set(aliceRoster.replica, timestamp = 5L, key = "alice", value = "away")))
+            aliceRoster.mutate { it.set(aliceRoster.replica, timestamp = 5L, key = "alice", value = "away") }
 
             // Bob sets the same key with a later timestamp 10 — "online" should win.
-            bobRoster.apply(Patch(bobRoster.state.value.set(bobRoster.replica, timestamp = 10L, key = "alice", value = "online")))
+            bobRoster.mutate { it.set(bobRoster.replica, timestamp = 10L, key = "alice", value = "online") }
 
             delay(10) // advance virtual time so all delta broadcasts deliver
 

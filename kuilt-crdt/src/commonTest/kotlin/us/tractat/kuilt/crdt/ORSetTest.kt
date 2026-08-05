@@ -17,14 +17,14 @@ class ORSetTest {
 
     @Test
     fun addThenContains() {
-        val s = ORSet.empty<String>().add(a, "card")
+        val s = ORSet.empty<String>().piece { it.add(a, "card") }
         assertTrue(s.contains("card"))
         assertEquals(setOf("card"), s.elements)
     }
 
     @Test
     fun removeMakesAbsent() {
-        val s = ORSet.empty<String>().add(a, "card").remove("card")
+        val s = ORSet.empty<String>().piece { it.add(a, "card") }.piece { it.remove("card") }
         assertFalse(s.contains("card"))
         assertEquals(emptySet(), s.elements)
     }
@@ -32,17 +32,17 @@ class ORSetTest {
     @Test
     fun addWinsOverConcurrentRemove() {
         // shared start: A added "card"
-        val start = ORSet.empty<String>().add(a, "card")
-        val alice = start.remove("card")     // Alice removes what she saw
-        val bob = start.add(b, "card")       // Bob concurrently re-adds
+        val start = ORSet.empty<String>().piece { it.add(a, "card") }
+        val alice = start.piece { it.remove("card") }     // Alice removes what she saw
+        val bob = start.piece { it.add(b, "card") }       // Bob concurrently re-adds
         val merged = alice.piece(bob)
         assertTrue(merged.contains("card"))  // add wins
     }
 
     @Test
     fun removeWinsWhenNothingConcurrentlyAdded() {
-        val start = ORSet.empty<String>().add(a, "card")
-        val alice = start.remove("card")
+        val start = ORSet.empty<String>().piece { it.add(a, "card") }
+        val alice = start.piece { it.remove("card") }
         // Bob did nothing new; merging the removal with the stale-present state drops it
         val merged = alice.piece(start)
         assertFalse(merged.contains("card"))
@@ -50,15 +50,15 @@ class ORSetTest {
 
     @Test
     fun mergeIsCommutative() {
-        val start = ORSet.empty<String>().add(a, "card")
-        val alice = start.remove("card")
-        val bob = start.add(b, "card")
+        val start = ORSet.empty<String>().piece { it.add(a, "card") }
+        val alice = start.piece { it.remove("card") }
+        val bob = start.piece { it.add(b, "card") }
         assertEquals(alice.piece(bob), bob.piece(alice))
     }
 
     @Test
     fun roundTripsThroughJson() {
-        val s = ORSet.empty<String>().add(a, "x").add(b, "y")
+        val s = ORSet.empty<String>().piece { it.add(a, "x") }.piece { it.add(b, "y") }
         val ser = ORSet.serializer(String.serializer())
         assertEquals(s, Json.decodeFromString(ser, Json.encodeToString(ser, s)))
     }
@@ -78,9 +78,9 @@ class ORSetTest {
      */
     @Test
     fun pieceIsAssociativeAcrossARemoveBetweenTwoAdds() {
-        val added = ORSet.empty<String>().add(a, "k")
-        val removed = added.remove("k")
-        val reAdded = removed.add(a, "k")
+        val added = ORSet.empty<String>().piece { it.add(a, "k") }
+        val removed = added.piece { it.remove("k") }
+        val reAdded = removed.piece { it.add(a, "k") }
 
         assertAll(
             *associativityChecks("add/remove/re-add", added, removed, reAdded),
@@ -102,10 +102,10 @@ class ORSetTest {
      */
     @Test
     fun pieceIsAssociativeAcrossAConcurrentAddAndRemove() {
-        val start = ORSet.empty<String>().add(a, "bystander").add(a, "card")
-        val remover = start.remove("card")
-        val reAdder = start.add(b, "card")
-        val thirdAdder = start.add(c, "card")
+        val start = ORSet.empty<String>().piece { it.add(a, "bystander") }.piece { it.add(a, "card") }
+        val remover = start.piece { it.remove("card") }
+        val reAdder = start.piece { it.add(b, "card") }
+        val thirdAdder = start.piece { it.add(c, "card") }
 
         val merged = remover.piece(reAdder).piece(thirdAdder)
 
@@ -138,12 +138,12 @@ class ORSetTest {
      */
     @Test
     fun pieceIsAssociativeWhenAnElementCarriesConcurrentDots() {
-        val fromA = ORSet.empty<String>().add(a, "card")
-        val fromB = ORSet.empty<String>().add(b, "card")
+        val fromA = ORSet.empty<String>().piece { it.add(a, "card") }
+        val fromB = ORSet.empty<String>().piece { it.add(b, "card") }
         val twoDots = fromA.piece(fromB)
 
-        val removed = twoDots.remove("card")           // retires both dots at once
-        val reAddedByC = twoDots.add(c, "card")        // supersedes both, mints a third
+        val removed = twoDots.piece { it.remove("card") }           // retires both dots at once
+        val reAddedByC = twoDots.piece { it.add(c, "card") }        // supersedes both, mints a third
         val stale = fromA                              // a peer that never saw B's add
 
         assertAll(
@@ -191,19 +191,19 @@ class ORSetTest {
                 live[author] = when (random.nextInt(8)) {
                     0, 1, 2 -> {
                         if (element in removedAnywhere) reAddAfterRemove++
-                        state.add(author, element)
+                        state.addWhole(author, element)
                     }
                     3, 4 -> {
                         if (state.contains(element)) removedAnywhere += element
-                        state.remove(element)
+                        state.removeWhole(element)
                     }
                     5, 6 -> state.piece(live.getValue(REPLICAS.random(random)))
                     7 -> if (random.nextBoolean()) {
                         if (element in removedAnywhere) reAddAfterRemove++
-                        state.piece(state.addDelta(author, element))
+                        state.piece { it.add(author, element) }
                     } else {
                         if (state.contains(element)) removedAnywhere += element
-                        state.piece(state.removeDelta(element))
+                        state.piece { it.remove(element) }
                     }
                     else -> state
                 }

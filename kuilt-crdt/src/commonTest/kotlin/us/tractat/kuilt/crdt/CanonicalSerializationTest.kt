@@ -123,13 +123,13 @@ class CanonicalSerializationTest {
     @Test
     fun orSetSerializationIsDeliveryOrderIndependent() {
         // Replica 1: A adds "x", B adds "y"
-        val s1a = ORSet.empty<String>().add(a, "x")
-        val s1b = ORSet.empty<String>().add(b, "y")
+        val s1a = ORSet.empty<String>().piece { it.add(a, "x") }
+        val s1b = ORSet.empty<String>().piece { it.add(b, "y") }
         val merged1 = s1a.piece(s1b)
 
         // Replica 2: B adds "y", A adds "x"
-        val s2b = ORSet.empty<String>().add(b, "y")
-        val s2a = ORSet.empty<String>().add(a, "x")
+        val s2b = ORSet.empty<String>().piece { it.add(b, "y") }
+        val s2a = ORSet.empty<String>().piece { it.add(a, "x") }
         val merged2 = s2b.piece(s2a)
 
         assertEquals(merged1, merged2)
@@ -211,8 +211,12 @@ class CanonicalSerializationTest {
         val betaFromB = GCounter.of(b to 6L, c to 8L)
 
         // A's view puts "alpha" then "beta"; B's view puts them the other way round.
-        val viewA = ORMap.empty<String, GCounter>().put(a, "alpha", alphaFromA).put(a, "beta", betaFromA)
-        val viewB = ORMap.empty<String, GCounter>().put(b, "beta", betaFromB).put(b, "alpha", alphaFromB)
+        val viewA = ORMap.empty<String, GCounter>()
+            .piece { it.put(a, "alpha", alphaFromA) }
+            .piece { it.put(a, "beta", betaFromA) }
+        val viewB = ORMap.empty<String, GCounter>()
+            .piece { it.put(b, "beta", betaFromB) }
+            .piece { it.put(b, "alpha", alphaFromB) }
 
         // Replica 1 hears A first, replica 2 hears B first.
         val merged1 = viewA.piece(viewB)
