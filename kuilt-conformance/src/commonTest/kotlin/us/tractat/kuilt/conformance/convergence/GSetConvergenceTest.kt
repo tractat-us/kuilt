@@ -15,6 +15,8 @@ internal class GSetConvergenceTest : CrdtConvergenceSuite<GSet<String>>() {
                 state.piece(GSet.of("e${random.nextInt(6)}"))
             },
         ),
+        // `GSet` only grows — `add` is its whole vocabulary and nothing takes an element back.
+        floors = VacuityFloors.NOTHING_TO_RETIRE,
         serializer = GSet.serializer(String.serializer()),
         replicaCount = 3,
         opsPerReplica = 8,

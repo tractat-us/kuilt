@@ -94,4 +94,41 @@ public abstract class CrdtConvergenceSuite<S : Quilted<S>> {
     public fun associativeJoinLawsHoldOverEveryShortWord() {
         newHarness().runExhaustiveSmall()
     }
+
+    /**
+     * The rest of the join-semilattice contract — **commutativity, idempotence and
+     * least-upper-bound** — over the causal pool, seeds `0..15`, plus the byte law on the
+     * commutativity pair.
+     *
+     * Breadth, not depth: they read 0 violations on a lattice broken in the way #2086 was broken,
+     * where associativity over the same pool reads 500. See
+     * [CrdtConvergenceHarness.runOtherJoinLaws] for what that means, and for why commutativity is
+     * asserted with no per-binding waiver.
+     *
+     * Separate from the bracketing tests because it is `O(pool²)` where those are `O(pool³)`: it
+     * costs a rounding error beside them, and a red here means something different enough to be
+     * worth its own name in the report.
+     */
+    @Test
+    public fun joinCommutesAbsorbsAndIsIdempotent() {
+        newHarness().runOtherJoinLawsSeeds(0L..15L)
+    }
+
+    /**
+     * The generator searched enough for the tests above to mean anything — see [VacuityFloors].
+     *
+     * **This is not a test of the type; it is a test of the evidence.** A lattice law over a pool
+     * whose states are all siblings, or in which nothing was ever retired, holds vacuously. That is
+     * #2100 exactly, and it is how #2086 survived a `pieceIsAssociative` property for as long as it
+     * did. The four measured rates print on every run, green or red, because a floor whose value
+     * nobody sees is a floor nobody notices drifting toward.
+     *
+     * Seeds `0..15` — the same window the law tests use, so the numbers describe the pools those
+     * tests actually ran over rather than a differently-sized sample.
+     */
+    @Test
+    public fun generatorIsNotVacuous() {
+        val report = newHarness().checkVacuityFloors(0L..15L)
+        println("${this::class.simpleName} — vacuity over seeds 0..15\n$report")
+    }
 }

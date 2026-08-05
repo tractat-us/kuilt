@@ -63,6 +63,10 @@ internal class DotContextConvergenceTest : CrdtConvergenceSuite<DotContext>() {
                 state.add(Dot(peer, unwitnessedSeq(state, peer, start)))
             },
         ),
+        // A `DotContext` records the dots it has witnessed and never un-witnesses one — compaction
+        // moves a dot from the cloud into the vector, which is a change of representation and not a
+        // withdrawal. So there is no RETIRE op to declare, as the alphabet above already says.
+        floors = VacuityFloors.NOTHING_TO_RETIRE,
         serializer = DotContext.serializer(),
         replicaCount = REPLICA_COUNT,
         opsPerReplica = 8,

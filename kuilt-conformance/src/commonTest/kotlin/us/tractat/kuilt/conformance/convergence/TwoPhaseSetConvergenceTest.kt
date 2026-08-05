@@ -8,6 +8,7 @@ import us.tractat.kuilt.crdt.piece
 // exercised for canonical encoding.
 private const val FOCUS = "e0"
 private const val OTHER = "e1"
+private val POOL = List(6) { "e$it" }
 
 internal class TwoPhaseSetConvergenceTest : CrdtConvergenceSuite<TwoPhaseSet<String>>() {
     override fun newHarness(): CrdtConvergenceHarness<TwoPhaseSet<String>> = CrdtConvergenceHarness(
@@ -20,12 +21,37 @@ internal class TwoPhaseSetConvergenceTest : CrdtConvergenceSuite<TwoPhaseSet<Str
         alphabet = listOf(
             LatticeOp("add", OpKind.ASSERT) { state, _, _ -> state.piece(state.add(FOCUS)) },
             LatticeOp("add-other", OpKind.ASSERT) { state, _, _ -> state.piece(state.add(OTHER)) },
+            // Both roaming ops draw from what is **actionable**, not from the whole pool, and in a
+            // two-phase set that is a sharper constraint than it is anywhere else: an element is
+            // single-shot. Once added it can never be added again, once removed it can never come
+            // back, so an op that keeps naming the same element is dead after one use rather than
+            // merely wasteful. Drawing blind, this binding spent 213 of 522 exploration steps
+            // (40.8%) changing nothing, the worst of the nineteen and well past Task 5's 25%
+            // ceiling; the three pinned ops above are dead on replica 0 the moment the critical
+            // shape has run, which leaves the roaming pair to carry the exploration.
+            //
+            // `add-roam` takes an element the state has neither added nor removed, so it always
+            // lands; the size-derived fallback keeps it landing once the pool is exhausted rather
+            // than silently becoming a no-op. Two replicas that have added the same number of
+            // elements derive the same fallback, which is the cross-replica collision the fixed
+            // pool was there for in the first place.
             LatticeOp("add-roam", OpKind.ASSERT) { state, _, random ->
-                state.piece(state.add("e${random.nextInt(6)}"))
+                val addable = POOL.filter { it !in state.added && it !in state.removed }
+                val element = if (addable.isEmpty()) "e${state.added.size}" else addable[random.nextInt(addable.size)]
+                state.piece(state.add(element))
             },
             LatticeOp("remove", OpKind.RETIRE) { state, _, _ -> state.piece(state.remove(FOCUS)) },
+            // Roams over the elements the state actually holds, so the tombstone it writes is one
+            // that changes what the set reads back. `sorted()` because `elements` is `added -
+            // removed`, backed by a `HashMap` on JVM and Android and by an insertion-ordered map on
+            // Kotlin/Native and wasmJs — indexing it raw would give the targets different
+            // trajectories from one seed. The empty-state fallback keeps "removing something never
+            // added" reachable: in a two-phase set that is *not* the identity, it writes a
+            // tombstone that pre-empts a later add, which is worth exercising.
             LatticeOp("remove-roam", OpKind.RETIRE) { state, _, random ->
-                state.piece(state.remove("e${random.nextInt(6)}"))
+                val live = state.elements.sorted()
+                val element = if (live.isEmpty()) POOL[random.nextInt(POOL.size)] else live[random.nextInt(live.size)]
+                state.piece(state.remove(element))
             },
         ),
         serializer = TwoPhaseSet.serializer(String.serializer()),

@@ -27,6 +27,9 @@ internal class BoundedCounterConvergenceTest : CrdtConvergenceSuite<BoundedCount
                 if (patch != null) state.piece(patch) else state
             },
         ),
+        // No RETIRE op, for the reason argued above: spending and transferring consume quota by
+        // adding to grow-only tallies, so no earlier contribution is withdrawn.
+        floors = VacuityFloors.NOTHING_TO_RETIRE,
         serializer = BoundedCounter.serializer(),
         replicaCount = 3,
         opsPerReplica = 8,

@@ -70,6 +70,18 @@ internal class LWWRegisterConvergenceTest : CrdtConvergenceSuite<LWWRegister<Str
         // declaration order, and a shape that re-asserts from the *lowest* band cannot outrank the
         // tombstone it is meant to survive.
         criticalShapes = listOf(listOf("set-low", "unset-high", "set-highest")),
+        // A total order, so the concurrency floor is waived — and the *reason* it is a total order
+        // is worth recording, because it was manufactured until very recently. This binding read
+        // 1.7% concurrent pairs while it was minting one `(replica, timestamp)` tag for two
+        // different values: two states carrying the same tag and disagreeing on the content are
+        // incomparable, so every violation of the precondition above showed up here as a
+        // concurrent pair. Honouring the precondition removed all of them and the rate went to
+        // **0.0%**, which is the truth about a single cell with a totally-ordered tag — any two
+        // states of it are comparable, and no generator can change that.
+        //
+        // So the 1.7% was not concurrency the fix destroyed; it was the violation, being counted.
+        // Ancestry reads 48.1%, against a 50% ceiling only a chain can reach.
+        floors = VacuityFloors(totalOrder = true),
         serializer = LWWRegister.serializer(String.serializer()),
         replicaCount = 3,
         opsPerReplica = 8,

@@ -28,13 +28,15 @@ private const val FOCUS_KEY = "k-0"
  * key's tag can exceed the visible maximum, so `max + 1` outranks the whole map. Every op is
  * effective, on every seed, including after a removal.
  *
- * **One cell per replica rather than one shared cell, and the difference is measurable.** A single
- * shared clock is enough to keep every op effective, and it was what this generator did first — but
- * a cell every replica writes is a cell on which any two states are *comparable*, and that dragged
- * the pool's concurrent-pair rate from 25.9% down to **14.1%**, under the 15% floor Task 5 asserts.
- * Per-replica cells restore it: a state carrying `@clock-R0` and one carrying `@clock-R1` are
- * incomparable on those cells alone, which is the honest shape — two peers that have not heard from
- * each other.
+ * **One cell per replica rather than one shared cell, and the difference is measurable — do not
+ * "simplify" this back.** A single shared clock is enough to keep every op effective, and it was
+ * what this generator did first; a shared cell is also the smaller, tidier-looking code, which is
+ * exactly why this paragraph is here. But a cell every replica writes is a cell on which any two
+ * states are *comparable*, and that dragged the pool's concurrent-pair rate from 25.9% down to
+ * **14.1%** — under the 15% floor `VacuityFloors` asserts, so collapsing these cells does not make
+ * the generator subtly worse, it reds `generatorIsNotVacuous` outright. Per-replica cells keep it
+ * honest: a state carrying `@clock-R0` and one carrying `@clock-R1` are incomparable on those cells
+ * alone, which is the true shape of two peers that have not heard from each other.
  */
 private const val CLOCK_PREFIX = "@clock-"
 

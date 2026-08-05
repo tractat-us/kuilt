@@ -15,6 +15,9 @@ internal class MVRegisterConvergenceTest : CrdtConvergenceSuite<MVRegister<Strin
                 state.set(ReplicaId("R$replicaIndex"), "v-${random.nextInt(0, 10)}")
             },
         ),
+        // No RETIRE op, for the reason argued above: `set` supersedes rather than withdraws, and
+        // never takes a value back without putting one in its place.
+        floors = VacuityFloors.NOTHING_TO_RETIRE,
         serializer = MVRegister.serializer(String.serializer()),
         replicaCount = 3,
         opsPerReplica = 8,
