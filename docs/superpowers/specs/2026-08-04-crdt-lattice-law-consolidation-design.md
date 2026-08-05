@@ -335,7 +335,7 @@ read from the results XML:
 | **total** | **148.6 s** | | |
 
 > **CORRECTED on execution: every absolute in this table is a box artifact; only the shares are
-> portable.** Six measurements of **identical code** read **148.6 / 77.0 / 79.2 / 60.3 / 62.5 /
+> portable.** Seven measurements of **identical code** read **148.6 / 77.0 / 79.2 / 60.3 / 62.5 /
 > 53.0 / 74.3 s**. What reproduced is the *structure* — encode's share came back at 76.9% against
 > 81% predicted, and the 18% saving below landed at 17.2%. Re-measured on one box on one day,
 > `git archive`-ing the pre-track tree into a scratch directory so both halves ran under the same

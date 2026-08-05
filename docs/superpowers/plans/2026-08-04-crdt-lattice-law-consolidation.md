@@ -132,7 +132,7 @@ over 16 bindings, from the results XML:
 | **total** | **148.6 s** | | |
 
 > **CORRECTED (Task 9). The gate is a ratio, not `148.6 s`.** That absolute is a box artifact and
-> must never be used as a threshold. Six independent measurements of **identical code** read
+> must never be used as a threshold. Seven independent measurements of **identical code** read
 > **148.6 / 77.0 / 79.2 / 60.3 / 62.5 / 53.0 / 74.3 s** — a 2.8× spread with no code change between
 > them. What *is* portable is the structure, and it reproduced: encode dominates the bill (81%
 > predicted, 76.9% re-measured), and Task 1b's predicted ~18% saving landed at 17.2%.
