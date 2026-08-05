@@ -17,10 +17,6 @@ kotlin {
             implementation(libs.kotlinx.coroutines.test)
         }
         jvmTest.dependencies {
-            // jqwik property-based / stateful testing (JVM-only; JUnit Platform)
-            implementation(libs.jqwik)
-            runtimeOnly(libs.junit.vintage.engine)
-            runtimeOnly(libs.junit.platform.launcher)
             // SLF4J backend for kotlin-logging on JVM
             runtimeOnly(libs.logback)
         }
@@ -32,11 +28,6 @@ kotlin {
             runtimeOnly(libs.logback)
         }
     }
-}
-
-// Switch jvmTest to the JUnit Platform so jqwik properties are discovered.
-tasks.named<Test>("jvmTest") {
-    useJUnitPlatform()
 }
 
 // ── Harness-discipline guard (issue #192) ──────────────────────────────────

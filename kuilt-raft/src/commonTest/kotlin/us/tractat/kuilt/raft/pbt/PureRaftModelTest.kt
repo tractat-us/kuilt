@@ -1,71 +1,37 @@
 package us.tractat.kuilt.raft.pbt
 
-import net.jqwik.api.Arbitraries
-import net.jqwik.api.Arbitrary
-import net.jqwik.api.ForAll
-import net.jqwik.api.Property
-import net.jqwik.api.Provide
-import org.junit.jupiter.api.Assertions.assertAll
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertThrows
-import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.Test
 import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftRole
+import us.tractat.kuilt.test.assertAll
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 // ---------------------------------------------------------------------------
-// Pure synchronous PBT for Raft safety invariants
+// Pure synchronous model check for Raft safety invariants
 //
 // NO kotlinx.coroutines. NO live engine. NO runTest. NO TestDispatcher.
-// Every jqwik try is a sequence of pure Cluster → Cluster transformations
-// that terminates in microseconds.
+// Every try is a sequence of pure Cluster → Cluster transformations that
+// terminates in microseconds. Generation, seeding and shrinking live in
+// [RaftActionSequences]; this file is the model's step function, its five
+// invariants, and the properties that drive them.
 // ---------------------------------------------------------------------------
 
-/** Actions that can be applied to a Cluster snapshot. File-level so jqwik can see the type. */
-public sealed interface RaftAction {
-    /** Drive node[nodeIdx % clusterSize] to start an election. */
-    data class Timeout(val nodeIdx: Int) : RaftAction
-    /** Deliver inFlight[msgIdx % queue.size] (or no-op if queue is empty). */
-    data class Deliver(val msgIdx: Int) : RaftAction
-    /** Propose next command byte to the current leader (no-op if no leader). */
-    data object Propose : RaftAction
-    /** Crash node[nodeIdx % clusterSize]. */
-    data class Crash(val nodeIdx: Int) : RaftAction
-    /** Restart (dead) node[nodeIdx % clusterSize]. */
-    data class Restart(val nodeIdx: Int) : RaftAction
-    /** Partition node[aIdx] from node[bIdx]. */
-    data class Partition(val aIdx: Int, val bIdx: Int) : RaftAction
-    /** Heal all partitions. */
-    data object Heal : RaftAction
-    /** Compact node[nodeIdx % clusterSize] through the cluster-wide replicated floor. */
-    data class Compact(val nodeIdx: Int) : RaftAction
+/**
+ * Fails the enclosing property if [condition] does not hold.
+ *
+ * Deliberately **not** `kotlin.assert`: on the JVM that compiles to a `-ea`-gated check, so the
+ * entire invariant surface evaporates silently under any runner that does not enable assertions,
+ * and the properties then pass by doing nothing. An unconditional throw makes the check a property
+ * of the code rather than of the launcher, and behaves identically on every target.
+ */
+private inline fun invariant(condition: Boolean, message: () -> String) {
+    if (!condition) throw AssertionError(message())
 }
 
 class PureRaftModelTest {
-
-    // ── Arbitraries ─────────────────────────────────────────────────────────
-
-    @Provide
-    fun actions(): Arbitrary<List<RaftAction>> {
-        val timeout = Arbitraries.integers().between(0, 10).map { RaftAction.Timeout(it) }
-        val deliver = Arbitraries.integers().between(0, 100).map { RaftAction.Deliver(it) }
-        val propose = Arbitraries.just<RaftAction>(RaftAction.Propose)
-        val crash = Arbitraries.integers().between(0, 10).map { RaftAction.Crash(it) }
-        val restart = Arbitraries.integers().between(0, 10).map { RaftAction.Restart(it) }
-        val partition = Arbitraries.integers().between(0, 10).flatMap { a ->
-            Arbitraries.integers().between(0, 10).map<RaftAction> { b -> RaftAction.Partition(a, b) }
-        }
-        val heal = Arbitraries.just<RaftAction>(RaftAction.Heal)
-        val compact = Arbitraries.integers().between(0, 10).map { RaftAction.Compact(it) }
-
-        // Deliver weighted 3x — messages need to be processed to make progress
-        val oneAction: Arbitrary<RaftAction> = Arbitraries.oneOf(
-            timeout, deliver, deliver, deliver,
-            propose, crash, restart, partition, heal, compact,
-        )
-        return oneAction.list().ofMinSize(1).ofMaxSize(40)
-    }
 
     // ── Step function ────────────────────────────────────────────────────────
 
@@ -98,7 +64,7 @@ class PureRaftModelTest {
             .groupBy { it.term }
 
         leadersByTerm.forEach { (term, leaders) ->
-            assert(leaders.size <= 1) {
+            invariant(leaders.size <= 1) {
                 "Election Safety violated: ${leaders.size} leaders in term $term: ${leaders.map { it.id }}"
             }
         }
@@ -124,7 +90,7 @@ class PureRaftModelTest {
                         for (pi in prefixIndices) {
                             val pa = a.entryAt(pi) ?: continue
                             val pb = b.entryAt(pi) ?: continue
-                            assert(pa.term == pb.term && pa.command.contentEquals(pb.command)) {
+                            invariant(pa.term == pb.term && pa.command.contentEquals(pb.command)) {
                                 "Log Matching violated at index $pi between ${a.id} and ${b.id}: " +
                                     "matched at ($idx,${ea.term}) but prefix diverges"
                             }
@@ -148,7 +114,7 @@ class PureRaftModelTest {
                 for (idx in 1..minCommit) {
                     val ea = a.entryAt(idx) ?: continue
                     val eb = b.entryAt(idx) ?: continue
-                    assert(ea.term == eb.term && ea.command.contentEquals(eb.command)) {
+                    invariant(ea.term == eb.term && ea.command.contentEquals(eb.command)) {
                         "State Machine Safety violated at committed index $idx: " +
                             "${a.id} has (term=${ea.term}, cmd=${ea.command.contentToString()}), " +
                             "${b.id} has (term=${eb.term}, cmd=${eb.command.contentToString()})"
@@ -173,7 +139,9 @@ class PureRaftModelTest {
                 // A compacted leader holds the entry in its snapshot baseline, not its retained log.
                 if (idx <= leader.snapshotIndex) continue
                 val entry = leader.entryAt(idx)
-                assert(entry != null && entry.term == committed.term && entry.command.contentEquals(committed.command)) {
+                invariant(
+                    entry != null && entry.term == committed.term && entry.command.contentEquals(committed.command),
+                ) {
                     "Leader Completeness violated: leader ${leader.id} (term=${leader.term}) " +
                         "is missing committed entry at index=$idx (term=${committed.term}, " +
                         "cmd=${committed.command.contentToString()})"
@@ -193,7 +161,7 @@ class PureRaftModelTest {
         for (r in c.replicas.values) {
             if (!r.alive) continue
             for (idx in 1..r.commitIndex) {
-                assert(r.hasCommitted(idx)) {
+                invariant(r.hasCommitted(idx)) {
                     "Compaction Completeness violated on ${r.id}: committed index $idx is neither in the " +
                         "retained log nor covered by the snapshot baseline (snapshotIndex=${r.snapshotIndex})"
                 }
@@ -225,37 +193,35 @@ class PureRaftModelTest {
         { checkCompactionCompleteness(c) },
     )
 
+    /** Replays one trajectory against a fresh cluster of [nodeIds], checking every invariant after each step. */
+    private fun replay(nodeIds: Array<String>, actions: List<RaftAction>) {
+        var c = cluster(*nodeIds)
+        val nodes = c.replicas.keys.toList()
+        val committedEntries = mutableMapOf<Long, LogEntry>()
+        for (action in actions) {
+            c = applyAction(c, action, nodes)
+            collectCommitted(c, committedEntries)
+            checkAllInvariants(c, committedEntries)
+        }
+    }
+
     // ── Properties ───────────────────────────────────────────────────────────
 
-    @Property(tries = 500)
-    fun `safety invariants hold in a 3-node cluster`(
-        @ForAll("actions") actions: List<RaftAction>,
-    ): Boolean {
-        var c = cluster("n1", "n2", "n3")
-        val nodes = c.replicas.keys.toList()
-        val committedEntries = mutableMapOf<Long, LogEntry>()
-        for (action in actions) {
-            c = applyAction(c, action, nodes)
-            collectCommitted(c, committedEntries)
-            checkAllInvariants(c, committedEntries)
-        }
-        return true
-    }
+    @Test
+    fun `safety invariants hold in a 3-node cluster`() = forAllActionSequences(
+        property = "safety invariants hold in a 3-node cluster",
+        tries = THREE_NODE_TRIES,
+        maxActions = MAX_ACTIONS,
+    ) { actions -> replay(arrayOf("n1", "n2", "n3"), actions) }
 
-    @Property(tries = 300)
-    fun `safety invariants hold in a 5-node cluster`(
-        @ForAll("actions") actions: List<RaftAction>,
-    ): Boolean {
-        var c = cluster("n1", "n2", "n3", "n4", "n5")
-        val nodes = c.replicas.keys.toList()
-        val committedEntries = mutableMapOf<Long, LogEntry>()
-        for (action in actions) {
-            c = applyAction(c, action, nodes)
-            collectCommitted(c, committedEntries)
-            checkAllInvariants(c, committedEntries)
-        }
-        return true
-    }
+    @Test
+    fun `safety invariants hold in a 5-node cluster`() = forAllActionSequences(
+        property = "safety invariants hold in a 5-node cluster",
+        tries = FIVE_NODE_TRIES,
+        maxActions = MAX_ACTIONS,
+    ) { actions -> replay(arrayOf("n1", "n2", "n3", "n4", "n5"), actions) }
+
+    // ── Invariant self-checks ────────────────────────────────────────────────
 
     /**
      * Verifies checkLeaderCompleteness detects a violation.
@@ -293,7 +259,7 @@ class PureRaftModelTest {
         // committedEntries: the entry was committed in term 1 at index 1
         val committedEntries = mapOf(1L to committedEntry)
 
-        assertThrows(AssertionError::class.java) {
+        assertFailsWith<AssertionError> {
             checkLeaderCompleteness(c, committedEntries)
         }
     }
@@ -309,15 +275,15 @@ class PureRaftModelTest {
             id = n1,
             term = 2L,
             role = RaftRole.Leader,
-            log = listOf(LogEntry(5L, 2L, byteArrayOf())),   // index 4 missing from log
+            log = listOf(LogEntry(5L, 2L, byteArrayOf())), // index 4 missing from log
             commitIndex = 5L,
-            snapshotIndex = 3L,                              // ...and not covered by the snapshot
+            snapshotIndex = 3L, // ...and not covered by the snapshot
             snapshotTerm = 1L,
             alive = true,
         )
         val c = Cluster(replicas = mapOf(n1 to broken), voters = setOf(n1))
 
-        assertThrows(AssertionError::class.java) { checkCompactionCompleteness(c) }
+        assertFailsWith<AssertionError> { checkCompactionCompleteness(c) }
     }
 
     /**
@@ -342,11 +308,28 @@ class PureRaftModelTest {
         val committed = (1L..5L).associateWith { idx -> log.first { it.index == idx } }
         assertAll(
             { assertEquals(5L, floor) },
-            { c.replicas.values.forEach { r -> assertEquals(emptyList<LogEntry>(), r.log, "${r.id} log fully compacted") } },
+            { c.replicas.values.forEach { r -> assertEquals(emptyList(), r.log, "${r.id} log fully compacted") } },
             { c.replicas.values.forEach { r -> (1L..r.commitIndex).forEach { assertTrue(r.hasCommitted(it)) } } },
             { checkCompactionCompleteness(c) },
             { checkLeaderCompleteness(c, committed) },
             { checkStateMachineSafety(c) },
         )
+    }
+
+    private companion object {
+        /**
+         * Trajectory budget. The model is pure and synchronous — a try costs microseconds on the JVM —
+         * but these properties now also run interpreted under wasmJs, roughly an order of magnitude
+         * slower, so the budget is sized for the slowest target rather than the fastest.
+         */
+        const val THREE_NODE_TRIES = 3_000
+        const val FIVE_NODE_TRIES = 1_500
+
+        /**
+         * Upper bound on trajectory length. A safety violation needs an election, a replication round
+         * and a second election before it can appear, so short trajectories are structurally incapable
+         * of finding one — length is drawn uniformly up to this bound rather than biased small.
+         */
+        const val MAX_ACTIONS = 60
     }
 }
