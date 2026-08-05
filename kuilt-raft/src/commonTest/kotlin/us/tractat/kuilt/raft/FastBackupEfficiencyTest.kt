@@ -3,9 +3,7 @@
 package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.encodeToByteArray
 import us.tractat.kuilt.raft.internal.RaftMessage
@@ -15,46 +13,59 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 
 /**
- * DESIGN PROTOTYPE for issue #2067 — a method that can measure the §5.3 "log too short" guard.
+ * Pins `RaftEngine.onAppendEntries`' §5.3 "log too short" rejection (issue #2067).
  *
- * The guard under test is `RaftEngine.onAppendEntries`' `prev == null` branch: it replies
- * `conflictTerm = null, conflictIndex = lastLogIndex + 1` rather than synthesising a term from the
- * follower's own last entry.
+ * When a leader probes past the follower's tail there is no conflicting *term* to skip, only a gap
+ * to close, so the follower replies `conflictTerm = null, conflictIndex = lastLogIndex + 1`.
+ * Synthesising a term from its own last entry instead sends the leader back through
+ * `lastOfTerm(term) + 1`, which lands above the gap on every round.
  *
- * ## The measured finding: the guard no longer bears the liveness property
+ * ## Three properties, three tests — they are not the same property
  *
- * #2067 assumed mutating this guard reproduces #1246's livelock, and that a livelock **hangs** the
- * virtual-time harness rather than reddening it. Measurement says the premise is stale.
- * `nextIndexAfterFailure` clamps its result to `1..currentNextIndex - 1` (#1829's *exclusive*
- * ceiling), which forbids the fixed point on the **leader** side no matter what the follower
- * replies. So under the mutation the backup loop still terminates — it just **crawls** one index per
- * round instead of jumping the whole gap. Receipts, all against the mutation
- * `conflictTerm = state.log.lastOrNull { it.index <= m.prevLogIndex }?.term`:
+ * The three tests below are deliberately not interchangeable, and the whole point of #2067 is that
+ * only one of them is coverage *of this guard*:
  *
- * | Candidate property | Verdict |
+ * | Test | Property it bears | Held by |
+ * |---|---|---|
+ * | [logTooShortRejectionClosesTheWholeGapInOneRound] | §5.3 fast-backup **efficiency** — one rejection closes the whole gap | **this guard** |
+ * | [logTooShortRejectionReportsNoConflictTermAndPointsAtOurTail] | the rejection reply's **value** | **this guard** |
+ * | [everyBackupRoundProbesAStrictlyLowerIndex] | **liveness** — backup cannot have a fixed point | [nextIndexAfterFailure][us.tractat.kuilt.raft.internal.nextIndexAfterFailure]'s clamp (#1829) |
+ *
+ * ## Measured: this guard does **not** bear the liveness property
+ *
+ * #2067 was filed on the belief that mutating the guard reproduces #1246's fast-backup livelock, and
+ * that such a livelock **hangs** the virtual-time harness rather than reddening it. Both halves are
+ * stale. `nextIndexAfterFailure` clamps its result to `1..currentNextIndex - 1` — #1829's
+ * **exclusive** ceiling — so the fixed point is forbidden on the **leader** side whatever the
+ * follower replies. Under the mutation the backup loop still terminates; it **crawls** one index per
+ * round instead of jumping the whole gap.
+ *
+ * Receipts against the mutation `conflictTerm = state.log.lastOrNull { it.index <= m.prevLogIndex }?.term`
+ * (`--rerun-tasks --no-build-cache`):
+ *
+ * | Test | Verdict under the mutation |
  * |---|---|
- * | eventual convergence over a live network ([followerConvergesEndToEndOverTheLiveNetwork]) | **PASSES**, 0.414 s — no hang, no red |
- * | strict progress per round ([everyBackupRoundProbesAStrictlyLowerIndex], #2067's option 1) | **PASSES**, 0.056 s — held by #1829's clamp, not by this guard |
- * | frame inequality across rounds (#2067's option 2) | implied by the row above: strictly decreasing `prevLogIndex` already makes consecutive frames unequal, so it passes too |
- * | **one-step gap closure** ([logTooShortRejectionClosesTheWholeGapInOneRound]) | **FAILS**, 0.507 s — `probes=[12, 11, …, 2] expected:<1> but was:<10>` |
- * | responder value ([logTooShortRejectionReportsNoConflictTermAndPointsAtOurTail], option 3) | **FAILS**, 0.384 s — `conflictTerm=1`, expected `null` |
+ * | [logTooShortRejectionClosesTheWholeGapInOneRound] | **FAILS** — `probes=[12, 11, …, 2]`, `expected:<1> but was:<10>` |
+ * | [logTooShortRejectionReportsNoConflictTermAndPointsAtOurTail] | **FAILS** — `conflictTerm=1`, expected `null` |
+ * | [everyBackupRoundProbesAStrictlyLowerIndex] | **PASSES** — the clamp holds it, not this guard |
  *
- * What survives as this guard's *unique* contribution is therefore **§5.3 fast-backup efficiency**:
- * one rejection round closes the whole gap. That property is bounded, terminating, and reddens fast.
+ * So the liveness test is kept as an end-to-end pin of a real property across the composed leader +
+ * follower pair — **not** as coverage of `conflictTerm = null`. Do not re-attribute it to this
+ * guard; that mis-attribution is the defect #2067 turned out to be about.
  *
- * ## Why the loop is still pumped by hand
+ * ## Why delivery is pumped by hand
  *
- * Every test here drives the backup loop through **both** real engines over the real transport, but
- * delivery is **pumped by hand**: the `l → f` and `f → l` links are dropped in the network, so the
- * rejection ping-pong cannot self-sustain, and the test's own `for (round in 1..ROUND_BUDGET)` is
- * the termination guarantee. Termination is then a property of the *test*, not of the code under
- * test — which is what #2067 asked for, and what keeps this method correct if #1829's clamp is ever
- * relaxed or a future mutation reintroduces a genuine fixed point.
+ * Both engines are real and the transport is real, but delivery is **pumped by hand**: the `l → f`
+ * and `f → l` links are dropped in the network, so the rejection ping-pong cannot self-sustain, and
+ * the test's own `for (round in 1..ROUND_BUDGET)` is the termination guarantee. Termination is then
+ * a property of the *test*, not of the code under test — so a future regression that does
+ * reintroduce a fixed point **reddens** these tests instead of wedging the harness. A live-network
+ * variant was written during the design pass and deliberately **not** shipped for exactly that
+ * reason: its termination depends on the code it is meant to police.
  *
- * `InMemoryRaftNetwork.recording` taps sends **before** the drop filter, so a dropped frame is still
+ * [InMemoryRaftNetwork.recording] taps sends **before** the drop filter, so a dropped frame is still
  * observed; [pumpBackupLoop] re-encodes it and hand-delivers it with [InMemoryRaftNetwork.deliver],
  * which bypasses the drop rules. Production code runs on both sides of every round.
  */
@@ -81,7 +92,7 @@ private const val FOLLOWER_PRESEED_DEPTH = 2L
  */
 private const val ROUND_BUDGET = 60
 
-internal class FastBackupProgressTest {
+internal class FastBackupEfficiencyTest {
 
     private val l = NodeId("l")
     private val f = NodeId("f")
@@ -91,22 +102,28 @@ internal class FastBackupProgressTest {
 
     private suspend fun preseed(storage: InMemoryRaftStorage, depth: Long) {
         storage.saveTerm(1L)
-        storage.appendEntries((1..depth).map { LogEntry(index = it, term = 1L, command = byteArrayOf(it.toByte())) })
+        storage.appendEntries(
+            (1..depth).map { LogEntry(index = it, term = 1L, command = byteArrayOf(it.toByte())) },
+        )
     }
 
     private fun encode(m: RaftMessage): ByteArray = Cbor.encodeToByteArray<RaftMessage>(m)
 
     // ----------------------------------------------------------------------------------------
-    // A — the discriminating test: the gap closes in ONE rejection round.
+    // A — §5.3 fast-backup EFFICIENCY. The discriminating test.
     // ----------------------------------------------------------------------------------------
 
     /**
-     * **Property: one-step gap closure (the §5.3 fast-backup contract).**
+     * **Property borne: §5.3 fast-backup efficiency — one-round gap closure.**
      *
      * A "log too short" rejection must move the leader's probe straight to the follower's tail, so
-     * exactly one rejection precedes acceptance. Synthesising a term instead sends the leader back
-     * through `lastOfTerm(term) + 1`, which lands above the gap every time; the #1829 clamp then
-     * drags it down one index per round, so the gap is crawled rather than jumped.
+     * exactly one rejection precedes acceptance however deep the gap. This is the guard's *unique*
+     * contribution and the only one of the three tests here that discriminates it: synthesising a
+     * term instead routes the leader through `lastOfTerm(term) + 1`, which lands above the gap every
+     * round, and #1829's clamp then drags it down one index at a time — the gap is crawled rather
+     * than jumped, and this assertion counts the crawl.
+     *
+     * Not liveness: the crawl still terminates. See the class KDoc.
      */
     @Test
     fun logTooShortRejectionClosesTheWholeGapInOneRound() = raftRunTest {
@@ -122,56 +139,34 @@ internal class FastBackupProgressTest {
                 )
             },
             {
-                assertTrue(rounds.last().accepted, "the pumped loop must end in an accepted AppendEntries; rounds=$rounds")
+                assertTrue(
+                    rounds.last().accepted,
+                    "the pumped loop must end in an accepted AppendEntries; rounds=$rounds",
+                )
             },
             {
                 assertEquals(
                     followerLast,
                     rounds.last().probedPrevLogIndex,
-                    "the round after the rejection must probe exactly the follower's tail; probes=${rounds.map { it.probedPrevLogIndex }}",
+                    "the round after the rejection must probe exactly the follower's tail; " +
+                        "probes=${rounds.map { it.probedPrevLogIndex }}",
                 )
             },
         )
     }
 
     // ----------------------------------------------------------------------------------------
-    // B — the weaker sibling: strict progress per round. Documented as NON-discriminating.
+    // B — the rejection reply's VALUE. Companion to A.
     // ----------------------------------------------------------------------------------------
 
     /**
-     * **Property: strict backup progress (liveness).** The probed index strictly decreases every
-     * round, so the loop cannot have a fixed point.
+     * **Property borne: the rejection reply's value.** A "log too short" AppendEntries draws
+     * `conflictTerm = null, conflictIndex = lastLogIndex + 1` — a statement about one frame, and
+     * nothing about convergence, efficiency or liveness.
      *
-     * This is the property #2067 proposed as its best candidate, and measurement says it does **not**
-     * discriminate this guard: it **passes in 0.056 s under the mutation**, because
-     * `nextIndexAfterFailure`'s `1..currentNextIndex - 1` clamp (#1829) enforces strict decrease on
-     * the *leader* side regardless of what the follower replies. Kept as an end-to-end pin of the
-     * liveness property across the composed pair — not as coverage of the `conflictTerm = null`
-     * guard. #2067's option 2 (frame inequality) is strictly weaker still: strictly decreasing
-     * `prevLogIndex` already makes consecutive frames unequal, so it passes wherever this does.
-     */
-    @Test
-    fun everyBackupRoundProbesAStrictlyLowerIndex() = raftRunTest {
-        val (rounds, _) = pumpBackupLoop()
-        val probes = rounds.map { it.probedPrevLogIndex }
-        assertAll(
-            *probes.zipWithNext().map { (a, b) ->
-                { assertTrue(b < a, "backup must strictly decrease the probed index; probes=$probes") }
-            }.toTypedArray()
-        )
-    }
-
-    // ----------------------------------------------------------------------------------------
-    // C — the responder in isolation: the value contract of the reply.
-    // ----------------------------------------------------------------------------------------
-
-    /**
-     * **Property: the rejection's value.** A "log too short" AppendEntries draws
-     * `conflictTerm = null, conflictIndex = lastLogIndex + 1` — nothing about convergence.
-     *
-     * Cheapest and structurally incapable of hanging (one frame in, one frame out), but it goes
-     * green if the leader side later changes how it consumes the pair, so it is a companion to the
-     * one-step test above, never a replacement.
+     * Cheapest of the three and structurally incapable of hanging (one frame in, one frame out), but
+     * it stays green if the *leader* side later changes how it consumes the pair, so it is a
+     * companion to [logTooShortRejectionClosesTheWholeGapInOneRound], never a replacement for it.
      */
     @Test
     fun logTooShortRejectionReportsNoConflictTermAndPointsAtOurTail() = raftRunTest {
@@ -199,7 +194,8 @@ internal class FastBackupProgressTest {
         net.deliver(from = l, to = f, bytes = probe)
         delay(5)
 
-        val reply = net.sent.last { it.from == f && it.to == l && it.message is RaftMessage.AppendEntriesResponse }
+        val reply = net.sent
+            .last { it.from == f && it.to == l && it.message is RaftMessage.AppendEntriesResponse }
             .message as RaftMessage.AppendEntriesResponse
         assertAll(
             { assertEquals(false, reply.success, "a probe past our tail must be rejected; reply=$reply") },
@@ -207,8 +203,8 @@ internal class FastBackupProgressTest {
                 assertEquals(
                     null,
                     reply.conflictTerm,
-                    "a log-too-short rejection carries no conflicting term — synthesising one reproduces the " +
-                        "leader's own nextIndex via lastOfTerm(term)+1 (#1246); reply=$reply",
+                    "a log-too-short rejection carries no conflicting term — synthesising one makes the " +
+                        "leader's lastOfTerm(term)+1 land above the gap on every round (#1246); reply=$reply",
                 )
             },
             {
@@ -222,37 +218,38 @@ internal class FastBackupProgressTest {
     }
 
     // ----------------------------------------------------------------------------------------
-    // D — the live cluster, for comparison. This is the shape that can hang.
+    // C — LIVENESS. Real property, but held by #1829's clamp, NOT by the guard above.
     // ----------------------------------------------------------------------------------------
 
     /**
-     * The same scenario with delivery left to the network — no pump, no round budget. Included to
-     * *measure* #2067's premise ("mutating the guard makes the test hang"): it **passes in 0.414 s
-     * under the mutation**, so the premise is stale as of #1829.
+     * **Property borne: strict backup progress (liveness).** The probed index strictly decreases
+     * every round, so the backup loop cannot have a fixed point.
      *
-     * **Recommended for deletion, not for shipping.** Its termination is a property of the code
-     * under test, so any future regression that does reintroduce a fixed point wedges the harness
-     * instead of reddening it — the shape this repo forbids. It earns its place here only as the
-     * artifact that refuted the premise.
+     * **What holds this is [nextIndexAfterFailure][us.tractat.kuilt.raft.internal.nextIndexAfterFailure]'s
+     * `maxOf(1, minOf(proposed, currentNextIndex - 1))` clamp (#1829) — not the
+     * `conflictTerm = null` guard this file is otherwise about.** That is measured, not argued: this
+     * test **passes** under the mutation that reddens the two above (see the class KDoc for the
+     * receipts), because the exclusive ceiling forbids the fixed point on the *leader* side whatever
+     * the follower replies. #2067 originally proposed exactly this property as the guard's best
+     * pin, and the measurement rules it out.
+     *
+     * Kept because the property is real and worth an end-to-end pin across the composed pair — the
+     * unit-level sibling is `RaftLogMathTest`'s
+     * `nextIndexAfterFailure_malformedConflictIndexAtOrAboveNextIndex_alwaysStrictlyDecreases`. It is
+     * strictly stronger than #2067's other rejected candidate, frame inequality across rounds: a
+     * strictly decreasing `prevLogIndex` already makes consecutive frames unequal.
      */
     @Test
-    fun followerConvergesEndToEndOverTheLiveNetwork() = raftRunTest {
-        val net = InMemoryRaftNetwork()
-        val leaderStorage = InMemoryRaftStorage()
-        val followerStorage = InMemoryRaftStorage()
-        preseed(leaderStorage, LEADER_PRESEED_DEPTH)
-        preseed(followerStorage, FOLLOWER_PRESEED_DEPTH)
-        val cluster = ClusterConfig(voters = setOf(l), learners = setOf(f))
-        val leader = backgroundScope.raftNode(cluster, net.transport(l), leaderStorage, fastBackupConfig())
-        val follower = backgroundScope.raftNode(cluster, net.transport(f), followerStorage, fastBackupConfig())
-        leader.awaitLeadership()
-        SingleVoterHarness(leader, leaderStorage).awaitCommit(LEADER_PRESEED_DEPTH + 1L)
-
-        withTimeout(2.seconds) { follower.commitIndex.first { it >= LEADER_PRESEED_DEPTH + 1L } }
-        assertEquals(
-            leaderStorage.entries().map { it.index to it.term },
-            followerStorage.entries().map { it.index to it.term },
-            "the follower must converge on the leader's log",
+    fun everyBackupRoundProbesAStrictlyLowerIndex() = raftRunTest {
+        val (rounds, _) = pumpBackupLoop()
+        val probes = rounds.map { it.probedPrevLogIndex }
+        assertAll(
+            // Non-vacuity: with fewer than two rounds there is no consecutive pair to compare, so
+            // the spread below would assert nothing at all.
+            { assertTrue(probes.size >= 2, "the pump must observe at least two rounds; probes=$probes") },
+            *probes.zipWithNext().map { (a, b) ->
+                { assertTrue(b < a, "backup must strictly decrease the probed index; probes=$probes") }
+            }.toTypedArray(),
         )
     }
 
@@ -264,6 +261,8 @@ internal class FastBackupProgressTest {
      * Stands up a sole-voter leader with a [LEADER_PRESEED_DEPTH]-entry log and a learner holding a
      * [FOLLOWER_PRESEED_DEPTH]-entry prefix of it, severs both links, and hand-pumps the backup loop
      * one round at a time until the follower accepts or [ROUND_BUDGET] is exhausted.
+     *
+     * The budget — not the code under test — is what terminates this loop; see the class KDoc.
      *
      * @return the observed rounds and the follower's last log index.
      */
@@ -297,7 +296,8 @@ internal class FastBackupProgressTest {
                 .message as RaftMessage.AppendEntries
             net.deliver(from = l, to = f, bytes = encode(ae))
             delay(1)
-            val reply = net.sent.last { it.from == f && it.to == l && it.message is RaftMessage.AppendEntriesResponse }
+            val reply = net.sent
+                .last { it.from == f && it.to == l && it.message is RaftMessage.AppendEntriesResponse }
                 .message as RaftMessage.AppendEntriesResponse
             rounds += Round(probedPrevLogIndex = ae.prevLogIndex, accepted = reply.success)
             if (reply.success) break

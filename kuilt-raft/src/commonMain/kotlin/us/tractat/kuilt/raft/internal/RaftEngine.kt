@@ -2348,10 +2348,19 @@ internal class RaftEngine(
                     // "Log too short" — prevLogIndex is beyond our lastLogIndex, so there is no
                     // conflicting *term* to skip, only a gap to close. Report no term and point the
                     // leader straight at our end (lastLogIndex + 1, snapshot-aware) so it backs
-                    // nextIndex to exactly where we can begin appending. Synthesising a term from our
-                    // last entry here would make the leader's `lastOfTerm(term)+1` reproduce the SAME
-                    // nextIndex every heartbeat — an identical AppendEntries, an identical rejection,
-                    // forever: the §5.3 fast-backup livelock (issue #1246).
+                    // nextIndex to exactly where we can begin appending.
+                    //
+                    // What this branch bears is §5.3 fast-backup EFFICIENCY: one rejection closes
+                    // the whole gap. Synthesising a term from our last entry here would make the
+                    // leader's `lastOfTerm(term)+1` land above the gap on every round.
+                    //
+                    // It is NOT the sole barrier against #1246's livelock, though it was filed as
+                    // one and this comment used to claim it (#2067). `nextIndexAfterFailure` clamps
+                    // to `1..currentNextIndex - 1` — #1829's *exclusive* ceiling — so the fixed
+                    // point is forbidden on the leader side whatever we reply. Mutating this branch
+                    // therefore makes the backup CRAWL one index per round, not livelock. Measured,
+                    // not argued: `FastBackupEfficiencyTest` reddens on the one-round property and
+                    // stays green on strict progress.
                     conflictTerm = null
                     resolvedConflictIndex = state.lastLogIndex + 1L
                 } else {
