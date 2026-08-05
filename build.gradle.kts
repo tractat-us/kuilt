@@ -1708,7 +1708,6 @@ val forbidTightRunTestTimeout by tasks.registering {
         "kuilt-quilter/src/commonTest/kotlin/us/tractat/kuilt/quilter/QuilterFullStateResyncTest.kt" to 1,
         "kuilt-quilter/src/commonTest/kotlin/us/tractat/kuilt/quilter/QuilterFullStateRetryTest.kt" to 2,
         "kuilt-quilter/src/commonTest/kotlin/us/tractat/kuilt/quilter/QuilterResendRetryTest.kt" to 3,
-        "kuilt-quilter/src/jvmTest/kotlin/us/tractat/kuilt/quilter/QuilterConcurrencyTest.kt" to 3,
         "kuilt-warp-compiler/src/jvmTest/kotlin/us/tractat/kuilt/warp/RealVariantTieringTest.kt" to 1,
         "kuilt-warp-runtime/src/jvmTest/kotlin/us/tractat/kuilt/warp/ChicoryWasmRuntimeTest.kt" to 1,
     )

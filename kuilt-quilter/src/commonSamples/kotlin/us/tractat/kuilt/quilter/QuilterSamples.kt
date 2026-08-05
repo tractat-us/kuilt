@@ -18,6 +18,7 @@ import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.RgaId
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlinx.serialization.serializer
 import kotlin.test.assertEquals
 import kotlin.time.Duration.Companion.seconds
@@ -60,6 +61,43 @@ internal fun sampleQuilterConvenience() = runTest(
 
     assertEquals(2L, aliceTally.state.value.value)
     assertEquals(aliceTally.state.value.value, bobTally.state.value.value)
+}
+
+// ── Quilter conditional write ─────────────────────────────────────────────────
+
+/**
+ * [Quilter.mutateOrSkip]: read the shared state, decide, and *maybe* write — atomically.
+ *
+ * Returning `null` from the transform means "write nothing". The decision is made against the
+ * state the patch would have landed on, and a refusal publishes no frame at all — unlike a
+ * hand-rolled identity patch, which costs a sequence number and an empty delta to every peer.
+ */
+@Suppress("unused")
+internal fun sampleQuilterMutateOrSkip() = runTest(
+    StandardTestDispatcher(),
+    timeout = TEST_WEDGE_BACKSTOP,
+) {
+    val loom = InMemoryLoom()
+    val seam = loom.host(Pattern("seat-claims"))
+
+    val seats = Quilter(
+        seam,
+        LWWMap.empty<String, String>(),
+        LWWMap.serializer(serializer<String>(), serializer<String>()),
+        backgroundScope,
+        config = QuilterConfig(expectVirtualTime = true),
+    )
+
+    // Claim a seat only if it is still free. Read and write are one atomic step, so no other
+    // writer can take the seat between the check and the publish.
+    fun claim(seat: String, player: String, at: Long): Boolean =
+        seats.mutateOrSkip { board ->
+            if (board[seat] != null) null else board.setDelta(seats.replica, at, seat, player)
+        }
+
+    assertEquals(true, claim("north", "alice", 1L), "the seat was free — published")
+    assertEquals(false, claim("north", "bob", 2L), "already taken — nothing published, no frame sent")
+    assertEquals("alice", seats.state.value["north"])
 }
 
 // ── Quilter basic setup ───────────────────────────────────────────────────────

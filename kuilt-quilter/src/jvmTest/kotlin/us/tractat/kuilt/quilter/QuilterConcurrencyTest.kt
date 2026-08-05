@@ -38,6 +38,24 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 /**
+ * The wall-clock ceiling every probe in this file uses — a **wedge backstop**, not a budget.
+ *
+ * Deliberately *not* [us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP]. That constant is 30 s and its
+ * KDoc scopes it to a trajectory running on **virtual** time, where the total quantity of real
+ * work is fixed and a wall-clock cap therefore asserts nothing but the host's speed. These probes
+ * are the opposite: they run genuinely parallel OS threads doing real work — 16 000 lock-serialised
+ * read-modify-writes in the two increment tests — so their wall time scales with machine load for a
+ * real reason, and 30 s is not obviously clear of it on a contended box.
+ *
+ * It is a named constant rather than the `120.seconds` literal these four sites used to repeat
+ * because that repetition is precisely how the next one gets written: `forbidTightRunTestTimeout`
+ * (#1739) rejects a bare duration literal in a `runTest` timeout, and it caught the fifth copy
+ * being added here for #2090. Sweeping the file all-or-none is what the guard asks for, so that a
+ * contributor copying a neighbour copies the constant.
+ */
+private val CONCURRENCY_PROBE_WEDGE_BACKSTOP = 120.seconds
+
+/**
  * Thread-safety probes for [Quilter] (#288).
  *
  * `Quilter` keeps plain mutable state (`nextSeq`, `pendingDeltas`, `knownPeers`,
@@ -89,7 +107,7 @@ class QuilterConcurrencyTest {
      * per-peer FullState retry coroutines.
      */
     @Test
-    fun concurrentApplyAndPeerChurnDoNotCorruptState() = runTest(timeout = 120.seconds) {
+    fun concurrentApplyAndPeerChurnDoNotCorruptState() = runTest(timeout = CONCURRENCY_PROBE_WEDGE_BACKSTOP) {
         withContext(Dispatchers.Default) {
             val lock = reentrantLock()
             val errors = mutableListOf<Throwable>()
@@ -180,7 +198,7 @@ class QuilterConcurrencyTest {
      * replica permanently short an element; under the lock both converge to the full union.
      */
     @Test
-    fun concurrentApplyAndInboundDeltasConverge() = runTest(timeout = 120.seconds) {
+    fun concurrentApplyAndInboundDeltasConverge() = runTest(timeout = CONCURRENCY_PROBE_WEDGE_BACKSTOP) {
         withContext(Dispatchers.Default) {
             val lock = reentrantLock()
             val errors = mutableListOf<Throwable>()
@@ -262,7 +280,7 @@ class QuilterConcurrencyTest {
      * the lock, making the lost update easy to hit under real OS-thread parallelism.
      */
     @Test
-    fun concurrentMutateIncrementsAreNotLost() = runTest(timeout = 120.seconds) {
+    fun concurrentMutateIncrementsAreNotLost() = runTest(timeout = CONCURRENCY_PROBE_WEDGE_BACKSTOP) {
         withContext(Dispatchers.Default) {
             val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
             try {
@@ -293,6 +311,62 @@ class QuilterConcurrencyTest {
                     rep.state.value.value,
                     "same-replica increments were max-joined away — mutate must run its " +
                         "transform inside the lock to be the atomic RMW its KDoc promises",
+                )
+            } finally {
+                scope.cancel()
+            }
+        }
+    }
+
+    /**
+     * The [concurrentMutateIncrementsAreNotLost] twin for [Quilter.mutateOrSkip] (#2090) — same
+     * CRDT, same shape, same reason.
+     *
+     * `mutateOrSkip` makes the *same* atomicity promise as [Quilter.mutate], and the whole point
+     * of it is that the refusal decision is inside the lock too. That guarantee needs its own
+     * real-thread probe: a virtual-time test cannot distinguish the correct implementation from
+     * one that reads `state.value` **outside** the lock and only takes it to publish. That variant
+     * is not hypothetical — it is exactly the bug [Quilter.mutate] shipped with and was fixed for
+     * in #1270, and it survives every single-threaded assertion, including the invocation-count
+     * pin in `QuilterMutateOrSkipTest` (it evaluates the transform exactly once, on both branches).
+     *
+     * [PNCounter] for the same reason as its twin: the delta carries the replica's absolute new
+     * slot value and join is elementwise max, so two transforms that both read slot `n` and write
+     * `n + 1` collapse into one increment. The `GSet` used elsewhere in this file is idempotent
+     * under max-join and would mask it.
+     */
+    @Test
+    fun concurrentMutateOrSkipIncrementsAreNotLost() = runTest(timeout = CONCURRENCY_PROBE_WEDGE_BACKSTOP) {
+        withContext(Dispatchers.Default) {
+            val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+            try {
+                val loom = InMemoryLoom()
+                val seam = loom.host(Pattern("mutate-or-skip-atomicity"))
+                val rep = Quilter(
+                    replica = ReplicaId(seam.selfId.value),
+                    seam = seam,
+                    initial = PNCounter.ZERO,
+                    messageSerializer = QuiltMessage.serializer(PNCounter.serializer()),
+                    scope = scope,
+                )
+
+                val workers = 8
+                val perWorker = 2000
+                coroutineScope {
+                    repeat(workers) {
+                        launch {
+                            repeat(perWorker) {
+                                rep.mutateOrSkip { it.increment(rep.replica) }
+                            }
+                        }
+                    }
+                }
+
+                assertEquals(
+                    (workers * perWorker).toLong(),
+                    rep.state.value.value,
+                    "same-replica increments were max-joined away — mutateOrSkip must read the " +
+                        "state and run its transform INSIDE the lock, not merely publish there",
                 )
             } finally {
                 scope.cancel()

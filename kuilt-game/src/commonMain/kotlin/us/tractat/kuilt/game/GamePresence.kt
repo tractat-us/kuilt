@@ -66,13 +66,6 @@ private const val SPECTATORS_CLOSED_SUFFIX = ":sc"
 private val VOTER_LIST_SERIALIZER = ListSerializer(String.serializer())
 
 /**
- * The patch a refused declaration publishes: the presence board's bottom element, which every
- * `piece` returns unchanged. See `GamePresence.declareIf` for why a refusal goes through the
- * Quilter at all rather than short-circuiting ahead of its lock.
- */
-private val NO_DECLARATION: Patch<EphemeralMap<String>> = Patch(EphemeralMap.empty())
-
-/**
  * Lobby presence over [seam], backed by an [EphemeralMap] replicated by [Quilter].
  *
  * Carries each peer's host-declaration flag so the game host entry point can fail
@@ -264,8 +257,8 @@ public class GamePresence(
      * publish it — as a single atomic step.
      *
      * [next] receives the current board and returns the value to publish, or `null` to publish
-     * nothing. It runs inside [Quilter.mutate], so the board it sees is the board its patch lands
-     * on: no other declaration can slip between the decision and the write.
+     * nothing. It runs inside [Quilter.mutateOrSkip], so the board it sees is the board its patch
+     * lands on: no other declaration can slip between the decision and the write.
      *
      * **Both halves have to be in here, and both for the same reason (#2083).** The board is an
      * [EphemeralMap], whose join keeps the higher clock and, at an equal clock for one replica,
@@ -279,21 +272,17 @@ public class GamePresence(
      * [next] runs in the Quilter's locked section, so it must stay pure and cheap: derive the
      * value from [board] only, and do any encoding before the call.
      *
-     * A `null` decision still enters [Quilter.mutate] and publishes [NO_DECLARATION], the board's
-     * bottom element — an identity join everywhere, at the cost of one empty delta frame. That
-     * keeps the refusal decision itself inside the critical section, which a fast-refuse ahead of
-     * the lock would not: [declareAdmissionOpen] must leave admission open when it returns, and a
-     * pre-lock read could refuse against a board that has already moved on. Both refusable
-     * declarations are cold — one per eviction, one per session — so the frame is not worth
-     * trading that for. ([us.tractat.kuilt.heddle.HeddleNode] takes the fast-refuse instead
-     * because its equivalent is on a hot path and its refusal is not a postcondition.)
+     * A `null` decision publishes nothing at all — [Quilter.mutateOrSkip] returns without touching
+     * the board or the wire, and the refusal decision itself stays inside the critical section. The
+     * decision has to be in there: [declareAdmissionOpen] must leave admission open *when it
+     * returns*, so a fast-refuse ahead of the lock could refuse against a board that has already
+     * moved on. Until #2090 the refusal was expressed as an identity patch — the board's bottom
+     * element, which every `piece` returns unchanged — holding the same guarantee at the cost of
+     * one empty delta frame per refusal; `mutateOrSkip` keeps the guarantee and drops the frame.
      */
     private fun declareIf(next: (EphemeralMap<String>) -> String?) {
-        quilter.mutate { board ->
-            val value = next(board)
-            if (value == null) {
-                NO_DECLARATION
-            } else {
+        quilter.mutateOrSkip { board ->
+            next(board)?.let { value ->
                 val nextClock = (board.entries[quilter.replica]?.clock ?: 0L) + 1L
                 Patch(board.put(quilter.replica, value, nextClock))
             }
