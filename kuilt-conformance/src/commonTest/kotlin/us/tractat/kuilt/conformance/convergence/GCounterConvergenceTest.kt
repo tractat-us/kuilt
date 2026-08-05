@@ -15,6 +15,8 @@ internal class GCounterConvergenceTest : CrdtConvergenceSuite<GCounter>() {
                 state.piece(state.inc(replica, by = random.nextLong(1L, 6L)))
             },
         ),
+        // No RETIRE op, for the reason argued above — an increment is never taken back.
+        floors = VacuityFloors.NOTHING_TO_RETIRE,
         serializer = GCounter.serializer(),
         replicaCount = 3,
         opsPerReplica = 8,

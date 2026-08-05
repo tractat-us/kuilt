@@ -21,6 +21,8 @@ internal class PNCounterConvergenceTest : CrdtConvergenceSuite<PNCounter>() {
                 state.piece(state.decrement(ReplicaId("R$replicaIndex"), random.nextLong(1L, 4L)))
             },
         ),
+        // No RETIRE op, for the reason argued above — both tallies are grow-only.
+        floors = VacuityFloors.NOTHING_TO_RETIRE,
         serializer = PNCounter.serializer(),
         replicaCount = 3,
         opsPerReplica = 8,
