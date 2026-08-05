@@ -16,6 +16,8 @@ import kotlinx.coroutines.yield
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.cbor.Cbor
+import kotlinx.serialization.encodeToByteArray
+import us.tractat.kuilt.raft.internal.RaftMessage
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -52,11 +54,11 @@ import kotlin.test.assertTrue
  * `SerializationException` at kotlinx-serialization 1.11 — the unknown discriminator throws the base
  * type from the subclass lookup, and truncation and a bad major type throw `CborDecodingException`,
  * a subtype of it. A `catch (SerializationException)` in `RaftEngine.decodeInbound` passes all three;
- * that was measured, not assumed. The engine catches `Throwable` anyway, because
- * `BinaryFormat.decodeFromByteArray` documents `IllegalArgumentException` as well and because #1818's
- * rule is a property of the *path*, not of a third-party exception hierarchy. Do not read a green run
- * here as evidence for the width — if a way to make the decoder throw outside `SerializationException`
- * ever appears, it belongs in this file as a fourth case.
+ * that was measured, not assumed. The engine catches `Throwable` anyway — see `decodeInbound`'s KDoc
+ * for the three reasons, the sharpest being that `ignoreUnknownKeys` skips an unknown value
+ * *recursively*, so a deeply-nested one throws `StackOverflowError`, which is an `Error` and so
+ * escapes `catch (e: Exception)` as well. Do not read a green run here as evidence for the width; a
+ * case that reaches outside `SerializationException` belongs in this file when someone builds one.
  *
  * ### Why the assertion is a scope, not a `try`
  *
@@ -123,18 +125,14 @@ class UndecodableFrameTest {
     fun anUndecodableFrame_isReportedOnTrace() = raftRunTest {
         val solo = soloNode()
         try {
-            val seen = mutableListOf<RaftTraceEvent.FrameUndecodable>()
-            solo.scope.launch {
-                solo.node.trace.collect { if (it is RaftTraceEvent.FrameUndecodable) seen += it }
-            }
             solo.node.awaitLeadership()
-            repeat(SETTLE_YIELDS) { yield() } // let the collector subscribe before the injection
 
             val bad = aFrameTypeThisBuildDoesNotKnow()
             solo.network.deliver(from = ghost, to = solo.self, bytes = bad)
             repeat(SETTLE_YIELDS) { yield() }
 
-            assertEquals(1, seen.size, "exactly one report for one undecodable frame, saw $seen")
+            val seen = solo.trace.filterIsInstance<RaftTraceEvent.FrameUndecodable>()
+            assertEquals(1, seen.size, "exactly one report for one undecodable frame, trace was ${solo.trace}")
             assertAll(
                 { assertEquals(solo.self, seen.single().node, "reported by the recipient") },
                 { assertEquals(ghost, seen.single().from, "names the peer the frame came from") },
@@ -146,11 +144,14 @@ class UndecodableFrameTest {
     }
 
     /**
-     * Drive a single-voter node to a committed proposal, inject [bad] from [ghost], and require both
-     * that nothing escaped into the node's scope and that the node is still leading and committing.
+     * Drive a single-voter node to a committed proposal, inject [bad] from [ghost], and require three
+     * things of it afterwards: that nothing escaped into its scope, that its **inbound path** still
+     * carries frames, and that it is still leading and committing.
      *
-     * The pre-injection commit is what makes the post-injection one meaningful: it establishes the
-     * node was already making progress, so a failure to commit afterwards can only be the frame.
+     * The three are independent and the middle one is the load-bearing addition — see
+     * [assertStillPumping] for the mutant that satisfies the other two. The pre-injection commit is
+     * what makes the post-injection one meaningful: it establishes the node was already making
+     * progress, so a failure to commit afterwards can only be the frame.
      */
     private suspend fun TestScope.assertSurvives(bad: ByteArray) {
         val solo = soloNode()
@@ -166,6 +167,8 @@ class UndecodableFrameTest {
                 solo.escapes.isEmpty(),
                 "an undecodable frame must not escape into the node's scope, but ${solo.escapes} did",
             )
+            assertStillPumping(solo)
+
             solo.node.propose(byteArrayOf(2))
             solo.harness.awaitCommit(3L)
             assertEquals(RaftRole.Leader, solo.node.role.value, "node must still be leading after a bad frame")
@@ -174,17 +177,69 @@ class UndecodableFrameTest {
         }
     }
 
+    /**
+     * The **inbound path** survived, not merely the scope — the half "drop and keep going" is really
+     * about, and the half a survival-only assertion structurally cannot see.
+     *
+     * Every other assertion in [assertSurvives] is satisfied by a node whose scope is merely alive:
+     * on a single-voter cluster `propose`/`awaitCommit` commits with **zero inbound traffic**. So a
+     * pump that went deaf after the bad frame — the `return@collect` shape already sitting two lines
+     * from the decode — passes all of them. That mutant was built and measured: without this
+     * function the suite was 4/4 green and the whole module 503/503. On a real cluster it is not a
+     * lesser bug than the one #2051 is about: the node never hears another `AppendEntries`, its lease
+     * expires, it campaigns forever and cannot be voted for, so a rolling upgrade turns every
+     * not-yet-upgraded voter permanently deaf. Same operational outcome as node death, reached
+     * quietly.
+     *
+     * So: a **decodable** frame from the same peer, through the same `deliver` path, and an assertion
+     * that the actor *decided* something about it. A `RequestVote` one term above ours draws a vote
+     * decision addressed back to [ghost], which nothing but that frame can produce.
+     *
+     * **Why the assertion is the trace event and not a state change.** The first draft asserted the
+     * §5.1 step-down, and instrumenting the failure is what corrected it: a leader that believes
+     * itself alive denies the vote on §4.2.3 stickiness *without* adopting the term
+     * (`VoteDenied(reasons = [LeaderAlive])`), so role and persisted term are both untouched. The
+     * decision event is the robust observable — and a denial specifically, at either gate: the probe
+     * claims an empty log while ours holds committed entries, so §5.4.1 refuses it even if the
+     * stickiness path ever stops applying. The reason is deliberately not asserted for that reason.
+     *
+     * Leaving the leader intact is also why this can run *before* the propose rather than having to
+     * be sequenced last. `term + 1` keeps the frame inside `RaftConfig.maxTermJump`, and `RequestVote`
+     * is not a leader→peer RPC, so the §5.2 authority gate does not refuse it from a non-member.
+     */
+    private suspend fun assertStillPumping(solo: Solo) {
+        val probeTerm = solo.harness.storage.term() + 1
+        solo.network.deliver(
+            from = ghost,
+            to = solo.self,
+            bytes = Cbor.encodeToByteArray<RaftMessage>(
+                RaftMessage.RequestVote(term = probeTerm, lastLogIndex = 0L, lastLogTerm = 0L),
+            ),
+        )
+        repeat(SETTLE_YIELDS) { yield() }
+
+        val decisions = solo.trace.filterIsInstance<RaftTraceEvent.VoteDenied>()
+            .filter { it.to == ghost && it.term == probeTerm }
+        assertEquals(
+            1,
+            decisions.size,
+            "the pump must still deliver: a decodable RequestVote(term=$probeTerm) sent after the " +
+                "undecodable frame must still reach the actor and draw a vote decision, but the " +
+                "trace holds ${solo.trace}",
+        )
+    }
+
     // ── Fixture ───────────────────────────────────────────────────────────────
 
     /**
-     * A single-voter node, the [InMemoryRaftNetwork] behind it so a test can inject raw bytes, and
-     * the [escapes] its scope's handler captured.
+     * A single-voter node, the [InMemoryRaftNetwork] behind it so a test can inject raw bytes, the
+     * [escapes] its scope's handler captured, and everything it has emitted on [RaftNode.trace].
      *
      * [singleVoterNode] builds its own network and does not expose it; this keeps that fixture
-     * untouched while giving this suite the two things it needs — a handle to
-     * [InMemoryRaftNetwork.deliver] and a scope that reports rather than swallows. [harness] is the
-     * same [SingleVoterHarness] so the bounded `awaitCommit` is reused rather than re-derived
-     * (issue #192 harness discipline).
+     * untouched while giving this suite the three things it needs — a handle to
+     * [InMemoryRaftNetwork.deliver], a scope that reports rather than swallows, and a trace record.
+     * [harness] is the same [SingleVoterHarness] so the bounded `awaitCommit` is reused rather than
+     * re-derived (issue #192 harness discipline).
      */
     private class Solo(
         val node: RaftNode,
@@ -193,6 +248,7 @@ class UndecodableFrameTest {
         val harness: SingleVoterHarness,
         val scope: CoroutineScope,
         val escapes: List<Throwable>,
+        val trace: List<RaftTraceEvent>,
     )
 
     /**
@@ -200,6 +256,10 @@ class UndecodableFrameTest {
      * the damage under test is that the node's own failure cancels its siblings — plus a
      * [CoroutineExceptionHandler] that records instead of crashing the runner. `backgroundScope` is
      * deliberately not used: its supervisor would mask exactly the cancellation this is about.
+     *
+     * The trace collector is launched here rather than per-test because `trace` is a replay-0
+     * `SharedFlow` — subscribing at construction is what makes an event emitted at any later point
+     * observable, and it means a failing assertion can print the whole trace as its diagnostic.
      */
     private fun TestScope.soloNode(): Solo {
         val escapes = mutableListOf<Throwable>()
@@ -215,7 +275,9 @@ class UndecodableFrameTest {
             storage,
             fastRaftConfig(),
         )
-        return Solo(node, network, self, SingleVoterHarness(node, storage), nodeScope, escapes)
+        val trace = mutableListOf<RaftTraceEvent>()
+        nodeScope.launch { node.trace.collect { trace += it } }
+        return Solo(node, network, self, SingleVoterHarness(node, storage), nodeScope, escapes, trace)
     }
 
     private companion object {
