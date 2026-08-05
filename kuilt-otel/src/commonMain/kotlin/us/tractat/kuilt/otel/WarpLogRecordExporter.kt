@@ -263,6 +263,13 @@ public class WarpLogRecordExporter(
             lock.withLock { install(recovered, entries) }
         }.onFailure { cause ->
             logger.error(cause) { "otel.logs: recovered state could not be installed, starting fresh" }
+            // Start fresh on the RECORDS, never on the numbering. Leaving the segment
+            // numbers at their construction defaults would have the next export write an
+            // index naming only segment 0 and overwrite it, orphaning every other segment
+            // permanently — there is no key-enumeration API to find them again. Adopting
+            // the index's numbering and opening a segment beyond it keeps every existing
+            // segment named and untouched, so the next clean start still recovers them.
+            lock.withLock { adoptNumberingOnly(recovered) }
             recordRecoveryFailure(cause)
         }
     }
@@ -389,6 +396,22 @@ public class WarpLogRecordExporter(
             activeSegment = Rga.empty(),
             nextSegmentNumber = index.next,
         )
+    }
+
+    /**
+     * Keep [recovered]'s segment numbering but none of its records, after the records
+     * could not be installed. A **fresh** segment is opened past everything the index
+     * named, so no existing segment is written to. Must hold [lock].
+     */
+    private fun adoptNumberingOnly(recovered: RecoveredState) {
+        sealedSegments.clear()
+        sealedSegments.addAll(recovered.sealedSegments)
+        if (recovered.activeNumber !in sealedSegments) sealedSegments += recovered.activeNumber
+        nextSegmentNumber = recovered.nextSegmentNumber
+        activeNumber = nextSegmentNumber++
+        activeSegment = Rga.empty()
+        activeOpCount = 0
+        indexPersisted = false
     }
 
     /** Install a [RecoveredState] and its already-materialized entries. Must hold [lock]. */
