@@ -15,14 +15,30 @@ internal class CausalDotMapConformanceTest : QuiltedConformanceSuite<Causal<DotM
     private fun map(vararg entries: Pair<String, Set<Dot>>): DotMap<String, DotSet> =
         DotMap(entries.associate { (k, v) -> k to DotSet(v) })
 
+    private val asserted = Causal(map("x" to setOf(Dot(a, 1L))), DotContext.of(Dot(a, 1L)))
+    private val retired = Causal(DotMap<String, DotSet>(), DotContext.of(Dot(a, 1L))) // x removed
+
+    /** "x" comes back under a fresh dot, after the dot that first carried it was retired. */
+    private val reAsserted =
+        Causal(map("x" to setOf(Dot(a, 2L))), DotContext.of(Dot(a, 1L), Dot(a, 2L)))
+
     override fun samples(): List<Causal<DotMap<String, DotSet>>> = listOf(
         Causal(DotMap(), DotContext.EMPTY),
-        Causal(map("x" to setOf(Dot(a, 1L))), DotContext.of(Dot(a, 1L))),
-        Causal(DotMap<String, DotSet>(), DotContext.of(Dot(a, 1L))), // x removed
+        asserted,
+        retired,
         Causal(
             map("x" to setOf(Dot(a, 1L)), "y" to setOf(Dot(b, 1L))),
             DotContext.of(Dot(a, 1L), Dot(b, 1L)),
         ),
         Causal(map("y" to setOf(Dot(b, 1L))), DotContext.of(Dot(a, 1L), Dot(b, 1L))),
+        reAsserted,
     )
+
+    override val retirementIsMeaningful: Boolean get() = true
+
+    override fun retirementReAssertion(): Triple<
+        Causal<DotMap<String, DotSet>>,
+        Causal<DotMap<String, DotSet>>,
+        Causal<DotMap<String, DotSet>>,
+        > = Triple(asserted, retired, reAsserted)
 }
