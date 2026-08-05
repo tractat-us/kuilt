@@ -1874,6 +1874,11 @@ internal class RaftEngine(
      * the 16 KiB default ceiling, a chunk sized to 16128 B encodes to as much as 32258 B. Converting
      * the wire budget into raw bytes via [CBOR_BYTE_EXPANSION] before comparing keeps the units
      * straight.
+     *
+     * A consequence worth naming: with **no** published budget this now returns `snapshotChunkCeiling`
+     * whole, where it used to subtract [HEADER_BUDGET] from it. That subtraction was never right —
+     * `snapshotChunkCeiling` bounds the chunk's *state bytes*, and there is no frame limit to reserve
+     * against when the transport names none.
      */
     private fun chunkBytes(): Int {
         val wireCap = transport.maxPayloadBytes ?: return raftConfig.snapshotChunkCeiling

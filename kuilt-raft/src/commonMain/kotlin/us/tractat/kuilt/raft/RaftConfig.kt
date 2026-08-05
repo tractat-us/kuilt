@@ -88,10 +88,13 @@ import kotlin.time.Duration.Companion.milliseconds
  *   Below this threshold, the log entry is at `debug` level. Set to [Duration.ZERO] to treat
  *   every propose as slow (useful in tests that want to assert the warn path fires). Default
  *   `100ms` — appropriate for LAN clusters.
- * @param snapshotChunkCeiling Upper bound on the bytes carried in a single §7
- *   InstallSnapshot chunk. The actual chunk size is the lesser of this and the
- *   transport's [RaftTransport.maxPayloadBytes] (minus a small header budget), so
- *   a fabric with a tighter framing limit shrinks chunks automatically.
+ * @param snapshotChunkCeiling Upper bound on the **raw state bytes** carried in a single
+ *   §7 InstallSnapshot chunk. A fabric with a tighter framing limit shrinks chunks
+ *   automatically: when the transport publishes a [RaftTransport.maxPayloadBytes], the
+ *   engine takes the lesser of this and what that budget leaves once the envelope reserve
+ *   *and* CBOR's byte-array expansion are paid. The expansion matters — CBOR renders a
+ *   `ByteArray` as an array of integers, so raw bytes cost up to two on the wire and a
+ *   chunk sized against the budget directly would encode to roughly twice it (#2150).
  * @param snapshotTotalCeiling Upper bound on the bytes a follower will accumulate
  *   reassembling one §7 snapshot. [snapshotChunkCeiling] bounds a single chunk; this
  *   bounds their **sum**. The sender chooses `done`, so without it a peer that keeps
