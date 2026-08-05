@@ -35,6 +35,7 @@ import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -106,6 +107,60 @@ class QuilterMutateOrSkipTest {
                 )
             },
             { assertEquals(1L, quilter.state.value.value, "the accepted patch did land") },
+        )
+    }
+
+    /**
+     * The transform is invoked **exactly once** per call, on both branches.
+     *
+     * This is the reachable half of "the decision happens inside the lock". The retreat that
+     * clause exists to forbid is a fast-refuse read *ahead* of the lock, kept in step with a
+     * second, authoritative evaluation inside it — and that shape is visible from here, because
+     * it evaluates twice whenever it accepts. What a single-threaded virtual-time test cannot
+     * see is the harm itself: a fast-refuse answering `false` against a state a concurrent
+     * inbound delta had already moved past. Pinning the invocation count is what makes the
+     * cheap version of that mistake fail here rather than in production.
+     */
+    @Test
+    fun transformIsInvokedExactlyOncePerCall() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val quilter = counterQuilter(loom.host(Pattern("mutate-or-skip-once")), backgroundScope)
+        testScheduler.runCurrent()
+
+        var calls = 0
+        val published = quilter.mutateOrSkip { calls++; it.inc(quilter.replica, 1L) }
+        val onAccept = calls
+        val declined = quilter.mutateOrSkip { calls++; null }
+        val onDecline = calls - onAccept
+
+        assertAll(
+            { assertTrue(published, "the accepting call published") },
+            { assertEquals(1, onAccept, "one evaluation on the accepting path, not a peek plus a redo") },
+            { assertFalse(declined, "the declining call published nothing") },
+            { assertEquals(1, onDecline, "one evaluation on the declining path too") },
+        )
+    }
+
+    /**
+     * A closed replicator throws **even on the branch that would have declined**, so `false` never
+     * has two meanings. Without the explicit check the decline path returns before reaching
+     * [Quilter.apply]'s own `check`, and a caller reading the [Boolean] would take "this replicator
+     * is gone" for "the state said no".
+     */
+    @Test
+    fun closedReplicatorThrowsRatherThanReportingARefusal() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val quilter = counterQuilter(loom.host(Pattern("mutate-or-skip-closed")), backgroundScope)
+        testScheduler.runCurrent()
+        quilter.close()
+
+        var transformRan = false
+        val failure = assertFailsWith<IllegalStateException> {
+            quilter.mutateOrSkip { transformRan = true; null }
+        }
+        assertAll(
+            { assertTrue(failure.message.orEmpty().contains("closed"), "names the closure") },
+            { assertFalse(transformRan, "a closed replicator does not run the transform at all") },
         )
     }
 

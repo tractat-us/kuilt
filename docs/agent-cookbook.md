@@ -23,6 +23,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | a "you are offline" / "your connection dropped" indicator, distinguishing *your* outage from *their* outage | `Room.localFabric` + `MembershipEvent.LocalFabricLost` | [Liveness & presence](#liveness--presence) |
 | a last-write-wins register, a grow-only set/counter, an add/remove set, a version vector, "merge these two states" | the CRDT zoo (`LWWRegister`, `GSet`, `PNCounter`, `ORSet`, …) | [Replicated data](#replicated-data) |
 | replicating a CRDT over a connection by hand | `Quilter` | [Replicated data](#replicated-data) |
+| a conditional write to shared state — "claim it only if it's free", "publish only if nobody already did" — or an identity/no-op patch meaning "I decided not to write" | `Quilter.mutateOrSkip { … }` (return `null` to decline) | [Replicated data](#replicated-data) |
 | a forwarding hop through the host so two guests can see each other — because a `Quilter` between two joiners never converges, or a peer is in the roster but unreachable | `Room.channel(id)` — the room already relays | [Replicated data](#replicated-data) |
 | averaging model updates from many devices without collecting their data — federated learning / federated analytics, "train locally, share only the update" | `FedAvg` + `TrainingUpdate` | [Replicated data](#replicated-data) |
 | checking two peers hold the same state across a process/socket boundary — hand-hashing a replicated state so you can compare it as one number | `canonicalDigest` | [Replicated data](#replicated-data) |
@@ -273,6 +274,24 @@ internal fun sampleQuilterSetup() = runTest(
 
 See [`crdt-quilter.md`](../Writerside/topics/crdt-quilter.md) for `Quilter`'s wire protocol,
 late-joiner full-state sync, and scaling to many peers via `GossipSeam`.
+
+**Intent:** read the shared state, decide, and *maybe* write — "claim the seat only if it's free", "publish this only if nobody already did", "apply the op if the state still allows it". The read and the decision have to be atomic with the write, and a refusal must be silent.
+**Primitive:** `Quilter.mutateOrSkip { … }`. Return `null` from the transform to decline; it returns whether anything was published. Don't return an identity patch to mean "no change" — it leaves the state alone but still burns a sequence number and broadcasts an empty delta to every peer. Don't test the condition *before* the call either: that decides against a state nothing is holding still, so another writer can make the answer wrong before you publish.
+
+<!-- verbatim from kuilt-quilter/src/commonSamples/kotlin/us/tractat/kuilt/quilter/QuilterSamples.kt#sampleQuilterMutateOrSkip -->
+```kotlin
+    // Claim a seat only if it is still free. Read and write are one atomic step, so no other
+    // writer can take the seat between the check and the publish.
+    fun claim(seat: String, player: String, at: Long): Boolean =
+        seats.mutateOrSkip { board ->
+            if (board[seat] != null) null else board.setDelta(seats.replica, at, seat, player)
+        }
+
+    assertEquals(true, claim("north", "alice", 1L), "the seat was free — published")
+    assertEquals(false, claim("north", "bob", 2L), "already taken — nothing published, no frame sent")
+```
+
+Use plain `mutate { … }` when the transform always writes.
 
 **Intent:** two guests in the same room never see each other's updates — a `Quilter` between two joiners never converges, one peer's messages reach the host and stop, or a co-member is in the roster but every send to it fails. Typically on Multipeer, Nearby, a WebSocket hub, or any "everybody connects to the host" wiring.
 **Primitive:** `Room.channel(id)` — and then nothing. The room relays through the host for you (#1994); don't build a forwarding protocol, and don't reach past the room to the raw fabric `Seam`.
