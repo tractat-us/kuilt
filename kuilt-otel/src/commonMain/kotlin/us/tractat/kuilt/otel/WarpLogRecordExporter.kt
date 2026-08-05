@@ -52,10 +52,29 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpLogRecordEx
  *
  * ## Buffer cap
  *
- * When the in-memory [Rga] exceeds [maxRecords], the oldest or newest record
- * (depending on [bufferPolicy]) is evicted before the new record is inserted.
- * **Every eviction is logged** with enough detail to correlate against a backend's
- * log index.
+ * [maxRecords] bounds how many records stay visible, and [bufferPolicy] decides which
+ * record gives way. **Every drop is logged** with enough detail to correlate against a
+ * backend's log index.
+ *
+ * - [BufferPolicy.DROP_OLDEST] evicts visible index 0 and then inserts the arrival, so
+ *   the buffer is a sliding window over the most recent [maxRecords] records.
+ * - [BufferPolicy.DROP_NEWEST] refuses the **arrival**. At a full buffer the newest
+ *   record is the one arriving, so "drop the newest" drops it: on the **export path** the
+ *   buffer freezes at the first [maxRecords] records and appends no further op — no
+ *   insert, no eviction, no tombstone.
+ *
+ * [merge] is the exception, and it is the intended production path, not a corner:
+ * [snapshot]/[merge] exist so this exporter can participate in gossip. A merge folds a
+ * remote op-log in wholesale, so it can push the visible count **past** [maxRecords] —
+ * remote inserts interleaving into the visible order, remote tombstones arriving from a
+ * peer running a different [bufferPolicy] — after which the gate simply keeps refusing.
+ * Neither policy evicts on the merge path.
+ *
+ * So the claim for `DROP_NEWEST` is about what this replica *emits*, not about what its
+ * buffer holds: it never authors a `Remove`, which is what makes **its own** contribution
+ * to the shared op-log a downward-closed prefix (#2127). The two exporters that share
+ * [BufferPolicy] resolve "newest" differently — [WarpSpanExporter] evicts the newest
+ * *buffered* span and admits the arrival — and that is the reason this one does not.
  *
  * ## On-disk layout — segmented op-log
  *
@@ -120,6 +139,10 @@ public class WarpLogRecordExporter(
 ) {
     init {
         require(segmentOps >= 1) { "segmentOps must be at least 1; got $segmentOps" }
+        // A zero cap is total, silent telemetry loss from a public constructor argument:
+        // under DROP_NEWEST the gate refuses every record forever, and under DROP_OLDEST
+        // every record is inserted and immediately evicted.
+        require(maxRecords >= 1) { "maxRecords must be at least 1; got $maxRecords" }
     }
 
     // The lock guards 'log' and every derived field below. No suspend calls are
@@ -143,11 +166,13 @@ public class WarpLogRecordExporter(
     // the eviction gate and the tail filter. Maintaining them incrementally makes
     // the common (non-evicting) export path touch the sequence not at all.
     //
-    // Every write to `log` must update these in the same locked section. The four
-    // events that move them out from under the cache — a DROP_NEWEST eviction
-    // (which removes the tail), a DROP_OLDEST eviction that empties the log, a
-    // merge whose remote inserts sort after the local tail, and a recover() that
-    // replaces the log wholesale — are pinned by WarpLogRecordExporterTailCacheTest.
+    // Every write to `log` must update these in the same locked section. The three
+    // events that move them out from under the cache — a DROP_OLDEST eviction that
+    // empties the log, a merge whose remote inserts sort after the local tail, and a
+    // recover() that replaces the log wholesale — are pinned by
+    // WarpLogRecordExporterTailCacheTest. Eviction is the *only* thing that can remove
+    // an element on the export path, and it only ever removes visible index 0, so no
+    // export can invalidate `tail` while the log is non-empty.
 
     /** Predecessor for the next append: the last visible element, or [RgaId.HEAD] when empty. */
     private var tail: RgaId = RgaId.HEAD
@@ -432,10 +457,15 @@ public class WarpLogRecordExporter(
     /**
      * Export one log record: append it to the [Rga] and durably flush to [store].
      *
-     * Returns [ExportResult.Success] after the durable write. If the record's
-     * [LogRecord.recordId] was already exported (including across process restarts
-     * after [recover]), returns [ExportResult.Success] immediately without
-     * inserting a duplicate.
+     * Returns [ExportResult.Success] after the durable write.
+     *
+     * Two paths return [ExportResult.Success] with **no** durable write, because there
+     * was nothing to write: a record whose [LogRecord.recordId] was already exported
+     * (including across process restarts after [recover]) is not inserted twice, and a
+     * record refused by the buffer cap under [BufferPolicy.DROP_NEWEST] is not inserted
+     * at all. Neither is a failure, and neither counts towards
+     * [ExporterHealth.accepted] — which means "records durably taken", not "calls that
+     * returned `Success`".
      *
      * **Never throws.** Every failure — a throwing [store], and also a failure
      * inside the in-memory CRDT insert, the eviction, or the CBOR encode — is
@@ -448,7 +478,7 @@ public class WarpLogRecordExporter(
         val actions = runCatchingCancellable {
             lock.withLock {
                 if (record.recordId in seenIds) return ExportResult.Success
-                maybeEvict(record)
+                if (!admit(record)) return ExportResult.Success
                 val (newLog, insertOp) = log.insertAfter(
                     replica = replica,
                     after = tail,
@@ -480,7 +510,8 @@ public class WarpLogRecordExporter(
      * Read a snapshot of the current in-memory [Rga] for gossip / anti-entropy.
      *
      * The returned [Rga] reflects all records exported since the last [recover]
-     * or process start, minus any that were evicted due to the buffer cap.
+     * or process start, minus any the buffer cap evicted ([BufferPolicy.DROP_OLDEST])
+     * or refused ([BufferPolicy.DROP_NEWEST]).
      */
     public fun snapshot(): Rga<LogRecord> = lock.withLock { log }
 
@@ -648,15 +679,41 @@ public class WarpLogRecordExporter(
         healthState.update { it.copy(recoveryFailed = true, lastFailure = cause) }
     }
 
-    /** Must be called with [lock] held. */
-    private fun maybeEvict(incoming: LogRecord) {
-        if (visibleCount < maxRecords) return
-        val index = when (bufferPolicy) {
-            BufferPolicy.DROP_OLDEST -> 0
-            BufferPolicy.DROP_NEWEST -> visibleCount - 1
+    /**
+     * Make room for [incoming], or refuse it. Returns `false` when the record must not be
+     * inserted at all. Must be called with [lock] held.
+     *
+     * [BufferPolicy.DROP_NEWEST] refuses the incoming record, which is what "drop the
+     * newest" means here: at a full buffer the newest record is the one arriving. So this
+     * replica never authors a `Remove`, and the ops it contributes to the shared op-log
+     * are a downward-closed prefix — the property #2127's bound relies on for this policy.
+     * It bounds what is *emitted*, not what the buffer holds: [merge] can still push
+     * [visibleCount] past [maxRecords], after which this gate simply keeps refusing.
+     *
+     * The `when` is exhaustive on purpose — a new [BufferPolicy] constant must not fall
+     * through to eviction on a public enum shared with [WarpSpanExporter].
+     */
+    private fun admit(incoming: LogRecord): Boolean {
+        if (visibleCount < maxRecords) return true
+        return when (bufferPolicy) {
+            BufferPolicy.DROP_NEWEST -> {
+                logger.warn {
+                    "WarpLogRecordExporter: buffer cap ($maxRecords) reached, refusing incoming record " +
+                        "recordId=${incoming.recordId} body=${incoming.body?.take(80)} policy=$bufferPolicy"
+                }
+                false
+            }
+            BufferPolicy.DROP_OLDEST -> {
+                evictOldest(incoming)
+                true
+            }
         }
-        val (newLog, removeOp) = log.removeAt(index) ?: return
-        val evictedRecord = log.toList()[index]
+    }
+
+    /** Evict the oldest visible record to make room for [incoming]. Must hold [lock]. */
+    private fun evictOldest(incoming: LogRecord) {
+        val (newLog, removeOp) = log.removeAt(0) ?: return
+        val evictedRecord = log.toList()[0]
         logger.warn {
             "WarpLogRecordExporter: buffer cap ($maxRecords) reached, evicting record " +
                 "recordId=${evictedRecord.recordId} body=${evictedRecord.body?.take(80)} " +
@@ -670,17 +727,10 @@ public class WarpLogRecordExporter(
         appendToActiveSegment(removeOp)
         seenIds.remove(evictedRecord.recordId)
         visibleCount--
-        tail = when {
-            // Nothing left to append after.
-            visibleCount == 0 -> RgaId.HEAD
-            // DROP_OLDEST removed visible index 0. With at least one element still
-            // standing, the first and last visible elements are distinct, so the
-            // tail is untouched.
-            bufferPolicy == BufferPolicy.DROP_OLDEST -> tail
-            // DROP_NEWEST removed visible index size-1 — the tail itself. The new
-            // tail is its predecessor, which only the sequence knows.
-            else -> tailIdOf(newLog)
-        }
+        // DROP_OLDEST removes visible index 0. With at least one element still standing the
+        // first and last visible elements are distinct, so `tail` is untouched; at zero there
+        // is nothing left to append after.
+        if (visibleCount == 0) tail = RgaId.HEAD
     }
 
     /**
@@ -711,16 +761,6 @@ public class WarpLogRecordExporter(
         seenIds.clear()
         entries.forEach { (rgaId, record) -> seenIds[record.recordId] = rgaId }
     }
-
-    /**
-     * The [RgaId] of the last visible element of [rga], or [RgaId.HEAD] if it has none.
-     *
-     * O(N) over the materialized sequence — reached only when a [BufferPolicy.DROP_NEWEST]
-     * eviction removes the tail, a path that already pays for the sequence inside
-     * [Rga.removeAt].
-     */
-    private fun tailIdOf(rga: Rga<LogRecord>): RgaId =
-        rga.sequence.lastOrNull { it !in rga.tombstones } ?: RgaId.HEAD
 }
 
 /** Maximum number of [LogRecord]s buffered in memory before eviction. */

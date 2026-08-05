@@ -24,9 +24,8 @@ import kotlin.test.assertTrue
  * the cache and asserts the resulting order.
  *
  * The last test is a differential oracle: it runs a scripted sequence of operations through both
- * the exporter and a verbatim transcription of the pre-optimisation implementation
- * ([ReferenceLogExporter]) and asserts both the resulting order **and the op-log recovered from
- * the store** agree. The op-log — not the byte layout — is what must not move: #1860 replaced the
+ * the exporter and a cache-free transcription of the same algorithm ([ReferenceLogExporter]) and
+ * asserts both the resulting order **and the op-log recovered from the store** agree. The op-log — not the byte layout — is what must not move: #1860 replaced the
  * single persisted blob with segments, so the check is now "persist, recover, compare op-logs",
  * which pins the same equivalence across a layout that is free to change again.
  */
@@ -72,14 +71,16 @@ class WarpLogRecordExporterTailCacheTest {
     }
 
     @Test
-    fun appendAfterDropNewestEvictionLandsAfterCorrectPredecessor() = runTest {
-        // DROP_NEWEST removes index size-1 — which *is* the tail. A cache that is not
-        // invalidated here appends after a tombstoned id and reorders the log.
+    fun dropNewestNeverMovesTheTailOutFromUnderTheCache() = runTest {
+        // DROP_NEWEST used to remove visible index size-1 — which *is* the tail — and was
+        // therefore the one export-path event that invalidated the cached tail. It refuses
+        // the arrival now, so that event ceases to exist and the invalidation branch is
+        // gone with it (#2127). This test is what the removal rests on: r1,r2,r3 fill the
+        // buffer, every later export is refused, and nothing moves.
         val exporter = exporterFor(maxRecords = 3, bufferPolicy = BufferPolicy.DROP_NEWEST)
         (1..6).forEach { exporter.export(record(it.toByte())) }
-        // r1,r2,r3 fill the buffer; each later export evicts the current newest first.
         assertEquals(
-            listOf("body-1", "body-2", "body-6"),
+            listOf("body-1", "body-2", "body-3"),
             bodies(exporter.snapshot().toList()),
         )
     }
@@ -213,10 +214,13 @@ class WarpLogRecordExporterTailCacheTest {
 
     @Test
     fun scriptedRunMatchesPreOptimisationReference() = runTest {
-        // cap 1 is not just a small cap: every eviction empties the log, so the append
-        // predecessor has to fall back to HEAD. Appending after the tombstoned id instead
-        // still yields the right visible order — only the op-log, and therefore the bytes,
-        // give it away. cap 4 keeps the log non-empty throughout.
+        // cap 1 is not just a small cap: under DROP_OLDEST every eviction empties the log, so
+        // the append predecessor has to fall back to HEAD. Appending after the tombstoned id
+        // instead still yields the right visible order — only the op-log, and therefore the
+        // bytes, give it away. cap 4 keeps the log non-empty throughout. Under DROP_NEWEST
+        // both caps saturate instead and the script's later exports are all refused, which is
+        // its own thing worth pinning: a merge can push the log PAST the cap, and the gate
+        // has to keep refusing afterwards rather than reading a stale count.
         val configurations = listOf(BufferPolicy.DROP_OLDEST, BufferPolicy.DROP_NEWEST)
             .flatMap { policy -> listOf(policy to ROOMY_CAP, policy to SINGLETON_CAP) }
         for ((policy, cap) in configurations) {
@@ -279,11 +283,16 @@ class WarpLogRecordExporterTailCacheTest {
     }
 
     /**
-     * A verbatim transcription of `WarpLogRecordExporter`'s derived-state handling **before**
-     * the incremental caches: the tail recomputed by filtering the whole [Rga.sequence], the
-     * eviction gate reading [Rga.size], the evicted record read via `toList()[index]`, and the
-     * dedup map copied on every append. Drives the same [Rga] mutations in the same order, so
-     * the resulting op-log — and therefore the encoded bytes — must be identical.
+     * `WarpLogRecordExporter`'s derived-state handling **without** the incremental caches:
+     * the tail recomputed by filtering the whole [Rga.sequence], the admission gate reading
+     * [Rga.size], the evicted record read via `toList()[0]`, and the dedup map copied on
+     * every append. Drives the same [Rga] mutations in the same order, so the resulting
+     * op-log — and therefore the encoded bytes — must be identical.
+     *
+     * It is the **caches** this is an oracle for, so the admission policy is production's,
+     * not history's: [BufferPolicy.DROP_NEWEST] refuses the arrival (#2127). Transcribing
+     * the superseded evict-the-tail reading here would make every divergence it produced
+     * read as a cache bug.
      */
     private class ReferenceLogExporter(
         private val replica: ReplicaId,
@@ -296,7 +305,7 @@ class WarpLogRecordExporterTailCacheTest {
 
         fun export(record: LogRecord) {
             if (record.recordId in seenIds) return
-            maybeEvict()
+            if (!admit()) return
             val (newLog, insertOp) = log.insertAfter(replica = replica, after = tailId(), value = record)
             log = newLog
             seenIds = seenIds + (record.recordId to insertOp.id)
@@ -307,16 +316,20 @@ class WarpLogRecordExporterTailCacheTest {
             seenIds = log.entries().associate { (rgaId, record) -> record.recordId to rgaId }
         }
 
-        private fun maybeEvict() {
-            if (log.size < maxRecords) return
-            val index = when (bufferPolicy) {
-                BufferPolicy.DROP_OLDEST -> 0
-                BufferPolicy.DROP_NEWEST -> log.size - 1
+        private fun admit(): Boolean {
+            if (log.size < maxRecords) return true
+            // Exhaustive, like production's: the oracle must not be the thing that
+            // silently absorbs a new BufferPolicy constant.
+            return when (bufferPolicy) {
+                BufferPolicy.DROP_NEWEST -> false
+                BufferPolicy.DROP_OLDEST -> {
+                    val (newLog, _) = log.removeAt(0) ?: return true
+                    val evictedRecord = log.toList()[0]
+                    log = newLog
+                    seenIds = seenIds - evictedRecord.recordId
+                    true
+                }
             }
-            val (newLog, _) = log.removeAt(index) ?: return
-            val evictedRecord = log.toList()[index]
-            log = newLog
-            seenIds = seenIds - evictedRecord.recordId
         }
 
         private fun tailId(): RgaId {
