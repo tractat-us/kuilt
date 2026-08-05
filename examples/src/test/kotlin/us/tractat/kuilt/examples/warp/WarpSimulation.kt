@@ -20,8 +20,8 @@ import us.tractat.kuilt.crdt.LWWRegister
 import us.tractat.kuilt.crdt.ORMap
 import us.tractat.kuilt.crdt.ORSet
 import us.tractat.kuilt.crdt.ReplicaId
-import kotlin.random.Random
 import us.tractat.kuilt.crdt.piece
+import kotlin.random.Random
 
 // ---------------------------------------------------------------------------
 // Domain types

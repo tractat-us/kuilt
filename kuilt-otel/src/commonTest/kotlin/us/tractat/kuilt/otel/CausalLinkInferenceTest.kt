@@ -7,10 +7,10 @@ import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.crdt.Dot
 import us.tractat.kuilt.crdt.ORSet
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.piece
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import us.tractat.kuilt.crdt.piece
 import us.tractat.kuilt.test.assertAll
 
 class CausalLinkInferenceTest {
