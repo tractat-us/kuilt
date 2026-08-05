@@ -23,11 +23,11 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.crdt.BoundedCounter
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 
 private val EQUALIZER_TEST_CFG = QuilterConfig(expectVirtualTime = true)
 private val bcSerEq = QuiltMessage.serializer(BoundedCounter.serializer())
@@ -90,7 +90,7 @@ class BoundedCounterEqualizerTest {
     fun equalizerConvergesImbalancedStartToEvenShares() {
         val scheduler = TestCoroutineScheduler()
         val dispatcher = StandardTestDispatcher(scheduler)
-        runTest(dispatcher, timeout = 5.seconds) {
+        runTest(dispatcher, timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val rawA = loom.host(Pattern("eq-converge"))
             val rawB = loom.join(InMemoryTag("b"))
@@ -163,7 +163,7 @@ class BoundedCounterEqualizerTest {
     fun equalizerKeepsQuotasBalancedSoReactiveBorrowFiresRarely() {
         val scheduler = TestCoroutineScheduler()
         val dispatcher = StandardTestDispatcher(scheduler)
-        runTest(dispatcher, timeout = 5.seconds) {
+        runTest(dispatcher, timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val rawA = loom.host(Pattern("eq-steady"))
             val rawB = loom.join(InMemoryTag("b"))
@@ -240,7 +240,7 @@ class BoundedCounterEqualizerTest {
     fun equalizerOffPreservesTargetedBorrowCorrectness() {
         val scheduler = TestCoroutineScheduler()
         val dispatcher = StandardTestDispatcher(scheduler)
-        runTest(dispatcher, timeout = 5.seconds) {
+        runTest(dispatcher, timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val rawA = loom.host(Pattern("eq-off"))
             val rawB = loom.join(InMemoryTag("b"))
@@ -303,7 +303,7 @@ class BoundedCounterEqualizerTest {
     fun equalizerIsQuietWhenQuotasAreAlreadyBalanced() {
         val scheduler = TestCoroutineScheduler()
         val dispatcher = StandardTestDispatcher(scheduler)
-        runTest(dispatcher, timeout = 5.seconds) {
+        runTest(dispatcher, timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val rawA = loom.host(Pattern("eq-quiet"))
             val rawB = loom.join(InMemoryTag("b"))
@@ -367,7 +367,7 @@ class BoundedCounterEqualizerTest {
     fun closeAlsoCancelsEqualizerJob() {
         val scheduler = TestCoroutineScheduler()
         val dispatcher = StandardTestDispatcher(scheduler)
-        runTest(dispatcher, timeout = 5.seconds) {
+        runTest(dispatcher, timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val rawA = loom.host(Pattern("eq-close"))
             val replicaA = ReplicaId(rawA.selfId.value)

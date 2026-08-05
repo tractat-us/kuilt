@@ -299,7 +299,7 @@ check(alpha == bravo)
 ```kotlin
 internal fun sampleQuilterSetup() = runTest(
     StandardTestDispatcher(),
-    timeout = 5.seconds,
+    timeout = TEST_WEDGE_BACKSTOP,
 ) {
     val loom = InMemoryLoom()
     val seam = loom.host(Pattern("my-session"))

@@ -16,11 +16,11 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * The [ReplicaId] and [us.tractat.kuilt.core.PeerId] identity domains are decoupled: the
@@ -55,7 +55,7 @@ class QuilterCustomReplicaIdTest {
     @Test
     fun ackGcWorksWhenReplicaIdDiffersFromPeerId() = runTest(
         UnconfinedTestDispatcher(),
-        timeout = 10.seconds,
+        timeout = TEST_WEDGE_BACKSTOP,
     ) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("custom-replica-ack"))
@@ -95,7 +95,7 @@ class QuilterCustomReplicaIdTest {
     @Test
     fun resendFallbackReachesRequesterWhenReplicaIdDiffersFromPeerId() = runTest(
         UnconfinedTestDispatcher(),
-        timeout = 10.seconds,
+        timeout = TEST_WEDGE_BACKSTOP,
     ) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("custom-replica-resend"))

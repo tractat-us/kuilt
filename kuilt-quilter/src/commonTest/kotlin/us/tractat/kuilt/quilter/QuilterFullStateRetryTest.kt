@@ -15,10 +15,10 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.crdt.GSet
 import us.tractat.kuilt.crdt.Patch
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Verifies the FullState retry timer: when a late-joining peer's initial FullState snapshot
@@ -77,7 +77,7 @@ class QuilterFullStateRetryTest {
     @Test
     fun fullStateIsRetriedWhenInitialIsDropped() = runTest(
         UnconfinedTestDispatcher(),
-        timeout = 5.seconds,
+        timeout = TEST_WEDGE_BACKSTOP,
     ) {
         val loom = InMemoryLoom()
         val rawSeamA = loom.host(Pattern("fullstate-retry"))
@@ -141,7 +141,7 @@ class QuilterFullStateRetryTest {
     @Test
     fun fullStateRetryIsCancelledWhenPeerResponds() = runTest(
         UnconfinedTestDispatcher(),
-        timeout = 5.seconds,
+        timeout = TEST_WEDGE_BACKSTOP,
     ) {
         val loom = InMemoryLoom()
         val rawSeamA = loom.host(Pattern("fullstate-cancel"))
