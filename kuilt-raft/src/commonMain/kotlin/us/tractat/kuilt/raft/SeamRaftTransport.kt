@@ -93,9 +93,10 @@ public class SeamRaftTransport(private val seam: Seam) : RaftTransport {
             //  2. The budget can move DOWN after an entry is already in the log. `maxPayloadBytes`
             //     is a reading, not a lease: a mesh peer attaching over a tighter link shrinks it.
             //     Nothing checked at propose time can close that race.
-            //  3. The propose-time bound covers a single oversize entry. The AppendEntries **batch**
-            //     is still unbounded — `sendAppendEntries` slices the whole un-replicated tail — so
-            //     N individually-legal entries can overflow together (#2150).
+            //  3. The engine's three sizing gates — the propose bound, `boundedBatch` and
+            //     `chunkBytes` (#2069/#2150) — all spend `HEADER_BUDGET` as a *reserve* for the
+            //     envelope rather than measuring it. A consumer-supplied value large enough to
+            //     exhaust that reserve, such as a very long `ClientId` (#2156), still arrives here.
             //
             // Dropped, therefore, but loudly: unlike a partition this is a misconfiguration, not
             // weather. The engine will retry the frame forever and never make progress on that

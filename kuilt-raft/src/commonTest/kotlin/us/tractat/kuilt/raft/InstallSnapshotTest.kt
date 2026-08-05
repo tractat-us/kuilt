@@ -55,12 +55,15 @@ class InstallSnapshotTest {
     /**
      * A small snapshot still spans many chunks when the transport reports a tiny [maxPayloadBytes].
      *
-     * 320 B is `HEADER_BUDGET` (256 B, for the CBOR envelope) + 64 B of state per chunk, so the
-     * 1000-byte snapshot below really does span the ~16 chunks it claims to. The budget used to read
-     * `64` — *below* the envelope reserve, so `chunkBytes()` hit its floor of 1 and the transfer was
-     * silently 1000 one-byte chunks. It also left no room for a command, which the propose-time bound
-     * of #2069 now says out loud: a transport whose whole budget is smaller than the envelope cannot
-     * carry any entry, and every `propose` here was refused.
+     * 320 B is `HEADER_BUDGET` (256 B, for the CBOR envelope) plus 64 B, which `chunkBytes()` then
+     * halves to **32 B of raw state per chunk** — CBOR renders a `ByteArray` as an array of integers,
+     * so a byte can cost two and a chunk sized in raw bytes must be halved to fit a wire budget
+     * (#2150). The 1000-byte snapshot below therefore spans ~32 chunks.
+     *
+     * The budget used to read `64` — *below* the envelope reserve, so `chunkBytes()` hit its floor of 1
+     * and the transfer was silently 1000 one-byte chunks. It also left no room for a command, which the
+     * propose-time bound of #2069 now says out loud: a transport whose whole budget is smaller than the
+     * envelope cannot carry any entry, and every `propose` here was refused.
      */
     @Test
     fun chunkedTransfer_reassemblesUnderTinyMaxPayload() = raftRunTest {
@@ -165,6 +168,60 @@ class InstallSnapshotTest {
     }
 
     /**
+     * A snapshot chunk must fit the **wire** budget, not merely the raw one (#2150).
+     *
+     * `chunkBytes()` used to take `minOf(maxPayloadBytes, snapshotChunkCeiling)` and subtract the
+     * envelope reserve — mixing two different units. `snapshotChunkCeiling` bounds the *raw* state bytes
+     * in a chunk; `maxPayloadBytes` bounds the *encoded frame*. CBOR renders a `ByteArray` as an array
+     * of integers, so raw bytes cost up to two on the wire and a chunk sized to fill the budget encodes
+     * to roughly twice it.
+     *
+     * ### Why the other chunking tests here cannot see this
+     *
+     * They run at 296 B and 320 B, where the 256 B envelope reserve *dominates*: it leaves 40 B and
+     * 64 B of raw state, which even at 2× encode to 80 B and 128 B — comfortably inside the budget. The
+     * defect needs a chunk large **relative to the reserve**, which is every realistic transport: at the
+     * 16 KiB default ceiling the old formula sized a chunk to 16128 B, encoding to as much as 32258 B.
+     * Reverting `chunkBytes()` alone left all 518 tests in this module green, which is what this case
+     * exists to close.
+     *
+     * [BIG_BUDGET] is deliberately the smallest round budget where the reserve no longer dominates, and
+     * the snapshot state is high-valued bytes (`0x80 or …`) so every one of them costs two on the wire —
+     * the worst case the sizing has to survive, not the average.
+     */
+    @Test
+    fun aChunkIsSizedToTheWireBudget_notTheRawOne() = raftRunTest {
+        val sim = raftSim(this, backgroundScope, n = 3, maxPayloadBytes = BIG_BUDGET)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodes.entries.first { it.value === leader }.key
+        val behind = sim.nodeIds.first { it != leaderId }
+
+        sim.crash(behind)
+        repeat(4) { leader.propose(ByteArray(64) { i -> (0x80 or (i and 0x3F)).toByte() }) }
+        val finalCommit = leader.commitIndex.value
+        val through = sim.compactionFloorCandidate(leaderId)
+
+        // Every byte high-valued, so the encoding is at its 2x worst case throughout.
+        val bigState = ByteArray(BIG_STATE) { (0x80 or (it and 0x3F)).toByte() }
+        leader.snapshots.value = Snapshot(through, bigState)
+        leader.compactionFloor.first { it == through }
+
+        sim.restart(behind)
+        val installs = sim.collectInstalls(behind)
+        sim.awaitCommit(finalCommit, on = setOf(behind))
+
+        assertAll(
+            { assertContentEquals(bigState, installs.last().snapshot.state, "the snapshot reassembles byte-for-byte") },
+            {
+                assertTrue(
+                    sim.network.overBudget.isEmpty(),
+                    "no chunk may exceed the ${BIG_BUDGET} B budget the transport published: ${sim.network.overBudget}",
+                )
+            },
+        )
+    }
+
+    /**
      * Completion under heartbeat interleaving (#1226): a **live** follower receives a multi-chunk
      * snapshot whose transfer spans several heartbeat intervals, and the transfer COMPLETES — the
      * follower installs the snapshot, then catches up the log tail via normal AppendEntries,
@@ -182,7 +239,8 @@ class InstallSnapshotTest {
     @Test
     fun multiHeartbeatSpanningChunkedTransfer_completesAndFollowerConverges() = raftRunTest {
         val hbMs = fastRaftConfig().heartbeatInterval.inWholeMilliseconds
-        // maxPayloadBytes budgets HEADER_BUDGET (256 B) for the CBOR envelope → 40 state bytes/chunk.
+        // maxPayloadBytes budgets HEADER_BUDGET (256 B) for the CBOR envelope, and chunkBytes() halves
+        // what is left for CBOR's byte-array expansion (#2150) → 20 raw state bytes/chunk.
         val sim = raftSim(this, backgroundScope, n = 3, maxPayloadBytes = 296)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodes.entries.first { it.value === leader }.key
@@ -237,5 +295,18 @@ class InstallSnapshotTest {
                 )
             },
         )
+    }
+
+    private companion object {
+        /**
+         * A transport budget large enough that the 256 B envelope reserve no longer dominates the chunk
+         * — which is what the mixed-units sizing bug of #2150 needs in order to bite. At 4096 B the old
+         * formula chose 3840 raw bytes per chunk, encoding to as much as 7682 B: nearly twice the
+         * budget. Below roughly 768 B the reserve absorbs the expansion and the defect is invisible.
+         */
+        const val BIG_BUDGET = 4096
+
+        /** Enough state to span several chunks at [BIG_BUDGET], so the sizing is exercised repeatedly. */
+        const val BIG_STATE = 8000
     }
 }

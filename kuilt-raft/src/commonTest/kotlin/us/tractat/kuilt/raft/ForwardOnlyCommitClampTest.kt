@@ -33,21 +33,26 @@ import kotlin.time.Duration.Companion.seconds
  * itself — with the consumer-visible consequence (a re-emitted committed prefix) as a second,
  * independent kill.
  *
- * ## Reachability: injection-only today, and that is the point
+ * ## Reachability: honest since #2150 — the predicted change arrived
  *
- * `sendAppendEntries` ships `logSliceFrom(state.log, state.snapshotIndex, nextIndex[peer])` — the
- * **entire** suffix, with no entry-count or payload-byte cap (`RaftConfig.snapshotChunkCeiling` /
- * `RaftTransport.maxPayloadBytes` gate only InstallSnapshot chunking). So every honestly minted frame
- * has `prevLogIndex + entries.size == the leader's lastLogIndex`, and its `leaderCommit` is that same
- * leader's `currentCommitIndex`, which never exceeds its own `lastLogIndex`. Hence
- * **`leaderCommit <= prevLogIndex + entries.size` in every honest frame** — and that is a relation
- * between two fields *of the frame*, fixed at mint time, so delay, duplication and reordering cannot
- * break it. The clamp needs the opposite (`leaderCommit > lastNewIndex`), which no honest sender emits.
+ * This section used to argue the clamp had **no honest trigger**. `sendAppendEntries` shipped
+ * `logSliceFrom(state.log, state.snapshotIndex, nextIndex[peer])` — the *entire* suffix, with no
+ * entry-count or payload-byte cap — so every minted frame had `prevLogIndex + entries.size == the
+ * leader's lastLogIndex` while its `leaderCommit` never exceeded that same leader's `lastLogIndex`.
+ * Hence `leaderCommit <= lastNewIndex` in every honest frame, a relation between two fields *of the
+ * frame*, fixed at mint time and immune to delay, duplication and reordering. The clamp needs the
+ * opposite, so only a malformed or foreign frame reached it.
  *
- * That makes this a defence with no honest trigger *under full-suffix batching*, not a live bug — and
- * it is kept and pinned regardless. An unreachability argument is a smell here (#1965, #1886), the
- * reachability is one `sendAppendEntries` change away (any batch-size or payload cap on AppendEntries
- * produces `leaderCommit > lastNewIndex` immediately), and a malformed or foreign frame reaches it now.
+ * It also said the reachability was **one `sendAppendEntries` change away** — "any batch-size or
+ * payload cap on AppendEntries produces `leaderCommit > lastNewIndex` immediately". #2150 made exactly
+ * that change: `RaftEngine.boundedBatch` truncates the batch to what the transport can carry, so on a
+ * budgeted transport the *first frame of every catch-up* carries a `leaderCommit` above where its batch
+ * ends. The clamp is now load-bearing on the honest path, and a follower that ignored it would commit
+ * entries it does not hold — see [AppendEntriesBatchBoundTest].
+ *
+ * The injection-based probes below are kept unchanged. They remain the sharper instrument: they isolate
+ * the clamp at a single frame with a control, where the honest trajectory exercises it incidentally and
+ * would not distinguish it from the exact-attestation `lastNewIndex` it clamps against.
  *
  * ## The trajectory, and why C4 two lines above is inert on it
  *
