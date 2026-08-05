@@ -2478,10 +2478,13 @@ internal class RaftEngine(
         //
         // The old code checked only `m.entries.first()` for a conflict and then appended any entry whose
         // index we lacked — silently keeping a LATER entry whose index existed locally with a different
-        // term, and over-attesting. Safe today only because the leader always ships the full suffix from
-        // `nextIndex` (an emergent invariant), so the first batch entry already sits at/above the first
-        // divergence and this per-entry scan lands on exactly the same truncate/append. This is
-        // behaviour-preserving hardening for every reachable input; it removes the standing proof-obligation.
+        // term, and over-attesting. It was safe only because the first batch entry already sits at/above
+        // the first divergence, so the per-entry scan lands on exactly the same truncate/append. That
+        // premise used to rest on the leader shipping the whole suffix from `nextIndex`; since #2150 the
+        // batch is TRUNCATED to fit the transport, so it rests instead on the batch still BEGINNING at
+        // `nextIndex` — a prefix of the old batch, never a different one. Truncation moves only where the
+        // batch ends, which is below any divergence, not above it. This remains behaviour-preserving
+        // hardening for every reachable input; it removes the standing proof-obligation either way.
         if (m.entries.isNotEmpty()) {
             var appendFrom = -1
             for ((i, entry) in m.entries.withIndex()) {
@@ -2517,8 +2520,10 @@ internal class RaftEngine(
         // entry THIS AppendEntries covered (`prevLogIndex + entries.size`; == prevLogIndex for a heartbeat).
         // Both the follower-commit bound and the success reply's matchIndex are keyed to it — NOT to
         // `state.lastLogIndex`, which can exceed the just-verified prefix when a stale suffix survives beyond
-        // the batch. For the currently-reachable full-suffix send `lastNewIndex == state.lastLogIndex`, so
-        // this is behaviour-preserving; it removes the proof-obligation that the two always coincide.
+        // the batch. Under full-suffix sends the two coincided, so keying to the batch was behaviour-
+        // preserving and merely removed a proof-obligation. Since #2150 they routinely DIVERGE — a
+        // truncated batch attests a prefix while the leader's commit runs far ahead of it — so this is now
+        // the only reading that keeps a catching-up follower from committing entries it does not hold.
         val lastNewIndex = m.prevLogIndex + m.entries.size
 
         if (m.leaderCommit > state.currentCommitIndex) {
@@ -2528,15 +2533,18 @@ internal class RaftEngine(
             // because advanceCommit's emit loop `(currentCommitIndex + 1)..newCommit` is empty when
             // `newCommit` is lower: nothing is re-emitted and `_commitIndex` is left stale.
             //
-            // No honest sender emits such a frame, and the reason is stronger than "the reachable send is
-            // full-suffix": [sendAppendEntries] ships the entire suffix, so a minted frame has
-            // `lastNewIndex == the leader's lastLogIndex`, and its `leaderCommit` is that same leader's
-            // commit index, which never exceeds its own last index. `leaderCommit <= lastNewIndex` is
-            // therefore a relation between two fields OF THE FRAME, fixed at mint time — delay, duplication
-            // and reordering cannot break it. The clamp needs the opposite (`leaderCommit > lastNewIndex`),
-            // so today it bites only on a malformed or foreign frame. It is one [sendAppendEntries] change
-            // from load-bearing, though: any entry-count or payload cap on AppendEntries produces
-            // `leaderCommit > lastNewIndex` immediately. Pinned by `ForwardOnlyCommitClampTest` (#2024).
+            // This is now LOAD-BEARING ON THE HONEST PATH, which it was not before #2150. While
+            // [sendAppendEntries] shipped the entire suffix, every minted frame had `lastNewIndex ==
+            // the leader's lastLogIndex` and a `leaderCommit` that never exceeded it, so
+            // `leaderCommit <= lastNewIndex` held as a relation between two fields OF THE FRAME, fixed
+            // at mint time — and the clamp, needing the opposite, bit only on a malformed or foreign
+            // frame. [boundedBatch] breaks that relation deliberately: a truncated batch still carries
+            // the leader's own commit index, which sits above where the batch ends on the FIRST frame of
+            // every catch-up. Committing to `leaderCommit` there would commit entries the follower does
+            // not hold. The comment this replaced predicted exactly that ("one [sendAppendEntries] change
+            // from load-bearing: any entry-count or payload cap produces `leaderCommit > lastNewIndex`
+            // immediately"). Pinned by `ForwardOnlyCommitClampTest` (#2024) and, on the honest path now,
+            // by `AppendEntriesBatchBoundTest`.
             advanceCommit(minOf(m.leaderCommit, maxOf(lastNewIndex, state.currentCommitIndex)))
         }
 

@@ -58,6 +58,23 @@ import kotlin.test.assertTrue
  * index, far above where the truncated batch ends. Committing to `leaderCommit` on a batch that
  * attests only a prefix of it would commit entries the follower does not hold. See
  * [ForwardOnlyCommitClampTest], whose "reachability: injection-only today" section this test retires.
+ *
+ * ## Mutation-verified
+ *
+ * Each guard reverted alone and restored from the committed object between runs
+ * (`:kuilt-raft:jvmTest`, 519 tests). Every row has a discriminating pin — no guard rests on blast
+ * radius alone:
+ *
+ * | reverted guard | what reddens |
+ * |---|---|
+ * | `boundedBatch` removed — ship the whole tail | **this test**, plus both post-install catch-ups in [InstallSnapshotTest] |
+ * | `boundedBatch` drops the always-one-entry floor | `ProposePayloadBudgetTest.aProposeAtExactlyTheLimitCommits`, plus three [InstallSnapshotTest] cases |
+ * | propose bound back to `command.size` | `ProposePayloadBudgetTest.aCommandInsideTheRawLimitButOverItOnTheWireIsRefused`, `…anOversizeProposeIsRefusedNamingTheDerivedLimit` |
+ * | `chunkBytes` back to the mixed-units formula | [InstallSnapshotTest.aChunkIsSizedToTheWireBudget_notTheRawOne] **only** |
+ *
+ * The last row is why that case had to be written: reverting `chunkBytes` alone left all 518
+ * pre-existing tests green, because every chunking fixture ran at a budget where the 256 B envelope
+ * reserve dominated the chunk and absorbed the expansion.
  */
 class AppendEntriesBatchBoundTest {
 
