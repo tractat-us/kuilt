@@ -1,4 +1,4 @@
-package us.tractat.kuilt.conformance.convergence
+package us.tractat.kuilt.conformance.lattice
 
 import kotlin.math.round
 import kotlin.random.Random
@@ -15,7 +15,7 @@ public fun interface OperationGenerator<S> {
 
 /**
  * What one binding's generator actually searched, measured by
- * [CrdtConvergenceHarness.measureVacuity] and checked against [VacuityFloors].
+ * [LatticeLawHarness.measureVacuity] and checked against [VacuityFloors].
  *
  * The counts are carried alongside the rates on purpose. A rate on its own is unreadable when the
  * denominator is small — "0.0% retiring" over 6 steps and over 600 are very different claims — and
@@ -109,7 +109,7 @@ internal fun percent(rate: Double): String {
  * even though a JVM green is not.)
  */
 @OptIn(ExperimentalSerializationApi::class, ExperimentalStdlibApi::class)
-public class CrdtConvergenceHarness<S : Quilted<S>>(
+public class LatticeLawHarness<S : Quilted<S>>(
     public val initial: S,
     public val alphabet: List<LatticeOp<S>>,
     public val serializer: KSerializer<S>,
@@ -227,7 +227,7 @@ public class CrdtConvergenceHarness<S : Quilted<S>>(
      * four laws read `assoc = 500, comm = 0, idem = 0, lub = 0`: **associativity is the only one
      * that sees it.** Nobody should add these expecting a second detector for that class, and
      * nobody should read a green here as covering what
-     * [associativeJoinLawsHoldOverLowerSeeds][CrdtConvergenceSuite.associativeJoinLawsHoldOverLowerSeeds]
+     * [associativeJoinLawsHoldOverLowerSeeds][LatticeLawSuite.associativeJoinLawsHoldOverLowerSeeds]
      * covers. What they do buy is the rest of the semilattice contract, on a pool that carries
      * causal ancestry, on every target — which is what the JVM-only surface they replace asserted
      * over operands drawn from *disjoint* replicas, where no operand could be another's ancestor.

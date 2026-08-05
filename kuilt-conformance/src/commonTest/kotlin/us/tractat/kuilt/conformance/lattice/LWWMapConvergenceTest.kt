@@ -1,4 +1,4 @@
-package us.tractat.kuilt.conformance.convergence
+package us.tractat.kuilt.conformance.lattice
 
 import kotlinx.serialization.builtins.serializer
 import us.tractat.kuilt.crdt.LWWMap
@@ -84,8 +84,8 @@ private fun write(
     }
 }
 
-internal class LWWMapConvergenceTest : CrdtConvergenceSuite<LWWMap<String, String>>() {
-    override fun newHarness(): CrdtConvergenceHarness<LWWMap<String, String>> = CrdtConvergenceHarness(
+internal class LWWMapConvergenceTest : LatticeLawSuite<LWWMap<String, String>>() {
+    override fun newHarness(): LatticeLawHarness<LWWMap<String, String>> = LatticeLawHarness(
         initial = LWWMap.empty(),
         // `LWWMap.remove` has always existed and this generator had never called it: 0.0% retiring
         // steps, the #2100 vacuity shape on a live binding. It is a last-writer-wins tombstone that

@@ -404,7 +404,7 @@ costing if you gate the workload with `HeddleAdmissionControl`.
 **Primitive:** `canonicalDigest(serializer, value)` (`:kuilt-conformance`, `us.tractat.kuilt.conformance`). A 64-bit FNV-1a hash over the value's canonical CBOR encoding — converged replicas share a digest, diverged ones almost certainly don't, and one `Long` crosses the boundary instead of a whole state. Test- and harness-side only: `:kuilt-conformance` `api`-exposes `kotlin-test`, so it does not belong on a production classpath.
 
 **In-process, don't use it.** `assertEquals(a, b)` on the states themselves is strictly better:
-exact, no collision risk, and a far better failure message. `CrdtConvergenceHarness` deliberately
+exact, no collision risk, and a far better failure message. `LatticeLawHarness` deliberately
 compares raw bytes rather than digests for that reason. Reach for `canonicalDigest` only where the
 comparison has to cross a process, a socket, or a live-peer boundary. And it is **not
 cryptographic** — a 64-bit non-keyed hash is fine against accidental divergence and no defence at

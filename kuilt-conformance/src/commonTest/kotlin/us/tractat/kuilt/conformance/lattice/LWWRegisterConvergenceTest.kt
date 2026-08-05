@@ -1,4 +1,4 @@
-package us.tractat.kuilt.conformance.convergence
+package us.tractat.kuilt.conformance.lattice
 
 import kotlinx.serialization.builtins.serializer
 import us.tractat.kuilt.crdt.LWWRegister
@@ -30,8 +30,8 @@ private fun registerValue(replica: ReplicaId, timestamp: Long): String = "v-${re
 // Binds LWWRegister<String> — the single-cell primitive LWWMap is built from (LWWMap has its own
 // convergence test). The convergence property is the same: the (timestamp, replicaId) tie-breaker
 // must produce the same winner regardless of merge order.
-internal class LWWRegisterConvergenceTest : CrdtConvergenceSuite<LWWRegister<String>>() {
-    override fun newHarness(): CrdtConvergenceHarness<LWWRegister<String>> = CrdtConvergenceHarness(
+internal class LWWRegisterConvergenceTest : LatticeLawSuite<LWWRegister<String>>() {
+    override fun newHarness(): LatticeLawHarness<LWWRegister<String>> = LatticeLawHarness(
         initial = LWWRegister.empty(),
         // Three bands, disjoint and ascending, so `set-low · unset-high · set-highest` ascends on
         // every seed. That is about what the shape *means*, not whether it runs: an assignment

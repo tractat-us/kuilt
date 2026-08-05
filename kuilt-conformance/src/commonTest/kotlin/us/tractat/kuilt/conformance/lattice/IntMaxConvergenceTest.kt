@@ -1,4 +1,4 @@
-package us.tractat.kuilt.conformance.convergence
+package us.tractat.kuilt.conformance.lattice
 
 import kotlinx.serialization.Serializable
 import us.tractat.kuilt.crdt.Quilted
@@ -8,8 +8,8 @@ internal data class IntMax(val value: Int) : Quilted<IntMax> {
     override fun piece(other: IntMax): IntMax = IntMax(maxOf(value, other.value))
 }
 
-internal class IntMaxConvergenceTest : CrdtConvergenceSuite<IntMax>() {
-    override fun newHarness(): CrdtConvergenceHarness<IntMax> = CrdtConvergenceHarness(
+internal class IntMaxConvergenceTest : LatticeLawSuite<IntMax>() {
+    override fun newHarness(): LatticeLawHarness<IntMax> = LatticeLawHarness(
         initial = IntMax(0),
         // A max-lattice over a total order: every join is trivial, nothing is ever retired, and the
         // laws are free. That is the point of binding it — it is the reference for what a free pass

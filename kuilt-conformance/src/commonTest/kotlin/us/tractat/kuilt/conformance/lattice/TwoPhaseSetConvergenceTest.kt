@@ -1,4 +1,4 @@
-package us.tractat.kuilt.conformance.convergence
+package us.tractat.kuilt.conformance.lattice
 
 import kotlinx.serialization.builtins.serializer
 import us.tractat.kuilt.crdt.TwoPhaseSet
@@ -10,8 +10,8 @@ private const val FOCUS = "e0"
 private const val OTHER = "e1"
 private val POOL = List(6) { "e$it" }
 
-internal class TwoPhaseSetConvergenceTest : CrdtConvergenceSuite<TwoPhaseSet<String>>() {
-    override fun newHarness(): CrdtConvergenceHarness<TwoPhaseSet<String>> = CrdtConvergenceHarness(
+internal class TwoPhaseSetConvergenceTest : LatticeLawSuite<TwoPhaseSet<String>>() {
+    override fun newHarness(): LatticeLawHarness<TwoPhaseSet<String>> = LatticeLawHarness(
         initial = TwoPhaseSet.empty(),
         // The derived default — `add · remove · add-other` — is the right word here, and its second
         // assert has to name a DIFFERENT element rather than repeat the first. A tombstone in a

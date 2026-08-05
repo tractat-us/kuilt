@@ -1,4 +1,4 @@
-package us.tractat.kuilt.conformance.convergence
+package us.tractat.kuilt.conformance.lattice
 
 import kotlin.random.Random
 
@@ -61,8 +61,8 @@ public enum class OpKind {
 /**
  * One named operation a binding can perform against its state.
  *
- * The alphabet is the binding's whole vocabulary: [CrdtConvergenceHarness] draws from it to build
- * the randomised causal pool, and [CrdtConvergenceHarness.criticalShapes] names its members to
+ * The alphabet is the binding's whole vocabulary: [LatticeLawHarness] draws from it to build
+ * the randomised causal pool, and [LatticeLawHarness.criticalShapes] names its members to
  * construct the shapes that must be reached on every seed rather than on a lucky one. One alphabet
  * driving both is the point — a constructed shape and a random trajectory cannot drift into
  * describing different sets of operations.
@@ -119,10 +119,10 @@ public fun <S> defaultCriticalShapes(alphabet: List<LatticeOp<S>>): List<List<St
  * How much *searching* a binding's generator has to do before its green counts for anything.
  *
  * A lattice law is a statement about a set of states, so a green run says exactly as much as the
- * pool it ran over. [CrdtConvergenceHarness] measures four rates while it builds that pool and
+ * pool it ran over. [LatticeLawHarness] measures four rates while it builds that pool and
  * fails the binding when one falls outside these bounds — not because the type is broken, but
  * because the *evidence* is too thin to say it is not. The measured values print on a green run too
- * ([CrdtConvergenceHarness.measureVacuity]), because a floor whose actual value nobody sees is a
+ * ([LatticeLawHarness.measureVacuity]), because a floor whose actual value nobody sees is a
  * floor nobody notices drifting toward.
  *
  * ## The pair definition, stated exactly

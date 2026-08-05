@@ -1,12 +1,12 @@
-package us.tractat.kuilt.conformance.convergence
+package us.tractat.kuilt.conformance.lattice
 
 import kotlinx.serialization.builtins.serializer
 import us.tractat.kuilt.crdt.GSet
 
 // A small element pool forces overlapping adds across replicas, so the merged sets differ
 // only in insertion order — the shape that exposes a non-canonical set encoding.
-internal class GSetConvergenceTest : CrdtConvergenceSuite<GSet<String>>() {
-    override fun newHarness(): CrdtConvergenceHarness<GSet<String>> = CrdtConvergenceHarness(
+internal class GSetConvergenceTest : LatticeLawSuite<GSet<String>>() {
+    override fun newHarness(): LatticeLawHarness<GSet<String>> = LatticeLawHarness(
         initial = GSet.empty(),
         // Grow-only by construction — `GSet` has no removal, so there is no RETIRE op to declare
         // and no critical shape to derive.

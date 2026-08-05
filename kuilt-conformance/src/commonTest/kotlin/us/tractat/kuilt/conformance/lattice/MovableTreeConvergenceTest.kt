@@ -1,4 +1,4 @@
-package us.tractat.kuilt.conformance.convergence
+package us.tractat.kuilt.conformance.lattice
 
 import kotlinx.serialization.builtins.serializer
 import us.tractat.kuilt.crdt.MovableTree
@@ -6,8 +6,8 @@ import us.tractat.kuilt.crdt.ReplicaId
 
 // Random adds and moves (including cycle-attempting moves, which replay skips
 // deterministically) — the patterns that reveal move-log total-order and replay bugs.
-internal class MovableTreeConvergenceTest : CrdtConvergenceSuite<MovableTree<String>>() {
-    override fun newHarness(): CrdtConvergenceHarness<MovableTree<String>> = CrdtConvergenceHarness(
+internal class MovableTreeConvergenceTest : LatticeLawSuite<MovableTree<String>>() {
+    override fun newHarness(): LatticeLawHarness<MovableTree<String>> = LatticeLawHarness(
         initial = MovableTree.empty(),
         // `move` is the RETIRE op. Nothing is deleted from a `MovableTree` — the move log only
         // grows — but a move *withdraws* an earlier assertion all the same: the node leaves its

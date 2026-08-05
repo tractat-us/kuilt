@@ -166,7 +166,7 @@ class ORSetTest {
      * (jvmTest, jqwik) generates its three states from three disjoint single-replica namespaces, so
      * no state it produces is ever an ancestor of another and no dot is ever superseded across the
      * triple — the sibling `ORMapLawsPropertyTest` is built the same way and passes on an `ORMap`
-     * that *is* non-associative. `CrdtConvergenceSuite` asserts only that replicas agree after a
+     * that *is* non-associative. `LatticeLawSuite` asserts only that replicas agree after a
      * full exchange, which a non-associative join still satisfies because the divergence heals on
      * the next merge. Here every snapshot comes from one shared history of adds, removes, merges and
      * shipped deltas, and every ordered triple of snapshots is checked in both groupings.

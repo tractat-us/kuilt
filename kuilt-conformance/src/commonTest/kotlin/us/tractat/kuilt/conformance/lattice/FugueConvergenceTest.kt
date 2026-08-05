@@ -1,18 +1,17 @@
-package us.tractat.kuilt.conformance.convergence
+package us.tractat.kuilt.conformance.lattice
 
 import kotlinx.serialization.builtins.serializer
+import us.tractat.kuilt.crdt.Fugue
 import us.tractat.kuilt.crdt.ReplicaId
-import us.tractat.kuilt.crdt.Rga
 
-// Random-position inserts plus removes force concurrent same-predecessor siblings and
-// tombstone merges — exactly the patterns that reveal ordering-tiebreak bugs.
-internal class RgaConvergenceTest : CrdtConvergenceSuite<Rga<String>>() {
-    override fun newHarness(): CrdtConvergenceHarness<Rga<String>> = CrdtConvergenceHarness(
-        initial = Rga.empty(),
-        // `insert-head` / `remove-head` both pin index 0, so the derived shape
-        // `insert-head · remove-head · insert-roam` retires exactly the element it just inserted.
-        // The roaming pair keeps the random-position behaviour that forces concurrent
-        // same-predecessor siblings.
+// Random-position inserts plus removes force concurrent same-anchor siblings and
+// tombstone merges — the patterns that reveal Fugue tree-ordering (non-interleaving) bugs.
+internal class FugueConvergenceTest : LatticeLawSuite<Fugue<String>>() {
+    override fun newHarness(): LatticeLawHarness<Fugue<String>> = LatticeLawHarness(
+        initial = Fugue.empty(),
+        // Pinned head ops so the derived shape `insert-head · remove-head · insert-roam` retires
+        // exactly the element it just inserted; the roaming pair keeps the random-position
+        // behaviour that forces concurrent same-anchor siblings.
         alphabet = listOf(
             LatticeOp("insert-head", OpKind.ASSERT) { state, replicaIndex, random ->
                 state.insertAt(ReplicaId("R$replicaIndex"), 0, "v$replicaIndex.${random.nextInt(100)}").first
@@ -28,7 +27,7 @@ internal class RgaConvergenceTest : CrdtConvergenceSuite<Rga<String>>() {
                 if (state.size > 0) state.removeAt(random.nextInt(state.size))?.first ?: state else state
             },
         ),
-        serializer = Rga.wireSerializer(String.serializer()),
+        serializer = Fugue.wireSerializer(String.serializer()),
         replicaCount = 3,
         opsPerReplica = 8,
     )

@@ -1,4 +1,4 @@
-package us.tractat.kuilt.conformance.convergence
+package us.tractat.kuilt.conformance.lattice
 
 import kotlinx.serialization.builtins.serializer
 import us.tractat.kuilt.crdt.EphemeralMap
@@ -34,11 +34,11 @@ private fun nextClock(state: EphemeralMap<String>, replica: ReplicaId): Long =
  * Each replica writes only to its own slot (single-writer contract), but the merge combines all
  * replicas' views and must converge identically under every delivery permutation.
  */
-internal class EphemeralMapConvergenceTest : CrdtConvergenceSuite<EphemeralMap<String>>() {
+internal class EphemeralMapConvergenceTest : LatticeLawSuite<EphemeralMap<String>>() {
 
     private val replicaIds = List(3) { ReplicaId("R$it") }
 
-    override fun newHarness(): CrdtConvergenceHarness<EphemeralMap<String>> = CrdtConvergenceHarness(
+    override fun newHarness(): LatticeLawHarness<EphemeralMap<String>> = LatticeLawHarness(
         initial = EphemeralMap.empty(),
         alphabet = listOf(
             LatticeOp("put", OpKind.ASSERT) { state, replicaIndex, random ->

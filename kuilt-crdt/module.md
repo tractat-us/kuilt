@@ -81,7 +81,7 @@ canonically. A key type carrying an unordered `Set` or `Map` field breaks it: tw
 sorting around them helps. Values are passed straight through, so a
 `Map<String, GCounter>` is canonical only once `GCounter` itself is.
 
-Two checks hold the invariant, along different axes. `CrdtConvergenceHarness`
+Two checks hold the invariant, along different axes. `LatticeLawHarness`
 (`:kuilt-conformance`) asserts that every merge permutation of a value encodes
 identically — the within-target axis. `CanonicalGoldenVectorTest` pins checked-in
 CBOR byte strings, and because `commonTest` runs on JVM, Android, iOS, macOS and

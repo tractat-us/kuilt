@@ -1,4 +1,4 @@
-package us.tractat.kuilt.conformance.convergence
+package us.tractat.kuilt.conformance.lattice
 
 import kotlinx.serialization.builtins.serializer
 import us.tractat.kuilt.crdt.ORSet
@@ -11,8 +11,8 @@ import us.tractat.kuilt.crdt.piece
 private val ELEMENTS = listOf("elem-0", "elem-1", "elem-2", "elem-3")
 private val FOCUS = ELEMENTS[0]
 
-internal class ORSetConvergenceTest : CrdtConvergenceSuite<ORSet<String>>() {
-    override fun newHarness(): CrdtConvergenceHarness<ORSet<String>> = CrdtConvergenceHarness(
+internal class ORSetConvergenceTest : LatticeLawSuite<ORSet<String>>() {
+    override fun newHarness(): LatticeLawHarness<ORSet<String>> = LatticeLawHarness(
         initial = ORSet.empty(),
         alphabet = listOf(
             LatticeOp("add", OpKind.ASSERT) { state, replicaIndex, _ ->

@@ -1,4 +1,4 @@
-package us.tractat.kuilt.conformance.convergence
+package us.tractat.kuilt.conformance.lattice
 
 import kotlinx.serialization.builtins.serializer
 import us.tractat.kuilt.crdt.Causal
@@ -22,8 +22,8 @@ private val FOCUS = KEYS[0]
  * whole key while keeping the context on `false`. What is added is a target-pinned pair of ops, so
  * the assert · retire · re-assert word lands on one key on every seed instead of on a lucky one.
  */
-internal class CausalDotMapConvergenceTest : CrdtConvergenceSuite<Causal<DotMap<String, DotSet>>>() {
-    override fun newHarness(): CrdtConvergenceHarness<Causal<DotMap<String, DotSet>>> = CrdtConvergenceHarness(
+internal class CausalDotMapConvergenceTest : LatticeLawSuite<Causal<DotMap<String, DotSet>>>() {
+    override fun newHarness(): LatticeLawHarness<Causal<DotMap<String, DotSet>>> = LatticeLawHarness(
         initial = Causal(DotMap(), DotContext.EMPTY),
         alphabet = listOf(
             LatticeOp("add", OpKind.ASSERT) { state, replicaIndex, _ ->
