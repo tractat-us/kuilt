@@ -85,11 +85,14 @@ public class WarpCausalClock(private val replica: ReplicaId) {
      * a missing or corrupt entry leaves the clock fresh (seq 0, empty frontier).
      */
     public suspend fun recover(store: DurableStore) {
-        val bytes = store.read(STORE_KEY) ?: return
+        val bytes = runCatchingCancellable { store.read(STORE_KEY) }.getOrElse { cause ->
+            logger.error(cause) { "otel.causal.clock: store read failed, starting fresh" }
+            return
+        } ?: return
         val state = runCatchingCancellable {
             cbor.decodeFromByteArray(stateSerializer, bytes)
-        }.getOrNull() ?: run {
-            logger.warn { "otel.causal.clock: corrupt store entry, starting fresh" }
+        }.getOrElse { cause ->
+            logger.warn(cause) { "otel.causal.clock: corrupt store entry, starting fresh" }
             return
         }
         lock.withLock {

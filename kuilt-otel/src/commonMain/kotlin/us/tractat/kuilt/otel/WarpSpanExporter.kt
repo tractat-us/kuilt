@@ -89,11 +89,14 @@ public class WarpSpanExporter(
      * If no persisted state exists, the exporter starts with an empty set.
      */
     public suspend fun recover() {
-        val bytes = store.read(STORE_KEY) ?: return
+        val bytes = runCatchingCancellable { store.read(STORE_KEY) }.getOrElse { cause ->
+            logger.error(cause) { "otel.spans: store read failed, starting fresh" }
+            return
+        } ?: return
         val recovered = runCatchingCancellable<ORSet<SpanRecord>> {
             cbor.decodeFromByteArray(spanSerializer, bytes)
-        }.getOrNull() ?: run {
-            logger.warn { "otel.spans: corrupt store entry, starting fresh" }
+        }.getOrElse { cause ->
+            logger.warn(cause) { "otel.spans: corrupt store entry, starting fresh" }
             return
         }
         lock.withLock { spans = recovered }
