@@ -50,6 +50,27 @@ class InMemoryRaftNetwork(
     /** In-order log of decoded sends captured while [recording] is on. */
     internal val sent: MutableList<Sent> = mutableListOf()
 
+    /** One frame this network refused for exceeding the [maxPayloadBytes] it publishes — see [overBudget]. */
+    data class OverBudget(val from: NodeId, val to: NodeId, val bytes: Int, val limit: Int)
+
+    /**
+     * Every frame refused for exceeding [maxPayloadBytes], in order (#2150).
+     *
+     * The budget used to be **published but never enforced**: `transport()` reported it to the engine
+     * and `sendTo` then carried a frame of any size. That made the whole class of "the engine minted a
+     * frame larger than the transport it was told about" structurally invisible — a test could assert
+     * an InstallSnapshot reassembled without ever proving its chunks fit, and the unbounded
+     * AppendEntries batch of #2150 wedged a real follower while every simulation stayed green.
+     *
+     * Enforcement mirrors a budgeted [us.tractat.kuilt.core.Seam]: the seam raises `PayloadTooLarge`
+     * and `SeamRaftTransport.sendTo` swallows it, because `RaftTransport.sendTo` is best-effort by
+     * contract and `RaftEngine.send` invokes it unguarded. So the frame is dropped, not thrown — and
+     * dropped **before** the partition filter, since a seam refuses on size independently of whether
+     * the peer is reachable. A test asserting this list is empty is asserting the sender's arithmetic,
+     * not the network's weather.
+     */
+    val overBudget: MutableList<OverBudget> = mutableListOf()
+
     fun transport(id: NodeId): RaftTransport {
         val ch = Channel<RaftEnvelope>(Channel.UNLIMITED)
         channels[id] = ch
@@ -62,6 +83,11 @@ class InMemoryRaftNetwork(
             override val maxPayloadBytes: Int? = limit
             override suspend fun sendTo(peer: NodeId, message: ByteArray) {
                 if (recording) sent += Sent(id, peer, Cbor.decodeFromByteArray(RaftMessage.serializer(), message))
+                if (limit != null && message.size > limit) {
+                    // Refused on size, ahead of the partition filter — see [overBudget].
+                    overBudget += OverBudget(id, peer, message.size, limit)
+                    return
+                }
                 if ((id to peer) in dropped) return
                 val latency = latencies[id to peer]
                 if (latency == null) {
