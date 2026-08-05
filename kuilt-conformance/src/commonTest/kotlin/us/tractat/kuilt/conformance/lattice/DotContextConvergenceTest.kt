@@ -9,7 +9,8 @@ private const val REPLICA_COUNT = 3
 
 /**
  * How far past the contiguous prefix `witness-gap` may jump, mirroring the seq range
- * `DotContextLawsPropertyTest.trajectories` drew from.
+ * `DotContextLawsPropertyTest.trajectories` drew from — in the JVM-only jqwik surface deleted in
+ * #2101, so that name and the one below will not resolve.
  */
 private const val GAP_SPREAD = 3
 

@@ -16,9 +16,7 @@ logback = "1.6.1"
 slf4j = "2.0.18"
 log4j2 = "2.26.1"
 playServicesNearby = "19.3.0"
-jqwik = "1.10.1"
 junit-platform-launcher = "6.1.2"
-junit-vintage-engine = "6.1.2"
 kover = "0.9.9"
 dokka = "2.2.0"
 ionspin-bignum = "0.3.10"
@@ -90,10 +88,10 @@ opentelemetry-sdk-logs = { module = "io.opentelemetry:opentelemetry-sdk-logs", v
 opentelemetry-sdk-metrics = { module = "io.opentelemetry:opentelemetry-sdk-metrics", version.ref = "otel" }
 opentelemetry-sdk-common = { module = "io.opentelemetry:opentelemetry-sdk-common", version.ref = "otel" }
 opentelemetry-sdk-testing = { module = "io.opentelemetry:opentelemetry-sdk-testing", version.ref = "otel" }
-# jqwik — property-based testing on JVM (JUnit Platform runner):
-jqwik = { module = "net.jqwik:jqwik", version.ref = "jqwik" }
+# JUnit Platform launcher — :kuilt-scale's JVM-only bench harness runs on it. There is no jqwik
+# entry beside it any more: the JVM-only property surface was deleted in #2101, and with it the
+# JUnit Platform switch and the vintage engine that only existed to resolve the conflict it created.
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher", version.ref = "junit-platform-launcher" }
-junit-vintage-engine = { module = "org.junit.vintage:junit-vintage-engine", version.ref = "junit-vintage-engine" }
 # Google Nearby Connections (Android-only) + Tasks↔coroutines bridge for kuilt-nearby:
 play-services-nearby = { module = "com.google.android.gms:play-services-nearby", version.ref = "playServicesNearby" }
 kotlinx-coroutines-playServices = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-play-services", version.ref = "kotlinx-coroutines" }

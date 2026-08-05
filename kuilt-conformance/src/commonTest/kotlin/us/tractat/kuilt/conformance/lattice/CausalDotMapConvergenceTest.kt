@@ -17,7 +17,8 @@ private val FOCUS = KEYS[0]
  * `Causal<DotMap<String, DotSet>>` — the shape underlying `ORSet`, bound directly so the nesting is
  * exercised without `ORSet`'s facade in the way.
  *
- * The alphabet preserves what `CausalDotMapLawsPropertyTest.trajectoryFor` drew: a `(key, isAdd)`
+ * The alphabet preserves what `CausalDotMapLawsPropertyTest.trajectoryFor` drew — in the JVM-only
+ * jqwik surface deleted in #2101, so the name will not resolve — a `(key, isAdd)`
  * pair over four keys, adding a fresh dot to the key's nested `DotSet` on `true` and dropping the
  * whole key while keeping the context on `false`. What is added is a target-pinned pair of ops, so
  * the assert · retire · re-assert word lands on one key on every seed instead of on a lucky one.
