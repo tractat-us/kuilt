@@ -110,6 +110,34 @@ class WarpLogRecordExporterHealthTest {
         assertEquals(1L, exporter.health.value.accepted, "only the first export wrote")
     }
 
+    /**
+     * The same semantic as [aDedupNoOpDoesNotCountAsADurableWrite], for the other path
+     * that returns [ExportResult.Success] without writing: a record refused by the buffer
+     * cap under [BufferPolicy.DROP_NEWEST] (#2127).
+     *
+     * Asserted on `accepted` directly rather than on the store, because "no bytes were
+     * written" is **not** evidence for it — `commit(emptyList())` performs no write and
+     * still calls `success()`. Only the early return in `export`, ahead of `commit`, keeps
+     * this true, and only this assertion notices if that return moves.
+     */
+    @Test
+    fun aRefusedRecordDoesNotCountAsADurableWrite() = runTest {
+        val exporter = WarpLogRecordExporter(
+            replica = replica,
+            store = InMemoryDurableStore(),
+            maxRecords = 3,
+            bufferPolicy = BufferPolicy.DROP_NEWEST,
+        )
+        repeat(3) { i -> exporter.export(record((i + 1).toByte())) }
+        repeat(20) { i -> exporter.export(record((10 + i).toByte())) }
+
+        assertAll(
+            { assertEquals(3L, exporter.health.value.accepted, "only the 3 admitted records were written") },
+            { assertEquals(0L, exporter.health.value.failed, "a refusal is not a failure") },
+            { assertEquals(0, exporter.health.value.consecutiveFailures) },
+        )
+    }
+
     @Test
     fun healthReportsAnExporterThatHasAcceptedNothing() = runTest {
         val exporter = WarpLogRecordExporter(replica = replica, store = WriteFailsStore())

@@ -59,15 +59,22 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpLogRecordEx
  * - [BufferPolicy.DROP_OLDEST] evicts visible index 0 and then inserts the arrival, so
  *   the buffer is a sliding window over the most recent [maxRecords] records.
  * - [BufferPolicy.DROP_NEWEST] refuses the **arrival**. At a full buffer the newest
- *   record is the one arriving, so "drop the newest" drops it: the buffer freezes at the
- *   first [maxRecords] records and appends no further op — no insert, no eviction, no
- *   tombstone. A full `DROP_NEWEST` buffer is inert.
+ *   record is the one arriving, so "drop the newest" drops it: on the **export path** the
+ *   buffer freezes at the first [maxRecords] records and appends no further op — no
+ *   insert, no eviction, no tombstone.
  *
- * The two exporters that share [BufferPolicy] resolve "newest" differently —
- * [WarpSpanExporter] evicts the newest *buffered* span and admits the arrival. That is
- * deliberate: this exporter's inertness is what makes its persisted set a downward-closed
- * prefix, which is what lets its bound be expressed as a single floor rather than a
- * per-replica range (#2127).
+ * [merge] is the exception, and it is the intended production path, not a corner:
+ * [snapshot]/[merge] exist so this exporter can participate in gossip. A merge folds a
+ * remote op-log in wholesale, so it can push the visible count **past** [maxRecords] —
+ * remote inserts interleaving into the visible order, remote tombstones arriving from a
+ * peer running a different [bufferPolicy] — after which the gate simply keeps refusing.
+ * Neither policy evicts on the merge path.
+ *
+ * So the claim for `DROP_NEWEST` is about what this replica *emits*, not about what its
+ * buffer holds: it never authors a `Remove`, which is what makes **its own** contribution
+ * to the shared op-log a downward-closed prefix (#2127). The two exporters that share
+ * [BufferPolicy] resolve "newest" differently — [WarpSpanExporter] evicts the newest
+ * *buffered* span and admits the arrival — and that is the reason this one does not.
  *
  * ## On-disk layout — segmented op-log
  *
@@ -132,6 +139,10 @@ public class WarpLogRecordExporter(
 ) {
     init {
         require(segmentOps >= 1) { "segmentOps must be at least 1; got $segmentOps" }
+        // A zero cap is total, silent telemetry loss from a public constructor argument:
+        // under DROP_NEWEST the gate refuses every record forever, and under DROP_OLDEST
+        // every record is inserted and immediately evicted.
+        require(maxRecords >= 1) { "maxRecords must be at least 1; got $maxRecords" }
     }
 
     // The lock guards 'log' and every derived field below. No suspend calls are
@@ -499,7 +510,8 @@ public class WarpLogRecordExporter(
      * Read a snapshot of the current in-memory [Rga] for gossip / anti-entropy.
      *
      * The returned [Rga] reflects all records exported since the last [recover]
-     * or process start, minus any that were evicted due to the buffer cap.
+     * or process start, minus any the buffer cap evicted ([BufferPolicy.DROP_OLDEST])
+     * or refused ([BufferPolicy.DROP_NEWEST]).
      */
     public fun snapshot(): Rga<LogRecord> = lock.withLock { log }
 
@@ -672,21 +684,30 @@ public class WarpLogRecordExporter(
      * inserted at all. Must be called with [lock] held.
      *
      * [BufferPolicy.DROP_NEWEST] refuses the incoming record, which is what "drop the
-     * newest" means here: at a full buffer the newest record is the one arriving. The
-     * buffer therefore freezes at the first [maxRecords] records and appends no further
-     * op — the property #2127's bound relies on for this policy.
+     * newest" means here: at a full buffer the newest record is the one arriving. So this
+     * replica never authors a `Remove`, and the ops it contributes to the shared op-log
+     * are a downward-closed prefix — the property #2127's bound relies on for this policy.
+     * It bounds what is *emitted*, not what the buffer holds: [merge] can still push
+     * [visibleCount] past [maxRecords], after which this gate simply keeps refusing.
+     *
+     * The `when` is exhaustive on purpose — a new [BufferPolicy] constant must not fall
+     * through to eviction on a public enum shared with [WarpSpanExporter].
      */
     private fun admit(incoming: LogRecord): Boolean {
         if (visibleCount < maxRecords) return true
-        if (bufferPolicy == BufferPolicy.DROP_NEWEST) {
-            logger.warn {
-                "WarpLogRecordExporter: buffer cap ($maxRecords) reached, refusing incoming record " +
-                    "recordId=${incoming.recordId} body=${incoming.body?.take(80)} policy=$bufferPolicy"
+        return when (bufferPolicy) {
+            BufferPolicy.DROP_NEWEST -> {
+                logger.warn {
+                    "WarpLogRecordExporter: buffer cap ($maxRecords) reached, refusing incoming record " +
+                        "recordId=${incoming.recordId} body=${incoming.body?.take(80)} policy=$bufferPolicy"
+                }
+                false
             }
-            return false
+            BufferPolicy.DROP_OLDEST -> {
+                evictOldest(incoming)
+                true
+            }
         }
-        evictOldest(incoming)
-        return true
     }
 
     /** Evict the oldest visible record to make room for [incoming]. Must hold [lock]. */

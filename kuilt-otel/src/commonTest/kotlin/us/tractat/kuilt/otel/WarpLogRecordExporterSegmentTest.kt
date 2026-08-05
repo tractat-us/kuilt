@@ -173,8 +173,8 @@ class WarpLogRecordExporterSegmentTest {
     }
 
     @Test
-    fun bothBufferPoliciesGetTheSameBoundedWrite() = runTest {
-        // Both policies owe the same bound — a per-export write sized by the SEGMENT, never
+    fun bothBufferPoliciesBoundThePerExportWrite() = runTest {
+        // Both policies owe a bound — a per-export write sized by the SEGMENT, never
         // by N — and this test measures BOTH because a bound only ever checked against the
         // default policy hid a policy-specific regression once already (#2126's F3, in a
         // reclamation that no longer exists: nothing is reclaimed under either policy now).

@@ -318,12 +318,18 @@ class WarpLogRecordExporterTailCacheTest {
 
         private fun admit(): Boolean {
             if (log.size < maxRecords) return true
-            if (bufferPolicy == BufferPolicy.DROP_NEWEST) return false
-            val (newLog, _) = log.removeAt(0) ?: return true
-            val evictedRecord = log.toList()[0]
-            log = newLog
-            seenIds = seenIds - evictedRecord.recordId
-            return true
+            // Exhaustive, like production's: the oracle must not be the thing that
+            // silently absorbs a new BufferPolicy constant.
+            return when (bufferPolicy) {
+                BufferPolicy.DROP_NEWEST -> false
+                BufferPolicy.DROP_OLDEST -> {
+                    val (newLog, _) = log.removeAt(0) ?: return true
+                    val evictedRecord = log.toList()[0]
+                    log = newLog
+                    seenIds = seenIds - evictedRecord.recordId
+                    true
+                }
+            }
         }
 
         private fun tailId(): RgaId {
