@@ -20,6 +20,7 @@ import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.FabricAvailability
+import us.tractat.kuilt.core.PayloadTooLarge
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
@@ -886,8 +887,48 @@ internal class NwSeam(
 
     // ── send ────────────────────────────────────────────────────────────────────
 
+    /**
+     * The ceiling [encodeFrame] enforces on every send — and, symmetrically, the one each
+     * connection's [NwFramer] enforces on every receive, because [maxFrameBytes] is threaded to
+     * both. Not `null`: this fabric *does* have a number, and a caller that cannot read it has no
+     * way to size to the bound it is held to (#2069).
+     *
+     * The 4-byte length prefix rides ON TOP of this — [encodeFrame] compares it against the
+     * *payload* size and allocates `4 + len` — so nothing is reserved out of the published budget
+     * and [PayloadTooLarge.reservedBytes] is zero.
+     *
+     * Unlike `MeshSeam`, this is a fixed constructor value rather than a live minimum across links:
+     * every connection under an [NwSeam] is framed by the same [maxFrameBytes], so there is no
+     * per-link ceiling to aggregate and no window in which the number can tighten under a caller.
+     */
+    override val maxPayloadBytes: Int get() = maxFrameBytes
+
+    /**
+     * Refuse [payload] if it cannot be framed, rather than letting [encodeFrame] throw from inside a
+     * `runCatchingCancellable` whose `onFailure` means *dead link* (#2069). That is what turned one
+     * mis-sized payload into an evicted healthy peer — and, when it was the last remote, a roster
+     * collapsed to `{selfId}` by [evictPeerLocked]'s re-form — while the throwable was swallowed and
+     * the caller was told the send had been accepted.
+     *
+     * Returns the refusal for the caller to raise or ignore, per the two methods' differing
+     * contracts, so both read the ceiling exactly once and in the same way.
+     */
+    private fun oversizeOrNull(payload: ByteArray): PayloadTooLarge? =
+        if (payload.size > maxFrameBytes) {
+            PayloadTooLarge(payloadBytes = payload.size, budgetBytes = maxFrameBytes, reservedBytes = 0)
+        } else {
+            null
+        }
+
     override suspend fun broadcast(payload: ByteArray) {
         check(_state.value !is SeamState.Torn) { closedMessage }
+        // Best-effort by contract: an over-budget payload is DROPPED, not reported. Every link under
+        // this seam shares one ceiling, so — unlike a mesh of independently-framed links — there is no
+        // subset that could still carry it, and the drop is whole rather than per link.
+        if (oversizeOrNull(payload) != null) {
+            log.info { "nw.seam.broadcast.over-budget self=${selfId.value} payload=${payload.size}B budget=${maxFrameBytes}B → dropped (best-effort)" }
+            return
+        }
         val targets = lock.withLock { registry.values.map { it.connId } }
         val frame = encodeFrame(payload, maxFrameBytes)
         for (connId in targets) {
@@ -902,6 +943,9 @@ internal class NwSeam(
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
         check(_state.value !is SeamState.Torn) { closedMessage }
         val connId = lock.withLock { registry[peer]?.connId } ?: throw PeerNotConnected(peer)
+        // Addressed and reporting, per contract: raise PayloadTooLarge BEFORE the encode, so the
+        // caller learns the number it should have respected and the link below is never implicated.
+        oversizeOrNull(payload)?.let { throw it }
         runCatchingCancellable { api.send(connId, encodeFrame(payload, maxFrameBytes)) }
             .onFailure {
                 log.info { "nw.seam.sendTo.send-failed peer=${peer.value} connId=${connId.value} self=${selfId.value}: ${it.message} → removeByConn" }
