@@ -464,15 +464,49 @@ public class Quilter<S : Quilted<S>>(
     }
 
     /**
-     * PLACEHOLDER (#2090) — the status-quo workaround, hoisted verbatim so the new signature
-     * exists and `QuilterMutateOrSkipTest` compiles and fails for the reason it is about to
-     * pin: a declined transform still publishes an identity patch, so it still burns a seq
-     * and still broadcasts a `Delta`. Replaced by the real skip in the next commit.
+     * [mutate], for a transform that may **decline**: read the state, decide, and *maybe* write —
+     * still as one atomic step. Returns whether a patch was published.
+     *
+     * `null` from [transform] means *"on this state, write nothing"*. It is a decision, not a
+     * missing argument: the refusal is an outcome of the read-modify-write, made against the very
+     * state the patch would have landed on, and it is the reason this overload exists.
+     *
+     * ```kotlin
+     * // Claim the slot only if nobody holds it — atomically, and silently if somebody does.
+     * val claimed = board.mutateOrSkip { seats ->
+     *     if (seats.get(seat) != null) null else Patch(seats.set(replica, clock, seat, me))
+     * }
+     * ```
+     *
+     * **Why not just return an identity patch.** A patch that joins to nothing does leave [state]
+     * unchanged — but [apply] does not know that. It burns a sequence number, buffers the delta
+     * until every peer acks it, and broadcasts an empty [QuiltMessage.Delta] to the whole room. On
+     * a refusal that fires often, that is a frame per refusal for no information. The alternative —
+     * testing the condition *before* the lock and returning early — is cheaper still but answers a
+     * different question: it decides against a state nothing is holding still, so by the time the
+     * call returns another writer may have made the answer wrong. `mutateOrSkip` is the one that
+     * is both: the decision is inside the lock, and a refusal costs nothing.
+     *
+     * The return is a plain [Boolean] — *did this publish?* — because that is the whole of what a
+     * caller cannot otherwise recover: [transform] runs inside the critical section, so its own
+     * result is not visible outside without a captured `var`. A caller that needs to know *what*
+     * it published already holds it, in the branch that built the patch.
+     *
+     * Same contract as [mutate] otherwise: [transform] runs inside the locked section, so it must
+     * be pure, fast, and non-suspending, and it may run against a state newer than any the caller
+     * has read.
+     *
+     * @return `true` if [transform] returned a patch and it was applied and broadcast; `false` if
+     *   [transform] declined, in which case nothing changed and no frame was sent.
+     * @sample us.tractat.kuilt.quilter.sampleQuilterMutateOrSkip
+     * @throws IllegalStateException if this replicator has been [close]d — including when
+     *   [transform] would have declined, so a closed replicator is never mistaken for a refusal.
      */
     public fun mutateOrSkip(transform: (S) -> Patch<S>?): Boolean = lock.withLock {
-        val patch = transform(state.value)
-        apply(patch ?: Patch(state.value))
-        patch != null
+        check(!closed) { "Quilter($replica) is closed" }
+        val patch = transform(state.value) ?: return@withLock false
+        apply(patch)
+        true
     }
 
     // ---- private helpers ----

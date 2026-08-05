@@ -340,20 +340,13 @@ public class HeddleNode internal constructor(
         refreshWakeClamps(ledger.value, parent)
         var grants = 0
         while (grants < MAX_ROUNDS_PER_CALL) {
-            // Peek on the current state: if nothing is delegable, stop *without* entering the
-            // Quilter (which would consume a seq and broadcast an empty delta — chatty).
-            val peek = pickOne(ledger.value, parent)
-            if (peek == null || ledger.value.delegate(self, peek.attachment, peek.amount) == null) break
-            var applied = false
-            ledgerQuilter.mutate { s ->
-                val grant = pickOne(s, parent)
-                val patch = grant?.let { s.delegate(self, it.attachment, it.amount) }
-                if (patch != null) {
-                    applied = true
-                    patch
-                } else {
-                    Patch(EntitlementLedger.ZERO)
-                }
+            // One pick, inside the Quilter's lock, on the state the grant lands on. Nothing
+            // delegable ⇒ mutateOrSkip publishes nothing and answers false (#2090). This used to
+            // peek on `ledger.value` first, solely so a barren round would not enter the Quilter
+            // and broadcast an empty delta — which meant running the policy twice per grant, the
+            // peek deciding against a state an inbound delta may already have moved past.
+            val applied = ledgerQuilter.mutateOrSkip { s ->
+                pickOne(s, parent)?.let { grant -> s.delegate(self, grant.attachment, grant.amount) }
             }
             if (!applied) break
             grants++
@@ -484,16 +477,9 @@ public class HeddleNode internal constructor(
             bufferedCharges += BufferedCharge(capturedPath, amount)
             return
         }
-        var charged = false
-        ledgerQuilter.mutate { s ->
-            val patch = s.spendCaptured(self, path, amount)
-            if (patch != null) {
-                charged = true
-                patch
-            } else {
-                Patch(EntitlementLedger.ZERO)
-            }
-        }
+        // A refusal here is an invariant violation, not an outcome — but it must still not
+        // publish anything on its way to the throw (#2090).
+        val charged = ledgerQuilter.mutateOrSkip { s -> s.spendCaptured(self, path, amount) }
         check(charged) { "spendCaptured returned null for captured path $path — charge lost" }
     }
 
@@ -708,23 +694,20 @@ public class HeddleNode internal constructor(
         return if (any) Demand(target, maxGrant) else Demand.NONE
     }
 
+    /**
+     * The one path the topology mutators take: read the ledger, run [op] against it, publish
+     * whatever patch it returns — or nothing at all, if it refuses. Returns whether it applied.
+     *
+     * [Quilter.mutateOrSkip] is what makes that one step (#2090). The shape it replaced ran [op]
+     * **twice**: a fast-refuse against [ledger].value ahead of the Quilter's lock, purely so a
+     * refusal would not enter it and broadcast an empty delta, and then the real one inside
+     * `mutate`. That pre-lock read could also refuse against a ledger a concurrent inbound delta
+     * had already moved past — answering `false` for an op that would have applied on the state
+     * its patch was about to land on. Deciding inside the lock costs nothing now, so it decides
+     * there, once.
+     */
     private fun applyIfPresent(op: (EntitlementLedger) -> Patch<EntitlementLedger>?): Boolean =
-        lock.withLock {
-            // Fast-refuse on the current state so a refused op does not enter the Quilter and
-            // broadcast an empty delta; the real op still runs inside mutate on fresh state.
-            if (op(ledger.value) == null) return@withLock false
-            var applied = false
-            ledgerQuilter.mutate { s ->
-                val patch = op(s)
-                if (patch != null) {
-                    applied = true
-                    patch
-                } else {
-                    Patch(EntitlementLedger.ZERO)
-                }
-            }
-            applied
-        }
+        lock.withLock { ledgerQuilter.mutateOrSkip(op) }
 
     /**
      * The replica roster for the §8.2 bound: every peer visible on the seam, plus self, plus
