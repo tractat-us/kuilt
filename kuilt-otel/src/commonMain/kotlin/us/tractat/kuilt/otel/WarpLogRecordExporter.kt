@@ -5,6 +5,10 @@ package us.tractat.kuilt.otel
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.io.bytestring.ByteString
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.runCatchingCancellable
@@ -105,6 +109,22 @@ public class WarpLogRecordExporter(
     // Maps recordId → RgaId of the Insert op, so that re-export is a no-op.
     // Mutated in place on export()/eviction and rebuilt from the op-log on recover().
     private val seenIds: MutableMap<ByteString, RgaId> = mutableMapOf()
+
+    // A MutableStateFlow owns no CoroutineScope, so the health surface adds no
+    // scope ownership to this type. `update {}` is an atomic CAS loop — a real
+    // thread-safe primitive, not dispatcher confinement (repo policy).
+    private val healthState = MutableStateFlow(ExporterHealth())
+
+    /**
+     * Out-of-band health for this exporter — see [ExporterHealth].
+     *
+     * `export()` reports a failed durable write in its return value, but on the
+     * logging path every caller discards it, so a stalled exporter had no way to
+     * say so (#1860). Read [kotlinx.coroutines.flow.StateFlow.value] for a
+     * point-in-time answer to "has this accepted anything since process start?",
+     * or collect the flow to alarm on a stall.
+     */
+    public val health: StateFlow<ExporterHealth> = healthState.asStateFlow()
 
     private companion object {
         private val STORE_KEY = StoreKey("otel.logs")
