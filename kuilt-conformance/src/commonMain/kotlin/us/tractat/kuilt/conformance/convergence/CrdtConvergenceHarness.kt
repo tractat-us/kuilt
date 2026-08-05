@@ -151,41 +151,144 @@ public class CrdtConvergenceHarness<S : Quilted<S>>(
      * already had to compare values to know which triples it could speak about.
      */
     public fun runAssociativeLaws(seed: Long) {
-        val pool = causalPool(Random(seed))
-        for (a in pool) for (b in pool) for (c in pool) {
-            val leftNested = a.piece(b).piece(c)
-            val rightNested = a.piece(b.piece(c))
-            check(leftNested == rightNested) { associativityFailure(seed, a, b, c, leftNested, rightNested) }
-            val leftBytes = encoded(leftNested)
-            val rightBytes = encoded(rightNested)
-            check(leftBytes.contentEquals(rightBytes)) { canonicalityFailure(seed, leftBytes, rightBytes, leftNested) }
-        }
+        checkAssociativeLaws(causalPool(Random(seed)), where = { "at seed $seed" })
     }
 
     /** Run [runAssociativeLaws] over every seed in [seeds]. */
     public fun runAssociativeLawsSeeds(seeds: LongRange): Unit = seeds.forEach(::runAssociativeLaws)
 
+    /**
+     * Both bracketing laws over **every word of length `1..L`** the alphabet can spell, on one
+     * replica — and on failure, the **shortest** word that breaks them. Returns the number of words
+     * searched on a green run.
+     *
+     * **This is the shrinking replacement, and it is a better artefact than a shrinker's.** Words
+     * are enumerated breadth-first by length, so the first one that fails is the shortest one that
+     * can: every shorter word was already tried and passed. A property-based shrinker reports a
+     * *locally* minimal synthetic operand list — three states it narrowed by re-running a
+     * generator; this reports the globally shortest **reachable trajectory**, named in the
+     * binding's own vocabulary, with the exact prefixes that produced `a`, `b` and `c`. Re-running
+     * the reported word from [initial] reproduces it exactly, because each word gets a fresh
+     * [Random] seeded identically, so a word — not a seed plus a trial number — is the whole repro.
+     *
+     * Measured against a lattice that wrongly keeps a retired contribution (the pre-#2099 `ORMap`),
+     * this pass reports `[put-high, remove, put-low]` — **length 3**, the shape #2086 needs. How
+     * many words it took to get there is a property of the *alphabet*, not of the search: 28 over
+     * `[put-low, put-high, remove]`, 20 over `[put-high, put-low, remove]`, 47 over the five ops
+     * `ORMapConvergenceTest` actually declares. **The length is the claim; the count is bookkeeping.**
+     *
+     * **One replica, so the pool is a chain, and that is the point.** The randomised pass explores
+     * *width*: three replicas, gossip, `POOL_LIMIT` states, sixteen seeds. This explores *depth
+     * exhaustively at tiny sizes*, where "exhaustively" is what buys the minimality claim. A chain
+     * is not a weaker pool than a forked one for this purpose — a broken join is exactly one that
+     * fails to be a join, and a chain `i ≤ s₁ ≤ … ≤ sₙ` is where that shows most legibly, because
+     * a correct lattice makes every join on it trivially the later operand.
+     *
+     * **The bound is `EXHAUSTIVE_WORD_LENGTH`, capped by `EXHAUSTIVE_TRIPLE_BUDGET`** — read both
+     * before changing either.
+     */
+    public fun runExhaustiveSmall(): Int {
+        var searched = 0
+        for (length in 1..exhaustiveWordLength) {
+            forEachWordOfLength(length) { word ->
+                searched++
+                val at = searched
+                checkAssociativeLaws(
+                    pool = walk(word),
+                    where = { "in the exhaustive-small search" },
+                    footer = { minimalCounterexample(word, at) },
+                )
+            }
+        }
+        return searched
+    }
+
+    /**
+     * Assert associativity, and then canonicality on the pairs that were equal, over every ordered
+     * triple from [pool].
+     *
+     * [where] names the trajectory family in the failure's first line and [footer] closes it; both
+     * are lambdas so a green run — every run but one — builds neither.
+     */
+    private fun checkAssociativeLaws(pool: List<Tracked<S>>, where: () -> String, footer: () -> String = { "" }) {
+        for (a in pool) for (b in pool) for (c in pool) {
+            val leftNested = a.state.piece(b.state).piece(c.state)
+            val rightNested = a.state.piece(b.state.piece(c.state))
+            check(leftNested == rightNested) {
+                associativityFailure(where(), a, b, c, leftNested, rightNested) + footer()
+            }
+            val leftBytes = encoded(leftNested)
+            val rightBytes = encoded(rightNested)
+            check(leftBytes.contentEquals(rightBytes)) {
+                canonicalityFailure(where(), a, b, c, leftBytes, rightBytes, leftNested) + footer()
+            }
+        }
+    }
+
     // The encodings are printed because a CRDT's `toString` shows the *observable* value and hides
     // the causal bookkeeping — an ORMap prints its values but not its tags or context. When two
     // states differ only there, the rendered forms look identical and the hex is the only readable
     // evidence.
-    private fun associativityFailure(seed: Long, a: S, b: S, c: S, leftNested: S, rightNested: S): String =
-        "Associativity failure at seed $seed — the two bracketings are NOT EQUAL:\n" +
-            "  a           = $a\n" +
-            "  b           = $b\n" +
-            "  c           = $c\n" +
-            "  (a⊔b)⊔c     = $leftNested\n" +
-            "  a⊔(b⊔c)     = $rightNested\n" +
-            "  (a⊔b)⊔c bytes = ${encoded(leftNested).toHexString()}\n" +
-            "  a⊔(b⊔c) bytes = ${encoded(rightNested).toHexString()}"
+    //
+    // Each operand also prints the WORD that built it. A `toString` says where a state landed; the
+    // word says how it got there, which is the half a reader has to reconstruct by hand otherwise —
+    // and reconstructing it from a seed means re-deriving the pool builder's draw order in their
+    // head. This is the provenance half of what replaces jqwik's shrinking; `runExhaustiveSmall` is
+    // the minimality half.
+    @Suppress("LongParameterList")
+    private fun associativityFailure(
+        where: String,
+        a: Tracked<S>,
+        b: Tracked<S>,
+        c: Tracked<S>,
+        left: S,
+        right: S,
+    ): String =
+        "Associativity failure $where — the two bracketings are NOT EQUAL:\n" +
+            operandLog(a, b, c) +
+            "  (a⊔b)⊔c     = $left\n" +
+            "  a⊔(b⊔c)     = $right\n" +
+            "  (a⊔b)⊔c bytes = ${encoded(left).toHexString()}\n" +
+            "  a⊔(b⊔c) bytes = ${encoded(right).toHexString()}"
 
-    private fun canonicalityFailure(seed: Long, leftBytes: ByteArray, rightBytes: ByteArray, state: S): String =
-        "Canonical-encoding failure at seed $seed — the two bracketings are EQUAL but encode to " +
+    @Suppress("LongParameterList")
+    private fun canonicalityFailure(
+        where: String,
+        a: Tracked<S>,
+        b: Tracked<S>,
+        c: Tracked<S>,
+        leftBytes: ByteArray,
+        rightBytes: ByteArray,
+        state: S,
+    ): String =
+        "Canonical-encoding failure $where — the two bracketings are EQUAL but encode to " +
             "DIFFERENT bytes. This is not an associativity defect; the join landed in the right " +
             "place and the serializer is history-dependent:\n" +
+            operandLog(a, b, c) +
             "  (a⊔b)⊔c bytes ${leftBytes.toHexString()}\n" +
             "  a⊔(b⊔c) bytes ${rightBytes.toHexString()}\n" +
             "  state         $state"
+
+    private fun operandLog(a: Tracked<S>, b: Tracked<S>, c: Tracked<S>): String =
+        "  a           = ${a.state}\n" +
+            "    built by  ${a.provenance}\n" +
+            "  b           = ${b.state}\n" +
+            "    built by  ${b.provenance}\n" +
+            "  c           = ${c.state}\n" +
+            "    built by  ${c.provenance}\n"
+
+    private fun minimalCounterexample(word: IntArray, searched: Int): String {
+        val spelled = word.joinToString(", ") { alphabet[it].name }
+        return "\n\n  MINIMAL COUNTEREXAMPLE\n" +
+            "  word            [$spelled]\n" +
+            "  length          ${word.size}\n" +
+            "  words searched  $searched of ${wordsUpTo(exhaustiveWordLength)} " +
+            "(every word of length 1..$exhaustiveWordLength over ${alphabet.size} ops)\n" +
+            "  minimal because words are enumerated breadth-first by length: every shorter word " +
+            "over this alphabet was tried first and held.\n" +
+            "  repro           apply the word above to `initial` on replica 0 with " +
+            "Random($EXHAUSTIVE_SEED)."
+    }
 
     /**
      * Reachable states that are **causally related to one another**, not merely siblings.
@@ -213,20 +316,48 @@ public class CrdtConvergenceHarness<S : Quilted<S>>(
      * a constructed step is informative on every seed, and the random step it displaces was
      * informative on roughly half.
      */
-    private fun causalPool(random: Random): List<S> {
+    private fun causalPool(random: Random): List<Tracked<S>> {
         val latest = MutableList(replicaCount) { initial }
-        val pool = mutableListOf(initial)
-        applyCriticalShapes(latest, pool, random)
+        val words = MutableList(replicaCount) { emptyList<String>() }
+        val pool = mutableListOf(Tracked(initial, "initial"))
+        applyCriticalShapes(latest, words, pool, random)
         outer@ for (op in 0 until opsPerReplica) {
             for (r in 0 until replicaCount) {
                 if (random.nextInt(GOSSIP_ONE_IN) == 0) {
-                    latest[r] = latest[r].piece(latest[random.nextInt(replicaCount)])
-                    pool += latest[r]
+                    val peer = random.nextInt(replicaCount)
+                    latest[r] = latest[r].piece(latest[peer])
+                    words[r] = words[r] + "⊔R$peer"
+                    pool += Tracked(latest[r], provenance(r, words[r]))
                 }
-                latest[r] = gen.applyRandomOp(latest[r], replicaIndex = r, random = random)
-                pool += latest[r]
+                val chosen = pick(random)
+                latest[r] = chosen.apply(latest[r], r, random)
+                words[r] = words[r] + chosen.name
+                pool += Tracked(latest[r], provenance(r, words[r]))
                 if (pool.size >= POOL_LIMIT) break@outer
             }
+        }
+        return pool
+    }
+
+    private fun provenance(replica: Int, word: List<String>): String =
+        "R$replica ← ${word.joinToString(" · ")}"
+
+    /**
+     * The states one exhaustive [word] passes through, `initial` first — the pool
+     * [runExhaustiveSmall] checks the laws over.
+     *
+     * The [Random] is fresh and identically seeded for every word, so a roaming op (one drawing its
+     * key or value from the stream) still lands the same way each time the same word is walked.
+     * That is what makes a reported word a complete repro on its own.
+     */
+    private fun walk(word: IntArray): List<Tracked<S>> {
+        val random = Random(EXHAUSTIVE_SEED)
+        val pool = ArrayList<Tracked<S>>(word.size + 1)
+        pool += Tracked(initial, "⊥")
+        var state = initial
+        for (i in word.indices) {
+            state = alphabet[word[i]].apply(state, 0, random)
+            pool += Tracked(state, (0..i).joinToString(" · ") { alphabet[word[it]].name })
         }
         return pool
     }
@@ -240,7 +371,12 @@ public class CrdtConvergenceHarness<S : Quilted<S>>(
      * budget already buys nothing by accident. A constructed shape that did the same would be worse,
      * because someone wrote it down on purpose and the next reader would trust it.
      */
-    private fun applyCriticalShapes(latest: MutableList<S>, pool: MutableList<S>, random: Random) {
+    private fun applyCriticalShapes(
+        latest: MutableList<S>,
+        words: MutableList<List<String>>,
+        pool: MutableList<Tracked<S>>,
+        random: Random,
+    ) {
         for (shape in criticalShapes) {
             for (opName in shape) {
                 val op = alphabet.firstOrNull { it.name == opName }
@@ -252,7 +388,8 @@ public class CrdtConvergenceHarness<S : Quilted<S>>(
                 val after = op.apply(before, 0, random)
                 check(after != before) { criticalShapeNoOpFailure(shape, op, before) }
                 latest[0] = after
-                pool += after
+                words[0] = words[0] + op.name
+                pool += Tracked(after, provenance(0, words[0]))
             }
         }
     }
@@ -266,6 +403,59 @@ public class CrdtConvergenceHarness<S : Quilted<S>>(
 
     private fun pick(random: Random): LatticeOp<S> =
         if (alphabet.size == 1) alphabet[0] else alphabet[random.nextInt(alphabet.size)]
+
+    /**
+     * Every word of [length] over the alphabet's indices, in lexicographic order, reusing one
+     * `IntArray` — an odometer. Lexicographic order is not an aesthetic choice: with
+     * [runExhaustiveSmall]'s outer loop over lengths it makes the enumeration breadth-first, and
+     * breadth-first is the entire basis of the minimality claim.
+     */
+    private fun forEachWordOfLength(length: Int, action: (IntArray) -> Unit) {
+        val word = IntArray(length)
+        while (true) {
+            action(word)
+            var i = length - 1
+            while (i >= 0) {
+                word[i]++
+                if (word[i] < alphabet.size) break
+                word[i] = 0
+                i--
+            }
+            if (i < 0) return
+        }
+    }
+
+    /** Words of length `1..length` over this alphabet: `Σ |A|ⁿ`. */
+    private fun wordsUpTo(length: Int): Int =
+        (1..length).sumOf { n -> intPow(alphabet.size, n) }
+
+    /**
+     * Ordered triples the exhaustive pass would check at bound [length] — the real cost unit, since
+     * a word of length `n` yields a pool of `n + 1` states and therefore `(n + 1)³` triples.
+     */
+    private fun triplesUpTo(length: Int): Long =
+        (1..length).sumOf { n -> intPow(alphabet.size, n).toLong() * (n + 1) * (n + 1) * (n + 1) }
+
+    private fun intPow(base: Int, exponent: Int): Int {
+        var result = 1
+        repeat(exponent) { result *= base }
+        return result
+    }
+
+    /**
+     * The bound [runExhaustiveSmall] actually uses: [EXHAUSTIVE_WORD_LENGTH], reduced to the
+     * largest **complete** length this alphabet can afford under [EXHAUSTIVE_TRIPLE_BUDGET].
+     *
+     * Reduced by whole lengths, never truncated part-way through one. A partial length would
+     * silently weaken the minimality claim to "shortest among the words we happened to reach",
+     * which is the kind of caveat nobody carries forward; a complete length keeps it exact —
+     * *shortest, full stop, up to this length*.
+     */
+    private val exhaustiveWordLength: Int =
+        (EXHAUSTIVE_WORD_LENGTH downTo 2).firstOrNull { triplesUpTo(it) <= EXHAUSTIVE_TRIPLE_BUDGET } ?: 1
+
+    /** One pool state, plus the word that built it. */
+    private class Tracked<S>(val state: S, val provenance: String)
 
     private fun buildReplicas(random: Random): List<S> =
         List(replicaCount) { r ->
@@ -322,5 +512,56 @@ public class CrdtConvergenceHarness<S : Quilted<S>>(
 
         /** Name of the synthetic op wrapping a raw [OperationGenerator]. */
         const val UNDECLARED_OP = "undeclared"
+
+        /**
+         * Longest word `runExhaustiveSmall` will spell. **Raising this is the obvious future
+         * mistake**, so the curve is here rather than in a design doc nobody opens.
+         *
+         * A green run — the everyday case — must enumerate *everything*, so it pays the full
+         * `Σ |A|ⁿ` words and `Σ |A|ⁿ(n+1)³` triples. Finding a counterexample is cheap because the
+         * search exits at it; **proving absence is what costs, and that is what runs every day.**
+         * Measured on the `ORMap` binding over a three-op alphabet:
+         *
+         * | L | words | JVM | wasmJs | macosArm64 |
+         * |---|---|---|---|---|
+         * | 3 | 39 | 25 ms | 9.9 ms | — |
+         * | 4 | 120 | 45 ms | 59 ms | **364 ms** |
+         * | 5 | 363 | 165 ms | 313 ms | — |
+         * | 6 | 1,092 | — | — | **15.2 s** |
+         * | 7 | 3,279 | — | — | **65 s** |
+         * | 8 | 9,840 | — | — | **193 s** |
+         *
+         * 4 is the right number because the shape this suite exists for — assert, retire,
+         * re-assert — is **three** ops long, so 4 carries one op of headroom over the deepest bug
+         * anyone has needed to reach here. 6 would cost four minutes on Kotlin/Native alone, and
+         * Kotlin/Native is where this module's test budget lands.
+         */
+        const val EXHAUSTIVE_WORD_LENGTH = 4
+
+        /**
+         * Ceiling on ordered triples one binding's exhaustive pass may check, which reduces
+         * [EXHAUSTIVE_WORD_LENGTH] for a wide alphabet.
+         *
+         * **Word length is not the cost; `|A|ᴸ` is**, and the table above was measured at `|A| = 3`.
+         * The live bindings run 1 to 6 ops, and at `L = 4` that spans 12,120 triples (`|A| = 3`) to
+         * **176,844** (`JsonCrdt`, `|A| = 6`) — a 15× spread from a constant that looks fixed. Left
+         * uncapped, one binding's tenth op would quietly cost more than the whole randomised suite.
+         *
+         * The value is the `|A| = 3, L = 4` cost — the configuration the table above was taken on —
+         * rounded up: a three-op alphabet gets the full bound, and a wider one drops to the longest
+         * length it can still enumerate *completely*. Every live alphabet keeps `L ≥ 3`, which is
+         * the length the assert/retire/re-assert shape needs, so no binding loses the shape it
+         * exists to catch.
+         */
+        const val EXHAUSTIVE_TRIPLE_BUDGET = 15_000L
+
+        /**
+         * The one seed every exhaustive word is walked under.
+         *
+         * Fixed rather than varied so that a word **is** the repro: an op that draws its key from
+         * the stream lands identically each time the same word is walked, and a reader can replay
+         * the reported counterexample without also being told a trial number.
+         */
+        const val EXHAUSTIVE_SEED = 0L
     }
 }

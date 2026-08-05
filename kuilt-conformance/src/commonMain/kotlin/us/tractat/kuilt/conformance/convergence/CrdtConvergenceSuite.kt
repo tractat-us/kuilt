@@ -68,4 +68,30 @@ public abstract class CrdtConvergenceSuite<S : Quilted<S>> {
     public fun associativeJoinLawsHoldOverUpperSeeds() {
         newHarness().runAssociativeLawsSeeds(8L..15L)
     }
+
+    /**
+     * The same two laws over **every short word** the binding's alphabet can spell — and, when one
+     * of them breaks, the shortest word that breaks it.
+     *
+     * The two seed-ranged tests above search *wide*: three replicas, gossip, a fourteen-state pool,
+     * sixteen seeds. They are good at finding that something is wrong and bad at saying what.
+     * A red there hands you three states out of a pool of fourteen, reached by a draw order you
+     * have to re-derive in your head from a seed. This test searches *narrow and complete*: one
+     * replica, every word of length 1..L, in length order — so the first word that fails is the
+     * shortest word that can, and the failure prints it in the binding's own op names.
+     *
+     * That pairing is deliberate, and it is what a property-based library's shrinker was doing for
+     * the JVM-only suite this one replaces. A shrinker narrows *one* failure it happened to find,
+     * to a locally minimal synthetic operand list. Enumerating short words instead gives the
+     * **globally** shortest reachable trajectory, and gives it as a word that reproduces on its own.
+     * See [CrdtConvergenceHarness.runExhaustiveSmall].
+     *
+     * It is cheap for the same reason it is shallow — it only proves the laws over words of a few
+     * ops, which is why it does not replace the seed-ranged pair. Neither subsumes the other: this
+     * one is exhaustive but small, those are deep but sampled.
+     */
+    @Test
+    public fun associativeJoinLawsHoldOverEveryShortWord() {
+        newHarness().runExhaustiveSmall()
+    }
 }
