@@ -1,5 +1,3 @@
-import org.gradle.api.artifacts.component.ModuleComponentIdentifier
-
 plugins {
     id("kuilt.kmp-library")
     alias(libs.plugins.kotlinSerialization)
@@ -18,10 +16,6 @@ kotlin {
             implementation(libs.kotlinx.serialization.cbor)
         }
         jvmTest.dependencies {
-            // jqwik property-based / stateful testing (JVM-only; JUnit Platform)
-            implementation(libs.jqwik)
-            runtimeOnly(libs.junit.vintage.engine)
-            runtimeOnly(libs.junit.platform.launcher)
             // SLF4J backend for kotlin-logging on JVM
             runtimeOnly(libs.logback)
         }
@@ -32,27 +26,6 @@ kotlin {
             // whole crdt suite once any logger.* call fires (raft issue #222).
             runtimeOnly(libs.logback)
         }
-    }
-}
-
-// Switch jvmTest to the JUnit Platform so jqwik properties are discovered.
-tasks.named<Test>("jvmTest") {
-    useJUnitPlatform()
-}
-
-// kuilt-conformance ships its conformance suites in MAIN bound to kotlin-test-junit
-// (JUnit4), but this module runs jvmTest on the JUnit Platform (jqwik), which otherwise
-// pulls kotlin-test-junit5. Both provide the `kotlin-test-framework-impl` capability,
-// so pulling kuilt-conformance into commonTest creates a capability conflict. Resolve it
-// to the JUnit4 variant: junit-vintage-engine (already a jvmTest runtime dep) runs those
-// kotlin-test tests on the Platform alongside jqwik. junit5 is not selected because no
-// JUnit Jupiter engine is on the test runtime — only vintage.
-configurations.configureEach {
-    resolutionStrategy.capabilitiesResolution.withCapability(
-        "org.jetbrains.kotlin:kotlin-test-framework-impl",
-    ) {
-        candidates.firstOrNull { (it.id as? ModuleComponentIdentifier)?.module == "kotlin-test-junit" }
-            ?.let { select(it) }
     }
 }
 

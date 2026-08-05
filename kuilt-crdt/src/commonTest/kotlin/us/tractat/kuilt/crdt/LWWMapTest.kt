@@ -156,16 +156,18 @@ class LWWMapTest {
     // `(x ⊔ y) ⊔ z == x ⊔ (y ⊔ z)`: what lets a peer absorb whatever it is handed in whatever
     // grouping the network happens to deliver.
     //
-    // `LWWMapLawsPropertyTest` (jvmTest) already asserts this law and already passes — but it is
-    // green over a region that cannot contain a counterexample, so it is not evidence. Its provider
-    // folds every generated state independently from `empty()`, so no operand is ever a **causal
-    // ancestor** of another; and it derives each value deterministically from `(replica, timestamp,
-    // key)`, so a repeated tag always carries the same write. `ORMapLawsPropertyTest` is green in
-    // exactly the same way on an `ORMap` that is provably non-associative (#2086), where the
-    // counterexample is a three-state ancestor chain — `a`, `a.remove(k)`, `a.remove(k).put(k, …)`
-    // — that its generator cannot construct. Seven of the fourteen property suites share the design.
+    // The law is asserted for every type by `:kuilt-conformance`'s shared randomised suite. What
+    // these tests add is the region an **independent-states** generator cannot contain a
+    // counterexample in — the design the JVM-only jqwik surface deleted in #2101 used throughout,
+    // and the reason it was not evidence. That generator folded every state independently from
+    // `empty()`, so no operand was ever a **causal ancestor** of another; and it derived each value
+    // deterministically from `(replica, timestamp, key)`, so a repeated tag always carried the same
+    // write. Its `ORMap` sibling was green in exactly the same way on an `ORMap` that is provably
+    // non-associative (#2086), where the counterexample is a three-state ancestor chain — `a`,
+    // `a.remove(k)`, `a.remove(k).put(k, …)` — that the generator could not construct. Seven of its
+    // fourteen suites shared the design.
     //
-    // So these tests deliberately cover what that one cannot: ancestor chains (below), reused tags,
+    // So these tests deliberately cover what that design cannot: ancestor chains (below), reused tags,
     // and writes that move a replica DOWN the lattice (#2087). Each triple resolves through a
     // mechanism that could plausibly be order-sensitive, and each asserts on the encoded form as
     // well as on `equals`, because #1955's anti-entropy gate compares state *hashes*: two bracketings
@@ -282,7 +284,7 @@ class LWWMapTest {
      * `start`, `start.removeWhole(k)`, and `start.removeWhole(k).setWhole(k, …)` — each state derived from the
      * previous one, all six orderings, every combination of three timestamps and three replicas.
      *
-     * This is the region `LWWMapLawsPropertyTest` structurally cannot reach, and it is where
+     * This is the region an independent-states generator structurally cannot reach, and it is where
      * `ORMap`'s violation lives. [LWWMap] has no violation to find here for a structural reason:
      * unlike `ORMap`, it carries **no causal context** — a state is exhaustively described by its
      * per-key `(timestamp, origin, value)` cells and records nothing about where it came from — so a
@@ -644,7 +646,7 @@ class LWWMapTest {
 
         // ── ancestor-chain search ────────────────────────────────────────────────
         //
-        // The region `LWWMapLawsPropertyTest` cannot generate: states derived from one another
+        // The region an independent-states generator cannot produce: states derived from one another
         // rather than folded independently from `empty()`.
 
         /** Every `(timestamp, replica)` the chain search walks each of its three positions over. */

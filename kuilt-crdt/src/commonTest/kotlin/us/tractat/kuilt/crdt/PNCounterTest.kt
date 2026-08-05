@@ -1,6 +1,7 @@
 package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.json.Json
+import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -80,5 +81,42 @@ class PNCounterTest {
         val pn = zero.piece(zero.increment(a, 4L)).piece(PNCounter.ZERO.decrement(b, 1L))
         val encoded = Json.encodeToString(PNCounter.serializer(), pn)
         assertEquals(pn, Json.decodeFromString(PNCounter.serializer(), encoded))
+    }
+
+    /**
+     * The defining invariant, over states reached by an interleaved run of increments and
+     * decrements across three replicas: [PNCounter.value] is the total incremented minus the
+     * total decremented, with no floor and no clamping anywhere in between.
+     *
+     * Re-homed from the deleted JVM-only jqwik surface (#2101) so it runs on every target. It
+     * holds by construction today — `value` *is* `inc.value - dec.value` — which is exactly what
+     * makes it worth pinning: the day either side grows a cache, a compaction, or a reset the
+     * two definitions can part company silently.
+     */
+    @Test
+    fun valueEqualsIncMinusDec() {
+        val replicas = listOf(a, b, ReplicaId("C"))
+        for (seed in 0 until VALUE_INVARIANT_SEEDS) {
+            val random = Random(seed)
+            val deltas = List(random.nextInt(0, MAX_OPS + 1)) { random.nextInt(0, MAX_DELTA).toLong() }
+            var acc = PNCounter.ZERO
+            deltas.forEachIndexed { i, delta ->
+                val replica = replicas[i % replicas.size]
+                acc =
+                    if (i % 2 == 0) acc.piece(acc.increment(replica, delta + 1L))
+                    else acc.piece(acc.decrement(replica, delta + 1L))
+            }
+            assertEquals(
+                acc.totalIncrement - acc.totalDecrement,
+                acc.value,
+                "seed $seed: value invariant failed after ${deltas.size} ops",
+            )
+        }
+    }
+
+    private companion object {
+        const val VALUE_INVARIANT_SEEDS = 64
+        const val MAX_OPS = 6
+        const val MAX_DELTA = 31
     }
 }

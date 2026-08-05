@@ -56,9 +56,9 @@ class MVRegisterTest {
      *
      * Each write mints a fresh dot and drops every dot it has observed, so `second` carries a
      * retirement of `first`'s dot while `first` still holds it live — the "one operand retired what
-     * another still holds" position that decides whether a join is associative. `MVRegisterLawsPropertyTest`
-     * cannot reach it: it draws its three states from three disjoint single-replica namespaces, so no
-     * dot it generates is ever superseded across the triple.
+     * another still holds" position that decides whether a join is associative. An independent-states
+     * generator cannot reach it: drawing three states from three disjoint single-replica namespaces
+     * means no dot it generates is ever superseded across the triple.
      */
     @Test
     fun pieceIsAssociativeAcrossAChainOfWritesOnOneReplica() {
@@ -197,13 +197,13 @@ class MVRegisterTest {
     /**
      * The general law, over **causally related** trajectories rather than independent states.
      *
-     * This is the coverage the surface that already exists cannot give. `MVRegisterLawsPropertyTest` (jvmTest,
-     * jqwik) folds each of its three states independently from `empty()` and pins each to its own
-     * replica, so no state is ever a causal ancestor of another and no dot is ever superseded across
-     * the triple. Its sibling `ORMapLawsPropertyTest` is built the same way and passes on an `ORMap`
-     * that *is* non-associative, so that design is not evidence of anything. Here every snapshot
-     * comes from one shared history of writes and merges, dots are unique by construction, and every
-     * ordered triple of snapshots is checked in both groupings.
+     * This is the coverage an independent-states generator cannot give. The JVM-only jqwik surface
+     * deleted in #2101 folded each of its three operands independently from `empty()` and pinned
+     * each to its own replica, so no state was ever a causal ancestor of another and no dot was ever
+     * superseded across the triple. Its `ORMap` sibling was built the same way and passed on an
+     * `ORMap` that *is* non-associative (#2086), so that design was not evidence of anything. Here
+     * every snapshot comes from one shared history of writes and merges, dots are unique by
+     * construction, and every ordered triple of snapshots is checked in both groupings.
      *
      * Values are globally unique tokens, so the live value set is in bijection with the live dot set
      * — which is what lets the vacuity guards below count retirements without reaching inside the
