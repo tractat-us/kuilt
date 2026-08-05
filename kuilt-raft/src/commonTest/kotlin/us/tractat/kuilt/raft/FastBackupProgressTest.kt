@@ -24,17 +24,38 @@ import kotlin.time.Duration.Companion.seconds
  * `conflictTerm = null, conflictIndex = lastLogIndex + 1` rather than synthesising a term from the
  * follower's own last entry.
  *
- * ## Why the obvious method does not work
+ * ## The measured finding: the guard no longer bears the liveness property
  *
- * Every test here drives the backup loop through **both** real engines with the real transport, but
+ * #2067 assumed mutating this guard reproduces #1246's livelock, and that a livelock **hangs** the
+ * virtual-time harness rather than reddening it. Measurement says the premise is stale.
+ * `nextIndexAfterFailure` clamps its result to `1..currentNextIndex - 1` (#1829's *exclusive*
+ * ceiling), which forbids the fixed point on the **leader** side no matter what the follower
+ * replies. So under the mutation the backup loop still terminates — it just **crawls** one index per
+ * round instead of jumping the whole gap. Receipts, all against the mutation
+ * `conflictTerm = state.log.lastOrNull { it.index <= m.prevLogIndex }?.term`:
+ *
+ * | Candidate property | Verdict |
+ * |---|---|
+ * | eventual convergence over a live network ([followerConvergesEndToEndOverTheLiveNetwork]) | **PASSES**, 0.414 s — no hang, no red |
+ * | strict progress per round ([everyBackupRoundProbesAStrictlyLowerIndex], #2067's option 1) | **PASSES**, 0.056 s — held by #1829's clamp, not by this guard |
+ * | frame inequality across rounds (#2067's option 2) | implied by the row above: strictly decreasing `prevLogIndex` already makes consecutive frames unequal, so it passes too |
+ * | **one-step gap closure** ([logTooShortRejectionClosesTheWholeGapInOneRound]) | **FAILS**, 0.507 s — `probes=[12, 11, …, 2] expected:<1> but was:<10>` |
+ * | responder value ([logTooShortRejectionReportsNoConflictTermAndPointsAtOurTail], option 3) | **FAILS**, 0.384 s — `conflictTerm=1`, expected `null` |
+ *
+ * What survives as this guard's *unique* contribution is therefore **§5.3 fast-backup efficiency**:
+ * one rejection round closes the whole gap. That property is bounded, terminating, and reddens fast.
+ *
+ * ## Why the loop is still pumped by hand
+ *
+ * Every test here drives the backup loop through **both** real engines over the real transport, but
  * delivery is **pumped by hand**: the `l → f` and `f → l` links are dropped in the network, so the
- * rejection ping-pong cannot self-sustain, and the test's own `for (round in 1..BUDGET)` is the
- * termination guarantee. That is the whole point — a live-cluster test of a liveness guard can only
- * observe "not yet", and under virtual time a zero-delay ping-pong freezes the scheduler at one
- * instant, so it HANGS instead of failing.
+ * rejection ping-pong cannot self-sustain, and the test's own `for (round in 1..ROUND_BUDGET)` is
+ * the termination guarantee. Termination is then a property of the *test*, not of the code under
+ * test — which is what #2067 asked for, and what keeps this method correct if #1829's clamp is ever
+ * relaxed or a future mutation reintroduces a genuine fixed point.
  *
  * `InMemoryRaftNetwork.recording` taps sends **before** the drop filter, so a dropped frame is still
- * observed; [pumpOneRound] re-encodes it and hand-delivers it with [InMemoryRaftNetwork.deliver],
+ * observed; [pumpBackupLoop] re-encodes it and hand-delivers it with [InMemoryRaftNetwork.deliver],
  * which bypasses the drop rules. Production code runs on both sides of every round.
  */
 private fun fastBackupConfig(): RaftConfig = RaftConfig(
@@ -122,10 +143,12 @@ internal class FastBackupProgressTest {
      * round, so the loop cannot have a fixed point.
      *
      * This is the property #2067 proposed as its best candidate, and measurement says it does **not**
-     * discriminate this guard: `nextIndexAfterFailure`'s `1..currentNextIndex - 1` clamp (#1829)
-     * enforces strict decrease on the *leader* side regardless of what the follower replies. Kept as
-     * an end-to-end pin of the liveness property across the composed pair — not as coverage of the
-     * `conflictTerm = null` guard.
+     * discriminate this guard: it **passes in 0.056 s under the mutation**, because
+     * `nextIndexAfterFailure`'s `1..currentNextIndex - 1` clamp (#1829) enforces strict decrease on
+     * the *leader* side regardless of what the follower replies. Kept as an end-to-end pin of the
+     * liveness property across the composed pair — not as coverage of the `conflictTerm = null`
+     * guard. #2067's option 2 (frame inequality) is strictly weaker still: strictly decreasing
+     * `prevLogIndex` already makes consecutive frames unequal, so it passes wherever this does.
      */
     @Test
     fun everyBackupRoundProbesAStrictlyLowerIndex() = raftRunTest {
@@ -204,9 +227,13 @@ internal class FastBackupProgressTest {
 
     /**
      * The same scenario with delivery left to the network — no pump, no round budget. Included to
-     * *measure* #2067's premise ("mutating the guard makes the test hang"), not because it is the
-     * recommended method: its termination is a property of the code under test, so a regression that
-     * reintroduces a fixed point wedges the harness instead of reddening.
+     * *measure* #2067's premise ("mutating the guard makes the test hang"): it **passes in 0.414 s
+     * under the mutation**, so the premise is stale as of #1829.
+     *
+     * **Recommended for deletion, not for shipping.** Its termination is a property of the code
+     * under test, so any future regression that does reintroduce a fixed point wedges the harness
+     * instead of reddening it — the shape this repo forbids. It earns its place here only as the
+     * artifact that refuted the premise.
      */
     @Test
     fun followerConvergesEndToEndOverTheLiveNetwork() = raftRunTest {
