@@ -926,7 +926,7 @@ internal class NwSeam(
         // this seam shares one ceiling, so — unlike a mesh of independently-framed links — there is no
         // subset that could still carry it, and the drop is whole rather than per link.
         if (oversizeOrNull(payload) != null) {
-            log.info { "nw.seam.broadcast.over-budget self=${selfId.value} payload=${payload.size}B budget=${maxFrameBytes}B → dropped (best-effort)" }
+            log.debug { "nw.seam.broadcast.over-budget self=${selfId.value} payload=${payload.size}B budget=${maxFrameBytes}B → dropped (best-effort)" }
             return
         }
         val targets = lock.withLock { registry.values.map { it.connId } }
