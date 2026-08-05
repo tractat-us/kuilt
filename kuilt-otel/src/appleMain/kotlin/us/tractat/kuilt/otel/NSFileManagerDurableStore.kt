@@ -7,6 +7,7 @@ import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
+import kotlinx.cinterop.toKString
 import kotlinx.cinterop.usePinned
 import kotlinx.cinterop.value
 import platform.Foundation.NSData
@@ -16,40 +17,47 @@ import platform.Foundation.create
 // NSData.writeToFile:options:error: lives in the NSExtendedData category, which
 // Kotlin/Native exposes as an extension function — hence the explicit import.
 import platform.Foundation.writeToFile
+import platform.posix.errno
 import platform.posix.memcpy
+import platform.posix.rename
+import platform.posix.strerror
 
 /**
  * A file-backed [DurableStore] for iOS and macOS backed by `NSFileManager`.
  *
- * It is **not** fully crash-safe today — see the known durability gap below.
- *
- * Each [StoreKey] maps to a single file under [directory]. Writes use a
+ * Each [StoreKey] maps to a single file under [directory]. Writes use an atomic
  * write-temp-then-rename strategy:
  *
  * 1. Write bytes to a sibling `.tmp` file via `NSData.writeToFile:options:error:`.
- * 2. Rename the temp file to the final name using
- *    `NSFileManager.moveItemAtPath:toPath:error:` — on Apple file systems this
- *    maps to a POSIX `rename(2)` syscall, which is atomic.
+ * 2. Replace the destination with the temp file using POSIX `rename(2)`, which
+ *    swaps the two directory entries atomically.
+ *
+ * The destination therefore always names *some* complete record: the previous one
+ * until the rename commits, the new one after. A crash before step 2 leaves only
+ * the `.tmp` file, which nothing reads; a crash after it leaves the new bytes on
+ * disk for the next [read]. There is no instant at which a previously committed
+ * record is absent.
+ *
+ * `rename(2)` rather than `NSFileManager.moveItemAtPath:toPath:error:` because
+ * the latter refuses to replace an existing destination, which forced an
+ * `removeItemAtPath(dest)` first — and *that* unlink was unconditional, so a
+ * rename which then failed (or a crash between the two) destroyed every committed
+ * record rather than leaving it stale (#2120). `replaceItemAtURL:…` is not an
+ * option either: it requires the destination to already exist, so it cannot serve
+ * a store whose first write has none.
  *
  * ## Failures carry their cause
  *
- * Every Foundation call here reports its `NSError`, and a thrown write failure
- * names the domain, code, localized description, the path, the byte count and
- * whether the parent directory exists. This is not incidental: these calls
- * previously all passed `error = null`, so a device whose writes began failing
- * threw `"atomic rename failed"` with **no cause at all** — no errno, no domain,
- * no code — which is why a field occurrence of the silent-death bug could not be
- * diagnosed from the device's own logs (#1860). Keep the causes wired.
- *
- * ## Known durability gap — the destination is unlinked before the rename (#2120)
- *
- * A crash after step 2 returns means the renamed file is on disk and the next
- * [read] returns the committed bytes. **Step 2 is not crash-safe, though:**
- * `moveItemAtPath` refuses to replace an existing file, so [write] calls
- * `removeItemAtPath(dest)` first. Between that unlink and the rename — or if the
- * rename merely returns `false` — there is no destination file at all, and every
- * previously committed record is gone rather than merely stale. Tracked in #2120;
- * the fix is a genuinely replacing write, not this remove-then-move pair.
+ * Every failure path here reports the underlying cause, and a thrown write failure
+ * names it alongside the path, the byte count and whether the parent directory
+ * exists. This is not incidental: these calls previously all passed `error = null`,
+ * so a device whose writes began failing threw `"atomic rename failed"` with **no
+ * cause at all** — no errno, no domain, no code — which is why a field occurrence
+ * of the silent-death bug could not be diagnosed from the device's own logs
+ * (#1860). Keep the causes wired. Step 1 reports its `NSError` (domain, code,
+ * localized description); step 2 reports `errno` and `strerror`, which is a
+ * *better* cause than the `NSError` it replaced — `moveItemAtPath` reported
+ * `NSCocoaErrorDomain` codes that flatten several distinct errnos into one.
  *
  * ## Directory
  *
@@ -84,7 +92,6 @@ public class NSFileManagerDurableStore(private val directory: String) : DurableS
         val directoryError = ensureDirectoryExists()
         val dest = filePath(key)
         val tmp = "$dest.tmp"
-        val fm = NSFileManager.defaultManager
         memScoped {
             // Step 1: write bytes to the temp file. NSData.writeToFile reports an
             // NSError; NSFileManager.createFileAtPath (which this replaces) returns
@@ -100,24 +107,22 @@ public class NSFileManagerDurableStore(private val directory: String) : DurableS
                         "directoryExists=${directoryExists()}",
                 )
             }
-            // Step 2: rename temp to dest. Remove dest first — moveItemAtPath fails
-            // rather than replacing an existing file. The remove is expected to fail
-            // on the first write (nothing to remove), so its error is only reported
-            // if the rename then also fails, where it is usually the explanation.
-            //
-            // This unlink-then-rename pair is NOT crash-safe: between the two there
-            // is no destination file, so a crash there loses every committed record
-            // rather than leaving the previous version. Tracked in #2120 — the fix
-            // is a replacing write, and is deliberately out of scope here.
-            val removeError = alloc<ObjCObjectVar<NSError?>>()
-            fm.removeItemAtPath(dest, error = removeError.ptr)
-            val moveError = alloc<ObjCObjectVar<NSError?>>()
-            if (!fm.moveItemAtPath(tmp, toPath = dest, error = moveError.ptr)) {
+            // Step 2: atomically replace dest with tmp. `rename(2)` swaps the two
+            // directory entries in one step, so the destination is never absent —
+            // it names the previous record until the instant it names the new one.
+            // Deliberately NOT moveItemAtPath: that refuses an existing destination,
+            // which is what forced an unconditional removeItemAtPath(dest) before
+            // it, and that unlink lost every committed record whenever the move
+            // then failed (#2120). On failure the destination is untouched and the
+            // temp file is left behind for the next write to overwrite.
+            if (rename(tmp, dest) != 0) {
+                val code = errno
                 error(
                     "NSFileManagerDurableStore: atomic rename failed for key=${key.name} " +
                         "from=$tmp to=$dest bytes=${bytes.size} " +
-                        "cause=${moveError.value.describe()} " +
-                        "priorRemove=${removeError.value.describe()}",
+                        "cause=errno=$code (${strerror(code)?.toKString() ?: "unknown"}) " +
+                        "directory=${directoryError.describe()} " +
+                        "directoryExists=${directoryExists()}",
                 )
             }
         }
