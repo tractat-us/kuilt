@@ -6,20 +6,50 @@ import us.tractat.kuilt.crdt.ORMap
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.piece
 
-// Fixed key pool forces concurrent put/remove collisions — exercises add-wins semantics
-// under every delivery permutation.
+/**
+ * The key the retire-and-re-assert shape is built on.
+ *
+ * A critical shape's ops have to agree on what they touch, so the three that form it pin this key
+ * rather than drawing one from `random`. The `-roam` variants keep the small random key pool that
+ * forces concurrent put/remove collisions across replicas — which is what exercises add-wins.
+ */
+private const val FOCUS_KEY = "k-0"
+
+private const val HIGH_COUNT = 4L
+private const val LOW_COUNT = 1L
+
 internal class ORMapConvergenceTest : CrdtConvergenceSuite<ORMap<String, GCounter>>() {
     override fun newHarness(): CrdtConvergenceHarness<ORMap<String, GCounter>> = CrdtConvergenceHarness(
         initial = ORMap.empty(),
-        gen = OperationGenerator { state, replicaIndex, random ->
-            val r = ReplicaId("R$replicaIndex")
-            val key = "k-${random.nextInt(0, 3)}"
-            when (random.nextInt(0, 3)) {
-                0 -> state.piece { it.put(r, key, GCounter.of(r to 1L)) }
-                1 -> state.piece { it.remove(key) }
-                else -> state.piece { it.put(r, key, GCounter.of(r to random.nextLong(1L, 4L))) }
-            }
-        },
+        // Declaration order is load-bearing: `defaultCriticalShapes` takes the first two ASSERT ops
+        // and the first RETIRE, so this alphabet's default shape is `put-high · remove · put-low`
+        // — the counterexample #2086 needs, in the only order that can see it.
+        //
+        // `put-low` must be the SECOND assert, not the first. A `GCounter` join takes the max per
+        // author, so re-asserting 4 after retiring 1 lands on `{R0:4}` whether the retired
+        // contribution survived the join or not: measured 0 violations against a lattice provably
+        // broken in exactly this way. Re-asserting 1 after retiring 4 separates the two — `{R0:1}`
+        // if the retirement was honoured, `{R0:4}` if it was not — and finds it on every seed.
+        alphabet = listOf(
+            LatticeOp("put-high", OpKind.ASSERT) { state, replicaIndex, _ ->
+                val r = ReplicaId("R$replicaIndex")
+                state.piece { it.put(r, FOCUS_KEY, GCounter.of(r to HIGH_COUNT)) }
+            },
+            LatticeOp("put-low", OpKind.ASSERT) { state, replicaIndex, _ ->
+                val r = ReplicaId("R$replicaIndex")
+                state.piece { it.put(r, FOCUS_KEY, GCounter.of(r to LOW_COUNT)) }
+            },
+            LatticeOp("put-roam", OpKind.ASSERT) { state, replicaIndex, random ->
+                val r = ReplicaId("R$replicaIndex")
+                state.piece { it.put(r, "k-${random.nextInt(0, 3)}", GCounter.of(r to random.nextLong(1L, 4L))) }
+            },
+            LatticeOp("remove", OpKind.RETIRE) { state, _, _ ->
+                state.piece { it.remove(FOCUS_KEY) }
+            },
+            LatticeOp("remove-roam", OpKind.RETIRE) { state, _, random ->
+                state.piece { it.remove("k-${random.nextInt(0, 3)}") }
+            },
+        ),
         serializer = ORMap.serializer(String.serializer(), GCounter.serializer()),
         replicaCount = 3,
         opsPerReplica = 8,

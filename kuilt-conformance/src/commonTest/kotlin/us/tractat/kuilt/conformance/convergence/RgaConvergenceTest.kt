@@ -9,15 +9,25 @@ import us.tractat.kuilt.crdt.Rga
 internal class RgaConvergenceTest : CrdtConvergenceSuite<Rga<String>>() {
     override fun newHarness(): CrdtConvergenceHarness<Rga<String>> = CrdtConvergenceHarness(
         initial = Rga.empty(),
-        gen = OperationGenerator { state, replicaIndex, random ->
-            val replica = ReplicaId("R$replicaIndex")
-            if (state.size > 0 && random.nextInt(4) == 0) {
-                state.removeAt(random.nextInt(state.size))?.first ?: state
-            } else {
+        // `insert-head` / `remove-head` both pin index 0, so the derived shape
+        // `insert-head · remove-head · insert-roam` retires exactly the element it just inserted.
+        // The roaming pair keeps the random-position behaviour that forces concurrent
+        // same-predecessor siblings.
+        alphabet = listOf(
+            LatticeOp("insert-head", OpKind.ASSERT) { state, replicaIndex, random ->
+                state.insertAt(ReplicaId("R$replicaIndex"), 0, "v$replicaIndex.${random.nextInt(100)}").first
+            },
+            LatticeOp("insert-roam", OpKind.ASSERT) { state, replicaIndex, random ->
                 val index = random.nextInt(state.size + 1)
-                state.insertAt(replica, index, "v$replicaIndex.${random.nextInt(100)}").first
-            }
-        },
+                state.insertAt(ReplicaId("R$replicaIndex"), index, "v$replicaIndex.${random.nextInt(100)}").first
+            },
+            LatticeOp("remove-head", OpKind.RETIRE) { state, _, _ ->
+                if (state.size > 0) state.removeAt(0)?.first ?: state else state
+            },
+            LatticeOp("remove-roam", OpKind.RETIRE) { state, _, random ->
+                if (state.size > 0) state.removeAt(random.nextInt(state.size))?.first ?: state else state
+            },
+        ),
         serializer = Rga.wireSerializer(String.serializer()),
         replicaCount = 3,
         opsPerReplica = 8,
