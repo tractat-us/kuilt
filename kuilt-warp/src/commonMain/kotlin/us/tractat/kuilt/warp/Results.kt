@@ -3,6 +3,7 @@ package us.tractat.kuilt.warp
 import us.tractat.kuilt.crdt.LWWRegister
 import us.tractat.kuilt.crdt.ORMap
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.piece
 
 /**
  * A distributed results board — the dedup backstop for `:kuilt-warp`.
@@ -62,7 +63,7 @@ public class Results<TaskId, Result> private constructor(
     ): Results<TaskId, Result> {
         val register = map[taskId]?.set(replica, timestamp, result)
             ?: LWWRegister.empty<Result>().set(replica, timestamp, result)
-        return Results(map.put(replica, taskId, register))
+        return Results(map.piece(map.put(replica, taskId, register)))
     }
 
     /**

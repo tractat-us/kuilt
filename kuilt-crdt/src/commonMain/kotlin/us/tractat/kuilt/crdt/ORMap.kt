@@ -89,7 +89,10 @@ public class ORMapEntry<S : Quilted<S>>(
  * is what makes [piece] associative — see [ORMapEntry] for why an entry-level value cannot be
  * (#2086).
  *
- * [putDelta]/[removeDelta] return just the change, which is what belongs on the wire.
+ * **Every mutator returns the change rather than a new map**: [put] and [remove] hand back a
+ * [Patch] holding just the key they touched, which is what belongs on the wire. [piece] absorbs
+ * one — and is also how a caller who wants the resulting whole map gets one:
+ * `map.piece(map.put(replica, key, value))`.
  *
  * **Serialization.** An entry keys its contributions by [Dot], so plain JSON needs
  * `Json { allowStructuredMapKeys = true }` — the same flag [MVRegister] and [ResettableCounter]
@@ -109,7 +112,9 @@ public class ORMap<K, S : Quilted<S>> private constructor(
     public operator fun get(key: K): S? = causal.store.entries[key]?.value
 
     /**
-     * Put [value] under [key], minting a fresh add-tag on behalf of [replica].
+     * Put [value] under [key], minting a fresh add-tag on behalf of [replica] — and return **the
+     * change**: one key, the value you supplied, and a short causal note, rather than the whole
+     * new map.
      *
      * A put is **additive, not destructive**, for the value lattice: reading [key] back afterwards
      * gives the old value `piece`d with [value]. What the put replaces is [replica]'s *own*
@@ -117,40 +122,17 @@ public class ORMap<K, S : Quilted<S>> private constructor(
      * never accumulates more than one tag per key. Tags minted by other replicas are left alone;
      * retiring those is [remove]'s job, and taking them here would silently discard a peer's
      * contribution that nobody asked to drop.
-     */
-    public fun put(replica: ReplicaId, key: K, value: S): ORMap<K, S> {
-        val dot = causal.context.nextDot(replica)
-        val existing = causal.store.entries[key]?.contributions.orEmpty()
-        val newEntry = ORMapEntry(
-            existing.filterKeys { it.replica != replica } + (dot to foldOwn(existing, replica, value)),
-        )
-        return ORMap(
-            Causal(
-                DotMap(causal.store.entries + (key to newEntry)),
-                causal.context.add(dot),
-            ),
-        )
-    }
-
-    /** Remove [key]: drop its current tags. Context retains them — propagates on merge. */
-    public fun remove(key: K): ORMap<K, S> {
-        if (key !in causal.store.entries) return this
-        return ORMap(Causal(DotMap(causal.store.entries - key), causal.context))
-    }
-
-    /**
-     * The **change** [put] would make, on its own — one key, the value you supplied, and a short
-     * causal note — rather than the whole new map.
      *
-     * This is what to put on the wire. A replicator broadcasts a patch's delta verbatim, so
-     * `Patch(map.put(…))` ships every key *and every key's value* on every write, at a cost that
-     * grows with the map; this frame's size does not depend on how large the map is. The idiom is
-     * `quilter.mutate { it.putDelta(replica, key, value) }` — read-modify-write inside the
-     * replicator's own lock.
+     * This is what to put on the wire. A replicator broadcasts a patch's delta verbatim, so a
+     * mutator that handed back the new map would ship every key *and every key's value* on every
+     * write, at a cost that grows with the map; this frame's size does not depend on how large the
+     * map is. The idiom is `quilter.mutate { it.put(replica, key, value) }` — read-modify-write
+     * inside the replicator's own lock. To hold the resulting map locally, absorb the patch:
+     * `map.piece(map.put(…))`.
      *
      * A delta is itself an [ORMap], so a peer absorbs it with the ordinary [piece] join, in any
      * order, with any repeats, and lands on a state that encodes byte-for-byte identically to the
-     * sender's [put] result. Nothing has to be buffered or delivered in causal order.
+     * author's own. Nothing has to be buffered or delivered in causal order.
      *
      * **The delta carries [value], plus whatever this replica has already contributed to the key —
      * never the whole stored value.** The frame is flat in the size of the map and flat in the size
@@ -172,25 +154,54 @@ public class ORMap<K, S : Quilted<S>> private constructor(
      * and so does exactly this delta's contribution, in either order and on every peer, because the
      * remove can only retire tags it observed and this one is not among them (#2086).
      *
-     * @sample us.tractat.kuilt.crdt.sampleORMapDelta
+     * @sample us.tractat.kuilt.crdt.sampleORMap
      */
-    public fun putDelta(replica: ReplicaId, key: K, value: S): Patch<ORMap<K, S>> =
+    public fun put(replica: ReplicaId, key: K, value: S): Patch<ORMap<K, S>> =
         putPatch(replica, key, value)
 
     /**
-     * The **change** [remove] would make, on its own: the tags currently on [key], retired, and
-     * nothing else. Ship this rather than `Patch(map.remove(…))`, which is the whole map.
+     * Remove [key] — and return **the change**: the tags currently on it, retired, and nothing
+     * else. Absorbing that patch drops the key; the retired tags stay witnessed, so the removal
+     * propagates on merge. To hold the resulting map locally, `map.piece(map.remove(…))`.
      *
      * The context carries exactly [key]'s live tags — never the sender's full history. A delta that
      * carried the whole context would be indistinguishable from *"I have removed every key I ever
      * saw"*, and joining it would empty the receiver's map.
      *
      * Removing a key that is absent yields the lattice identity — an empty store and an empty
-     * context — so absorbing it changes nothing, matching [remove]'s own no-op.
+     * context — so absorbing it changes nothing.
      *
-     * @sample us.tractat.kuilt.crdt.sampleORMapDelta
+     * @sample us.tractat.kuilt.crdt.sampleORMap
      */
-    public fun removeDelta(key: K): Patch<ORMap<K, S>> = removePatch(key)
+    public fun remove(key: K): Patch<ORMap<K, S>> = removePatch(key)
+
+    /**
+     * The whole map a [put] produces — the reference semantics [put]'s delta must reproduce under
+     * [piece], byte for byte.
+     *
+     * Deliberately **not public**: it is the O(map) spelling this type exists to keep off the wire,
+     * and the only caller that needs it is `ORMapDeltaMutatorLawTest`, which cannot state the
+     * delta-mutator law without an independent reference to compare against.
+     */
+    internal fun putWhole(replica: ReplicaId, key: K, value: S): ORMap<K, S> {
+        val dot = causal.context.nextDot(replica)
+        val existing = causal.store.entries[key]?.contributions.orEmpty()
+        val newEntry = ORMapEntry(
+            existing.filterKeys { it.replica != replica } + (dot to foldOwn(existing, replica, value)),
+        )
+        return ORMap(
+            Causal(
+                DotMap(causal.store.entries + (key to newEntry)),
+                causal.context.add(dot),
+            ),
+        )
+    }
+
+    /** The whole map a [remove] produces. Internal for the same reason as [putWhole]. */
+    internal fun removeWhole(key: K): ORMap<K, S> {
+        if (key !in causal.store.entries) return this
+        return ORMap(Causal(DotMap(causal.store.entries - key), causal.context))
+    }
 
     private fun putPatch(replica: ReplicaId, key: K, value: S): Patch<ORMap<K, S>> {
         val dot = causal.context.nextDot(replica)
@@ -208,9 +219,9 @@ public class ORMap<K, S : Quilted<S>> private constructor(
      *
      * This is what makes a put additive while still leaving the replica one tag: the fresh tag
      * carries its own history, so superseding the older tags loses nothing. It is also why
-     * [putDelta] can carry this — and must: the dot the delta names and the dot [put] mints have to
-     * agree on their value, or a peer that took the delta and a peer that took the whole state
-     * would hold the same dot with two different payloads.
+     * [put]'s delta can carry this — and must: the dot the delta names and the dot [putWhole]
+     * mints have to agree on their value, or a peer that took the delta and a peer that took the
+     * whole state would hold the same dot with two different payloads.
      */
     private fun foldOwn(existing: Map<Dot, S>, replica: ReplicaId, value: S): S =
         existing.keys.filter { it.replica == replica }.sorted()
@@ -224,7 +235,7 @@ public class ORMap<K, S : Quilted<S>> private constructor(
      * The map's presence tags for [key] — not the nested value's dots, which live in their own
      * space. Internal: the dot layer is an implementation detail, but tests need it to prove a
      * generated state actually carries *concurrent* tags on a key. A map grown by one replica never
-     * has more than one tag per key, so a generator built that way makes [putDelta]'s
+     * has more than one tag per key, so a generator built that way makes [put]'s
      * superseded-tags term a singleton every time and never exercises the case it exists for —
      * another replica's tag travelling with the supersession.
      */

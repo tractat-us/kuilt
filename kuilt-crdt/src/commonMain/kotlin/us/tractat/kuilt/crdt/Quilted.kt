@@ -23,14 +23,26 @@ import kotlin.jvm.JvmInline
  * patches.
  *
  * **Two mutator shapes, one absorption path.** A mutator may return either a
- * [Patch] (the minimal lattice fragment for the change — counters do this, e.g.
- * [BoundedCounter.trySpend]) or a full new state `S` (registers and maps do
- * this, e.g. `LWWRegister.set`). Both are absorbed by the identical [piece]
- * join: a `Patch` is applied with `piece(patch)`, and a returned full state is
- * itself a valid join argument (`a.piece(newState)`). The register/map form is
- * not a second mechanism — for an LWW register the whole state *is* a minimal
- * delta (one tagged cell); the `Patch` wrapper is reserved for CRDTs whose
- * delta is a strict, non-obvious subset of their state.
+ * [Patch] (the minimal lattice fragment for the change — [BoundedCounter.trySpend],
+ * `ORSet.add`, `ORMap.put`, `LWWMap.set`) or a full new state `S` ([LWWRegister.set],
+ * [Gauge.observe]). Both are absorbed by the identical [piece] join: a `Patch` is
+ * applied with `piece(patch)`, and a returned full state is itself a valid join
+ * argument (`a.piece(newState)`).
+ *
+ * **Return a full state only when the whole state genuinely *is* the minimal
+ * delta.** That is true of a single-cell type — an [LWWRegister] holds one tagged
+ * value, so there is nothing smaller to send. It is **not** true of a collection,
+ * however single-celled its per-key merge looks: an `ORSet` add touches one
+ * element, an `ORMap` put one key, an `LWWMap` set one cell, and returning the
+ * container would put every *other* element on the wire too. Those three return a
+ * [Patch] for exactly that reason, and their deltas are pinned byte-for-byte by
+ * the delta-mutator law `X.piece(mᵟ(X)) == m(X)` (#2044).
+ *
+ * An earlier version of this paragraph offered *registers and maps* together as
+ * the family whose whole state is already minimal. The maps were never in it, and
+ * that sentence is a large part of why every write shipped O(state) bytes for six
+ * months without anyone looking. When adding a type here, ask what one write
+ * costs on a large instance — not what the merge function looks like.
  *
  * @param S the self-type — implementors write `class Foo : Quilted<Foo>`.
  */
@@ -67,3 +79,23 @@ public value class Patch<S : Quilted<S>>(public val delta: S)
 
 /** Absorb a [patch] into this state via [Quilted.piece]. */
 public fun <S : Quilted<S>> S.piece(patch: Patch<S>): S = piece(patch.delta)
+
+/**
+ * This state with the delta [mutate] produces from it absorbed — the delta-mutator law
+ * `X.piece(mᵟ(X))` spelled once, so a caller need not name `X` twice.
+ *
+ * Reach for it when you hold a CRDT **outside** a [us.tractat.kuilt.quilter.Quilter] and want
+ * the resulting whole state rather than a frame to broadcast:
+ *
+ * ```kotlin
+ * val roster = ORSet.empty<String>()
+ *     .piece { it.add(alpha, "ada") }
+ *     .piece { it.add(bravo, "grace") }
+ * ```
+ *
+ * Under a replicator, do **not** use this — `quilter.mutate { it.add(replica, element) }` takes
+ * the same lambda, applies it under the replicator's own lock, and broadcasts only the delta.
+ * Absorbing locally and handing the replicator the whole state is the O(state) mistake every
+ * mutator in this package now returns a [Patch] to prevent.
+ */
+public inline fun <S : Quilted<S>> S.piece(mutate: (S) -> Patch<S>): S = piece(mutate(this))

@@ -429,9 +429,15 @@ class CanonicalGoldenVectorTest {
      * every assertion in this file stays green after a re-record.
      */
     private fun orSet(): ORSet<String> {
-        val fromZulu = ORSet.empty<String>().add(zulu, "zulu").add(zulu, "mike").add(zulu, "gone")
-        val fromAlpha = ORSet.empty<String>().add(alpha, "alpha").add(alpha, "delta").add(alpha, "mike")
-        return fromZulu.remove("gone").piece(fromAlpha)
+        val fromZulu = ORSet.empty<String>()
+            .piece { it.add(zulu, "zulu") }
+            .piece { it.add(zulu, "mike") }
+            .piece { it.add(zulu, "gone") }
+        val fromAlpha = ORSet.empty<String>()
+            .piece { it.add(alpha, "alpha") }
+            .piece { it.add(alpha, "delta") }
+            .piece { it.add(alpha, "mike") }
+        return fromZulu.piece { it.remove("gone") }.piece(fromAlpha)
     }
 
     /**
@@ -455,11 +461,11 @@ class CanonicalGoldenVectorTest {
      */
     private fun orMap(): ORMap<String, GCounter> {
         val viewZulu = ORMap.empty<String, GCounter>()
-            .put(zulu, "zulu", GCounter.of(zulu to 1L, mike to 3L))
-            .put(zulu, "alpha", GCounter.of(zulu to 5L, delta to 7L))
+            .piece { it.put(zulu, "zulu", GCounter.of(zulu to 1L, mike to 3L)) }
+            .piece { it.put(zulu, "alpha", GCounter.of(zulu to 5L, delta to 7L)) }
         val viewAlpha = ORMap.empty<String, GCounter>()
-            .put(alpha, "alpha", GCounter.of(alpha to 6L, mike to 8L))
-            .put(alpha, "zulu", GCounter.of(alpha to 2L, delta to 4L))
+            .piece { it.put(alpha, "alpha", GCounter.of(alpha to 6L, mike to 8L)) }
+            .piece { it.put(alpha, "zulu", GCounter.of(alpha to 2L, delta to 4L)) }
         return viewZulu.piece(viewAlpha)
     }
 
@@ -667,9 +673,11 @@ class CanonicalGoldenVectorTest {
     private fun sharedByFive(): ORSet<String> {
         fun view(replica: ReplicaId, priorAdds: Int): ORSet<String> =
             (1..priorAdds)
-                .fold(ORSet.empty<String>()) { set, n -> set.add(replica, "${replica.value}$n") }
-                .add(replica, shared)
-                .add(replica, retired)
+                .fold(ORSet.empty<String>()) { set, n ->
+                    set.piece { it.add(replica, "${replica.value}$n") }
+                }
+                .piece { it.add(replica, shared) }
+                .piece { it.add(replica, retired) }
         return view(zulu, priorAdds = 0)
             .piece(view(mike, priorAdds = 2))
             .piece(view(alpha, priorAdds = 1))
@@ -695,7 +703,7 @@ class CanonicalGoldenVectorTest {
      * [DotMapSerializer] and [DotSetSerializer] are not exercised here. [orSet] and [orMap] pin
      * those; this vector exists for the context.
      */
-    private fun orSetAddDelta(): ORSet<String> = sharedByFive().addDelta(zulu, shared).delta
+    private fun orSetAddDelta(): ORSet<String> = sharedByFive().add(zulu, shared).delta
 
     /**
      * The other delta shape: an **empty store** with a non-empty context — "these dots are
@@ -707,7 +715,7 @@ class CanonicalGoldenVectorTest {
      * bravo:5` against a canonical order of `alpha:3, bravo:5, delta:2, mike:4, zulu:2`.
      * [dotContext] pins a cloud beside a populated vector; this pins one standing alone.
      */
-    private fun orSetRemoveDelta(): ORSet<String> = sharedByFive().removeDelta(retired).delta
+    private fun orSetRemoveDelta(): ORSet<String> = sharedByFive().remove(retired).delta
 
     /**
      * The [ORMap] mirror, with a value on the wire. Five replicas put [shared] at five different
@@ -716,7 +724,7 @@ class CanonicalGoldenVectorTest {
      *
      * The supplied value is a four-slot `GCounter` built out of sorted order, so this vector also
      * pins `GCounter.counts`' canonical sort *inside a delta frame*. It pins one more thing for
-     * free: `putDelta` ships **the caller's value, not the locally merged one**. Ship the merged
+     * free: a put delta ships **the caller's value, not the locally merged one**. Ship the merged
      * value instead and these bytes change — the frame would carry every replica's slice rather
      * than the four written here.
      */
@@ -724,16 +732,16 @@ class CanonicalGoldenVectorTest {
         fun view(replica: ReplicaId, priorPuts: Int): ORMap<String, GCounter> =
             (1..priorPuts)
                 .fold(ORMap.empty<String, GCounter>()) { map, n ->
-                    map.put(replica, "${replica.value}$n", GCounter.of(replica to n.toLong()))
+                    map.piece { it.put(replica, "${replica.value}$n", GCounter.of(replica to n.toLong())) }
                 }
-                .put(replica, shared, GCounter.of(replica to 1L))
+                .piece { it.put(replica, shared, GCounter.of(replica to 1L)) }
         val converged = view(zulu, priorPuts = 2)
             .piece(view(mike, priorPuts = 2))
             .piece(view(alpha, priorPuts = 1))
             .piece(view(delta, priorPuts = 0))
             .piece(view(bravo, priorPuts = 3))
         return converged
-            .putDelta(zulu, shared, GCounter.of(mike to 8L, alpha to 6L, delta to 4L, zulu to 2L))
+            .put(zulu, shared, GCounter.of(mike to 8L, alpha to 6L, delta to 4L, zulu to 2L))
             .delta
     }
 

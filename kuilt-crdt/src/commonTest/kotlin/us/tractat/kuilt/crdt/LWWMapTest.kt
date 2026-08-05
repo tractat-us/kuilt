@@ -23,23 +23,23 @@ class LWWMapTest {
 
     @Test
     fun setReturnsTheValue() {
-        val m = LWWMap.empty<String, String>().set(a, 10L, "lang", "en")
+        val m = LWWMap.empty<String, String>().setWhole(a, 10L, "lang", "en")
         assertEquals("en", m["lang"])
         assertEquals(mapOf("lang" to "en"), m.entries)
     }
 
     @Test
     fun perKeyLwwSemantics_laterWins() {
-        val m1 = LWWMap.empty<String, String>().set(a, 10L, "lang", "en")
-        val m2 = LWWMap.empty<String, String>().set(b, 20L, "lang", "fr")
+        val m1 = LWWMap.empty<String, String>().setWhole(a, 10L, "lang", "en")
+        val m2 = LWWMap.empty<String, String>().setWhole(b, 20L, "lang", "fr")
         assertEquals("fr", m1.piece(m2)["lang"])
         assertEquals("fr", m2.piece(m1)["lang"]) // commutative
     }
 
     @Test
     fun differentKeysComposeIndependently() {
-        val m1 = LWWMap.empty<String, String>().set(a, 10L, "lang", "en")
-        val m2 = LWWMap.empty<String, String>().set(b, 5L, "tz", "UTC")
+        val m1 = LWWMap.empty<String, String>().setWhole(a, 10L, "lang", "en")
+        val m2 = LWWMap.empty<String, String>().setWhole(b, 5L, "tz", "UTC")
         val merged = m1.piece(m2)
         assertEquals("en", merged["lang"])
         assertEquals("UTC", merged["tz"])
@@ -53,8 +53,8 @@ class LWWMapTest {
     @Test
     fun removeHidesTheKeyFromReads() {
         val m = LWWMap.empty<String, String>()
-            .set(a, 10L, "lang", "en")
-            .remove(a, 20L, "lang")
+            .setWhole(a, 10L, "lang", "en")
+            .removeWhole(a, 20L, "lang")
         assertAll(
             { assertNull(m["lang"]) },
             { assertEquals(emptyMap<String, String>(), m.entries) },
@@ -63,9 +63,9 @@ class LWWMapTest {
 
     @Test
     fun removeThenConcurrentPut_laterPutWins() {
-        val base = LWWMap.empty<String, String>().set(a, 10L, "lang", "en")
-        val removed = base.remove(a, 20L, "lang")
-        val rewritten = base.set(b, 30L, "lang", "fr")
+        val base = LWWMap.empty<String, String>().setWhole(a, 10L, "lang", "en")
+        val removed = base.removeWhole(a, 20L, "lang")
+        val rewritten = base.setWhole(b, 30L, "lang", "fr")
         assertAll(
             { assertEquals("fr", removed.piece(rewritten)["lang"]) },
             { assertEquals("fr", rewritten.piece(removed)["lang"]) },
@@ -74,9 +74,9 @@ class LWWMapTest {
 
     @Test
     fun putThenConcurrentRemove_laterRemoveWins() {
-        val base = LWWMap.empty<String, String>().set(a, 10L, "lang", "en")
-        val rewritten = base.set(b, 20L, "lang", "fr")
-        val removed = base.remove(a, 30L, "lang")
+        val base = LWWMap.empty<String, String>().setWhole(a, 10L, "lang", "en")
+        val rewritten = base.setWhole(b, 20L, "lang", "fr")
+        val removed = base.removeWhole(a, 30L, "lang")
         assertAll(
             { assertNull(removed.piece(rewritten)["lang"]) },
             { assertNull(rewritten.piece(removed)["lang"]) },
@@ -86,9 +86,9 @@ class LWWMapTest {
     @Test
     fun removeVsPutSameTimestamp_tieBreaksOnReplicaId() {
         // Same ts=20; B > A lexicographically, so B's remove beats A's put — both directions.
-        val base = LWWMap.empty<String, String>().set(a, 10L, "lang", "en")
-        val putByA = base.set(a, 20L, "lang", "fr")
-        val removedByB = base.remove(b, 20L, "lang")
+        val base = LWWMap.empty<String, String>().setWhole(a, 10L, "lang", "en")
+        val putByA = base.setWhole(a, 20L, "lang", "fr")
+        val removedByB = base.removeWhole(b, 20L, "lang")
         assertAll(
             { assertNull(putByA.piece(removedByB)["lang"]) },
             { assertNull(removedByB.piece(putByA)["lang"]) },
@@ -99,8 +99,8 @@ class LWWMapTest {
     fun removeOfAbsentKeyStillBeatsAnEarlierConcurrentPut() {
         // The remove must leave a tombstone even when the key was never set locally,
         // so a concurrent earlier-timestamped put arriving later still loses.
-        val removed = LWWMap.empty<String, String>().remove(b, 20L, "lang")
-        val put = LWWMap.empty<String, String>().set(a, 10L, "lang", "en")
+        val removed = LWWMap.empty<String, String>().removeWhole(b, 20L, "lang")
+        val put = LWWMap.empty<String, String>().setWhole(a, 10L, "lang", "en")
         assertAll(
             { assertNull(removed.piece(put)["lang"]) },
             { assertNull(put.piece(removed)["lang"]) },
@@ -110,9 +110,9 @@ class LWWMapTest {
     @Test
     fun mergeWithTombstonesIsIdempotentAndCommutative() {
         val m1 = LWWMap.empty<String, String>()
-            .set(a, 10L, "lang", "en")
-            .remove(a, 20L, "lang")
-        val m2 = LWWMap.empty<String, String>().set(b, 15L, "lang", "fr")
+            .setWhole(a, 10L, "lang", "en")
+            .removeWhole(a, 20L, "lang")
+        val m2 = LWWMap.empty<String, String>().setWhole(b, 15L, "lang", "fr")
         assertAll(
             { assertEquals(m1, m1.piece(m1)) },
             { assertEquals(m1.piece(m2), m2.piece(m1)) },
@@ -123,19 +123,19 @@ class LWWMapTest {
     @Test
     fun deltaStateCarriesTheTombstone() {
         // A stale replica that only absorbs the post-remove state converges to removed.
-        val base = LWWMap.empty<String, String>().set(a, 10L, "lang", "en")
-        val removed = base.remove(a, 20L, "lang")
+        val base = LWWMap.empty<String, String>().setWhole(a, 10L, "lang", "en")
+        val removed = base.removeWhole(a, 20L, "lang")
         assertNull(base.piece(removed)["lang"])
     }
 
     @Test
     fun tombstoneSurvivesJsonRoundTrip() {
         val m = LWWMap.empty<String, String>()
-            .set(a, 10L, "lang", "en")
-            .remove(a, 20L, "lang")
+            .setWhole(a, 10L, "lang", "en")
+            .removeWhole(a, 20L, "lang")
         val ser = LWWMap.serializer(String.serializer(), String.serializer())
         val decoded = Json.decodeFromString(ser, Json.encodeToString(ser, m))
-        val stale = LWWMap.empty<String, String>().set(b, 15L, "lang", "fr")
+        val stale = LWWMap.empty<String, String>().setWhole(b, 15L, "lang", "fr")
         assertAll(
             { assertEquals(m, decoded) },
             { assertNull(decoded.piece(stale)["lang"]) }, // tombstone still wins after the wire
@@ -145,8 +145,8 @@ class LWWMapTest {
     @Test
     fun roundTripsThroughJson() {
         val m = LWWMap.empty<String, String>()
-            .set(a, 10L, "lang", "en")
-            .set(b, 20L, "tz", "UTC")
+            .setWhole(a, 10L, "lang", "en")
+            .setWhole(b, 20L, "tz", "UTC")
         val ser = LWWMap.serializer(String.serializer(), String.serializer())
         assertEquals(m, Json.decodeFromString(ser, Json.encodeToString(ser, m)))
     }
@@ -175,16 +175,16 @@ class LWWMapTest {
      * The [ORMap] shape, applied to this type: a `remove` sits between two concurrent `set`s of one
      * key and wins.
      *
-     * [LWWMap] survives it for a structural reason worth naming — [LWWMap.remove] retains a
+     * [LWWMap] survives it for a structural reason worth naming — a remove retains a
      * tombstone **cell**, so the join's key set is a plain union and no merge can discard something
      * a differently-bracketed merge would have kept. Had `remove` deleted the key instead, the
      * removal would simply vanish into the lattice identity.
      */
     @Test
     fun pieceIsAssociativeAcrossAWinningTombstoneBetweenTwoSetsOfOneKey() {
-        val early = LWWMap.empty<String, String>().set(a, 10L, "lang", "en")
-        val removed = LWWMap.empty<String, String>().remove(c, 30L, "lang")
-        val late = LWWMap.empty<String, String>().set(b, 20L, "lang", "fr")
+        val early = LWWMap.empty<String, String>().setWhole(a, 10L, "lang", "en")
+        val removed = LWWMap.empty<String, String>().removeWhole(c, 30L, "lang")
+        val late = LWWMap.empty<String, String>().setWhole(b, 20L, "lang", "fr")
 
         assertAll(
             { assertOrderIndependent(early, removed, late, "a winning tombstone bracketed between two sets") },
@@ -198,9 +198,9 @@ class LWWMapTest {
      */
     @Test
     fun pieceIsAssociativeAcrossAWinningSetBetweenTwoTombstones() {
-        val removedEarly = LWWMap.empty<String, String>().remove(a, 10L, "lang")
-        val revived = LWWMap.empty<String, String>().set(c, 30L, "lang", "fr")
-        val removedLate = LWWMap.empty<String, String>().remove(b, 20L, "lang")
+        val removedEarly = LWWMap.empty<String, String>().removeWhole(a, 10L, "lang")
+        val revived = LWWMap.empty<String, String>().setWhole(c, 30L, "lang", "fr")
+        val removedLate = LWWMap.empty<String, String>().removeWhole(b, 20L, "lang")
 
         assertAll(
             { assertOrderIndependent(removedEarly, revived, removedLate, "a winning set between two tombstones") },
@@ -215,9 +215,9 @@ class LWWMapTest {
      */
     @Test
     fun pieceIsAssociativeWhenAnEqualTimestampIsBrokenOnReplicaId() {
-        val byA = LWWMap.empty<String, String>().set(a, 7L, "lang", "en")
-        val byB = LWWMap.empty<String, String>().set(b, 7L, "lang", "fr")
-        val byC = LWWMap.empty<String, String>().set(c, 7L, "lang", "de")
+        val byA = LWWMap.empty<String, String>().setWhole(a, 7L, "lang", "en")
+        val byB = LWWMap.empty<String, String>().setWhole(b, 7L, "lang", "fr")
+        val byC = LWWMap.empty<String, String>().setWhole(c, 7L, "lang", "de")
 
         assertAll(
             { assertOrderIndependent(byA, byB, byC, "one timestamp, three replicas — the tie-break decides") },
@@ -228,17 +228,19 @@ class LWWMapTest {
     /**
      * An operand that is strictly **below** where its own replica started.
      *
-     * [LWWMap.set] assigns rather than joins, so a write whose tag loses moves the writer's state
-     * down the lattice — the anomaly filed as #2087. That is a place a join could plausibly become
+     * [LWWMap.setWhole] assigns rather than joins, so a write whose tag loses moves the writer's
+     * state down the lattice — the anomaly filed as #2087. Public callers can no longer reach it:
+     * [LWWMap.set] returns a delta, and a delta is *joined*. The whole-state form these tests drive
+     * is retained precisely so the region stays searchable. That is a place a join could plausibly become
      * order-sensitive, since one operand is no longer above anything it once held, so the triple is
      * pinned here rather than assumed benign. It is not: associativity is unaffected. #2087 is a
      * defect of the *mutators*; associativity is a property of [LWWMap.piece] alone.
      */
     @Test
     fun pieceIsAssociativeAcrossAWriteWhoseTagLosesAndMovesItsReplicaDownTheLattice() {
-        val converged = LWWMap.empty<String, String>().set(b, 30L, "seat", "north")
-        val regressed = converged.set(a, 5L, "seat", "south")
-        val peer = LWWMap.empty<String, String>().set(c, 20L, "seat", "east")
+        val converged = LWWMap.empty<String, String>().setWhole(b, 30L, "seat", "north")
+        val regressed = converged.setWhole(a, 5L, "seat", "south")
+        val peer = LWWMap.empty<String, String>().setWhole(c, 20L, "seat", "east")
 
         assertAll(
             { assertEquals("south", regressed["seat"], "#2087: the losing write shows up locally…") },
@@ -257,11 +259,11 @@ class LWWMapTest {
     @Test
     fun pieceIsAssociativeWhenEachKeyResolvesADifferentWay() {
         val peerA = LWWMap.empty<String, String>()
-            .set(a, 10L, "lang", "en").set(a, 7L, "tz", "UTC").set(a, 10L, "theme", "dark")
+            .setWhole(a, 10L, "lang", "en").setWhole(a, 7L, "tz", "UTC").setWhole(a, 10L, "theme", "dark")
         val peerB = LWWMap.empty<String, String>()
-            .set(b, 20L, "lang", "fr").set(b, 7L, "tz", "CET").set(b, 15L, "theme", "light")
+            .setWhole(b, 20L, "lang", "fr").setWhole(b, 7L, "tz", "CET").setWhole(b, 15L, "theme", "light")
         val peerC = LWWMap.empty<String, String>()
-            .set(c, 5L, "lang", "de").set(c, 7L, "tz", "JST").remove(c, 30L, "theme")
+            .setWhole(c, 5L, "lang", "de").setWhole(c, 7L, "tz", "JST").removeWhole(c, 30L, "theme")
 
         assertAll(
             { assertOrderIndependent(peerA, peerB, peerC, "three keys resolving three different ways") },
@@ -277,7 +279,7 @@ class LWWMapTest {
 
     /**
      * The `ORMap` counterexample transplanted **as an ancestor chain**, exhaustively over its tags:
-     * `start`, `start.remove(k)`, and `start.remove(k).set(k, …)` — each state derived from the
+     * `start`, `start.removeWhole(k)`, and `start.removeWhole(k).setWhole(k, …)` — each state derived from the
      * previous one, all six orderings, every combination of three timestamps and three replicas.
      *
      * This is the region `LWWMapLawsPropertyTest` structurally cannot reach, and it is where
@@ -294,9 +296,9 @@ class LWWMapTest {
         for (first in CHAIN_TAGS) {
             for (second in CHAIN_TAGS) {
                 for (third in CHAIN_TAGS) {
-                    val start = LWWMap.empty<String, String>().set(first.second, first.first, "k", "v1")
-                    val removed = start.remove(second.second, second.first, "k")
-                    val rePut = removed.set(third.second, third.first, "k", "v2")
+                    val start = LWWMap.empty<String, String>().setWhole(first.second, first.first, "k", "v1")
+                    val removed = start.removeWhole(second.second, second.first, "k")
+                    val rePut = removed.setWhole(third.second, third.first, "k", "v2")
                     chains++
                     if (removed.piece(start) != removed) derivedStatesBelowTheirAncestor++
                     if (rePut.piece(removed) != rePut) derivedStatesBelowTheirAncestor++
@@ -438,9 +440,9 @@ class LWWMapTest {
         val atoms = listOf(a, b).flatMap { replica ->
             listOf(1L, 2L).flatMap { timestamp ->
                 listOf(
-                    LWWMap.empty<String, String>().set(replica, timestamp, "k", "x"),
-                    LWWMap.empty<String, String>().set(replica, timestamp, "k", "y"),
-                    LWWMap.empty<String, String>().remove(replica, timestamp, "k"),
+                    LWWMap.empty<String, String>().setWhole(replica, timestamp, "k", "x"),
+                    LWWMap.empty<String, String>().setWhole(replica, timestamp, "k", "y"),
+                    LWWMap.empty<String, String>().removeWhole(replica, timestamp, "k"),
                 )
             }
         }
@@ -474,9 +476,9 @@ class LWWMapTest {
      */
     @Test
     fun oneTagCarryingTwoValuesCostsCommutativityNotAssociativity() {
-        val wroteX = LWWMap.empty<String, String>().set(a, 5L, "k", "x")
-        val wroteY = LWWMap.empty<String, String>().set(a, 5L, "k", "y")
-        val removed = LWWMap.empty<String, String>().remove(a, 5L, "k")
+        val wroteX = LWWMap.empty<String, String>().setWhole(a, 5L, "k", "x")
+        val wroteY = LWWMap.empty<String, String>().setWhole(a, 5L, "k", "y")
+        val removed = LWWMap.empty<String, String>().removeWhole(a, 5L, "k")
 
         assertAll(
             { assertEquals("x", wroteX.piece(wroteY)["k"], "an equal tag keeps the left operand…") },
@@ -557,8 +559,8 @@ class LWWMapTest {
     private data class Op(val key: String, val replica: ReplicaId, val timestamp: Long, val value: String?)
 
     private fun LWWMap<String, String>.applied(op: Op): LWWMap<String, String> =
-        if (op.value == null) remove(op.replica, op.timestamp, op.key)
-        else set(op.replica, op.timestamp, op.key, op.value)
+        if (op.value == null) removeWhole(op.replica, op.timestamp, op.key)
+        else setWhole(op.replica, op.timestamp, op.key, op.value)
 
     private fun fold(ops: List<Op>): LWWMap<String, String> =
         ops.fold(LWWMap.empty()) { map, op -> map.applied(op) }

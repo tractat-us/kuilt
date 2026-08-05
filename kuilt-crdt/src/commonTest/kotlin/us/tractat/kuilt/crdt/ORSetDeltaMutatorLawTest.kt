@@ -17,8 +17,9 @@ import kotlin.test.assertTrue
  * X.piece(mᵟ(X)) == m(X)
  * ```
  *
- * for every state `X` and every mutator `m` — [ORSet.add] against [ORSet.addDelta], [ORSet.remove]
- * against [ORSet.removeDelta].
+ * for every state `X` and every mutator `m` — [ORSet.add]'s delta against [ORSet.addWhole],
+ * [ORSet.remove]'s against [ORSet.removeWhole]. The reference side is deliberately the internal
+ * whole-state form: comparing the delta path against itself would prove nothing.
  *
  * **Why bytes and not just `equals`.** Two states can compare equal and still encode two ways. The
  * anti-entropy gate hashes the state *as it appears on the wire*, so a delta path that left two
@@ -54,8 +55,8 @@ class ORSetDeltaMutatorLawTest {
             val element = ELEMENTS.random(random)
             if (state.dotsOn(element).size > 1) concurrentDotTrials++
 
-            val viaFull = state.add(charlie, element)
-            val viaDelta = state.piece(state.addDelta(charlie, element))
+            val viaFull = state.addWhole(charlie, element)
+            val viaDelta = state.piece(state.add(charlie, element))
 
             assertEquals(viaFull, viaDelta, "trial $trial: add law by equality, element=$element")
             assertTrue(
@@ -77,8 +78,8 @@ class ORSetDeltaMutatorLawTest {
             val element = ELEMENTS.random(random)
             if (state.dotsOn(element).size > 1) concurrentDotTrials++
 
-            val viaFull = state.remove(element)
-            val viaDelta = state.piece(state.removeDelta(element))
+            val viaFull = state.removeWhole(element)
+            val viaDelta = state.piece(state.remove(element))
 
             assertEquals(viaFull, viaDelta, "trial $trial: remove law by equality, element=$element")
             assertTrue(
@@ -92,8 +93,8 @@ class ORSetDeltaMutatorLawTest {
 
     @Test
     fun removingAnAbsentElementYieldsTheLatticeIdentity() {
-        val state = ORSet.empty<String>().add(alpha, "kept").add(bravo, "also-kept")
-        val identity = state.removeDelta("never-added")
+        val state = ORSet.empty<String>().addWhole(alpha, "kept").addWhole(bravo, "also-kept")
+        val identity = state.remove("never-added")
 
         assertAll(
             { assertEquals(state, state.piece(identity), "absorbing it must change nothing") },
@@ -128,7 +129,7 @@ class ORSetDeltaMutatorLawTest {
         val issueShapeReAdd: (ORSet<String>) -> Patch<ORSet<String>> = { _ ->
             // A fresh set has an empty context, so `add` here mints (alpha,1) and witnesses only
             // that — #2044's shape, with none of the dots the re-add actually supersedes.
-            Patch(ORSet.empty<String>().add(alpha, ELEMENT))
+            ORSet.empty<String>().add(alpha, ELEMENT)
         }
 
         assertAll(
@@ -140,8 +141,8 @@ class ORSetDeltaMutatorLawTest {
             },
             {
                 assertFalse(
-                    replayReAddThenRemove { state -> state.addDelta(alpha, ELEMENT) },
-                    "addDelta must carry the superseded dots, or a later remove resurrects the element",
+                    replayReAddThenRemove { state -> state.add(alpha, ELEMENT) },
+                    "add's delta must carry the superseded dots, or a later remove resurrects the element",
                 )
             },
         )
@@ -158,14 +159,14 @@ class ORSetDeltaMutatorLawTest {
     @Test
     fun aRemoveDeltaCarryingTheWholeContextWouldWipeTheReceiver() {
         val five = listOf("e1", "e2", "e3", "e4", "e5")
-        val converged = five.fold(ORSet.empty<String>()) { set, element -> set.add(alpha, element) }
+        val converged = five.fold(ORSet.empty<String>()) { set, element -> set.addWhole(alpha, element) }
 
-        val patch = converged.removeDelta("e3")
-        val sender = converged.remove("e3")      // the author's own mutator
-        val receiver = converged.piece(patch)    // a converged peer absorbing the delta
+        val patch = converged.remove("e3")
+        val sender = converged.removeWhole("e3")  // the author's own whole-state mutator
+        val receiver = converged.piece(patch)     // a converged peer absorbing the delta
 
         // The issue's shape: everything removed, context untouched.
-        val issueShape = sender.elements.fold(sender) { set, element -> set.remove(element) }
+        val issueShape = sender.elements.fold(sender) { set, element -> set.removeWhole(element) }
 
         assertAll(
             {
@@ -179,7 +180,7 @@ class ORSetDeltaMutatorLawTest {
                 assertEquals(
                     setOf("e1", "e2", "e4", "e5"),
                     receiver.elements,
-                    "removeDelta must retire e3's dots and no others",
+                    "the remove delta must retire e3's dots and no others",
                 )
             },
             {
@@ -216,9 +217,9 @@ class ORSetDeltaMutatorLawTest {
 
                 val patch = if (state.contains(element) && random.nextInt(3) == 0) {
                     removeDeltas++
-                    state.removeDelta(element)
+                    state.remove(element)
                 } else {
-                    state.addDelta(author, element)
+                    state.add(author, element)
                 }
                 local[author] = state.piece(patch)
                 deltas += patch.delta
@@ -260,14 +261,14 @@ class ORSetDeltaMutatorLawTest {
     @Test
     fun aRemoveDeltaAppliedBeforeTheAddItRetiresConverges() {
         // A converged peer holding an unrelated element and an older copy of the one under test.
-        val peer = ORSet.empty<String>().add(bravo, "bystander").add(bravo, ELEMENT)
+        val peer = ORSet.empty<String>().addWhole(bravo, "bystander").addWhole(bravo, ELEMENT)
 
-        // The author re-adds the element and then removes it, by the full mutators.
-        val author = peer.add(alpha, ELEMENT).remove(ELEMENT)
+        // The author re-adds the element and then removes it, by the whole-state mutators.
+        val author = peer.addWhole(alpha, ELEMENT).removeWhole(ELEMENT)
 
         // The same two operations as deltas — the re-add supersedes bravo's dot.
-        val add = peer.addDelta(alpha, ELEMENT).delta
-        val remove = peer.add(alpha, ELEMENT).removeDelta(ELEMENT).delta
+        val add = peer.add(alpha, ELEMENT).delta
+        val remove = peer.addWhole(alpha, ELEMENT).remove(ELEMENT).delta
 
         val orders = mapOf(
             "add,remove" to listOf(add, remove),
@@ -299,9 +300,9 @@ class ORSetDeltaMutatorLawTest {
     fun aConcurrentAddSurvivesARemoveDeltaInEitherOrder() {
         // "bystander" is here so the remove delta's context is a strict subset of the sender's
         // history: a delta that over-claimed would take the bystander down with it.
-        val start = ORSet.empty<String>().add(alpha, "bystander").add(alpha, ELEMENT)
-        val removal = start.removeDelta(ELEMENT).delta       // alpha retires the dot it can see
-        val concurrent = start.addDelta(bravo, ELEMENT).delta // bravo re-adds, minting a fresh dot
+        val start = ORSet.empty<String>().addWhole(alpha, "bystander").addWhole(alpha, ELEMENT)
+        val removal = start.remove(ELEMENT).delta       // alpha retires the dot it can see
+        val concurrent = start.add(bravo, ELEMENT).delta // bravo re-adds, minting a fresh dot
 
         val removeFirst = start.piece(removal).piece(concurrent)
         val addFirst = start.piece(concurrent).piece(removal)
@@ -332,20 +333,20 @@ class ORSetDeltaMutatorLawTest {
      *
      * 1. `alpha` and `bravo` converge on `{e ↦ (bravo,1)}`.
      * 2. `alpha` re-adds `e` locally and ships [reAddDelta].
-     * 3. `alpha` removes `e` and ships a correct [ORSet.removeDelta].
+     * 3. `alpha` removes `e` and ships a correct [ORSet.remove] delta.
      *
      * The author ends up without `e` under either delta shape; the question is the receiver.
      */
     private fun replayReAddThenRemove(reAddDelta: (ORSet<String>) -> Patch<ORSet<String>>): Boolean {
-        val start = ORSet.empty<String>().add(bravo, ELEMENT)
+        val start = ORSet.empty<String>().addWhole(bravo, ELEMENT)
         var author = start
         var receiver = start
 
         val readd = reAddDelta(author)
-        author = author.add(alpha, ELEMENT)
+        author = author.addWhole(alpha, ELEMENT)
         receiver = receiver.piece(readd)
 
-        val removal = author.removeDelta(ELEMENT)
+        val removal = author.remove(ELEMENT)
         author = author.piece(removal)
         receiver = receiver.piece(removal)
 
@@ -357,22 +358,26 @@ class ORSetDeltaMutatorLawTest {
      * A random state, built as the merge of two independently-grown branches so that elements both
      * branches touched carry **more than one** dot.
      *
-     * That is the whole point of the shape: [ORSet.add] mints a single dot and supersedes the
-     * element's previous ones, so a state built by one replica alone never has a multi-dot element,
-     * [ORSet.addDelta]'s superseded-dots term is always a singleton, and the law would hold
-     * vacuously against precisely the defect it exists to catch.
+     * That is the whole point of the shape: an add mints a single dot and supersedes the element's
+     * previous ones, so a state built by one replica alone never has a multi-dot element,
+     * [ORSet.add]'s superseded-dots term is always a singleton, and the law would hold vacuously
+     * against precisely the defect it exists to catch.
+     *
+     * Built with the whole-state mutators so the generator never depends on the mechanism the law
+     * is testing.
      */
     private fun randomState(random: Random): ORSet<String> {
         var left = ORSet.empty<String>()
         var right = ORSet.empty<String>()
         repeat(random.nextInt(2, 8)) {
-            left = left.add(alpha, ELEMENTS.random(random))
-            right = right.add(bravo, ELEMENTS.random(random))
+            left = left.addWhole(alpha, ELEMENTS.random(random))
+            right = right.addWhole(bravo, ELEMENTS.random(random))
         }
         var merged = left.piece(right)
         repeat(random.nextInt(0, 3)) {
             val element = ELEMENTS.random(random)
-            merged = if (random.nextBoolean()) merged.add(charlie, element) else merged.remove(element)
+            merged =
+                if (random.nextBoolean()) merged.addWhole(charlie, element) else merged.removeWhole(element)
         }
         return merged
     }
@@ -397,7 +402,7 @@ class ORSetDeltaMutatorLawTest {
          * The floor the generator must clear for a law test to mean anything. **Measured: 113 of
          * 400** on seed 11. Set at roughly half of that, so an incidental generator tweak does not
          * red-light the suite, but a generator that stopped producing concurrent dots — and with it
-         * every case in which [ORSet.addDelta]'s superseded-dots term does any work — fails loudly
+         * every case in which [ORSet.add]'s superseded-dots term does any work — fails loudly
          * instead of passing vacuously.
          */
         const val MIN_CONCURRENT_DOT_TRIALS = 60

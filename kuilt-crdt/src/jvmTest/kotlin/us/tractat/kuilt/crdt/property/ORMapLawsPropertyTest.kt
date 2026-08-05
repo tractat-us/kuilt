@@ -8,6 +8,7 @@ import net.jqwik.api.Provide
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ORMap
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.piece
 
 /**
  * Lattice law properties for [ORMap].
@@ -88,7 +89,11 @@ internal class ORMapLawsPropertyTest {
 
     private fun applyTo(replica: ReplicaId): (ORMap<String, GCounter>, Op) -> ORMap<String, GCounter> =
         { state, op ->
-            if (op.isPut) state.put(replica, op.key, GCounter.of(replica to op.weight)) else state.remove(op.key)
+            if (op.isPut) {
+                state.piece { it.put(replica, op.key, GCounter.of(replica to op.weight)) }
+            } else {
+                state.piece { it.remove(op.key) }
+            }
         }
 
     /**

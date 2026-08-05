@@ -18,7 +18,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.crdt.LWWMap
-import us.tractat.kuilt.crdt.Patch
+import us.tractat.kuilt.crdt.piece
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
@@ -190,10 +190,10 @@ class PatchworkSession(
         board = if (live != null) {
             // A one-cell map is a proper delta: joining it into any board sets
             // exactly this cell (or loses the LWW race, identically everywhere).
-            live.mutate { Patch(LWWMap.empty<Cell, Colour>().set(stitcher, timestamp, cell, colour)) }
+            live.mutate { it.set(stitcher, timestamp, cell, colour) }
             live.state.value
         } else {
-            board.set(stitcher, timestamp, cell, colour)
+            board.piece(board.set(stitcher, timestamp, cell, colour))
         }
         _quilt.value = board.entries
     }
