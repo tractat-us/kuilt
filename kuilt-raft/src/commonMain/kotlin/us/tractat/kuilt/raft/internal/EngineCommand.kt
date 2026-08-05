@@ -9,6 +9,22 @@ import us.tractat.kuilt.raft.Snapshot
 
 internal sealed interface EngineCommand {
     data class IncomingMessage(val from: NodeId, val message: RaftMessage) : EngineCommand
+
+    /**
+     * A frame from [from] that failed to decode and was dropped (#2051).
+     *
+     * The engine's inbound pump decodes before enqueueing, so this is the one command carrying no
+     * `RaftMessage` — the failure *is* that there is no message. It exists so the drop is reported
+     * from the **actor loop** rather than the pump coroutine: the trace clock is a plain `var`
+     * confined to the actor, and emitting off it would race every other event's clock. Routing
+     * through the same channel as [IncomingMessage] also means an undecodable-frame flood is bounded
+     * by exactly the queue that already bounds a decodable one, adding no new surface.
+     *
+     * Carries [byteCount] rather than the bytes: the payload is remote-controlled and nothing
+     * downstream reads it. The decode failure itself is logged at `debug` at the pump, where the
+     * exception is still in hand.
+     */
+    data class UndecodableMessage(val from: NodeId, val byteCount: Int) : EngineCommand
     /** [requestId] is the caller-pinned Raft §8 serial, or `null` to draw the next auto-serial on the actor loop. */
     data class Propose(val command: ByteArray, val requestId: Long?, val response: CompletableDeferred<LogEntry>) : EngineCommand
     data class ChangeMembership(val target: ClusterConfig, val response: CompletableDeferred<ClusterConfig>) : EngineCommand

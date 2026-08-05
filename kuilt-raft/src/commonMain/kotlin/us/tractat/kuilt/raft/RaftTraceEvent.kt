@@ -6,9 +6,9 @@ package us.tractat.kuilt.raft
  * The event vocabulary follows the etcd TLA+ action names so traces can be
  * replayed through the Vanlightly standard-raft TLA+ spec for TLC validation.
  *
- * [FrameRefused] is the one variant that is deliberately *not* a state transition — it reports a
- * frame the engine refused, i.e. a transition that did **not** happen, and has no TLA+ action to
- * correspond to. Filter it out before a spec replay.
+ * [FrameRefused] and [FrameUndecodable] are the two variants that are deliberately *not* state
+ * transitions — each reports a frame the engine dropped, i.e. a transition that did **not** happen,
+ * and neither has a TLA+ action to correspond to. Filter both out before a spec replay.
  */
 public sealed interface RaftTraceEvent {
     /** Logical monotonic clock — incremented on every emitted event. */
@@ -275,6 +275,51 @@ public sealed interface RaftTraceEvent {
         val from: NodeId,
         val messageType: RaftMessageType,
         val gate: RefusalGate,
+    ) : RaftTraceEvent
+
+    /**
+     * A frame [from] a peer could not be **decoded**, and was dropped (#2051).
+     *
+     * ### Why this is not a [FrameRefused]
+     *
+     * [FrameRefused] reports a *guard* declining a frame the engine understands, and every field it
+     * carries past `from` — [FrameRefused.messageType], [FrameRefused.gate] — is a fact about the
+     * decoded frame. Here the failure **is** the decode, so neither exists: there is no
+     * [RaftMessageType], because the bytes never became a `RaftMessage`, and no [RefusalGate],
+     * because no guard ran. Widening either field to express "unknown" would weaken it everywhere it
+     * is currently exact, and minting a `RaftMessageType.Undecodable` would break that enum's one
+     * structural property — it mirrors the sealed wire hierarchy one-for-one, which is what makes a
+     * new frame type impossible to add without an entry (#1973). A separate event keeps both surfaces
+     * honest and says exactly what is knowable at a point where the frame is still bytes.
+     *
+     * ### The trigger is ordinarily version skew
+     *
+     * The engine's codec sets `ignoreUnknownKeys`, so an unknown *field* from a newer peer is
+     * tolerated; an unknown sealed-class **discriminator** is not. A peer on a newer build sending a
+     * frame type this build does not declare therefore lands here, and rolling upgrades across a
+     * voter set are the ordinary case. A corrupt link or a hostile peer reaches it too, for the cost
+     * of arbitrary bytes — which is why the frame is dropped rather than allowed to throw.
+     *
+     * ### Losable, like [FrameRefused]
+     *
+     * Emitted on the actor loop and subject to the same `DROP_OLDEST` buffer, so it can never
+     * backpressure consensus and a flood of undecodable frames evicts honest events. Evidence, not a
+     * ledger. Nothing here feeds [RaftMetric.WedgeSuspected]: that metric counts *leader→peer* frames
+     * at or above this node's term, and neither the sender's role nor the frame's term is knowable
+     * without the decode that just failed.
+     *
+     * @property node this engine's own id — the *recipient* that dropped the frame.
+     * @property from the frame's true origin, as the transport reported it. The only attribution that
+     *   survives a failed decode, and the actionable one: it names the peer to look at.
+     * @property byteCount the frame's length. Deliberately the length and not the bytes — the payload
+     *   is remote-controlled and unbounded, and a trace event is not the place to retain it. It still
+     *   separates a truncated read from a full frame this build does not understand.
+     */
+    public data class FrameUndecodable(
+        override val clock: Long,
+        val node: NodeId,
+        val from: NodeId,
+        val byteCount: Int,
     ) : RaftTraceEvent
 }
 

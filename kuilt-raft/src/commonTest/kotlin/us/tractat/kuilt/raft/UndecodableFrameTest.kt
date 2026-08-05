@@ -9,12 +9,14 @@ import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.yield
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.cbor.Cbor
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -40,13 +42,21 @@ import kotlin.test.assertTrue
  * forgery. [aFrameTypeThisBuildDoesNotKnow] is exactly that shape — a real CBOR polymorphic envelope
  * whose discriminator names a subclass that does not exist here.
  *
- * The corrupt-bytes cases are the same defect reached the cheap way, and they earn their place
- * because the decoder does not throw one type: the unknown discriminator surfaces as a plain
- * `SerializationException` from the subclass lookup, while truncation and a bad major type surface
- * as `CborDecodingException` from the parser. Catching one named type is therefore not a fix, and
- * `CborDecodingException` is `internal` to kotlinx-serialization-cbor so it cannot even be named
- * here. The guard has to be `Throwable`-shaped (with the cancellation carve-out), and these three
- * cases are what holds it that way.
+ * The corrupt-bytes cases are the same defect reached the cheap way — a torn read and a garbage
+ * major type, so the fix is pinned against the parser's failure lane as well as the polymorphic
+ * resolver's.
+ *
+ * ### What these three cases do **not** pin
+ *
+ * They do not pin the *width* of the engine's catch. Every failure they produce is a
+ * `SerializationException` at kotlinx-serialization 1.11 — the unknown discriminator throws the base
+ * type from the subclass lookup, and truncation and a bad major type throw `CborDecodingException`,
+ * a subtype of it. A `catch (SerializationException)` in `RaftEngine.decodeInbound` passes all three;
+ * that was measured, not assumed. The engine catches `Throwable` anyway, because
+ * `BinaryFormat.decodeFromByteArray` documents `IllegalArgumentException` as well and because #1818's
+ * rule is a property of the *path*, not of a third-party exception hierarchy. Do not read a green run
+ * here as evidence for the width — if a way to make the decoder throw outside `SerializationException`
+ * ever appears, it belongs in this file as a fourth case.
  *
  * ### Why the assertion is a scope, not a `try`
  *
@@ -98,6 +108,41 @@ class UndecodableFrameTest {
     @Test
     fun garbageBytes_doNotKillTheNode() = raftRunTest {
         assertSurvives(garbageBytes())
+    }
+
+    /**
+     * The drop is **reported**, naming the peer and the frame's size.
+     *
+     * Dropping silently would swap node death for an invisible hole: version skew would present as a
+     * peer that is simply never heard from, which is indistinguishable from a partition. So the
+     * observable is the assertion here, not a side effect of survival — and it asserts the exact
+     * `from`, because the sender is the one piece of attribution that survives a failed decode and
+     * the only thing an operator can act on.
+     */
+    @Test
+    fun anUndecodableFrame_isReportedOnTrace() = raftRunTest {
+        val solo = soloNode()
+        try {
+            val seen = mutableListOf<RaftTraceEvent.FrameUndecodable>()
+            solo.scope.launch {
+                solo.node.trace.collect { if (it is RaftTraceEvent.FrameUndecodable) seen += it }
+            }
+            solo.node.awaitLeadership()
+            repeat(SETTLE_YIELDS) { yield() } // let the collector subscribe before the injection
+
+            val bad = aFrameTypeThisBuildDoesNotKnow()
+            solo.network.deliver(from = ghost, to = solo.self, bytes = bad)
+            repeat(SETTLE_YIELDS) { yield() }
+
+            assertEquals(1, seen.size, "exactly one report for one undecodable frame, saw $seen")
+            assertAll(
+                { assertEquals(solo.self, seen.single().node, "reported by the recipient") },
+                { assertEquals(ghost, seen.single().from, "names the peer the frame came from") },
+                { assertEquals(bad.size, seen.single().byteCount, "carries the frame's length") },
+            )
+        } finally {
+            solo.scope.cancel()
+        }
     }
 
     /**
