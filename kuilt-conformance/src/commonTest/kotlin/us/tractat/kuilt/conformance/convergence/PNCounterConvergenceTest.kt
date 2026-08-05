@@ -9,15 +9,18 @@ import us.tractat.kuilt.crdt.piece
 internal class PNCounterConvergenceTest : CrdtConvergenceSuite<PNCounter>() {
     override fun newHarness(): CrdtConvergenceHarness<PNCounter> = CrdtConvergenceHarness(
         initial = PNCounter.ZERO,
-        gen = OperationGenerator { state, replicaIndex, random ->
-            val replica = ReplicaId("R$replicaIndex")
-            val amount = random.nextLong(1L, 4L)
-            if (random.nextBoolean()) {
-                state.piece(state.increment(replica, amount))
-            } else {
-                state.piece(state.decrement(replica, amount))
-            }
-        },
+        // `decrement` is NOT a RETIRE. It withdraws nothing: a PNCounter is two grow-only counters
+        // and a decrement adds to the second one, so the observable value falls while every prior
+        // contribution stays exactly where it was. Retirement is about what a later op takes back,
+        // not about which direction a number moves.
+        alphabet = listOf(
+            LatticeOp("inc", OpKind.ASSERT) { state, replicaIndex, random ->
+                state.piece(state.increment(ReplicaId("R$replicaIndex"), random.nextLong(1L, 4L)))
+            },
+            LatticeOp("dec", OpKind.ASSERT) { state, replicaIndex, random ->
+                state.piece(state.decrement(ReplicaId("R$replicaIndex"), random.nextLong(1L, 4L)))
+            },
+        ),
         serializer = PNCounter.serializer(),
         replicaCount = 3,
         opsPerReplica = 8,

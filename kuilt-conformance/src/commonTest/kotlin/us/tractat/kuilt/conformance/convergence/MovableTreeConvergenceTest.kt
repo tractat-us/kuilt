@@ -9,24 +9,62 @@ import us.tractat.kuilt.crdt.ReplicaId
 internal class MovableTreeConvergenceTest : CrdtConvergenceSuite<MovableTree<String>>() {
     override fun newHarness(): CrdtConvergenceHarness<MovableTree<String>> = CrdtConvergenceHarness(
         initial = MovableTree.empty(),
-        gen = OperationGenerator { state, replicaIndex, random ->
-            val replica = ReplicaId("R$replicaIndex")
-            // ts is monotone per replica within one history (the log grows by one per op),
-            // and (replica, ts) is globally unique because each harness replica is distinct —
-            // the MovableTree.addNode contract.
-            val ts = state.moveLogSize + 1L
-            val nodes = nodesOf(state)
-            val anchors = listOf(MovableTree.ROOT_ID) + nodes
-            if (nodes.size >= 2 && random.nextBoolean()) {
-                val node = nodes[random.nextInt(nodes.size)]
-                val candidates = anchors.filter { it != node }
-                val newParent = candidates[random.nextInt(candidates.size)]
-                state.move(replica, ts, node, newParent).first
-            } else {
-                val parent = anchors[random.nextInt(anchors.size)]
-                state.addNode(replica, ts, parent, "n$replicaIndex.${random.nextInt(100)}").tree
-            }
-        },
+        // `move` is the RETIRE op. Nothing is deleted from a `MovableTree` — the move log only
+        // grows — but a move *withdraws* an earlier assertion all the same: the node leaves its
+        // previous parent's children. Retirement is about the observable value, not the encoding,
+        // which is why the free byte-size proxy reads 0.0% here (see `OpKind`).
+        //
+        // ts is monotone per replica within one history (the log grows by one per op), and
+        // (replica, ts) is globally unique because each harness replica is distinct — the
+        // MovableTree.addNode contract.
+        alphabet = listOf(
+            LatticeOp("add-under-root", OpKind.ASSERT) { state, replicaIndex, random ->
+                state.addNode(
+                    ReplicaId("R$replicaIndex"),
+                    state.moveLogSize + 1L,
+                    MovableTree.ROOT_ID,
+                    "n$replicaIndex.${random.nextInt(100)}",
+                ).tree
+            },
+            LatticeOp("add-roam", OpKind.ASSERT) { state, replicaIndex, random ->
+                val anchors = listOf(MovableTree.ROOT_ID) + nodesOf(state)
+                state.addNode(
+                    ReplicaId("R$replicaIndex"),
+                    state.moveLogSize + 1L,
+                    anchors[random.nextInt(anchors.size)],
+                    "n$replicaIndex.${random.nextInt(100)}",
+                ).tree
+            },
+            LatticeOp("move-last-under-first", OpKind.RETIRE) { state, replicaIndex, _ ->
+                val nodes = nodesOf(state)
+                if (nodes.size < 2) {
+                    state
+                } else {
+                    state.move(ReplicaId("R$replicaIndex"), state.moveLogSize + 1L, nodes.last(), nodes.first()).first
+                }
+            },
+            LatticeOp("move-roam", OpKind.RETIRE) { state, replicaIndex, random ->
+                val nodes = nodesOf(state)
+                if (nodes.size < 2) {
+                    state
+                } else {
+                    val node = nodes[random.nextInt(nodes.size)]
+                    val candidates = (listOf(MovableTree.ROOT_ID) + nodes).filter { it != node }
+                    state.move(
+                        ReplicaId("R$replicaIndex"),
+                        state.moveLogSize + 1L,
+                        node,
+                        candidates[random.nextInt(candidates.size)],
+                    ).first
+                }
+            },
+        ),
+        // Four steps, not the default three: `move` needs two nodes before it can retire anything,
+        // so the word opens with two adds. The third step is the retirement (the second node leaves
+        // the root for the first), the fourth re-asserts under the root the move just vacated.
+        criticalShapes = listOf(
+            listOf("add-under-root", "add-under-root", "move-last-under-first", "add-under-root"),
+        ),
         serializer = MovableTree.serializer(String.serializer()),
         replicaCount = 3,
         opsPerReplica = 8,

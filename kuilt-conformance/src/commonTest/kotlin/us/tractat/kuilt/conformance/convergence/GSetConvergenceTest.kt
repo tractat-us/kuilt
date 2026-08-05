@@ -8,9 +8,13 @@ import us.tractat.kuilt.crdt.GSet
 internal class GSetConvergenceTest : CrdtConvergenceSuite<GSet<String>>() {
     override fun newHarness(): CrdtConvergenceHarness<GSet<String>> = CrdtConvergenceHarness(
         initial = GSet.empty(),
-        gen = OperationGenerator { state, _, random ->
-            state.piece(GSet.of("e${random.nextInt(6)}"))
-        },
+        // Grow-only by construction — `GSet` has no removal, so there is no RETIRE op to declare
+        // and no critical shape to derive.
+        alphabet = listOf(
+            LatticeOp("add", OpKind.ASSERT) { state, _, random ->
+                state.piece(GSet.of("e${random.nextInt(6)}"))
+            },
+        ),
         serializer = GSet.serializer(String.serializer()),
         replicaCount = 3,
         opsPerReplica = 8,

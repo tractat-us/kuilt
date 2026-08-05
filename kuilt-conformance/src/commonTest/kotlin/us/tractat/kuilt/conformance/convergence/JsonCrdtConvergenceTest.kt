@@ -27,18 +27,40 @@ internal class JsonCrdtConvergenceTest : CrdtConvergenceSuite<JsonCrdt>() {
     private val replicaIds = List(3) { ReplicaId("R$it") }
     private val keys = listOf("k0", "k1", "k2")
 
+    /** The key the critical shape's three steps agree on — see the alphabet's comment. */
+    private val focusKey get() = keys[0]
+
     override fun newHarness(): CrdtConvergenceHarness<JsonCrdt> = CrdtConvergenceHarness(
         initial = JsonCrdt.empty(replicaIds[0]),
-        gen = OperationGenerator { state, replicaIndex, random ->
-            val r = replicaIds[replicaIndex]
-            val key = keys[random.nextInt(keys.size)]
-            when (random.nextInt(4)) {
-                0 -> state.withReplica(r).set(key, leafNode(r, "v${random.nextInt(4)}"))
-                1 -> state.withReplica(r).set(key, objNode(r, "f" to leafNode(r, "obj")))
-                2 -> state.withReplica(r).set(key, arrNode(r, leafNode(r, "item")))
-                else -> state.withReplica(r).remove(key)
-            }
-        },
+        // The derived shape is `set-leaf · remove · set-obj` on the focus key: assert a scalar,
+        // retire it, then re-assert a node of a *different* type. Coming back as an object rather
+        // than another leaf is what makes the re-assertion visible — a lattice that let the retired
+        // leaf survive would have to reconcile it against the object, and the cross-type tiebreak
+        // is where that shows.
+        alphabet = listOf(
+            LatticeOp("set-leaf", OpKind.ASSERT) { state, replicaIndex, random ->
+                val r = replicaIds[replicaIndex]
+                state.withReplica(r).set(focusKey, leafNode(r, "v${random.nextInt(4)}"))
+            },
+            LatticeOp("set-obj", OpKind.ASSERT) { state, replicaIndex, _ ->
+                val r = replicaIds[replicaIndex]
+                state.withReplica(r).set(focusKey, objNode(r, "f" to leafNode(r, "obj")))
+            },
+            LatticeOp("set-leaf-roam", OpKind.ASSERT) { state, replicaIndex, random ->
+                val r = replicaIds[replicaIndex]
+                state.withReplica(r).set(keys[random.nextInt(keys.size)], leafNode(r, "v${random.nextInt(4)}"))
+            },
+            LatticeOp("set-arr-roam", OpKind.ASSERT) { state, replicaIndex, random ->
+                val r = replicaIds[replicaIndex]
+                state.withReplica(r).set(keys[random.nextInt(keys.size)], arrNode(r, leafNode(r, "item")))
+            },
+            LatticeOp("remove", OpKind.RETIRE) { state, replicaIndex, _ ->
+                state.withReplica(replicaIds[replicaIndex]).remove(focusKey)
+            },
+            LatticeOp("remove-roam", OpKind.RETIRE) { state, replicaIndex, random ->
+                state.withReplica(replicaIds[replicaIndex]).remove(keys[random.nextInt(keys.size)])
+            },
+        ),
         serializer = JsonCrdt.serializer(),
         replicaCount = 3,
         opsPerReplica = 8,

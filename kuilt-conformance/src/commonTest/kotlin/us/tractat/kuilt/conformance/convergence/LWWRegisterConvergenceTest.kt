@@ -10,13 +10,19 @@ import us.tractat.kuilt.crdt.ReplicaId
 internal class LWWRegisterConvergenceTest : CrdtConvergenceSuite<LWWRegister<String>>() {
     override fun newHarness(): CrdtConvergenceHarness<LWWRegister<String>> = CrdtConvergenceHarness(
         initial = LWWRegister.empty(),
-        gen = OperationGenerator { state, replicaIndex, random ->
-            val replica = ReplicaId("R$replicaIndex")
-            // Sparse timestamp space forces frequent ties — exercises the replicaId tie-breaker.
-            val timestamp = random.nextLong(0L, 10L)
-            val value = "v-${random.nextInt(0, 10)}"
-            state.set(replica, timestamp, value)
-        },
+        // `LWWRegister` has no removal at all, so nothing here is a RETIRE. It is also the type the
+        // free byte-size proxy gets most wrong — 62.1% of its steps shrink the encoding, purely
+        // because a shorter value string encodes shorter. See `OpKind`.
+        //
+        // The tag-uniqueness precondition this generator violates (same `(replica, timestamp)`,
+        // two different values) is #2101's Task 4, not this one.
+        alphabet = listOf(
+            LatticeOp("set", OpKind.ASSERT) { state, replicaIndex, random ->
+                // Sparse timestamp space forces frequent ties — exercises the replicaId tie-breaker.
+                val timestamp = random.nextLong(0L, 10L)
+                state.set(ReplicaId("R$replicaIndex"), timestamp, "v-${random.nextInt(0, 10)}")
+            },
+        ),
         serializer = LWWRegister.serializer(String.serializer()),
         replicaCount = 3,
         opsPerReplica = 8,
