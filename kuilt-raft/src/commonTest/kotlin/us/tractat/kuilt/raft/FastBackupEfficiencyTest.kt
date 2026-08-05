@@ -51,9 +51,21 @@ import kotlin.time.Duration.Companion.milliseconds
  * | [logTooShortRejectionReportsNoConflictTermAndPointsAtOurTail] | **FAILS** — `conflictTerm=1`, expected `null` |
  * | [everyBackupRoundProbesAStrictlyLowerIndex] | **PASSES** — the clamp holds it, not this guard |
  *
+ * A second mutation, `resolvedConflictIndex = state.lastLogIndex` (off-by-one), reddens the same two
+ * and leaves the third green: `probes=[12, 1]`, `expected:<2> but was:<1>` and `conflictIndex=2`,
+ * expected `3`.
+ *
  * So the liveness test is kept as an end-to-end pin of a real property across the composed leader +
  * follower pair — **not** as coverage of `conflictTerm = null`. Do not re-attribute it to this
  * guard; that mis-attribution is the defect #2067 turned out to be about.
+ *
+ * ## And the liveness test is not vacuous: drop *both* barriers and it reddens
+ *
+ * Mutate the guard **and** relax #1829's ceiling to `minOf(proposed, currentNextIndex)` together and
+ * the genuine #1246 fixed point is back — [everyBackupRoundProbesAStrictlyLowerIndex] reports
+ * `probes=[12 × 60]` and **fails in 0.046 s**. That is the measurement that matters for the method:
+ * a real livelock, driven through both production engines, rendered as a bounded red rather than a
+ * hang, because the pump below is what terminates the loop.
  *
  * ## Why delivery is pumped by hand
  *
@@ -235,9 +247,13 @@ internal class FastBackupEfficiencyTest {
      *
      * Kept because the property is real and worth an end-to-end pin across the composed pair — the
      * unit-level sibling is `RaftLogMathTest`'s
-     * `nextIndexAfterFailure_malformedConflictIndexAtOrAboveNextIndex_alwaysStrictlyDecreases`. It is
-     * strictly stronger than #2067's other rejected candidate, frame inequality across rounds: a
-     * strictly decreasing `prevLogIndex` already makes consecutive frames unequal.
+     * `nextIndexAfterFailure_malformedConflictIndexAtOrAboveNextIndex_alwaysStrictlyDecreases`, which
+     * pins the same invariant on the pure function alone. It is strictly stronger than #2067's other
+     * rejected candidate, frame inequality across rounds: a strictly decreasing `prevLogIndex`
+     * already makes consecutive frames unequal.
+     *
+     * And it is not vacuous — remove the clamp *as well as* the guard and it reddens with
+     * `probes=[12 × 60]` in 0.046 s. See the class KDoc.
      */
     @Test
     fun everyBackupRoundProbesAStrictlyLowerIndex() = raftRunTest {
