@@ -29,6 +29,7 @@ import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.TransportRole
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.stream.DEFAULT_MAX_FRAME_SIZE
 import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -132,6 +133,13 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwSeam")
  *   the seam evicts it — re-forming to [SeamState.Weaving] if it was the last remote (#1478/#1513).
  *   Production default [DEFAULT_WOVEN_PATH_GRACE] (10s); tests inject a small value. Injected via
  *   [scope]'s (test) dispatcher, so it advances under virtual time.
+ * @param maxFrameBytes the largest payload this seam's framing will carry, published as
+ *   [maxPayloadBytes] and enforced by both edges of the wire — [encodeFrame] on send and each
+ *   connection's [NwFramer] on receive. One number, threaded to both, so the ceiling this seam
+ *   *publishes* is by construction the ceiling it *enforces* (#2069); previously each edge reached
+ *   for [DEFAULT_MAX_FRAME_SIZE] independently and the seam published nothing. Production default
+ *   [DEFAULT_MAX_FRAME_SIZE] (16 MiB); tests inject a small value so an over-budget payload costs
+ *   bytes rather than megabytes.
  */
 internal class NwSeam(
     override val selfId: PeerId,
@@ -145,6 +153,7 @@ internal class NwSeam(
     // a confident path verdict it had never observed (#1712). Narrowing the type makes that
     // structurally impossible rather than merely discouraged: there is no availability to launder.
     private val staticRoles: Set<TransportRole> = NwLoom.NW_ROLES,
+    private val maxFrameBytes: Int = DEFAULT_MAX_FRAME_SIZE,
 ) : Seam {
 
     /**
@@ -152,8 +161,8 @@ internal class NwSeam(
      * only by the single bytes loop. [nonce] is minted once at creation and never mutated — it is
      * this connection's contribution to the canonical dedup nonce.
      */
-    private class ConnState(val nonce: ByteArray) {
-        val framer: NwFramer = NwFramer()
+    private class ConnState(val nonce: ByteArray, maxFrameBytes: Int) {
+        val framer: NwFramer = NwFramer(maxFrameBytes)
         var resolvedPeerId: PeerId? = null
 
         /**
@@ -320,7 +329,7 @@ internal class NwSeam(
             // could go stale before the locked reconcile ran.
             if (created) reconcileStates()
             log.debug { "nw.seam.opened connId=${connId.value} self=${selfId.value} → sending NwHello" }
-            runCatchingCancellable { api.send(connId, encodeFrame(NwHello.encode(selfId, cs.nonce))) }
+            runCatchingCancellable { api.send(connId, encodeFrame(NwHello.encode(selfId, cs.nonce), maxFrameBytes)) }
                 .onFailure { log.debug { "nw.seam.identity-send-failed connId=${connId.value} self=${selfId.value}: ${it.message}" } }
         }
     }
@@ -394,7 +403,7 @@ internal class NwSeam(
         if (existing != null) {
             existing to false
         } else {
-            ConnState(random.nextBytes(NONCE_BYTES)).also { conns[connId] = it } to true
+            ConnState(random.nextBytes(NONCE_BYTES), maxFrameBytes).also { conns[connId] = it } to true
         }
     }
 
@@ -412,7 +421,7 @@ internal class NwSeam(
         when {
             existing != null -> existing to false
             connId in tombstones -> null // evicted conn — drop the late/buffered frame, do not resurrect
-            else -> ConnState(random.nextBytes(NONCE_BYTES)).also { conns[connId] = it } to true
+            else -> ConnState(random.nextBytes(NONCE_BYTES), maxFrameBytes).also { conns[connId] = it } to true
         }
     }
 
@@ -880,7 +889,7 @@ internal class NwSeam(
     override suspend fun broadcast(payload: ByteArray) {
         check(_state.value !is SeamState.Torn) { closedMessage }
         val targets = lock.withLock { registry.values.map { it.connId } }
-        val frame = encodeFrame(payload)
+        val frame = encodeFrame(payload, maxFrameBytes)
         for (connId in targets) {
             runCatchingCancellable { api.send(connId, frame) }
                 .onFailure {
@@ -893,7 +902,7 @@ internal class NwSeam(
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
         check(_state.value !is SeamState.Torn) { closedMessage }
         val connId = lock.withLock { registry[peer]?.connId } ?: throw PeerNotConnected(peer)
-        runCatchingCancellable { api.send(connId, encodeFrame(payload)) }
+        runCatchingCancellable { api.send(connId, encodeFrame(payload, maxFrameBytes)) }
             .onFailure {
                 log.info { "nw.seam.sendTo.send-failed peer=${peer.value} connId=${connId.value} self=${selfId.value}: ${it.message} → removeByConn" }
                 removeByConn(connId)
