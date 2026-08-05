@@ -810,6 +810,16 @@ public class LatticeLawHarness<S : Quilted<S>>(
          * re-assert — is **three** ops long, so 4 carries one op of headroom over the deepest bug
          * anyone has needed to reach here. 6 would cost four minutes on Kotlin/Native alone, and
          * Kotlin/Native is where this module's test budget lands.
+         *
+         * **Read the shape of this curve, not its absolute native cells.** Two things move them.
+         * *The box:* the `L = 4` native cell has been measured at **364 ms**, **694–703 ms** and
+         * **1.01 s** on three occasions, and the whole track's native suite total has read anywhere
+         * from 53 s to 149 s for identical code. *The type:* the column is `ORMap<String, GCounter>`,
+         * whose join is nested — `LWWRegisterConvergenceTest` runs this **exact** configuration
+         * (`|A| = 3`, `L = 4`, 120 words) for **1 ms**, because its join is a tag comparison. So the
+         * row is not a per-binding constant and must not be multiplied out as one. Measured whole-
+         * suite cost of this pass on Kotlin/Native, 2026-08-05, 19 bindings, load 1.5: **3.03 s
+         * total**, of which `JsonCrdt` is 2.02 s and `ORMap` 1.01 s and the other 17 are ~0.
          */
         const val EXHAUSTIVE_WORD_LENGTH = 4
 

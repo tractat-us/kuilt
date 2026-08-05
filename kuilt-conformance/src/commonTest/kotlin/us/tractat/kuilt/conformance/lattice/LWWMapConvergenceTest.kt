@@ -42,7 +42,8 @@ private const val CLOCK_PREFIX = "@clock-"
 
 /**
  * The value a write carries, derived from `(replica, timestamp, key)` — [LWWMap.set]'s documented
- * tag-uniqueness precondition, honoured the way `LWWMapLawsPropertyTest` honours it.
+ * tag-uniqueness precondition, honoured the way the JVM-only jqwik surface deleted in #2101
+ * honoured it.
  *
  * `set` requires `(replica, timestamp)` to identify a write on a key uniquely, because
  * [us.tractat.kuilt.crdt.LWWRegister.piece]'s `else -> this` reads equal tags as equal values: two

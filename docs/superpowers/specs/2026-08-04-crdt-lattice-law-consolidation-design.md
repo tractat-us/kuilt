@@ -1,9 +1,18 @@
 # One place that decides whether a shared type is sound
 
 **Issue:** [#2101](https://github.com/tractat-us/kuilt/issues/2101) · **Date:** 2026-08-04 ·
-**Status:** design proposed, not implemented. Every figure below was measured on this branch with
-throwaway probes; "How the figures were produced" says how to re-take them. **#2101's own table is
-corrected in the first section — read that before the proposal.**
+**Status:** **IMPLEMENTED and closed, 2026-08-05.** Every figure below was measured on this branch
+with throwaway probes; "How the figures were produced" says how to re-take them. **#2101's own table
+is corrected in the first section — read that before the proposal.**
+
+> **Five figures below did not survive execution and are corrected inline where they appear**,
+> marked **CORRECTED on execution**: the `148.6 s` native baseline (a box artifact — identical code
+> reads 53–149 s; the gate is a **ratio**, met at **0.891×**), the `LWWMap` commutativity count
+> (**0**, not 20 — unreachable because its mutators join), the `L = 4` cost table (measured at
+> `|A| = 3`; cost is `|A|ᴸ`, so it needed a triple budget), "~5.8 s across 16" (the pass costs
+> **3.03 s across 19**, concentrated in two bindings), and the exhaustive pass's "28 words"
+> (order-dependent — it reads **20**; the word and the length reproduce exactly). The plan doc
+> carries all eight, including three that are prescriptions rather than figures.
 
 ## What this changes, in plain language
 
@@ -124,6 +133,14 @@ seeds 0..15:
 | idempotence | 0 everywhere |
 | least-upper-bound | 0 everywhere |
 | **commutativity** | **`LWWMapConvergenceTest` 20, `LWWRegisterConvergenceTest` 52**, 0 elsewhere |
+
+> **CORRECTED on execution: the `LWWMap` cell is 0, not 20.** `LWWMap`'s mutators *join*, so a second
+> write at an already-used tag is dropped and the losing value never enters a pool state — the
+> violation is unreachable, measured 0 in 12,950 pairs over seeds `0..63`. `LWWRegister` *assigns*,
+> does reach it, and measured **226** over the full pool (the 52 at seeds `0..15` reproduced
+> exactly). Fixing the `LWWMap` generator is therefore **preventive**: the green was an accident of
+> the mutators, not of the precondition being honoured. A 0 has two causes — the law holds, or the
+> pool cannot get there — and only reading the mutator separates them.
 
 Both are the known equal-tag finding from #2096: a generator that mints the same
 `(replica, timestamp)` with two different values steps outside `LWWRegister.set`'s **documented**
@@ -248,6 +265,13 @@ Against the reintroduced #2086, with alphabet `{put(k0,4), put(k0,1), remove(k0)
 
 > minimal counterexample = `[put(k0,4), remove(k0), put(k0,1)]`, length **3**, found after **28 words**
 
+> **CORRECTED on execution: the word and the length reproduce exactly; the `28` is not a property of
+> the search.** Re-measured against a rebuilt legacy `ORMap`, the pass returns the same word at
+> length **3** after **20** words. The count follows **alphabet declaration order**, which is the
+> order the enumeration walks: with the asserts declared `put-high, put-low, remove` the failing word
+> sits at length-3 index 7 (`3 + 9 + 8 = 20`); reversed, at index 15 (`3 + 9 + 16 = 28`). Both are
+> correct breadth-first searches. **Quote the word and the length; never the count.**
+
 That is the #2086 shape, **minimal by construction** — there is no shorter word, because every
 shorter word was tried first. jqwik's shrinker produces a locally-minimal synthetic operand list;
 this produces the globally shortest *reachable trajectory*. It is strictly the better artefact.
@@ -275,6 +299,18 @@ cannot be exhaustive, so it never justifies a green.
 per binding on the slowest target — about 6 s across 16 bindings. L = 6 would cost **4 minutes on
 Kotlin/Native alone**. Finding a counterexample is cheap because the search exits early; *proving
 absence* is what costs, and that is the case that runs every day.
+
+> **CORRECTED on execution — twice over.** *(a)* **The table is `|A| = 3` and the cost is `|A|ᴸ`,
+> not `L`.** Live bindings run 1 to 6 ops wide; at `L = 4` that spans 12,120 ordered triples
+> (`|A| = 3`) to **176,844** (`JsonCrdt`, `|A| = 6`), so uncapped `JsonCrdt` alone would have cost
+> ~40 s rather than ~6 s for the whole pass. Shipped with `EXHAUSTIVE_TRIPLE_BUDGET`, which reduces
+> the bound **by whole lengths only** — a partial length would weaken "shortest counterexample" to
+> "shortest we reached". *(b)* **"~0.4 s per binding × 16" is not a valid multiplication.** The
+> native cell is `ORMap<String, GCounter>`-specific, and box-dependent besides (364 ms / 694–703 ms /
+> 1.01 s on three occasions): `LWWRegisterConvergenceTest` runs the *exact* `|A| = 3, L = 4,
+> 120-word` configuration for **1 ms**, because its join is a tag comparison rather than a nested
+> map merge. Whole-pass cost, re-measured 2026-08-05 at load 1.5: **3.03 s across 19 bindings** —
+> `JsonCrdt` 2.02 s, `ORMap` 1.01 s, the other **17 at ~0**. The JVM and wasmJs rows reproduce.
 
 ## The multiplatform cost is a Kotlin/Native cost, not a "non-JVM" cost
 
@@ -306,6 +342,15 @@ read from the results XML:
 | `convergesAtSeedZero` | 0.0 s | — | GREEN |
 | **total** | **148.6 s** | | |
 
+> **CORRECTED on execution: every absolute in this table is a box artifact; only the shares are
+> portable.** Seven measurements of **identical code** read **148.6 / 77.0 / 79.2 / 60.3 / 62.5 /
+> 53.0 / 74.3 s**. What reproduced is the *structure* — encode's share came back at 76.9% against
+> 81% predicted, and the 18% saving below landed at 17.2%. Re-measured on one box on one day,
+> `git archive`-ing the pre-track tree into a scratch directory so both halves ran under the same
+> conditions: **74.30 s** pre-track over 16 bindings, **66.18 s** post-track over 19 —
+> **0.891×, and 25% cheaper per binding**, with four laws asserted instead of two. **Use a
+> same-box before/after ratio as the gate; never an absolute second count.**
+
 The most expensive test in the suite is the one that could not see the defect the issue is about —
 by design, since `runAssociativeEncoding` `continue`s past any triple that already failed
 associativity. It is guarding a real and different axis (canonicality, #1955), but it is doing so at
@@ -314,7 +359,8 @@ four fifths of the Kotlin/Native budget, and `JsonCrdt` alone accounts for 30.1 
 That reframes the whole cost question in #2101. **The multiplatform bill is real and is already
 being paid.** Everything this design adds is marginal against it: an exhaustive pass at `L = 4` costs
 364 ms per binding, ~5.8 s across 16 — **under 5% of what `associativeJoinsEncodeIdentically` costs
-today**.
+today**. *(The conclusion holds; the arithmetic does not — see the correction above. The pass
+measured **3.03 s across 19 bindings**, concentrated in two of them.)*
 
 **And there is an easy 18% back.** `runAssociativity` and `runAssociativeEncoding` each rebuild the
 pool from the same seed and each recompute *both bracketings* for every triple; the second then adds
@@ -402,6 +448,10 @@ Mutation-first, because every claim here is about what a test can *see*:
    results XML. Baseline: **148.6 s** across 16 bindings, of which `associativeJoinsEncodeIdentically`
    is 120.5 s. After the merge in "the multiplatform cost" section, the *total including everything
    this design adds* should be **at or below** that baseline.
+   > **CORRECTED on execution: state this as a ratio, not a threshold.** `148.6 s` is a box artifact
+   > (53–149 s for identical code), so "at or below 148.6 s" is a gate that passes or fails on box
+   > load. **Met**, on the paired same-box measurement: **66.18 s vs 74.30 s = 0.891×**, for 19
+   > bindings rather than 16.
 
 ## Decisions Iain owns
 

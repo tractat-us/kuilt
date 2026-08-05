@@ -162,14 +162,18 @@ class ORSetTest {
     /**
      * The general law, over **causally related** trajectories rather than independent states.
      *
-     * This is the coverage the surfaces that already exist cannot give. `ORSetLawsPropertyTest`
-     * (jvmTest, jqwik) generates its three states from three disjoint single-replica namespaces, so
-     * no state it produces is ever an ancestor of another and no dot is ever superseded across the
-     * triple — the sibling `ORMapLawsPropertyTest` is built the same way and passes on an `ORMap`
-     * that *is* non-associative. `LatticeLawSuite` asserts only that replicas agree after a
-     * full exchange, which a non-associative join still satisfies because the divergence heals on
-     * the next merge. Here every snapshot comes from one shared history of adds, removes, merges and
-     * shipped deltas, and every ordered triple of snapshots is checked in both groupings.
+     * This is the coverage an **independent-states** generator cannot give. The JVM-only jqwik
+     * surface deleted in #2101 generated its three states from three disjoint single-replica
+     * namespaces, so no state it produced was ever an ancestor of another and no dot was ever
+     * superseded across the triple. Its `ORMap` sibling was built the same way and passed on an
+     * `ORMap` that *is* non-associative (#2086), so that design was not evidence of anything.
+     * Here every snapshot comes from one shared history of adds, removes, merges and shipped
+     * deltas, and every ordered triple of snapshots is checked in both groupings.
+     *
+     * `:kuilt-conformance`'s `LatticeLawSuite` now checks this law over a causal-ancestor pool for
+     * `ORSet` too, so this test is no longer the only surface that can reach the shape. What it
+     * still adds is a *named, seeded* trajectory with its own vacuity guards asserted below, in the
+     * per-type register the shared suite deliberately does not replace.
      */
     @Test
     fun pieceIsAssociativeOverCausallyRelatedTrajectories() {

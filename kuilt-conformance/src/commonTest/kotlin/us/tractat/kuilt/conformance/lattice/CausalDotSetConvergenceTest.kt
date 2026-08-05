@@ -8,7 +8,8 @@ import us.tractat.kuilt.crdt.ReplicaId
 /**
  * `Causal<DotSet>` — the enable-wins flag, the smallest causal CRDT there is.
  *
- * The alphabet is `DotSet`'s whole vocabulary, and it is the one this type was reached with before:
+ * The alphabet is `DotSet`'s whole vocabulary, and it is the one this type was reached with before,
+ * in the JVM-only jqwik surface deleted in #2101 — so the names below will not resolve.
  * `CausalDotSetLawsPropertyTest.trajectoryFor` folded a list of booleans, minting a fresh dot on
  * `true` and dropping **all** dots while keeping the context on `false`. Both branches survive here
  * verbatim; what is added is that the interesting word is now constructed rather than drawn.
