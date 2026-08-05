@@ -16,9 +16,16 @@ internal sealed interface EngineCommand {
      * The engine's inbound pump decodes before enqueueing, so this is the one command carrying no
      * `RaftMessage` — the failure *is* that there is no message. It exists so the drop is reported
      * from the **actor loop** rather than the pump coroutine: the trace clock is a plain `var`
-     * confined to the actor, and emitting off it would race every other event's clock. Routing
-     * through the same channel as [IncomingMessage] also means an undecodable-frame flood is bounded
-     * by exactly the queue that already bounds a decodable one, adding no new surface.
+     * confined to the actor, and emitting off it would race every other event's clock.
+     *
+     * **Routing it through the shared command channel adds no queueing surface — but not because
+     * that channel bounds anything.** It is `Channel.UNLIMITED`, so a flood of *either* command shape
+     * grows it without limit; do not read a boundedness guarantee here that does not exist. The
+     * reason this is safe is that an undecodable frame is strictly *cheaper* than a decodable one on
+     * every axis: it retains an `Int` where [IncomingMessage] retains a whole `RaftMessage`, and its
+     * handler is one non-suspending trace emit where `onMessage` may persist, append and respond. The
+     * actor therefore drains these *faster* than the frames a peer could already send, so an
+     * undecodable flood grows the queue less than the decodable flood that is always available.
      *
      * Carries [byteCount] rather than the bytes: the payload is remote-controlled and nothing
      * downstream reads it. The decode failure itself is logged at `debug` at the pump, where the

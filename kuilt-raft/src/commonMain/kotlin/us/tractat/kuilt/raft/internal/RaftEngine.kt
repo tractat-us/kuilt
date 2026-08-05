@@ -61,12 +61,22 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.raft.RaftEngine")
 /**
  * Codec for the [RaftMessage] wire envelope. [Cbor.ignoreUnknownKeys] is `true` so a peer running an
  * OLDER build tolerates a field a NEWER peer added — e.g. [RaftMessage.RequestVote.leadershipTransfer].
- * Without it the default `Cbor` throws on the unknown key and the transport-collect coroutine (which
- * only guards [ClosedSendChannelException]) would take the node's scope down. Adding a defaulted field
- * to any `RaftMessage` is therefore forward- and backward-compatible: an old peer that receives it just
- * drops the field and behaves as if it were absent (for the disrupt flag: denies under stickiness — the
- * correct graceful degradation). [Cbor.encodeDefaults] stays at its default `false`, so a new peer with
- * `leadershipTransfer = false` omits the field entirely and the byte stream is unchanged for old peers.
+ *
+ * **What the flag buys is participation across a rolling upgrade, and that is the whole reason it is
+ * here.** Adding a defaulted field to any `RaftMessage` is forward- and backward-compatible: an old
+ * peer that receives it drops the field and behaves as if it were absent (for the disrupt flag:
+ * denies under stickiness — the correct graceful degradation). [Cbor.encodeDefaults] stays at its
+ * default `false`, so a new peer with `leadershipTransfer = false` omits the field entirely and the
+ * byte stream is unchanged for old peers.
+ *
+ * **Do not read the flag as a crash guard, and do not drop it now that one exists.** It used to be
+ * justified here as the thing standing between an unknown key and node death, because the decode ran
+ * inside a `collect` guarding only [ClosedSendChannelException]. [decodeInbound] closed that hole
+ * (#2051), so the old rationale is now false and is deliberately not restated. The consequence of
+ * removing the flag is *worse* than it was, not better: with the decode no longer fatal, an old peer
+ * facing a newer one that added a single defaulted field would drop **every** frame from it — a node
+ * that is up, traced, emitting [RaftTraceEvent.FrameUndecodable], and completely unable to
+ * participate. Forward-compatibility is load-bearing on its own; the crash was never the argument.
  */
 private val raftCbor = Cbor { ignoreUnknownKeys = true }
 
@@ -687,12 +697,18 @@ internal class RaftEngine(
      * reject with `CborDecodingException` too. A `catch (SerializationException)` would pass
      * `UndecodableFrameTest` today — that was checked, not assumed.
      *
-     * Width is still right, for two reasons that do not depend on that taxonomy holding. The format
+     * Width is still right, for three reasons that do not depend on that taxonomy holding. The format
      * contract is wider than the current behaviour: `BinaryFormat.decodeFromByteArray` documents
      * `IllegalArgumentException` alongside `SerializationException`, so a narrow catch is already
-     * outside what the interface promises. And #1818's rule is about the *path*, not the library —
-     * the width that belongs here is "anything a remote peer's bytes can cause", and pinning it to a
+     * outside what the interface promises. #1818's rule is about the *path*, not the library — the
+     * width that belongs here is "anything a remote peer's bytes can cause", and pinning it to a
      * third-party exception hierarchy makes a dependency bump able to reintroduce node death silently.
+     *
+     * And there is one live case outside the whole `Exception` branch: [raftCbor]'s `ignoreUnknownKeys`
+     * **skips an unknown value recursively**, so a hostile frame nesting an unknown key deeply enough
+     * throws `StackOverflowError`. That is an `Error`, so it clears not only `catch (SerializationException)`
+     * but `catch (e: Exception)` too — a narrow catch of either shape leaves it fatal. Only a
+     * `Throwable`-wide guard covers it, which is why this one is.
      *
      * [runCatchingCancellable] is what keeps the width from swallowing cancellation: a
      * `CancellationException` still propagates, so scope teardown is unaffected.
