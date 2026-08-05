@@ -1,5 +1,27 @@
 # Lattice-Law Consolidation — Implementation Plan
 
+> **EXECUTED AND CLOSED, 2026-08-05.** All nine tasks shipped (#2132 · #2133 · #2135 · #2136 ·
+> #2137 · #2142 · #2146 · #2147 · #2148), closing #2101. This plan is kept as the record of how the
+> work was reasoned about, **not** as a description of the tree — for that, read the code.
+>
+> **Seven of its prescriptions turned out to be wrong, and each is corrected inline below** at the
+> step that carried it, marked **CORRECTED (Task 9)**. Every correction was *measured* by the worker
+> that hit it, not inferred. In summary:
+>
+> | # | where | what was wrong |
+> |---|---|---|
+> | 1 | cost baseline | `148.6 s` is a **box artifact**, not a gate — identical code has read 53–149 s. The gate is a same-box before/after **ratio**; the track landed at **0.891×** for 19 bindings instead of 16. |
+> | 2 | Task 0 Step 2 | "use `ORMapConvergenceTest`'s own generator" — #2110 moved it onto delta mutators after this plan was committed; a `348de854^` type will not compile against it. |
+> | 3 | Task 1 Step 2 | the prescribed sample is **inert** — 0 violations, not 12. The rule is *must not dominate*, not *must differ*. |
+> | 4 | Task 0 Step 3 | the vacuity-control arm is **not uniquely specified**; four spellings, none reproducing the published triple count. The conclusion survives all four. |
+> | 5 | Task 4 Step 4 | `LWWMap`'s 20 commutativity violations are **0** — unreachable, because its mutators join. The fix is preventive, not corrective. |
+> | 6 | Task 6 Step 3 | the `L = 4` cost table was measured at `\|A\| = 3` and **does not generalise**; cost is `\|A\|ᴸ`. Shipped with a triple budget. |
+> | 7 | Task 8 Step 4 | "leave `jqwik` in the catalog, `:kuilt-raft` uses it" — #2112 took `:kuilt-raft` off jqwik **46 minutes** after this plan was committed. |
+>
+> The pattern worth carrying forward: **five of the seven are a prescribed literal, a prescribed
+> absolute, or a prescribed premise about another module** — the three things a plan cannot state
+> without running them, and the three a worker is most likely to copy rather than check.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development
 > (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use
 > checkbox (`- [ ]`) syntax for tracking.
@@ -30,6 +52,9 @@ op-log failure reporting. `QuiltedConformanceSuite` stays as the cheap smoke sur
 >    `LWWMapConvergenceTest` and 52× on `LWWRegisterConvergenceTest`, because those generators
 >    violate `LWWRegister.set`'s documented tag-uniqueness precondition. Fix the generators (Task 4)
 >    before asserting the law (Task 5).
+>    **CORRECTED (Task 9): only the `LWWRegister` half is real** — 52 at seeds `0..15` reproduced
+>    exactly, and 226 over the full pool. `LWWMap` is **0**: its mutators join, so a duplicate-tag
+>    write is dropped and the losing value never enters the pool. See Task 4 Step 4.
 > 3. **No JVM/all-targets split is needed.** wasmJs is JVM-class; Kotlin/Native is 10–15× slower on
 >    the cubic loop but still affordable at the current parameters. Do not propose one.
 >
@@ -71,7 +96,7 @@ op-log failure reporting. `QuiltedConformanceSuite` stays as the cheap smoke sur
 | `kuilt-crdt/src/jvmTest/kotlin/us/tractat/kuilt/crdt/property/**` | **Delete (Task 8).** 15 files. |
 | `kuilt-crdt/src/commonTest/.../{RgaTest,PNCounterTest}.kt` | **Modify (Task 8).** Re-home 5 behavioural properties. |
 | `kuilt-crdt/build.gradle.kts` | **Modify (Task 8).** Remove jqwik, `useJUnitPlatform()`, capability resolution. |
-| `gradle/libs.versions.toml` | **Modify (Task 8).** Leave `jqwik` — `:kuilt-raft` still uses it. |
+| `gradle/libs.versions.toml` | **Modify (Task 9, not 8).** Delete `jqwik` — #2112 took `:kuilt-raft` off it. |
 
 **Dependency order:**
 
@@ -106,8 +131,24 @@ over 16 bindings, from the results XML:
 | `convergesAtSeedZero` | 0.0 s | — | no |
 | **total** | **148.6 s** | | |
 
-**The whole track must finish at or below 148.6 s.** That is affordable because Task 1b returns 27 s
-and the largest addition (Task 6 at `L = 4`) costs ~6 s.
+> **CORRECTED (Task 9). The gate is a ratio, not `148.6 s`.** That absolute is a box artifact and
+> must never be used as a threshold. Six independent measurements of **identical code** read
+> **148.6 / 77.0 / 79.2 / 60.3 / 62.5 / 53.0 / 74.3 s** — a 2.8× spread with no code change between
+> them. What *is* portable is the structure, and it reproduced: encode dominates the bill (81%
+> predicted, 76.9% re-measured), and Task 1b's predicted ~18% saving landed at 17.2%.
+>
+> **The gate every task should have been measured against: a same-box, same-day before/after
+> ratio.** Task 9 took the pair by extracting the pre-track tree with `git archive 440098f6` into a
+> scratch directory and running both — no checkout, no second branch, no stash:
+>
+> | | native total | bindings | per binding | load before |
+> |---|---|---|---|---|
+> | pre-track (`440098f6`) | 74.30 s | 16 | 4.64 s | 1.27 |
+> | post-track (`126cf269`) | **66.18 s** | **19** | **3.48 s** | 1.54 |
+>
+> **0.891× the cost, for 19 bindings instead of 16 and four laws instead of two** — 25% cheaper per
+> binding. Affordable because Task 1b returned the duplicated join pass; the largest addition (Task 6
+> at `L = 4`, under its triple budget) costs 3.03 s across all 19.
 
 ---
 
@@ -129,6 +170,12 @@ and the largest addition (Task 6 at `L = 4`) costs ~6 s.
 - [ ] **Step 2: Bind it to the UNMODIFIED harness** with `ORMapConvergenceTest`'s own generator, and
   record which landed tests red, per seed. Expected (measured 2026-08-04):
 
+  > **CORRECTED (Task 9): "use `ORMapConvergenceTest`'s own generator" was stale before the first
+  > task started.** #2110 moved that generator onto delta mutators (`put`/`remove` returning deltas)
+  > after this plan was committed, so a `LegacyORMap` recovered from `348de854^` — whole-state
+  > `put`/`remove` — does **not** compile against it. Recover the generator from the same commit as
+  > the type, or hand-write a whole-state one. The verdicts below still reproduce.
+
 | landed test | verdict |
 |---|---|
 | `runAssociativity`, seeds 0..15 | RED at **2, 4, 5, 7, 9, 11, 13, 14** — 8 of 16 |
@@ -142,6 +189,15 @@ and the largest addition (Task 6 at `L = 4`) costs ~6 s.
   deleted. Expected: **0 violations / 47,059 triples**, ancestry **28.4%**, non-trivial inner join
   **39.3%**. This is the arm that proves an ancestry floor is not enough; it is the single most
   load-bearing number in the design.
+
+  > **CORRECTED (Task 9): "same generator, removes deleted" does not uniquely specify an arm.** It
+  > leaves the branch structure open, and the branch structure decides where `POOL_LIMIT` truncates —
+  > so it decides the triple count. Four spellings were measured (drop the branch; fold it into the
+  > adjacent one; renumber the `when`; keep the branch but no-op it) and **none** reproduces both
+  > 47,059 triples *and* the published percentages. **The conclusion is robust across all four** —
+  > every arm finds 0 violations while ancestry and inner-join stay comfortably above any floor a
+  > reviewer would set — which is what the design rests on. So for a control arm, **record the
+  > spelling alongside the numbers**; a control that cannot be reconstructed exactly is a claim.
 
 - [ ] **Step 4: Record per-target timings**, sampling `uptime` immediately before each. Expected order
   of magnitude: JVM ≈ wasmJs; macosArm64 10–15× slower on `runAssociativity`.
@@ -165,6 +221,14 @@ Independent of every other task. Ship it first: measured 0 → 12 violations for
   `withVotes.remove("votes").put(a, "votes", GCounter.of(a to 1L))`. The re-asserted value must
   **differ** from the original, or a lost contribution is indistinguishable from a kept one (#2099's
   finding, and the reason `ORMapLawsPropertyTest`'s generator varies its weight).
+
+  > **CORRECTED (Task 9): the sample prescribed above is INERT — it yields 0 violations, not 12.**
+  > The rule is not "the re-asserted value must **differ**"; it is that the retired value must not
+  > **dominate** it. A `GCounter` join takes the max *per author*, so re-asserting any count under
+  > the **same** author `a` lands both bracketings on the same number and the defect is invisible:
+  > `a to 1L` → **0**, `a to 2L` → **0**. Re-assert under a **different** author — `c to 1L` — and
+  > the same construction finds **12**. The shipped `retirementReAssertion()` KDoc carries this;
+  > a step that prescribes a literal must be run before it is written down.
 - [ ] **Step 3:** confirm the same construction now yields **12** violations against `LegacyORMap`.
 - [ ] **Step 4:** add to `QuiltedConformanceSuite`:
 
@@ -283,6 +347,20 @@ this design where that is true.
   the same `(replica, timestamp)` with two different values. Derive the value deterministically from
   `(replica, timestamp, key)`, exactly as `LWWMapLawsPropertyTest` already does.
 
+  > **CORRECTED (Task 9): `LWWMap`'s 20 violations do NOT reproduce — the count is 0**, in 12,950
+  > pairs over seeds `0..63`, and *not* because the precondition was honoured (it was not; the
+  > shipped `set` drew its value at random). The pool cannot **reach** the violation: `LWWMap`'s
+  > mutators *join*, so a second write at an already-used tag is dropped and the losing value never
+  > enters a pool state. `LWWRegister` *assigns* instead of joining, does reach it, and measured
+  > **226** over the same pool — while the plan's own `LWWRegister = 52` at seeds `0..15`
+  > reproduced exactly, so the generator is not in doubt, only the reachability claim.
+  >
+  > **So the `LWWMap` half of this step is preventive, not corrective.** Worth doing — the green was
+  > an accident of the mutators and a future generator drawing timestamps again would lose it — but
+  > #2101's body implies `main` is red today on `LWWMap` and it is not. Note the shape: a violation
+  > count of 0 has two causes, "the law holds" and "the pool cannot get there", and only reading the
+  > mutator tells them apart.
+
   **Do not add a per-binding commutativity waiver.** A waiver is a permanent green-by-declaration. The
   violation stays pinned where it belongs and already is — `LWWMapTest.oneTagCarryingTwoValuesCosts
   CommutativityNotAssociativity` and `MVRegisterTest.forkingOneReplicaBreaksCommutativityBut
@@ -344,6 +422,24 @@ Parallel with Tasks 3–5.
 | 7 | 3,279 | — | — | **65 s** |
 | 8 | 9,840 | — | — | **193 s** |
 
+  > **CORRECTED (Task 9): this table was measured at `|A| = 3` and does not generalise.** Word length
+  > is not the cost — `|A|ᴸ` is. Live bindings run **1 to 6** ops wide, and at `L = 4` that spans
+  > 12,120 ordered triples (`|A| = 3`) to **176,844** (`JsonCrdt`, `|A| = 6`). Uncapped, `JsonCrdt`
+  > alone would have cost ~40 s, not the budgeted ~6 s for the whole pass.
+  >
+  > **Shipped with `EXHAUSTIVE_TRIPLE_BUDGET`, which reduces the bound by whole lengths only.** A
+  > partial length would weaken the headline claim from "shortest counterexample" to "shortest we
+  > reached", which is exactly the caveat nobody carries forward. Every live alphabet still keeps
+  > `L ≥ 3`, the length the assert/retire/re-assert shape needs.
+  >
+  > **The `364 ms` native cell is not a per-binding constant.** It has read 364 ms, 694–703 ms and
+  > 1.01 s on three occasions (box), and it is `ORMap<String, GCounter>`-specific (type):
+  > `LWWRegisterConvergenceTest` runs this **exact** `|A| = 3, L = 4, 120-word` configuration for
+  > **1 ms**, because its join is a tag comparison rather than a nested map merge. Do not multiply
+  > it out per binding — the spec's "~5.8 s across 16" is wrong for that reason. Whole-pass cost
+  > re-measured 2026-08-05 at load 1.5: **3.03 s across 19 bindings**, of which `JsonCrdt` is 2.02 s
+  > and `ORMap` 1.01 s and the other **17 are ~0**. The JVM and wasmJs rows reproduce exactly.
+
 - [ ] **Step 4:** add the op log to the **randomised** pass so its failure prints the word that built
   each of `a`, `b`, `c`. The existing message already prints both bracketings and their hex; this adds
   provenance, and together with Step 1 it is what replaces jqwik's shrinking.
@@ -390,6 +486,16 @@ obvious: **a broken test-discovery configuration reports BUILD SUCCESSFUL with z
   which exists **only** to resolve the JUnit4/JUnit5 conflict the Platform switch creates.
   **Leave `jqwik` in `gradle/libs.versions.toml`** — `:kuilt-raft`'s `PureRaftModelTest` still uses it
   and is another session's track. Do not touch `kuilt-raft/build.gradle.kts`.
+
+  > **CORRECTED (Task 9): that premise expired 46 minutes after this plan was committed.** #2112
+  > (`c97f5b8b`, 22:14 ET on 2026-08-04) migrated `:kuilt-raft`'s model check off jqwik. Verified on
+  > `origin/main` after #2147: no `*.gradle.kts` references jqwik and no `*.kt` imports
+  > `net.jqwik`, leaving the catalog entry the sole survivor — and a catalog entry nothing consumes
+  > is not inert, it keeps Renovate proposing bumps to a dependency the repo does not use. Task 9
+  > deletes it, along with `junit-vintage-engine`, which existed only to resolve the JUnit4/JUnit5
+  > conflict the Platform switch created and now has zero consumers. `junit-platform-launcher`
+  > stays — `:kuilt-scale` uses it. **Do not touch `kuilt-raft/build.gradle.kts` still holds**, for
+  > the different reason that there is now nothing there to touch.
 - [ ] **Step 5 — the gate that actually matters.** `:kuilt-crdt:jvmTest --rerun-tasks`, then read the
   **results XML** and assert:
 
