@@ -52,11 +52,53 @@ public fun interface OperationGenerator<S> {
 @OptIn(ExperimentalSerializationApi::class, ExperimentalStdlibApi::class)
 public class CrdtConvergenceHarness<S : Quilted<S>>(
     public val initial: S,
-    public val gen: OperationGenerator<S>,
+    public val alphabet: List<LatticeOp<S>>,
     public val serializer: KSerializer<S>,
+    public val criticalShapes: List<List<String>> = defaultCriticalShapes(alphabet),
     public val replicaCount: Int = 3,
     public val opsPerReplica: Int = 8,
 ) {
+    /**
+     * Bind a type that has not declared an alphabet yet.
+     *
+     * The generator becomes a one-op alphabet named `undeclared`, and the binding gets **no**
+     * critical shapes — there are no op names for a shape to be a word over. That is the honest
+     * reading, not a degradation to route around: an undeclared binding also declares no
+     * [OpKind.RETIRE] op, so it reads as non-retiring to anything that measures retirement, which
+     * is what an undeclared binding should read as. Prefer the primary constructor.
+     */
+    public constructor(
+        initial: S,
+        gen: OperationGenerator<S>,
+        serializer: KSerializer<S>,
+        replicaCount: Int = 3,
+        opsPerReplica: Int = 8,
+    ) : this(
+        initial = initial,
+        alphabet = listOf(LatticeOp(UNDECLARED_OP, OpKind.ASSERT, gen::applyRandomOp)),
+        serializer = serializer,
+        criticalShapes = emptyList(),
+        replicaCount = replicaCount,
+        opsPerReplica = opsPerReplica,
+    )
+
+    /**
+     * The alphabet as a uniform random draw — the shape the pool builder consumes.
+     *
+     * Derived rather than stored so a binding cannot declare an alphabet the random pass then
+     * ignores. A single-op alphabet draws nothing, so wrapping one generator in [LatticeOp] leaves
+     * that binding's per-seed trajectory byte-for-byte what it was.
+     */
+    public val gen: OperationGenerator<S> = OperationGenerator { state, replicaIndex, random ->
+        pick(random).apply(state, replicaIndex, random)
+    }
+
+    init {
+        require(alphabet.isNotEmpty()) { "alphabet must not be empty — the pool builder has nothing to draw from" }
+        val names = alphabet.map { it.name }
+        require(names.distinct().size == names.size) { "alphabet op names must be unique, got $names" }
+    }
+
     private val cbor = Cbor {}
 
     private fun encoded(state: S): ByteArray = cbor.encodeToByteArray(serializer, state)
@@ -156,12 +198,25 @@ public class CrdtConvergenceHarness<S : Quilted<S>>(
      * absorbs a peer's current state before its next op, so the pool also holds states whose
      * contexts overlap.
      *
+     * **[criticalShapes] run first, on replica 0, as a prefix.** Random exploration reaches the
+     * interesting shape on *some* seeds; a constructed prefix reaches it on every seed, which is
+     * the difference between a law and a probabilistic pin. Against a lattice that wrongly keeps a
+     * retired contribution, the seeds-only pool is red on **8 of 16** seeds — first at seed 2, so a
+     * range of `0..1` is green on a provably broken type — and the same pool with a
+     * `put(k,4) · remove(k) · put(k,1)` prefix is red on **64 of 64**. The control matters as much:
+     * the corrected lattice is green on 64 of 64 either way, so the prefix is not manufacturing the
+     * red.
+     *
      * Trimmed to [POOL_LIMIT] entries — the triple loop is cubic, and the interesting shapes all
-     * appear within a handful of ops.
+     * appear within a handful of ops. **The prefix is counted inside that cap, not added to it**, so
+     * constructed shapes cost random exploration rather than wall clock. That is the intended trade:
+     * a constructed step is informative on every seed, and the random step it displaces was
+     * informative on roughly half.
      */
     private fun causalPool(random: Random): List<S> {
         val latest = MutableList(replicaCount) { initial }
         val pool = mutableListOf(initial)
+        applyCriticalShapes(latest, pool, random)
         outer@ for (op in 0 until opsPerReplica) {
             for (r in 0 until replicaCount) {
                 if (random.nextInt(GOSSIP_ONE_IN) == 0) {
@@ -175,6 +230,42 @@ public class CrdtConvergenceHarness<S : Quilted<S>>(
         }
         return pool
     }
+
+    /**
+     * Walk each word of [criticalShapes] on replica 0, keeping every intermediate state.
+     *
+     * Every step is asserted to have **changed the state**, because a shape that no-ops is
+     * decoration that reads like coverage. This is not hypothetical: `ORMapConvergenceTest`'s
+     * generator burns **10 of 29** steps removing a key the state does not hold, so a third of its
+     * budget already buys nothing by accident. A constructed shape that did the same would be worse,
+     * because someone wrote it down on purpose and the next reader would trust it.
+     */
+    private fun applyCriticalShapes(latest: MutableList<S>, pool: MutableList<S>, random: Random) {
+        for (shape in criticalShapes) {
+            for (opName in shape) {
+                val op = alphabet.firstOrNull { it.name == opName }
+                    ?: error(
+                        "critical shape $shape names op '$opName', which is not in the alphabet " +
+                            "${alphabet.map { it.name }}",
+                    )
+                val before = latest[0]
+                val after = op.apply(before, 0, random)
+                check(after != before) { criticalShapeNoOpFailure(shape, op, before) }
+                latest[0] = after
+                pool += after
+            }
+        }
+    }
+
+    private fun criticalShapeNoOpFailure(shape: List<String>, op: LatticeOp<S>, before: S): String =
+        "Critical shape $shape is decoration: step '${op.name}' left the state unchanged.\n" +
+            "  state $before\n" +
+            "  A constructed shape only pins what it actually reaches. Either the op is not " +
+            "target-deterministic (its key/element is drawn from `random`, so it wandered off what " +
+            "the previous step touched), or its precondition is unmet at this point in the word."
+
+    private fun pick(random: Random): LatticeOp<S> =
+        if (alphabet.size == 1) alphabet[0] else alphabet[random.nextInt(alphabet.size)]
 
     private fun buildReplicas(random: Random): List<S> =
         List(replicaCount) { r ->
@@ -216,10 +307,20 @@ public class CrdtConvergenceHarness<S : Quilted<S>>(
     }
 
     private companion object {
-        /** Cap on [causalPool]'s size — the associativity loop over it is cubic. */
+        /**
+         * Cap on [causalPool]'s size — the associativity loop over it is cubic.
+         *
+         * Measured on JVM: pool 14 → 45,797 triples / 107 ms; 20 → 133,044 / 305 ms; 28 → 356,106 /
+         * 875 ms; 40 → 1,024,000 / 2.61 s. Multiply by 10–15 for Kotlin/Native, which is where this
+         * module's test budget lands. **Do not raise this to buy redness** — [criticalShapes] buy
+         * the same redness at zero cost, which is what they are for.
+         */
         const val POOL_LIMIT = 14
 
         /** One op in this many is preceded by absorbing a peer's state. */
         const val GOSSIP_ONE_IN = 4
+
+        /** Name of the synthetic op wrapping a raw [OperationGenerator]. */
+        const val UNDECLARED_OP = "undeclared"
     }
 }
