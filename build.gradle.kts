@@ -1579,6 +1579,113 @@ val forbidBareRunCatching by tasks.registering {
     }
 }
 
+// Guard: forbid `kotlin.assert` anywhere in the tree (#2119).
+//
+// WHAT IS BANNED. `kotlin.assert` is not an assertion primitive — whether it checks anything is a
+// property of the LAUNCHER, not of the code. On the JVM it is `-ea`-gated and works here only
+// because Gradle's `Test` task happens to default `enableAssertions = true`; outside Gradle, or
+// under a runner that does not, every one of these lines silently evaluates to nothing. Off the JVM
+// the gating is per-platform and different again. The fix is any UNCONDITIONAL throw: `check(…)` /
+// `require(…)` for a precondition, `assertTrue(…)` / `assertEquals(…)` from `kotlin.test` for a
+// test assertion.
+//
+// WHY A GUARD AND NOT A REVIEW HABIT. #2112 migrated `:kuilt-raft`'s pure Raft model check to
+// `commonTest` and found ALL FIVE Raft safety invariants — Election Safety, Log Matching, State
+// Machine Safety, Leader Completeness, Compaction Completeness — written with `kotlin.assert`.
+// They had passed for their whole life by launcher grace, and the move to `commonTest` would have
+// made that live on precisely the platforms it added. Nothing had stopped it, so it accumulated.
+// Fixing the last three call sites was ten minutes; this task is the actual deliverable. Same
+// reason `forbidBareRunCatching` is a source scan and not a detekt rule: `ForbiddenMethodCall`
+// resolves no kotlin-stdlib callee in this KMP setup (see #1329's note above), so a detekt ban on
+// `kotlin.assert` would silently no-op — the exact failure shape this guard exists to end.
+//
+// SCOPE IS BLANKET — production AND test, which is the point rather than an over-reach: this
+// idiom's home is test sources, so a `*Main`-only scoping (the one
+// `forbidRunCatchingCancellableUnderNonCancellable` uses, for its own reasons) would cover none of
+// the population. `**/*.kt` under each module's `src` also picks up `commonSamples` (compiled into
+// `commonTest`) and the plain-JVM `src/test` layout that a `*Main`/`*Test` pattern would miss.
+//
+// A hit under `src/common*` is the worst case and is TAGGED `[commonSource]` in the report: it
+// compiles for every target the module declares, so it is green on JVM and inert on Native/wasm at
+// the same time. That is why the tag exists — the whole list is banned either way.
+//
+// THERE IS NO ESCAPE HATCH, deliberately, and the contrast with `forbidBareRunCatching` above is
+// the reason. That guard's real rule is NARROWER than what it can see lexically ("bare
+// `runCatching` in a coroutine context"), so a blanket lexical ban necessarily over-fires and needs
+// an `// ALLOW-runCatching:` marker to clear the legitimate remainder. Here the real rule and the
+// lexical rule COINCIDE: there is no context in this codebase in which a launcher-gated check is
+// the right primitive, so there is nothing for a marker to except. Surveyed before choosing —
+// the tree contains zero user-defined `fun assert(` and zero receiver-qualified `.assert(`, so the
+// false-positive population a hatch would serve is empty. And a hatch on a SILENCE bug is how the
+// idiom survives: `// ALLOW-assert: debug-only sanity check` is exactly what all five Raft
+// invariants would have carried. If an unforeseen legitimate site ever appears, the cheap clear is
+// to rename the function (shadowing `kotlin.assert` is confusing on its own terms); adding a hatch
+// later is a small PR, removing one after it has become idiom is not.
+//
+// DETECTION. `(?<![A-Za-z0-9_.])(kotlin\.)?assert\s*\(` over `KotlinCodeScanner.stripNonCode`
+// output. The lookbehind is the whole guard: without it the pattern eats `assertEquals(`,
+// `assertTrue(`, `assertAll(`, `assertContentEquals(`, `assertFailsWith(` — ~9,000 call sites
+// across ~1,400 files, i.e. it would fail on everything. Excluding `.` keeps a hypothetical
+// `receiver.assert(…)` out; the explicit `(kotlin\.)?` alternative puts the fully-qualified form of
+// the banned function itself back IN, which the bare `[^A-Za-z0-9_.]` boundary would have missed.
+// Stripping is defensive rather than load-bearing today (no prose hit exists), but this issue's own
+// text is quotable into a KDoc, and the sibling guards all strip.
+//
+// KNOWN COVERAGE EDGES, stated rather than fixed, and the same set `forbidBareRunCatching` carries:
+// `:spike` is a subproject only under `-PincludeSpike` so it is absent from `subprojects` on a
+// normal build; `build-logic/` is a separate included build; `*.kts` is not scanned. Also
+// undetected: an import alias (`import kotlin.assert as sanityCheck`). All are currently empty of
+// the idiom, and none is the runtime library, which is where a check that evaporates costs
+// something.
+val forbidKotlinAssert by tasks.registering {
+    group = "verification"
+    description = "Fails if any source calls kotlin.assert — it is launcher-gated, so it may check nothing (#2119)."
+    val sources = kotlinSourcesIn(subprojects.map { it.projectDir.resolve("src") })
+    inputs.files(sources).withPropertyName("kotlinSources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // See "Guard plumbing" above: the stamp is what makes UP-TO-DATE possible (#1827). The verdict
+    // is a pure function of file contents — there is no allowlist and no in-source marker — so a
+    // RELATIVE fingerprint hit genuinely means "this exact source was verified".
+    val stamp = layout.buildDirectory.file("verification/forbid-kotlin-assert.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    val rootPath = rootDir
+    doLast {
+        val call = Regex("""(?<![A-Za-z0-9_.])(kotlin\.)?assert\s*\(""")
+        val offenders = mutableListOf<String>()
+        sources.files.sortedBy { it.invariantSeparatorsPath }.forEach { file ->
+            val raw = file.readText()
+            val code = KotlinCodeScanner.stripNonCode(raw)
+            if (!call.containsMatchIn(code)) return@forEach
+            val rawLines = raw.lines()
+            // Compiles for every target the module declares — green on JVM, inert on Native/wasm.
+            val shared = "/src/common" in file.invariantSeparatorsPath
+            call.findAll(code).forEach { hit ->
+                val line = code.take(hit.range.first).count { it == '\n' } + 1
+                offenders += (if (shared) "[commonSource] " else "") +
+                    "${file.relativeTo(rootPath)}:$line  ${rawLines.getOrElse(line - 1) { "" }.trim()}"
+            }
+        }
+        if (offenders.isNotEmpty()) {
+            error(
+                "`kotlin.assert` found (#2119). It is `-ea`-gated on the JVM and gated differently " +
+                    "per platform elsewhere, so whether it checks anything is a property of the " +
+                    "LAUNCHER, not of this code — it passes today only because Gradle's `Test` task " +
+                    "defaults `enableAssertions = true`. Use an UNCONDITIONAL throw instead: " +
+                    "`check(cond) { \"…\" }` or `require(cond) { \"…\" }` for a precondition, " +
+                    "`assertTrue(cond, \"…\")` / `assertEquals(…)` from `kotlin.test` for a test " +
+                    "assertion. There is no marker to opt out with, deliberately — see this guard's " +
+                    "note in the root `build.gradle.kts`; a site tagged `[commonSource]` is the worst " +
+                    "case, green on JVM and inert on Native/wasm at once:\n  " +
+                    offenders.joinToString("\n  "),
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText("ok — ${sources.files.size} Kotlin sources scanned\n")
+    }
+}
+
 // Guard: forbid a bare duration literal as a `runTest(…)` timeout — at a CALL SITE (pass 1, a
 // per-file count ratchet) or in a WRAPPER's parameter default (pass 2, zero tolerance). #1739.
 //
@@ -1930,6 +2037,7 @@ allprojects {
         dependsOn(rootProject.tasks.named("verifyDocCitations"))
         dependsOn(rootProject.tasks.named("forbidRunCatchingCancellableUnderNonCancellable"))
         dependsOn(rootProject.tasks.named("forbidBareRunCatching"))
+        dependsOn(rootProject.tasks.named("forbidKotlinAssert"))
         dependsOn(rootProject.tasks.named("forbidTightRunTestTimeout"))
     }
 }
