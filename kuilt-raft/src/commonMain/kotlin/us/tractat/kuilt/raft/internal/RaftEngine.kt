@@ -41,6 +41,7 @@ import us.tractat.kuilt.raft.MembershipChangeInProgressException
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.NotLeaderException
 import us.tractat.kuilt.raft.RaftConfig
+import us.tractat.kuilt.raft.RaftEnvelope
 import us.tractat.kuilt.raft.RaftMetric
 import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
@@ -60,12 +61,22 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.raft.RaftEngine")
 /**
  * Codec for the [RaftMessage] wire envelope. [Cbor.ignoreUnknownKeys] is `true` so a peer running an
  * OLDER build tolerates a field a NEWER peer added — e.g. [RaftMessage.RequestVote.leadershipTransfer].
- * Without it the default `Cbor` throws on the unknown key and the transport-collect coroutine (which
- * only guards [ClosedSendChannelException]) would take the node's scope down. Adding a defaulted field
- * to any `RaftMessage` is therefore forward- and backward-compatible: an old peer that receives it just
- * drops the field and behaves as if it were absent (for the disrupt flag: denies under stickiness — the
- * correct graceful degradation). [Cbor.encodeDefaults] stays at its default `false`, so a new peer with
- * `leadershipTransfer = false` omits the field entirely and the byte stream is unchanged for old peers.
+ *
+ * **What the flag buys is participation across a rolling upgrade, and that is the whole reason it is
+ * here.** Adding a defaulted field to any `RaftMessage` is forward- and backward-compatible: an old
+ * peer that receives it drops the field and behaves as if it were absent (for the disrupt flag:
+ * denies under stickiness — the correct graceful degradation). [Cbor.encodeDefaults] stays at its
+ * default `false`, so a new peer with `leadershipTransfer = false` omits the field entirely and the
+ * byte stream is unchanged for old peers.
+ *
+ * **Do not read the flag as a crash guard, and do not drop it now that one exists.** It used to be
+ * justified here as the thing standing between an unknown key and node death, because the decode ran
+ * inside a `collect` guarding only [ClosedSendChannelException]. [decodeInbound] closed that hole
+ * (#2051), so the old rationale is now false and is deliberately not restated. The consequence of
+ * removing the flag is *worse* than it was, not better: with the decode no longer fatal, an old peer
+ * facing a newer one that added a single defaulted field would drop **every** frame from it — a node
+ * that is up, traced, emitting [RaftTraceEvent.FrameUndecodable], and completely unable to
+ * participate. Forward-compatibility is load-bearing on its own; the crash was never the argument.
  */
 private val raftCbor = Cbor { ignoreUnknownKeys = true }
 
@@ -648,7 +659,7 @@ internal class RaftEngine(
             launch {
                 transport.incoming.collect {
                     try {
-                        cmd.send(EngineCommand.IncomingMessage(it.from, raftCbor.decodeFromByteArray(it.bytes)))
+                        cmd.send(decodeInbound(it))
                     } catch (_: ClosedSendChannelException) {
                         return@collect // channel closed — node is shutting down
                     }
@@ -658,6 +669,81 @@ internal class RaftEngine(
         }
     }
 
+    /**
+     * Turn one inbound envelope into the command the actor should see — the decoded frame, or the
+     * report that it could not be decoded (#2051).
+     *
+     * **The decode is the one point on the inbound path where the frame is still bytes**, i.e.
+     * upstream of every guard [refuseFrame] covers, and before this it was the only point that could
+     * still *throw*. A throw here escapes the `collect` lambda, escapes the `launch` around it, and
+     * lands in the constructor-injected [scope] — no `SupervisorJob`, no `CoroutineExceptionHandler`
+     * on the path — so one undecodable frame killed the node and everything else the consumer had
+     * structured under that scope. That is exactly what #1818's "never `throw` on a remote-frame-
+     * controlled path" rule exists for, honoured everywhere downstream of dispatch and skipped here.
+     *
+     * **The ordinary trigger is version skew, not an attacker.** [raftCbor] sets `ignoreUnknownKeys`,
+     * which tolerates an unknown *field* from a newer peer but not an unknown sealed-class
+     * **discriminator**: a peer one version ahead sending a [RaftMessage] variant this build does not
+     * declare lands here, and a rolling upgrade across a voter set is the normal case. A corrupt link
+     * or a hostile peer reaches it for the cost of arbitrary bytes.
+     *
+     * **The guard is `Throwable`-wide on purpose, and that width is a policy choice rather than a
+     * measured one — stated plainly so the next reader does not mistake it for either.** Measured:
+     * every decode failure reachable from the wire at kotlinx-serialization 1.11 is a
+     * `SerializationException`. The unknown discriminator throws the base type from the polymorphic
+     * subclass lookup; truncation and a bad major type throw `CborDecodingException`, which is a
+     * *subtype* of it (and `internal` to the cbor module, so unnameable here anyway); and the
+     * length-bound arms that used to be the obvious route to a `NegativeArraySizeException` now
+     * reject with `CborDecodingException` too. A `catch (SerializationException)` would pass
+     * `UndecodableFrameTest` today — that was checked, not assumed.
+     *
+     * Width is still right, for three reasons that do not depend on that taxonomy holding. The format
+     * contract is wider than the current behaviour: `BinaryFormat.decodeFromByteArray` documents
+     * `IllegalArgumentException` alongside `SerializationException`, so a narrow catch is already
+     * outside what the interface promises. #1818's rule is about the *path*, not the library — the
+     * width that belongs here is "anything a remote peer's bytes can cause", and pinning it to a
+     * third-party exception hierarchy makes a dependency bump able to reintroduce node death silently.
+     *
+     * And there is one live case outside the whole `Exception` branch: [raftCbor]'s `ignoreUnknownKeys`
+     * **skips an unknown value recursively**, so a hostile frame nesting an unknown key deeply enough
+     * throws `StackOverflowError`. That is an `Error`, so it clears not only `catch (SerializationException)`
+     * but `catch (e: Exception)` too — a narrow catch of either shape leaves it fatal. Only a
+     * `Throwable`-wide guard covers it, which is why this one is.
+     *
+     * [runCatchingCancellable] is what keeps the width from swallowing cancellation: a
+     * `CancellationException` still propagates, so scope teardown is unaffected.
+     *
+     * Non-suspend and side-effect-free apart from the log, so the pump stays a pure decode; the drop
+     * is *reported* from the actor loop — see [EngineCommand.UndecodableMessage] for why.
+     */
+    private fun decodeInbound(envelope: RaftEnvelope): EngineCommand =
+        runCatchingCancellable { raftCbor.decodeFromByteArray<RaftMessage>(envelope.bytes) }.fold(
+            onSuccess = { EngineCommand.IncomingMessage(envelope.from, it) },
+            onFailure = { failure ->
+                // The exception is the most informative thing about the frame and the one thing the
+                // trace event deliberately does not carry (its wording is a library detail and varies
+                // by target, so it cannot be asserted on). Debug is where that belongs.
+                debug {
+                    "inbound: DROP ${envelope.bytes.size} undecodable bytes from " +
+                        "${envelope.from.value} — $failure"
+                }
+                EngineCommand.UndecodableMessage(envelope.from, envelope.bytes.size)
+            },
+        )
+
+    /**
+     * Report a dropped undecodable frame on [trace] (#2051).
+     *
+     * The whole handler: there is no state to touch, because there is no frame — only the attribution
+     * that survives a failed decode. Not routed through [refuseFrame], which needs a [RaftMessage] to
+     * name a [RaftMessageType] and a guard to name a [RefusalGate]; see
+     * [RaftTraceEvent.FrameUndecodable] for why widening either to express "unknown" would be the
+     * wrong trade.
+     */
+    private suspend fun onUndecodableMessage(from: NodeId, byteCount: Int) {
+        emitTrace(RaftTraceEvent.FrameUndecodable(nextClock(), transport.selfId, from, byteCount))
+    }
+
     private fun startActor() {
         scope.launch {
             try {
@@ -665,6 +751,7 @@ internal class RaftEngine(
                     val closing = c is EngineCommand.Close
                     when (c) {
                         is EngineCommand.IncomingMessage  -> onMessage(c.from, c.message)
+                        is EngineCommand.UndecodableMessage -> onUndecodableMessage(c.from, c.byteCount)
                         is EngineCommand.Propose          -> onLocalPropose(c.command, c.requestId, c.response)
                         is EngineCommand.ChangeMembership -> onChangeMembership(c.target, c.response)
                         is EngineCommand.ElectionTimeout  -> onElectionTimeout()
@@ -720,6 +807,7 @@ internal class RaftEngine(
                         // EngineCommand variant forces a compile error here rather than silently hanging its
                         // caller on close, exactly like the exhaustive actor-dispatch `when` above.
                         is EngineCommand.IncomingMessage,
+                        is EngineCommand.UndecodableMessage,
                         is EngineCommand.ElectionTimeout,
                         is EngineCommand.HeartbeatTick,
                         is EngineCommand.LeaseExpired,

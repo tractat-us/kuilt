@@ -134,15 +134,21 @@ action names so a captured trace can be replayed through the standard-raft TLA+ 
 Every event carries a monotonic logical `clock`, which is what lets a test assert
 ordering (`ClientRequest` before `AdvanceCommitIndex`).
 
-One variant is deliberately not a state transition, and so has no TLA+ action to
-correspond to: `FrameRefused(clock, node, from, messageType, gate)` reports a frame an
+Two variants are deliberately not state transitions, and so have no TLA+ action to
+correspond to. `FrameRefused(clock, node, from, messageType, gate)` reports a frame an
 inbound guard **refused**, naming the guard through the `RefusalGate` enum.
 It exists because a guard refuses by returning, so its only other observable is the
 *absence* of a state change — which several guards produce identically, leaving a test
 that asserts only state effects unable to say which one fired. Assert attribution
 (`gate`) rather than "term unchanged, still a Follower" whenever more than one guard
-could refuse the frame under test. Filter it out before replaying a trace through the
-TLA+ spec.
+could refuse the frame under test.
+
+`FrameUndecodable(clock, node, from, byteCount)` reports a frame the engine could not
+**decode** — the ordinary cause being version skew, a peer on a newer build sending a
+frame type this one does not declare. It is separate from `FrameRefused` rather than a
+gate on it because the failure *is* the decode: there is no `messageType` (the bytes never
+became a frame) and no `RefusalGate` (no guard ran), so all that survives is the sender and
+the frame's length. Filter both out before replaying a trace through the TLA+ spec.
 
 The harness turns traces into a **failure diagnostic**: each `await*` helper, on timeout
 or on excess election churn, throws `AssertionError(dumpState(...))`. `dumpState` renders
