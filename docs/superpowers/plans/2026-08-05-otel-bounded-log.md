@@ -213,16 +213,29 @@ private fun evictOldest(incoming: LogRecord) {
 
 Delete `tailIdOf` — it existed only for the `DROP_NEWEST` arm, which no longer removes the tail. Confirm with `git grep tailIdOf` that nothing else calls it.
 
-Update `BufferPolicy`'s KDoc so the enum says what the code now does:
+**`BufferPolicy` is SHARED — do not rewrite the enum's KDoc to describe one exporter.**
+`WarpSpanExporter` also takes a `BufferPolicy` and implements the *other* reading:
+`DROP_NEWEST` there evicts the newest **buffered** span and admits the arrival
+(`WarpSpanExporter.kt:226-239`). This PR deliberately changes **only** the log exporter;
+the span exporter is out of scope and unchanged. A KDoc saying "the buffer freezes" would
+therefore be false on a public API.
+
+Keep the enum policy-neutral and put the behaviour where it is implemented:
 
 ```kotlin
 /**
- * Refuse the incoming record when the buffer is full — at a full buffer the newest
- * record is the one arriving. The buffer freezes at the first `maxRecords` records.
- * **Logs each drop.**
+ * Drop the newest span when the buffer is full. **Logs each drop.**
+ *
+ * "Newest" is resolved per exporter, and the two shipped exporters resolve it differently:
+ * [WarpSpanExporter] evicts the newest *buffered* span and admits the arrival;
+ * [WarpLogRecordExporter] refuses the arrival, which at a full buffer is the newest record
+ * there is. See each exporter's KDoc.
  */
 DROP_NEWEST,
 ```
+
+Then document the log exporter's own choice on `WarpLogRecordExporter`'s class KDoc, under
+the existing "Buffer cap" heading.
 
 - [ ] **Step 5: Run the tests, confirm they pass**
 
@@ -236,6 +249,25 @@ Expected: PASS.
 - [ ] **Step 6: Restate `bothBufferPoliciesGetTheSameBoundedWrite`**
 
 Open `WarpLogRecordExporterSegmentTest.kt:176-204`. It asserts both policies get the same bounded per-export write. Under the new behaviour `DROP_NEWEST` writes **nothing** once full, which is a stronger bound. Update the assertion to that, and update the comment — it currently explains #2126's F3 asymmetry, which no longer applies the same way. Do **not** delete the test.
+
+- [ ] **Step 6b: Update the other tests and comments that encode the old behaviour**
+
+The shipped behaviour was **chosen, not accidental** — there is a deliberate test with an
+explaining comment — so expect to move real assertions, and say so in the PR body rather than
+presenting this as a pure bug fix.
+
+- `bufferCapEvictsNewestRecordWithDropNewestPolicy` (`WarpLogRecordExporterTest.kt:288`) — its
+  comment reads "At capacity; DROP_NEWEST evicts the newest present (r3), then inserts r4".
+  Rewrite the test and the comment; do not delete either.
+- The `DROP_NEWEST` arms of `WarpLogRecordExporterTailCacheTest` (~:76, :220, :314). The
+  "a `DROP_NEWEST` eviction removes the tail" cache event **ceases to exist**.
+- The comment at `WarpLogRecordExporter.kt:146-150` enumerating the four events that move the
+  derived-state cache — one of the four is now unreachable.
+- `export`'s KDoc (`WarpLogRecordExporter.kt:433-437`) promises `Success` means "after the
+  durable write". A refusal returns `Success` with no write. The existing dedup path already
+  does this, so the precedent is there — but state it rather than leaving the KDoc false.
+- `ExporterHealth.accepted` is **not** incremented for a refusal (it counts records durably
+  taken). Confirm `admit`'s `false` path returns before `commit`.
 
 - [ ] **Step 7: Run every `:kuilt-otel` test**
 
@@ -277,14 +309,20 @@ git add -A kuilt-otel/
 git commit -m "$(cat <<'EOF'
 fix(otel): DROP_NEWEST refuses the incoming record (part of #2127)
 
-BufferPolicy.DROP_NEWEST documents "drop the newest span when the buffer is
-full" — the incoming record. The shipped code dropped the SECOND-newest: it
-evicted visible index visibleCount-1 and then inserted the arrival anyway, so
-the buffer retained 1..maxRecords-1 plus whatever had most recently arrived.
+At a full buffer the newest record is the one arriving, so DROP_NEWEST now
+refuses it instead of evicting the newest already buffered. Both readings fit
+the enum's one-line KDoc and the previous behaviour was chosen deliberately —
+this is a behaviour change argued on its payoff, not a typo being corrected.
 
-Refusing the arrival restores the documented contract and makes a full
-DROP_NEWEST buffer inert: no eviction, no tombstone, no further op. That is
-what lets #2127's compaction floor be downward-closed.
+The payoff: a full DROP_NEWEST buffer becomes inert — no eviction, no
+tombstone, no further op — so every compacted set #2127 goes on to produce is
+a downward-closed DROP_OLDEST prefix. That lets the compaction record be an
+O(authors) VersionVector floor instead of a per-replica range with a bespoke
+merge, its own canonical serializer, and a range-shaped Quilted capability.
+
+Scope: the LOG exporter only. WarpSpanExporter shares BufferPolicy and keeps
+evict-the-newest-buffered; the enum KDoc now points at both rather than
+asserting one.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 EOF
@@ -733,8 +771,13 @@ Expected: compile failure — `dropWindow` unresolved.
 public fun dropWindow(self: ReplicaId, dropped: Set<RgaId>): Pair<Rga<V>, Rga<V>>? {
     if (dropped.isEmpty()) return null
     val ownSeqs = dropped.filterTo(mutableSetOf()) { it.replicaId == self }.mapTo(mutableSetOf()) { it.seq }
+    // Own dots ALREADY dropped explicitly — recorded in a retained Compact, so absent from
+    // insertsById and never handed to dropWindow again. Without these the walk cannot step
+    // over them and the floor wedges below the first one FOREVER (see the wedge test).
+    val ownCompacted = compactedIds.filterTo(mutableSetOf()) { it.replicaId == self }
+        .mapTo(mutableSetOf()) { it.seq }
     var floorSeq = compactedBelow[self]
-    while ((floorSeq + 1L) in ownSeqs) floorSeq++
+    while ((floorSeq + 1L) in ownSeqs || (floorSeq + 1L) in ownCompacted) floorSeq++
     val newFloor = compactedBelow.ceilWith(VersionVector.of(mapOf(self to floorSeq)))
 
     val residue = dropped.filterTo(mutableSetOf()) { !newFloor.contains(it.dot) && it in insertsById }
@@ -792,6 +835,62 @@ fun repeatedWindowingKeepsTheOpLogFlatRatherThanGrowingWithEveryDrop() {
 ```
 
 Run it; it must pass. If `rga.ops.size` grows with the record count, `dropWindow` is minting explicit `Compact` ops it should have folded into the floor — fix `dropWindow`, not the assertion.
+
+- [ ] **Step 5b: Pin the wedge — the failure that makes the whole bound fake**
+
+An own dot dropped *explicitly* on an earlier pass is absent from `insertsById`, so it never
+reappears in a later `dropped` set. If the contiguity walk only consults the current drop set,
+the floor freezes below that dot **permanently**, and every later drop becomes explicit residue
+— Θ(records ever), the exact disease this issue exists to cure.
+
+This is not adversarial. `aCompactionInheritedFromTheLegacyBlobIsNeverDropped`'s own fixture is a
+legacy blob carrying a `Compact` of the replica's **own** dot, so the upgrade population — long-lived
+pre-#1860 devices, precisely the ones that need #2127 — is exactly the wedged population.
+
+```kotlin
+@Test
+fun anOwnDotAlreadyCompactedExplicitlyDoesNotWedgeTheFloorForever() {
+    val (rga, ops) = chain(6)
+    // Simulate an inherited/merged explicit Compact of our OWN seq 1 — the legacy-blob shape.
+    val inherited = rga.apply(RgaOp.Compact(rga.positionsFor(setOf(ops[0].id))))
+
+    // Now window away seqs 2..4. Seq 1 is gone already and will never be in `dropped` again.
+    val (state, _) = inherited.dropWindow(me, ops.subList(1, 4).map { it.id }.toSet())!!
+
+    assertEquals(
+        VersionVector.of(mapOf(me to 4L)),
+        state.compactedBelow,
+        "the walk must step OVER the already-compacted seq 1, not stop below it",
+    )
+    assertEquals(listOf("r4", "r5"), state.toList())
+}
+
+@Test
+fun anInheritedCompactDoesNotMakeEveryLaterDropExplicitResidue() {
+    var rga = Rga.empty<String>()
+    var tail = RgaId.HEAD
+    val ids = mutableListOf<RgaId>()
+    repeat(3) { i ->
+        val (next, op) = rga.insertAfter(me, tail, "seed$i"); rga = next; tail = op.id; ids += op.id
+    }
+    rga = rga.apply(RgaOp.Compact(rga.positionsFor(setOf(ids[0]))))   // the inherited Compact
+
+    val window = ArrayDeque(ids.drop(1))
+    repeat(200) { i ->
+        val (next, op) = rga.insertAfter(me, tail, "r$i"); rga = next; tail = op.id
+        window.addLast(op.id)
+        if (window.size > 5) {
+            val drop = buildSet { repeat(window.size - 5) { add(window.removeFirst()) } }
+            rga = rga.dropWindow(me, drop)!!.first
+        }
+    }
+    // 5 live inserts + the one inherited Compact. NOT 200-ish singleton Compacts.
+    assertTrue(rga.ops.size <= 8, "an inherited Compact must not make the bound fake; got ${rga.ops.size}")
+}
+```
+
+Run both. `anInheritedCompactDoesNotMakeEveryLaterDropExplicitResidue` is the one that matters —
+it fails with an op count in the hundreds if the walk cannot step over `compactedIds`.
 
 - [ ] **Step 6: Mutation-check the mint rule**
 
@@ -947,9 +1046,20 @@ The floor can swallow every op, and `deriveLamport` reads lamports off op ids on
  * Derive the Lamport high-water from the op-set, floored by [compactedBelow].
  *
  * A floor purges the ops it covers, so their lamports are no longer readable. Their
- * **seqs** are, and a replica's lamport is monotonic in its own seq, so the floor's
- * high-water is a sound lower bound. Without it a log whose window has drained entirely
- * would decode with `lamport = 0` and mint its next id below ids the floor still suppresses.
+ * **seqs** are, and each own insert advances both by one, so `lamport >= seq` for an own dot
+ * and the floor's high-water is a sound *lower* bound.
+ *
+ * **A lower bound is not the invariant, and this does not fully close the hole.** A merge can
+ * inflate the clock far above the seq (`applyInsert` takes `maxOf(lamport, op.id.lamport)`),
+ * so a log whose window drains **entirely** decodes with `lamport = seq`, and re-minting climbs
+ * back through lamports the purged ids already used. Two distinct same-author ids then share a
+ * lamport, and [RgaId.compareTo] — which tiebreaks on `(lamport, replicaId)` only — returns `0`
+ * for them on any peer still holding the purged inserts, breaking the total order the canonical
+ * op sort rests on. Explicit `Compact.positions` keys were structurally immune because they
+ * carry whole [RgaId]s; a floor deliberately discards the lamport.
+ *
+ * Unreachable through [WarpLogRecordExporter] (its window never drains, and the survivors carry
+ * the true high-water), but [dropWindow] is public API. See the pinned case below.
  */
 internal fun <V> deriveLamport(ops: Set<RgaOp<V>>, compactedBelow: VersionVector): Long {
     val fromOps = ops.flatMap { op ->
@@ -966,6 +1076,38 @@ internal fun <V> deriveLamport(ops: Set<RgaOp<V>>, compactedBelow: VersionVector
 
 Update every call site (`git grep deriveLamport`).
 
+- [ ] **Step 4b: Pin the lamport hazard's safe case, and prove the unsafe one is unreachable here**
+
+```kotlin
+@Test
+fun aWindowThatNeverDrainsKeepsTheTrueLamportAcrossAWireRoundTrip() {
+    // The exporter's shape: survivors always carry the real high-water.
+    val original = windowed()
+    val decoded = cbor.decodeFromByteArray(ser, cbor.encodeToByteArray(ser, original))
+    assertEquals(original.lamport, decoded.lamport)
+}
+
+@Test
+fun aFullyDrainedWindowDecodesToTheFloorNotToZero() {
+    var rga = Rga.empty<String>()
+    var tail = RgaId.HEAD
+    val ids = mutableListOf<RgaId>()
+    repeat(3) { i -> val (n, op) = rga.insertAfter(me, tail, "r$i"); rga = n; tail = op.id; ids += op.id }
+    val drained = rga.dropWindow(me, ids.toSet())!!.first
+    val decoded = cbor.decodeFromByteArray(ser, cbor.encodeToByteArray(ser, drained))
+
+    assertEquals(3L, decoded.lamport, "the floor is the only surviving evidence of the clock")
+    val (_, fresh) = decoded.insertAfter(me, RgaId.HEAD, "next")
+    assertTrue(fresh.id.seq > 3L, "and the next seq still does not collide")
+}
+```
+
+The second test documents the *bounded* form of the hazard rather than hiding it. **Do not** try
+to fix the merge-inflated case in this task — file it as a follow-up issue titled
+"Rga: a compaction floor discards the lamport high-water it swallows" and link it from
+`deriveLamport`'s KDoc. It needs a lamport high-water carried beside the floor, which is a
+design question, not a plan step.
+
 - [ ] **Step 5: Run the wire tests, confirm they pass**
 
 ```bash
@@ -980,7 +1122,11 @@ JAVA_HOME=$HOME/.sdkman/candidates/java/21.0.5-tem timeout 600 \
   ./gradlew :kuilt-crdt:jvmTest --tests "*CanonicalGoldenVectorTest*"
 ```
 
-Expected: FAIL — the `Rga` vector's bytes changed because the struct gained a field. Read the test to find how vectors are declared, update the `Rga` entry to the new bytes, and **add a new vector for a floor-carrying `Rga`** so the floor's encoding is itself pinned. Do not simply delete the failing vector.
+Expected: FAIL on **two** vectors, not one. `JsonNode` embeds `Rga<JsonNode>` on the wire
+(`JsonNode.kt:42,79,141`), so the **JsonCrdt** golden vector (`CanonicalGoldenVectorTest.kt:256`)
+re-pins along with the `Rga` one. Read the test to find how vectors are declared, update both,
+and **add a new vector for a floor-carrying `Rga`** so the floor's encoding is itself pinned.
+Do not simply delete a failing vector.
 
 - [ ] **Step 7: Full `:kuilt-crdt` build**
 
@@ -1202,6 +1348,13 @@ And stop re-emitting floored dots from `causalDots` — the floored ops are alre
 JAVA_HOME=$HOME/.sdkman/candidates/java/21.0.5-tem timeout 900 ./gradlew :kuilt-crdt:build --max-workers=6
 ```
 
+- [ ] **Step 5b: Note the nested-`Rga` gap**
+
+`JsonNode.Array.causalDots` unions the dots of nested `Rga`s (`JsonNode.kt:42,79,141`), but
+nothing aggregates a nested `causalFloor`. Harmless today — nothing floors a nested `Rga` —
+but a one-line KDoc note on `causalFloor` saying so prevents a future `JsonCrdt` compaction
+from silently under-reporting its frontier.
+
 - [ ] **Step 6: Update the module docs**
 
 `Quilted`'s KDoc for `causalDots` says "today that is [Rga], which returns its `Insert`/`Remove` op dots and **excludes** `Compact` ops". That is now incomplete — it also excludes floored dots, which `causalFloor` reports instead. Update it, and check `kuilt-crdt/module.md` and `docs/op-log-crdt-compaction.md` for statements that are now wrong.
@@ -1344,7 +1497,18 @@ val snapshot = _state.value
 _deliveredLocal.value = contiguousFrontier(snapshot.causalDots(), snapshot.causalFloor())
 ```
 
-Fix every other `contiguousFrontier(` call site — `git grep contiguousFrontier`.
+Fix every other `contiguousFrontier(` call site. `git grep contiguousFrontier` finds four
+**test** files calling the 1-arg form — mechanical, but name them so nobody misreads the
+"existing tests unmodified" promise below (that promise is about the four GC *integration*
+tests, which do not call this directly):
+
+- `ContiguousFrontierTest`
+- `DeliveredFrontierRegressionTest`
+- `QuiltMessageTest` (~:147-151)
+- `RgaDeliveryTrackingAuditTest` (~:37)
+
+Give the 1-arg form a `floor: VersionVector = VersionVector.EMPTY` default rather than editing
+four test files, unless a reviewer objects to a defaulted internal.
 
 - [ ] **Step 5: Run them, confirm they pass**
 
@@ -1604,6 +1768,38 @@ fun aPeerHoldingWindowedAwayRecordsCannotPushThemBackIn() = runTest {
 }
 ```
 
+- [ ] **Step 6b: Trigger a pass after `merge()` too**
+
+`evictionsSincePass` only increments in `evictOldest`. Post-PR-0 `DROP_NEWEST` never evicts, so
+a full `DROP_NEWEST` buffer that then `merge()`s a peer's records — `merge` is public gossip API —
+grows past `maxRecords` with **no eviction and no window pass, ever**. "DROP_NEWEST is bounded
+outright" holds for local exports only.
+
+Gate the pass on the log's size as well as on the eviction count, and call it from `merge` after
+`rebuildDerivedState()`:
+
+```kotlin
+// in export(), and again in merge() after rebuildDerivedState()
+if (evictionsSincePass >= maxRecords || visibleCount > maxRecords) windowPass()
+```
+
+`idsOutsideWindow` already trims to `maxRecords` visible whatever the policy, so this needs no
+policy branch. Test it:
+
+```kotlin
+@Test
+fun aFullDropNewestBufferDoesNotGrowUnboundedWhenAPeerMergesIn() = runTest {
+    val a = WarpLogRecordExporter(ReplicaId("a"), InMemoryDurableStore(), maxRecords = 5,
+        bufferPolicy = BufferPolicy.DROP_NEWEST, segmentOps = 4)
+    val b = WarpLogRecordExporter(ReplicaId("b"), InMemoryDurableStore(), maxRecords = 5, segmentOps = 4)
+    repeat(20) { i -> a.export(logRecord("a$i")); b.export(logRecord("b$i")) }
+
+    a.merge(b.snapshot())
+
+    assertTrue(a.snapshot().size <= 5, "a merge must not leave the window over cap; got ${a.snapshot().size}")
+}
+```
+
 - [ ] **Step 7: Commit**
 
 ### Task 10: Segment retirement behind a `retired` ledger
@@ -1681,9 +1877,19 @@ The exporter does not hold each sealed segment in memory. Rather than re-reading
 /** Ids each sealed segment contributed, so retirability is decidable without re-reading it. */
 private val sealedContents: MutableMap<Int, Set<RgaId>> = mutableMapOf()
 
-/** Sealed segments known to carry a Compact op — never retirable until consolidated. */
-private val sealedCarryingCompacts: MutableSet<Int> = mutableSetOf()
+/**
+ * Sealed segments **positively known** to carry no Compact op. Stated in the affirmative on
+ * purpose: a segment whose content was never read must not be retirable, and a
+ * "known-to-carry" set would make absence read as safe.
+ */
+private val sealedKnownCompactFree: MutableSet<Int> = mutableSetOf()
 ```
+
+**Watch the RAM.** `sealedContents` is Θ(ids in non-retired sealed segments). A segment that is
+never retirable — the legacy segment, or any carrying a foreign `Compact` — pins its id set in
+memory forever, quietly regressing acceptance criterion 3. Track ids only for segments retirement
+can actually act on: drop the entry as soon as a segment is judged permanently non-retirable, and
+record only that fact.
 
 Populate both in `rollActiveSegment` (from `activeSegment` before it is replaced) and in `adoptRemoteSegment`. On recovery, populate them from each segment as it is read in `loadPersistedState`.
 
@@ -1706,8 +1912,15 @@ private fun retirableSegments(): List<Int> {
     val floor = log.compactedBelow
     val compacted = log.compactedIdsView
     return sealedSegments.filter { number ->
-        number !in sealedCarryingCompacts &&
-            sealedContents[number].orEmpty().all { id -> floor.contains(id.dot) || id in compacted }
+        // UNKNOWN CONTENT MUST MEAN "KEEP". A segment that failed to read at recovery keeps its
+        // place in `sealedSegments` deliberately (WarpLogRecordExporter.kt:171-174) and has no
+        // `sealedContents` entry. `orEmpty().all {}` is vacuously TRUE, so an `orEmpty()` here
+        // would judge it retirable and DELETE it — turning this file's promise that "one bad read
+        // costs one segment's records until the next clean start" into permanent destruction on a
+        // transient I/O error. Same for `sealedCarryingCompacts`: absent must mean "assume yes".
+        val contents = sealedContents[number] ?: return@filter false
+        if (number !in sealedKnownCompactFree) return@filter false
+        contents.all { id -> floor.contains(id.dot) || id in compacted }
     }
 }
 ```
@@ -1748,23 +1961,63 @@ Implement both with a `DurableStore` decorator that throws on the *n*th call, th
 
 ### Task 11: Serialize retirement deletes against export writes
 
-Batches are built under `lock` but committed **outside** it (`WarpLogRecordExporter.kt:523-538`). Today's worst case is a stale segment write. A retirement *delete* racing an export *write* on the same key is new: the delete can land after the write and destroy a live segment.
+**First, correct the hazard — the earlier draft of this task overstated it.** Retirement targets
+**sealed** segments only, and `nextSegmentNumber` is monotone so a number is never reused. No
+future batch writes a retired key, so a delete cannot destroy a live segment. The real residual
+race is the mirror image: a **stale in-flight write** from before the roll, landing *after* the
+delete, resurrects an **orphaned key** the index no longer names. In a store with no
+key-enumeration API that key is unreachable and unsweepable — a permanent bytes leak, not data
+loss.
+
+That is a weaker problem than "destroys a live segment", so weigh the remedy accordingly.
 
 **Files:**
 - Modify: `kuilt-otel/.../WarpLogRecordExporter.kt`
 - Test: `kuilt-otel/src/jvmTest/kotlin/us/tractat/kuilt/otel/WarpLogRecordExporterConcurrencyTest.kt`
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Decide the remedy before writing code, and record the decision in the PR body**
 
-Extend the existing concurrency test. Drive many concurrent `export`s at a small `maxRecords`/`segmentOps` on a **multi-threaded** dispatcher (this file already carries the `@Suppress` for a deliberate real-threading harness — follow its pattern), then recover and assert every retained record is present.
+Two candidates. Pick one on evidence, do not default to the heavier.
 
-- [ ] **Step 2: Implement**
+**(a) Retirement deletes ride the export batch.** `commit` already applies one batch's actions in
+order, and retirement is triggered from `windowPass` inside the same locked section that builds the
+batch. Appending the deletes to that batch makes them ordered with respect to *that* export's
+writes for free. The cross-batch orphan window remains; log it and tolerate it. **No API change.**
 
-Give the store a single-writer ordering domain: a `Channel<Pair<List<StoreAction>, CompletableDeferred<Unit>>>` drained by one dedicated coroutine, so batches are applied in the order they were built under `lock`. A dedicated writer draining a `Channel` for FIFO ordering is explicitly sanctioned by the repo's concurrency policy; `limitedParallelism(1)` confinement is **banned**.
+**(b) A single-writer ordering domain** — a `Channel<Pair<List<StoreAction>, CompletableDeferred<Unit>>>`
+drained by one dedicated coroutine, so batches apply in the order they were built under `lock`.
+A dedicated writer draining a `Channel` for FIFO ordering is explicitly sanctioned by repo policy
+(`limitedParallelism(1)` confinement is **banned**). But it makes the exporter **scope-owning**, so
+`CoroutineScope` becomes a **required** constructor parameter — never defaulted to a real dispatcher.
 
-This makes the exporter scope-owning, so its `CoroutineScope` must be a **required** constructor parameter — never defaulted to a real dispatcher.
+**(b) is a public constructor break.** Before choosing it, enumerate the blast radius:
 
-- [ ] **Step 3: Run; commit**
+```bash
+git grep -n "WarpLogRecordExporter(" -- '*.kt' | grep -v '/build/'
+```
+
+Every hit — tests, `commonSamples`, `WarpTelemetry`'s plumbing — must be updated, and any
+out-of-tree consumer breaks. Start from **(a)**; escalate to **(b)** only if Step 2's test shows
+(a) leaves a reachable orphan under realistic concurrency.
+
+- [ ] **Step 2: Write the failing test**
+
+Extend the existing concurrency test (`WarpLogRecordExporterConcurrencyTest.kt` exists in
+`jvmTest`). Drive many concurrent `export`s at a small `maxRecords`/`segmentOps` on a
+**multi-threaded** dispatcher — the file already carries the `@Suppress` for a deliberate
+real-threading harness, so follow its pattern — then recover and assert **two** things:
+
+1. every record still inside the window is present after recovery;
+2. the store holds no key the recovered index does not name (the orphan assertion — this is the
+   one that discriminates between remedies (a) and (b)).
+
+`InMemoryDurableStore` needs a test-only key enumeration for (2). Add it in the test source set as
+a decorator, not on the `DurableStore` interface — production deliberately has no such API.
+
+- [ ] **Step 3: Implement the chosen remedy; run; commit**
+
+State in the commit message which remedy you chose and what the test showed. If you chose (a),
+say plainly that the cross-batch orphan window is tolerated and logged.
 
 ### Task 12: Acceptance criteria, docs, and the closing PR
 

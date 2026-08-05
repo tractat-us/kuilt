@@ -127,15 +127,28 @@ evicts visible index `visibleCount - 1` *before* inserting
 would force a per-replica range field, a bespoke `(min lo, max hi)` merge, a new canonical
 serializer, and a range-shaped `Quilted` capability.
 
-It is also not what `BufferPolicy.DROP_NEWEST` documents — "**Drop the newest** span when
-the buffer is full", which is the *incoming* record. Restoring the documented behaviour
-(reject the incoming record once full) means nothing is evicted after the buffer fills, so
-`DROP_NEWEST` never compacts at all and its bound is trivial. Every compacted set that
-remains comes from `DROP_OLDEST` and is downward-closed.
+`BufferPolicy.DROP_NEWEST` documents "**Drop the newest** span when the buffer is full".
+At a full buffer the newest record is the *incoming* one, so refusing the arrival fits that
+sentence — but so does "the newest *buffered* one", which is what the code does, what
+`WarpSpanExporter` does with the same shared enum (`WarpSpanExporter.kt:226-239`), and what a
+deliberate test with an explaining comment pins (`WarpLogRecordExporterTest.kt:288`).
 
-So the symmetry the design needs is bought by **fixing a behaviour/doc mismatch**, not by
-generalising the CRDT to absorb it. PR 0 exists to settle that question before any of the
-CRDT work is built on it — see §8.
+**So this is a behaviour change argued on its payoff, not a typo being corrected.** Do not
+sell it as a doc fix; a reviewer who looks at the span exporter will reject that framing. The
+payoff is concrete: refusing the arrival makes a full buffer inert, so `DROP_NEWEST` never
+compacts, so every remaining compacted set is a `DROP_OLDEST` prefix — and the compaction
+record collapses from a per-replica range with a bespoke merge, its own canonical serializer
+and a range-shaped capability, to a `VersionVector` that already has all three.
+
+The change is scoped to the **log** exporter. `WarpSpanExporter` keeps its semantics, and the
+shared enum's KDoc points at both rather than asserting one.
+
+**What actually hangs on it.** Downward closure is load-bearing for the **bound**, not for
+**safety**: `dropWindow` (§3) advances the floor only across a contiguous own-dot run and
+records everything else explicitly, so a non-prefix drop set degrades the bound toward the
+`Compact`-per-element cost — it never loses or resurrects a record. If PR 0 is rejected,
+`DROP_NEWEST` simply keeps paying explicit residue; §3, §4 and §5 stand unchanged. PR 0 still
+ships first, because that outcome should be a decision rather than a discovery.
 
 ### The mint rule
 
@@ -318,6 +331,10 @@ implementation is the wrong shape once reclamation exists.
 5. `bothBufferPoliciesGetTheSameBoundedWrite` restated: both policies bound the **total**,
    not only the per-export write — `DROP_NEWEST` by never evicting, `DROP_OLDEST` by
    compacting. Neither is exempt.
+   **Scoped to local exports.** A full `DROP_NEWEST` buffer that then `merge()`s a peer's
+   records exceeds `maxRecords` with no eviction to trigger a window pass, so the pass is
+   gated on the log's size as well as on the eviction count (plan Task 9). Assert the merge
+   path explicitly; the eviction-count trigger alone is blind to it.
 6. Lattice laws hold for the floor field under mixed explicit-`Compact` / floor states,
    including a replica carrying only a floor merged with one carrying only explicit ops.
 7. Seq survival across a floor raise plus a cacheless reload — a floor analogue of
@@ -334,8 +351,13 @@ implementation is the wrong shape once reclamation exists.
 - **Wire-format break**, on the persisted blob *and* the gossip path — `merge()` is a
   cross-app-version anti-entropy surface. Approved (pre-1.0). Golden vectors regenerate
   (`CanonicalGoldenVectorTest`).
-- **`DROP_NEWEST`'s observable behaviour changes** (PR 0). Approved; it restores the
-  documented contract.
+- **`DROP_NEWEST`'s observable behaviour changes** (PR 0). Approved. Not a doc fix — the
+  previous behaviour was a defensible reading of the same sentence and was deliberately
+  tested. Bought for the bound, as §5 explains.
+- **A pre-existing own-dot `Compact` costs the bound a constant, permanently.** Explicit
+  `Compact` ops already minted cannot be un-shipped (set-union semantics), so a device that
+  inherits one through the legacy-blob migration carries it for the life of the store. The
+  floor must *step over* those dots or the bound is fake — plan Task 3 Step 5b.
 - **Foreign explicit `Compact`s are never floor-subsumed.** An own-replica floor cannot
   cover another author's dots, and `RgaGcCoordinator.compactWithWindow` mints
   mixed-replica-key Compacts routinely (`RgaGcCoordinator.kt:184-186`). Retained forever.
