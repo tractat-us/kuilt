@@ -174,12 +174,15 @@ class WarpLogRecordExporterSegmentTest {
 
     @Test
     fun bothBufferPoliciesGetTheSameBoundedWrite() = runTest {
-        // F3: the reclamation this PR originally shipped could never fire under
-        // DROP_NEWEST — a segment always closes on an Insert, so the next one always
-        // opens with the Remove for it, which is exactly the straddle the safety
-        // condition blocked. The asymmetry was invisible because only the default
-        // policy was measured. Nothing is reclaimed now, under either policy, so the
-        // one property that must hold is that both get the same bounded write.
+        // Both policies owe the same bound — a per-export write sized by the SEGMENT, never
+        // by N — and this test measures BOTH because a bound only ever checked against the
+        // default policy hid a policy-specific regression once already (#2126's F3, in a
+        // reclamation that no longer exists: nothing is reclaimed under either policy now).
+        //
+        // What they do once the cap bites diverges, and DROP_NEWEST's side is strictly
+        // stronger: it refuses the arrival, so a saturated buffer appends no op and writes
+        // nothing at all (#2127). That is asserted here rather than left to read as an
+        // incidentally empty list.
         for (policy in BufferPolicy.entries) {
             val store = RecordingStore()
             val exporter = exporterFor(store = store, maxRecords = 20, bufferPolicy = policy, segmentOps = 8)
@@ -188,16 +191,25 @@ class WarpLogRecordExporterSegmentTest {
             val firstWindow = store.writes().max()
             store.resetWriteLog()
             repeat(100) { exporter.export(record(100 + it)) }
-            val secondWindow = store.writes().max()
+            val secondWindow = store.writes()
 
             assertAll(
                 { assertEquals(20, exporter.snapshot().toList().size, "$policy: the cap must hold") },
                 { assertTrue(firstWindow < 4 * 1024, "$policy: first-window max $firstWindow") },
                 {
-                    assertTrue(
-                        secondWindow <= firstWindow,
-                        "$policy: per-export write grew with N: $firstWindow -> $secondWindow",
-                    )
+                    when (policy) {
+                        // Saturated long before the second window opens, so all 100 of those
+                        // exports are refused at the door and not one byte is written.
+                        BufferPolicy.DROP_NEWEST -> assertEquals(
+                            emptyList<Int>(),
+                            secondWindow,
+                            "$policy: a saturated buffer must write nothing",
+                        )
+                        BufferPolicy.DROP_OLDEST -> assertTrue(
+                            secondWindow.max() <= firstWindow,
+                            "$policy: per-export write grew with N: $firstWindow -> ${secondWindow.max()}",
+                        )
+                    }
                 },
             )
         }

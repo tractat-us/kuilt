@@ -3,11 +3,23 @@ package us.tractat.kuilt.otel
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.Rga
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+
+/**
+ * Every operation in this [Rga]'s log: one per `Insert`, one per `Remove`.
+ *
+ * A tombstoned element is counted twice on purpose — it contributes its `Insert` to
+ * [Rga.sequence] and its `Remove` to [Rga.tombstones] — which is exactly what makes the
+ * sum the op count rather than the record count, and what lets a test assert that a
+ * buffer appended *nothing*, not merely that its visible size held.
+ */
+internal fun Rga<LogRecord>.opCountForTest(): Int = sequence.size + tombstones.size
 
 class WarpLogRecordExporterTest {
 
@@ -284,7 +296,7 @@ class WarpLogRecordExporterTest {
     }
 
     @Test
-    fun bufferCapEvictsNewestRecordWithDropNewestPolicy() = runTest {
+    fun bufferCapDropsTheIncomingRecordWithDropNewestPolicy() = runTest {
         val exporter = exporterFor(maxRecords = 3, bufferPolicy = BufferPolicy.DROP_NEWEST)
 
         val r1 = record(1, body = "oldest")
@@ -294,12 +306,42 @@ class WarpLogRecordExporterTest {
         exporter.export(r1)
         exporter.export(r2)
         exporter.export(r3)
-        // At capacity; DROP_NEWEST evicts the newest present (r3), then inserts r4.
+        // At capacity. The newest record is the one ARRIVING, so DROP_NEWEST refuses r4
+        // at the door and leaves the buffer — and its op-log — untouched. This is a
+        // deliberate change from the earlier reading, which evicted r3 and admitted r4;
+        // see the class KDoc on WarpLogRecordExporter and #2127 for why.
         exporter.export(r4)
 
         val list = exporter.snapshot().toList()
-        assertEquals(3, list.size)
-        assertTrue(r3 !in list, "newest-before-insert should be evicted")
+        assertAll(
+            { assertEquals(listOf(r1, r2, r3), list, "the first maxRecords records must survive intact") },
+            { assertTrue(r4 !in list, "the incoming record should be refused") },
+        )
+    }
+
+    @Test
+    fun dropNewestRejectsTheIncomingRecordRatherThanTheSecondNewest() = runTest {
+        val exporter = exporterFor(maxRecords = 3, bufferPolicy = BufferPolicy.DROP_NEWEST)
+        repeat(5) { i ->
+            assertEquals(ExportResult.Success, exporter.export(record(i.toByte(), body = "r$i")))
+        }
+
+        // The buffer holds the FIRST three records; r3 and r4 were refused at the door.
+        assertEquals(
+            listOf("r0", "r1", "r2"),
+            exporter.snapshot().toList().map { it.body },
+            "DROP_NEWEST must drop the incoming record, not the second-newest",
+        )
+    }
+
+    @Test
+    fun dropNewestAppendsNoOpsAtAllOnceFull() = runTest {
+        val exporter = exporterFor(maxRecords = 3, bufferPolicy = BufferPolicy.DROP_NEWEST)
+        repeat(3) { i -> exporter.export(record(i.toByte(), body = "r$i")) }
+        val opsWhenFull = exporter.snapshot().opCountForTest()
+        repeat(50) { i -> exporter.export(record((3 + i).toByte(), body = "later$i")) }
+
+        assertEquals(opsWhenFull, exporter.snapshot().opCountForTest(), "a full DROP_NEWEST buffer must be inert")
     }
 
     @Test

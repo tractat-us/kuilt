@@ -21,7 +21,14 @@ public enum class BufferPolicy {
     /** Drop the oldest span when the buffer is full. **Logs each drop.** */
     DROP_OLDEST,
 
-    /** Drop the newest span when the buffer is full. **Logs each drop.** */
+    /**
+     * Drop the newest span when the buffer is full. **Logs each drop.**
+     *
+     * "Newest" is resolved per exporter, and the two shipped exporters resolve it
+     * differently: [WarpSpanExporter] evicts the newest *buffered* span and admits the
+     * arrival; [WarpLogRecordExporter] refuses the arrival, which at a full buffer is
+     * the newest record there is. See each exporter's KDoc.
+     */
     DROP_NEWEST,
 }
 
