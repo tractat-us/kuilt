@@ -103,6 +103,15 @@ class NwConformanceTest : SeamConformanceSuite() {
     /** Proven: this harness drives a genuine self-dial through the radio, so no gap. */
     override fun selfDialGap(): String? = null
 
+    /**
+     * Not the generic "names no frame ceiling" anchor: [NwSeam] *has* a ceiling (16 MiB, enforced
+     * on both edges) and refuses above it. What it cannot yet do is *promise* it — both `NwApi`
+     * implementations drop received bytes under a multi-chunk burst, so a frame of that size never
+     * completes (#2134). Publishing would put this fabric under
+     * [SeamConformanceSuite.payloadOfExactlyTheBudgetIsCarried], which is the test that found it.
+     */
+    override fun payloadBudgetGap(): String = "https://github.com/tractat-us/kuilt/issues/2134"
+
     // Mid-session-death obligation (13b — injectMidSessionDeath / both-ends-Torn-on-death + incoming
     // completes) is UNPROVABLE for this fabric BY DESIGN — do NOT "fix" it by re-introducing tear-on-death.
     // Since #1513 NwSeam treats a transport death (a dropped remote) as *recoverable*: the last-remote loss

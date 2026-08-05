@@ -92,6 +92,14 @@ class NwLoopbackConformanceTest : SeamConformanceSuite() {
     override fun capabilityGaps(): Map<String, String> = emptyMap()
 
     /**
+     * [NwSeam] has a 16 MiB ceiling and refuses above it, but cannot yet *promise* it — and this
+     * harness is the one that would prove it over a real TLS-PSK Network.framework link, so it is
+     * also the one most exposed: `RealNwApi` publishes received bytes with a bounded `tryEmit`,
+     * which drops under the 256+ chunk burst a 16 MiB frame arrives as (#2134).
+     */
+    override fun payloadBudgetGap(): String = "https://github.com/tractat-us/kuilt/issues/2134"
+
+    /**
      * Wrap [delegate] so `weave` runs on a real [Dispatchers.Default]. [NwLoom] captures its seam
      * scope from `currentCoroutineContext()`, so without this the suite's virtual-time test dispatcher
      * would drive the seam's `withTimeout`/timers and fast-forward past the real socket connect.

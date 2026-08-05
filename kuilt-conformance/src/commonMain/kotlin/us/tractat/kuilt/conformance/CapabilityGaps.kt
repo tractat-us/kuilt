@@ -61,8 +61,13 @@ public object CapabilityGaps {
      * `Connection` publishes nothing), and the contract says so. It is *declared* rather than assumed
      * because of the one case the suite structurally cannot test — a fabric that **enforces** a
      * ceiling while publishing `null`, which proving would take a payload the size of the hidden
-     * limit. `NwSeam` is the known outstanding instance (16 MiB via `encodeFrame`, published as
-     * `null`); it is tracked by #2069 and named in the doc section below.
+     * limit. `NwSeam` is the known instance (16 MiB via `encodeFrame`), and it is why a declaration
+     * rather than an assertion is the right mechanism here: the *declaration* is what surfaced it.
+     *
+     * A fabric in that position should point [SeamConformanceSuite.payloadBudgetGap] at **its own**
+     * blocking issue rather than at this constant, which says only "no ceiling to name". `NwSeam`
+     * does: it has a ceiling and refuses above it, but cannot yet promise it, because its receive
+     * path drops bytes under a multi-chunk burst (#2134). The doc section below tracks the rest.
      */
     public const val PAYLOAD_BUDGET: String =
         "https://github.com/tractat-us/kuilt/blob/main/docs/architecture.md#payloadbudget--fabrics-that-name-no-frame-ceiling"
