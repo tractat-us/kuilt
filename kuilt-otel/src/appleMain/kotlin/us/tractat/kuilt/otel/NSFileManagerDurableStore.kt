@@ -35,19 +35,27 @@ import platform.posix.strerror_r
  * 2. Replace the destination with the temp file using POSIX `rename(2)`, which
  *    swaps the two directory entries atomically.
  *
- * The destination therefore always names *some* complete record: the previous one
- * until the rename commits, the new one after. A crash before step 2 leaves only
- * the `.tmp` file, which nothing reads; a crash after it leaves the new bytes on
- * disk for the next [read]. There is no instant at which a previously committed
- * record is absent.
+ * The destination path therefore always names *some* complete record: the previous
+ * one until the rename commits, the new one after. A crash before step 2 leaves
+ * only the `.tmp` file, which nothing reads; a crash after it leaves the new bytes
+ * in the file system's cache for the next [read]. **Process** termination cannot
+ * lose a committed record.
+ *
+ * That guarantee is about the *directory entry*, not the bytes: the temp file is
+ * never flushed before the rename, so power loss can commit the new name with the
+ * new extents unwritten, leaving [read] a file that is present and empty. See
+ * #2141 — unlike `FileChannelDurableStore`, which pays `FileChannel.force(true)`
+ * before its own rename, this store does not force, and what that would cost
+ * against the exporter's per-export budget has not been measured.
  *
  * `rename(2)` rather than `NSFileManager.moveItemAtPath:toPath:error:` because
  * the latter refuses to replace an existing destination, which forced an
  * `removeItemAtPath(dest)` first — and *that* unlink was unconditional, so a
  * rename which then failed (or a crash between the two) destroyed every committed
  * record rather than leaving it stale (#2120). `replaceItemAtURL:…` is not an
- * option either: it requires the destination to already exist, so it cannot serve
- * a store whose first write has none.
+ * option either: against a *directory* destination it silently succeeds and
+ * deletes the tree — the same unconditional destroy this fix removes — where
+ * `rename(2)` refuses with `EISDIR`.
  *
  * ## Failures carry their cause
  *
@@ -184,6 +192,13 @@ public class NSFileManagerDurableStore(private val directory: String) : DurableS
  * errno, no domain, no code. That is the single reason a device that silently
  * stopped accepting telemetry could not be diagnosed from its own logs (#1860).
  */
+private fun NSError?.describe(): String =
+    if (this == null) {
+        "none"
+    } else {
+        "NSError(domain=$domain, code=$code, desc=${localizedDescription})"
+    }
+
 /** Size of the `strerror_r` buffer; every Darwin errno string fits well inside it. */
 private const val STRERROR_BUFFER_BYTES = 256
 
@@ -200,13 +215,6 @@ private fun MemScope.describeErrno(code: Int): String {
     val filled = strerror_r(code, buffer, STRERROR_BUFFER_BYTES.toULong()) == 0
     return if (filled) buffer.toKString() else "unknown"
 }
-
-private fun NSError?.describe(): String =
-    if (this == null) {
-        "none"
-    } else {
-        "NSError(domain=$domain, code=$code, desc=${localizedDescription})"
-    }
 
 // ---- ByteArray ↔ NSData conversions (apple-only; private to this file) ----
 
