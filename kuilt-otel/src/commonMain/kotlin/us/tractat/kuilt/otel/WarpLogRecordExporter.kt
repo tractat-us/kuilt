@@ -151,17 +151,31 @@ public class WarpLogRecordExporter(
     public suspend fun recover() {
         val bytes = runCatchingCancellable { store.read(STORE_KEY) }.getOrElse { cause ->
             logger.error(cause) { "otel.logs: store read failed, starting fresh" }
+            recordRecoveryFailure(cause)
             return
         } ?: return
         val recovered = runCatchingCancellable<Rga<LogRecord>> {
             cbor.decodeFromByteArray(logSerializer, bytes)
         }.getOrElse { cause ->
             logger.warn(cause) { "otel.logs: corrupt store entry, starting fresh" }
+            recordRecoveryFailure(cause)
             return
         }
-        lock.withLock {
-            log = recovered
-            rebuildDerivedState()
+        // The in-memory swap is guarded too: walking the recovered CRDT to derive
+        // tail/visibleCount/seenIds must not propagate out of recover() any more
+        // than the read or the decode may. The walk happens BEFORE the lock is
+        // taken — it is a pure function of `recovered` and touches no field — so a
+        // throw cannot leave `log` swapped with stale derived state. What runs
+        // under the lock is only the assignment, which cannot throw.
+        runCatchingCancellable {
+            val entries = recovered.entries()
+            lock.withLock {
+                log = recovered
+                installDerivedState(entries)
+            }
+        }.onFailure { cause ->
+            logger.error(cause) { "otel.logs: recovered state could not be installed, starting fresh" }
+            recordRecoveryFailure(cause)
         }
     }
 
@@ -173,31 +187,43 @@ public class WarpLogRecordExporter(
      * after [recover]), returns [ExportResult.Success] immediately without
      * inserting a duplicate.
      *
-     * Returns [ExportResult.Failure] only if the [store] itself throws.
+     * **Never throws.** Every failure — a throwing [store], and also a failure
+     * inside the in-memory CRDT insert, the eviction, or the CBOR encode — is
+     * returned as [ExportResult.Failure] and reflected on [health]. The store is
+     * the failure this method was originally written for, but it is not the only
+     * one reachable, and a caller on the logging path cannot handle a thrown
+     * exception: it would surface inside an application's own logging call (#1860).
      */
     public suspend fun export(record: LogRecord): ExportResult {
-        val encoded = lock.withLock {
-            if (record.recordId in seenIds) return ExportResult.Success
-            maybeEvict(record)
-            val (newLog, insertOp) = log.insertAfter(
-                replica = replica,
-                after = tail,
-                value = record,
-            )
-            log = newLog
-            tail = insertOp.id
-            visibleCount++
-            seenIds[record.recordId] = insertOp.id
-            cbor.encodeToByteArray(logSerializer, log)
+        val encoded = runCatchingCancellable {
+            lock.withLock {
+                if (record.recordId in seenIds) return ExportResult.Success
+                maybeEvict(record)
+                val (newLog, insertOp) = log.insertAfter(
+                    replica = replica,
+                    after = tail,
+                    value = record,
+                )
+                log = newLog
+                tail = insertOp.id
+                visibleCount++
+                seenIds[record.recordId] = insertOp.id
+                cbor.encodeToByteArray(logSerializer, log)
+            }
+        }.getOrElse { cause ->
+            logger.error(cause) {
+                "WarpLogRecordExporter: buffer update failed for record ${record.recordId}"
+            }
+            return failure(cause)
         }
         return runCatchingCancellable { store.write(STORE_KEY, encoded) }
             .fold(
-                onSuccess = { ExportResult.Success },
+                onSuccess = { success() },
                 onFailure = { cause ->
                     logger.error(cause) {
                         "WarpLogRecordExporter: durable write failed for record ${record.recordId}"
                     }
-                    ExportResult.Failure(cause)
+                    failure(cause)
                 },
             )
     }
@@ -215,22 +241,66 @@ public class WarpLogRecordExporter(
      * into this exporter's state, then flush the merged result to [store].
      *
      * Idempotent: merging the same [Rga] twice produces the same result.
+     *
+     * **Never throws**, on the same terms as [export]: a failure in the CRDT
+     * join, the dedup rebuild, the encode, or the [store] is returned as
+     * [ExportResult.Failure] and reflected on [health].
      */
     public suspend fun merge(remote: Rga<LogRecord>): ExportResult {
-        val encoded = lock.withLock {
-            log = log.piece(remote)
-            // A remote insert can land anywhere, including after the local tail.
-            rebuildDerivedState()
-            cbor.encodeToByteArray(logSerializer, log)
+        val encoded = runCatchingCancellable {
+            lock.withLock {
+                log = log.piece(remote)
+                // A remote insert can land anywhere, including after the local tail.
+                rebuildDerivedState()
+                cbor.encodeToByteArray(logSerializer, log)
+            }
+        }.getOrElse { cause ->
+            logger.error(cause) { "WarpLogRecordExporter: buffer update failed during merge" }
+            return failure(cause)
         }
         return runCatchingCancellable { store.write(STORE_KEY, encoded) }
             .fold(
-                onSuccess = { ExportResult.Success },
+                onSuccess = { success() },
                 onFailure = { cause ->
                     logger.error(cause) { "WarpLogRecordExporter: durable write failed during merge" }
-                    ExportResult.Failure(cause)
+                    failure(cause)
                 },
             )
+    }
+
+    // ── Health bookkeeping ─────────────────────────────────────────────────────
+    //
+    // MutableStateFlow.update is an atomic compare-and-set loop, so these are
+    // correct under a real multi-threaded dispatcher without taking `lock` —
+    // and without extending `lock`'s hold time across the durable write.
+
+    /** Record a successful durable write and return [ExportResult.Success]. */
+    private fun success(): ExportResult {
+        healthState.update { it.copy(accepted = it.accepted + 1, consecutiveFailures = 0) }
+        return ExportResult.Success
+    }
+
+    /** Record a failed durable write and return [ExportResult.Failure]. */
+    private fun failure(cause: Throwable): ExportResult {
+        healthState.update {
+            it.copy(
+                failed = it.failed + 1,
+                consecutiveFailures = it.consecutiveFailures + 1,
+                lastFailure = cause,
+            )
+        }
+        return ExportResult.Failure(cause)
+    }
+
+    /**
+     * Record that [recover] could not restore the persisted state.
+     *
+     * Deliberately does **not** touch [ExporterHealth.failed] — a failed recovery
+     * is not a failed write, and conflating them would make `failed > 0` stop
+     * meaning "the store is rejecting writes".
+     */
+    private fun recordRecoveryFailure(cause: Throwable) {
+        healthState.update { it.copy(recoveryFailed = true, lastFailure = cause) }
     }
 
     /** Must be called with [lock] held. */
@@ -272,8 +342,20 @@ public class WarpLogRecordExporter(
      *
      * Must be called with [lock] held.
      */
-    private fun rebuildDerivedState() {
-        val entries = log.entries()
+    private fun rebuildDerivedState(): Unit = installDerivedState(log.entries())
+
+    /**
+     * Assign [tail], [visibleCount] and [seenIds] from an already-materialized
+     * [Rga.entries] list.
+     *
+     * Split out from [rebuildDerivedState] so [recover] can do the O(N) walk
+     * *outside* the lock and leave only this assignment inside it: the walk can
+     * throw, the assignment cannot, so a failure there cannot leave [log] swapped
+     * with stale derived state (#1860).
+     *
+     * Must be called with [lock] held.
+     */
+    private fun installDerivedState(entries: List<Pair<RgaId, LogRecord>>) {
         tail = entries.lastOrNull()?.first ?: RgaId.HEAD
         visibleCount = entries.size
         seenIds.clear()
