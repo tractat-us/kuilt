@@ -5,7 +5,6 @@ import kotlinx.coroutines.CoroutineScope
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.crdt.LWWMap
-import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.gossip.TwoTier
 import us.tractat.kuilt.quilter.Quilter

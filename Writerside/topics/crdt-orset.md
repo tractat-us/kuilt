@@ -44,9 +44,9 @@ alpha = alpha.piece(readd)
 bravo = bravo.piece(readd)
 check(alpha == bravo)
 
-// A concurrent add beats a concurrent remove: the remove can only retire the dots it saw.
-val elsewhere = ORSet.empty<String>().piece { it.add(b, "alice") }
-check(alpha.piece(alpha.remove("alice")).piece(elsewhere).contains("alice"))
+// A concurrent add beats a concurrent remove: B's re-add mints a dot A's remove never saw.
+val concurrent = alpha.add(b, "alice")
+check(alpha.piece(alpha.remove("alice")).piece(concurrent).contains("alice"))
 ```
 
 ## When to use

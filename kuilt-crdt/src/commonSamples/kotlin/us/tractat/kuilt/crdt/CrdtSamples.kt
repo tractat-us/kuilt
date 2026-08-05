@@ -127,9 +127,9 @@ internal fun sampleORSet() {
     bravo = bravo.piece(readd)
     check(alpha == bravo)
 
-    // A concurrent add beats a concurrent remove: the remove can only retire the dots it saw.
-    val elsewhere = ORSet.empty<String>().piece { it.add(b, "alice") }
-    check(alpha.piece(alpha.remove("alice")).piece(elsewhere).contains("alice"))
+    // A concurrent add beats a concurrent remove: B's re-add mints a dot A's remove never saw.
+    val concurrent = alpha.add(b, "alice")
+    check(alpha.piece(alpha.remove("alice")).piece(concurrent).contains("alice"))
 
     // A remove lands everywhere, because both peers agree on which dot is live. Had the delta
     // above kept quiet about B's dot, it would still be alive on bravo — and "alice" would come
@@ -241,9 +241,9 @@ internal fun sampleORMap() {
     check(alpha == bravo)
     check(alpha["team"] == GSet.of("alice", "bob", "carol", "dan", "erin"))
 
-    // A concurrent put beats a concurrent remove: add-wins on the key.
-    val elsewhere = ORMap.empty<String, GSet<String>>().piece { it.put(b, "team", GSet.of("frank")) }
-    check("team" in alpha.piece(alpha.remove("team")).piece(elsewhere).keys)
+    // A concurrent put beats a concurrent remove: B's put mints a tag A's remove never saw.
+    val concurrent = alpha.put(b, "team", GSet.of("frank"))
+    check("team" in alpha.piece(alpha.remove("team")).piece(concurrent).keys)
 
     // A remove lands everywhere, because both peers agree on which tags are live. Had A already
     // held a tag on "team" and the delta kept quiet about it, that older tag would still be alive

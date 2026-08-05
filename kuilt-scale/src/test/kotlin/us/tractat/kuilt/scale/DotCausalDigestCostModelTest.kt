@@ -23,7 +23,6 @@ import us.tractat.kuilt.crdt.MVRegister
 import us.tractat.kuilt.crdt.ORMap
 import us.tractat.kuilt.crdt.ORMapEntry
 import us.tractat.kuilt.crdt.ORSet
-import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.VersionVector
 import us.tractat.kuilt.crdt.piece
