@@ -37,11 +37,11 @@ import kotlin.test.assertNull
  *    `broadcast`'s best-effort "drop, don't report" contract, whose most common caller is a
  *    timer-driven replication loop a throw kills outright.
  *
- * The TCK ([us.tractat.kuilt.conformance.SeamConformanceSuite]) cannot reach any of this: its
- * budget cases are selected by a non-null `maxPayloadBytes`, which this fabric deliberately does
- * not yet report (#2134), and proving a hidden 16 MiB bound would need a 16 MiB payload anyway.
- * That is what `NwSeam(maxFrameBytes = …)` is for — the same number reaches both edges of the
- * wire, so a [CEILING]-byte ceiling exercises exactly the production paths at a cost of bytes.
+ * The TCK ([us.tractat.kuilt.conformance.SeamConformanceSuite]) now selects this fabric's budget
+ * cases — `maxPayloadBytes` is published as of #2134 — but it exercises them at the production
+ * 16 MiB, and over a real socket. That is what `NwSeam(maxFrameBytes = …)` is for here: the same
+ * number reaches both edges of the wire, so a [CEILING]-byte ceiling exercises exactly the
+ * production refusal paths at a cost of bytes rather than megabytes.
  */
 class NwSeamPayloadBudgetTest {
 
@@ -49,25 +49,27 @@ class NwSeamPayloadBudgetTest {
     private val ceiling = CEILING
 
     /**
-     * The seam enforces a ceiling and deliberately does **not** publish it — see the send-section
-     * comment in [NwSeam]. Publishing is a promise that a payload of that size will cross, and this
-     * fabric's receive path drops bytes under the multi-chunk burst such a payload arrives as
-     * (#2134). Enforcing a bound and promising one are different claims.
+     * The seam publishes **exactly** the ceiling it enforces — one number, reaching the caller, the
+     * encoder, and every connection's [NwFramer] (#2069).
      *
-     * Pinned so that publishing becomes a deliberate act with this test as its checklist, rather
-     * than something that drifts in: flipping it on while #2134 is open puts the fabric under
-     * `SeamConformanceSuite.payloadOfExactlyTheBudgetIsCarried`, which then wedges roughly one run
-     * in five — a flake in `ci-required` whose cause is two layers away from the change.
+     * This was the deliberate tripwire held closed while #2134 was open. Publishing is a promise that a
+     * payload of that size will *cross*, not merely that a larger one is refused, and the receive path
+     * could not keep it: both `NwApi` implementations dropped chunks under the multi-chunk burst such a
+     * payload arrives as, so turning this on early bought a `ci-required` flake at roughly one run in
+     * five whose cause was two layers away. The receive path now applies real backpressure, so the
+     * assertion inverts — and the obligation it opens (`payloadOfExactlyTheBudgetIsCarried`, over a real
+     * socket, in all three conformance harnesses) is the point of inverting it.
      */
     @Test
-    fun theSeamDoesNotYetPromiseTheCeilingItEnforces() =
+    fun theSeamPublishesTheCeilingItEnforces() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val (a, _) = budgetedPair()
 
-            assertNull(
+            assertEquals(
+                ceiling,
                 a.seam.maxPayloadBytes,
-                "publishing a budget is a promise to CARRY it; until #2134 makes the receive path " +
-                    "lossless this fabric can only promise to REFUSE above it",
+                "the published budget must be the enforced one — a caller that trims to this number " +
+                    "must not then be refused, and a number the framer disagrees with is worse than none",
             )
         }
 
