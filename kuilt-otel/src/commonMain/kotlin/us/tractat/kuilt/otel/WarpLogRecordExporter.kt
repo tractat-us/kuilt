@@ -14,6 +14,7 @@ import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.RgaId
+import us.tractat.kuilt.crdt.RgaOp
 import us.tractat.kuilt.crdt.ReplicaId
 
 // Explicit, package-qualified name — NOT the `logger {}` lambda form. On
@@ -56,6 +57,46 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpLogRecordEx
  * **Every eviction is logged** with enough detail to correlate against a backend's
  * log index.
  *
+ * ## On-disk layout — segmented op-log
+ *
+ * An [Rga] *is* an op-log, and [Rga.piece] is an idempotent union of two op-logs.
+ * So the exporter does not need one key holding the whole log: it keeps the log in
+ * **segments** of at most [segmentOps] operations, each under its own key
+ * (`otel.logs.seg.<n>`), plus a small [LogSegmentIndex] naming the live ones
+ * (`otel.logs.idx`).
+ *
+ * [export] appends the [us.tractat.kuilt.crdt.RgaOp.Insert] that
+ * [Rga.insertAfter] already returns to the **active** segment and rewrites only
+ * that segment, so the encode-and-write cost is O([segmentOps]) — a constant,
+ * independent of how many records the log holds. The previous layout re-encoded
+ * and rewrote the entire log on every single record, which is O(N) work once per
+ * record: Θ(N²) time and Θ(N²) bytes to accumulate N records (#1860).
+ *
+ * Recovery reads the segments named by the index and unions them with [Rga.piece].
+ * Set union is commutative and idempotent, so the reconstruction is exact and
+ * order-independent — and the persisted [Rga] wire form derives its Lamport clock
+ * from the op-set, so nothing is lost by not persisting it per segment.
+ *
+ * ## What this does not bound: the total
+ *
+ * Segments are **never dropped**. [maxRecords] bounds *visibility* exactly, as it
+ * always has — eviction tombstones one record at a time — but the tombstoned
+ * record's `Insert` op still carries its full body and still sits in its segment.
+ * Total bytes on disk therefore grow with the number of records ever exported,
+ * exactly as they did before, and the store gains roughly one key per [segmentOps]
+ * operations. What is fixed here is the **write amplification**: those bytes are
+ * written once each, instead of once per record that follows them.
+ *
+ * Dropping the ops outright is the obvious next step, and it is deliberately not
+ * taken here, because it is a **garbage collection of CRDT state** whose safety
+ * precondition is causal stability — every replica has seen them. A local
+ * "this segment is fully superseded" test cannot establish that. [Rga.piece] is a
+ * set union, so once `Insert(X)` and `Remove(X)` are both gone, a peer holding the
+ * old ops re-admits `X` as live; and an `RgaOp.Compact` dropped along with its
+ * segment silently revokes [Rga]'s "once compacted, always compacted" guarantee.
+ * Doing it properly needs [Rga.compact] and the version vectors it demands, which
+ * this exporter has no way to obtain.
+ *
  * @param replica The [ReplicaId] for this device/process. Must be unique and stable
  *   across restarts (a UUID is recommended).
  * @param store The [DurableStore] to persist CRDT state. Use [InMemoryDurableStore]
@@ -64,6 +105,9 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpLogRecordEx
  *   Defaults to [DEFAULT_MAX_LOG_RECORDS].
  * @param bufferPolicy What to do when [maxRecords] is exceeded. Defaults to
  *   [BufferPolicy.DROP_OLDEST].
+ * @param segmentOps Operations per persisted segment — the ceiling on how many bytes
+ *   one [export] rewrites. Pure tuning: smaller writes less per record but keeps more
+ *   keys. Defaults to [DEFAULT_LOG_SEGMENT_OPS].
  *
  * @sample us.tractat.kuilt.otel.sampleWarpLogRecordExporter
  */
@@ -72,7 +116,12 @@ public class WarpLogRecordExporter(
     private val store: DurableStore,
     private val maxRecords: Int = DEFAULT_MAX_LOG_RECORDS,
     private val bufferPolicy: BufferPolicy = BufferPolicy.DROP_OLDEST,
+    private val segmentOps: Int = DEFAULT_LOG_SEGMENT_OPS,
 ) {
+    init {
+        require(segmentOps >= 1) { "segmentOps must be at least 1; got $segmentOps" }
+    }
+
     // The lock guards 'log' and every derived field below. No suspend calls are
     // made inside the locked section — Cbor encode/decode and the CRDT mutations
     // are pure (non-suspending). The store write is performed outside the lock on
@@ -113,6 +162,31 @@ public class WarpLogRecordExporter(
     // A MutableStateFlow owns no CoroutineScope, so the health surface adds no
     // scope ownership to this type. `update {}` is an atomic CAS loop — a real
     // thread-safe primitive, not dispatcher confinement (repo policy).
+    // ── Persisted segments ───────────────────────────────────────────────────
+    //
+    // Guarded by `lock`, like everything above. Only the segment NUMBERS are held —
+    // the ops live in `log`, and the segments are a persistence partition of it:
+    // `log.ops == union(segment.ops)` is the invariant every write path preserves.
+    //
+    // Numbers are only ever added. A segment that could not be read at startup keeps
+    // its place in this list, so a transient read failure cannot cause the next index
+    // write to stop naming it — there is no key-enumeration API, so a segment the
+    // index forgets is unreachable and unsweepable forever.
+
+    private val sealedSegments: MutableList<Int> = mutableListOf()
+    private var activeSegment: Rga<LogRecord> = Rga.empty()
+    private var activeNumber: Int = 0
+    private var activeOpCount: Int = 0
+    private var nextSegmentNumber: Int = 1
+
+    /**
+     * Whether the store holds an index matching [sealedSegments]/[activeNumber].
+     *
+     * Cleared on any failed batch, so the next attempt rewrites it: a partially
+     * applied batch can have left the index naming segments that were never written.
+     */
+    private var indexPersisted: Boolean = false
+
     private val healthState = MutableStateFlow(ExporterHealth())
 
     /**
@@ -127,10 +201,32 @@ public class WarpLogRecordExporter(
     public val health: StateFlow<ExporterHealth> = healthState.asStateFlow()
 
     private companion object {
-        private val STORE_KEY = StoreKey("otel.logs")
+        /** The pre-#1860 single-blob key. Read once, migrated, then deleted forever. */
+        private val LEGACY_KEY = StoreKey("otel.logs")
+
+        /** The segment the legacy blob is adopted into, verbatim, by the migration. */
+        private const val LEGACY_SEGMENT = 0
+
+        private val INDEX_KEY = StoreKey("otel.logs.idx")
+        private const val SEGMENT_KEY_PREFIX = "otel.logs.seg."
         private val cbor = Cbor { alwaysUseByteString = true }
         private val logSerializer = Rga.wireSerializer(LogRecord.serializer())
+        private val indexSerializer = LogSegmentIndex.serializer()
+
+        private fun segmentKey(number: Int) = StoreKey("$SEGMENT_KEY_PREFIX$number")
     }
+
+    /** One durable-store write. */
+    private class StoreAction(val key: StoreKey, val bytes: ByteArray)
+
+    /** Everything [recover] reconstructs from the store, before it is installed. */
+    private class RecoveredState(
+        val log: Rga<LogRecord>,
+        val sealedSegments: List<Int>,
+        val activeNumber: Int,
+        val activeSegment: Rga<LogRecord>,
+        val nextSegmentNumber: Int,
+    )
 
     /**
      * Recover persisted log state from [store]. Call once at startup before
@@ -149,34 +245,188 @@ public class WarpLogRecordExporter(
      * logged (#1860).
      */
     public suspend fun recover() {
-        val bytes = runCatchingCancellable { store.read(STORE_KEY) }.getOrElse { cause ->
-            logger.error(cause) { "otel.logs: store read failed, starting fresh" }
+        val recovered = runCatchingCancellable { loadPersistedState() }.getOrElse { cause ->
+            logger.error(cause) { "otel.logs: persisted state could not be read, starting fresh" }
             recordRecoveryFailure(cause)
             return
         } ?: return
-        val recovered = runCatchingCancellable<Rga<LogRecord>> {
-            cbor.decodeFromByteArray(logSerializer, bytes)
-        }.getOrElse { cause ->
-            logger.warn(cause) { "otel.logs: corrupt store entry, starting fresh" }
-            recordRecoveryFailure(cause)
-            return
-        }
         // The in-memory swap is guarded too: walking the recovered CRDT to derive
         // tail/visibleCount/seenIds must not propagate out of recover() any more
-        // than the read or the decode may. The walk happens BEFORE the lock is
+        // than the reads or the decodes may. The walk happens BEFORE the lock is
         // taken — it is a pure function of `recovered` and touches no field — so a
         // throw cannot leave `log` swapped with stale derived state. What runs
-        // under the lock is only the assignment, which cannot throw.
+        // under the lock is only the assignment, which cannot throw. Segmented
+        // recovery does strictly more work per key than the single blob did, so
+        // keeping the split matters more here, not less.
         runCatchingCancellable {
-            val entries = recovered.entries()
-            lock.withLock {
-                log = recovered
-                installDerivedState(entries)
-            }
+            val entries = recovered.log.entries()
+            lock.withLock { install(recovered, entries) }
         }.onFailure { cause ->
             logger.error(cause) { "otel.logs: recovered state could not be installed, starting fresh" }
+            // Start fresh on the RECORDS, never on the numbering. Leaving the segment
+            // numbers at their construction defaults would have the next export write an
+            // index naming only segment 0 and overwrite it, orphaning every other segment
+            // permanently — there is no key-enumeration API to find them again. Adopting
+            // the index's numbering and opening a segment beyond it keeps every existing
+            // segment named and untouched, so the next clean start still recovers them.
+            lock.withLock { adoptNumberingOnly(recovered) }
             recordRecoveryFailure(cause)
         }
+    }
+
+    /**
+     * Read the segments the index names and union them back into one op-log, or
+     * migrate the legacy single-blob entry if this is the first start on the
+     * segmented format. Returns `null` when nothing has ever been persisted.
+     *
+     * [Rga.piece] is set union, so the order the segments are absorbed in does not
+     * matter and absorbing one twice is harmless — which is what makes a partition
+     * of the op-log across keys an exact, order-independent reconstruction.
+     */
+    private suspend fun loadPersistedState(): RecoveredState? {
+        val indexBytes = store.read(INDEX_KEY) ?: return migrateLegacyBlob()
+        val index = cbor.decodeFromByteArray(indexSerializer, indexBytes)
+        sweepLegacyKey()
+
+        // Nothing past this point may throw. Once the index has decoded, its numbering
+        // is the only thing standing between a restart and renumbering onto segments
+        // that are still live — so every per-segment step is guarded individually and
+        // the segment list is adopted from the index verbatim, read failures included.
+        var merged = Rga.empty<LogRecord>()
+        for (number in index.sealedSegments) {
+            merged = absorbSegment(merged, number)
+        }
+        val active = readSegment(index.active) ?: Rga.empty()
+        return RecoveredState(
+            log = absorb(merged, active, index.active),
+            sealedSegments = index.sealedSegments,
+            activeNumber = index.active,
+            activeSegment = active,
+            nextSegmentNumber = maxOf(index.next, index.active + 1),
+        )
+    }
+
+    /**
+     * Delete the legacy key, which the presence of an index proves is superseded.
+     *
+     * Guarded on its own: a failed delete of known garbage must never cost the log.
+     * This runs on every start, so a store whose `delete` throws would otherwise fail
+     * recovery forever, on every launch — the exact silent-death shape #1860 is about.
+     */
+    private suspend fun sweepLegacyKey() {
+        runCatchingCancellable { store.delete(LEGACY_KEY) }.onFailure { cause ->
+            logger.warn(cause) { "otel.logs: superseded legacy entry could not be deleted; retrying next start" }
+        }
+    }
+
+    private suspend fun absorbSegment(into: Rga<LogRecord>, number: Int): Rga<LogRecord> =
+        absorb(into, readSegment(number) ?: return into, number)
+
+    private fun absorb(into: Rga<LogRecord>, segment: Rga<LogRecord>, number: Int): Rga<LogRecord> =
+        runCatchingCancellable { into.piece(segment) }.getOrElse { cause ->
+            logger.warn(cause) { "otel.logs: segment $number could not be absorbed, dropping its records" }
+            into
+        }
+
+    /**
+     * Read one segment, or `null` if the store cannot supply or decode it.
+     *
+     * Absence is **expected**, not corruption: the index is written before the
+     * segment it allocates, so a crash in that window leaves the index naming a
+     * segment that was never written.
+     *
+     * The [DurableStore.read] is inside the guard, not outside it. Recovery now
+     * performs N reads where it used to perform one, so a single transient I/O error
+     * on any one of them would otherwise fail the whole recovery — and a failed
+     * recovery leaves the numbering at its construction defaults, so the next export
+     * would write an index naming only segment 0 and overwrite it, orphaning every
+     * other segment permanently in a format with no key-enumeration API to sweep them.
+     * One bad read must cost one segment's records, which is what this KDoc has always
+     * promised.
+     */
+    private suspend fun readSegment(number: Int): Rga<LogRecord>? =
+        runCatchingCancellable {
+            val bytes = store.read(segmentKey(number))
+            if (bytes == null) {
+                logger.debug { "otel.logs: segment $number is named by the index but absent" }
+                null
+            } else {
+                cbor.decodeFromByteArray(logSerializer, bytes)
+            }
+        }.getOrElse { cause ->
+            logger.warn(cause) { "otel.logs: segment $number is unreadable, dropping its records" }
+            null
+        }
+
+    /**
+     * One-time migration off the pre-#1860 single-blob `otel.logs` key.
+     *
+     * The blob is adopted **verbatim** as segment [LEGACY_SEGMENT] and sealed, and a
+     * fresh active segment is opened beside it — so the very next [export] writes only
+     * that small new segment instead of rewriting the inherited log. It is deliberately
+     * *not* split into [segmentOps]-sized pieces: splitting needs the individual ops,
+     * and re-deriving them from the visible records would mint **new** op identities,
+     * which would duplicate every record the next time this replica merged with a peer.
+     * The inherited segment is **permanent**: nothing drops a segment (see the class
+     * KDoc), so a device carries its pre-upgrade log for as long as the store lives.
+     * Bounding that is #2127.
+     *
+     * Crash-safety rests on the write order: the legacy key stays authoritative until
+     * the index — the commit point — is on disk. A crash before that leaves both, and
+     * the next start re-runs the whole migration idempotently; a crash after it leaves
+     * a stale legacy key that [loadPersistedState] deletes.
+     */
+    private suspend fun migrateLegacyBlob(): RecoveredState? {
+        val bytes = store.read(LEGACY_KEY) ?: return null
+        val recovered = cbor.decodeFromByteArray(logSerializer, bytes)
+        store.write(segmentKey(LEGACY_SEGMENT), bytes)
+        val index = LogSegmentIndex(
+            sealedSegments = listOf(LEGACY_SEGMENT),
+            active = LEGACY_SEGMENT + 1,
+            next = LEGACY_SEGMENT + 2,
+        )
+        store.write(INDEX_KEY, cbor.encodeToByteArray(indexSerializer, index))
+        store.delete(LEGACY_KEY)
+        logger.info {
+            "otel.logs: migrated the legacy single-blob entry (${bytes.size} bytes, " +
+                "${recovered.size} visible records) into segment $LEGACY_SEGMENT"
+        }
+        return RecoveredState(
+            log = recovered,
+            sealedSegments = listOf(LEGACY_SEGMENT),
+            activeNumber = index.active,
+            activeSegment = Rga.empty(),
+            nextSegmentNumber = index.next,
+        )
+    }
+
+    /**
+     * Keep [recovered]'s segment numbering but none of its records, after the records
+     * could not be installed. A **fresh** segment is opened past everything the index
+     * named, so no existing segment is written to. Must hold [lock].
+     */
+    private fun adoptNumberingOnly(recovered: RecoveredState) {
+        sealedSegments.clear()
+        sealedSegments.addAll(recovered.sealedSegments)
+        if (recovered.activeNumber !in sealedSegments) sealedSegments += recovered.activeNumber
+        nextSegmentNumber = recovered.nextSegmentNumber
+        activeNumber = nextSegmentNumber++
+        activeSegment = Rga.empty()
+        activeOpCount = 0
+        indexPersisted = false
+    }
+
+    /** Install a [RecoveredState] and its already-materialized entries. Must hold [lock]. */
+    private fun install(recovered: RecoveredState, entries: List<Pair<RgaId, LogRecord>>) {
+        log = recovered.log
+        sealedSegments.clear()
+        sealedSegments.addAll(recovered.sealedSegments)
+        activeSegment = recovered.activeSegment
+        activeNumber = recovered.activeNumber
+        activeOpCount = opCountOf(recovered.activeSegment)
+        nextSegmentNumber = recovered.nextSegmentNumber
+        indexPersisted = true
+        installDerivedState(entries)
     }
 
     /**
@@ -195,7 +445,7 @@ public class WarpLogRecordExporter(
      * exception: it would surface inside an application's own logging call (#1860).
      */
     public suspend fun export(record: LogRecord): ExportResult {
-        val encoded = runCatchingCancellable {
+        val actions = runCatchingCancellable {
             lock.withLock {
                 if (record.recordId in seenIds) return ExportResult.Success
                 maybeEvict(record)
@@ -208,7 +458,10 @@ public class WarpLogRecordExporter(
                 tail = insertOp.id
                 visibleCount++
                 seenIds[record.recordId] = insertOp.id
-                cbor.encodeToByteArray(logSerializer, log)
+                // The op `insertAfter` already handed back is exactly what the segment
+                // needs — the append is O(1) and the encode below is O(segmentOps).
+                appendToActiveSegment(insertOp)
+                pendingWrites()
             }
         }.getOrElse { cause ->
             logger.error(cause) {
@@ -216,16 +469,11 @@ public class WarpLogRecordExporter(
             }
             return failure(cause)
         }
-        return runCatchingCancellable { store.write(STORE_KEY, encoded) }
-            .fold(
-                onSuccess = { success() },
-                onFailure = { cause ->
-                    logger.error(cause) {
-                        "WarpLogRecordExporter: durable write failed for record ${record.recordId}"
-                    }
-                    failure(cause)
-                },
-            )
+        return commit(actions) { cause ->
+            logger.error(cause) {
+                "WarpLogRecordExporter: durable write failed for record ${record.recordId}"
+            }
+        }
     }
 
     /**
@@ -247,26 +495,123 @@ public class WarpLogRecordExporter(
      * [ExportResult.Failure] and reflected on [health].
      */
     public suspend fun merge(remote: Rga<LogRecord>): ExportResult {
-        val encoded = runCatchingCancellable {
+        val actions = runCatchingCancellable {
             lock.withLock {
                 log = log.piece(remote)
                 // A remote insert can land anywhere, including after the local tail.
                 rebuildDerivedState()
-                cbor.encodeToByteArray(logSerializer, log)
+                adoptRemoteSegment(remote)
             }
         }.getOrElse { cause ->
             logger.error(cause) { "WarpLogRecordExporter: buffer update failed during merge" }
             return failure(cause)
         }
-        return runCatchingCancellable { store.write(STORE_KEY, encoded) }
-            .fold(
-                onSuccess = { success() },
-                onFailure = { cause ->
-                    logger.error(cause) { "WarpLogRecordExporter: durable write failed during merge" }
-                    failure(cause)
-                },
-            )
+        return commit(actions) { cause ->
+            logger.error(cause) { "WarpLogRecordExporter: durable write failed during merge" }
+        }
     }
+
+    // ── Segmented persistence ──────────────────────────────────────────────────
+
+    /**
+     * Apply a batch of store mutations in order, then report it through [health].
+     *
+     * One export is **one** accepted write no matter how many keys its batch
+     * touched, so [ExporterHealth.accepted] keeps meaning "records durably taken",
+     * not "store calls made".
+     */
+    private suspend fun commit(actions: List<StoreAction>, logFailure: (Throwable) -> Unit): ExportResult =
+        runCatchingCancellable {
+            actions.forEach { action -> store.write(action.key, action.bytes) }
+        }.fold(
+            onSuccess = {
+                lock.withLock { indexPersisted = true }
+                success()
+            },
+            onFailure = { cause ->
+                // A half-applied batch can have left the index naming segments that
+                // were never written. Rewriting it on the next attempt re-converges.
+                lock.withLock { indexPersisted = false }
+                logFailure(cause)
+                failure(cause)
+            },
+        )
+
+    /**
+     * The store mutations one [export] owes: the active segment, plus a roll when it
+     * is full. **This is the whole cost of an export** — one segment's worth of CBOR,
+     * never the whole log. Must hold [lock].
+     */
+    private fun pendingWrites(): List<StoreAction> {
+        val actions = mutableListOf<StoreAction>()
+        // The index names the active segment, so it has to exist on disk before any
+        // content is written into a segment it announces.
+        if (!indexPersisted) actions += StoreAction(INDEX_KEY, encodeIndex())
+        actions += StoreAction(segmentKey(activeNumber), cbor.encodeToByteArray(logSerializer, activeSegment))
+        if (activeOpCount >= segmentOps) actions += rollActiveSegment()
+        return actions
+    }
+
+    /**
+     * Seal the full active segment and open a fresh one. Must hold [lock].
+     *
+     * The index is rewritten here and only here on the export path — once per
+     * [segmentOps] operations — because this is the only point at which the set of
+     * segments changes. Nothing is ever deleted; see the class KDoc for why dropping
+     * a superseded segment is a CRDT garbage collection this exporter cannot make safe.
+     */
+    private fun rollActiveSegment(): List<StoreAction> {
+        sealedSegments += activeNumber
+        activeNumber = nextSegmentNumber++
+        activeSegment = Rga.empty()
+        activeOpCount = 0
+        return listOf(StoreAction(INDEX_KEY, encodeIndex()))
+    }
+
+    /**
+     * Persist [remote]'s op-log as a sealed segment of its own. Must hold [lock].
+     *
+     * A merge is the one path that cannot append incrementally — remote ops land
+     * anywhere in the sequence — so it pays O(remote) once, which is what it already
+     * cost. Ops this replica already held are re-persisted in the new segment;
+     * [Rga.piece] is idempotent, so the duplication costs bytes and nothing else.
+     *
+     * The index is written **first** here: a crash before the segment lands leaves the
+     * index naming a segment the store lacks, which recovery tolerates, whereas the
+     * reverse order would leak an unreferenced segment forever.
+     */
+    private fun adoptRemoteSegment(remote: Rga<LogRecord>): List<StoreAction> {
+        val number = nextSegmentNumber++
+        sealedSegments += number
+        return listOf(
+            StoreAction(INDEX_KEY, encodeIndex()),
+            StoreAction(segmentKey(number), cbor.encodeToByteArray(logSerializer, remote)),
+        )
+    }
+
+    /** Absorb one op into the active segment. Must hold [lock]. */
+    private fun appendToActiveSegment(op: RgaOp<LogRecord>) {
+        activeSegment = activeSegment.apply(op)
+        activeOpCount++
+    }
+
+    /** Must hold [lock]. */
+    private fun encodeIndex(): ByteArray = cbor.encodeToByteArray(
+        indexSerializer,
+        LogSegmentIndex(
+            sealedSegments = sealedSegments.sorted(),
+            active = activeNumber,
+            next = nextSegmentNumber,
+        ),
+    )
+
+    /**
+     * How many ops [segment] holds, for the roll threshold. A `Remove` whose `Insert`
+     * lives in another segment appears only in [Rga.tombstones], so the two projections
+     * are disjoint exactly where they should be and the sum is the true op count.
+     */
+    private fun opCountOf(segment: Rga<LogRecord>): Int =
+        segment.sequence.size + segment.tombstones.size
 
     // ── Health bookkeeping ─────────────────────────────────────────────────────
     //
@@ -310,7 +655,7 @@ public class WarpLogRecordExporter(
             BufferPolicy.DROP_OLDEST -> 0
             BufferPolicy.DROP_NEWEST -> visibleCount - 1
         }
-        val (newLog, _) = log.removeAt(index) ?: return
+        val (newLog, removeOp) = log.removeAt(index) ?: return
         val evictedRecord = log.toList()[index]
         logger.warn {
             "WarpLogRecordExporter: buffer cap ($maxRecords) reached, evicting record " +
@@ -318,6 +663,11 @@ public class WarpLogRecordExporter(
                 "policy=$bufferPolicy (incoming recordId=${incoming.recordId})"
         }
         log = newLog
+        // The tombstone is an op like any other, so it rides in the active segment.
+        // It hides the record; it does not reclaim anything. The evicted record's own
+        // `Insert` — body and all — stays in whichever segment it landed in, because
+        // nothing drops a segment (see the class KDoc, and #2127).
+        appendToActiveSegment(removeOp)
         seenIds.remove(evictedRecord.recordId)
         visibleCount--
         tail = when {
@@ -375,3 +725,15 @@ public class WarpLogRecordExporter(
 
 /** Maximum number of [LogRecord]s buffered in memory before eviction. */
 public const val DEFAULT_MAX_LOG_RECORDS: Int = 10_000
+
+/**
+ * Default operations per persisted log segment — the ceiling on how many bytes one
+ * [WarpLogRecordExporter.export] rewrites.
+ *
+ * At the ~491 bytes/record measured against a real device's accumulated store, a
+ * segment is ~123 KB: small enough that a per-record rewrite is cheap on a phone's
+ * flash, large enough that the default 10,000-record buffer needs only ~40 keys,
+ * which recovery reads once at startup. It is a pure tuning knob — correctness does
+ * not depend on it, and two replicas need not agree on it.
+ */
+public const val DEFAULT_LOG_SEGMENT_OPS: Int = 256
