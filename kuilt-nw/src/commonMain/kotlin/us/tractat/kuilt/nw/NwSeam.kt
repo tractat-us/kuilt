@@ -887,21 +887,24 @@ internal class NwSeam(
 
     // ── send ────────────────────────────────────────────────────────────────────
 
-    /**
-     * The ceiling [encodeFrame] enforces on every send — and, symmetrically, the one each
-     * connection's [NwFramer] enforces on every receive, because [maxFrameBytes] is threaded to
-     * both. Not `null`: this fabric *does* have a number, and a caller that cannot read it has no
-     * way to size to the bound it is held to (#2069).
-     *
-     * The 4-byte length prefix rides ON TOP of this — [encodeFrame] compares it against the
-     * *payload* size and allocates `4 + len` — so nothing is reserved out of the published budget
-     * and [PayloadTooLarge.reservedBytes] is zero.
-     *
-     * Unlike `MeshSeam`, this is a fixed constructor value rather than a live minimum across links:
-     * every connection under an [NwSeam] is framed by the same [maxFrameBytes], so there is no
-     * per-link ceiling to aggregate and no window in which the number can tighten under a caller.
-     */
-    override val maxPayloadBytes: Int get() = maxFrameBytes
+    // ── on NOT publishing [Seam.maxPayloadBytes] yet (#2069 / #2134) ──────────────
+    //
+    // This seam has a number — [maxFrameBytes], enforced below on send and by each connection's
+    // [NwFramer] on receive — and #2069 exists to make exactly this kind of hidden ceiling public.
+    // It stays unpublished for one reason: publishing it is a PROMISE that a payload of that size
+    // will cross, and this fabric's receive path cannot currently keep it.
+    //
+    // Both `NwApi` implementations hand received bytes off lossily — `BridgeNwApi` through a
+    // 64-slot `DROP_OLDEST` channel, `RealNwApi` through a bounded `tryEmit` — while the transport
+    // delivers at most 64 KiB per receive. A 16 MiB frame is 256+ chunks against a 64-slot buffer,
+    // so chunks are silently dropped, the frame never completes, and the length-prefixed stream
+    // cannot resynchronize after the gap. Measured at ~1-in-5 on an idle box; #2134 has the arms.
+    //
+    // So the honest state is: this seam REFUSES above [maxFrameBytes], and declines to PROMISE it.
+    // [payloadBudgetGap] on the conformance harnesses points at #2134 rather than at the generic
+    // "names no ceiling" anchor, because that is the actual reason. Publishing here is a two-line
+    // change once #2134 lands — and the TCK's `payloadOfExactlyTheBudgetIsCarried` is what will
+    // then hold it, which is precisely how the defect surfaced.
 
     /**
      * Refuse [payload] if it cannot be framed, rather than letting [encodeFrame] throw from inside a

@@ -20,14 +20,14 @@ import kotlin.test.assertContains
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 
 /**
- * [NwSeam] publishes the frame ceiling it enforces, and enforces it non-destructively (#2069).
+ * [NwSeam] enforces its frame ceiling non-destructively (#2069).
  *
- * The fabric already *enforced* a ceiling — [encodeFrame] throws `FrameTooLargeException` past
- * [NwSeam]'s `maxFrameBytes` — while publishing `null`, i.e. "I cannot tell you". A caller had no
- * way to read the number it was being held to, and both send paths turned a mis-sized payload into
- * damage out of all proportion to it:
+ * The fabric enforces a ceiling — [encodeFrame] throws `FrameTooLargeException` past [NwSeam]'s
+ * `maxFrameBytes` — and both send paths used to turn a mis-sized payload into damage out of all
+ * proportion to it:
  *
  *  - `sendTo` encoded *inside* `runCatchingCancellable`, so the oversize throw landed in the
  *    `onFailure` that exists for a **dead link** — **evicting a healthy peer** — and was then
@@ -37,27 +37,39 @@ import kotlin.test.assertIs
  *    `broadcast`'s best-effort "drop, don't report" contract, whose most common caller is a
  *    timer-driven replication loop a throw kills outright.
  *
- * The TCK ([us.tractat.kuilt.conformance.SeamConformanceSuite]) cannot reach any of this while the
- * ceiling is 16 MiB: proving a hidden 16 MiB bound needs a 16 MiB payload. That is what
- * `NwSeam(maxFrameBytes = …)` is for — the same number reaches both edges of the wire, so a
- * [CEILING]-byte ceiling exercises exactly the production paths at a cost of bytes.
+ * The TCK ([us.tractat.kuilt.conformance.SeamConformanceSuite]) cannot reach any of this: its
+ * budget cases are selected by a non-null `maxPayloadBytes`, which this fabric deliberately does
+ * not yet report (#2134), and proving a hidden 16 MiB bound would need a 16 MiB payload anyway.
+ * That is what `NwSeam(maxFrameBytes = …)` is for — the same number reaches both edges of the
+ * wire, so a [CEILING]-byte ceiling exercises exactly the production paths at a cost of bytes.
  */
 class NwSeamPayloadBudgetTest {
 
     /** Small enough that an over-budget payload costs bytes; the production default is 16 MiB. */
     private val ceiling = CEILING
 
+    /**
+     * The seam enforces a ceiling and deliberately does **not** publish it — see the send-section
+     * comment in [NwSeam]. Publishing is a promise that a payload of that size will cross, and this
+     * fabric's receive path drops bytes under the multi-chunk burst such a payload arrives as
+     * (#2134). Enforcing a bound and promising one are different claims.
+     *
+     * Pinned so that publishing becomes a deliberate act with this test as its checklist, rather
+     * than something that drifts in: flipping it on while #2134 is open puts the fabric under
+     * `SeamConformanceSuite.payloadOfExactlyTheBudgetIsCarried`, which then wedges roughly one run
+     * in five — a flake in `ci-required` whose cause is two layers away from the change.
+     */
     @Test
-    fun theSeamPublishesTheCeilingItEnforces() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
-        val (a, _) = budgetedPair()
+    fun theSeamDoesNotYetPromiseTheCeilingItEnforces() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val (a, _) = budgetedPair()
 
-        assertEquals(
-            ceiling,
-            a.seam.maxPayloadBytes,
-            "the seam refuses past this number, so it must say so — `null` means unknown, and a " +
-                "fabric that enforces a bound is not a fabric that cannot tell",
-        )
-    }
+            assertNull(
+                a.seam.maxPayloadBytes,
+                "publishing a budget is a promise to CARRY it; until #2134 makes the receive path " +
+                    "lossless this fabric can only promise to REFUSE above it",
+            )
+        }
 
     @Test
     fun anOverBudgetAddressedSendIsRefusedWithoutEvictingTheRecipient() =
@@ -88,7 +100,7 @@ class NwSeamPayloadBudgetTest {
                     )
                     assertAll(
                         { assertEquals(ceiling + 1, refusal.payloadBytes) },
-                        { assertEquals(ceiling, refusal.budgetBytes, "the refusal names the number the seam publishes") },
+                        { assertEquals(ceiling, refusal.budgetBytes, "the refusal names the ceiling the seam enforces") },
                         {
                             assertEquals(
                                 0,
@@ -141,7 +153,7 @@ class NwSeamPayloadBudgetTest {
             assertContentEquals(
                 atBudget,
                 b.received.single().toByteArray(),
-                "the published number is a promise: a payload of exactly the budget crosses whole",
+                "a payload of exactly the ceiling crosses whole — the bound refuses ABOVE it, not at it",
             )
         }
 

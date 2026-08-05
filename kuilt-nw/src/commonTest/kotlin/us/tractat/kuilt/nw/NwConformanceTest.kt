@@ -104,14 +104,13 @@ class NwConformanceTest : SeamConformanceSuite() {
     override fun selfDialGap(): String? = null
 
     /**
-     * No gap: since #2069 [NwSeam] publishes the ceiling it enforces, so this fabric is under the
-     * budget obligation rather than tracked as owing one. That is what puts it under
-     * [SeamConformanceSuite.payloadOfExactlyTheBudgetIsCarried] and
-     * [SeamConformanceSuite.overBudgetAddressedSendIsRefusedNotLeaked] — both are selected by
-     * `maxPayloadBytes` being non-null, not by this hook, which only decides whether an
-     * *unpublished* budget is accounted for.
+     * Not the generic "names no frame ceiling" anchor: [NwSeam] *has* a ceiling (16 MiB, enforced
+     * on both edges) and refuses above it. What it cannot yet do is *promise* it — both `NwApi`
+     * implementations drop received bytes under a multi-chunk burst, so a frame of that size never
+     * completes (#2134). Publishing would put this fabric under
+     * [SeamConformanceSuite.payloadOfExactlyTheBudgetIsCarried], which is the test that found it.
      */
-    override fun payloadBudgetGap(): String? = null
+    override fun payloadBudgetGap(): String = "https://github.com/tractat-us/kuilt/issues/2134"
 
     // Mid-session-death obligation (13b — injectMidSessionDeath / both-ends-Torn-on-death + incoming
     // completes) is UNPROVABLE for this fabric BY DESIGN — do NOT "fix" it by re-introducing tear-on-death.

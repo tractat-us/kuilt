@@ -92,11 +92,12 @@ class NwLoopbackConformanceTest : SeamConformanceSuite() {
     override fun capabilityGaps(): Map<String, String> = emptyMap()
 
     /**
-     * No gap: since #2069 [NwSeam] publishes the ceiling it enforces. Here the at-budget payload
-     * crosses a real TLS-PSK Network.framework link, so this harness proves the published number is
-     * one the *actual Apple transport* carries — not merely one the framing agrees to.
+     * [NwSeam] has a 16 MiB ceiling and refuses above it, but cannot yet *promise* it — and this
+     * harness is the one that would prove it over a real TLS-PSK Network.framework link, so it is
+     * also the one most exposed: `RealNwApi` publishes received bytes with a bounded `tryEmit`,
+     * which drops under the 256+ chunk burst a 16 MiB frame arrives as (#2134).
      */
-    override fun payloadBudgetGap(): String? = null
+    override fun payloadBudgetGap(): String = "https://github.com/tractat-us/kuilt/issues/2134"
 
     /**
      * Wrap [delegate] so `weave` runs on a real [Dispatchers.Default]. [NwLoom] captures its seam

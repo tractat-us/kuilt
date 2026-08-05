@@ -160,10 +160,15 @@ public interface Seam {
      * the same failure into `removePeer`, evicting a healthy recipient as though its link had died.
      * Publishing a number nothing checks is worse than publishing none.
      *
-     * The TCK now holds every fabric that publishes a number to it at both edges, and the last
-     * fabric enforcing a ceiling while publishing none (`NwSeam`, 16 MiB via its framing) publishes
-     * it. Still open under #2069: `SeamRaftTransport`, and the decorators of #2058 that delegate to
-     * a bounded seam while reporting `null`.
+     * The TCK now holds every fabric that publishes a number to it at both edges. Still open under
+     * #2069: `SeamRaftTransport`, and the decorators of #2058 that delegate to a bounded seam while
+     * reporting `null`.
+     *
+     * `NwSeam` is the instructive case. It enforces a 16 MiB ceiling and refuses above it, but
+     * publishes nothing — deliberately, because publishing is a *promise* and its receive path
+     * drops bytes under a multi-chunk burst, so a frame that size never completes (#2134). A fabric
+     * may enforce a bound it cannot yet promise; those are different claims, and only the second
+     * one this value makes.
      *
      * ## A reading, not a lease
      *

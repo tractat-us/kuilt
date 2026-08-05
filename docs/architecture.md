@@ -369,15 +369,24 @@ genuinely cannot see: a fabric that enforces a ceiling internally while still
 reporting "I don't know". Proving a hidden 16 MiB limit would take a 16 MiB
 message, which is not a test worth running against every fabric — so the
 declaration is the mechanism there, not the assertion. That is not a
-hypothetical: the Apple Network.framework fabric was exactly this case, refusing
+hypothetical: the Apple Network.framework fabric is exactly this case, refusing
 frames past 16 MiB while reporting "I don't know", and it was the declaration —
 not any test — that surfaced it
-([#2069](https://github.com/tractat-us/kuilt/issues/2069)). It now publishes the
-number.
+([#2069](https://github.com/tractat-us/kuilt/issues/2069)).
+
+It also turned out to be the more interesting shape. Having found the hidden
+ceiling, the obvious move is to publish it — and doing so revealed *why* it had
+better not be published yet: the fabric can refuse a message that size, but it
+cannot reliably **carry** one, because its receive path drops bytes when a
+single message arrives split across many small reads
+([#2134](https://github.com/tractat-us/kuilt/issues/2134)). Enforcing a limit
+and promising a limit are different claims, and only the second is what
+publishing a number means. A fabric in that position points its declaration at
+the thing actually blocking it, rather than at the generic "no ceiling to name".
 
 Like the observer gap above, this one is not permanent for any fabric that
-*does* have a ceiling — it closes the moment the fabric publishes the number it
-is already enforcing.
+*does* have a ceiling — it closes the moment the fabric can publish, and keep,
+the number it is already enforcing.
 
 ### Not every flag describes a design choice
 
