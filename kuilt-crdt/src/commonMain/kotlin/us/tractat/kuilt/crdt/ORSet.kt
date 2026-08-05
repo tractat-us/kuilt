@@ -76,8 +76,11 @@ public class ORSet<E> private constructor(
      * under [piece], byte for byte.
      *
      * Deliberately **not public**: it is the O(set) spelling this type exists to keep off the
-     * wire, and the only caller that needs it is `ORSetDeltaMutatorLawTest`, which cannot state
-     * the delta-mutator law without an independent reference to compare against.
+     * wire. Two callers need it: `ORSetDeltaMutatorLawTest`, which cannot state the
+     * delta-mutator law without a reference independent of the delta path it is testing; and
+     * `ORSetTest.pieceIsAssociativeOverCausallyRelatedTrajectories`, whose generator walks the
+     * whole-state and delta paths in the same trajectory — take this away and both arms become
+     * the delta path and the test compares it against itself.
      */
     internal fun addWhole(replica: ReplicaId, element: E): ORSet<E> {
         val dot = causal.context.nextDot(replica)

@@ -63,7 +63,7 @@ public class Results<TaskId, Result> private constructor(
     ): Results<TaskId, Result> {
         val register = map[taskId]?.set(replica, timestamp, result)
             ?: LWWRegister.empty<Result>().set(replica, timestamp, result)
-        return Results(map.piece(map.put(replica, taskId, register)))
+        return Results(map.piece { it.put(replica, taskId, register) })
     }
 
     /**

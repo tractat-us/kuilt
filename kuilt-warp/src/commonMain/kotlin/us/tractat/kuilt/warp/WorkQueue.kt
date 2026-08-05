@@ -33,7 +33,7 @@ public class WorkQueue<TaskId> private constructor(
      * task ID on a peer that hasn't seen this add yet (add-wins semantics).
      */
     public fun add(replica: ReplicaId, taskId: TaskId): WorkQueue<TaskId> =
-        WorkQueue(set.piece(set.add(replica, taskId)))
+        WorkQueue(set.piece { it.add(replica, taskId) })
 
     /**
      * Remove [taskId] from the pending set.
@@ -42,7 +42,7 @@ public class WorkQueue<TaskId> private constructor(
      * replica that minted a new dot survives the merge (observed-remove semantics).
      */
     public fun remove(taskId: TaskId): WorkQueue<TaskId> =
-        WorkQueue(set.piece(set.remove(taskId)))
+        WorkQueue(set.piece { it.remove(taskId) })
 
     /**
      * The causal merge of two replicas of this queue.

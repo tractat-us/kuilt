@@ -47,7 +47,7 @@ public class MemberMetadata private constructor(
      * is unchanged.
      */
     public fun set(peer: PeerId, displayName: String, timestamp: Long, replica: ReplicaId): MemberMetadata =
-        MemberMetadata(map.piece(map.set(replica, timestamp, peer, displayName)))
+        MemberMetadata(map.piece { it.set(replica, timestamp, peer, displayName) })
 
     /**
      * Merge another replica's metadata into this one.

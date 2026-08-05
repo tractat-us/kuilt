@@ -193,7 +193,7 @@ class PatchworkSession(
             live.mutate { it.set(stitcher, timestamp, cell, colour) }
             live.state.value
         } else {
-            board.piece(board.set(stitcher, timestamp, cell, colour))
+            board.piece { it.set(stitcher, timestamp, cell, colour) }
         }
         _quilt.value = board.entries
     }

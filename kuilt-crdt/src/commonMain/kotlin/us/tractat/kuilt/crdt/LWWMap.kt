@@ -110,9 +110,15 @@ public class LWWMap<K, V> private constructor(
      * [piece], byte for byte, throughout the domination domain named on [set].
      *
      * Deliberately **not public**: it is the O(keys) spelling this type exists to keep off the
-     * wire, and the only caller that needs it is `LWWMapDeltaMutatorLawTest`, which cannot state
-     * the delta-mutator law — nor find its domain's edge — without an independent reference to
-     * compare against.
+     * wire. Two callers need it, and both are reasons to keep it rather than delete it:
+     *
+     * - `LWWMapDeltaMutatorLawTest` cannot state the delta-mutator law — nor find the edge of
+     *   its domain — without a reference independent of the delta path it is testing.
+     * - `LWWMapTest` drives it throughout (46 [setWhole] calls, 18 [removeWhole]) because
+     *   [piece]'s lattice laws must hold over states a *joined* delta can no longer produce.
+     *   Assigning can move a replica **down** the lattice (#2087); joining cannot. Delete this
+     *   and that whole region stops being searchable — the associativity sweeps over #2087
+     *   down-moves would silently start asserting over well-behaved inputs only.
      */
     internal fun setWhole(replica: ReplicaId, timestamp: Long, key: K, value: V): LWWMap<K, V> {
         val current = cells[key] ?: LWWRegister.empty()

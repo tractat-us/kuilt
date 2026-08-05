@@ -175,7 +175,8 @@ internal fun sampleQuilterSessionMetadata() = runTest(
     kotlinx.coroutines.delay(1)
 
     // Each peer writes its own display name. LWWMap gives per-key last-writer-wins.
-    // LWWMap.set returns a new LWWMap (the merged state), so wrap it in Patch.
+    // LWWMap.set returns a Patch — the one cell it wrote — and mutate broadcasts exactly
+    // that, so the frame is the same size whatever the map already holds.
     aliceRep.mutate { it.set(aliceRep.replica, timestamp = 1L, key = seamAlice.selfId, value = "Alice") }
     bobRep.mutate { it.set(bobRep.replica, timestamp = 1L, key = seamBob.selfId, value = "Bob") }
 

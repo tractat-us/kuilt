@@ -42,7 +42,7 @@ public class PeerRoster(
      * Duplicate announces for the same peer are idempotent.
      */
     public fun announce(peerId: PeerId) {
-        orSet = orSet.piece(orSet.add(replicaId, peerId))
+        orSet = orSet.piece { it.add(replicaId, peerId) }
         _peers.value = orSet.elements
     }
 
@@ -54,7 +54,7 @@ public class PeerRoster(
      * Calling [goodbye] for an unknown peer is a no-op.
      */
     public fun goodbye(peerId: PeerId) {
-        orSet = orSet.piece(orSet.remove(peerId))
+        orSet = orSet.piece { it.remove(peerId) }
         _peers.value = orSet.elements
     }
 

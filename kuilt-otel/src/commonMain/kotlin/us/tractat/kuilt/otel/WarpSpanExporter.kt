@@ -149,7 +149,7 @@ public class WarpSpanExporter(
         val minted = stamped !== span
         lock.withLock {
             maybeEvict()
-            spans = spans.piece(spans.add(replica, stamped))
+            spans = spans.piece { it.add(replica, stamped) }
         }
         // Serialize the durable-write section across concurrent export()/merge() so the
         // clock persist and the span write are one ordered unit (#1053).
@@ -171,7 +171,7 @@ public class WarpSpanExporter(
                         // Undo the in-memory add so a retry produces exactly one stamped
                         // copy. remove() targets this span's unique dot value, so it never
                         // clobbers a concurrent add of a different span.
-                        lock.withLock { spans = spans.piece(spans.remove(stamped)) }
+                        lock.withLock { spans = spans.piece { current -> current.remove(stamped) } }
                     }
                     logger.error(cause) { "WarpSpanExporter: durable write failed for span ${stamped.spanId}" }
                     ExportResult.Failure(cause)
@@ -232,7 +232,7 @@ public class WarpSpanExporter(
                 "traceId=${victim.traceId} spanId=${victim.spanId} name=${victim.name} " +
                 "policy=$bufferPolicy"
         }
-        spans = spans.piece(spans.remove(victim))
+        spans = spans.piece { it.remove(victim) }
     }
 }
 

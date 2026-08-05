@@ -36,7 +36,11 @@ import kotlin.jvm.JvmInline
  * element, an `ORMap` put one key, an `LWWMap` set one cell, and returning the
  * container would put every *other* element on the wire too. Those three return a
  * [Patch] for exactly that reason, and their deltas are pinned byte-for-byte by
- * the delta-mutator law `X.piece(mᵟ(X)) == m(X)` (#2044).
+ * the delta-mutator law `X.piece(mᵟ(X)) == m(X)` (#2044) — unconditionally for
+ * `ORSet` and `ORMap`, and for `LWWMap` exactly while the write's
+ * `(timestamp, replica)` tag dominates the key's current one, which is what its
+ * own tag-uniqueness rule already requires. Outside that domain no delta exists,
+ * because a delta is joined and a join can only move up the lattice (#2087).
  *
  * An earlier version of this paragraph offered *registers and maps* together as
  * the family whose whole state is already minimal. The maps were never in it, and

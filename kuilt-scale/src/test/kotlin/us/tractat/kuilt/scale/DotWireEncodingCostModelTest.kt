@@ -951,7 +951,7 @@ class DotWireEncodingCostModelTest {
      * so `Patch(state.add(…))` put the entire state on the wire once per write. It grew one in
      * #2044, and part (I) now meters both paths on a real mesh. The model is no longer free to
      * drift: [theOnPerMutationFullStateDominatesBootstrapAndSteadyStateAlike] pins it against what
-     * [ORSet.addDelta] really produces.
+     * [ORSet.add] really produces.
      */
     private fun minimalDeltaBytes(width: Int = DEFAULT_ID_WIDTH): Int = bytesOf(
         QuiltMessage.serializer(orSetCausalSerializer),
@@ -966,7 +966,7 @@ class DotWireEncodingCostModelTest {
     )
 
     /**
-     * The same add, through the real [ORSet.addDelta] and [Quilter]'s own frame. Differs from
+     * The same add, through the real [ORSet.add] and [Quilter]'s own frame. Differs from
      * [minimalDeltaBytes] only by `ORSet`'s one-field serialization wrapper — `Causal` reached
      * through a `{"causal": …}` map rather than directly — which is [ORSET_WRAPPER_SLACK] bytes.
      */
@@ -997,8 +997,8 @@ class DotWireEncodingCostModelTest {
         println("  A join costs ${replicas - 1} full states (each existing peer unicasts one to the joiner).")
         println("  A write costs a full state too ON THE `Patch(state.add(...))` PATH — and that row is a")
         println("  LOWER bound: it charges ${replicas - 1} links, while part (I) meters the gossip flood at")
-        println("  three times that. The last column is the same workload written through `ORSet.addDelta`,")
-        println("  which #2044 added: no longer a counterfactual, and metered end-to-end in part (I).")
+        println("  three times that. The last column is the same workload written through `ORSet.add`,")
+        println("  which #2044 made a delta mutator: no longer a counterfactual, and metered in part (I).")
         val full = frameBytes(namedFrame, namedCausal(100_000, replicas, DEFAULT_ID_WIDTH)).toDouble()
         val antiEntropyPerHour = replicas * SECONDS_PER_HOUR / ANTI_ENTROPY_SECONDS * digestRound
         println("  %6s %6s %18s %18s %18s %14s".format(
@@ -1016,7 +1016,7 @@ class DotWireEncodingCostModelTest {
         println("  At one write per minute a 100k-entry ORSet moved " +
             "${"%.0f".format(60 * full * (replicas - 1) / 1e6)} MB/hr cluster-wide, which")
         println("  60 joins per hour would have to match to compete — and no room joins once a minute.")
-        println("  Through `addDelta` the same workload is " +
+        println("  Through `add`'s delta the same workload is " +
             "${"%.0f".format(60 * minimalDeltaBytes().toDouble() * (replicas - 1) / 1e3)} kB/hr, and the")
         println("  join column is what is left to optimise. That reordering is what #2044 bought.")
 
@@ -1041,13 +1041,13 @@ class DotWireEncodingCostModelTest {
                 )
             },
             // And the model is now pinned to production rather than to a sketch of it. If
-            // `ORSet.addDelta` ever regressed to shipping state, the delta column of this budget
+            // `ORSet.add` ever regressed to shipping state, the delta column of this budget
             // would silently keep quoting the sketch; this is what stops that.
             {
                 assertTrue(
                     realDeltaBytes() - minimalDeltaBytes() in 0..ORSET_WRAPPER_SLACK,
                     "the modelled minimal delta (${minimalDeltaBytes()} b) must still be what " +
-                        "ORSet.addDelta really produces (${realDeltaBytes()} b, one `causal` " +
+                        "ORSet.add really produces (${realDeltaBytes()} b, one `causal` " +
                         "wrapper wider) — otherwise this whole column is a sketch of a method " +
                         "that exists and can be measured",
                 )
@@ -1352,7 +1352,7 @@ class DotWireEncodingCostModelTest {
             println("  compounding reasons: `ORSet.add` returned the whole new set, so `Patch(state.add(...))`")
             println("  broadcast the ENTIRE state once per write; and a broadcast is flooded, so it crossed")
             println("  ${"%.1f".format(paths.fullAdd / paths.fullState.toDouble())} links where a join's unicast crosses ${MESH_NODES - 1}.")
-            println("  Through `addDelta` the flood factor is unchanged and the frame is not, so the write")
+            println("  Through `add`'s delta the flood factor is unchanged and the frame is not, so the write")
             println("  path drops BELOW the join and the ranking #2037 assumed is restored — by removing the")
             println("  O(state) term, not by shrinking it. Every candidate in #2037 was a constant factor on")
             println("  a term that no longer has to be paid at all.")
@@ -1363,7 +1363,7 @@ class DotWireEncodingCostModelTest {
                 {
                     assertTrue(
                         paths.deltaAdd < oneJoin,
-                        "one add through ORSet.addDelta (${paths.deltaAdd} b) must now cost LESS than " +
+                        "one add through ORSet.add's delta (${paths.deltaAdd} b) must now cost LESS than " +
                             "admitting a new peer (${oneJoin.toLong()} b). This assertion used to run the " +
                             "other way; #2044 gave ORSet a delta mutator and it inverted on purpose",
                     )
