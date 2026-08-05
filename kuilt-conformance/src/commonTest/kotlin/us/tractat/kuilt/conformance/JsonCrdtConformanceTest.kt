@@ -35,6 +35,8 @@ internal class JsonCrdtConformanceTest : QuiltedConformanceSuite<JsonCrdt>() {
     private val r3 = ReplicaId("R3")
     private val r4 = ReplicaId("R4")
     private val r5 = ReplicaId("R5")
+    private val r6 = ReplicaId("R6")
+    private val r7 = ReplicaId("R7")
 
     private fun leaf(r: ReplicaId, v: String) =
         JsonNode.Leaf(MVRegister.empty<JsonValue>().set(r, JsonValue.Str(v)))
@@ -55,6 +57,15 @@ internal class JsonCrdtConformanceTest : QuiltedConformanceSuite<JsonCrdt>() {
         return JsonNode.Array(rga)
     }
 
+    // R6 writes a key, removes it, then writes it again — the one shape none of the samples above
+    // reach, because none of them removes anything. The three are a causal chain on one replica, so
+    // they do not alias: each observes the last. The re-asserted leaf is authored by R7 so the
+    // register's join keeps both values apart — a leaf re-written under R6's own dot would carry
+    // the same tag twice, and a dropped contribution would then be invisible.
+    private val jAsserted = JsonCrdt.empty(r6).set("j", leaf(r6, "one"))
+    private val jRetired = jAsserted.remove("j")
+    private val jReAsserted = jRetired.set("j", leaf(r7, "two"))
+
     override fun samples(): List<JsonCrdt> = listOf(
         // empty — identity element
         JsonCrdt.empty(r1),
@@ -68,5 +79,13 @@ internal class JsonCrdtConformanceTest : QuiltedConformanceSuite<JsonCrdt>() {
         JsonCrdt.empty(r5)
             .set("name", leaf(r5, "Alice"))
             .set("meta", objNode(r5, "active" to leaf(r5, "true"))),
+        jAsserted,
+        jRetired,
+        jReAsserted,
     )
+
+    override val retirementIsMeaningful: Boolean get() = true
+
+    override fun retirementReAssertion(): Triple<JsonCrdt, JsonCrdt, JsonCrdt> =
+        Triple(jAsserted, jRetired, jReAsserted)
 }

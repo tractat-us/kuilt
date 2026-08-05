@@ -15,14 +15,30 @@ internal class CausalDotFunConformanceTest : QuiltedConformanceSuite<Causal<DotF
     private val a = ReplicaId("A")
     private val b = ReplicaId("B")
 
+    private val asserted = Causal(DotFun(mapOf(Dot(a, 1L) to "x")), DotContext.of(Dot(a, 1L)))
+    private val retired = Causal(DotFun<String>(emptyMap()), DotContext.of(Dot(a, 1L))) // written then removed
+
+    /** A writes again after its first write was retired — a fresh dot, and a value of its own. */
+    private val reAsserted =
+        Causal(DotFun(mapOf(Dot(a, 2L) to "z")), DotContext.of(Dot(a, 1L), Dot(a, 2L)))
+
     override fun samples(): List<Causal<DotFun<String>>> = listOf(
         Causal(DotFun(), DotContext.EMPTY),
-        Causal(DotFun(mapOf(Dot(a, 1L) to "x")), DotContext.of(Dot(a, 1L))),
-        Causal(DotFun<String>(emptyMap()), DotContext.of(Dot(a, 1L))), // written then removed
+        asserted,
+        retired,
         Causal(
             DotFun(mapOf(Dot(a, 1L) to "x", Dot(b, 1L) to "y")),
             DotContext.of(Dot(a, 1L), Dot(b, 1L)),
         ),
         Causal(DotFun(mapOf(Dot(b, 1L) to "y")), DotContext.of(Dot(a, 1L), Dot(b, 1L))),
+        reAsserted,
     )
+
+    override val retirementIsMeaningful: Boolean get() = true
+
+    override fun retirementReAssertion(): Triple<
+        Causal<DotFun<String>>,
+        Causal<DotFun<String>>,
+        Causal<DotFun<String>>,
+        > = Triple(asserted, retired, reAsserted)
 }
