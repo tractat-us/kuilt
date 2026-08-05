@@ -299,4 +299,60 @@ class QuilterConcurrencyTest {
             }
         }
     }
+
+    /**
+     * The [concurrentMutateIncrementsAreNotLost] twin for [Quilter.mutateOrSkip] (#2090) — same
+     * CRDT, same shape, same reason.
+     *
+     * `mutateOrSkip` makes the *same* atomicity promise as [Quilter.mutate], and the whole point
+     * of it is that the refusal decision is inside the lock too. That guarantee needs its own
+     * real-thread probe: a virtual-time test cannot distinguish the correct implementation from
+     * one that reads `state.value` **outside** the lock and only takes it to publish. That variant
+     * is not hypothetical — it is exactly the bug [Quilter.mutate] shipped with and was fixed for
+     * in #1270, and it survives every single-threaded assertion, including the invocation-count
+     * pin in `QuilterMutateOrSkipTest` (it evaluates the transform exactly once, on both branches).
+     *
+     * [PNCounter] for the same reason as its twin: the delta carries the replica's absolute new
+     * slot value and join is elementwise max, so two transforms that both read slot `n` and write
+     * `n + 1` collapse into one increment. The `GSet` used elsewhere in this file is idempotent
+     * under max-join and would mask it.
+     */
+    @Test
+    fun concurrentMutateOrSkipIncrementsAreNotLost() = runTest(timeout = 120.seconds) {
+        withContext(Dispatchers.Default) {
+            val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+            try {
+                val loom = InMemoryLoom()
+                val seam = loom.host(Pattern("mutate-or-skip-atomicity"))
+                val rep = Quilter(
+                    replica = ReplicaId(seam.selfId.value),
+                    seam = seam,
+                    initial = PNCounter.ZERO,
+                    messageSerializer = QuiltMessage.serializer(PNCounter.serializer()),
+                    scope = scope,
+                )
+
+                val workers = 8
+                val perWorker = 2000
+                coroutineScope {
+                    repeat(workers) {
+                        launch {
+                            repeat(perWorker) {
+                                rep.mutateOrSkip { it.increment(rep.replica) }
+                            }
+                        }
+                    }
+                }
+
+                assertEquals(
+                    (workers * perWorker).toLong(),
+                    rep.state.value.value,
+                    "same-replica increments were max-joined away — mutateOrSkip must read the " +
+                        "state and run its transform INSIDE the lock, not merely publish there",
+                )
+            } finally {
+                scope.cancel()
+            }
+        }
+    }
 }

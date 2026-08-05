@@ -496,11 +496,19 @@ public class Quilter<S : Quilted<S>>(
      * be pure, fast, and non-suspending, and it may run against a state newer than any the caller
      * has read.
      *
+     * **A closed replicator throws on *both* branches**, the declining one included, so `false`
+     * never has two meanings. That is deliberate and it is reachable: a `Quilter` closes itself
+     * when its [Seam] completes, so a consumer that polls a conditional write on a tick — a
+     * scheduler round that usually has nothing to do, a presence declaration that is usually
+     * already current — sees a throw at teardown where an unconditional `mutate` would have
+     * thrown too. The alternative, reporting a dead replicator as a refusal, silently converts
+     * "this session is over" into "the state said no", which is the answer a caller acts on.
+     *
      * @return `true` if [transform] returned a patch and it was applied and broadcast; `false` if
      *   [transform] declined, in which case nothing changed and no frame was sent.
      * @sample us.tractat.kuilt.quilter.sampleQuilterMutateOrSkip
-     * @throws IllegalStateException if this replicator has been [close]d — including when
-     *   [transform] would have declined, so a closed replicator is never mistaken for a refusal.
+     * @throws IllegalStateException if this replicator has been [close]d — checked **before**
+     *   [transform] runs, so it fires on the declining path as well as the publishing one.
      */
     public fun mutateOrSkip(transform: (S) -> Patch<S>?): Boolean = lock.withLock {
         check(!closed) { "Quilter($replica) is closed" }
