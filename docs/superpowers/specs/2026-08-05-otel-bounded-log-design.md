@@ -51,8 +51,9 @@ nothing.
 **Known qualification.** Under `DROP_NEWEST` the barrier *does* fire: eviction removes
 the visible tail, which is a successor-free leaf, and a probe reclaimed all 5 evicted
 tails in one pass. This is the exact inverse of #2126's asymmetry (segment-drop
-reclamation fired only under `DROP_OLDEST`). The design below deliberately does not use
-two mechanisms — see §4.
+reclamation fired only under `DROP_OLDEST`). The design does not exploit it, because PR 0
+(§5) removes that eviction entirely — `DROP_NEWEST` stops evicting, so there is nothing
+for a second mechanism to reclaim.
 
 ## 2. The mechanism: un-gated windowing
 
@@ -83,7 +84,7 @@ perturbation is unreachable in the dominant shape and tolerable after merges.
 `:kuilt-quilter`. The exporter computes its own drop set from `log.sequence` and the
 retained window; `WindowPolicy` stays where it is.
 
-## 3. The bound: a compacted range on `Rga`
+## 3. The bound: a compacted floor on `Rga`
 
 Windowing alone is a **constant factor, not a bound**. `RgaOp.Compact.positions` retains
 one `(RgaId → RgaId)` pair per dropped record forever — roughly 110 B against the measured
@@ -105,36 +106,36 @@ idempotence / commutativity / associativity hold by construction and
 `RgaLawsPropertyTest` / `QuiltedLawsTest` are satisfied structurally rather than by
 argument. The field participates in `equals`.
 
-### Why a range, not a floor
+### A floor — enabled by fixing `DROP_NEWEST` first
 
-A plain floor `VersionVector` is downward-closed. `DROP_NEWEST`'s drop set is not: the
-exporter evicts visible index `visibleCount - 1` *before* inserting
-(`WarpLogRecordExporter.kt:652-684`), so it retains seqs `1..maxRecords-1` **plus the
-current newest**, making the compacted set the band `[maxRecords, newest)`. A floor would
-bound `DROP_OLDEST` only — reintroducing the policy asymmetry that
-`bothBufferPoliciesGetTheSameBoundedWrite` (`WarpLogRecordExporterSegmentTest.kt:176-204`)
-exists to catch.
-
-So the field is a per-replica **range** — one half-open `[lo, hi)` of author seqs:
+The field is a downward-closed per-author high-water:
 
 ```kotlin
-public val compacted: Map<ReplicaId, LongRange>
+public val compactedBelow: VersionVector
 ```
 
-- `DROP_OLDEST` → `[1, k)`
-- `DROP_NEWEST` → `[maxRecords, newest)`
+merged by the existing `ceilWith`, tested by the existing `contains`, and already
+canonically encoded — `VersionVector.entries` carries `CanonicalMapSerializer` for exactly
+the #2010 reason (iteration order is not a function of the value while `equals` is
+order-insensitive). No new lattice, no new serializer, no new golden-vector shape.
 
-Both O(1) per replica. One mechanism, one code path, symmetric bound.
+**This only works because `DROP_NEWEST` is fixed first (PR 0).** As shipped, `DROP_NEWEST`
+evicts visible index `visibleCount - 1` *before* inserting
+(`WarpLogRecordExporter.kt:652-684`) — so it drops the **second**-newest and retains
+`1..maxRecords-1` plus the current newest, making the compacted set the band
+`[maxRecords, newest)`. That is not downward-closed, and a floor cannot express it; it
+would force a per-replica range field, a bespoke `(min lo, max hi)` merge, a new canonical
+serializer, and a range-shaped `Quilted` capability.
 
-**Merge** is elementwise `(min lo, max hi)` per replica. That is sound only because the
-ranges for a given replica come from a single producer and are therefore nested — which
-the mint rule below guarantees.
+It is also not what `BufferPolicy.DROP_NEWEST` documents — "**Drop the newest** span when
+the buffer is full", which is the *incoming* record. Restoring the documented behaviour
+(reject the incoming record once full) means nothing is evicted after the buffer fills, so
+`DROP_NEWEST` never compacts at all and its bound is trivial. Every compacted set that
+remains comes from `DROP_OLDEST` and is downward-closed.
 
-**The wire encoding must be canonical.** A `Map<ReplicaId, LongRange>`'s iteration order
-is not a function of its value while `equals` is order-insensitive, so two replicas at the
-same logical state would otherwise emit different bytes — the #2010 defect, already fixed
-for `VersionVector.entries` and `RgaOp.Compact.positions` by `CanonicalMapSerializer`
-(`Rga.kt:104`). The new field takes the same treatment, and the golden vectors pin it.
+So the symmetry the design needs is bought by **fixing a behaviour/doc mismatch**, not by
+generalising the CRDT to absorb it. PR 0 exists to settle that question before any of the
+CRDT work is built on it — see §8.
 
 ### The mint rule
 
@@ -148,16 +149,16 @@ a merge (a foreign live element can sit between two of this replica's own record
 reroot can move a higher-seq own subtree above a lower-seq one), so eviction order can
 diverge from own-seq order. The rule is therefore:
 
-> Raise to the largest `k` such that **every** own dot in `[lo, k)` is in the drop set.
-> Anything dropped above `k` keeps an explicit `Compact` positions entry.
+> Raise `compactedBelow[self]` to the largest `k` such that **every** own dot in `1..k` is
+> in the drop set. Anything dropped above `k` keeps an explicit `Compact` positions entry.
 
-Under pure single-author `DROP_OLDEST` this is exact and the residue is empty. After
-merges the range lags and explicit entries bridge the gap — bounded in the shipped shape,
-unbounded under adversarial interleaving. That is a stated limit, not a defect.
+Under pure single-author `DROP_OLDEST` this is exact and the residue is empty. After merges
+the floor lags and explicit entries bridge the gap — bounded in the shipped shape, degraded
+under adversarial interleaving. That is a stated limit, not a defect.
 
-The mint path additionally **checks the new range is adjacent to or overlapping the
-existing one**, falling back to explicit positions otherwise, so a policy switch across
-restarts cannot punch a hole that `(min lo, max hi)` would silently swallow.
+The "every own dot in `1..k`" quantifier is what makes a hole impossible: the floor only
+advances across a contiguous run this replica has actually dropped, so `ceilWith` can never
+swallow a retained dot.
 
 **Enforceability.** Merge cannot verify authorship. This adds **no new trust surface**:
 the existing un-gated `RgaOp.Compact` already lets any peer purge arbitrary ids.
@@ -167,7 +168,7 @@ raises only its own entry — the same trust model as today.
 ### Reroot
 
 `nearestPresentAncestor` does `positions[cur] ?: head` (`OpLogEngine.kt:161`), so an id
-covered by a range and carrying no positions entry reroots to HEAD. For a prefix drop that
+covered by the floor and carrying no positions entry reroots to HEAD. For a prefix drop that
 is exactly correct: the dropped id's ancestors are all dropped too, so the chain-walk would
 have reached HEAD anyway.
 
@@ -177,33 +178,32 @@ halve the bytes and is equivalent *for a prefix drop*. It is unsound: `piece` me
 (`Rga.kt:216-220`). A replica recording HEAD and a peer recording the real `after` collide,
 last-writer-wins, and the two replicas diverge.
 
-## 4. `Quilted.causalCompacted()` — a capability, not an `Rga` patch
+## 4. `Quilted.causalFloor()` — a capability, not an `Rga` patch
 
 `Quilter` recomputes `contiguousFrontier(_state.value.causalDots())` on **every state
-change** (`Quilter.kt:538`). A compacted range with no explicit id set would force Θ(range)
-dot enumeration per call — an unbounded tax on the hot path, worse than the disease it
-cures.
+change** (`Quilter.kt:538`). A floor with no explicit id set would force Θ(floor) dot
+enumeration per call — an unbounded tax on the hot path, worse than the disease it cures.
 
 The fix is a new `Quilted` capability, shaped exactly like the existing `causalDots()`
 (`Quilted.kt:57-75`) and defaulted so it is non-breaking for every CRDT that does not use
 this path:
 
 ```kotlin
-/** Per-author seq ranges this state delivered and has since compacted away. */
-public fun causalCompacted(): Map<ReplicaId, LongRange> = emptyMap()
+/** Per-author high-water this state delivered and has since compacted away. */
+public fun causalFloor(): VersionVector = VersionVector.EMPTY
 ```
 
-**It returns ranges, not a floor.** A `VersionVector` floor is downward-closed and so
-cannot represent `DROP_NEWEST`'s band `[maxRecords, newest)` — the frontier walk would stop
-at `maxRecords - 1` and pin the author's delivered high-water below the gap forever,
-stalling all downstream GC exactly as `Rga.kt:477-491` warns. Since §3 went to trouble to
-make the *state* symmetric across policies, the capability that reads it has to be
-symmetric too.
+`contiguousHighWater` (`Quilter.kt:1189-1193`) starts its walk at `floor[author]` instead
+of `0`. `Rga.causalDots` then stops re-emitting floor-swallowed dots — `causalFloor()`
+carries them, which is what keeps the delivered frontier gap-free. Without it, dropping
+those dots pins the author's delivered high-water below the gap forever and stalls all
+downstream GC, exactly as `Rga.kt:477-491` warns.
 
-`contiguousHighWater` (`Quilter.kt:1189-1193`) still counts up from `1`, but on hitting a
-missing seq it checks whether a range covers it and, if so, resumes at that range's `hi`.
-`Rga.causalDots` then stops re-emitting range-swallowed dots — `causalCompacted()` carries
-them, and the walk bridges the gap they leave.
+**Correctness rests on §3's downward-closure.** The capability is a high-water, so it can
+only describe a compacted set that is a prefix. That is guaranteed by the mint rule (a
+contiguous own-dot run from 1) *and* by PR 0 removing the one policy that would otherwise
+produce a band. If either changes, this capability is the thing that breaks — silently, by
+under-reporting the frontier — so criterion 8 in §6 exists to catch it.
 
 **This is deliberately generic.** `Fugue` has the same op-log shape — `compact`
 (`Fugue.kt:422`), `causalDots` (`Fugue.kt:466`), and the same `nearestPresentAncestor`
@@ -213,6 +213,32 @@ learning anything about it.
 
 ## 5. The exporter
 
+### PR 0 — restore `DROP_NEWEST`'s documented behaviour
+
+`BufferPolicy.DROP_NEWEST` documents "**Drop the newest** span when the buffer is full".
+The shipped code drops the *second*-newest: `maybeEvict` removes visible index
+`visibleCount - 1` and `export` then inserts the incoming record
+(`WarpLogRecordExporter.kt:652-684`). Restore the contract — once `visibleCount ==
+maxRecords`, log the drop and return `ExportResult.Success` **without** inserting.
+
+Consequences, all wanted:
+
+- The log freezes at the first `maxRecords` records, so `DROP_NEWEST` is bounded outright
+  and never compacts. Every remaining compacted set is a `DROP_OLDEST` prefix, which is
+  what lets §3 be a floor rather than a range.
+- `seenIds` is **not** updated for a rejected record, so a later re-export retries rather
+  than being deduped into silence.
+- `bothBufferPoliciesGetTheSameBoundedWrite`
+  (`WarpLogRecordExporterSegmentTest.kt:176-204`) needs restating: under `DROP_NEWEST` a
+  full buffer writes *nothing*, which is a stronger bound than the test currently asserts,
+  not a weaker one.
+
+**This is a public behaviour change and it is the decision gate for everything after it.**
+It ships first, alone, so that if review prefers the current behaviour we learn before the
+CRDT work is built on downward-closure. If it is rejected, §3 reverts to a per-replica
+range field with a `(min lo, max hi)` merge, its own canonical serializer, and a
+range-shaped `causalFloor`; nothing else in this design changes.
+
 ### Batched windowing
 
 The window pass runs **once per batch of evictions**, not per eviction. Segments roll on
@@ -221,16 +247,15 @@ op count (`activeOpCount >= segmentOps`, `WarpLogRecordExporter.kt:551`), so a p
 The drop set is every id in `log.sequence` outside the retained window, computed
 policy-aware:
 
-- `DROP_OLDEST` retains the **last** `maxRecords` visible ids; the drop set is everything
-  before them (the `WindowPolicy.byCount` walk, mirrored in `:kuilt-otel` rather than
-  taking a `:kuilt-quilter` dependency).
-- `DROP_NEWEST` retains the **first** `maxRecords` visible ids; the drop set is everything
-  after them.
+Only `DROP_OLDEST` reaches this path. It retains the **last** `maxRecords` visible ids and
+drops everything before them — the `WindowPolicy.byCount` walk, mirrored in `:kuilt-otel`
+rather than taking a `:kuilt-quilter` dependency. After PR 0, `DROP_NEWEST` never evicts, so
+it has no drop set and needs no window pass.
 
 ### Segment retirement
 
 A sealed segment is retirable iff every op it holds is an `Insert`/`Remove` now covered by
-the compacted range or a retained `Compact`, **and** it carries no `Compact` op that has
+the compacted floor or a retained `Compact`, **and** it carries no `Compact` op that has
 not been consolidated. The second clause is what keeps
 `aCompactionInheritedFromTheLegacyBlobIsNeverDropped`
 (`WarpLogRecordExporterSegmentTest.kt:354-382`) green — the legacy segment 0 and every
@@ -246,7 +271,7 @@ wobble; a correctness bug the moment segments carry Compacts.
 Extending the file's own precedents (the index is the commit point; `adoptRemoteSegment`
 writes the index first, `WarpLogRecordExporter.kt:578-581`):
 
-1. Durably write the consolidation state (the range + any residual `Compact`).
+1. Durably write the consolidation state (the floor + any residual `Compact`).
 2. Write the index moving retired numbers from `sealedSegments` into a new
    `retired: List<Int>` field — **the commit point**.
 3. Delete the retired keys.
@@ -290,24 +315,28 @@ implementation is the wrong shape once reclamation exists.
    a persistence-only fix cannot deliver it.
 4. `aMergeCannotResurrectRecordsThisReplicaAlreadyEvicted` and
    `aCompactionInheritedFromTheLegacyBlobIsNeverDropped` still pass, unmodified.
-5. `bothBufferPoliciesGetTheSameBoundedWrite` extended: both policies get the same bounded
-   **total**, not only the same bounded per-export write.
-6. Lattice laws hold for the range field under mixed explicit-`Compact` / range states.
-7. Seq survival across a range raise plus a cacheless reload — a range analogue of
+5. `bothBufferPoliciesGetTheSameBoundedWrite` restated: both policies bound the **total**,
+   not only the per-export write — `DROP_NEWEST` by never evicting, `DROP_OLDEST` by
+   compacting. Neither is exempt.
+6. Lattice laws hold for the floor field under mixed explicit-`Compact` / floor states,
+   including a replica carrying only a floor merged with one carrying only explicit ops.
+7. Seq survival across a floor raise plus a cacheless reload — a floor analogue of
    `RgaCompactionSeqSurvivalTest` (#639). `maxSeqByReplica` / `nextSeqFor` must not regress
-   when the range swallows the ids that were holding the per-author high-water up, so
-   `OpLogEngine.deliveredDots` (`OpLogEngine.kt:97-102`) has each range contribute at least
-   `(r, hi - 1)`.
-8. A `Quilter` over an `Rga` keeps a **gap-free** delivered frontier under both policies —
-   including `DROP_NEWEST`, where the compacted band does not touch seq 1 and the walk has
-   to bridge it. This is the case a floor-shaped capability would have failed silently.
+   when the floor swallows the ids that were holding the per-author high-water up, so
+   `OpLogEngine.deliveredDots` (`OpLogEngine.kt:97-102`) has the floor contribute at least
+   `(r, floor[r])`.
+8. A `Quilter` over an `Rga` with a non-empty floor keeps a **gap-free** delivered
+   frontier, and the frontier is computed **without enumerating the swallowed dots** — the
+   whole point of the capability. Assert both: the value, and that the work is O(authors).
 
 ## 7. Known costs, accepted
 
 - **Wire-format break**, on the persisted blob *and* the gossip path — `merge()` is a
   cross-app-version anti-entropy surface. Approved (pre-1.0). Golden vectors regenerate
   (`CanonicalGoldenVectorTest`).
-- **Foreign explicit `Compact`s are never range-subsumed.** An own-replica range cannot
+- **`DROP_NEWEST`'s observable behaviour changes** (PR 0). Approved; it restores the
+  documented contract.
+- **Foreign explicit `Compact`s are never floor-subsumed.** An own-replica floor cannot
   cover another author's dots, and `RgaGcCoordinator.compactWithWindow` mints
   mixed-replica-key Compacts routinely (`RgaGcCoordinator.kt:184-186`). Retained forever.
   Irrelevant in the single-author exporter shape; a stated limit of the bound.
@@ -317,16 +346,21 @@ implementation is the wrong shape once reclamation exists.
 
 | # | module | content |
 |---|--------|---------|
-| 1 | `:kuilt-crdt` | `Rga.compacted` range field, merge, `equals`, mint entry point, serializer, goldens, lattice + seq-survival coverage |
-| 2 | `:kuilt-crdt` | `Quilted.causalCompacted()` defaulted capability; `Rga` implements it |
-| 3 | `:kuilt-quilter` | `contiguousHighWater` bridges compacted ranges; frontier gap-free test under both policies |
+| 0 | `:kuilt-otel` | `DROP_NEWEST` rejects the incoming record when full — the decision gate for §3's downward-closure |
+| 1 | `:kuilt-crdt` | `Rga.compactedBelow` floor field, `ceilWith` merge, `equals`, mint entry point, serializer, goldens, lattice + seq-survival coverage |
+| 2 | `:kuilt-crdt` | `Quilted.causalFloor()` defaulted capability; `Rga` implements it |
+| 3 | `:kuilt-quilter` | `contiguousHighWater` starts at the floor; frontier gap-free + O(authors) test |
 | 4 | `:kuilt-otel` | `opCountOf` fix, batched windowing, segment retirement, `retired` ledger, write-ordering, race serialization |
 
-#2127 closes on PR 4. PRs 1–3 are `part of #2127`.
+#2127 closes on PR 4. PRs 0–3 are `part of #2127`.
 
-`Quilted.causalCompacted()` is deliberately its own PR: it is a capability other op-log
-CRDTs (`Fugue` first) should adopt, not an `Rga` implementation detail, and reviewing it
-apart from the `Rga` change keeps that visible.
+**PR 0 is a gate, not just a first step.** It settles a public-behaviour question the rest
+of the design depends on; if it is rejected, PR 1's field changes shape before it is
+written. Do not start PR 1 until PR 0 has merged.
+
+`Quilted.causalFloor()` is deliberately its own PR: it is a capability other op-log CRDTs
+(`Fugue` first) should adopt, not an `Rga` implementation detail, and reviewing it apart
+from the `Rga` change keeps that visible.
 
 ## 9. Declined
 
@@ -343,4 +377,4 @@ apart from the `Rga` change keeps that visible.
   (~1.1 GB at N=100k, batch=500), the exact defect #2126 fixed.
 - **LSM-style tiered consolidation in `:kuilt-otel`** — genuinely bounds keys at
   O(N·log N) writes without touching the CRDT, but is ~60 lines of compaction machinery
-  that the range field makes dead code. Sequencing, not merit.
+  that the floor field makes dead code. Sequencing, not merit.
