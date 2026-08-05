@@ -24,11 +24,21 @@ import kotlin.time.Duration.Companion.milliseconds
  * ```
  *
  * Both upper disjuncts are pinned — `InstallSnapshotMetaValidationTest` for the bounds as a whole,
- * [SnapshotTermCeilingArmsTest] for the term ceiling's two arms. Deleting either `< 0L` left the
- * whole module green: no test on the wire path had ever put a negative `lastIncludedIndex` or
- * `lastIncludedTerm` on it, so both clauses evaluated `false` on every trajectory that reached them
- * and were inert. (The negatives in `RestoredLogValidationTest` are on the *restore* path —
- * `checkedRestoredSnapshotMeta`, a different guard.)
+ * [SnapshotTermCeilingArmsTest] for the term ceiling's two arms. When #1980's mutation survey ran,
+ * deleting *either* `< 0L` left the whole module green: no test on the wire path had ever put a
+ * negative `lastIncludedIndex` or `lastIncludedTerm` on it, so both clauses evaluated `false` on
+ * every trajectory that reached them and were inert. (The negatives in `RestoredLogValidationTest`
+ * are on the *restore* path — `checkedRestoredSnapshotMeta`, a different guard.)
+ *
+ * **One of those two receipts has since expired, and saying so is the point of this paragraph.**
+ * #2055's attribution suite added `FrameRefusedTest.aNegativeSnapshotIndex_isRefusedAs_InstallSnapshotIndexOutOfRange`,
+ * which injects `lastIncludedIndex = -1`, so the *index* clause has been reachable-and-measured since
+ * — deleting it now reddens that test (and `everyRefusalGateIsReachable`, which loses the gate's only
+ * emit site) before this class is consulted. What that test does **not** measure is the ordering
+ * obligation below: it asserts the gate and nothing else, so it is green on any refactor that keeps
+ * the drop but moves it after a side-effect. The *term* clause was un-pinned exactly as #2054
+ * measured — deleting it leaves 504 of 505 green, and [aNegativeLastIncludedTermIsDroppedBeforeEverySideEffect]
+ * is the one red.
  *
  * ### Severity: injection-only, and downstream-shadowed. This is ordering, not a safety hole
  *
@@ -88,17 +98,22 @@ import kotlin.time.Duration.Companion.milliseconds
  *
  * ### Measured coverage
  *
- * `:kuilt-raft` was green on both mutations before these tests. With them each clause is red under
- * its own deletion and green under its sibling's, which is what makes these two clause pins rather
- * than one coarser bound pin:
+ * Each clause is red under its own deletion and **green under its sibling's**, which is what makes
+ * these two clause pins rather than one coarser bound pin (`:kuilt-raft:jvmTest --rerun-tasks
+ * --no-build-cache`, 505 tests, `compileKotlinJvm` EXECUTED on both runs):
  *
  * | | `lastIncludedIndex < 0L` deleted | `lastIncludedTerm < 0L` deleted |
  * |---|---|---|
  * | [aNegativeLastIncludedIndexIsDroppedBeforeEverySideEffect] | 🔴 | 🟢 |
  * | [aNegativeLastIncludedTermIsDroppedBeforeEverySideEffect] | 🟢 | 🔴 |
+ * | rest of the module | 2 🔴 (`FrameRefusedTest`, above) | 0 🔴 |
  *
- * Both reds are the **whole** side-effect set, not one surface: the victim answers the forger, adopts
- * its term, adopts it as this term's leader, and restarts its election timer.
+ * Both reds are the **whole** side-effect set, not one surface — 9 of the 15 assertions, reporting
+ * that the victim answered the forger with an `InstallSnapshotResponse`, raised its durable term
+ * from 1 to 2, adopted `v3` (a follower) as leader in place of `v1`, and restarted its election
+ * timer. The positive control fails alongside them, for a reason worth naming: having adopted the
+ * forged frame's term, the victim then reads the *control* frame as stale. That is a consequence of
+ * the mutation, not an independent signal — the control's job is to keep the green case honest.
  */
 internal class SnapshotChunkSignClausesTest {
 
