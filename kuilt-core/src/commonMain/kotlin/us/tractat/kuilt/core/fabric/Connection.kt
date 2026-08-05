@@ -2,6 +2,7 @@ package us.tractat.kuilt.core.fabric
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import us.tractat.kuilt.core.PayloadTooLarge
 
 /**
  * A point-to-point, message-oriented duplex link between exactly two peers.
@@ -42,6 +43,13 @@ public interface Connection {
      *
      * A [Connection] decorator that adds no bytes to a frame delegates this unchanged; one that
      * adds bytes subtracts them, floored at zero.
+     *
+     * **Fixed for the life of the link.** Unlike [us.tractat.kuilt.core.Seam.maxPayloadBytes] — which
+     * a mesh derives from a link set that grows and shrinks, so it moves — this number is a property
+     * of one transport and must not change once the link exists. That is what makes it the sound
+     * thing to pre-check a payload against: a seam reading it immediately before [send] cannot be
+     * overtaken by a tightening it did not see (#2069). A transport whose real ceiling is negotiated
+     * publishes the settled value, or `null` until it settles.
      */
     public val maxFrameBytes: Int? get() = null
 
@@ -55,3 +63,29 @@ public interface Connection {
 
 /** Await the first inbound frame (the identity preamble). */
 internal suspend fun Connection.firstFrame(): ByteArray = incoming.first()
+
+/**
+ * [PayloadTooLarge] if [payload] will not fit this link's [maxFrameBytes], else `null`.
+ *
+ * The pre-check the fabric seams owe a caller once they publish a budget (#2069), and the reason it
+ * is written against the **connection** rather than [us.tractat.kuilt.core.Seam.maxPayloadBytes]:
+ * the seam's number is an aggregate that moves (a mesh reports the minimum across a live link set),
+ * so checking it would leave a check-then-send window a tightening could slip through, whereas this
+ * one is fixed for the life of the link. It is also the only number that knows which link the frame
+ * is actually going down — on a mesh the seam-level minimum would refuse a payload the chosen link
+ * could carry perfectly well.
+ *
+ * `reservedBytes = 0`: both fabric seams hand the caller's payload to [send] byte for byte, with no
+ * per-frame header of their own, so the payload budget *is* the frame ceiling. Reservation happens
+ * further up, in the layers that wrap a payload before it gets this far (`RoomChannel`, `SeamRoom`).
+ *
+ * A link that names no ceiling returns `null` — unknown is not a refusal.
+ */
+internal fun Connection.oversizeOrNull(payload: ByteArray): PayloadTooLarge? {
+    val ceiling = maxFrameBytes ?: return null
+    return if (payload.size > ceiling) {
+        PayloadTooLarge(payloadBytes = payload.size, budgetBytes = ceiling, reservedBytes = 0)
+    } else {
+        null
+    }
+}

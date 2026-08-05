@@ -27,9 +27,10 @@ import us.tractat.kuilt.core.internal.MappedStateFlow
  *   send there throws, per the `Torn` rule below.)
  * - [sendTo] when the addressed peer is absent from [peers]: throws
  *   [PeerNotConnected].
- * - [sendTo] of a payload over [maxPayloadBytes]: **should** throw [PayloadTooLarge]; [broadcast]
- *   should instead drop it (best-effort, as above). An obligation on an implementation that
- *   publishes a budget, not a guarantee every in-tree seam already meets — see [maxPayloadBytes].
+ * - [sendTo] of a payload over [maxPayloadBytes]: throws [PayloadTooLarge]; [broadcast] instead
+ *   drops it (best-effort, as above). An obligation on an implementation that *publishes* a budget
+ *   — a seam reporting `null` owes nothing here — and one every in-tree seam that publishes one now
+ *   meets (#2069). See [maxPayloadBytes].
  *   Note it is the one refusal that does **not** depend on the seam's state — a `Woven` seam
  *   raises it — so a caller catching only [PeerNotConnected] does not cover addressed sends on a
  *   seam that publishes a budget.
@@ -143,18 +144,24 @@ public interface Seam {
      * [PayloadTooLarge] rather than letting a fabric-level error out, subject to each method's own
      * contract: [sendTo] is addressed and reports, [broadcast] is best-effort and drops.
      *
-     * ## Publishing is not yet enforcing (#2069)
+     * ## Publishing IS enforcing, and the check is per link (#2069)
      *
-     * The in-tree fabric seams publish this number but do **not** pre-check against it, and the
-     * consequence is worse than a leaked error. `LinkSeam.sendTo` enqueues and returns *success*;
-     * its write loop then meets the fabric's own oversize error and tears the whole seam down
-     * asynchronously, after the caller was told the send was accepted. `MeshSeam.sendTo` routes the
-     * same failure into `removePeer`, evicting a healthy recipient as though its link had died. The
-     * fix is a per-conn pre-check inside each seam against the **immutable**
-     * [us.tractat.kuilt.core.fabric.Connection.maxFrameBytes] rather than against this live
-     * aggregate — which also removes the check-then-send race, since a mesh's minimum can tighten
-     * between a caller's read and the write. Tracked in #2069, along with the missing TCK case that
-     * would have caught it.
+     * The in-tree fabric seams pre-check every send. They check the **connection's**
+     * [us.tractat.kuilt.core.fabric.Connection.maxFrameBytes], not this value: a link's ceiling is
+     * fixed for the life of the link, whereas this aggregate moves, so checking here would leave a
+     * check-then-send window a tightening could slip through — and on a mesh it would refuse a
+     * payload the addressed link could carry. A decorator with no connection under it has no such
+     * alternative and checks this value; the difference is what it can see, not what it owes.
+     *
+     * What that replaced is worth stating, because it is the failure mode a *published-but-unchecked*
+     * budget produces anywhere: `LinkSeam.sendTo` enqueued and returned *success*, and its write loop
+     * — which cannot tell an oversize frame from a dead wire — then tore the whole seam down
+     * asynchronously, after the caller had been told the send was accepted; `MeshSeam.sendTo` routed
+     * the same failure into `removePeer`, evicting a healthy recipient as though its link had died.
+     * Publishing a number nothing checks is worse than publishing none.
+     *
+     * Still open under #2069: the TCK case that would hold **every** fabric to this, and the fabrics
+     * that enforce a ceiling without publishing one (`NwSeam`).
      *
      * ## A reading, not a lease
      *
@@ -239,8 +246,8 @@ public interface Seam {
      * @throws PayloadTooLarge if [payload] exceeds [maxPayloadBytes] — the obligation on a seam
      *   that publishes a budget, and what a caller must be ready for. Independent of [state] (a
      *   `Woven` seam raises it), so a `catch (PeerNotConnected)` written against the state-driven
-     *   refusals alone does not cover it. **Not yet met by the in-tree fabric seams**, which
-     *   publish a budget but do not pre-check it — see [maxPayloadBytes] and #2069.
+     *   refusals alone does not cover it. Raised *before* the frame reaches the fabric, so a caller
+     *   that gets it knows nothing was written — see [maxPayloadBytes].
      */
     public suspend fun sendTo(
         peer: PeerId,
