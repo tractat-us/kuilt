@@ -23,6 +23,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.decodeFromByteArray
 import kotlinx.serialization.encodeToByteArray
 import kotlinx.serialization.cbor.Cbor
+import us.tractat.kuilt.core.PayloadTooLarge
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.raft.ClientId
 import us.tractat.kuilt.raft.ClientIdCollisionException
@@ -2750,7 +2751,51 @@ internal class RaftEngine(
     override suspend fun propose(command: ByteArray, requestId: Long): LogEntry =
         proposeWithRequestId(command, requestId)
 
+    /**
+     * Refuse [command] if it cannot fit the transport's published payload budget (#2069) — **before**
+     * it can enter the log.
+     *
+     * There is no un-propose. An over-budget command that reaches `state.log` rides out in an
+     * `AppendEntries` that nothing chunks, is dropped at the transport ([SeamRaftTransport.sendTo]
+     * must swallow `PayloadTooLarge`, since [send] invokes it unguarded and a throw would fail the
+     * engine coroutine rather than one message), and is therefore never acked — so `nextIndex` never
+     * advances and the leader retries that same frame forever. AppendEntries is prefix-ordered, so no
+     * *later* entry can commit behind it either: one oversize command wedges the log permanently.
+     *
+     * **Why here rather than in the actor loop.** Refusing on the caller's coroutine means the command
+     * never enters the engine at all: no dedup serial is burned ([onLocalPropose] does `++serial`), no
+     * forward is queued, and the caller gets a synchronous, actionable failure it can retry against a
+     * smaller command. It also covers the **follower-forward** path for free — a non-leader's propose
+     * leaves as a [RaftMessage.Forward], which must cross this same local transport.
+     *
+     * **Why the budget is read per propose rather than snapshotted at construction.**
+     * `Seam.maxPayloadBytes` is "a reading, not a lease": a mesh reports the minimum across its live
+     * links, so a peer attaching over a tighter transport lowers it, and `RoutedRaftTransport`'s is a
+     * `get()` over a moving value. A cached copy would refuse commands the fabric could carry and
+     * admit ones it cannot.
+     *
+     * **Why [HEADER_BUDGET].** The command does not ride alone: it is wrapped in the CBOR
+     * [RaftMessage.AppendEntries] envelope alongside `prevLogIndex` / `prevLogTerm` / `leaderCommit` /
+     * `round`, plus the entry's own `index` / `term` / `dedupKey`. [HEADER_BUDGET] is the existing
+     * in-tree reservation for exactly that envelope, already spent by [chunkBytes].
+     *
+     * **Why `coerceAtLeast(0)` and not `maxOf(1, …)`.** [chunkBytes] floors at 1 because a zero-byte
+     * chunk would never terminate a transfer. Here `0` is the honest answer: a transport whose whole
+     * budget is smaller than the envelope cannot carry *any* entry, and refusing every propose is
+     * correct rather than a lie.
+     *
+     * **What this does not bound: the batch.** [sendAppendEntries] slices the entire un-replicated
+     * tail, so N individually-legal entries can still sum past the budget on a lagging follower.
+     * Tracked as #2150.
+     */
+    private fun checkProposeFitsTransport(command: ByteArray) {
+        val budget = transport.maxPayloadBytes ?: return
+        val limit = (budget - HEADER_BUDGET).coerceAtLeast(0)
+        if (command.size > limit) throw PayloadTooLarge(command.size, limit, HEADER_BUDGET)
+    }
+
     private suspend fun proposeWithRequestId(command: ByteArray, requestId: Long?): LogEntry {
+        checkProposeFitsTransport(command)
         val d = CompletableDeferred<LogEntry>()
         try {
             cmd.send(EngineCommand.Propose(command, requestId, d))
@@ -3655,7 +3700,18 @@ internal class RaftEngine(
     }
 
     private companion object {
-        /** Reserve for the CBOR envelope around a chunk's [RaftMessage.InstallSnapshot.data] payload. */
+        /**
+         * Reserve for the CBOR envelope around an opaque payload the engine puts on the wire — a
+         * chunk's [RaftMessage.InstallSnapshot.data] in [chunkBytes], and a proposed command inside
+         * [RaftMessage.AppendEntries] in [checkProposeFitsTransport].
+         *
+         * One constant covers both because the two envelopes carry the same *kind* of thing: a
+         * handful of `Long`s (`term`, `prevLogIndex` / `lastIncludedIndex`, `leaderCommit` / `offset`,
+         * `round`) around one byte array, plus the entry's own `index` / `term` / `dedupKey` on the
+         * AppendEntries side. Deliberately generous — a budget spent on framing that turns out not to
+         * be needed costs a few bytes of payload, while one that falls short costs a silently dropped
+         * frame the sender believed it had sized to fit.
+         */
         const val HEADER_BUDGET = 256
 
         /**

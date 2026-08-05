@@ -88,6 +88,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
+import us.tractat.kuilt.core.PayloadTooLarge
 import us.tractat.kuilt.core.checkNotUnderTestDispatcher
 import us.tractat.kuilt.raft.internal.RaftEngine
 
@@ -269,6 +270,10 @@ public interface RaftNode {
      *   (e.g. the leader stepped down); the caller may retry on the new leader.
      * @throws NotLeaderException only in terminal cases: the node is [close]d, or the leader
      *   is rejecting proposals because a leadership transfer is in flight.
+     * @throws PayloadTooLarge if [command] exceeds the transport's published payload budget less an
+     *   envelope reserve (#2069). Raised on the calling coroutine *before* the command reaches the
+     *   log — nothing was appended and no client serial was burned, so a retry with a smaller
+     *   command is safe. A transport that publishes no budget never raises it.
      */
     public suspend fun propose(command: ByteArray): LogEntry
 
@@ -280,6 +285,10 @@ public interface RaftNode {
      * across the crash: the proposer stamps `DedupKey(clientId, requestId)` onto the entry, it rides
      * the forward hop unchanged, and the consumer's dedup table ([ClientSessionTable]) skips a serial
      * it has already applied. The auto-serial [propose] form draws the next monotonic serial itself.
+     *
+     * @throws PayloadTooLarge if [command] exceeds the transport's published payload budget less an
+     *   envelope reserve (#2069). Raised before the command reaches the log, so [requestId] is
+     *   unspent and replaying it against a smaller command keeps the exactly-once guarantee intact.
      */
     public suspend fun propose(command: ByteArray, requestId: Long): LogEntry
 

@@ -52,10 +52,19 @@ class InstallSnapshotTest {
         )
     }
 
-    /** A small snapshot still spans many chunks when the transport reports a tiny [maxPayloadBytes]. */
+    /**
+     * A small snapshot still spans many chunks when the transport reports a tiny [maxPayloadBytes].
+     *
+     * 320 B is `HEADER_BUDGET` (256 B, for the CBOR envelope) + 64 B of state per chunk, so the
+     * 1000-byte snapshot below really does span the ~16 chunks it claims to. The budget used to read
+     * `64` — *below* the envelope reserve, so `chunkBytes()` hit its floor of 1 and the transfer was
+     * silently 1000 one-byte chunks. It also left no room for a command, which the propose-time bound
+     * of #2069 now says out loud: a transport whose whole budget is smaller than the envelope cannot
+     * carry any entry, and every `propose` here was refused.
+     */
     @Test
     fun chunkedTransfer_reassemblesUnderTinyMaxPayload() = raftRunTest {
-        val sim = raftSim(this, backgroundScope, n = 3, maxPayloadBytes = 64)
+        val sim = raftSim(this, backgroundScope, n = 3, maxPayloadBytes = 320)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodes.entries.first { it.value === leader }.key
         val offline = sim.nodeIds.first { it != leaderId }
@@ -99,7 +108,9 @@ class InstallSnapshotTest {
     @Test
     fun heartbeatDuringTransfer_resumesInsteadOfRestartingFromOffsetZero() = raftRunTest {
         val hb = fastRaftConfig().heartbeatInterval.inWholeMilliseconds
-        val sim = raftSim(this, backgroundScope, n = 3, maxPayloadBytes = 64)
+        // 320 B = HEADER_BUDGET (256) + 64 B of state per chunk — see
+        // [chunkedTransfer_reassemblesUnderTinyMaxPayload] for why a sub-256 budget is not a knob.
+        val sim = raftSim(this, backgroundScope, n = 3, maxPayloadBytes = 320)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodes.entries.first { it.value === leader }.key
         val offline = sim.nodeIds.first { it != leaderId }
