@@ -120,13 +120,23 @@ public class WarpLogRecordExporter(
      * persisted records remains a no-op after a process restart.
      *
      * If no persisted state exists, the exporter starts with an empty log.
+     *
+     * **Never throws.** An unreadable store or an undecodable entry degrades this
+     * exporter to "start fresh" rather than propagating. The caller installs log
+     * capture *after* awaiting this, so a propagating failure here means capture
+     * is never installed at all: the exporter goes silently dead for the whole
+     * process lifetime, on every launch, with nothing written and nothing
+     * logged (#1860).
      */
     public suspend fun recover() {
-        val bytes = store.read(STORE_KEY) ?: return
+        val bytes = runCatchingCancellable { store.read(STORE_KEY) }.getOrElse { cause ->
+            logger.error(cause) { "otel.logs: store read failed, starting fresh" }
+            return
+        } ?: return
         val recovered = runCatchingCancellable<Rga<LogRecord>> {
             cbor.decodeFromByteArray(logSerializer, bytes)
-        }.getOrNull() ?: run {
-            logger.warn { "otel.logs: corrupt store entry, starting fresh" }
+        }.getOrElse { cause ->
+            logger.warn(cause) { "otel.logs: corrupt store entry, starting fresh" }
             return
         }
         lock.withLock {

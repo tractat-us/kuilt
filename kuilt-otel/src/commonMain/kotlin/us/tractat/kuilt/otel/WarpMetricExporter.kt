@@ -165,55 +165,70 @@ public class WarpMetricExporter(
     }
 
     private suspend fun recoverHistograms() {
-        val bytes = store.read(HISTOGRAM_STORE_KEY) ?: return
+        val bytes = runCatchingCancellable { store.read(HISTOGRAM_STORE_KEY) }.getOrElse { cause ->
+            logger.error(cause) { "otel.metrics.histograms: store read failed, starting fresh" }
+            return
+        } ?: return
         val recovered = runCatchingCancellable<Map<MetricKey, DDSketch>> {
             cbor.decodeFromByteArray(histogramsSerializer, bytes)
-        }.getOrNull() ?: run {
-            logger.warn { "otel.metrics.histograms: corrupt store entry, starting fresh" }
+        }.getOrElse { cause ->
+            logger.warn(cause) { "otel.metrics.histograms: corrupt store entry, starting fresh" }
             return
         }
         lock.withLock { recovered.forEach { (k, v) -> histograms[k] = v } }
     }
 
     private suspend fun recoverSumsDouble() {
-        val bytes = store.read(SUM_DOUBLE_STORE_KEY) ?: return
+        val bytes = runCatchingCancellable { store.read(SUM_DOUBLE_STORE_KEY) }.getOrElse { cause ->
+            logger.error(cause) { "otel.metrics.sums.double: store read failed, starting fresh" }
+            return
+        } ?: return
         val recovered = runCatchingCancellable<Map<MetricKey, GCounterDouble>> {
             cbor.decodeFromByteArray(sumsDoubleSerializer, bytes)
-        }.getOrNull() ?: run {
-            logger.warn { "otel.metrics.sums.double: corrupt store entry, starting fresh" }
+        }.getOrElse { cause ->
+            logger.warn(cause) { "otel.metrics.sums.double: corrupt store entry, starting fresh" }
             return
         }
         lock.withLock { recovered.forEach { (k, v) -> sumsDouble[k] = v } }
     }
 
     private suspend fun recoverSums() {
-        val bytes = store.read(SUM_STORE_KEY) ?: return
+        val bytes = runCatchingCancellable { store.read(SUM_STORE_KEY) }.getOrElse { cause ->
+            logger.error(cause) { "otel.metrics.sums: store read failed, starting fresh" }
+            return
+        } ?: return
         val recovered = runCatchingCancellable<Map<MetricKey, GCounter>> {
             cbor.decodeFromByteArray(sumsSerializer, bytes)
-        }.getOrNull() ?: run {
-            logger.warn { "otel.metrics.sums: corrupt store entry, starting fresh" }
+        }.getOrElse { cause ->
+            logger.warn(cause) { "otel.metrics.sums: corrupt store entry, starting fresh" }
             return
         }
         lock.withLock { recovered.forEach { (k, v) -> sums[k] = v } }
     }
 
     private suspend fun recoverGauges() {
-        val bytes = store.read(GAUGE_STORE_KEY) ?: return
+        val bytes = runCatchingCancellable { store.read(GAUGE_STORE_KEY) }.getOrElse { cause ->
+            logger.error(cause) { "otel.metrics.gauges: store read failed, starting fresh" }
+            return
+        } ?: return
         val recovered = runCatchingCancellable<Map<MetricKey, LWWRegister<Double>>> {
             cbor.decodeFromByteArray(gaugesSerializer, bytes)
-        }.getOrNull() ?: run {
-            logger.warn { "otel.metrics.gauges: corrupt store entry, starting fresh" }
+        }.getOrElse { cause ->
+            logger.warn(cause) { "otel.metrics.gauges: corrupt store entry, starting fresh" }
             return
         }
         lock.withLock { recovered.forEach { (k, v) -> gauges[k] = v } }
     }
 
     private suspend fun recoverCardinalities() {
-        val bytes = store.read(CARDINALITY_STORE_KEY) ?: return
+        val bytes = runCatchingCancellable { store.read(CARDINALITY_STORE_KEY) }.getOrElse { cause ->
+            logger.error(cause) { "otel.metrics.cardinalities: store read failed, starting fresh" }
+            return
+        } ?: return
         val recovered = runCatchingCancellable<Map<MetricKey, HyperLogLog>> {
             cbor.decodeFromByteArray(cardinalitiesSerializer, bytes)
-        }.getOrNull() ?: run {
-            logger.warn { "otel.metrics.cardinalities: corrupt store entry, starting fresh" }
+        }.getOrElse { cause ->
+            logger.warn(cause) { "otel.metrics.cardinalities: corrupt store entry, starting fresh" }
             return
         }
         lock.withLock { recovered.forEach { (k, v) -> cardinalities[k] = v } }
