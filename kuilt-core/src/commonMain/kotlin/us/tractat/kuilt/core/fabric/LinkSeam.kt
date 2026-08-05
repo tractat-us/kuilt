@@ -88,6 +88,10 @@ internal class LinkSeam(
      * The conn's own frame ceiling, unchanged: this seam writes the caller's `payload` to
      * [Connection.send] byte for byte — there is no per-frame header on this hop — so the payload
      * budget and the frame budget are the same number (#2047).
+     *
+     * **Enforced, not merely published** (#2069): [sendTo] refuses an over-budget payload with
+     * [us.tractat.kuilt.core.PayloadTooLarge] and [broadcast] drops it, both before the frame can
+     * reach [Connection.send]. See the note above the two methods for what used to happen instead.
      */
     override val maxPayloadBytes: Int? get() = conn.maxFrameBytes
 
@@ -112,14 +116,24 @@ internal class LinkSeam(
 
     private val closedMessage get() = "Seam for $selfId is closed"
 
+    // Both sends pre-check against the conn's own ceiling (#2069). Enqueuing an over-budget frame
+    // instead is destructive out of all proportion to the mistake: this call returns SUCCESS, and
+    // the frame then fails in `writeLoop`, which cannot tell an oversize frame from a dead wire and
+    // tears the whole seam down — a whole session lost, asynchronously, to one bad payload the
+    // caller was told had been accepted. The wire is fine; `framed().send` checks before writing.
+
     override suspend fun broadcast(payload: ByteArray) {
         check(state.value !is SeamState.Torn) { closedMessage }
+        // Best-effort by contract: an over-budget payload is dropped, not reported. Its most common
+        // caller is a timer-driven replication loop a throw would kill.
+        if (conn.oversizeOrNull(payload) != null) return
         enqueue(payload)
     }
 
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
         check(state.value !is SeamState.Torn) { closedMessage }
         if (peer !in _peers.value) throw PeerNotConnected(peer)
+        conn.oversizeOrNull(payload)?.let { throw it }
         enqueue(payload)
     }
 

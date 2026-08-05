@@ -609,11 +609,24 @@ private class MeshSeam(
         _attestedPrincipals.value = buildRoster()
     }
 
+    // Both sends pre-check the chosen link's own ceiling before writing (#2069). Without it an
+    // oversize frame reached `conn.send`, failed there, and fell into the `onFailure` below — which
+    // exists for a DEAD LINK and so EVICTS the peer. A healthy recipient was dropped from the
+    // roster because the caller mis-sized one payload, and `runCatchingCancellable` swallowed the
+    // throwable, so nothing anywhere recorded that the frame had been oversize.
+    //
+    // Per link, not against `maxPayloadBytes`: that aggregate is the live minimum and can tighten
+    // between a caller's read and this write, and it would refuse a payload the addressed link can
+    // carry perfectly well. See `Connection.oversizeOrNull`.
+
     override suspend fun broadcast(payload: ByteArray) {
         check(state.value !is SeamState.Torn) { closedMessage }
         // Snapshot the live links under the lock, then send OUTSIDE it.
         val targets = lock.withLock { links.values.map { it.remoteId to it.conn } }
         targets.forEach { (remoteId, conn) ->
+            // Best-effort by contract, and per link: a link too tight for this payload is skipped,
+            // while the links that can carry it still get it. Skipping is not a link failure.
+            if (conn.oversizeOrNull(payload) != null) return@forEach
             runCatchingCancellable { conn.send(payload) }
                 .onFailure { removePeer(remoteId, conn) }
         }
@@ -622,6 +635,7 @@ private class MeshSeam(
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
         check(state.value !is SeamState.Torn) { closedMessage }
         val conn = lock.withLock { links[peer]?.conn } ?: throw PeerNotConnected(peer)
+        conn.oversizeOrNull(payload)?.let { throw it }
         runCatchingCancellable { conn.send(payload) }
             .onFailure { removePeer(peer, conn) }
     }
