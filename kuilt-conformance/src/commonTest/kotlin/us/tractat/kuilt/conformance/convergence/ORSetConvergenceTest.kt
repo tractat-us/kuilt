@@ -24,8 +24,26 @@ internal class ORSetConvergenceTest : CrdtConvergenceSuite<ORSet<String>>() {
             LatticeOp("remove", OpKind.RETIRE) { state, _, _ ->
                 state.piece { it.remove(FOCUS) }
             },
+            // Roams over the elements the state **actually holds**, not over `ELEMENTS`. Drawing
+            // from the pool spent 106 of 130 draws (82%) removing an element that was not there,
+            // which absorbs the lattice identity and changes nothing — on its own it was 20% of
+            // every step this binding took, and it is most of why the binding sat at 33.8% no-ops
+            // against Task 5's 25% ceiling. Roaming is the part worth keeping: a remove that lands
+            // on an element another replica is concurrently adding is what exercises add-wins, and
+            // pinning this op to `FOCUS` (the cheap way to the same number) would delete that.
+            //
+            // `sorted()` rather than the set's own order: `elements` is backed by a `HashMap` on
+            // JVM and Android and by an insertion-ordered map on Kotlin/Native and wasmJs, so
+            // indexing it raw would give the targets different trajectories from one seed.
+            //
+            // The empty-state fallback keeps the absent-element case reachable rather than erasing
+            // it — replicas 1 and 2 start empty, and "removing an element you do not hold is the
+            // identity" is real behaviour. `remove` (pinned) reaches it too, which is where the
+            // residual no-op rate lives.
             LatticeOp("remove-roam", OpKind.RETIRE) { state, _, random ->
-                state.piece { it.remove(ELEMENTS[random.nextInt(ELEMENTS.size)]) }
+                val held = state.elements.sorted()
+                val element = if (held.isEmpty()) ELEMENTS[random.nextInt(ELEMENTS.size)] else held[random.nextInt(held.size)]
+                state.piece { it.remove(element) }
             },
         ),
         // Declared rather than derived. The default would re-assert with `add-roam`, which draws
