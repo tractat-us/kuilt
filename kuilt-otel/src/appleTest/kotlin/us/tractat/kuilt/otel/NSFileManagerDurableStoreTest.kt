@@ -11,6 +11,7 @@ import kotlin.test.assertContains
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -196,8 +197,12 @@ class NSFileManagerDurableStoreTest {
             { assertNull(readBack, "the payload that could not commit never became readable") },
             { assertNotNull(failure, "write reported the rename it could not commit instead of returning") },
             // The cause must survive the move off NSFileManager: errno is a better
-            // cause than the NSError it replaces, not a worse one (#1860).
+            // cause than the NSError it replaces, not a worse one (#1860). Both
+            // halves matter — a bare "errno=21" would pass the first assertion with
+            // strerror_r silently failing, and an unreadable cause is the thing
+            // #1860 is about.
             { assertContains(failure?.message.orEmpty(), "errno=", message = "the failure names its errno") },
+            { assertFalse(failure?.message.orEmpty().contains("(unknown)"), "the errno resolved to readable text") },
         )
     }
 

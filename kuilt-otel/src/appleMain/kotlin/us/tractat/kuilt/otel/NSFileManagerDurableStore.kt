@@ -2,9 +2,12 @@
 
 package us.tractat.kuilt.otel
 
+import kotlinx.cinterop.ByteVar
+import kotlinx.cinterop.MemScope
 import kotlinx.cinterop.ObjCObjectVar
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.alloc
+import kotlinx.cinterop.allocArray
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
 import kotlinx.cinterop.toKString
@@ -20,7 +23,7 @@ import platform.Foundation.writeToFile
 import platform.posix.errno
 import platform.posix.memcpy
 import platform.posix.rename
-import platform.posix.strerror
+import platform.posix.strerror_r
 
 /**
  * A file-backed [DurableStore] for iOS and macOS backed by `NSFileManager`.
@@ -55,9 +58,11 @@ import platform.posix.strerror
  * cause at all** — no errno, no domain, no code — which is why a field occurrence
  * of the silent-death bug could not be diagnosed from the device's own logs
  * (#1860). Keep the causes wired. Step 1 reports its `NSError` (domain, code,
- * localized description); step 2 reports `errno` and `strerror`, which is a
- * *better* cause than the `NSError` it replaced — `moveItemAtPath` reported
- * `NSCocoaErrorDomain` codes that flatten several distinct errnos into one.
+ * localized description); step 2 reports `errno` and its `strerror` text, which
+ * is a *strictly better* cause than the `NSError` it replaced: `moveItemAtPath`
+ * reported an `NSCocoaErrorDomain` code and carried the POSIX errno only nested
+ * inside `NSUnderlyingError`, which [describe] does not unwrap — so the actual
+ * reason the rename failed never reached the message at all.
  *
  * ## Directory
  *
@@ -120,7 +125,7 @@ public class NSFileManagerDurableStore(private val directory: String) : DurableS
                 error(
                     "NSFileManagerDurableStore: atomic rename failed for key=${key.name} " +
                         "from=$tmp to=$dest bytes=${bytes.size} " +
-                        "cause=errno=$code (${strerror(code)?.toKString() ?: "unknown"}) " +
+                        "cause=errno=$code (${describeErrno(code)}) " +
                         "directory=${directoryError.describe()} " +
                         "directoryExists=${directoryExists()}",
                 )
@@ -179,6 +184,23 @@ public class NSFileManagerDurableStore(private val directory: String) : DurableS
  * errno, no domain, no code. That is the single reason a device that silently
  * stopped accepting telemetry could not be diagnosed from its own logs (#1860).
  */
+/** Size of the `strerror_r` buffer; every Darwin errno string fits well inside it. */
+private const val STRERROR_BUFFER_BYTES = 256
+
+/**
+ * Render an `errno` as its human-readable `strerror` text.
+ *
+ * `strerror_r`, not `strerror`: the latter may format an unrecognised code into a
+ * shared static buffer, and this class documents itself as needing no external
+ * locking. A cause that another thread can garble is exactly the kind of
+ * untrustworthy diagnostic #1860 is about, so pay the three lines.
+ */
+private fun MemScope.describeErrno(code: Int): String {
+    val buffer = allocArray<ByteVar>(STRERROR_BUFFER_BYTES)
+    val filled = strerror_r(code, buffer, STRERROR_BUFFER_BYTES.toULong()) == 0
+    return if (filled) buffer.toKString() else "unknown"
+}
+
 private fun NSError?.describe(): String =
     if (this == null) {
         "none"
