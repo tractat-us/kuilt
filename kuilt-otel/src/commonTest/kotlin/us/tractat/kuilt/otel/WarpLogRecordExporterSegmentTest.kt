@@ -10,6 +10,7 @@ import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.RgaId
+import us.tractat.kuilt.crdt.VersionVector
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -97,13 +98,39 @@ class WarpLogRecordExporterSegmentTest {
         fun resetWriteLog(): Unit = lock.withLock { payloadSizes.clear() }
     }
 
+    /**
+     * A compacted legacy [blob], plus a [laggingPeer] whose op-log still holds the
+     * purged record's `Insert` — the peer that never received the compaction.
+     */
+    private class CompactedFixture(val blob: ByteArray, val laggingPeer: Rga<LogRecord>)
+
     /** The pre-#1860 single-blob format: one CBOR-encoded [Rga] under `otel.logs`. */
     private object Legacy {
         val key: StoreKey = StoreKey("otel.logs")
         private val cbor = Cbor { alwaysUseByteString = true }
         private val serializer = Rga.wireSerializer(LogRecord.serializer())
 
-        fun blobOf(records: List<LogRecord>, replica: ReplicaId): ByteArray {
+        fun blobOf(records: List<LogRecord>, replica: ReplicaId): ByteArray =
+            cbor.encodeToByteArray(serializer, rgaOf(records, replica))
+
+        /**
+         * A legacy blob in which [purged] has been garbage-collected under the ADR-003
+         * causal-stability barrier, so the op-log carries an [us.tractat.kuilt.crdt.RgaOp.Compact].
+         * This is the state a pre-#1860 build reached by merging a peer that had compacted.
+         */
+        fun compactedBlobOf(purged: LogRecord, rest: List<LogRecord>, replica: ReplicaId): CompactedFixture {
+            // `purged` goes LAST: the barrier's condition 4 refuses to GC an element that
+            // still has a surviving successor, so only the tail is ever compactable here.
+            val full = rgaOf(rest + purged, replica)
+            val (tombstoned, _) = requireNotNull(full.removeAt(rest.size)) { "expected a record to tombstone" }
+            val delivered = VersionVector.of(tombstoned.causalDots().associate { it.replica to it.seq })
+            val (compacted, _) = requireNotNull(
+                tombstoned.compact(stableCut = delivered, frontierMax = delivered, delivered = delivered),
+            ) { "expected the barrier to admit a compaction" }
+            return CompactedFixture(blob = cbor.encodeToByteArray(serializer, compacted), laggingPeer = full)
+        }
+
+        private fun rgaOf(records: List<LogRecord>, replica: ReplicaId): Rga<LogRecord> {
             var rga = Rga.empty<LogRecord>()
             var tail = RgaId.HEAD
             for (r in records) {
@@ -111,7 +138,7 @@ class WarpLogRecordExporterSegmentTest {
                 rga = next
                 tail = op.id
             }
-            return cbor.encodeToByteArray(serializer, rga)
+            return rga
         }
     }
 
@@ -145,47 +172,125 @@ class WarpLogRecordExporterSegmentTest {
         )
     }
 
-    // ---- The second, separately-proven defect: maxRecords never bounded the file ----
+    @Test
+    fun bothBufferPoliciesGetTheSameBoundedWrite() = runTest {
+        // F3: the reclamation this PR originally shipped could never fire under
+        // DROP_NEWEST — a segment always closes on an Insert, so the next one always
+        // opens with the Remove for it, which is exactly the straddle the safety
+        // condition blocked. The asymmetry was invisible because only the default
+        // policy was measured. Nothing is reclaimed now, under either policy, so the
+        // one property that must hold is that both get the same bounded write.
+        for (policy in BufferPolicy.entries) {
+            val store = RecordingStore()
+            val exporter = exporterFor(store = store, maxRecords = 20, bufferPolicy = policy, segmentOps = 8)
+
+            repeat(100) { exporter.export(record(it)) }
+            val firstWindow = store.writes().max()
+            store.resetWriteLog()
+            repeat(100) { exporter.export(record(100 + it)) }
+            val secondWindow = store.writes().max()
+
+            assertAll(
+                { assertEquals(20, exporter.snapshot().toList().size, "$policy: the cap must hold") },
+                { assertTrue(firstWindow < 4 * 1024, "$policy: first-window max $firstWindow") },
+                {
+                    assertTrue(
+                        secondWindow <= firstWindow,
+                        "$policy: per-export write grew with N: $firstWindow -> $secondWindow",
+                    )
+                },
+            )
+        }
+    }
 
     @Test
-    fun totalPersistedBytesPlateauUnderTheBufferCap() = runTest {
-        val store = RecordingStore()
-        val exporter = exporterFor(store = store, maxRecords = 20, segmentOps = 8)
+    fun theStoreIsNoLargerThanTheOpLogItHolds() = runTest {
+        // Segments are never dropped, so the total is NOT bounded — the honest claim is
+        // that partitioning the op-log across keys does not inflate it. Both policies,
+        // because F3 was a policy-specific regression that only measuring one hid.
+        for (policy in BufferPolicy.entries) {
+            val segmented = RecordingStore()
+            exporterFor(store = segmented, maxRecords = 20, bufferPolicy = policy, segmentOps = 8)
+                .also { e -> repeat(200) { e.export(record(it)) } }
 
-        // Sample after every export and compare window *maxima*, so the sawtooth from
-        // segments filling and being reclaimed cannot decide the verdict — only a real
-        // upward trend can.
-        val resident = mutableListOf<Int>()
-        repeat(300) {
-            exporter.export(record(it))
-            resident += store.residentBytes()
+            val singleBlob = RecordingStore()
+            exporterFor(store = singleBlob, maxRecords = 20, bufferPolicy = policy, segmentOps = 100_000)
+                .also { e -> repeat(200) { e.export(record(it)) } }
+
+            // A 15% allowance for the per-segment CBOR framing and the index.
+            val ceiling = singleBlob.residentBytes() * 115 / 100
+            assertTrue(
+                segmented.residentBytes() <= ceiling,
+                "$policy: segmenting inflated the store from ${singleBlob.residentBytes()} " +
+                    "to ${segmented.residentBytes()}",
+            )
         }
-        val earlier = resident.subList(100, 200).max()
-        val later = resident.subList(200, 300).max()
+    }
 
-        // The residue is not zero and cannot be: Lamport counters and segment numbers rise
-        // monotonically, so their CBOR encodings widen — O(log N) drift, a few bytes per
-        // hundred exports. The defect this pins was ~385 bytes *per export*, forever, so a
-        // ceiling of 10 B/export over the window separates the two by two orders of magnitude.
-        val driftAllowance = 10 * 100
+    // ---- Robustness: one bad read must not cost the whole log ----
+
+    @Test
+    fun oneUnreadableSegmentCostsOnlyThatSegmentsRecords() = runTest {
+        // Recovery now performs N reads where it performed one. If a single transient
+        // failure fails the whole recovery, the numbering falls back to its construction
+        // defaults and the next export writes an index naming only segment 0 — and
+        // overwrites it. Every other segment is then orphaned permanently, in a format
+        // with no key-enumeration API to sweep them.
+        val store = RecordingStore()
+        exporterFor(store = store, segmentOps = 8).also { e -> repeat(60) { e.export(record(it)) } }
+        val failing = FailReadOfStore(store, StoreKey("otel.logs.seg.2"))
+
+        val recovered = exporterFor(store = failing, segmentOps = 8)
+        recovered.recover()
+        val survived = recovered.snapshot().toList().size
+        recovered.export(record(999))
 
         assertAll(
-            { assertEquals(20, exporter.snapshot().toList().size, "visible count must stay at the cap") },
+            { assertTrue(survived >= 40, "one bad segment cost $survived of 60 records") },
             {
                 assertTrue(
-                    later - earlier < driftAllowance,
-                    "persisted bytes still growing with N under the cap: $earlier -> $later",
-                )
-            },
-            {
-                assertTrue(
-                    later < 16 * 1024,
-                    "20 capped records should not need $later bytes on disk",
+                    store.keys().count { it.startsWith("otel.logs.seg.") } >= 8,
+                    "segments were orphaned: ${store.keys()}",
                 )
             },
         )
     }
 
+    @Test
+    fun aLegacyKeyThatWillNotDeleteDoesNotCostTheLog() = runTest {
+        // The legacy sweep runs on EVERY start, forever. A store whose delete throws
+        // (IndexedDbDurableStore does) would otherwise fail recovery on every launch.
+        val store = RecordingStore()
+        exporterFor(store = store, segmentOps = 8).also { e -> repeat(30) { e.export(record(it)) } }
+        val expected = exporterFor(store = store, segmentOps = 8).also { it.recover() }.snapshot().toList()
+        store.putRaw(Legacy.key, byteArrayOf(1, 2, 3))
+
+        val recovered = exporterFor(store = FailDeleteStore(store), segmentOps = 8)
+        recovered.recover()
+
+        assertAll(
+            { assertEquals(expected, recovered.snapshot().toList(), "a failed delete of garbage cost the log") },
+            { assertEquals(false, recovered.health.value.recoveryFailed) },
+        )
+    }
+
+    /** Delegates to [backing], but throws on reading [poisoned]. */
+    private class FailReadOfStore(private val backing: DurableStore, private val poisoned: StoreKey) : DurableStore {
+        override suspend fun read(key: StoreKey): ByteArray? {
+            if (key == poisoned) throw IllegalStateException("simulated transient read failure on $key")
+            return backing.read(key)
+        }
+
+        override suspend fun write(key: StoreKey, bytes: ByteArray): Unit = backing.write(key, bytes)
+        override suspend fun delete(key: StoreKey): Unit = backing.delete(key)
+    }
+
+    /** Delegates to [backing], but throws on every delete. */
+    private class FailDeleteStore(private val backing: DurableStore) : DurableStore {
+        override suspend fun read(key: StoreKey): ByteArray? = backing.read(key)
+        override suspend fun write(key: StoreKey, bytes: ByteArray): Unit = backing.write(key, bytes)
+        override suspend fun delete(key: StoreKey): Unit = throw IllegalStateException("simulated delete failure")
+    }
     // ---- Round-trip through the segments ----
 
     @Test
@@ -220,32 +325,59 @@ class WarpLogRecordExporterSegmentTest {
     }
 
     @Test
-    fun reclamationNeverDropsATombstoneWhoseRecordSurvivesElsewhere() = runTest {
-        // The resurrection hazard, reachable only under DROP_NEWEST. That policy pins the
-        // OLDEST segment forever — its first records are never the newest, so they are never
-        // evicted and it never becomes fully superseded — while every later segment does
-        // become superseded. Those later segments carry the `Remove` ops for `Insert`s still
-        // living in the pinned one, so dropping one on "all my own records are evicted"
-        // alone un-tombstones an evicted record. In memory nothing shows: `log` still holds
-        // every op. It only surfaces on the next start, which is why this recovers.
+    fun aMergeCannotResurrectRecordsThisReplicaAlreadyEvicted() = runTest {
+        // Physically dropping ops is a garbage-collection of CRDT state, and the safety
+        // precondition for that is causal stability — every replica has seen them. A local
+        // "this segment is fully superseded" test cannot establish it. Once Insert(X) AND
+        // Remove(X) are both gone, `piece` is a set union with nothing left to tombstone X,
+        // so a peer holding the old ops re-admits X as live.
         val store = RecordingStore()
-        fun exporter() = exporterFor(
-            store = store,
-            maxRecords = 3,
-            bufferPolicy = BufferPolicy.DROP_NEWEST,
-            segmentOps = 4,
+        val exporter = exporterFor(store = store, maxRecords = 10, segmentOps = 8)
+
+        // A peer takes a snapshot while records 0..7 are still live.
+        repeat(8) { exporter.export(record(it)) }
+        val peer = exporter.snapshot()
+        repeat(92) { exporter.export(record(8 + it)) }
+
+        val restarted = exporterFor(store = store, maxRecords = 10, segmentOps = 8)
+        restarted.recover()
+        restarted.merge(peer)
+
+        assertEquals(
+            10,
+            restarted.snapshot().toList().size,
+            "the merge resurrected records this replica had already evicted",
         )
-        val live = exporter().let { e ->
-            repeat(40) { e.export(record(it)) }
-            e.snapshot().toList()
-        }
+    }
 
-        val recovered = exporter()
-        recovered.recover()
+    @Test
+    fun aCompactionInheritedFromTheLegacyBlobIsNeverDropped() = runTest {
+        // Rga guarantees "once compacted, always compacted", and the ONLY thing carrying
+        // that guarantee forward is the retained Compact op. A pre-#1860 build that ever
+        // merged a compacted peer left Compact ops in its single blob, so they arrive in
+        // segment 0 on the very first start of the new build — before any local merge, so
+        // a "stop reclaiming once we have merged" flag cannot see them.
+        //
+        // The harm needs a peer that never got the compaction and still holds the purged
+        // record's Insert. While our Compact survives, `piece` unions the compacted-id
+        // sets and re-purges it. Drop the segment carrying our Compact and that suppression
+        // is simply gone, so the merge re-admits the record as live.
+        val store = RecordingStore()
+        val purged = record(0)
+        val fixture = Legacy.compactedBlobOf(purged, (1 until 12).map { record(it) }, replicaA)
+        store.putRaw(Legacy.key, fixture.blob)
 
-        assertAll(
-            { assertEquals(3, live.size, "precondition: the cap holds in memory") },
-            { assertEquals(live, recovered.snapshot().toList(), "recovery resurrected an evicted record") },
+        val exporter = exporterFor(store = store, maxRecords = 6, segmentOps = 4)
+        exporter.recover()
+        repeat(60) { exporter.export(record(1_000 + it)) }
+
+        val restarted = exporterFor(store = store, maxRecords = 6, segmentOps = 4)
+        restarted.recover()
+        restarted.merge(fixture.laggingPeer)
+
+        assertTrue(
+            purged !in restarted.snapshot().toList(),
+            "a compacted record came back: the Compact op that purged it was dropped",
         )
     }
 
