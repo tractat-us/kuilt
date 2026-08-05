@@ -23,7 +23,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.CloseReason
@@ -581,10 +580,13 @@ internal class SeamRoom(
     private val rawIncoming = MutableSharedFlow<Swatch>(extraBufferCapacity = 256)
 
     /**
-     * Relayed payloads, delivered to **channel views only** — deliberately *not* [rawIncoming].
+     * Every channel frame this room should hand to a [RoomChannelSeam] — **both** the ones that
+     * arrived directly and the ones the host relayed on a co-spoke's behalf.
      *
-     * [rawIncoming] feeds two consumers with different needs: [RoomChannelSeam.incoming], which must
-     * see relayed channel frames, and [PerPeerSeam], which feeds each peer's
+     * ## Why this is a second stream rather than more of [rawIncoming]
+     *
+     * [rawIncoming] would otherwise feed two consumers with different needs: [RoomChannelSeam.incoming],
+     * which must see relayed channel frames, and [PerPeerSeam], which feeds each peer's
      * [HeartbeatPartitionDetector] — and that detector treats **any** inbound frame as proof of
      * liveness. Emitting a relayed payload into [rawIncoming] stamped with its origin would let A's
      * relayed *data* refresh B's detector for A.
@@ -594,8 +596,25 @@ internal class SeamRoom(
      * tiered topology where B does hold a direct edge to A, a dead A↔B link would be masked by
      * relayed traffic and never mature into [PartitionEvent.PeerUnresponsive]. That is the exact
      * inverse of the documented carve-out: **data is relayed; liveness is not** (#1592/#1576).
+     *
+     * ## Why the union is made here, by two producers, and never by `merge` (#2104)
+     *
+     * The obvious spelling of "a channel view sees both streams" is to hand the view
+     * `merge(rawIncoming, relayedIncoming)`. It is wrong, and silently: `merge` subscribes to its
+     * sources from child coroutines it **launches**, so a collector's subscription lands a dispatch
+     * turn after its own coroutine first runs, whereas collecting a [SharedFlow] registers the slot
+     * synchronously on first collect. Both streams are `replay = 0`, so every frame emitted inside
+     * that widened window is dropped — and for a [us.tractat.kuilt.quilter.Quilter] that means its
+     * first delta is lost and the peer converges only via the ~30 s anti-entropy backstop. #2026
+     * shipped exactly that; #2104 is the report.
+     *
+     * Making the union at the **producers** removes the question rather than tightening the window:
+     * this flow is live from field initialisation, so there is no subscription for a collector to
+     * race. Keep it that way — do not reintroduce a combinator between this field and
+     * [RoomChannelSeam], and keep that constructor parameter typed [SharedFlow] so the requirement
+     * stays visible at the call site instead of living only in this paragraph.
      */
-    private val relayedIncoming = MutableSharedFlow<Swatch>(extraBufferCapacity = 256)
+    private val channelIncoming = MutableSharedFlow<Swatch>(extraBufferCapacity = 256)
 
     private var loopJobs: List<Job> = emptyList()
 
@@ -1067,6 +1086,11 @@ internal class SeamRoom(
             incomingCollectJob = scope.launch {
                 seam.incoming.collect { swatch ->
                     rawIncoming.emit(swatch)
+                    // Channel views collect [channelIncoming], never [rawIncoming] — this is the
+                    // direct half of the union that field's KDoc describes. Suspending `emit`, not
+                    // `tryEmit`: this path can back-pressure, and dropping a directly-delivered
+                    // frame here would be a strictly worse contract than the one it replaced.
+                    if (RoomChannel.isChannelFrame(swatch)) channelIncoming.emit(swatch)
                     dispatchIncoming(swatch)
                 }
             }
@@ -2142,7 +2166,7 @@ internal class SeamRoom(
      */
     private fun deliverRelayedPayload(envelope: RelayEnvelope) {
         if (RoomChannel.isChannelFrame(envelope.payload)) {
-            val accepted = relayedIncoming.tryEmit(Swatch(envelope.payload, sender = envelope.origin))
+            val accepted = channelIncoming.tryEmit(Swatch(envelope.payload, sender = envelope.origin))
             if (!accepted) {
                 // Relayed delivery is the one place weaker than direct delivery: the direct path
                 // uses a suspending `emit` inside the collector, which this cannot. Absence has to
@@ -3193,17 +3217,18 @@ internal class SeamRoom(
      * Returns a [Seam] view scoped to channel [id].
      *
      * The returned [RoomChannelSeam] sources its peer set from [rosterPeers] (admitted
-     * roster + self) and its inbound stream from [rawIncoming] **merged with** [relayedIncoming],
-     * filtered to channel frames with the sub-id derived from [id]. The merge is what lets a
-     * channel view see a co-spoke's relayed frames while the per-peer liveness detectors — which
-     * collect [rawIncoming] alone — do not (#1994; see [relayedIncoming]). Idempotent: the same
-     * [Seam] instance is returned for each distinct [id].
+     * roster + self) and its inbound stream from [channelIncoming] — the union of the directly
+     * delivered and the host-relayed channel frames — filtered to the sub-id derived from [id].
+     * That union is what lets a channel view see a co-spoke's relayed frames while the per-peer
+     * liveness detectors — which collect [rawIncoming] alone — do not (#1994; see
+     * [channelIncoming], including why the union is made by its two producers rather than by a
+     * combinator here). Idempotent: the same [Seam] instance is returned for each distinct [id].
      */
     override fun channel(id: String): Seam {
         val subId = RoomChannel.channelSubId(id)
         return lock.withLock {
             channelViews.getOrPut(subId) {
-                RoomChannelSeam(room = this, subId = subId, sharedRaw = merge(rawIncoming, relayedIncoming))
+                RoomChannelSeam(room = this, subId = subId, sharedRaw = channelIncoming)
             }
         }
     }

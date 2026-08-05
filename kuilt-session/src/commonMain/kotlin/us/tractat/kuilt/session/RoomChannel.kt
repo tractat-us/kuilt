@@ -1,6 +1,7 @@
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
@@ -128,27 +129,34 @@ public object RoomChannel {
  * - `state` forwards the delegate seam's state.
  * - `close` is a no-op — the Room owns the lifecycle.
  *
- * ## The upstream is a merge of two inbound streams
+ * ## The upstream carries both inbound routes, and must stay a `SharedFlow`
  *
- * [sharedRaw] is `SeamRoom`'s direct inbound stream **merged with** its relayed one (#1994) — a
- * `Flow`, not a `SharedFlow`, purely because `merge` returns one; the only operations applied are
- * `filter`/`map`, so nothing here depended on the narrower type. The split upstream is deliberate
- * and asymmetric: a channel view must see a co-spoke's host-relayed frames, while the per-peer
- * liveness detectors (which collect the direct stream alone) must **not** — a detector treats any
- * inbound frame as proof of liveness, so feeding it relayed data would mask a dead direct edge.
- * Data is relayed; liveness is not.
+ * [sharedRaw] is `SeamRoom`'s channel-frame stream: the frames that arrived directly **and** the
+ * ones the host relayed on a co-spoke's behalf, unioned by their two producers (#1994). That
+ * split is deliberate and asymmetric — a channel view must see a co-spoke's host-relayed frames,
+ * while the per-peer liveness detectors (which collect the direct stream alone) must **not**; a
+ * detector treats any inbound frame as proof of liveness, so feeding it relayed data would mask a
+ * dead direct edge. Data is relayed; liveness is not.
  *
- * Both underlying streams are hot `SharedFlow`s started eagerly, so frames emitted before
- * [incoming] is first collected are not held in a buffer. Late subscribers use `replay = 0` and may
- * miss frames; this is safe for [us.tractat.kuilt.quilter.Quilter] (gaps heal via FullState +
- * resend). Those `replay = 0` semantics are unchanged by the merge.
+ * The `SharedFlow` type is **load-bearing, not incidental**: collecting one registers the
+ * subscription synchronously on first collect, whereas collecting a combinator over it (`merge`,
+ * say) subscribes from a launched child and so lands a dispatch turn later. The stream is
+ * `replay = 0`, so anything emitted in that window is dropped — which is #2104, where a
+ * `Quilter`'s first delta was lost and its peer converged only via the ~30 s anti-entropy
+ * backstop. Widen this parameter to `Flow` and the guarantee is gone with no compiler complaint.
+ *
+ * The stream is hot and started eagerly, so frames emitted before [incoming] is first collected
+ * are not held in a buffer. A genuinely *late* subscriber — one that collects after traffic has
+ * flowed — uses `replay = 0` and may still miss frames; that is safe for
+ * [us.tractat.kuilt.quilter.Quilter] (gaps heal via FullState + resend), and is a different claim
+ * from the one above: it is about when you subscribe, not about a delay the plumbing imposed.
  *
  * Construction should go through [SeamRoom.channel], which caches instances by id.
  */
 internal class RoomChannelSeam(
     private val room: SeamRoom,
     private val subId: Short,
-    sharedRaw: Flow<Swatch>,
+    sharedRaw: SharedFlow<Swatch>,
 ) : Seam {
 
     override val selfId: PeerId get() = room.selfId
