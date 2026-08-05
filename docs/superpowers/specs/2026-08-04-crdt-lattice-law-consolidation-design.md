@@ -293,6 +293,36 @@ the JVM and wasmJs rows were taken at box load ~50–55, the macosArm64 rows at 
 comparison flatters the JVM. `associativeJoinsEncodeIdentically` is the expensive one because it CBOR-
 encodes two states per triple.
 
+### And 81% of that cost is already being paid by the test that catches least
+
+The per-test durations from a full `:kuilt-conformance:macosArm64Test`, summed over all 16 bindings,
+read from the results XML:
+
+| landed test | native total | share | verdict against the reintroduced #2086 |
+|---|---|---|---|
+| `associativeJoinsEncodeIdentically` | **120.5 s** | **81%** | **GREEN** |
+| `pieceIsAssociativeOverReachableStates` | 27.1 s | 18% | RED (8/16 seeds) |
+| `convergesAcrossSeeds` | 1.0 s | <1% | GREEN |
+| `convergesAtSeedZero` | 0.0 s | — | GREEN |
+| **total** | **148.6 s** | | |
+
+The most expensive test in the suite is the one that could not see the defect the issue is about —
+by design, since `runAssociativeEncoding` `continue`s past any triple that already failed
+associativity. It is guarding a real and different axis (canonicality, #1955), but it is doing so at
+four fifths of the Kotlin/Native budget, and `JsonCrdt` alone accounts for 30.1 s of it.
+
+That reframes the whole cost question in #2101. **The multiplatform bill is real and is already
+being paid.** Everything this design adds is marginal against it: an exhaustive pass at `L = 4` costs
+364 ms per binding, ~5.8 s across 16 — **under 5% of what `associativeJoinsEncodeIdentically` costs
+today**.
+
+**And there is an easy 18% back.** `runAssociativity` and `runAssociativeEncoding` each rebuild the
+pool from the same seed and each recompute *both bracketings* for every triple; the second then adds
+two CBOR encodes. Folding them into one loop — compare values, then compare bytes only when the
+values match — deletes the 27.1 s of duplicated joins outright and changes no assertion. Worth doing
+in the same track, and worth doing *before* anything is added, so the added cost lands against a
+smaller baseline.
+
 Two consequences the design has to respect:
 
 - **The cubic loop's pool size is the budget dial, and it is cubic.** Measured on JVM: pool 14 →
@@ -305,8 +335,9 @@ Two consequences the design has to respect:
 
 **No split is needed.** #2101 anticipates possibly having to propose "exhaustive-small on all targets
 + randomised-deep on JVM". The numbers say the whole suite fits on every target at the parameters
-already in use, provided the pool stays at 14 and `L` stays at 4. Recommending a split here would be
-inventing a constraint the measurements do not support.
+already in use, provided the pool stays at 14 and `L` stays at 4 — and that the merge above is done,
+which pays for the addition twice over. Recommending a split here would be inventing a constraint the
+measurements do not support.
 
 ## Encoded bytes
 
@@ -367,8 +398,10 @@ Mutation-first, because every claim here is about what a test can *see*:
 4. `CausalDotSet`, `CausalDotMap` and `DotContext` are bound to the randomised suite.
 5. jqwik is gone from `:kuilt-crdt`, and the module's JVM test count is exactly the old count minus the
    76 deleted properties plus the 5 re-homed behavioural tests.
-6. `:kuilt-conformance`'s `macosArm64Test` wall clock is measured before and after, and the increase is
-   stated as a number in the PR.
+6. `:kuilt-conformance`'s `macosArm64Test` per-test totals are measured before and after, from the
+   results XML. Baseline: **148.6 s** across 16 bindings, of which `associativeJoinsEncodeIdentically`
+   is 120.5 s. After the merge in "the multiplatform cost" section, the *total including everything
+   this design adds* should be **at or below** that baseline.
 
 ## Decisions Iain owns
 
