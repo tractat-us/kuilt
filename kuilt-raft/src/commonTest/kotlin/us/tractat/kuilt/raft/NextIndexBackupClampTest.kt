@@ -58,6 +58,8 @@ private fun backupClampConfig(): RaftConfig = RaftConfig(
  * identical frame and ping-pongs forever. That property is pinned in `RaftLogMathTest`
  * (`…_alwaysStrictlyDecreases`) rather than here on purpose — driving the loop through a live peer
  * would hang the harness rather than fail it, which is exactly the shape this repo forbids in a test.
+ * `FastBackupEfficiencyTest` does cover it end-to-end anyway, by hand-pumping delivery against a
+ * severed link so the *test's* round budget terminates the loop (#2067).
  */
 internal class NextIndexBackupClampTest {
 

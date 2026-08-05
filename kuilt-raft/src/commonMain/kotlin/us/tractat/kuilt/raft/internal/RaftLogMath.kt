@@ -77,9 +77,13 @@ internal fun isLogUpToDate(ours: LogPosition, candidate: LogPosition): Boolean =
  * - **Equal to `currentNextIndex`** ⇒ no progress at all. `onAppendEntriesResponse`'s rejection
  *   branch calls `sendAppendEntries(from)` **synchronously**, so an unchanged `nextIndex` emits a
  *   byte-identical frame, draws an identical rejection, and ping-pongs with no delay — the §5.3
- *   fast-backup livelock of #1246, and in this repo's virtual-time harness it **hangs rather than
+ *   fast-backup livelock of #1246, and in a *live-network* virtual-time test it **hangs rather than
  *   fails**. This is why the ceiling is `currentNextIndex - 1` and not `currentNextIndex`:
  *   §5.3 requires backup to *back up*, so the value must **strictly decrease** on a rejection.
+ *   "Hangs rather than fails" is a property of live delivery, not of the defect (#2067):
+ *   `FastBackupEfficiencyTest` pumps delivery by hand against a severed link, so its own round
+ *   budget terminates the loop and this exact fixed point renders as `probes=[12 × 60]` — a bounded
+ *   red in 0.046 s, through both real engines.
  *
  * `conflictIndex` is a **quantity**, not a nonce, so a conservative in-range reading exists and the
  * clamp is the right disposition (unlike the round echo of #1817, where an out-of-range value is
