@@ -1,5 +1,6 @@
 package us.tractat.kuilt.conformance.convergence
 
+import kotlin.math.round
 import kotlin.random.Random
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
@@ -10,6 +11,64 @@ import us.tractat.kuilt.crdt.Quilted
 public fun interface OperationGenerator<S> {
     /** Pick and apply an op against [state] using [random] for choices. Returns the new state (post-mutation). */
     public fun applyRandomOp(state: S, replicaIndex: Int, random: Random): S
+}
+
+/**
+ * What one binding's generator actually searched, measured by
+ * [CrdtConvergenceHarness.measureVacuity] and checked against [VacuityFloors].
+ *
+ * The counts are carried alongside the rates on purpose. A rate on its own is unreadable when the
+ * denominator is small — "0.0% retiring" over 6 steps and over 600 are very different claims — and
+ * the raw counts are what makes a drift diagnosable rather than merely visible.
+ *
+ * @param pairs ordered pairs of distinct pool positions, summed over the seeds measured.
+ * @param strictAncestorPairs pairs `(a, b)` with `a` strictly below `b`. See [VacuityFloors] — only
+ *   one direction of a comparable pair counts, so this tops out at half of [pairs].
+ * @param concurrentPairs pairs where neither state is below the other. Both directions count.
+ * @param steps ops applied by the pool builder. Absorbing a peer's state is not one.
+ * @param effectiveRetireSteps steps whose op is [OpKind.RETIRE] **and** which changed the state.
+ * @param noOpSteps steps of any kind that left the state unchanged.
+ * @param floors the bounds these were measured against, so a printed report is self-contained.
+ */
+public class VacuityReport(
+    public val pairs: Long,
+    public val strictAncestorPairs: Long,
+    public val concurrentPairs: Long,
+    public val steps: Int,
+    public val effectiveRetireSteps: Int,
+    public val noOpSteps: Int,
+    public val floors: VacuityFloors,
+) {
+    /** Fraction of [pairs] that are strict-ancestor pairs. A total order reads `0.5`. */
+    public val strictAncestorRate: Double get() = ratio(strictAncestorPairs, pairs)
+
+    /** Fraction of [pairs] that are concurrent. */
+    public val concurrentRate: Double get() = ratio(concurrentPairs, pairs)
+
+    /** Fraction of [steps] that retired something *and* changed the state. */
+    public val effectiveRetireRate: Double get() = ratio(effectiveRetireSteps.toLong(), steps.toLong())
+
+    /** Fraction of [steps] that changed nothing. */
+    public val noOpRate: Double get() = ratio(noOpSteps.toLong(), steps.toLong())
+
+    override fun toString(): String =
+        "  strict-ancestor pairs  ${percent(strictAncestorRate)}  ($strictAncestorPairs / $pairs)" +
+            "  floor ≥ ${percent(floors.strictAncestorPairs)}\n" +
+            "  concurrent pairs       ${percent(concurrentRate)}  ($concurrentPairs / $pairs)" +
+            "  floor ≥ ${percent(floors.concurrentPairs)}${if (floors.totalOrder) " — WAIVED, totalOrder" else ""}\n" +
+            "  effective RETIRE steps ${percent(effectiveRetireRate)}  ($effectiveRetireSteps / $steps)" +
+            "  floor ≥ ${percent(floors.effectiveRetireSteps)}\n" +
+            "  no-op steps            ${percent(noOpRate)}  ($noOpSteps / $steps)" +
+            "  ceiling ≤ ${percent(floors.maxNoOpSteps)}"
+
+    private fun ratio(numerator: Long, denominator: Long): Double =
+        if (denominator == 0L) 0.0 else numerator.toDouble() / denominator.toDouble()
+}
+
+/** One decimal place, without `String.format` — which `commonMain` does not have. */
+internal fun percent(rate: Double): String {
+    val tenths = round(rate * 1000.0).toLong()
+    return "${tenths / 10}.${tenths % 10}%"
 }
 
 /**
@@ -55,6 +114,7 @@ public class CrdtConvergenceHarness<S : Quilted<S>>(
     public val alphabet: List<LatticeOp<S>>,
     public val serializer: KSerializer<S>,
     public val criticalShapes: List<List<String>> = defaultCriticalShapes(alphabet),
+    public val floors: VacuityFloors = VacuityFloors.DEFAULT,
     public val replicaCount: Int = 3,
     public val opsPerReplica: Int = 8,
 ) {
@@ -78,6 +138,7 @@ public class CrdtConvergenceHarness<S : Quilted<S>>(
         alphabet = listOf(LatticeOp(UNDECLARED_OP, OpKind.ASSERT, gen::applyRandomOp)),
         serializer = serializer,
         criticalShapes = emptyList(),
+        floors = VacuityFloors.DEFAULT,
         replicaCount = replicaCount,
         opsPerReplica = opsPerReplica,
     )
@@ -151,11 +212,66 @@ public class CrdtConvergenceHarness<S : Quilted<S>>(
      * already had to compare values to know which triples it could speak about.
      */
     public fun runAssociativeLaws(seed: Long) {
-        checkAssociativeLaws(causalPool(Random(seed)), where = { "at seed $seed" })
+        checkAssociativeLaws(causalPool(Random(seed)).states, where = { "at seed $seed" })
     }
 
     /** Run [runAssociativeLaws] over every seed in [seeds]. */
     public fun runAssociativeLawsSeeds(seeds: LongRange): Unit = seeds.forEach(::runAssociativeLaws)
+
+    /**
+     * The three join laws that are **not** about bracketing — **commutativity**, **idempotence**
+     * and **least-upper-bound** — over [causalPool], plus the byte law on the commutativity pair.
+     *
+     * These are breadth, not depth, and the honest framing is worth keeping in front of the next
+     * reader. Over the causal pool of a lattice provably broken in the way #2086 was broken, the
+     * four laws read `assoc = 500, comm = 0, idem = 0, lub = 0`: **associativity is the only one
+     * that sees it.** Nobody should add these expecting a second detector for that class, and
+     * nobody should read a green here as covering what
+     * [associativeJoinLawsHoldOverLowerSeeds][CrdtConvergenceSuite.associativeJoinLawsHoldOverLowerSeeds]
+     * covers. What they do buy is the rest of the semilattice contract, on a pool that carries
+     * causal ancestry, on every target — which is what the JVM-only surface they replace asserted
+     * over operands drawn from *disjoint* replicas, where no operand could be another's ancestor.
+     *
+     * **Commutativity is asserted unconditionally, with no per-binding waiver, and that was a
+     * decision.** It reads 0 everywhere today only because two generators were fixed first:
+     * `LWWRegisterConvergenceTest` minted one `(replica, timestamp)` tag for two different values —
+     * outside `LWWRegister.set`'s documented precondition — and the pool held **226 non-commuting
+     * pairs in 12,979**. The fix belongs in the generator, because the interesting behaviour at an
+     * equal tag is real and stays pinned by name in `LWWMapTest`
+     * (`oneTagCarryingTwoValuesCostsCommutativityNotAssociativity`) and `MVRegisterTest`
+     * (`forkingOneReplicaBreaksCommutativityButNotAssociativity`). A `tagUniqueness = false`
+     * escape hatch here would be a permanent green-by-declaration and would leave that behaviour
+     * asserted nowhere.
+     *
+     * **Least-upper-bound is the absorption pair**, `a ⊔ b ⊒ a` and `a ⊔ b ⊒ b`, checked as
+     * `(a ⊔ b) ⊔ a == a ⊔ b`. That is the form the deleted jqwik surface asserted, re-homed
+     * verbatim rather than strengthened, so a red here means the same thing it meant there.
+     *
+     * The byte law extends to the commutativity pair for the same reason it covers the bracketing
+     * pair: `Quilter`'s root-hash gate compares digests, so two peers that agree on the value and
+     * disagree on the bytes read as diverged. Measured free — 0 differences in 3,113–3,261
+     * equal-valued pairs per binding.
+     */
+    public fun runOtherJoinLaws(seed: Long) {
+        val pool = causalPool(Random(seed)).states
+        for (a in pool) {
+            val selfJoin = a.state.piece(a.state)
+            check(selfJoin == a.state) { idempotenceFailure(seed, a, selfJoin) }
+            for (b in pool) {
+                val ab = a.state.piece(b.state)
+                val ba = b.state.piece(a.state)
+                check(ab == ba) { commutativityFailure(seed, a, b, ab, ba) }
+                val abBytes = encoded(ab)
+                val baBytes = encoded(ba)
+                check(abBytes.contentEquals(baBytes)) { commutativityCanonicalityFailure(seed, a, b, abBytes, baBytes, ab) }
+                check(ab.piece(a.state) == ab) { absorptionFailure(seed, "a", a, b, ab, ab.piece(a.state)) }
+                check(ab.piece(b.state) == ab) { absorptionFailure(seed, "b", a, b, ab, ab.piece(b.state)) }
+            }
+        }
+    }
+
+    /** Run [runOtherJoinLaws] over every seed in [seeds]. */
+    public fun runOtherJoinLawsSeeds(seeds: LongRange): Unit = seeds.forEach(::runOtherJoinLaws)
 
     /**
      * Both bracketing laws over **every word of length `1..L`** the alphabet can spell, on one
@@ -269,6 +385,52 @@ public class CrdtConvergenceHarness<S : Quilted<S>>(
             "  a⊔(b⊔c) bytes ${rightBytes.toHexString()}\n" +
             "  state         $state"
 
+    private fun commutativityFailure(seed: Long, a: Tracked<S>, b: Tracked<S>, ab: S, ba: S): String =
+        "Commutativity failure at seed $seed — a⊔b and b⊔a are NOT EQUAL:\n" +
+            pairLog(a, b) +
+            "  a⊔b         = $ab\n" +
+            "  b⊔a         = $ba\n" +
+            "  Before reading this as a defect in the type, check the generator against the type's " +
+            "documented preconditions: a generator that mints one tag for two different writes " +
+            "steps outside them, and the resulting asymmetry is the test's, not the lattice's."
+
+    private fun commutativityCanonicalityFailure(
+        seed: Long,
+        a: Tracked<S>,
+        b: Tracked<S>,
+        abBytes: ByteArray,
+        baBytes: ByteArray,
+        state: S,
+    ): String =
+        "Canonical-encoding failure at seed $seed — a⊔b and b⊔a are EQUAL but encode to DIFFERENT " +
+            "bytes. The join commutes and the serializer does not; it is history-dependent:\n" +
+            pairLog(a, b) +
+            "  a⊔b bytes   ${abBytes.toHexString()}\n" +
+            "  b⊔a bytes   ${baBytes.toHexString()}\n" +
+            "  state       $state"
+
+    private fun idempotenceFailure(seed: Long, a: Tracked<S>, selfJoin: S): String =
+        "Idempotence failure at seed $seed — a⊔a is not a:\n" +
+            "  a           = ${a.state}\n" +
+            "    built by  ${a.provenance}\n" +
+            "  a⊔a         = $selfJoin"
+
+    @Suppress("LongParameterList")
+    private fun absorptionFailure(seed: Long, side: String, a: Tracked<S>, b: Tracked<S>, ab: S, absorbed: S): String =
+        "Least-upper-bound failure at seed $seed — a⊔b is not an upper bound of $side:\n" +
+            pairLog(a, b) +
+            "  a⊔b         = $ab\n" +
+            "  (a⊔b)⊔$side      = $absorbed\n" +
+            "  A join that is not above its own operands is not a join. Expect this to come with " +
+            "an associativity failure; if it does not, the defect is in `piece` itself rather than " +
+            "in how contributions are combined."
+
+    private fun pairLog(a: Tracked<S>, b: Tracked<S>): String =
+        "  a           = ${a.state}\n" +
+            "    built by  ${a.provenance}\n" +
+            "  b           = ${b.state}\n" +
+            "    built by  ${b.provenance}\n"
+
     private fun operandLog(a: Tracked<S>, b: Tracked<S>, c: Tracked<S>): String =
         "  a           = ${a.state}\n" +
             "    built by  ${a.provenance}\n" +
@@ -316,11 +478,12 @@ public class CrdtConvergenceHarness<S : Quilted<S>>(
      * a constructed step is informative on every seed, and the random step it displaces was
      * informative on roughly half.
      */
-    private fun causalPool(random: Random): List<Tracked<S>> {
+    private fun causalPool(random: Random): PoolRun<S> {
         val latest = MutableList(replicaCount) { initial }
         val words = MutableList(replicaCount) { emptyList<String>() }
         val pool = mutableListOf(Tracked(initial, "initial"))
-        applyCriticalShapes(latest, words, pool, random)
+        val steps = mutableListOf<Step>()
+        applyCriticalShapes(latest, words, pool, steps, random)
         outer@ for (op in 0 until opsPerReplica) {
             for (r in 0 until replicaCount) {
                 if (random.nextInt(GOSSIP_ONE_IN) == 0) {
@@ -330,13 +493,15 @@ public class CrdtConvergenceHarness<S : Quilted<S>>(
                     pool += Tracked(latest[r], provenance(r, words[r]))
                 }
                 val chosen = pick(random)
-                latest[r] = chosen.apply(latest[r], r, random)
+                val before = latest[r]
+                latest[r] = chosen.apply(before, r, random)
+                steps += Step(chosen.kind, changed = latest[r] != before)
                 words[r] = words[r] + chosen.name
                 pool += Tracked(latest[r], provenance(r, words[r]))
                 if (pool.size >= POOL_LIMIT) break@outer
             }
         }
-        return pool
+        return PoolRun(pool, steps)
     }
 
     private fun provenance(replica: Int, word: List<String>): String =
@@ -375,6 +540,7 @@ public class CrdtConvergenceHarness<S : Quilted<S>>(
         latest: MutableList<S>,
         words: MutableList<List<String>>,
         pool: MutableList<Tracked<S>>,
+        steps: MutableList<Step>,
         random: Random,
     ) {
         for (shape in criticalShapes) {
@@ -388,6 +554,7 @@ public class CrdtConvergenceHarness<S : Quilted<S>>(
                 val after = op.apply(before, 0, random)
                 check(after != before) { criticalShapeNoOpFailure(shape, op, before) }
                 latest[0] = after
+                steps += Step(op.kind, changed = true)
                 words[0] = words[0] + op.name
                 pool += Tracked(after, provenance(0, words[0]))
             }
@@ -456,6 +623,114 @@ public class CrdtConvergenceHarness<S : Quilted<S>>(
 
     /** One pool state, plus the word that built it. */
     private class Tracked<S>(val state: S, val provenance: String)
+
+    /** One op the pool builder applied: what it was for, and whether it did anything. */
+    private class Step(val kind: OpKind, val changed: Boolean)
+
+
+    /** A built pool and the steps that built it — see [VacuityFloors] for what counts as a step. */
+    private class PoolRun<S>(val states: List<Tracked<S>>, val steps: List<Step>)
+
+    /**
+     * Measure how much the generator actually searched, over the pools of [seeds]. Asserts nothing.
+     *
+     * See [VacuityFloors] for the exact pair and step definitions — in particular that a pair is an
+     * **ordered** pair of distinct pool positions, which is what makes a total order read 50%
+     * ancestry rather than 100%.
+     *
+     * `O(pool²)` joins per seed against the associativity pass's `O(pool³)`, so this is free at any
+     * pool size that pass can afford.
+     */
+    public fun measureVacuity(seeds: LongRange): VacuityReport {
+        var pairs = 0L
+        var strictAncestor = 0L
+        var concurrent = 0L
+        var steps = 0
+        var effectiveRetires = 0
+        var noOps = 0
+        for (seed in seeds) {
+            val run = causalPool(Random(seed))
+            val states = run.states
+            for (i in states.indices) {
+                for (j in states.indices) {
+                    if (i == j) continue
+                    pairs++
+                    val a = states[i].state
+                    val b = states[j].state
+                    val aBelowB = a.piece(b) == b
+                    val bBelowA = b.piece(a) == a
+                    if (aBelowB && !bBelowA) strictAncestor++
+                    if (!aBelowB && !bBelowA) concurrent++
+                }
+            }
+            for (step in run.steps) {
+                steps++
+                if (step.kind == OpKind.RETIRE && step.changed) effectiveRetires++
+                if (!step.changed) noOps++
+            }
+        }
+        return VacuityReport(pairs, strictAncestor, concurrent, steps, effectiveRetires, noOps, floors)
+    }
+
+    /**
+     * [measureVacuity] over [seeds], with every floor in [floors] asserted — and the measured
+     * values returned either way, so a caller can print them on a green run.
+     *
+     * Each floor fails on its own with its own message. That separation is the point of the whole
+     * task: deleting a binding's retiring op must red the **retirement** floor and leave ancestry
+     * and concurrency green, because ancestry and concurrency are exactly the metrics that stay
+     * healthy while a generator stops searching (measured: ancestry 28.4% and concurrency 43.2% on
+     * an arm that found 0 violations in 47,059 triples — *higher* on both than the arm that found
+     * 500). A single aggregate assertion would report "the generator is vacuous" and lose the one
+     * bit of information worth having, which is *how*.
+     */
+    public fun checkVacuityFloors(seeds: LongRange): VacuityReport {
+        val report = measureVacuity(seeds)
+        check(report.strictAncestorRate >= floors.strictAncestorPairs) {
+            floorFailure(
+                "strict-ancestor pairs", report.strictAncestorRate, floors.strictAncestorPairs, report,
+                "The pool has stopped being a causal chain — its states are siblings, so no operand " +
+                    "can retire a tag another still carries, and the whole #2086 bug class is out of reach.",
+            )
+        }
+        check(floors.totalOrder || report.concurrentRate >= floors.concurrentPairs) {
+            floorFailure(
+                "concurrent pairs", report.concurrentRate, floors.concurrentPairs, report,
+                "Every join in this pool is trivial — one operand already dominates — so the law " +
+                    "holds for free. If the type genuinely cannot fork (a chain, like `IntMax`), " +
+                    "declare `VacuityFloors(totalOrder = true)`; if it can, the generator has stopped " +
+                    "letting it. A shared cell every replica writes is the usual cause: it makes any " +
+                    "two states comparable, and on `LWWMap` it cost 12 points (25.9% → 14.1%).",
+            )
+        }
+        check(report.effectiveRetireRate >= floors.effectiveRetireSteps) {
+            floorFailure(
+                "effective RETIRE steps", report.effectiveRetireRate, floors.effectiveRetireSteps, report,
+                "This is the floor the suite exists for, and the only one no `Quilted` expression " +
+                    "can compute — see `OpKind`. Either the alphabet declares no RETIRE op, or the " +
+                    "ones it declares are landing on nothing (removing what the state does not hold " +
+                    "is the lattice identity). Both read as coverage and neither is.",
+            )
+        }
+        check(report.noOpRate <= floors.maxNoOpSteps) {
+            floorFailure(
+                "no-op steps (ceiling)", report.noOpRate, floors.maxNoOpSteps, report,
+                "Most of the generator's budget is being spent on ops the type discards. Point the " +
+                    "roaming ops at what the state actually holds, or give a clock-gated op a " +
+                    "state-derived clock; do not raise the ceiling, which buys the number without " +
+                    "buying the search.",
+            )
+        }
+        return report
+    }
+
+    private fun floorFailure(name: String, measured: Double, floor: Double, report: VacuityReport, why: String): String =
+        "Vacuity floor breached — $name measured ${percent(measured)}, required " +
+            "${if (name.endsWith("(ceiling)")) "at most" else "at least"} ${percent(floor)}.\n" +
+            "  $why\n" +
+            "  alphabet ${alphabet.joinToString(", ")}\n" +
+            "  shapes   ${criticalShapes.ifEmpty { "none" }}\n" +
+            report
 
     private fun buildReplicas(random: Random): List<S> =
         List(replicaCount) { r ->
