@@ -12,9 +12,9 @@ import us.tractat.kuilt.raft.internal.nextIndexAfterFailure
 // Pure synchronous Raft reference model
 //
 // No coroutines, no live engine, no channels. Every function is a plain
-// transformation from one immutable Cluster snapshot to another. jqwik drives
-// sequences of these transformations and asserts the four Raft safety
-// invariants after each step.
+// transformation from one immutable Cluster snapshot to another. Seeded,
+// shrinking action sequences (see RaftActionSequences.kt) drive these
+// transformations and assert the Raft safety invariants after each step.
 // ---------------------------------------------------------------------------
 
 // ── Wire messages (mirrors RaftEngine's internal protocol) ──────────────────
