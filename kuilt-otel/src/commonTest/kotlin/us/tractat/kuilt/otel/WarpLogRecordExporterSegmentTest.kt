@@ -219,6 +219,36 @@ class WarpLogRecordExporterSegmentTest {
         assertEquals(live, recovered.snapshot().toList())
     }
 
+    @Test
+    fun reclamationNeverDropsATombstoneWhoseRecordSurvivesElsewhere() = runTest {
+        // The resurrection hazard, reachable only under DROP_NEWEST. That policy pins the
+        // OLDEST segment forever — its first records are never the newest, so they are never
+        // evicted and it never becomes fully superseded — while every later segment does
+        // become superseded. Those later segments carry the `Remove` ops for `Insert`s still
+        // living in the pinned one, so dropping one on "all my own records are evicted"
+        // alone un-tombstones an evicted record. In memory nothing shows: `log` still holds
+        // every op. It only surfaces on the next start, which is why this recovers.
+        val store = RecordingStore()
+        fun exporter() = exporterFor(
+            store = store,
+            maxRecords = 3,
+            bufferPolicy = BufferPolicy.DROP_NEWEST,
+            segmentOps = 4,
+        )
+        val live = exporter().let { e ->
+            repeat(40) { e.export(record(it)) }
+            e.snapshot().toList()
+        }
+
+        val recovered = exporter()
+        recovered.recover()
+
+        assertAll(
+            { assertEquals(3, live.size, "precondition: the cap holds in memory") },
+            { assertEquals(live, recovered.snapshot().toList(), "recovery resurrected an evicted record") },
+        )
+    }
+
     // ---- Migration off the legacy single blob ----
 
     @Test
@@ -294,6 +324,55 @@ class WarpLogRecordExporterSegmentTest {
             { assertEquals(legacy, second.snapshot().toList(), "no loss, no duplication") },
             { assertTrue(Legacy.key.name !in store.keys(), "the leftover legacy key must be dropped") },
         )
+    }
+
+    @Test
+    fun aMigrationThatDiesPartWayLeavesTheLegacyBlobIntact() = runTest {
+        // The two tests above pin the *states* a crash can leave behind; this pins the write
+        // ORDER that makes those the only reachable states. Deleting the legacy key before
+        // the index is on disk would open a state — no legacy, no index — that is total loss,
+        // and no state-based test can see it because that state is simply never constructed.
+        val legacy = (0 until 30).map { record(it) }
+        val blob = Legacy.blobOf(legacy, replicaA)
+
+        for (failingWrite in 1..2) {
+            val store = FailNthWriteStore(failingWrite)
+            store.putRaw(Legacy.key, blob)
+            exporterFor(store = store, segmentOps = 8).recover()
+
+            // Whatever landed, the legacy key is still authoritative, so a healthy
+            // start re-runs the migration and loses nothing.
+            store.failing = false
+            val survivingLegacy = store.read(Legacy.key)
+            val retried = exporterFor(store = store, segmentOps = 8)
+            retried.recover()
+            assertAll(
+                { assertNotNull(survivingLegacy, "write #$failingWrite: legacy blob was dropped early") },
+                { assertEquals(legacy, retried.snapshot().toList(), "write #$failingWrite: records lost") },
+            )
+        }
+    }
+
+    /** Fails the [failOn]-th [write] call, then keeps failing until [failing] is cleared. */
+    private class FailNthWriteStore(private val failOn: Int) : DurableStore {
+        private val lock = reentrantLock()
+        private val backing = mutableMapOf<StoreKey, ByteArray>()
+        private var writes = 0
+        var failing: Boolean = true
+
+        override suspend fun read(key: StoreKey): ByteArray? = lock.withLock { backing[key]?.copyOf() }
+
+        override suspend fun write(key: StoreKey, bytes: ByteArray) {
+            lock.withLock {
+                writes++
+                if (failing && writes >= failOn) throw IllegalStateException("simulated crash on write $writes")
+                backing[key] = bytes.copyOf()
+            }
+        }
+
+        override suspend fun delete(key: StoreKey): Unit = lock.withLock { backing.remove(key) }
+
+        fun putRaw(key: StoreKey, bytes: ByteArray): Unit = lock.withLock { backing[key] = bytes.copyOf() }
     }
 
     @Test
