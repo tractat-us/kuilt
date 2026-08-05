@@ -51,4 +51,19 @@ public object CapabilityGaps {
      */
     public const val SELF_DIAL: String =
         "https://github.com/tractat-us/kuilt/issues/1502"
+
+    /**
+     * A fabric that names no frame ceiling — [us.tractat.kuilt.core.Seam.maxPayloadBytes] is `null`
+     * (see [SeamConformanceSuite.payloadBudgetGap]).
+     *
+     * Unlike every other constant here this one is **usually not a shortfall at all**: `null` is the
+     * honest answer from a fabric with no wire limit to name (in-memory, and every relay fabric whose
+     * `Connection` publishes nothing), and the contract says so. It is *declared* rather than assumed
+     * because of the one case the suite structurally cannot test — a fabric that **enforces** a
+     * ceiling while publishing `null`, which proving would take a payload the size of the hidden
+     * limit. `NwSeam` is the known outstanding instance (16 MiB via `encodeFrame`, published as
+     * `null`); it is tracked by #2069 and named in the doc section below.
+     */
+    public const val PAYLOAD_BUDGET: String =
+        "https://github.com/tractat-us/kuilt/blob/main/docs/architecture.md#payloadbudget--fabrics-that-name-no-frame-ceiling"
 }
