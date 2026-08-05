@@ -5,13 +5,14 @@
 with throwaway probes; "How the figures were produced" says how to re-take them. **#2101's own table
 is corrected in the first section — read that before the proposal.**
 
-> **Four figures below did not survive execution and are corrected inline where they appear**,
+> **Five figures below did not survive execution and are corrected inline where they appear**,
 > marked **CORRECTED on execution**: the `148.6 s` native baseline (a box artifact — identical code
 > reads 53–149 s; the gate is a **ratio**, met at **0.891×**), the `LWWMap` commutativity count
 > (**0**, not 20 — unreachable because its mutators join), the `L = 4` cost table (measured at
-> `|A| = 3`; cost is `|A|ᴸ`, so it needed a triple budget), and "~5.8 s across 16" (the pass costs
-> **3.03 s across 19**, concentrated in two bindings). The plan doc carries the full list of seven,
-> including three that are prescriptions rather than figures.
+> `|A| = 3`; cost is `|A|ᴸ`, so it needed a triple budget), "~5.8 s across 16" (the pass costs
+> **3.03 s across 19**, concentrated in two bindings), and the exhaustive pass's "28 words"
+> (order-dependent — it reads **20**; the word and the length reproduce exactly). The plan doc
+> carries all eight, including three that are prescriptions rather than figures.
 
 ## What this changes, in plain language
 
@@ -263,6 +264,13 @@ binding's alphabet on one replica, all intermediate states kept as the pool, bot
 Against the reintroduced #2086, with alphabet `{put(k0,4), put(k0,1), remove(k0)}`:
 
 > minimal counterexample = `[put(k0,4), remove(k0), put(k0,1)]`, length **3**, found after **28 words**
+
+> **CORRECTED on execution: the word and the length reproduce exactly; the `28` is not a property of
+> the search.** Re-measured against a rebuilt legacy `ORMap`, the pass returns the same word at
+> length **3** after **20** words. The count follows **alphabet declaration order**, which is the
+> order the enumeration walks: with the asserts declared `put-high, put-low, remove` the failing word
+> sits at length-3 index 7 (`3 + 9 + 8 = 20`); reversed, at index 15 (`3 + 9 + 16 = 28`). Both are
+> correct breadth-first searches. **Quote the word and the length; never the count.**
 
 That is the #2086 shape, **minimal by construction** — there is no shorter word, because every
 shorter word was tried first. jqwik's shrinker produces a locally-minimal synthetic operand list;

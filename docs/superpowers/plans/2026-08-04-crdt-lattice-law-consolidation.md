@@ -4,7 +4,7 @@
 > #2137 · #2142 · #2146 · #2147 · #2148), closing #2101. This plan is kept as the record of how the
 > work was reasoned about, **not** as a description of the tree — for that, read the code.
 >
-> **Seven of its prescriptions turned out to be wrong, and each is corrected inline below** at the
+> **Eight of its prescriptions turned out to be wrong, and each is corrected inline below** at the
 > step that carried it, marked **CORRECTED (Task 9)**. Every correction was *measured* by the worker
 > that hit it, not inferred. In summary:
 >
@@ -17,10 +17,16 @@
 > | 5 | Task 4 Step 4 | `LWWMap`'s 20 commutativity violations are **0** — unreachable, because its mutators join. The fix is preventive, not corrective. |
 > | 6 | Task 6 Step 3 | the `L = 4` cost table was measured at `\|A\| = 3` and **does not generalise**; cost is `\|A\|ᴸ`. Shipped with a triple budget. |
 > | 7 | Task 8 Step 4 | "leave `jqwik` in the catalog, `:kuilt-raft` uses it" — #2112 took `:kuilt-raft` off jqwik **46 minutes** after this plan was committed. |
+> | 8 | Task 6 Step 2 | "found after **28 words**" reads **20** — the count follows *alphabet declaration order*, not the search. The word and the length reproduce exactly. |
 >
-> The pattern worth carrying forward: **five of the seven are a prescribed literal, a prescribed
+> The pattern worth carrying forward: **six of the eight are a prescribed literal, a prescribed
 > absolute, or a prescribed premise about another module** — the three things a plan cannot state
 > without running them, and the three a worker is most likely to copy rather than check.
+>
+> Correction 8 was found by Task 9 doing what Step 2 of its own brief asks — *re-run every
+> measurement this plan quotes* — and it is the one that makes the case for that step. Six of these
+> eight are numbers or literals that read as facts and were nobody's to check; a track that records
+> measurements without ever re-taking one accumulates them silently.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development
 > (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use
@@ -410,6 +416,19 @@ Parallel with Tasks 3–5.
   > minimal counterexample = `[put(k0,4), remove(k0), put(k0,1)]`, length **3**, after **28 words**
 
   Anything longer means the enumeration is not breadth-first by length and the "minimal" claim is false.
+
+  > **CORRECTED (Task 9): the word and the length reproduce; the "28 words" does not, and cannot.**
+  > Re-run against a rebuilt `LegacyORMap`, the pass returns `[put-high, remove, put-low]` at length
+  > **3** — the same word — after **20** words, not 28. The count is an artifact of **alphabet
+  > declaration order**, because that is the order the enumeration walks: with the asserts declared
+  > `put-high, put-low, remove` the failing word sits at length-3 index 7, so `3 + 9 + 8 = 20`; with
+  > `put-low, put-high, remove` it sits at index 15, so `3 + 9 + 16 = 28`. Both are correct
+  > breadth-first searches finding the same counterexample.
+  >
+  > So **the step's own guard sentence is the part to keep, and its literal is the part to drop.**
+  > "Anything longer means the enumeration is not breadth-first" is right about the *length*; the
+  > word count is not a property of the search at all, and pinning it would fail the day someone
+  > reorders an alphabet for an unrelated reason. Assert the length and the word, never the count.
 - [ ] **Step 3:** `L = 4`, as a named constant whose KDoc carries the cost curve for a **green** run
   (the normal case), because raising it is the obvious future mistake:
 
