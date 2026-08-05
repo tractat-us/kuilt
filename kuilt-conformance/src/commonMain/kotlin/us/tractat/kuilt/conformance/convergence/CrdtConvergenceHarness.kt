@@ -74,77 +74,76 @@ public class CrdtConvergenceHarness<S : Quilted<S>>(
     public fun runSeeds(seeds: LongRange): List<S> = seeds.map(::run)
 
     /**
-     * Assert `piece` is **associative** over states this type can actually reach:
-     * `(a ⊔ b) ⊔ c == a ⊔ (b ⊔ c)` for every ordered triple drawn from [causalPool].
+     * Assert **both** laws that relate the two bracketings of a join, in one pass over
+     * [causalPool]: for every ordered triple, `(a ⊔ b) ⊔ c` and `a ⊔ (b ⊔ c)` must be equal
+     * (**associativity**), and — only once they are equal — must encode to the same bytes
+     * (**canonicality**).
      *
-     * **This is a different property from [run], and the difference is the whole point.** [run]
-     * folds a fixed set of replica states in every *order* — `((i⊔a)⊔b)⊔c` versus `((i⊔b)⊔a)⊔c` —
-     * which is commutativity plus one fixed left-nested bracketing. It never forms `a ⊔ (b ⊔ c)`,
-     * so a join that is order-sensitive but self-healing passes it: the states it compares have all
-     * absorbed the same three operands, and a lost contribution comes back the moment the missing
-     * operand is merged in again. Real deployments do not enjoy that. A peer that receives `b ⊔ c`
-     * as one anti-entropy digest, and a peer that receives `b` then `c`, must land on the same
-     * state — and until the next round they are what a user reads and what `Quilter.stateRoot()`
-     * hashes.
+     * **Associativity is a different property from [run], and the difference is the whole point.**
+     * [run] folds a fixed set of replica states in every *order* — `((i⊔a)⊔b)⊔c` versus
+     * `((i⊔b)⊔a)⊔c` — which is commutativity plus one fixed left-nested bracketing. It never forms
+     * `a ⊔ (b ⊔ c)`, so a join that is order-sensitive but self-healing passes it: the states it
+     * compares have all absorbed the same three operands, and a lost contribution comes back the
+     * moment the missing operand is merged in again. Real deployments do not enjoy that. A peer
+     * that receives `b ⊔ c` as one anti-entropy digest, and a peer that receives `b` then `c`, must
+     * land on the same state — and until the next round they are what a user reads and what
+     * `Quilter.stateRoot()` hashes.
      *
      * The second thing [run] cannot see is *causal relation*. Its replicas each fork from
      * `initial` under their own replica id, so no replica's context ever witnesses another's dots.
      * Bugs that need one operand to **retire a tag a second operand still carries** are structurally
      * unreachable there. [causalPool] restores that dimension by snapshotting each replica's own
      * running history, so `s`, `s.remove(k)` and `s.remove(k).put(k, v)` all sit in the pool.
-     */
-    public fun runAssociativity(seed: Long) {
-        val pool = causalPool(Random(seed))
-        for (a in pool) for (b in pool) for (c in pool) {
-            val leftNested = a.piece(b).piece(c)
-            val rightNested = a.piece(b.piece(c))
-            check(leftNested == rightNested) {
-                // The encodings are printed because a CRDT's `toString` shows the *observable*
-                // value and hides the causal bookkeeping — an ORMap prints its values but not
-                // its tags or context. When two states differ only there, the rendered forms
-                // look identical and the hex is the only readable evidence.
-                "Associativity failure at seed $seed:\n" +
-                    "  a           = $a\n" +
-                    "  b           = $b\n" +
-                    "  c           = $c\n" +
-                    "  (a⊔b)⊔c     = $leftNested\n" +
-                    "  a⊔(b⊔c)     = $rightNested\n" +
-                    "  (a⊔b)⊔c bytes = ${encoded(leftNested).toHexString()}\n" +
-                    "  a⊔(b⊔c) bytes = ${encoded(rightNested).toHexString()}"
-            }
-        }
-    }
-
-    /** Run [runAssociativity] over every seed in [seeds]. */
-    public fun runAssociativitySeeds(seeds: LongRange): Unit = seeds.forEach(::runAssociativity)
-
-    /**
-     * Assert the two bracketings of an associative join also **encode identically**.
      *
-     * Value equality is checked first, so a failure here is unambiguously a canonicality defect —
-     * two equal states whose bytes differ — and never an associativity one. It matters because
-     * `Quilter`'s root-hash gate (#1955) compares digests, not values: a pair of peers that agree
-     * on the state but disagree on its bytes reads as diverged and skips the fast path.
+     * **Canonicality is checked second, and only on equal values, so the two failures never blur.**
+     * An inequality is an associativity defect; differing bytes over states that already compare
+     * equal is a *canonicality* defect, and the messages say so in different words on purpose. The
+     * byte law matters because `Quilter`'s root-hash gate (#1955) compares digests, not values: a
+     * pair of peers that agree on the state but disagree on its bytes reads as diverged and skips
+     * the fast path.
+     *
+     * **Why one pass and not two.** The two laws were once two methods, each rebuilding the pool
+     * from the same seed and each recomputing *both* bracketings for every one of ~45,797 triples;
+     * only the second went on to encode. Splitting them cost a full duplicate set of joins — 18% of
+     * this module's Kotlin/Native test budget — and bought nothing, because the encoding pass
+     * already had to compare values to know which triples it could speak about.
      */
-    public fun runAssociativeEncoding(seed: Long) {
+    public fun runAssociativeLaws(seed: Long) {
         val pool = causalPool(Random(seed))
         for (a in pool) for (b in pool) for (c in pool) {
             val leftNested = a.piece(b).piece(c)
             val rightNested = a.piece(b.piece(c))
-            if (leftNested != rightNested) continue // an associativity failure, reported by runAssociativity
+            check(leftNested == rightNested) { associativityFailure(seed, a, b, c, leftNested, rightNested) }
             val leftBytes = encoded(leftNested)
             val rightBytes = encoded(rightNested)
-            check(leftBytes.contentEquals(rightBytes)) {
-                "Canonical-encoding failure across bracketings at seed $seed:\n" +
-                    "  (a⊔b)⊔c bytes ${leftBytes.toHexString()}\n" +
-                    "  a⊔(b⊔c) bytes ${rightBytes.toHexString()}\n" +
-                    "  state         $leftNested"
-            }
+            check(leftBytes.contentEquals(rightBytes)) { canonicalityFailure(seed, leftBytes, rightBytes, leftNested) }
         }
     }
 
-    /** Run [runAssociativeEncoding] over every seed in [seeds]. */
-    public fun runAssociativeEncodingSeeds(seeds: LongRange): Unit = seeds.forEach(::runAssociativeEncoding)
+    /** Run [runAssociativeLaws] over every seed in [seeds]. */
+    public fun runAssociativeLawsSeeds(seeds: LongRange): Unit = seeds.forEach(::runAssociativeLaws)
+
+    // The encodings are printed because a CRDT's `toString` shows the *observable* value and hides
+    // the causal bookkeeping — an ORMap prints its values but not its tags or context. When two
+    // states differ only there, the rendered forms look identical and the hex is the only readable
+    // evidence.
+    private fun associativityFailure(seed: Long, a: S, b: S, c: S, leftNested: S, rightNested: S): String =
+        "Associativity failure at seed $seed — the two bracketings are NOT EQUAL:\n" +
+            "  a           = $a\n" +
+            "  b           = $b\n" +
+            "  c           = $c\n" +
+            "  (a⊔b)⊔c     = $leftNested\n" +
+            "  a⊔(b⊔c)     = $rightNested\n" +
+            "  (a⊔b)⊔c bytes = ${encoded(leftNested).toHexString()}\n" +
+            "  a⊔(b⊔c) bytes = ${encoded(rightNested).toHexString()}"
+
+    private fun canonicalityFailure(seed: Long, leftBytes: ByteArray, rightBytes: ByteArray, state: S): String =
+        "Canonical-encoding failure at seed $seed — the two bracketings are EQUAL but encode to " +
+            "DIFFERENT bytes. This is not an associativity defect; the join landed in the right " +
+            "place and the serializer is history-dependent:\n" +
+            "  (a⊔b)⊔c bytes ${leftBytes.toHexString()}\n" +
+            "  a⊔(b⊔c) bytes ${rightBytes.toHexString()}\n" +
+            "  state         $state"
 
     /**
      * Reachable states that are **causally related to one another**, not merely siblings.
