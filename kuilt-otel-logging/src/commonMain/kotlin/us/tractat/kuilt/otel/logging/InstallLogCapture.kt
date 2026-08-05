@@ -6,6 +6,7 @@ import io.github.oshai.kotlinlogging.KLoggerFactory
 import io.github.oshai.kotlinlogging.KotlinLoggingConfiguration
 import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.StateFlow
 import us.tractat.kuilt.otel.WarpLogRecordExporter
 import kotlin.random.Random
 import kotlin.time.Clock
@@ -22,6 +23,18 @@ import kotlin.time.Clock
 public class LogCaptureInstallation internal constructor(
     /** The installed capture core (event → `LogRecord` → exporter). */
     public val capture: LogCapture,
+    /**
+     * Out-of-band health for the capture edge — see [CaptureHealth].
+     *
+     * The queue between the application's logging call and the export drain is
+     * bounded, so an app that logs faster than the exporter drains loses the oldest
+     * events rather than growing the host's heap without limit (#2124). Read
+     * [CaptureHealth.droppedEvents] for a point-in-time answer to "am I losing log
+     * lines?", or collect the flow to alarm on it climbing. Read alongside
+     * `WarpLogRecordExporter.health`: drops climbing while the exporter is healthy
+     * means the export path works and is simply too slow for this log volume.
+     */
+    public val health: StateFlow<CaptureHealth>,
     private val onClose: () -> Unit,
 ) : AutoCloseable {
     private val closed = atomic(false)
@@ -72,7 +85,9 @@ public class LogCaptureInstallation internal constructor(
  *   coroutine — so an ambient provider that reads thread/coroutine-local context is
  *   honoured (#1034).
  * @return the [LogCaptureInstallation] handle — its [LogCaptureInstallation.capture]
- *   is the installed core, and [LogCaptureInstallation.close] uninstalls capture.
+ *   is the installed core, [LogCaptureInstallation.health] reports whether the
+ *   bounded capture queue is dropping events (#2124), and
+ *   [LogCaptureInstallation.close] uninstalls capture.
  *
  * @sample us.tractat.kuilt.otel.logging.sampleInstallLogCapture
  */
@@ -90,7 +105,7 @@ public fun installLogCapture(
     val previousAppender: Appender = KotlinLoggingConfiguration.direct.appender
     val appender = CapturingAppender(capture, captureDelegate(previousAppender), scope)
     KotlinLoggingConfiguration.direct.appender = appender
-    return LogCaptureInstallation(capture) {
+    return LogCaptureInstallation(capture, appender.health) {
         KotlinLoggingConfiguration.direct.appender = previousAppender
         KotlinLoggingConfiguration.loggerFactory = previousFactory
         appender.close()
