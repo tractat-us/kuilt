@@ -161,14 +161,16 @@ public interface Seam {
      * Publishing a number nothing checks is worse than publishing none.
      *
      * The TCK now holds every fabric that publishes a number to it at both edges. Still open under
-     * #2069: `SeamRaftTransport`, and the decorators of #2058 that delegate to a bounded seam while
-     * reporting `null`.
+     * #2069: the decorators of #2058 that delegate to a bounded seam while reporting `null`.
      *
-     * `NwSeam` is the instructive case. It enforces a 16 MiB ceiling and refuses above it, but
-     * publishes nothing — deliberately, because publishing is a *promise* and its receive path
-     * drops bytes under a multi-chunk burst, so a frame that size never completes (#2134). A fabric
-     * may enforce a bound it cannot yet promise; those are different claims, and only the second
-     * one this value makes.
+     * `NwSeam` is where the distinction was drawn, and it is worth keeping. It enforced a 16 MiB
+     * ceiling and refused above it while publishing nothing — deliberately, because publishing is a
+     * *promise to carry*, not merely to refuse, and its receive path dropped bytes under a
+     * multi-chunk burst, so a frame that size never completed. **A fabric may enforce a bound it
+     * cannot yet promise; those are different claims, and only the second one this value makes.**
+     * The withholding ended with #2134, which gave the receive path real backpressure — so `NwSeam`
+     * now publishes its ceiling, and the TCK's `payloadOfExactlyTheBudgetIsCarried` (the case that
+     * found the defect) is what holds it to it.
      *
      * ## A reading, not a lease
      *

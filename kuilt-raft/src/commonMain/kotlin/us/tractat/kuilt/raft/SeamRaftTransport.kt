@@ -33,8 +33,11 @@ private fun Set<PeerId>.toNodeIds(): Set<NodeId> = mapTo(mutableSetOf()) { NodeI
  * frames from the fabric layer itself) are silently dropped; only frames with
  * a known sender are forwarded as [RaftEnvelope]s.
  *
- * This class is the only place in `kuilt-raft` that imports from `kuilt-core`.
- * All other Raft types are transport-agnostic.
+ * This class is the only place in `kuilt-raft` that names a `kuilt-core` *fabric* type — [Seam],
+ * [PeerId], and the errors they raise. All other Raft types are transport-agnostic; the handful of
+ * `kuilt-core` symbols they do reach for are utilities (`runCatchingCancellable`,
+ * `checkNotUnderTestDispatcher`) and [PayloadTooLarge], which is the contract the fabric refuses by
+ * and so travels with the budget rather than with the transport.
  */
 public class SeamRaftTransport(private val seam: Seam) : RaftTransport {
 
@@ -52,6 +55,24 @@ public class SeamRaftTransport(private val seam: Seam) : RaftTransport {
             seam.peers.collect { set -> collector.emit(set.toNodeIds()) }
     }
 
+    /**
+     * The seam's budget, republished **unchanged** (#2069).
+     *
+     * This transport hands `message` to [Seam.sendTo] exactly as the engine minted it and adds no
+     * bytes of its own, so there is nothing to subtract. Contrast `RoutedRaftTransport`, which wraps
+     * every frame in a `RaftRelay` envelope and therefore reports the delegate's limit less its own
+     * `headerBudget` — a decorator subtracts what it costs, and this one costs nothing.
+     *
+     * A `get()` rather than a `val` initialiser because [Seam.maxPayloadBytes] is "a reading, not a
+     * lease": a mesh reports the minimum across its live links, so a peer attaching over a tighter
+     * transport lowers it. A snapshot taken at construction would go stale the first time the fabric
+     * changed shape.
+     *
+     * The engine spends this on two things — chunking an `InstallSnapshot`, and refusing an
+     * over-budget `propose` before it can enter the log (`RaftEngine.checkProposeFitsTransport`).
+     */
+    override val maxPayloadBytes: Int? get() = seam.maxPayloadBytes
+
     override suspend fun sendTo(peer: NodeId, message: ByteArray) {
         try {
             seam.sendTo(PeerId(peer.value), message)
@@ -63,15 +84,22 @@ public class SeamRaftTransport(private val seam: Seam) : RaftTransport {
             // CancellationException, so structured-concurrency cancellation still propagates.
         } catch (tooLarge: PayloadTooLarge) {
             // A seam that publishes a payload budget refuses an over-budget frame while Woven
-            // (#2047) — a refusal independent of peer reachability, and one this transport cannot
-            // let escape: `RaftEngine.send` invokes this **unguarded**, so a throw here fails the
-            // engine coroutine rather than one message.
+            // (#2047) — a refusal independent of peer reachability. This catch is PERMANENT, not a
+            // stopgap awaiting the propose-time bound of #2069, for three reasons:
+            //
+            //  1. `RaftTransport.sendTo` is best-effort by contract ("may silently drop"), and
+            //     `RaftEngine.send` invokes it **unguarded** — a throw here fails the engine
+            //     coroutine, not one message.
+            //  2. The budget can move DOWN after an entry is already in the log. `maxPayloadBytes`
+            //     is a reading, not a lease: a mesh peer attaching over a tighter link shrinks it.
+            //     Nothing checked at propose time can close that race.
+            //  3. The propose-time bound covers a single oversize entry. The AppendEntries **batch**
+            //     is still unbounded — `sendAppendEntries` slices the whole un-replicated tail — so
+            //     N individually-legal entries can overflow together (#2150).
             //
             // Dropped, therefore, but loudly: unlike a partition this is a misconfiguration, not
             // weather. The engine will retry the frame forever and never make progress on that
-            // peer, so the log line is the only thing that names why. The structural fix is for
-            // this transport to publish `maxPayloadBytes` so the engine chunks to fit — a
-            // consensus-behaviour change, tracked separately rather than smuggled in here.
+            // peer, so the log line is the only thing that names why.
             log.warn {
                 "raft.send.drop self=${selfId.value} to=${peer.value} " +
                     "reason=payload-over-budget ${tooLarge.message}"
