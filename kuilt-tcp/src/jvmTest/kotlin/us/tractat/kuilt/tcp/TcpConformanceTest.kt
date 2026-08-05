@@ -69,4 +69,13 @@ class TcpConformanceTest : SeamConformanceSuite() {
         "securesTransport" to CapabilityGaps.SECURES_TRANSPORT,
         "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
     )
+
+    /**
+     * No gap: TCP is the one in-tree fabric that **publishes** a frame ceiling. `framed()` names its
+     * `maxFrameSize`, [TcpConnection] passes it up as `Connection.maxFrameBytes`, and `LinkSeam`
+     * surfaces it as `Seam.maxPayloadBytes` — so this harness is held to the number by
+     * [payloadOfExactlyTheBudgetIsCarried] and [overBudgetAddressedSendIsRefusedNotLeaked] instead of
+     * declaring it away (#2069).
+     */
+    override fun payloadBudgetGap(): String? = null
 }

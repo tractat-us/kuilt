@@ -24,6 +24,7 @@ import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.PayloadTooLarge
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
@@ -99,6 +100,15 @@ import kotlin.test.fail
  * (a peer leaving without a tear) and [injectSelfDial] (a peer dialling its own advertisement, the
  * #1466 class) — each opt-in, each tracked-by-default via its own `*Gap()` and `*IsTrackedWhenUnproven`
  * meta-test rather than a required abstract every fabric would have to implement.
+ *
+ * A **fourth** selects on a value the fabric already publishes rather than on any declaration:
+ * [payloadOfExactlyTheBudgetIsCarried] and [overBudgetAddressedSendIsRefusedNotLeaked] run exactly
+ * when [Seam.maxPayloadBytes] is non-null, because a fabric reporting `null` has made no promise to
+ * keep. That is the one gating input a fabric cannot get wrong by *declaring* wrong — but it can
+ * still stay silent while enforcing a ceiling internally, so the same tracked-by-default umbrella
+ * applies ([payloadBudgetGap] / [payloadBudgetObligationIsTrackedWhenUnpublished], #2069). Unusually,
+ * that pairing binds in **both** directions: publishing a budget requires the gap to be *cleared*,
+ * so the declaration cannot be left behind as an opt-out.
  *
  * ## Continuous contract monitor
  *
@@ -274,6 +284,27 @@ public abstract class SeamConformanceSuite {
      * [selfDialObligationIsTrackedWhenUnproven] enforces the pairing.
      */
     public open fun selfDialGap(): String? = CapabilityGaps.SELF_DIAL
+
+    /**
+     * Tracking URL for **why this fabric names no frame ceiling** — the accountability analog of
+     * [midSessionDeathGap] for [us.tractat.kuilt.core.Seam.maxPayloadBytes] (#2069).
+     *
+     * The base default is a **non-null** umbrella ([CapabilityGaps.PAYLOAD_BUDGET]), so a fabric
+     * that publishes nothing is *declared*, never silently green; a fabric that publishes a number
+     * MUST override this to `null`/blank, and is then held to that number by
+     * [payloadOfExactlyTheBudgetIsCarried] and [overBudgetAddressedSendIsRefusedNotLeaked].
+     * [payloadBudgetObligationIsTrackedWhenUnpublished] enforces the pairing in **both**
+     * directions.
+     *
+     * **This is deliberately not a [SeamCapabilities] flag**, though #2069 first asked for one.
+     * Every `false` flag there is a contract *shortfall* for which [everyFalseCapabilityDeclaresAGap]
+     * demands a per-fabric issue URL — but `maxPayloadBytes == null` is the *honest* answer from a
+     * fabric with no wire limit to name, so a flag would have demanded a permanently-open issue from
+     * nearly every subclass of this suite. The hook's shared umbrella default costs those fabrics
+     * nothing while still making the one real hazard — a fabric enforcing a ceiling it does not
+     * publish — a declaration somebody has to write down.
+     */
+    public open fun payloadBudgetGap(): String? = CapabilityGaps.PAYLOAD_BUDGET
 
     /**
      * Drive [newLoomPair] to a connected host/joiner pair and hand both live [Seam]s to
@@ -1089,4 +1120,126 @@ public abstract class SeamConformanceSuite {
                 }
             }
         }
+
+    // ── (19) a published payload budget is a promise, and it is kept at BOTH edges ──
+    //
+    // Value-selected, not capability-gated: the selector is `maxPayloadBytes` itself. A fabric that
+    // reports `null` has made no promise, so there is nothing here to assert — its accountability is
+    // [payloadBudgetGap], below. A fabric that reports a number is held to it exactly, on both sides
+    // of the edge, because each side catches a different lie: too-large-a-number is caught by the
+    // at-budget send, and published-but-unenforced by the over-budget one (#2069).
+
+    /**
+     * A payload of **exactly** [Seam.maxPayloadBytes] crosses. Sent with `broadcast` so the
+     * obligation does not also depend on [SeamCapabilities.supportsSendTo].
+     *
+     * This is the edge a fabric gets wrong by publishing a number bigger than its wire really takes
+     * — the frame is then refused by the fabric's own machinery, at a limit the caller could not see
+     * and did not agree to. `null` means unknown, so a fabric that names nothing skips: it promised
+     * nothing to break.
+     */
+    @Test
+    public fun payloadOfExactlyTheBudgetIsCarried(): TestResult =
+        runTest {
+            connectedPair { host, joiner ->
+                val budget = host.maxPayloadBytes ?: return@connectedPair
+                val atBudget = ByteArray(budget) { (it % PAYLOAD_FILL_MODULUS).toByte() }
+                val received = async { joiner.incoming.first() }
+
+                host.broadcast(atBudget)
+
+                // Unbounded, like every other delivery obligation here: `runTest`'s own ceiling is the
+                // backstop. An inner `withTimeout` would be measured in VIRTUAL time, which a real-IO
+                // fabric does not advance — the clock jumps the whole bound while the socket is still
+                // carrying the frame, and the obligation fails on a fabric that was working fine.
+                val swatch = received.await()
+                assertAll(
+                    {
+                        assertEquals(
+                            budget,
+                            swatch.payloadSize,
+                            "a payload of exactly maxPayloadBytes ($budget B) must cross whole — the " +
+                                "number is a promise, not a hint",
+                        )
+                    },
+                    {
+                        // The fill is non-uniform, so a truncate-and-zero-pad cannot pass the size
+                        // check above by accident: the last byte is the one such a fabric loses.
+                        assertEquals(
+                            atBudget[budget - 1],
+                            swatch.byteAt(budget - 1),
+                            "the payload's last byte must survive, not be zero-padded back to length",
+                        )
+                    },
+                )
+            }
+        }
+
+    /**
+     * A payload **one byte over** the budget is refused by the seam with
+     * [us.tractat.kuilt.core.PayloadTooLarge], not leaked as the fabric's own frame error.
+     *
+     * The distinction is the whole point of publishing a budget: [PayloadTooLarge] names the number
+     * the caller should have respected, whereas a fabric-level error names a limit the caller had no
+     * way to read — and, in the two in-tree fabric seams before #2069, arrived only *after* the send
+     * had reported success, having torn the seam down or evicted a healthy peer on the way.
+     *
+     * Gated on [SeamCapabilities.supportsSendTo]: `broadcast` is best-effort and *drops* an
+     * over-budget payload by contract, so only the addressed send has a refusal to observe.
+     */
+    @Test
+    public fun overBudgetAddressedSendIsRefusedNotLeaked(): TestResult =
+        runTest {
+            connectedPair { host, joiner ->
+                val budget = host.maxPayloadBytes ?: return@connectedPair
+                if (!capabilities().supportsSendTo) return@connectedPair
+                // A budget at Int.MAX_VALUE has no representable "one byte over" to test.
+                if (budget == Int.MAX_VALUE) return@connectedPair
+
+                val refusal = assertFailsWith<PayloadTooLarge>(
+                    "a seam that publishes maxPayloadBytes ($budget B) must refuse one byte more " +
+                        "with PayloadTooLarge, not let its fabric's own frame error out",
+                ) {
+                    host.sendTo(joiner.selfId, ByteArray(budget + 1))
+                }
+                assertEquals(
+                    budget,
+                    refusal.budgetBytes,
+                    "the refusal must name the same budget the seam publishes",
+                )
+            }
+        }
+
+    // ── (20) an unpublished payload budget must be declared, not silently absent ──
+    //
+    // The accountability analog of [midSessionDeathObligationIsTrackedWhenUnproven], and the reason
+    // the two obligations above may skip. It binds in BOTH directions, which is what stops the gap
+    // from becoming a way to opt out: a fabric that publishes nothing must name a tracking URL, and
+    // a fabric that publishes a number must NOT — so a gap left in place while a budget appears
+    // fails here rather than quietly excusing a fabric already under obligation.
+
+    @Test
+    public fun payloadBudgetObligationIsTrackedWhenUnpublished(): TestResult =
+        runTest {
+            connectedPair { host, _ ->
+                if (host.maxPayloadBytes == null) {
+                    assertFalse(
+                        payloadBudgetGap().isNullOrBlank(),
+                        "a fabric that names no frame ceiling must be declared: override " +
+                            "payloadBudgetGap() with a tracking URL, or publish Seam.maxPayloadBytes",
+                    )
+                } else {
+                    assertTrue(
+                        payloadBudgetGap().isNullOrBlank(),
+                        "this fabric publishes maxPayloadBytes (${host.maxPayloadBytes}), so it is " +
+                            "under obligation, not tracked as a gap: override payloadBudgetGap() to null",
+                    )
+                }
+            }
+        }
+
+    private companion object {
+        /** Non-uniform fill for the at-budget payload, so a truncation cannot pass as a zero-fill. */
+        const val PAYLOAD_FILL_MODULUS = 251
+    }
 }

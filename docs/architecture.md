@@ -285,8 +285,8 @@ Not every fabric can promise everything. A fabric declares what it can and
 can't do (its `SeamCapabilities`), and the first two gaps below are permanent
 properties of *how the fabric works*, not bugs waiting on a fix — they are
 recorded here so a reader hits the explanation once, rather than re-deriving
-it every time a new fabric declares the same honest limitation. The third is a
-different shape: an honest "not wired yet" that closes fabric by fabric.
+it every time a new fabric declares the same honest limitation. The last two are
+a different shape: an honest "not wired yet" that closes fabric by fabric.
 
 ### securesTransport — fabrics without wire encryption
 
@@ -343,6 +343,38 @@ is not.
 Unlike the two gaps above, this one is not permanent. Each fabric's observer is
 wired one lane at a time, and a lane flips its flag to `true` in the same change
 that lands the observer and a test proving the value actually moves.
+
+### payloadBudget — fabrics that name no frame ceiling
+
+Ask a fabric "how big a message will you carry?" and, like the question above,
+there are three honest answers — and only two of them are a number. Some
+transports have a hard limit built in: a length-prefixed stream reserves a fixed
+field for the size, so anything past it simply cannot be described, let alone
+sent. Others have none worth naming — an in-memory fabric never leaves the
+process, so the only real limit is how much memory you have.
+
+A fabric that knows its limit publishes it as `Seam.maxPayloadBytes`, and having
+published it, must keep it: a message of exactly that size gets carried, and a
+message one byte over is refused *by the fabric, politely*, before anything is
+written. A fabric with no limit to name reports "I don't know" instead. That is
+the honest answer, not a failing — and it is deliberately not the same as "any
+size is fine", because a caller that reads it as permission will eventually hand
+some future transport a message it cannot carry.
+
+What the conformance suite can check is only the first case. If a fabric names a
+number, the suite holds it to the number. If it reports "I don't know", there is
+no promise to test — so the suite instead requires the fabric to *say so*, by
+pointing `payloadBudgetGap()` at this section. That leaves one thing the suite
+genuinely cannot see: a fabric that enforces a ceiling internally while still
+reporting "I don't know". Proving a hidden 16 MiB limit would take a 16 MiB
+message, which is not a test worth running against every fabric — so the
+declaration is the mechanism there, not the assertion. `NwSeam` is the known
+outstanding case ([#2069](https://github.com/tractat-us/kuilt/issues/2069)): it
+refuses frames past 16 MiB and publishes nothing.
+
+Like the observer gap above, this one is not permanent for any fabric that
+*does* have a ceiling — it closes the moment the fabric publishes the number it
+is already enforcing.
 
 ### Not every flag describes a design choice
 
