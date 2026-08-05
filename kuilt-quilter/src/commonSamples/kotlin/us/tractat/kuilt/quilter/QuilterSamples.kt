@@ -21,7 +21,6 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlinx.serialization.serializer
 import kotlin.test.assertEquals
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Samples for the quilter (replicator) API used by `@sample` KDoc tags.
@@ -40,7 +39,7 @@ import kotlin.time.Duration.Companion.seconds
 @Suppress("unused")
 internal fun sampleQuilterConvenience() = runTest(
     StandardTestDispatcher(),
-    timeout = 5.seconds,
+    timeout = TEST_WEDGE_BACKSTOP,
 ) {
     val loom = InMemoryLoom()
     val seamAlice = loom.host(Pattern("vote-tally"))
@@ -112,7 +111,7 @@ internal fun sampleQuilterMutateOrSkip() = runTest(
 @Suppress("unused")
 internal fun sampleQuilterSetup() = runTest(
     StandardTestDispatcher(),
-    timeout = 5.seconds,
+    timeout = TEST_WEDGE_BACKSTOP,
 ) {
     val loom = InMemoryLoom()
     val seam = loom.host(Pattern("my-session"))
@@ -146,7 +145,7 @@ internal fun sampleQuilterSetup() = runTest(
 @Suppress("unused")
 internal fun sampleQuilterSessionMetadata() = runTest(
     StandardTestDispatcher(),
-    timeout = 5.seconds,
+    timeout = TEST_WEDGE_BACKSTOP,
 ) {
     val loom = InMemoryLoom()
     val seamAlice = loom.host(Pattern("session"))
@@ -199,7 +198,7 @@ internal fun sampleQuilterSessionMetadata() = runTest(
 @Suppress("unused")
 internal fun sampleRgaChatReplicator() = runTest(
     StandardTestDispatcher(),
-    timeout = 5.seconds,
+    timeout = TEST_WEDGE_BACKSTOP,
 ) {
     val loom = InMemoryLoom()
     val seamAlice = loom.host(Pattern("chat"))
@@ -264,7 +263,7 @@ internal fun sampleRgaChatReplicator() = runTest(
 @Suppress("unused")
 internal fun sampleQuilterSparseDeltaTargets() = runTest(
     StandardTestDispatcher(),
-    timeout = 5.seconds,
+    timeout = TEST_WEDGE_BACKSTOP,
 ) {
     val loom = InMemoryLoom()
     val seamA = loom.host(Pattern("sparse-mesh"))
@@ -315,7 +314,7 @@ internal fun sampleQuilterSparseDeltaTargets() = runTest(
  * test in `VoteTallyTest` — the backtick name can't be an `include-symbol` target.
  */
 @Suppress("unused")
-internal fun sampleVoteTally() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+internal fun sampleVoteTally() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
     val loom = InMemoryLoom()
     val seamAlice = loom.host(Pattern("vote-tally"))
     val seamBob = loom.join(InMemoryTag("bob"))

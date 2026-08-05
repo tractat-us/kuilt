@@ -21,10 +21,10 @@ import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.crdt.GSet
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Verifies the Resend retry timer: when a peer detects a delta gap and its Resend is
@@ -83,7 +83,7 @@ class QuilterResendRetryTest {
     @Test
     fun resendIsRetriedAfterIntervalWhenFirstResendIsDropped() = runTest(
         UnconfinedTestDispatcher(),
-        timeout = 5.seconds,
+        timeout = TEST_WEDGE_BACKSTOP,
     ) {
         val loom = InMemoryLoom()
         val rawSeamA = loom.host(Pattern("resend-retry"))
@@ -148,7 +148,7 @@ class QuilterResendRetryTest {
     @Test
     fun resendTimerCancelledWhenGapCloses() = runTest(
         UnconfinedTestDispatcher(),
-        timeout = 5.seconds,
+        timeout = TEST_WEDGE_BACKSTOP,
     ) {
         val loom = InMemoryLoom()
         val rawSeamA = loom.host(Pattern("resend-cancel"))
@@ -216,7 +216,7 @@ class QuilterResendRetryTest {
     @Test
     fun retryStaysArmedAfterPartialDrain() = runTest(
         UnconfinedTestDispatcher(),
-        timeout = 5.seconds,
+        timeout = TEST_WEDGE_BACKSTOP,
     ) {
         val loom = InMemoryLoom()
         val rawSeamA = loom.host(Pattern("partial-drain"))

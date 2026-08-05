@@ -15,11 +15,11 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.crdt.GSet
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * A [QuiltMessage.FullState] heal must resynchronise the receive watermark, not just the
@@ -59,7 +59,7 @@ class QuilterFullStateResyncTest {
     @Test
     fun fullStateHealResyncsReceiveCursorSoLateJoinerCanAck() = runTest(
         UnconfinedTestDispatcher(),
-        timeout = 10.seconds,
+        timeout = TEST_WEDGE_BACKSTOP,
     ) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("fullstate-resync"))
