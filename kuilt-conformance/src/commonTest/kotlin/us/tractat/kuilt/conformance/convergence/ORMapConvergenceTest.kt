@@ -46,8 +46,26 @@ internal class ORMapConvergenceTest : CrdtConvergenceSuite<ORMap<String, GCounte
             LatticeOp("remove", OpKind.RETIRE) { state, _, _ ->
                 state.piece { it.remove(FOCUS_KEY) }
             },
+            // Roams over the keys the state **actually holds**, not over the key pool. Drawing
+            // from the pool spent 102 of 126 draws (81%) removing a key that was not there, which
+            // absorbs the lattice identity and changes nothing — on its own it was 20% of every
+            // step this binding took, and it is what put the whole binding at 27.2% no-ops against
+            // Task 5's 25% ceiling. Roaming is the part worth keeping: a remove that lands on a
+            // key another replica is concurrently putting is what exercises add-wins, and pinning
+            // this op to `FOCUS_KEY` (the cheap way to the same number) would delete that.
+            //
+            // `sorted()` rather than the set's own order: `keys` is backed by a `HashMap` on JVM
+            // and Android and by an insertion-ordered map on Kotlin/Native and wasmJs, so indexing
+            // it raw would give the targets different trajectories from the same seed.
+            //
+            // The empty-state fallback keeps the absent-key case in the alphabet rather than
+            // erasing it — replicas 1 and 2 start empty, and "removing an absent key is the
+            // identity" is real behaviour worth reaching. `remove` (pinned) reaches it too, at
+            // 40/97 draws, which is where the residual no-op rate lives.
             LatticeOp("remove-roam", OpKind.RETIRE) { state, _, random ->
-                state.piece { it.remove("k-${random.nextInt(0, 3)}") }
+                val held = state.keys.sorted()
+                val key = if (held.isEmpty()) "k-${random.nextInt(0, 3)}" else held[random.nextInt(held.size)]
+                state.piece { it.remove(key) }
             },
         ),
         serializer = ORMap.serializer(String.serializer(), GCounter.serializer()),
