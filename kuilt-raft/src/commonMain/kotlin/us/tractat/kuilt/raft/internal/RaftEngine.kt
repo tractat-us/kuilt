@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
+import kotlinx.serialization.builtins.ByteArraySerializer
 import kotlinx.serialization.decodeFromByteArray
 import kotlinx.serialization.encodeToByteArray
 import kotlinx.serialization.cbor.Cbor
@@ -1775,7 +1776,7 @@ internal class RaftEngine(
             state.entryAt(prevIndex)?.term
                 ?: error("prevTerm for in-window index $prevIndex missing (snapshotIndex=${state.snapshotIndex}, lastLogIndex=${state.lastLogIndex})")
         }
-        val entries = logSliceFrom(state.log, state.snapshotIndex, ni)
+        val entries = boundedBatch(logSliceFrom(state.log, state.snapshotIndex, ni))
         debug { "sendAppendEntries($peer): ni=$ni prevIndex=$prevIndex prevTerm=$prevTerm entries=${entries.size} commit=${state.currentCommitIndex}" }
         emitTrace(
             RaftTraceEvent.AppendEntries(
@@ -1802,16 +1803,82 @@ internal class RaftEngine(
         )
     }
 
+    /**
+     * The entries [logSliceFrom] produced, truncated to what the transport can actually carry (#2150).
+     *
+     * `logSliceFrom` returns the **entire** un-replicated tail. On a transport that publishes and
+     * enforces a payload budget an over-budget frame is refused at the *sender*, which makes an
+     * unbounded batch a permanent wedge rather than a slow round: the follower never sees the frame,
+     * so it never rejects it and `nextIndex` never backs up; it never acks it, so `nextIndex` never
+     * advances; and the next heartbeat mints the identical frame. Nothing self-heals it, and enough
+     * wedged followers cost the leader its commit quorum.
+     *
+     * **Truncating is safe because AppendEntries is prefix-ordered.** The batch still *begins* at the
+     * follower's `nextIndex`, so the §5.3 consistency check and the per-entry truncate/append scan in
+     * [onAppendEntries] see exactly what they saw before — a prefix of the old batch, not a different
+     * one. The follower acks the prefix it received, `nextIndex` advances, and the tail drains over
+     * successive rounds instead of in one frame.
+     *
+     * **Always at least one entry.** A single entry that cannot fit is sent anyway, alone, and dropped
+     * loudly at the transport. Emitting zero would be worse: the frame degrades into a heartbeat the
+     * follower *acks*, so the leader would spin forever with no log line naming why. Refusing such an
+     * entry before it can reach the log is [checkProposeFitsTransport]'s job; the residual case — the
+     * budget shrinking after the entry was already committed — has no fix at either site and is
+     * exactly what the drop-with-`warn` in `SeamRaftTransport.sendTo` exists to name.
+     *
+     * **Cost.** [encodedSize] is called until the budget is exceeded, so at most one entry more than
+     * fits — bounded by the budget, not by the tail. In steady state the tail is one entry or none.
+     *
+     * **This makes the forward-only commit clamp in [onAppendEntries] load-bearing.** A truncated batch
+     * carries the leader's own `leaderCommit`, which now routinely sits *above* where the batch ends —
+     * the relation `leaderCommit <= lastNewIndex` that every full-suffix frame satisfied is gone. The
+     * clamp, and the exact-attestation `lastNewIndex` it clamps against (#1248/#1249), are what stop a
+     * follower committing entries it does not yet hold. See `ForwardOnlyCommitClampTest`.
+     */
+    private fun boundedBatch(tail: List<LogEntry>): List<LogEntry> {
+        val budget = transport.maxPayloadBytes ?: return tail
+        val limit = (budget - HEADER_BUDGET).coerceAtLeast(0)
+        var used = 0
+        var fit = 0
+        for (entry in tail) {
+            val size = encodedSize(entry)
+            if (fit > 0 && used + size > limit) break
+            used += size
+            fit++
+        }
+        return if (fit == tail.size) tail else tail.subList(0, fit)
+    }
+
+    /**
+     * The bytes [entry] contributes to an encoded [RaftMessage.AppendEntries] — **measured, not
+     * estimated**.
+     *
+     * CBOR elements are self-delimiting and a definite-length array is its header followed by the
+     * concatenated elements, so a batch's cost is exactly the envelope plus the sum of these. It is
+     * measured rather than derived from `command.size` because the two differ by up to a factor of two
+     * — see [CBOR_BYTE_EXPANSION].
+     */
+    private fun encodedSize(entry: LogEntry): Int = raftCbor.encodeToByteArray(entry).size
+
     // ── §7 InstallSnapshot ──────────────────────────────────────────────────────
 
     /**
-     * Bytes carried per chunk: the lesser of the transport's payload limit and the configured
-     * ceiling, minus a fixed header budget for the CBOR envelope, floored at 1.
+     * Raw state bytes carried per chunk: the configured ceiling, or what the transport's payload
+     * budget leaves once the envelope reserve and CBOR's byte-array expansion are paid — whichever is
+     * smaller — floored at 1.
+     *
+     * The two inputs are in **different units**, which is what this used to get wrong.
+     * `snapshotChunkCeiling` bounds the *raw* state bytes in a chunk; `maxPayloadBytes` bounds the
+     * *encoded frame*. Taking `minOf` of them directly and subtracting [HEADER_BUDGET] treated a wire
+     * bound as a raw one, so a chunk sized to fit could encode to twice the budget and be dropped — at
+     * the 16 KiB default ceiling, a chunk sized to 16128 B encodes to as much as 32258 B. Converting
+     * the wire budget into raw bytes via [CBOR_BYTE_EXPANSION] before comparing keeps the units
+     * straight.
      */
     private fun chunkBytes(): Int {
-        val cap = transport.maxPayloadBytes?.let { minOf(it, raftConfig.snapshotChunkCeiling) }
-            ?: raftConfig.snapshotChunkCeiling
-        return maxOf(1, cap - HEADER_BUDGET)
+        val wireCap = transport.maxPayloadBytes ?: return raftConfig.snapshotChunkCeiling
+        val rawFromWire = (wireCap - HEADER_BUDGET).coerceAtLeast(0) / CBOR_BYTE_EXPANSION
+        return maxOf(1, minOf(raftConfig.snapshotChunkCeiling, rawFromWire))
     }
 
     /**
@@ -2784,14 +2851,25 @@ internal class RaftEngine(
      * budget is smaller than the envelope cannot carry *any* entry, and refusing every propose is
      * correct rather than a lie.
      *
-     * **What this does not bound: the batch.** [sendAppendEntries] slices the entire un-replicated
-     * tail, so N individually-legal entries can still sum past the budget on a lagging follower.
-     * Tracked as #2150.
+     * **Why the cost is measured, and why [PayloadTooLarge.payloadBytes] is therefore not
+     * `command.size`.** The bound compared `command.size` against the budget, which is wrong by up to a
+     * factor of two: `raftCbor` renders a [ByteArray] as an array of integers, so every byte outside
+     * CBOR's one-byte range costs two (see [CBOR_BYTE_EXPANSION]). A command at exactly the old limit
+     * therefore produced a frame the transport refused — the precise wedge this gate exists to prevent,
+     * reached *through* the gate. The refusal now names what the command will actually cost on the
+     * wire; that is the number the budget is denominated in, and the only one a caller can compare
+     * against it. The raw size is still recoverable by the caller — it is the array they passed.
+     *
+     * **What this does not bound.** The *aggregate*: N individually-legal entries can still sum past
+     * the budget, which is [boundedBatch]'s job, not this one's. And the entry's own metadata —
+     * `index` / `term` / `dedupKey` — is charged to [HEADER_BUDGET] rather than measured, so a
+     * consumer-supplied [ClientId] long enough to exhaust that reserve escapes this check (#2156).
      */
     private fun checkProposeFitsTransport(command: ByteArray) {
         val budget = transport.maxPayloadBytes ?: return
         val limit = (budget - HEADER_BUDGET).coerceAtLeast(0)
-        if (command.size > limit) throw PayloadTooLarge(command.size, limit, HEADER_BUDGET)
+        val wireBytes = raftCbor.encodeToByteArray(ByteArraySerializer(), command).size
+        if (wireBytes > limit) throw PayloadTooLarge(wireBytes, limit, HEADER_BUDGET)
     }
 
     private suspend fun proposeWithRequestId(command: ByteArray, requestId: Long?): LogEntry {
@@ -3702,17 +3780,44 @@ internal class RaftEngine(
     private companion object {
         /**
          * Reserve for the CBOR envelope around an opaque payload the engine puts on the wire — a
-         * chunk's [RaftMessage.InstallSnapshot.data] in [chunkBytes], and a proposed command inside
-         * [RaftMessage.AppendEntries] in [checkProposeFitsTransport].
+         * chunk's [RaftMessage.InstallSnapshot.data] in [chunkBytes], a proposed command inside
+         * [RaftMessage.AppendEntries] in [checkProposeFitsTransport], and a whole batch of entries in
+         * [boundedBatch].
          *
-         * One constant covers both because the two envelopes carry the same *kind* of thing: a
-         * handful of `Long`s (`term`, `prevLogIndex` / `lastIncludedIndex`, `leaderCommit` / `offset`,
-         * `round`) around one byte array, plus the entry's own `index` / `term` / `dedupKey` on the
-         * AppendEntries side. Deliberately generous — a budget spent on framing that turns out not to
-         * be needed costs a few bytes of payload, while one that falls short costs a silently dropped
-         * frame the sender believed it had sized to fit.
+         * One constant covers all three because the envelopes carry the same *kind* of thing: a handful
+         * of `Long`s (`term`, `prevLogIndex` / `lastIncludedIndex`, `leaderCommit` / `offset`, `round`)
+         * around opaque bytes. Measured (`:kuilt-raft` commonTest, `raftCbor`): an entry-less
+         * `AppendEntries` encodes to 126 B and an `InstallSnapshot` with no data to 135 B, so the
+         * reserve carries roughly 120 B of slack for larger index/term varints and — on the
+         * AppendEntries side — the leading entry's own `index` / `term` / `dedupKey`, itself 60 B for a
+         * short [ClientId]. Deliberately generous: a byte of framing reserved and not needed costs a
+         * byte of payload, while one that falls short costs a silently dropped frame the sender
+         * believed it had sized to fit.
+         *
+         * It is a **reserve, not a measurement**, and one consumer-supplied value can still outrun it:
+         * a [ClientId] long enough to push an entry's metadata past the slack (#2156).
          */
         const val HEADER_BUDGET = 256
+
+        /**
+         * Worst-case ratio between a [ByteArray]'s raw length and its encoded length under [raftCbor].
+         *
+         * `kotlinx-serialization`'s CBOR renders a `ByteArray` as an **array of integers**, not as a
+         * CBOR byte string: each element costs one byte when it falls in CBOR's short range (`0..23`,
+         * or `-1..-24` — Kotlin's `Byte` is signed) and two bytes otherwise. So the expansion is 1× for
+         * all-zero or all-`0xFF` data and exactly 2× for anything outside those ranges, which is where
+         * most real payloads sit. Measured at 2.0026 for a 768 B array of `0x7F` (1538 B, the extra two
+         * being the array header).
+         *
+         * Anywhere a *raw* byte count is checked against a transport's *wire* budget, this is the
+         * conversion between the two units. [boundedBatch] and [encodedSize] avoid needing it by
+         * measuring the encoding directly; [chunkBytes] cannot — it must choose a slice size *before*
+         * there are bytes to measure — so it pays the worst case.
+         *
+         * Annotating the payload fields `@ByteString` would make the encoding 1:1 and halve Raft's wire
+         * cost, but it changes the wire format and so is a separate, breaking change (#2160).
+         */
+        const val CBOR_BYTE_EXPANSION = 2
 
         /**
          * Upper sanity bound on a term this node **stores or unpacks** — [checkedRestoredTerm],
