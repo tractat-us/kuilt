@@ -17,8 +17,12 @@ import kotlin.time.Clock
  * Returned by [installLogCapture]. Hold it for as long as capture should run, then
  * [close] it to uninstall. **`close()` is the way to stop capture** — cancelling
  * the install scope alone is not sufficient: it kills the drain coroutine but
- * leaves the capturing appender wired into the global logging config, buffering
- * every subsequent log line into a channel nobody drains (a memory leak).
+ * leaves the capturing appender wired into the global logging config, still
+ * accepting and queueing every subsequent log line into a channel nobody drains.
+ * Since #2124 that queue is bounded, so the cost is no longer unbounded heap: it is
+ * that capture is silently doing nothing useful while still charging the
+ * application its edge cost, with [health]'s `droppedEvents` climbing by one per
+ * line once the queue is full. Bounded waste is still waste — [close].
  */
 public class LogCaptureInstallation internal constructor(
     /** The installed capture core (event → `LogRecord` → exporter). */

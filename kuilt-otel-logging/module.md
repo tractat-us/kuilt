@@ -88,22 +88,27 @@ down the app it is watching. Dropping the oldest matches the exporter's own
 `BufferPolicy.DROP_OLDEST` below it, so both buffers on the path behave alike, and
 keeps the newest lines, which are the ones a post-hoc diagnosis wants.
 
-The loss is counted, not silent: `LogCaptureInstallation.health.droppedEvents` is an
-exact cumulative count of lines dropped for want of queue space, and the first drop
-is logged once (under a `us.tractat.kuilt.otel` logger, so the report is excluded
-from capture and can never feed back into the queue it is reporting on). Read it
-alongside `WarpLogRecordExporter.health`: drops climbing while the exporter is
-healthy means the export path works and is simply too slow for this log volume.
+The loss is counted, not silent: `LogCaptureInstallation.health.value.droppedEvents`
+is an exact cumulative count of lines dropped for want of queue space, and the first
+drop is logged once (under a `us.tractat.kuilt.otel` logger, so the report is
+excluded from capture and can never feed back into the queue it is reporting on).
+Read it alongside `WarpLogRecordExporter.health`: drops climbing while the exporter
+is healthy means the export path works and is simply too slow for this log volume.
 
-## Never captures kuilt's own logs
+## Never captures the exporter's own logs
 
 Capture hooks the process-global logging config, so it sees every log event in the
 process — including kuilt's own. The capture core drops any event from a
-`us.tractat.kuilt` logger before recording it. This is a safety invariant, not a
-setting: the durable buffer logs when it evicts, so capturing that would feed an
-eviction back into the buffer and loop. A consumer app is never under that
-package, so only kuilt internals are excluded — and every capture edge inherits
-the rule through the one shared core.
+`us.tractat.kuilt.otel` logger before recording it. This is a safety invariant, not
+a setting: the durable buffer logs when it evicts, so capturing that would feed an
+eviction back into the buffer and loop.
+
+The exclusion is deliberately **only** the exporter's own package, not kuilt's whole
+namespace. A consumer that uses kuilt as its networking library depends on
+`us.tractat.kuilt.session.*`, `…liveness.*`, `…raft.*`, `…nw.*` diagnostics being
+captured exactly like its own application logs, so those are kept — and any code
+under `us.tractat.kuilt` but outside `.otel` is captured normally. Every capture
+edge inherits the rule through the one shared core.
 
 ## Stopping capture
 
@@ -111,7 +116,10 @@ the rule through the one shared core.
 way to stop capture: it restores the previously-installed appender and stops the
 capturing appender from buffering any further events. Cancelling the install scope
 alone is **not** sufficient — that kills the drain but leaves the appender wired
-into the global config, buffering forever.
+into the global config, still queueing every line into a channel nobody drains. The
+queue is bounded, so that is no longer a runaway leak; it is capture doing nothing
+useful while still charging your logging path for it, with `droppedEvents` climbing
+by one per line once the queue fills.
 
 ## Determinism
 

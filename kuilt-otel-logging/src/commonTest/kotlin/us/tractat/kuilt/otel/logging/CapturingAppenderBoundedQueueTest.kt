@@ -38,9 +38,23 @@ class CapturingAppenderBoundedQueueTest {
         override fun now(): Instant = Instant.fromEpochSeconds(epochSeconds = 1L, nanosecondAdjustment = 0)
     }
 
-    /** Swallows the passthrough so a burst does not flood the test's console output. */
-    private object NoOpAppender : Appender {
-        override fun log(loggingEvent: KLoggingEvent) = Unit
+    /**
+     * Stands in for the platform passthrough: keeps the burst off the test console,
+     * and records what reached it.
+     *
+     * The recording is what makes the overflow report *observable*. The report is
+     * emitted through `kotlin-logging`, so when this appender is the globally
+     * installed one the report re-enters `log()` and is forwarded here — meaning a
+     * report that was never emitted (or was emitted and swallowed) is visible as an
+     * absence, rather than passing as a green assertion about records that were
+     * never going to exist.
+     */
+    private class RecordingAppender : Appender {
+        val logged: MutableList<KLoggingEvent> = mutableListOf()
+
+        override fun log(loggingEvent: KLoggingEvent) {
+            logged += loggingEvent
+        }
     }
 
     /**
@@ -71,6 +85,38 @@ class CapturingAppenderBoundedQueueTest {
         timestamp = 0L,
     )
 
+    /**
+     * Run [body] with the logging config pinned to [DirectLoggerFactory] and the
+     * appender under test wired in as the global one, restoring both afterwards.
+     *
+     * Both halves are load-bearing, not tidiness.
+     *
+     * **The factory.** Overflowing the queue makes the appender emit its one-shot
+     * report through `kotlin-logging`, and `KotlinLogging.logger(name)` resolves the
+     * configured factory eagerly. On JVM/Android the auto-detected default is the
+     * SLF4J factory, and `slf4j-api` is deliberately absent from this module's test
+     * runtime — so a test that leaves the default in place either never exercises
+     * the report path at all or depends on an earlier test having switched the
+     * factory first. Pinning it here makes every target run the same path and makes
+     * each test pass **alone**, which is how this repo tells agents to run them.
+     *
+     * **The appender.** Installing it globally is what routes the report back into
+     * the appender that emitted it, so the re-entrancy guard is under test rather
+     * than assumed.
+     */
+    private fun withGlobalCapture(appender: CapturingAppender, body: () -> Unit) {
+        val outerFactory = KotlinLoggingConfiguration.loggerFactory
+        KotlinLoggingConfiguration.loggerFactory = DirectLoggerFactory
+        val outerAppender = KotlinLoggingConfiguration.direct.appender
+        KotlinLoggingConfiguration.direct.appender = appender
+        try {
+            body()
+        } finally {
+            KotlinLoggingConfiguration.direct.appender = outerAppender
+            KotlinLoggingConfiguration.loggerFactory = outerFactory
+        }
+    }
+
     @Test
     fun aDrainSlowerThanItsProducerCannotGrowTheQueueWithoutBound() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val exporter = WarpLogRecordExporter(
@@ -78,18 +124,21 @@ class CapturingAppenderBoundedQueueTest {
             SlowStore(InMemoryDurableStore(), writeCost = 1.seconds),
         )
         val capture = LogCapture(exporter, CaptureConfig(), fixedClock, Random(1))
-        val appender = CapturingAppender(capture, NoOpAppender, backgroundScope, capacity = QUEUE)
+        val delegate = RecordingAppender()
+        val appender = CapturingAppender(capture, delegate, backgroundScope, capacity = QUEUE)
 
-        // The whole burst lands before the drain gets a single turn: log() is
-        // synchronous and never suspends, so this is precisely "producer faster
-        // than drain", with no dependence on scheduling luck.
-        repeat(BURST) { appender.log(appEvent("event $it")) }
+        withGlobalCapture(appender) {
+            // The whole burst lands before the drain gets a single turn: log() is
+            // synchronous and never suspends, so this is precisely "producer faster
+            // than drain", with no dependence on scheduling luck.
+            repeat(BURST) { appender.log(appEvent("event $it")) }
 
-        // Bounded advance — the drain re-arms nothing, but advanceUntilIdle() is
-        // banned repo-wide and a bounded window is the honest way to say "let the
-        // slow drain finish the events it actually still holds".
-        testScheduler.advanceTimeBy(DRAIN_WINDOW)
-        testScheduler.runCurrent()
+            // Bounded advance — the drain re-arms nothing, but advanceUntilIdle() is
+            // banned repo-wide and a bounded window is the honest way to say "let the
+            // slow drain finish the events it actually still holds".
+            testScheduler.advanceTimeBy(DRAIN_WINDOW)
+            testScheduler.runCurrent()
+        }
 
         val bodies = exporter.snapshot().toList().map { it.body }
         assertAll(
@@ -111,14 +160,20 @@ class CapturingAppenderBoundedQueueTest {
     fun anUnfilledQueueDropsNothingAndCountsNothing() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val exporter = WarpLogRecordExporter(ReplicaId("device-1"), InMemoryDurableStore())
         val capture = LogCapture(exporter, CaptureConfig(), fixedClock, Random(1))
-        val appender = CapturingAppender(capture, NoOpAppender, backgroundScope, capacity = QUEUE)
+        val delegate = RecordingAppender()
+        val appender = CapturingAppender(capture, delegate, backgroundScope, capacity = QUEUE)
 
-        repeat(QUEUE) { appender.log(appEvent("event $it")) }
-        testScheduler.runCurrent()
+        withGlobalCapture(appender) {
+            repeat(QUEUE) { appender.log(appEvent("event $it")) }
+            testScheduler.runCurrent()
+        }
 
         assertAll(
             { assertEquals(QUEUE, exporter.snapshot().toList().size) },
             { assertEquals(0L, appender.health.value.droppedEvents) },
+            // No drops means no report: the one-shot warn is not emitted at all.
+            { assertEquals(QUEUE, delegate.logged.size) },
+            { assertTrue(delegate.logged.none { it.loggerName.startsWith(KUILT_PREFIX) }) },
         )
     }
 
@@ -135,35 +190,38 @@ class CapturingAppenderBoundedQueueTest {
      */
     @Test
     fun theOverflowReportCannotReEnterCapture() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
-        val outerFactory = KotlinLoggingConfiguration.loggerFactory
-        KotlinLoggingConfiguration.loggerFactory = DirectLoggerFactory
-        val outerAppender = KotlinLoggingConfiguration.direct.appender
-        try {
-            val exporter = WarpLogRecordExporter(ReplicaId("device-1"), InMemoryDurableStore())
-            val capture = LogCapture(exporter, CaptureConfig(), fixedClock, Random(1))
-            val appender = CapturingAppender(capture, NoOpAppender, backgroundScope, capacity = QUEUE)
-            KotlinLoggingConfiguration.direct.appender = appender
+        val exporter = WarpLogRecordExporter(ReplicaId("device-1"), InMemoryDurableStore())
+        val capture = LogCapture(exporter, CaptureConfig(), fixedClock, Random(1))
+        val delegate = RecordingAppender()
+        val appender = CapturingAppender(capture, delegate, backgroundScope, capacity = QUEUE)
 
+        withGlobalCapture(appender) {
             repeat(BURST) { appender.log(appEvent("event $it")) }
             testScheduler.runCurrent()
-
-            val records = exporter.snapshot().toList()
-            assertAll(
-                {
-                    assertTrue(
-                        records.none { (it.attributes[LOGGER_NAME_ATTRIBUTE] ?: "").startsWith("us.tractat.kuilt") },
-                        "the overflow report must never be captured: $records",
-                    )
-                },
-                // Exact, and the point: had the report been queued it would have
-                // taken a slot and shifted both of these.
-                { assertEquals(QUEUE, records.size) },
-                { assertEquals((BURST - QUEUE).toLong(), appender.health.value.droppedEvents) },
-            )
-        } finally {
-            KotlinLoggingConfiguration.direct.appender = outerAppender
-            KotlinLoggingConfiguration.loggerFactory = outerFactory
         }
+
+        val records = exporter.snapshot().toList()
+        val reports = delegate.logged.filter { it.loggerName.startsWith(KUILT_PREFIX) }
+        assertAll(
+            // First: the report really happened and really came back through log().
+            // Without this the rest would pass just as well if it were never emitted,
+            // or emitted and swallowed — an assertion about records that were never
+            // going to exist.
+            { assertEquals(1, reports.size, "expected exactly one overflow report, got: $reports") },
+            { assertEquals(OVERFLOW_LOGGER, reports.single().loggerName) },
+            // …and having come back through log(), it was excluded from capture
+            // rather than recorded.
+            {
+                assertTrue(
+                    records.none { (it.attributes[LOGGER_NAME_ATTRIBUTE] ?: "").startsWith(KUILT_PREFIX) },
+                    "the overflow report must never be captured: $records",
+                )
+            },
+            // Exact, and the point: had the report been queued it would have
+            // taken a slot and shifted both of these.
+            { assertEquals(QUEUE, records.size) },
+            { assertEquals((BURST - QUEUE).toLong(), appender.health.value.droppedEvents) },
+        )
     }
 
     private companion object {
@@ -172,6 +230,12 @@ class CapturingAppenderBoundedQueueTest {
 
         /** Comfortably more than [QUEUE], so the drop path runs many times. */
         private const val BURST = 64
+
+        /** The logger the overflow report is emitted under — inside the exclusion prefix. */
+        private const val OVERFLOW_LOGGER = "us.tractat.kuilt.otel.logging.CapturingAppender"
+
+        /** Nothing under kuilt's namespace may be captured back into the buffer. */
+        private const val KUILT_PREFIX = "us.tractat.kuilt"
 
         /** Generous virtual window for [QUEUE] exports at one virtual second per store write. */
         private val DRAIN_WINDOW = 120.seconds

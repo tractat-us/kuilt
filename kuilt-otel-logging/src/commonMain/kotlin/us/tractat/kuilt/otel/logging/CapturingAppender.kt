@@ -15,11 +15,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.runCatchingCancellable
 
-// Explicitly named so the Native self-capture exclusion works (#1003) — and, here,
-// so the overflow report below is dropped by that same exclusion before it can be
-// queued. See InternalLoggerNameGuardTest.
-private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.logging.CapturingAppender")
-
 /**
  * An oshai [Appender] that feeds each event into a [LogCapture] core while
  * delegating to a previously-installed appender (so console output is preserved).
@@ -141,14 +136,48 @@ internal class CapturingAppender(
      * overflow hook, so the re-entrant [log] the report causes is not nested inside
      * a channel operation. The flag is claimed before the line is emitted, so the
      * re-entrant call returns here immediately even if the exclusion ever changed.
+     *
+     * ## Why the logger is built here, and why nothing escapes
+     *
+     * [KotlinLogging.logger] resolves the configured factory **eagerly**, and that
+     * resolution can fail — on the JVM the auto-detected default is the SLF4J
+     * factory, which throws `NoClassDefFoundError` when no `slf4j-api` is on the
+     * runtime classpath (kotlin-logging 8.x makes the binding optional). Held as a
+     * file-level `val` it would run in the file facade's `<clinit>`, triggered by
+     * the *first* [log] call — putting a throwing initializer on the appender's hot
+     * path, and poisoning the facade class for the rest of the process once it
+     * threw. Building it here instead means it is resolved at most once per
+     * appender, only if the queue actually overflows, and only after
+     * [installLogCapture] has configured the factory it intends.
+     *
+     * The `catch` is the structural half: this runs **inside the application's own
+     * logging call**, where nothing kuilt does may propagate. That discipline is
+     * already the module's rule — a throwing `CaptureConfig.attributeMapper` loses
+     * its record rather than surfacing inside `log()` — and it applies with more
+     * force here, because a diagnostic about dropped telemetry must never be the
+     * thing that breaks the app's logging. A failure is not recorded anywhere: the
+     * count on [health] still stands, and it — not this line — is the load-bearing
+     * signal, read in-process rather than through the pipeline that is failing.
      */
     private fun reportOverflowOnce() {
         if (healthState.value.droppedEvents == 0L) return
         if (!overflowReported.compareAndSet(expect = false, update = true)) return
-        logger.warn {
-            "log capture queue overflowed (capacity=$capacity): the exporter is draining slower than this " +
-                "application logs, so the oldest captured events are being dropped. Read " +
-                "LogCaptureInstallation.health.droppedEvents for the running total."
+        try {
+            // Explicitly named so the Native self-capture exclusion works (#1003)
+            // and so this very line is excluded from capture. Never the empty-lambda
+            // form — see InternalLoggerNameGuardTest.
+            KotlinLogging.logger(OVERFLOW_LOGGER_NAME).warn {
+                "log capture queue overflowed (capacity=$capacity): the exporter is draining slower than this " +
+                    "application logs, so the oldest captured events are being dropped. Read " +
+                    "LogCaptureInstallation.health.value.droppedEvents for the running total."
+            }
+        } catch (ignoredReportFailure: Throwable) {
+            // Deliberately swallowed, and deliberately NOT rethrowing cancellation:
+            // log() is a synchronous framework callback on the application's own
+            // thread, not a coroutine, so there is no cancellation of ours to honour
+            // here — only a logging backend's failure, which must not reach the
+            // caller. The once-flag is already claimed, so a broken backend costs
+            // one failed attempt, not one per log line.
         }
     }
 
@@ -160,6 +189,18 @@ internal class CapturingAppender(
         if (closed.compareAndSet(expect = false, update = true)) {
             events.close()
         }
+    }
+
+    private companion object {
+        /**
+         * The overflow report's logger name.
+         *
+         * Must stay under `LogCapture`'s `us.tractat.kuilt.otel` self-capture
+         * exclusion prefix — that is what stops the report re-entering the queue it
+         * is reporting on. Pinned by
+         * `CapturingAppenderBoundedQueueTest.theOverflowReportCannotReEnterCapture`.
+         */
+        private const val OVERFLOW_LOGGER_NAME = "us.tractat.kuilt.otel.logging.CapturingAppender"
     }
 }
 

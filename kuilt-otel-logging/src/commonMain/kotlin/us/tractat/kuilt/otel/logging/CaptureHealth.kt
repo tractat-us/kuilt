@@ -17,11 +17,14 @@ package us.tractat.kuilt.otel.logging
  *   exception cascade — are a few hundred lines over a second or two. A depth
  *   below that would drop events while the drain is merely momentarily behind,
  *   which is the case the queue is *for*.
- * - **Heap.** A queued [NormalizedLogEvent] is a level, two strings and a small
- *   attribute map — order a kilobyte with its strings. This depth therefore bounds
- *   the capture queue's contribution to the host application's heap at roughly a
- *   megabyte, which is the largest fixed overhead worth imposing on a mobile host
- *   for a diagnostics subsystem.
+ * - **Heap.** A queued [NormalizedLogEvent] is a level, two strings and — after
+ *   `LogCapture.resolveAtEdge` — **two** attribute maps
+ *   ([NormalizedLogEvent.attributes] and its resolved copy), so call it a couple of
+ *   kilobytes rather than one. This depth therefore bounds the queue's contribution
+ *   to the host application's heap in the low single-digit megabytes, and only when
+ *   the drain is fully stalled; a keeping-up drain holds nothing. That is about the
+ *   largest fixed worst case worth imposing on a mobile host for a diagnostics
+ *   subsystem.
  * - **Staleness.** At the field's measured worst case — a Debug build on an A12
  *   against a large store, 692–1153 ms per export (#1860) — a full queue is
  *   already 12–20 minutes of backlog. Records that old have lost their relation to
