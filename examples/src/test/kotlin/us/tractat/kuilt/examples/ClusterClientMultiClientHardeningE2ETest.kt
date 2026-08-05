@@ -29,6 +29,7 @@ import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -219,11 +220,12 @@ class ClusterClientMultiClientHardeningE2ETest {
                 // ── Assertions ────────────────────────────────────────────────────────
 
                 // Log ordering: each phase entry extends the shared log.
-                assert(alphaEntry1.index > 0) { "alpha phase-1 commit index must be positive" }
-                assert(betaEntry1.index > 0) { "beta phase-1 commit index must be positive" }
-                assert(alphaEntry2.index > alphaEntry1.index) {
-                    "alpha phase-2 (${alphaEntry2.index}) must follow phase-1 (${alphaEntry1.index})"
-                }
+                assertTrue(alphaEntry1.index > 0, "alpha phase-1 commit index must be positive")
+                assertTrue(betaEntry1.index > 0, "beta phase-1 commit index must be positive")
+                assertTrue(
+                    alphaEntry2.index > alphaEntry1.index,
+                    "alpha phase-2 (${alphaEntry2.index}) must follow phase-1 (${alphaEntry1.index})",
+                )
 
                 // Wait for all 3 commands to replicate to voterC.
                 withTimeout(10.seconds) { voterCDone.await() }
