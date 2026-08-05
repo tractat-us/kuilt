@@ -70,8 +70,28 @@ installation.close()
 ```
 
 Cancelling the scope alone is **not** enough: that stops the drain but leaves the
-capturing appender wired into the global logging config, buffering forever. Hold
-the handle for as long as capture should run, then close it.
+capturing appender wired into the global logging config, still putting every line
+into a queue nothing is reading. The queue is capped (below), so this won't eat your
+app's memory — but capture is doing no useful work while still costing you something
+on every log call. Hold the handle for as long as capture should run, then close it.
+
+### When your app logs faster than the buffer can take them
+
+Writing a line to the on-device buffer takes a moment, and your app's `log.info { … }`
+call doesn't wait for it — the line is handed to a queue and written just behind you.
+Usually that queue is empty. But on a slow device with a large buffer, writing can
+fall behind a chatty app and stay behind, and then the queue only grows.
+
+kuilt does not let it grow forever, because that queue lives in *your app's* memory:
+it holds a bounded number of lines (`CAPTURE_QUEUE_CAPACITY`) and, once full, drops
+the oldest to make room for the newest. Your logging call is never slowed down and
+never fails — a telemetry buffer must not slow down the app it is watching.
+
+Dropping is honest rather than silent. Every dropped line is counted on
+`installation.health.value.droppedEvents`, and the first drop is logged once. So if you
+ever wonder whether you are seeing everything, read that number: zero means nothing
+was lost. If it is climbing, the fix is a cheaper buffer or a quieter log level —
+a bigger queue would only postpone the same loss while holding more of your memory.
 
 ### Two platform notes
 
