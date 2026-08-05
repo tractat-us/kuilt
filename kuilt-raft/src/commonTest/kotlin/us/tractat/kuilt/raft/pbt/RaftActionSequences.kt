@@ -56,6 +56,16 @@ public sealed interface RaftAction {
  * trajectories on every run and on every target — a property surface that draws
  * fresh randomness each run trades a real defect signal for a flake generator.
  * Change it deliberately (and re-run the mutation table in the PR that does).
+ *
+ * One mutation in that table is **structurally unkillable here, and no seed or budget will change
+ * that**: deleting the `entry.term == r.term` conjunct at the commit-advance site (Raft §5.4.2,
+ * Figure 8). [Cluster.becomeLeader] appends a current-term no-op as the leader's last entry and
+ * `appendEntriesMsgs` ships the *entire* unbounded suffix, so any follower that accepts replies
+ * with a `matchIndex` at or above that no-op — leaving the quorum-th `matchIndex` either 0 (no
+ * commit) or in the all-current-term region. A prior-term majority commit is therefore
+ * unreachable. Killing it needs bounded AppendEntries batches, so a follower can acknowledge a
+ * prefix stopping short of the no-op; that is tracked in #2114. Don't spend a budget increase on
+ * it — 450,000 trajectories over 100 seeds produced zero prior-term majority-commit states.
  */
 internal const val SEED: Long = 0x5AFE_7A17L
 
@@ -179,14 +189,34 @@ internal data class ShrinkResult(val actions: List<RaftAction>, val replays: Int
 
 // ── Property runner ─────────────────────────────────────────────────────────
 
-/** Replays [actions] through [body], returning the [AssertionError] it raised, or null if it passed. */
-private fun assertionFrom(actions: List<RaftAction>, body: (List<RaftAction>) -> Unit): AssertionError? =
+/**
+ * Replays [actions] through [body], returning whatever it threw, or null if it passed.
+ *
+ * Catches [Throwable], not only [AssertionError]. A model edit that breaks an internal premise
+ * throws something else entirely — `NoSuchElementException` from the conflict-term lookup in
+ * `onAppendEntries` is the live example — and letting that escape [forAllActionSequences] would
+ * lose the seed, the try index and the shrinking, i.e. exactly the "try 4,812 failed, here is a
+ * 60-action mystery" report this file exists to prevent. jqwik shrank on any `Throwable` too, so
+ * narrowing to `AssertionError` would have been a diagnostics regression against what it replaced.
+ *
+ * Nothing is swallowed: the caller either rethrows it inside a reported [AssertionError] or is
+ * replaying a pure, non-suspending function while shrinking.
+ */
+@Suppress("TooGenericExceptionCaught") // deliberate: any throw is a counterexample worth reporting
+private fun outcomeOf(actions: List<RaftAction>, body: (List<RaftAction>) -> Unit): Throwable? =
     try {
         body(actions)
         null
-    } catch (failure: AssertionError) {
+    } catch (failure: Throwable) {
         failure
     }
+
+/** Renders a replayed failure, naming the type when it is not a plain assertion. */
+private fun describe(failure: Throwable?): String = when (failure) {
+    null -> "<not reproduced — the shrunk sequence passed>"
+    is AssertionError -> failure.message ?: failure.toString()
+    else -> "${failure::class.simpleName}: ${failure.message ?: failure.toString()}"
+}
 
 /**
  * Runs [body] over [tries] seeded trajectories of up to [maxActions] actions.
@@ -206,9 +236,14 @@ internal fun forAllActionSequences(
     for (tryIndex in 0 until tries) {
         val trySeed = seed + tryIndex
         val actions = generateActions(Random(trySeed), maxActions)
-        assertionFrom(actions, body) ?: continue
-        val shrunk = shrink(actions) { assertionFrom(it, body) != null }
-        val reproduced = assertionFrom(shrunk.actions, body)
+        val failure = outcomeOf(actions, body) ?: continue
+        // Shrink toward the SAME kind of failure. A predicate that accepted any throwable would let
+        // the search minimise a safety violation into an unrelated model crash and report that one.
+        val stillFails = { candidate: List<RaftAction> ->
+            outcomeOf(candidate, body)?.let { it::class == failure::class } == true
+        }
+        val shrunk = shrink(actions, stillFails)
+        val reproduced = outcomeOf(shrunk.actions, body)
         throw AssertionError(
             buildString {
                 appendLine("Property \"$property\" FAILED.")
@@ -217,7 +252,7 @@ internal fun forAllActionSequences(
                 appendLine("  (${shrunk.replays} shrink replays)")
                 appendLine("  minimal counterexample:")
                 shrunk.actions.forEachIndexed { i, action -> appendLine("    [$i] $action") }
-                appendLine("  reproduces: ${reproduced?.message}")
+                appendLine("  reproduces: ${describe(reproduced)}")
             },
         )
     }
