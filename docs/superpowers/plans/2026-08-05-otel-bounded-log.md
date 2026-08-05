@@ -78,7 +78,7 @@ At a full buffer the newest record is the one *arriving*. `DROP_NEWEST` will now
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: the invariant *"under `DROP_NEWEST`, once `visibleCount == maxRecords` no further op is ever appended"*, which Tasks 9 and 12 rely on to skip windowing for that policy.
+- Produces: the invariant *"under `DROP_NEWEST`, once `visibleCount == maxRecords` the **export path** appends no further op"*. **Scoped to the export path on purpose** — `merge()` folds in a remote op-log wholesale (`adoptRemoteSegment`) and can push `visibleCount` past `maxRecords`, after which the gate simply keeps refusing and nothing brings it back down. Task 9 therefore gates its window pass on the log's size as well as on the eviction count; do not state the invariant unqualified anywhere, least of all in a KDoc.
 
 - [ ] **Step 1: Branch**
 
