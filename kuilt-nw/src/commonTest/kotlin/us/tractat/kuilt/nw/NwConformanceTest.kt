@@ -103,6 +103,16 @@ class NwConformanceTest : SeamConformanceSuite() {
     /** Proven: this harness drives a genuine self-dial through the radio, so no gap. */
     override fun selfDialGap(): String? = null
 
+    /**
+     * No gap: since #2069 [NwSeam] publishes the ceiling it enforces, so this fabric is under the
+     * budget obligation rather than tracked as owing one. That is what puts it under
+     * [SeamConformanceSuite.payloadOfExactlyTheBudgetIsCarried] and
+     * [SeamConformanceSuite.overBudgetAddressedSendIsRefusedNotLeaked] — both are selected by
+     * `maxPayloadBytes` being non-null, not by this hook, which only decides whether an
+     * *unpublished* budget is accounted for.
+     */
+    override fun payloadBudgetGap(): String? = null
+
     // Mid-session-death obligation (13b — injectMidSessionDeath / both-ends-Torn-on-death + incoming
     // completes) is UNPROVABLE for this fabric BY DESIGN — do NOT "fix" it by re-introducing tear-on-death.
     // Since #1513 NwSeam treats a transport death (a dropped remote) as *recoverable*: the last-remote loss

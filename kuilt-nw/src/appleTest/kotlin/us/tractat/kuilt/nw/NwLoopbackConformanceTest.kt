@@ -92,6 +92,13 @@ class NwLoopbackConformanceTest : SeamConformanceSuite() {
     override fun capabilityGaps(): Map<String, String> = emptyMap()
 
     /**
+     * No gap: since #2069 [NwSeam] publishes the ceiling it enforces. Here the at-budget payload
+     * crosses a real TLS-PSK Network.framework link, so this harness proves the published number is
+     * one the *actual Apple transport* carries — not merely one the framing agrees to.
+     */
+    override fun payloadBudgetGap(): String? = null
+
+    /**
      * Wrap [delegate] so `weave` runs on a real [Dispatchers.Default]. [NwLoom] captures its seam
      * scope from `currentCoroutineContext()`, so without this the suite's virtual-time test dispatcher
      * would drive the seam's `withTimeout`/timers and fast-forward past the real socket connect.

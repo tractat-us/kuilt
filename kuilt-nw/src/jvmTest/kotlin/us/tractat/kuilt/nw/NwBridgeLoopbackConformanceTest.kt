@@ -125,6 +125,13 @@ class NwBridgeLoopbackConformanceTest : SeamConformanceSuite() {
         mapOf("reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY)
 
     /**
+     * No gap: since #2069 [NwSeam] publishes the ceiling it enforces. Worth having on this harness
+     * in particular — a real `127.0.0.1` socket carries the at-budget payload here, so the promise
+     * is proven over a genuine wire rather than an in-memory double.
+     */
+    override fun payloadBudgetGap(): String? = null
+
+    /**
      * Wrap [delegate] so `weave` runs on a real [Dispatchers.Default]. [NwLoom] captures its seam
      * scope from `currentCoroutineContext()`, so without this the suite's virtual-time test dispatcher
      * would drive the seam's `withTimeout`/timers and fast-forward past the real socket connect.

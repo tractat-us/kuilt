@@ -368,9 +368,12 @@ pointing `payloadBudgetGap()` at this section. That leaves one thing the suite
 genuinely cannot see: a fabric that enforces a ceiling internally while still
 reporting "I don't know". Proving a hidden 16 MiB limit would take a 16 MiB
 message, which is not a test worth running against every fabric — so the
-declaration is the mechanism there, not the assertion. `NwSeam` is the known
-outstanding case ([#2069](https://github.com/tractat-us/kuilt/issues/2069)): it
-refuses frames past 16 MiB and publishes nothing.
+declaration is the mechanism there, not the assertion. That is not a
+hypothetical: the Apple Network.framework fabric was exactly this case, refusing
+frames past 16 MiB while reporting "I don't know", and it was the declaration —
+not any test — that surfaced it
+([#2069](https://github.com/tractat-us/kuilt/issues/2069)). It now publishes the
+number.
 
 Like the observer gap above, this one is not permanent for any fabric that
 *does* have a ceiling — it closes the moment the fabric publishes the number it
