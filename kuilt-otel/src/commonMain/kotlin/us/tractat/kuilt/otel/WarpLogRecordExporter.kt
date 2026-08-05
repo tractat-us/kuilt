@@ -367,7 +367,9 @@ public class WarpLogRecordExporter(
      * *not* split into [segmentOps]-sized pieces: splitting needs the individual ops,
      * and re-deriving them from the visible records would mint **new** op identities,
      * which would duplicate every record the next time this replica merged with a peer.
-     * The inherited segment is reclaimed by the normal path once its records age out.
+     * The inherited segment is **permanent**: nothing drops a segment (see the class
+     * KDoc), so a device carries its pre-upgrade log for as long as the store lives.
+     * Bounding that is #2127.
      *
      * Crash-safety rests on the write order: the legacy key stays authoritative until
      * the index — the commit point — is on disk. A crash before that leaves both, and
@@ -662,7 +664,9 @@ public class WarpLogRecordExporter(
         }
         log = newLog
         // The tombstone is an op like any other, so it rides in the active segment.
-        // It is what eventually makes the evicted record's own segment reclaimable.
+        // It hides the record; it does not reclaim anything. The evicted record's own
+        // `Insert` — body and all — stays in whichever segment it landed in, because
+        // nothing drops a segment (see the class KDoc, and #2127).
         appendToActiveSegment(removeOp)
         seenIds.remove(evictedRecord.recordId)
         visibleCount--

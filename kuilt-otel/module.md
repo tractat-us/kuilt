@@ -70,11 +70,13 @@ delta-temporality retry bug is structurally impossible.
   [DEFAULT_MAX_LOG_RECORDS]); the metric buffer at [DEFAULT_MAX_METRICS] distinct series.
   Evicted entries are always logged — never silently dropped. Counters are O(1)
   regardless of offline duration (a counter compresses losslessly).
-- **Bounded *file*, for logs.** [WarpLogRecordExporter] persists its op-log in
-  segments of [DEFAULT_LOG_SEGMENT_OPS] operations, so one export rewrites one
-  segment rather than the whole log, and a segment whose records have all been
-  evicted is physically dropped. The span and metric exporters still rewrite their
-  whole state per export — the same shape of cost, not yet addressed.
+- **Bounded *write*, for logs — not a bounded total.** [WarpLogRecordExporter]
+  persists its op-log in segments of [DEFAULT_LOG_SEGMENT_OPS] operations, so one
+  export rewrites one segment instead of the whole log. Segments are never dropped:
+  total bytes still grow with the number of records ever exported, the store gains
+  roughly one key per segment, and startup reads all of them. Bounding the total is
+  a garbage collection of CRDT state that needs a causal-stability barrier — see
+  #2127. The span and metric exporters still rewrite their whole state per export.
 - **Cardinality estimation.** HyperLogLog gives ~0.81% relative error at default
   precision (`p=14`). Small cardinalities (< ~5 distinct elements) have higher
   relative error; the linear-counting correction reduces but does not eliminate this.
