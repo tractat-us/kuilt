@@ -92,7 +92,7 @@ internal fun sampleQuilterMutateOrSkip() = runTest(
     // writer can take the seat between the check and the publish.
     fun claim(seat: String, player: String, at: Long): Boolean =
         seats.mutateOrSkip { board ->
-            if (board[seat] != null) null else board.setDelta(seats.replica, at, seat, player)
+            if (board[seat] != null) null else board.set(seats.replica, at, seat, player)
         }
 
     assertEquals(true, claim("north", "alice", 1L), "the seat was free — published")
