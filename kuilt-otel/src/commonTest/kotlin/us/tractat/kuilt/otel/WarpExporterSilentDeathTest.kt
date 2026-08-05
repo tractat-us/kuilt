@@ -84,7 +84,7 @@ class WarpExporterSilentDeathTest {
         assertAll(
             { assertEquals(ExportResult.Success, result) },
             { assertEquals(1, exporter.snapshot().toList().size) },
-            { assertTrue(StoreKey("otel.logs") in store.written, "the record should have been flushed") },
+            { assertTrue(StoreKey("otel.logs.seg.0") in store.written, "the record should have been flushed") },
         )
     }
 

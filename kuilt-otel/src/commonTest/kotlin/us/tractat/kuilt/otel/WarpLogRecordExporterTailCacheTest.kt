@@ -1,16 +1,12 @@
-@file:OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
-
 package us.tractat.kuilt.otel
 
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.bytestring.ByteString
-import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.RgaId
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
-import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -29,8 +25,10 @@ import kotlin.test.assertTrue
  *
  * The last test is a differential oracle: it runs a scripted sequence of operations through both
  * the exporter and a verbatim transcription of the pre-optimisation implementation
- * ([ReferenceLogExporter]) and asserts both the resulting order **and the persisted CBOR bytes**
- * agree — the wire format must not move.
+ * ([ReferenceLogExporter]) and asserts both the resulting order **and the op-log recovered from
+ * the store** agree. The op-log — not the byte layout — is what must not move: #1860 replaced the
+ * single persisted blob with segments, so the check is now "persist, recover, compare op-logs",
+ * which pins the same equivalence across a layout that is free to change again.
  */
 class WarpLogRecordExporterTailCacheTest {
 
@@ -245,7 +243,10 @@ class WarpLogRecordExporterTailCacheTest {
                 }
             }
 
-            val persisted = store.read(StoreKey("otel.logs"))
+            // Rga equality is op-set equality, so this asserts the op-log read back through
+            // the segmented layout is exactly the one the reference implementation computes.
+            val roundTripped = exporterFor(store = store, maxRecords = cap, bufferPolicy = policy)
+            roundTripped.recover()
             assertAll(
                 {
                     assertEquals(
@@ -255,10 +256,17 @@ class WarpLogRecordExporterTailCacheTest {
                     )
                 },
                 {
-                    assertContentEquals(
-                        CBOR.encodeToByteArray(SERIALIZER, reference.log),
-                        persisted,
-                        "$policy/cap=$cap: persisted CBOR bytes are not byte-identical",
+                    assertEquals(
+                        reference.log,
+                        roundTripped.snapshot(),
+                        "$policy/cap=$cap: the op-log recovered from the store is not the reference's",
+                    )
+                },
+                {
+                    assertEquals(
+                        bodies(reference.log.toList()),
+                        bodies(roundTripped.snapshot().toList()),
+                        "$policy/cap=$cap: recovered visible order diverged from the reference",
                     )
                 },
             )
@@ -322,8 +330,6 @@ class WarpLogRecordExporterTailCacheTest {
         private const val SINGLETON_CAP = 1
         private const val REMOTE_ID_1: Byte = 50
         private const val REMOTE_ID_2: Byte = 51
-        private val CBOR = Cbor { alwaysUseByteString = true }
-        private val SERIALIZER = Rga.wireSerializer(LogRecord.serializer())
 
         /**
          * Appends past the cap (forcing eviction under both policies), re-exports records
