@@ -12,6 +12,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -134,6 +135,28 @@ class WarpLogRecordExporterTailCacheTest {
     }
 
     @Test
+    fun mergedRemoteTombstoneFreesTheDedupSlot() = runTest {
+        // The rebuild must *replace* the dedup map, not merely add to it: a merge can carry
+        // in a remote Remove for a record that is visible locally, and that record's slot has
+        // to be freed or a later re-export is silently swallowed and the record is lost.
+        val exporter = exporterFor()
+        val r1 = record(1)
+        exporter.export(r1)
+        exporter.export(record(2))
+
+        // A peer that has seen r1 and removed it. piece() unions the Remove op in.
+        val (remoteWithTombstone, _) = assertNotNull(exporter.snapshot().removeAt(0))
+        exporter.merge(remoteWithTombstone)
+        assertTrue(r1 !in exporter.snapshot().toList(), "precondition: the merge tombstoned r1")
+
+        exporter.export(r1)
+        assertTrue(
+            r1 in exporter.snapshot().toList(),
+            "a record tombstoned by a merge must be re-insertable",
+        )
+    }
+
+    @Test
     fun mergeRebuildsCountSoEvictionStillFires() = runTest {
         // The eviction gate reads a threaded-forward visible count. merge() replaces the
         // log wholesale, so the count must be rebuilt or the cap silently stops applying.
@@ -192,10 +215,16 @@ class WarpLogRecordExporterTailCacheTest {
 
     @Test
     fun scriptedRunMatchesPreOptimisationReference() = runTest {
-        for (policy in listOf(BufferPolicy.DROP_OLDEST, BufferPolicy.DROP_NEWEST)) {
+        // cap 1 is not just a small cap: every eviction empties the log, so the append
+        // predecessor has to fall back to HEAD. Appending after the tombstoned id instead
+        // still yields the right visible order — only the op-log, and therefore the bytes,
+        // give it away. cap 4 keeps the log non-empty throughout.
+        val configurations = listOf(BufferPolicy.DROP_OLDEST, BufferPolicy.DROP_NEWEST)
+            .flatMap { policy -> listOf(policy to ROOMY_CAP, policy to SINGLETON_CAP) }
+        for ((policy, cap) in configurations) {
             val store = InMemoryDurableStore()
-            val exporter = exporterFor(store = store, maxRecords = MAX, bufferPolicy = policy)
-            val reference = ReferenceLogExporter(replicaA, MAX, policy)
+            val exporter = exporterFor(store = store, maxRecords = cap, bufferPolicy = policy)
+            val reference = ReferenceLogExporter(replicaA, cap, policy)
 
             // A remote op-log whose inserts are concurrent with the local ones.
             val remoteSource = exporterFor(replica = replicaB)
@@ -222,14 +251,14 @@ class WarpLogRecordExporterTailCacheTest {
                     assertEquals(
                         bodies(reference.log.toList()),
                         bodies(exporter.snapshot().toList()),
-                        "$policy: visible order diverged from the pre-optimisation reference",
+                        "$policy/cap=$cap: visible order diverged from the reference",
                     )
                 },
                 {
                     assertContentEquals(
                         CBOR.encodeToByteArray(SERIALIZER, reference.log),
                         persisted,
-                        "$policy: persisted CBOR bytes are not byte-identical",
+                        "$policy/cap=$cap: persisted CBOR bytes are not byte-identical",
                     )
                 },
             )
@@ -289,7 +318,8 @@ class WarpLogRecordExporterTailCacheTest {
     }
 
     private companion object {
-        private const val MAX = 4
+        private const val ROOMY_CAP = 4
+        private const val SINGLETON_CAP = 1
         private const val REMOTE_ID_1: Byte = 50
         private const val REMOTE_ID_2: Byte = 51
         private val CBOR = Cbor { alwaysUseByteString = true }

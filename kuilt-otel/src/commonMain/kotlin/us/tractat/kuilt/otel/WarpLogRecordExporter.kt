@@ -69,10 +69,10 @@ public class WarpLogRecordExporter(
     private val maxRecords: Int = DEFAULT_MAX_LOG_RECORDS,
     private val bufferPolicy: BufferPolicy = BufferPolicy.DROP_OLDEST,
 ) {
-    // The lock guards 'log' and 'seenIds'. No suspend calls are made inside the
-    // locked section — Cbor encode/decode and the CRDT mutations are pure
-    // (non-suspending). The store write is performed outside the lock on the
-    // encoded snapshot.
+    // The lock guards 'log' and every derived field below. No suspend calls are
+    // made inside the locked section — Cbor encode/decode and the CRDT mutations
+    // are pure (non-suspending). The store write is performed outside the lock on
+    // the encoded snapshot.
     //
     // An explicit reentrant lock is the repo policy for scope-owning types:
     // correctness must hold under a real multi-threaded dispatcher, not just the
@@ -80,9 +80,31 @@ public class WarpLogRecordExporter(
     private val lock = reentrantLock()
     private var log: Rga<LogRecord> = Rga.empty()
 
+    // ── Derived state, threaded forward across export() calls ────────────────
+    //
+    // All three are functions of `log` alone and were recomputed from it on every
+    // export. That is pure waste in this access pattern: `Rga` is immutable, so
+    // `insertAfter` hands back a NEW instance whose `sequence` lazy is cold —
+    // meaning a full `computeSequence()` (a groupBy plus a sortedDescending per
+    // sibling group) ran once per exported record, plus two more O(N) passes for
+    // the eviction gate and the tail filter. Maintaining them incrementally makes
+    // the common (non-evicting) export path touch the sequence not at all.
+    //
+    // Every write to `log` must update these in the same locked section. The four
+    // events that move them out from under the cache — a DROP_NEWEST eviction
+    // (which removes the tail), a DROP_OLDEST eviction that empties the log, a
+    // merge whose remote inserts sort after the local tail, and a recover() that
+    // replaces the log wholesale — are pinned by WarpLogRecordExporterTailCacheTest.
+
+    /** Predecessor for the next append: the last visible element, or [RgaId.HEAD] when empty. */
+    private var tail: RgaId = RgaId.HEAD
+
+    /** Number of visible (non-tombstoned) records in [log] — the eviction gate. */
+    private var visibleCount: Int = 0
+
     // Maps recordId → RgaId of the Insert op, so that re-export is a no-op.
-    // Populated on export() and rebuilt from the op-log on recover().
-    private var seenIds: Map<ByteString, RgaId> = emptyMap()
+    // Mutated in place on export()/eviction and rebuilt from the op-log on recover().
+    private val seenIds: MutableMap<ByteString, RgaId> = mutableMapOf()
 
     private companion object {
         private val STORE_KEY = StoreKey("otel.logs")
@@ -109,7 +131,7 @@ public class WarpLogRecordExporter(
         }
         lock.withLock {
             log = recovered
-            seenIds = buildSeenIdsFrom(recovered)
+            rebuildDerivedState()
         }
     }
 
@@ -129,11 +151,13 @@ public class WarpLogRecordExporter(
             maybeEvict(record)
             val (newLog, insertOp) = log.insertAfter(
                 replica = replica,
-                after = tailId(),
+                after = tail,
                 value = record,
             )
             log = newLog
-            seenIds = seenIds + (record.recordId to insertOp.id)
+            tail = insertOp.id
+            visibleCount++
+            seenIds[record.recordId] = insertOp.id
             cbor.encodeToByteArray(logSerializer, log)
         }
         return runCatchingCancellable { store.write(STORE_KEY, encoded) }
@@ -165,7 +189,8 @@ public class WarpLogRecordExporter(
     public suspend fun merge(remote: Rga<LogRecord>): ExportResult {
         val encoded = lock.withLock {
             log = log.piece(remote)
-            seenIds = buildSeenIdsFrom(log)
+            // A remote insert can land anywhere, including after the local tail.
+            rebuildDerivedState()
             cbor.encodeToByteArray(logSerializer, log)
         }
         return runCatchingCancellable { store.write(STORE_KEY, encoded) }
@@ -180,10 +205,10 @@ public class WarpLogRecordExporter(
 
     /** Must be called with [lock] held. */
     private fun maybeEvict(incoming: LogRecord) {
-        if (log.size < maxRecords) return
+        if (visibleCount < maxRecords) return
         val index = when (bufferPolicy) {
             BufferPolicy.DROP_OLDEST -> 0
-            BufferPolicy.DROP_NEWEST -> log.size - 1
+            BufferPolicy.DROP_NEWEST -> visibleCount - 1
         }
         val (newLog, _) = log.removeAt(index) ?: return
         val evictedRecord = log.toList()[index]
@@ -193,29 +218,47 @@ public class WarpLogRecordExporter(
                 "policy=$bufferPolicy (incoming recordId=${incoming.recordId})"
         }
         log = newLog
-        seenIds = seenIds - evictedRecord.recordId
+        seenIds.remove(evictedRecord.recordId)
+        visibleCount--
+        tail = when {
+            // Nothing left to append after.
+            visibleCount == 0 -> RgaId.HEAD
+            // DROP_OLDEST removed visible index 0. With at least one element still
+            // standing, the first and last visible elements are distinct, so the
+            // tail is untouched.
+            bufferPolicy == BufferPolicy.DROP_OLDEST -> tail
+            // DROP_NEWEST removed visible index size-1 — the tail itself. The new
+            // tail is its predecessor, which only the sequence knows.
+            else -> tailIdOf(newLog)
+        }
     }
 
     /**
-     * Returns the [RgaId] of the last visible element in [log], or [RgaId.HEAD]
-     * if the log is empty. Used as the predecessor for new append-only inserts.
+     * Recompute [tail], [visibleCount] and [seenIds] from [log] in one pass.
+     *
+     * The entry point for the two events that replace the log wholesale — [recover]
+     * and [merge] — where nothing can be threaded forward. Tombstoned entries are
+     * excluded by [Rga.entries], so an evicted record's dedup slot is freed for re-use.
      *
      * Must be called with [lock] held.
      */
-    private fun tailId(): RgaId {
-        val visible = log.sequence.filter { it !in log.tombstones }
-        return visible.lastOrNull() ?: RgaId.HEAD
+    private fun rebuildDerivedState() {
+        val entries = log.entries()
+        tail = entries.lastOrNull()?.first ?: RgaId.HEAD
+        visibleCount = entries.size
+        seenIds.clear()
+        entries.forEach { (rgaId, record) -> seenIds[record.recordId] = rgaId }
     }
 
     /**
-     * Rebuild the dedup map from an [Rga]'s visible elements.
+     * The [RgaId] of the last visible element of [rga], or [RgaId.HEAD] if it has none.
      *
-     * Maps each visible record's [LogRecord.recordId] to its [RgaId] via
-     * [Rga.entries]. Tombstoned entries are excluded — an evicted record's slot is
-     * freed for re-use.
+     * O(N) over the materialized sequence — reached only when a [BufferPolicy.DROP_NEWEST]
+     * eviction removes the tail, a path that already pays for the sequence inside
+     * [Rga.removeAt].
      */
-    private fun buildSeenIdsFrom(rga: Rga<LogRecord>): Map<ByteString, RgaId> =
-        rga.entries().associate { (rgaId, record) -> record.recordId to rgaId }
+    private fun tailIdOf(rga: Rga<LogRecord>): RgaId =
+        rga.sequence.lastOrNull { it !in rga.tombstones } ?: RgaId.HEAD
 }
 
 /** Maximum number of [LogRecord]s buffered in memory before eviction. */
