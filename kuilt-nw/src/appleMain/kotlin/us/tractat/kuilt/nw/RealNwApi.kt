@@ -19,12 +19,15 @@ import kotlinx.cinterop.staticCFunction
 import kotlinx.cinterop.toKString
 import kotlinx.cinterop.usePinned
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.buffer
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.update
 import platform.Network.NW_PARAMETERS_DEFAULT_CONFIGURATION
 import platform.Network.nw_advertise_descriptor_create_bonjour_service
@@ -202,14 +205,21 @@ internal data class NwConnectionFailure(
  * to a graceful close (`NwConnectionClosed.reason == null`); a `failed` state, or a `cancelled`
  * we did not initiate, carries a non-null reason. (Precedent: `MCSessionLink` in `:kuilt-multipeer`.)
  *
- * ## Single-collection event flows
+ * ## Single-collection event flows — lossy for lifecycle, LOSSLESS for bytes
  * The four *event* flows ([endpointFound]/[connectionOpened]/[bytesReceived]/[connectionClosed]) are
- * each fed by exactly ONE callback source, so each is **single-collection** — two collectors would each
- * receive every event, duplicating delivery. The GCD handlers run off the dispatch queue (not a
- * coroutine), so they publish via [MutableSharedFlow.tryEmit] onto a buffered, no-replay flow. A full
- * buffer therefore DROPS the event under `tryEmit` (bounded backpressure — the known head-of-line concern
- * for these event streams). For [connectionClosed] a dropped event would strand a zombie peer, so it is
- * backstopped by the drop-tolerant [connectionStates] `Closed` STATE (see below); the other three have no such backstop.
+ * each fed by exactly ONE callback source, so each is **single-collection**.
+ *
+ * The three **lifecycle** flows are lossy by design: the GCD handlers run off the dispatch queue (not a
+ * coroutine), so they publish via [MutableSharedFlow.tryEmit] onto a buffered, no-replay flow, and a full
+ * buffer DROPS the event (bounded backpressure — the known head-of-line concern for these event streams).
+ * For [connectionClosed] a dropped event would strand a zombie peer, so it is backstopped by the
+ * drop-tolerant [connectionStates] `Closed` STATE (see below); [endpointFound]/[connectionOpened] have no
+ * such backstop, and are reconstructible by re-discovery.
+ *
+ * [bytesReceived] is **not** one of them (#2134). A byte stream is not drop-tolerant and nothing above
+ * reconstructs it, so it is published losslessly by a cold drain that re-arms the transport only after the
+ * chunk has been taken — see its KDoc. Two collectors there would *split* rather than duplicate the
+ * stream, so single-collection is enforced with a check instead of left to convention.
  *
  * ## Lifecycle is drop-tolerant STATE, not just an event (#1509/#1522/#1539)
  * [connectionStates] is the ONE drop-tolerant per-connection [NwConnState] signal, unifying the former
@@ -242,8 +252,21 @@ internal class RealNwApi(
     private val _endpointFound = MutableSharedFlow<NwEndpoint>(extraBufferCapacity = EVENT_BUFFER)
     private val _endpointLost = MutableSharedFlow<NwEndpoint>(extraBufferCapacity = EVENT_BUFFER)
     private val _connectionOpened = MutableSharedFlow<NwConnectionOpened>(extraBufferCapacity = EVENT_BUFFER)
-    private val _bytesReceived = MutableSharedFlow<NwBytesReceived>(extraBufferCapacity = BYTES_BUFFER)
     private val _connectionClosed = MutableSharedFlow<NwConnectionClosed>(extraBufferCapacity = EVENT_BUFFER)
+
+    // The receive hand-off (#2134). [onReceiveComplete] runs on a serial GCD queue from a pure-C block and
+    // cannot suspend, so it deposits the completion here and RETURNS WITHOUT RE-ARMING; the [bytesReceived]
+    // drain does the suspending publish and only then calls [receiveLoop]. UNLIMITED is bounded by the
+    // TRANSPORT, not by hope: at most one `nw_connection_receive` is outstanding per connection (the only
+    // arming sites are the first `ready`, a `waiting → ready` restart of a loop that had stopped, the
+    // transient backoff, and the drain), so this holds at most one entry per live connection — and, while
+    // nothing is collecting, exactly one, because nothing re-arms.
+    private val receiveCompletions = Channel<ReceiveCompletion>(Channel.UNLIMITED)
+
+    // Single-collection latch for [bytesReceived] (see its KDoc): the drain consumes [receiveCompletions],
+    // so a second concurrent collector would SPLIT the byte stream between the two — silently interleaving
+    // one connection's chunks across two framers. Fail loudly instead.
+    private val bytesCollected = atomic(false)
 
     // Per-connection LATEST lifecycle state, as the ONE drop-tolerant STATE signal (#1539) unifying the former
     // separate viability (#1509) and closed-markers (#1522) maps. A `ready`/`waiting` transition atomically
@@ -279,8 +302,49 @@ internal class RealNwApi(
     override val endpointFound: Flow<NwEndpoint> = _endpointFound.asSharedFlow()
     override val endpointLost: Flow<NwEndpoint> = _endpointLost.asSharedFlow()
     override val connectionOpened: Flow<NwConnectionOpened> = _connectionOpened.asSharedFlow()
-    override val bytesReceived: Flow<NwBytesReceived> = _bytesReceived.asSharedFlow()
     override val connectionClosed: Flow<NwConnectionClosed> = _connectionClosed.asSharedFlow()
+
+    /**
+     * The inbound byte stream — **lossless, and the flow-control valve for the whole receive path** (#2134).
+     *
+     * Unlike the three lifecycle event flows beside it, this is a byte stream: nothing above reconstructs a
+     * gap, and a length-prefixed reader cannot resynchronize after one, so a single dropped chunk misparses
+     * **every subsequent byte on that connection**. It is therefore the one flow that is not published with a
+     * lossy [MutableSharedFlow.tryEmit]. Instead it is a **cold drain** of [receiveCompletions]:
+     *
+     *  1. the GCD/C completion ([onReceiveComplete]) copies the chunk out, stages it, and returns —
+     *     **it does not re-arm**;
+     *  2. this drain publishes the chunk with a *suspending* `emit`, and only once that returns does it call
+     *     [receiveLoop] to arm the next receive.
+     *
+     * So the thing that fills when a consumer falls behind is the peer's own NW/TCP send window — where
+     * backpressure belongs — rather than a buffer of ours that silently discards. [buffer] keeps
+     * [BYTES_BUFFER] chunks of pipelining slack (the same slack the old `MutableSharedFlow` had, minus the
+     * drops): the drain runs ahead of the collector up to that depth and then suspends.
+     *
+     * **Single-collection, enforced.** The drain *consumes* the completion channel, so a second concurrent
+     * collector would split the stream rather than duplicate it — one connection's chunks interleaved across
+     * two framers. A second collection therefore throws rather than corrupting silently.
+     *
+     * **Cold on purpose.** Nothing is armed and no coroutine is rooted until someone collects, so
+     * `RealNwApi` stays GC-collectable when its seam is dropped (the appleMain half of the GC-parity
+     * contract the JVM bridge reproduces with a `Cleaner`). While nobody collects, at most one completion
+     * per connection is staged and the transport is simply never asked for more.
+     */
+    override val bytesReceived: Flow<NwBytesReceived> = flow {
+        check(bytesCollected.compareAndSet(expect = false, update = true)) {
+            "NwApi.bytesReceived is single-collection: a second collector would SPLIT the byte stream, " +
+                "interleaving one connection's chunks across two framers. Fan out with shareIn instead."
+        }
+        try {
+            for (completion in receiveCompletions) {
+                completion.bytes?.let { emit(NwBytesReceived(completion.id, it)) }
+                resumeReceiving(completion)
+            }
+        } finally {
+            bytesCollected.value = false
+        }
+    }.buffer(BYTES_BUFFER)
     override val connectionStates: StateFlow<Map<NwConnectionId, NwConnState>> = _connectionStates.asStateFlow()
 
     private val pathStateFlow: StateFlow<NwPathState?> = _pathState.asStateFlow()
@@ -1026,8 +1090,15 @@ internal class RealNwApi(
     /**
      * Handle one receive completion, unpacked to primitives by the C shim (#1516). [bytes] points into a
      * mapped dispatch_data region that ARC keeps alive until strictly after this returns, so the
-     * [readBytes] copy is safe. Mirrors the old in-lambda logic: emit any chunk, then re-arm on success
-     * (resetting the retry budget) or route the error through [handleReceiveError].
+     * [readBytes] copy is safe.
+     *
+     * **This runs on a serial GCD queue from a pure-C block and cannot suspend, so it does exactly two
+     * things: copy the chunk out, and stage it (#2134).** It deliberately does NOT publish and does NOT
+     * re-arm. Re-arming here is what made the receive path lossy: it invited the transport to deliver the
+     * next chunk whether or not anyone had consumed the last one, leaving a bounded buffer as the only
+     * thing between the radio and a silent drop. [bytesReceived]'s drain now owns both — it publishes with
+     * a suspending `emit` and re-arms only afterwards, so the re-arm works as the flow-control valve it
+     * always was.
      */
     private fun onReceiveComplete(
         id: NwConnectionId,
@@ -1038,12 +1109,41 @@ internal class RealNwApi(
         errDomain: Int,
         errCode: Int,
     ) {
-        if (bytes != null && len > 0) _bytesReceived.tryEmit(NwBytesReceived(id, bytes.readBytes(len)))
-        if (!hasError) {
+        receiveCompletions.trySend(
+            ReceiveCompletion(
+                id = id,
+                connection = connection,
+                bytes = if (bytes != null && len > 0) bytes.readBytes(len) else null,
+                hasError = hasError,
+                errDomain = errDomain,
+                errCode = errCode,
+            ),
+        )
+    }
+
+    /**
+     * The second half of a receive completion, run by the [bytesReceived] drain *after* the chunk has been
+     * published (#2134): re-arm on success (resetting the retry budget) or route the error through
+     * [handleReceiveError]. This is the moment the transport is invited to deliver more, which is why it
+     * sits downstream of a suspending `emit` rather than in the GCD callback.
+     *
+     * A completion whose connection has since left [connections] is dropped without re-arming — the same
+     * "entry already gone" outcome [onTransientReceiveError] reaches under [TransientAction.Gone]. That
+     * covers the widened window this split introduces: a close can now land between the completion and its
+     * drain, and arming a receive on a cancelled connection would only produce another ECANCELED.
+     */
+    private fun resumeReceiving(completion: ReceiveCompletion) {
+        val id = completion.id
+        val live = lock.withLock { connections[id] != null }
+        if (!live) {
+            log.debug { "nw.api.receive-drain id=${id.value} entry already dropped → no re-arm" }
+            return
+        }
+        if (!completion.hasError) {
             lock.withLock { connections[id]?.receiveRetries = 0 } // healthy ⇒ any transient blip cleared
-            receiveLoop(id, connection) // re-arm only while healthy
+            receiveLoop(id, completion.connection) // re-arm only while healthy
         } else {
-            handleReceiveError(id, connection, errDomain, errCode)
+            handleReceiveError(id, completion.connection, completion.errDomain, completion.errCode)
         }
     }
 
@@ -1268,6 +1368,21 @@ internal class RealNwApi(
         val api: RealNwApi,
         val id: NwConnectionId,
         val connection: nw_connection_t,
+    )
+
+    /**
+     * One `nw_connection_receive` completion, staged by [onReceiveComplete] for the [bytesReceived] drain
+     * to publish and then act on (#2134). [bytes] is already copied out of the mapped dispatch_data region
+     * (that pointer dies with the C block), and is `null` for a completion that carried no payload — an
+     * error, or a zero-length read.
+     */
+    private class ReceiveCompletion(
+        val id: NwConnectionId,
+        val connection: nw_connection_t,
+        val bytes: ByteArray?,
+        val hasError: Boolean,
+        val errDomain: Int,
+        val errCode: Int,
     )
 
     private companion object {

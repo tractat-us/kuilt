@@ -887,24 +887,20 @@ internal class NwSeam(
 
     // ── send ────────────────────────────────────────────────────────────────────
 
-    // ── on NOT publishing [Seam.maxPayloadBytes] yet (#2069 / #2134) ──────────────
-    //
-    // This seam has a number — [maxFrameBytes], enforced below on send and by each connection's
-    // [NwFramer] on receive — and #2069 exists to make exactly this kind of hidden ceiling public.
-    // It stays unpublished for one reason: publishing it is a PROMISE that a payload of that size
-    // will cross, and this fabric's receive path cannot currently keep it.
-    //
-    // Both `NwApi` implementations hand received bytes off lossily — `BridgeNwApi` through a
-    // 64-slot `DROP_OLDEST` channel, `RealNwApi` through a bounded `tryEmit` — while the transport
-    // delivers at most 64 KiB per receive. A 16 MiB frame is 256+ chunks against a 64-slot buffer,
-    // so chunks are silently dropped, the frame never completes, and the length-prefixed stream
-    // cannot resynchronize after the gap. Measured at ~1-in-5 on an idle box; #2134 has the arms.
-    //
-    // So the honest state is: this seam REFUSES above [maxFrameBytes], and declines to PROMISE it.
-    // [payloadBudgetGap] on the conformance harnesses points at #2134 rather than at the generic
-    // "names no ceiling" anchor, because that is the actual reason. Publishing here is a two-line
-    // change once #2134 lands — and the TCK's `payloadOfExactlyTheBudgetIsCarried` is what will
-    // then hold it, which is precisely how the defect surfaced.
+    /**
+     * The largest payload this seam will carry (#2069) — [maxFrameBytes], the one number enforced at both
+     * edges of the wire: [encodeFrame] on send and each connection's [NwFramer] on receive.
+     *
+     * Publishing it is a **promise to carry** a payload of that size, not merely to refuse above it, and
+     * that promise was withheld until #2134. Both `NwApi` implementations used to hand received bytes off
+     * lossily — a bounded `tryEmit` on Apple, a 64-slot `DROP_OLDEST` channel on the JVM bridge — while the
+     * transport delivers at most 64 KiB per receive. A 16 MiB frame is 256+ chunks against a 64-slot
+     * buffer, so chunks vanished silently, the frame never completed, and a length-prefixed stream cannot
+     * resynchronize after a gap. The receive path now applies real backpressure instead (the re-arm waits
+     * on the consumer), so the promise is one the fabric can keep, and the TCK's
+     * `payloadOfExactlyTheBudgetIsCarried` — the case that found the defect — is what holds it.
+     */
+    override val maxPayloadBytes: Int = maxFrameBytes
 
     /**
      * Refuse [payload] if it cannot be framed, rather than letting [encodeFrame] throw from inside a

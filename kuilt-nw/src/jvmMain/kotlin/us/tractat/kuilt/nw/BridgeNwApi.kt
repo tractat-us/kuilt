@@ -1,12 +1,14 @@
 package us.tractat.kuilt.nw
 
 import com.sun.jna.Pointer
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -20,6 +22,8 @@ import us.tractat.kuilt.core.FabricAvailability
 import java.lang.ref.Cleaner
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.CoroutineContext
+
+private val log = KotlinLogging.logger("us.tractat.kuilt.nw.BridgeNwApi")
 
 /**
  * JVM [NwApi] proxying through the macOS K/N Network.framework bridge
@@ -35,9 +39,20 @@ import kotlin.coroutines.CoroutineContext
  * [Channel] via [Channel.trySend] (never blocks). A single per-flow drain
  * coroutine forwards from the staging channel to the corresponding
  * [MutableSharedFlow] in FIFO order, so ordering is preserved and no event is
- * ever emitted from a JNA thread. Each staging channel is [BufferOverflow.DROP_OLDEST]
- * so a burst is lossy at the JNA boundary rather than blocking the native caller —
- * matching `RealNwApi`'s `tryEmit`-drops-when-full backpressure.
+ * ever emitted from a JNA thread. The three **lifecycle** staging channels are
+ * [BufferOverflow.DROP_OLDEST] so a burst is lossy at the JNA boundary rather than
+ * blocking the native caller — matching `RealNwApi`'s `tryEmit`-drops-when-full
+ * backpressure for the same three flows.
+ *
+ * ## …except [bytesReceived], which SUSPENDS rather than drops (#2134)
+ * A byte stream is not drop-tolerant: nothing above reconstructs a gap, and a
+ * length-prefixed reader cannot resynchronize after one, so a dropped chunk
+ * misparses **every subsequent byte on that connection**. Its staging channel is
+ * therefore plain bounded (SUSPEND), and [stageBytesReceived] blocks the JNA thread
+ * when it is full. That block is the whole mechanism: the dylib invokes this callback
+ * *synchronously* from its `bytesReceived` forwarding collector, so returning from it
+ * is the ack the native side's re-arm waits on — no new ABI entry point needed. See
+ * [stageBytesReceived].
  *
  * ## Lifecycle is drop-tolerant STATE, sourced from native signals (#1509/#1522/#1539)
  * [connectionStates] mirrors `RealNwApi`'s `MutableStateFlow<Map<NwConnectionId, NwConnState>>`, unifying the
@@ -165,8 +180,10 @@ public class BridgeNwApi internal constructor(
     // forward to the SharedFlows in FIFO order. DROP_OLDEST so the JNA thread never blocks.
     private val endpointFoundStaging = Channel<NwEndpoint>(EVENT_BUFFER, BufferOverflow.DROP_OLDEST)
     private val connectionOpenedStaging = Channel<NwConnectionOpened>(EVENT_BUFFER, BufferOverflow.DROP_OLDEST)
-    private val bytesReceivedStaging = Channel<NwBytesReceived>(BYTES_BUFFER, BufferOverflow.DROP_OLDEST)
     private val connectionClosedStaging = Channel<NwConnectionClosed>(EVENT_BUFFER, BufferOverflow.DROP_OLDEST)
+
+    // …except the byte stream, which SUSPENDS rather than drops (#2134). See [stageBytesReceived].
+    private val bytesReceivedStaging = Channel<NwBytesReceived>(BYTES_BUFFER)
 
     // Strong refs so JNA trampolines aren't GC'd while the K/N side may still fire them.
     private val endpointFoundCallback =
@@ -191,8 +208,38 @@ public class BridgeNwApi internal constructor(
         NwNativeLib.BytesReceivedCallback { connectionId, data, len ->
             // Copy out of the raw pointer immediately — it is valid only for this call.
             val bytes = if (len > 0) data.getByteArray(0, len) else ByteArray(0)
-            bytesReceivedStaging.trySend(NwBytesReceived(NwConnectionId(connectionId), bytes))
+            stageBytesReceived(NwBytesReceived(NwConnectionId(connectionId), bytes))
         }
+
+    /**
+     * Stage one received chunk, **blocking this JNA thread until the drain accepts it** (#2134).
+     *
+     * This is the JVM half of the receive backpressure, and it needs no new ABI entry point: the callback
+     * is invoked *synchronously* by the dylib's `bytesReceived` forwarding collector, so **returning from
+     * it IS the ack**. Block here and that collector cannot take the next chunk; the native
+     * `RealNwApi.bytesReceived` drain therefore cannot complete its own suspending `emit`, so it never
+     * re-arms `nw_connection_receive`, and the queue that fills is the peer's NW/TCP send window. Return
+     * eagerly (the old `DROP_OLDEST` `trySend`) and the whole native-side chain is defeated — the drop just
+     * relocates to this channel, which is exactly where a 16 MiB frame lost its chunks.
+     *
+     * [Channel.trySend] first, so the common case (room in the buffer) costs no [runBlocking]. Blocking is
+     * confined to the burst case, and is why this channel alone is not `DROP_OLDEST`: a byte stream cannot
+     * resynchronize after a gap, so a dropped chunk misparses every subsequent byte on the connection.
+     *
+     * A throw is possible only once [close] has cancelled the staging channel, at which point there is no
+     * drain left and dropping the chunk is the correct outcome — so it is caught rather than allowed to
+     * unwind across the JNA boundary into native code. That is also why this is a plain `catch (Throwable)`
+     * with no cancellation rethrow: this is a foreign callback thread, not a coroutine, and the
+     * [runBlocking] job it wraps is the only thing a `CancellationException` here could refer to.
+     */
+    private fun stageBytesReceived(event: NwBytesReceived) {
+        if (bytesReceivedStaging.trySend(event).isSuccess) return
+        try {
+            runBlocking { bytesReceivedStaging.send(event) }
+        } catch (failure: Throwable) {
+            log.debug { "nw.bridge.bytes-staged-after-close id=${event.connectionId.value}: $failure" }
+        }
+    }
 
     // The lossy per-EVENT close stream — the fast, reason-carrying path (NwSeam loop 3). It ONLY forwards
     // the event to the staging channel; the drop-tolerant [connectionStates] `Closed` STATE is sourced from
@@ -245,6 +292,14 @@ public class BridgeNwApi internal constructor(
 
     override fun availability(): FabricAvailability = NwNativeLib.jvmAvailability()
 
+    /**
+     * Test-only: how many collectors are currently attached to [bytesReceived]. `bytesReceived` is a
+     * no-replay [MutableSharedFlow], so a chunk published before the first subscriber attaches is simply
+     * gone — a burst test must therefore wait for its collector to be *subscribed*, not merely launched,
+     * or it measures the wrong drop. Not part of the fabric contract — do not build behaviour on it.
+     */
+    internal fun bytesSubscriberCountForTest(): Int = _bytesReceived.subscriptionCount.value
+
     override suspend fun startListening(serviceName: String, serviceType: String) {
         withContext(dispatcher) { nativeLib.nw_start_listening(handle, serviceName, serviceType) }
     }
@@ -290,6 +345,11 @@ public class BridgeNwApi internal constructor(
      */
     public fun close() {
         scope.cancel()
+        // Cancelling the byte staging is what releases a JNA callback thread parked in
+        // [stageBytesReceived] (#2134): with the drain gone, its blocking `send` would otherwise wait for a
+        // consumer that is never coming back. `cancel()` fails both the parked send and every later one, so
+        // a post-close callback drops its chunk instead of hanging a dylib forwarding collector forever.
+        bytesReceivedStaging.cancel()
         cleanable.clean()
     }
 

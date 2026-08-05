@@ -125,12 +125,12 @@ class NwBridgeLoopbackConformanceTest : SeamConformanceSuite() {
         mapOf("reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY)
 
     /**
-     * [NwSeam] has a 16 MiB ceiling and refuses above it, but cannot yet *promise* it: this harness
-     * is where that was measured. Over the real `127.0.0.1` socket a 16 MiB frame arrives as 256+
-     * chunks against `BridgeNwApi`'s 64-slot `DROP_OLDEST` staging channel, so bytes are silently
-     * dropped and the frame never completes — ~1 run in 5 on an idle box (#2134).
+     * No gap: [NwSeam] publishes its 16 MiB frame ceiling as of #2134, so this harness is held to the
+     * number by [payloadOfExactlyTheBudgetIsCarried] and [overBudgetAddressedSendIsRefusedNotLeaked]
+     * instead of declaring it away (#2069). That first case is the one that found #2134 — a payload of
+     * exactly the budget arrives as 256+ chunks, which is what the lossy receive path could not survive.
      */
-    override fun payloadBudgetGap(): String = "https://github.com/tractat-us/kuilt/issues/2134"
+    override fun payloadBudgetGap(): String? = null
 
     /**
      * Wrap [delegate] so `weave` runs on a real [Dispatchers.Default]. [NwLoom] captures its seam

@@ -368,25 +368,37 @@ pointing `payloadBudgetGap()` at this section. That leaves one thing the suite
 genuinely cannot see: a fabric that enforces a ceiling internally while still
 reporting "I don't know". Proving a hidden 16 MiB limit would take a 16 MiB
 message, which is not a test worth running against every fabric — so the
-declaration is the mechanism there, not the assertion. That is not a
-hypothetical: the Apple Network.framework fabric is exactly this case, refusing
-frames past 16 MiB while reporting "I don't know", and it was the declaration —
-not any test — that surfaced it
+declaration is the mechanism there, not the assertion.
+
+That was not a hypothetical, and the case it caught is worth following through.
+The Apple Network.framework fabric was exactly this shape: refusing frames past
+16 MiB while reporting "I don't know". No test found it; the declaration did
 ([#2069](https://github.com/tractat-us/kuilt/issues/2069)).
 
-It also turned out to be the more interesting shape. Having found the hidden
-ceiling, the obvious move is to publish it — and doing so revealed *why* it had
-better not be published yet: the fabric can refuse a message that size, but it
-cannot reliably **carry** one, because its receive path drops bytes when a
-single message arrives split across many small reads
-([#2134](https://github.com/tractat-us/kuilt/issues/2134)). Enforcing a limit
-and promising a limit are different claims, and only the second is what
-publishing a number means. A fabric in that position points its declaration at
-the thing actually blocking it, rather than at the generic "no ceiling to name".
+Having found the hidden ceiling, the obvious move is to publish it — and that
+move failed, in the most useful possible way. The fabric could *refuse* a
+message that size but could not reliably **carry** one: its receive path dropped
+bytes whenever a single message arrived split across many small reads, roughly
+one attempt in five. Enforcing a limit and promising a limit are different
+claims, and only the second is what publishing a number means, so the number
+stayed unpublished and the declaration pointed at the real blocker
+([#2134](https://github.com/tractat-us/kuilt/issues/2134)) rather than at the
+generic "no ceiling to name".
 
-Like the observer gap above, this one is not permanent for any fabric that
-*does* have a ceiling — it closes the moment the fabric can publish, and keep,
-the number it is already enforcing.
+What made that worth the detour is where the bug turned out to live. Every time
+a chunk arrived, the fabric asked the operating system for the next one
+immediately — whether or not anyone had read the last. Asking for more is the
+one lever a reader has over how fast a sender sends, and it was being pulled
+unconditionally, leaving a small fixed buffer as the only thing between the
+radio and a silent discard. Waiting to ask until the chunk has actually been
+taken turns that lever back into what it always was, and the queue that fills
+under a slow reader becomes the sender's own, which is where it belongs. With
+that fixed the fabric publishes its ceiling and the suite holds it to it.
+
+So this gap is not permanent for any fabric that *does* have a ceiling. It
+closes the moment the fabric can publish, and keep, the number it is already
+enforcing — and, as above, finding out that it *cannot* keep it yet is the most
+valuable thing the declaration does.
 
 ### Not every flag describes a design choice
 
