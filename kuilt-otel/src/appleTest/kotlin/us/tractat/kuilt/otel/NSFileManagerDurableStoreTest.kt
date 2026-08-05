@@ -5,9 +5,12 @@ package us.tractat.kuilt.otel
 import kotlinx.coroutines.test.runTest
 import platform.Foundation.NSFileManager
 import platform.Foundation.NSTemporaryDirectory
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 
 /**
@@ -95,6 +98,40 @@ class NSFileManagerDurableStoreTest {
         val store = NSFileManagerDurableStore(dir)
         store.write(key, bytes)
         assertContentEquals(bytes, store.read(key))
+    }
+
+    /**
+     * A failing write must name its cause (#1860).
+     *
+     * Pointing the store at a subdirectory of a *regular file* makes the
+     * directory creation and then the temp write both fail — the same class of
+     * failure a device hits when its storage rejects a write. Before the
+     * `NSError` was captured, this threw `"write to temp file failed"` and
+     * nothing else, which is exactly why a field occurrence could not be
+     * diagnosed from the device's own logs.
+     */
+    @Test
+    fun writeFailureNamesItsCause() = runTest {
+        val blocker = NSTemporaryDirectory() + "kuilt-otel-blocker-${kotlin.random.Random.nextLong()}"
+        NSFileManager.defaultManager.createFileAtPath(blocker, contents = null, attributes = null)
+        // `blocker` is a regular file, so nothing can live underneath it.
+        val store = NSFileManagerDurableStore("$blocker/nested/")
+
+        val failure = assertFailsWith<IllegalStateException> {
+            store.write(StoreKey("otel.logs"), byteArrayOf(1, 2, 3))
+        }
+
+        val message = failure.message.orEmpty()
+        assertAll(
+            { assertContains(message, "otel.logs", message = "names the key") },
+            { assertContains(message, "bytes=3", message = "names the payload size") },
+            // Anchored to `cause=` deliberately. A bare "NSError(domain=" would also
+            // be satisfied by the directory= field alone, so the assertion would
+            // still pass with the write's own error discarded — the exact defect
+            // under repair.
+            { assertContains(message, "cause=NSError(domain=", message = "carries the WRITE's own NSError") },
+            { assertContains(message, "directoryExists=false", message = "names the missing directory") },
+        )
     }
 
     @Test
