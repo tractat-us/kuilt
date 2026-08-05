@@ -74,6 +74,27 @@ app's existing log output is preserved:
   trigger the printf-format-string crash class. The handle honours a configured
   `KotlinLoggingConfiguration.subsystem` / `.category` for filtered Console output.
 
+## When your app logs faster than the buffer takes them
+
+Your `log.info { … }` call does not wait for the record to be written — it hands the
+line to a queue and returns, and a drain writes it just behind you. On a slow device
+with a large buffer that drain can fall behind a chatty app and stay behind.
+
+The queue is bounded (`CAPTURE_QUEUE_CAPACITY`) and drops the **oldest** line when
+it is full, because it lives in the host application's memory: an unbounded queue
+here is unbounded heap growth in the app being observed. Suspending the caller
+instead was rejected for the same reason — a slow telemetry store must never slow
+down the app it is watching. Dropping the oldest matches the exporter's own
+`BufferPolicy.DROP_OLDEST` below it, so both buffers on the path behave alike, and
+keeps the newest lines, which are the ones a post-hoc diagnosis wants.
+
+The loss is counted, not silent: `LogCaptureInstallation.health.droppedEvents` is an
+exact cumulative count of lines dropped for want of queue space, and the first drop
+is logged once (under a `us.tractat.kuilt.otel` logger, so the report is excluded
+from capture and can never feed back into the queue it is reporting on). Read it
+alongside `WarpLogRecordExporter.health`: drops climbing while the exporter is
+healthy means the export path works and is simply too slow for this log volume.
+
 ## Never captures kuilt's own logs
 
 Capture hooks the process-global logging config, so it sees every log event in the
