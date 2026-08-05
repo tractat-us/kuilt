@@ -23,25 +23,47 @@ import kotlin.coroutines.ContinuationInterceptor
  * @param maxFrameBytes what each end reports as [Connection.maxFrameBytes] — the frame ceiling a
  *   length-prefixed transport would have. Defaults to `null` (this in-memory pair has no ceiling of
  *   its own); pass a value to drive the payload-budget arithmetic the seams above derive from it.
- *   **Reported, not enforced** — an oversize frame still crosses, so a test asserts on the budget
- *   rather than on a rejection it would have to fake.
+ *   **Reported, not enforced by default** — an oversize frame still crosses, so a test can assert on
+ *   the budget without also having to fake a rejection. Pass [enforcesFrameCeiling] when the
+ *   rejection is the thing under test.
+ * @param enforcesFrameCeiling make [Connection.send] actually *refuse* a frame over [maxFrameBytes],
+ *   the way a length-prefixed transport does (`:kuilt-stream`'s `framed()` throws
+ *   `FrameTooLargeException`). Off by default so existing budget-arithmetic tests are unaffected.
+ *
+ *   A test that asserts a seam **pre-checks** a payload needs this: without it the fake carries the
+ *   oversize frame happily, so the seam's own pre-check is the only thing that could refuse it and
+ *   the test passes whether or not the fabric error it exists to prevent would have fired. With it,
+ *   the test is red before the pre-check exists — and stays honest about *which* layer refused
+ *   (a seam that pre-checks raises [us.tractat.kuilt.core.PayloadTooLarge]; one that does not lets
+ *   this fake's error through, into whatever the seam does with a failed `send`).
  */
 public fun connectionPair(
     policy: DeliveryPolicy = DeliveryPolicy.Reliable,
     maxFrameBytes: Int? = null,
+    enforcesFrameCeiling: Boolean = false,
 ): Pair<Connection, Connection> {
     val aToB = Spool<ByteArray>(policy)
     val bToA = Spool<ByteArray>(policy)
-    return ChannelConnection(out = aToB, inn = bToA, maxFrameBytes = maxFrameBytes) to
-        ChannelConnection(out = bToA, inn = aToB, maxFrameBytes = maxFrameBytes)
+    val ceiling = maxFrameBytes.takeIf { enforcesFrameCeiling }
+    return ChannelConnection(out = aToB, inn = bToA, maxFrameBytes = maxFrameBytes, enforced = ceiling) to
+        ChannelConnection(out = bToA, inn = aToB, maxFrameBytes = maxFrameBytes, enforced = ceiling)
 }
 
 private class ChannelConnection(
     private val out: Spool<ByteArray>,
     private val inn: Spool<ByteArray>,
     override val maxFrameBytes: Int?,
+    private val enforced: Int?,
 ) : Connection {
-    override suspend fun send(frame: ByteArray) { out.deliver(frame) }
+    override suspend fun send(frame: ByteArray) {
+        // Stand in for a real framed transport's FrameTooLargeException. The type does not matter to
+        // the seams above — every one of them treats any `conn.send` failure identically — only that
+        // the refusal happens at the wire, after the seam has already accepted the call.
+        enforced?.let {
+            if (frame.size > it) error("frame of ${frame.size} B exceeds the $it B frame ceiling")
+        }
+        out.deliver(frame)
+    }
     override val incoming: Flow<ByteArray> = inn.incoming
     override suspend fun close() { out.close() }
 }
