@@ -4,6 +4,7 @@ import kotlinx.serialization.builtins.serializer
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ORMap
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.piece
 
 // Fixed key pool forces concurrent put/remove collisions — exercises add-wins semantics
 // under every delivery permutation.
@@ -14,9 +15,9 @@ internal class ORMapConvergenceTest : CrdtConvergenceSuite<ORMap<String, GCounte
             val r = ReplicaId("R$replicaIndex")
             val key = "k-${random.nextInt(0, 3)}"
             when (random.nextInt(0, 3)) {
-                0 -> state.put(r, key, GCounter.of(r to 1L))
-                1 -> state.remove(key)
-                else -> state.put(r, key, GCounter.of(r to random.nextLong(1L, 4L)))
+                0 -> state.piece { it.put(r, key, GCounter.of(r to 1L)) }
+                1 -> state.piece { it.remove(key) }
+                else -> state.piece { it.put(r, key, GCounter.of(r to random.nextLong(1L, 4L))) }
             }
         },
         serializer = ORMap.serializer(String.serializer(), GCounter.serializer()),

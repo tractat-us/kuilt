@@ -26,6 +26,7 @@ import us.tractat.kuilt.crdt.ORSet
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.VersionVector
+import us.tractat.kuilt.crdt.piece
 import us.tractat.kuilt.gossip.GossipSeam
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.quilter.QuiltMessage
@@ -286,7 +287,7 @@ class DotCausalDigestCostModelTest {
     /** An [ORSet] built the way a consumer builds one — through the public API, one `add` per element. */
     private fun realOrSet(n: Int, replicas: Int): ORSet<String> {
         var set = ORSet.empty<String>()
-        for (i in 0 until n) set = set.add(replicaId(i % replicas), element(i))
+        for (i in 0 until n) set = set.piece { it.add(replicaId(i % replicas), element(i)) }
         return set
     }
 
@@ -294,7 +295,8 @@ class DotCausalDigestCostModelTest {
         var map = ORMap.empty<String, LWWRegister<String>>()
         for (i in 0 until n) {
             val id = replicaId(i % replicas)
-            map = map.put(id, element(i), LWWRegister.empty<String>().set(id, (i / replicas + 1).toLong(), "value-$i"))
+            val cell = LWWRegister.empty<String>().set(id, (i / replicas + 1).toLong(), "value-$i")
+            map = map.piece { it.put(id, element(i), cell) }
         }
         return map
     }
@@ -548,7 +550,7 @@ class DotCausalDigestCostModelTest {
         flush()
 
         quilters.forEachIndexed { i, quilter ->
-            quilter.mutate { Patch(it.add(ReplicaId("peer-$i"), "converged-writer-$i")) }
+            quilter.mutate { it.add(ReplicaId("peer-$i"), "converged-writer-$i") }
         }
         flush()
 
@@ -683,9 +685,9 @@ class DotCausalDigestCostModelTest {
         //   1. A adds "x"     2. B absorbs A's add     3. A removes "x", and the delta is LOST.
         // Anti-entropy is the *only* backstop left: the delta path detects a gap only if A mints
         // again, and A has gone quiet.
-        val a0 = ORSet.empty<String>().add(ReplicaId("A"), "x")
+        val a0 = ORSet.empty<String>().piece { it.add(ReplicaId("A"), "x") }
         val b = a0
-        val a = a0.remove("x")
+        val a = a0.piece { it.remove("x") }
 
         val mirrorA0 = mirrorAdd(Causal(DotMap(), DotContext.EMPTY), ReplicaId("A"), "x")
         val mirrorB = mirrorA0

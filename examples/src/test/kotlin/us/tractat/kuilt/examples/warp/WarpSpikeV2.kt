@@ -29,6 +29,7 @@ import us.tractat.kuilt.crdt.ORMap
 import us.tractat.kuilt.crdt.ORSet
 import us.tractat.kuilt.crdt.ReplicaId
 import kotlin.random.Random
+import us.tractat.kuilt.crdt.piece
 
 // ---------------------------------------------------------------------------
 // Strategy enum
@@ -213,7 +214,7 @@ private fun buildInitialQueue(
     var queue = ORSet.empty<TaskId>()
     for (i in 0 until taskCount) {
         val owner = replicaIds[rng.nextInt(peerCount)]
-        queue = queue.add(owner, TaskId("task-$i"))
+        queue = queue.piece { it.add(owner, TaskId("task-$i")) }
     }
     return queue
 }
@@ -357,7 +358,7 @@ private fun claimWithIntent(
     val afterIntent = peers.map { peer ->
         val candidate = pickCandidate(peer, rng) ?: return@map peer
         val newClock = peer.clock + 1L
-        val newIntent = peer.intentRegister.set(peer.id, newClock, candidate, peer.id.value)
+        val newIntent = peer.intentRegister.piece { it.set(peer.id, newClock, candidate, peer.id.value) }
         val neighbours = activeViews[peer.id] ?: emptyList()
         // Count intent messages sent.
         val intentMsgCount = neighbours.size
@@ -475,7 +476,7 @@ private fun executePhase(peers: List<PeerStateV2>, rng: Random): List<PeerStateV
                 val newClock = current.clock + 1L
                 val register = LWWRegister.empty<String>().set(peer.id, newClock, "result-by-${peer.id.value}")
                 current = current.copy(
-                    results = current.results.put(peer.id, taskId, register),
+                    results = current.results.piece { it.put(peer.id, taskId, register) },
                     clock = newClock,
                 )
             }

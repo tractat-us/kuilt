@@ -8,6 +8,7 @@ import us.tractat.kuilt.crdt.ORMap
 import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.RgaId
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.piece
 
 /**
  * Lattice-law conformance for [JsonCrdt].
@@ -42,7 +43,7 @@ internal class JsonCrdtConformanceTest : QuiltedConformanceSuite<JsonCrdt>() {
         JsonNode.Leaf(MVRegister.empty<JsonValue>().set(r, JsonValue.Num(n)))
 
     private fun objNode(r: ReplicaId, vararg pairs: Pair<String, JsonNode>): JsonNode.Object {
-        val map = pairs.fold(ORMap.empty<String, JsonNode>()) { acc, (k, v) -> acc.put(r, k, v) }
+        val map = pairs.fold(ORMap.empty<String, JsonNode>()) { acc, (k, v) -> acc.piece { it.put(r, k, v) } }
         return JsonNode.Object(map)
     }
 

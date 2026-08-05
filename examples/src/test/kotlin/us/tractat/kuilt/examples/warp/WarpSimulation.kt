@@ -21,6 +21,7 @@ import us.tractat.kuilt.crdt.ORMap
 import us.tractat.kuilt.crdt.ORSet
 import us.tractat.kuilt.crdt.ReplicaId
 import kotlin.random.Random
+import us.tractat.kuilt.crdt.piece
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -144,7 +145,7 @@ private fun initPeers(
     var sharedQueue = ORSet.empty<TaskId>()
     for (task in tasks) {
         val owner = replicaIds[rng.nextInt(peerCount)]
-        sharedQueue = sharedQueue.add(owner, task)
+        sharedQueue = sharedQueue.piece { it.add(owner, task) }
     }
 
     return replicaIds.map { id ->
@@ -184,7 +185,7 @@ private fun executeRound(
         // Execute: write result into ORMap (LWWRegister per task)
         val newClock = peer.clock + 1L
         val register = LWWRegister.empty<String>().set(peer.id, newClock, "result-by-${peer.id.value}")
-        val newResults = peer.results.put(peer.id, candidate, register)
+        val newResults = peer.results.piece { it.put(peer.id, candidate, register) }
 
         claims.add(candidate to peer.id)
         peer.copy(

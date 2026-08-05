@@ -176,8 +176,8 @@ internal fun sampleQuilterSessionMetadata() = runTest(
 
     // Each peer writes its own display name. LWWMap gives per-key last-writer-wins.
     // LWWMap.set returns a new LWWMap (the merged state), so wrap it in Patch.
-    aliceRep.apply(Patch(aliceRep.state.value.set(aliceRep.replica, timestamp = 1L, key = seamAlice.selfId, value = "Alice")))
-    bobRep.apply(Patch(bobRep.state.value.set(bobRep.replica, timestamp = 1L, key = seamBob.selfId, value = "Bob")))
+    aliceRep.mutate { it.set(aliceRep.replica, timestamp = 1L, key = seamAlice.selfId, value = "Alice") }
+    bobRep.mutate { it.set(bobRep.replica, timestamp = 1L, key = seamBob.selfId, value = "Bob") }
 
     kotlinx.coroutines.delay(10)
 

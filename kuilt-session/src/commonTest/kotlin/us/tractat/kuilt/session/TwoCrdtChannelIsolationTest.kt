@@ -100,8 +100,8 @@ class TwoCrdtChannelIsolationTest {
             hostCounter.apply(hostCounter.state.value.inc(hostReplica, 4L))
             joinerCounter.apply(joinerCounter.state.value.inc(joinerReplica, 6L))
 
-            hostMap.apply(Patch(LWWMap.empty<String, String>().set(hostReplica, 1L, "color", "red")))
-            joinerMap.apply(Patch(LWWMap.empty<String, String>().set(joinerReplica, 1L, "size", "large")))
+            hostMap.apply(LWWMap.empty<String, String>().set(hostReplica, 1L, "color", "red"))
+            joinerMap.apply(LWWMap.empty<String, String>().set(joinerReplica, 1L, "size", "large"))
 
             testScheduler.advanceUntilIdle()
 

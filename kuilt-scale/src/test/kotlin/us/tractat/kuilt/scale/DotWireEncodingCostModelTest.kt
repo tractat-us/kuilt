@@ -27,6 +27,7 @@ import us.tractat.kuilt.crdt.ORSet
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.Quilted
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.piece
 import us.tractat.kuilt.gossip.GossipSeam
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.quilter.QuiltMessage
@@ -974,7 +975,7 @@ class DotWireEncodingCostModelTest {
         QuiltMessage.Delta(
             sender = replica,
             seq = 1L,
-            delta = ORSet.empty<String>().addDelta(ReplicaId(replicaIdOf(0, width)), element(0)).delta,
+            delta = ORSet.empty<String>().add(ReplicaId(replicaIdOf(0, width)), element(0)).delta,
         ),
     )
 
@@ -1094,8 +1095,10 @@ class DotWireEncodingCostModelTest {
      * of this part is a table whose rows are comparable.
      *
      * [addFull]/[removeFull] are the `Patch(state.mutator(…))` spelling every consumer used before
-     * #2044; [addDelta]/[removeDelta] are the delta mutators it added. The `timestamp` argument is
-     * ignored by the two causal types and is [LWWMap]'s write tag.
+     * #2044 — reconstructed as `state.piece(state.mutator(…))`, which the delta-mutator law makes
+     * byte-identical to what that spelling produced. [addDelta]/[removeDelta] are the delta
+     * mutators. The `timestamp` argument is ignored by the two causal types and is [LWWMap]'s
+     * write tag.
      */
     @Suppress("LongParameterList")
     private class WriteProbe<S : Quilted<S>>(
@@ -1116,12 +1119,14 @@ class DotWireEncodingCostModelTest {
         label = "ORSet",
         serializer = ORSet.serializer(string),
         seed = { n ->
-            (0 until n).fold(ORSet.empty<String>()) { set, i -> set.add(replicaId(i % SEED_REPLICAS), element(i)) }
+            (0 until n).fold(ORSet.empty<String>()) { set, i ->
+                set.piece { it.add(replicaId(i % SEED_REPLICAS), element(i)) }
+            }
         },
-        addFull = { set, r, key, _ -> set.add(r, key) },
-        addDelta = { set, r, key, _ -> set.addDelta(r, key) },
-        removeFull = { set, _, key, _ -> set.remove(key) },
-        removeDelta = { set, _, key, _ -> set.removeDelta(key) },
+        addFull = { set, r, key, _ -> set.piece(set.add(r, key)) },
+        addDelta = { set, r, key, _ -> set.add(r, key) },
+        removeFull = { set, _, key, _ -> set.piece(set.remove(key)) },
+        removeDelta = { set, _, key, _ -> set.remove(key) },
         holds = { set, key -> set.contains(key) },
     )
 
@@ -1130,13 +1135,13 @@ class DotWireEncodingCostModelTest {
         serializer = ORMap.serializer(string, GSet.serializer(string)),
         seed = { n ->
             (0 until n).fold(ORMap.empty<String, GSet<String>>()) { map, i ->
-                map.put(replicaId(i % SEED_REPLICAS), element(i), GSet.of(seedValue(i)))
+                map.piece { it.put(replicaId(i % SEED_REPLICAS), element(i), GSet.of(seedValue(i))) }
             }
         },
-        addFull = { map, r, key, _ -> map.put(r, key, GSet.of(PROBE_VALUE)) },
-        addDelta = { map, r, key, _ -> map.putDelta(r, key, GSet.of(PROBE_VALUE)) },
-        removeFull = { map, _, key, _ -> map.remove(key) },
-        removeDelta = { map, _, key, _ -> map.removeDelta(key) },
+        addFull = { map, r, key, _ -> map.piece(map.put(r, key, GSet.of(PROBE_VALUE))) },
+        addDelta = { map, r, key, _ -> map.put(r, key, GSet.of(PROBE_VALUE)) },
+        removeFull = { map, _, key, _ -> map.piece(map.remove(key)) },
+        removeDelta = { map, _, key, _ -> map.remove(key) },
         holds = { map, key -> map[key] != null },
     )
 
@@ -1145,13 +1150,13 @@ class DotWireEncodingCostModelTest {
         serializer = LWWMap.serializer(string, string),
         seed = { n ->
             (0 until n).fold(LWWMap.empty<String, String>()) { map, i ->
-                map.set(replicaId(i % SEED_REPLICAS), i + 1L, element(i), seedValue(i))
+                map.piece { it.set(replicaId(i % SEED_REPLICAS), i + 1L, element(i), seedValue(i)) }
             }
         },
-        addFull = { map, r, key, at -> map.set(r, at, key, PROBE_VALUE) },
-        addDelta = { map, r, key, at -> map.setDelta(r, at, key, PROBE_VALUE) },
-        removeFull = { map, r, key, at -> map.remove(r, at, key) },
-        removeDelta = { map, r, key, at -> map.removeDelta(r, at, key) },
+        addFull = { map, r, key, at -> map.piece(map.set(r, at, key, PROBE_VALUE)) },
+        addDelta = { map, r, key, at -> map.set(r, at, key, PROBE_VALUE) },
+        removeFull = { map, r, key, at -> map.piece(map.remove(r, at, key)) },
+        removeDelta = { map, r, key, at -> map.remove(r, at, key) },
         holds = { map, key -> map[key] != null },
     )
 
@@ -1335,7 +1340,7 @@ class DotWireEncodingCostModelTest {
             println("  (ii)  ONE add,   Patch(add(...)) : ${paths.fullAdd} b " +
                 "= ${"%.1f".format(paths.fullAdd / paths.fullState.toDouble())} full states, " +
                 "${"%.1f".format(paths.fullAdd / oneJoin)}x a join")
-            println("  (ii') ONE add,   addDelta(...)   : ${paths.deltaAdd} b " +
+            println("  (ii') ONE add,   add(...) delta  : ${paths.deltaAdd} b " +
                 "= ${"%.3f".format(paths.deltaAdd / oneJoin)}x a join, " +
                 "${"%.0f".format(paths.fullAdd.toDouble() / paths.deltaAdd)}x smaller than the full-state form")
             println("  (iii) converged round, per node  : ${"%.1f".format(paths.perRoundPerNode)} b " +

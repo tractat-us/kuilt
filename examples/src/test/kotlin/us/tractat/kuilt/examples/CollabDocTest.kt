@@ -18,6 +18,7 @@ import us.tractat.kuilt.crdt.MVRegister
 import us.tractat.kuilt.crdt.ORMap
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.piece
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
@@ -123,21 +124,17 @@ class CollabDocTest {
             // Alice and Bob each populate a different nested key in "profile".
             aliceDoc.mutate { doc ->
                 val profile = JsonNode.Object(
-                    ORMap.empty<String, JsonNode>().put(
-                        aliceDoc.replica,
-                        "name",
-                        strLeaf(aliceDoc.replica, "Alice"),
-                    ),
+                    ORMap.empty<String, JsonNode>().piece {
+                        it.put(aliceDoc.replica, "name", strLeaf(aliceDoc.replica, "Alice"))
+                    },
                 )
                 Patch(doc.withReplica(aliceDoc.replica).set("profile", profile))
             }
             bobDoc.mutate { doc ->
                 val profile = JsonNode.Object(
-                    ORMap.empty<String, JsonNode>().put(
-                        bobDoc.replica,
-                        "location",
-                        strLeaf(bobDoc.replica, "London"),
-                    ),
+                    ORMap.empty<String, JsonNode>().piece {
+                        it.put(bobDoc.replica, "location", strLeaf(bobDoc.replica, "London"))
+                    },
                 )
                 Patch(doc.withReplica(bobDoc.replica).set("profile", profile))
             }
