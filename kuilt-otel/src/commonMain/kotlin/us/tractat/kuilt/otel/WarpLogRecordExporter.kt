@@ -244,6 +244,17 @@ public class WarpLogRecordExporter(
      * between another turn's [retireSupersededSegments] and its [applyRetirement], so a segment
      * number cannot be staged for retirement twice.
      *
+     * **Do not narrow this to [commit] alone.** It looks equivalent and holds the lock for less
+     * time, and it is wrong twice: two turns would still build in one order and acquire in
+     * another, and a turn could still build its whole batch while another turn's commit is
+     * in flight — which is the double-staging window verbatim. Both are also **invisible to the
+     * tests**, and that is not an oversight to be fixed by a better test. A double-stage is
+     * idempotent at every step ([applyRetirement] filters, `removeAll` and `remove` no-op, and a
+     * repeat delete of an absent key is a no-op), so it leaves no trace on [store] to assert on;
+     * and the residual reorder window shrinks from one store write wide to a few instructions
+     * wide, which a stress loop does not reach. Serializing the *whole* turn is what makes both
+     * unrepresentable, so this shape is load-bearing where no assertion can be.
+     *
      * A [Mutex] and not [lock] because a turn suspends — holding a thread-blocking lock across
      * `store.write` would park a dispatcher thread for the length of an I/O. It is a real
      * mutual-exclusion primitive, not `limitedParallelism(1)` confinement: this type owns no scope
