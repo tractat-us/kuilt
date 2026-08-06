@@ -700,8 +700,17 @@ public class Rga<V> private constructor(
      * Delegates to the shared [OpLogEngine], which folds in **compacted ids** as well as
      * live [RgaOp.Insert]s so a self-compaction can't regress the per-author high-water
      * and let [nextSeqFor] reuse a seq it already minted (#639).
+     *
+     * [compactedBelow] is folded in for the same reason and is **not** optional: a floor
+     * purges the ops beneath it, so the op-log holds no evidence at all that those seqs were
+     * minted, and a window that drained entirely would leave this map empty and let
+     * [nextSeqFor] hand back `1` — a dot the floor itself suppresses, so the next record would
+     * be silently annihilated by the very next [piece]. The two cached paths ([cacheAfterFloor],
+     * [piece]) already merge the floor in; this is the no-cache path, which the wire decode
+     * reaches through [fromOps] (#2127).
      */
-    private fun computeMaxSeqByReplica(): Map<ReplicaId, Long> = engine<V>().maxSeqByReplica(ops)
+    private fun computeMaxSeqByReplica(): Map<ReplicaId, Long> =
+        engine<V>().maxSeqByReplica(ops).mergeMax(compactedBelow.entries)
 
     /** Compute compactedIds from the op-log (fallback when no cache is provided). */
     private fun computeCompactedIds(): Set<RgaId> =
@@ -859,12 +868,21 @@ public class Rga<V> private constructor(
          * The ops are purged against [compactedBelow] on construction, so a decoded
          * blob whose op-set contradicts its own floor cannot present a resurrected
          * element — the floor wins, exactly as it does on every other path.
+         *
+         * **The floor is canonicalised through [VersionVector.of].** Its primary constructor
+         * keeps a non-positive entry and kotlinx-serialization decodes through the constructor,
+         * so a blob carrying `{r: 0}` would otherwise produce a floor that suppresses nothing yet
+         * is `!equals` the canonical [VersionVector.EMPTY] — and since the floor is part of
+         * [equals], `decode(encode(x)) != x` for a value whose ops are identical.
          */
         internal fun <V> fromOps(
             ops: Set<RgaOp<V>>,
             lamport: Long,
             compactedBelow: VersionVector = VersionVector.EMPTY,
-        ): Rga<V> = Rga(purgeBelow(ops, compactedBelow), lamport, compactedBelow)
+        ): Rga<V> {
+            val floor = VersionVector.of(compactedBelow.entries)
+            return Rga(purgeBelow(ops, floor), lamport, floor)
+        }
 
         /**
          * A minimal state carrying only a compaction record, for propagation through [piece].
