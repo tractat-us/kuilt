@@ -296,6 +296,12 @@ class WarpLogRecordExporterTailCacheTest {
      * a cache bug. The windowing transcription costs the oracle nothing: production computes
      * the window from [Rga.sequence]/[Rga.tombstones] too, so that part was never cached on
      * either side.
+     *
+     * That transcription is **verbatim**, deliberately, which means the window walk itself is
+     * NOT differentially covered here: a bug *in the walk* is copied to both sides and they
+     * agree on the wrong answer. Accepted, for the reason just given — but do not read this
+     * oracle as coverage of the walk. What the walk owes is pinned directly, by
+     * `WarpLogRecordExporterWindowingTest`.
      */
     private class ReferenceLogExporter(
         private val replica: ReplicaId,

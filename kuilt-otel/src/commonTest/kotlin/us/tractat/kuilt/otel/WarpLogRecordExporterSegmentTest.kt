@@ -241,8 +241,7 @@ class WarpLogRecordExporterSegmentTest {
     @Test
     fun theStoreIsNoLargerThanTheOpLogItHolds() = runTest {
         // Segments are never dropped, so the total is NOT bounded — the honest claim is
-        // that partitioning the op-log across keys does not inflate it. Both policies,
-        // because F3 was a policy-specific regression that only measuring one hid.
+        // that partitioning the op-log across keys does not inflate it.
         //
         // The cap is deliberately above the export count, so nothing is evicted and both
         // sides hold the identical 200-Insert op-log — which is the only configuration in
@@ -253,25 +252,37 @@ class WarpLogRecordExporterSegmentTest {
         // segment retirement lands. Comparing totals there would measure that gap (real, and
         // the rest of #2127) rather than the layout question this test is named for, and
         // comparing bytes-per-op would compare different op *mixes* (the one-key side keeps
-        // only bodied Inserts; the segments also hold cheap bodiless Removes). Cap pressure
-        // on both policies is measured next door, by bothBufferPoliciesBoundThePerExportWrite.
-        for (policy in BufferPolicy.entries) {
-            val segmented = RecordingStore()
-            exporterFor(store = segmented, maxRecords = 1_000, bufferPolicy = policy, segmentOps = 8)
-                .also { e -> repeat(200) { e.export(record(it)) } }
+        // only bodied Inserts; the segments also hold cheap bodiless Removes).
+        //
+        // That has a cost worth stating plainly rather than hand-waving: **total resident
+        // bytes under cap pressure are now measured NOWHERE.** This test used to measure it
+        // and no longer can — the property is genuinely false post-windowing, so it cannot be
+        // restored as written, and the neighbouring bothBufferPoliciesBoundThePerExportWrite
+        // is not a substitute (it bounds one export's *write size*, not the total on disk).
+        // What would make the dimension measurable again is segment retirement — the rest of
+        // #2127 — after which a windowed-away Insert leaves the store instead of only `log`.
+        //
+        // No policy loop, for the same reason. With no cap pressure DROP_NEWEST refuses
+        // nothing and DROP_OLDEST evicts nothing, so both policies drive the identical op
+        // sequence and a loop over BufferPolicy.entries would run twice to assert once. The
+        // policy-specific regression that motivated looping here (#2126's F3) was in a
+        // reclamation path that no longer exists; the surviving policy-split coverage is
+        // bothBufferPoliciesBoundThePerExportWrite, where the cap does bite.
+        val segmented = RecordingStore()
+        exporterFor(store = segmented, maxRecords = 1_000, segmentOps = 8)
+            .also { e -> repeat(200) { e.export(record(it)) } }
 
-            val singleBlob = RecordingStore()
-            exporterFor(store = singleBlob, maxRecords = 1_000, bufferPolicy = policy, segmentOps = 100_000)
-                .also { e -> repeat(200) { e.export(record(it)) } }
+        val singleBlob = RecordingStore()
+        exporterFor(store = singleBlob, maxRecords = 1_000, segmentOps = 100_000)
+            .also { e -> repeat(200) { e.export(record(it)) } }
 
-            // A 15% allowance for the per-segment CBOR framing and the index.
-            val ceiling = singleBlob.residentBytes() * 115 / 100
-            assertTrue(
-                segmented.residentBytes() <= ceiling,
-                "$policy: segmenting inflated the store from ${singleBlob.residentBytes()} " +
-                    "to ${segmented.residentBytes()}",
-            )
-        }
+        // A 15% allowance for the per-segment CBOR framing and the index.
+        val ceiling = singleBlob.residentBytes() * 115 / 100
+        assertTrue(
+            segmented.residentBytes() <= ceiling,
+            "segmenting inflated the store from ${singleBlob.residentBytes()} " +
+                "to ${segmented.residentBytes()}",
+        )
     }
 
     // ---- Robustness: one bad read must not cost the whole log ----

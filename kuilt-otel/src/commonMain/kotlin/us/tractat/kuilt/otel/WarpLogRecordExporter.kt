@@ -116,16 +116,35 @@ internal fun opCountOf(segment: Rga<LogRecord>): Int = segment.opCount
  *
  * Eviction only *tombstones*: the evicted record's `Insert` op — body and all — stays
  * in the log, so the in-memory op-log grew with the number of records ever exported
- * even though [maxRecords] held visibility flat. [Rga.dropWindow] is the bounded fix,
- * and this exporter calls it in **batches** ([windowPass]): everything outside the
- * retained window is dropped from `log`, and the drop is recorded as a per-author
- * compaction **floor** — O(authors), not O(elements dropped).
+ * even though [maxRecords] held visibility flat. [Rga.dropWindow] is the fix, and this
+ * exporter calls it in **batches** ([windowPass]): everything outside the retained
+ * window is dropped from `log`.
  *
- * That is sound without a causal-stability barrier because windowing deliberately
- * forgets *position*, not *identity*: the floor keeps suppressing a dropped dot, so a
- * peer that still holds the raw `Insert` cannot push the record back in through
- * [merge] — [Rga.piece] merges the floor and re-purges under it. What is given up is
- * the stability of a survivor's position when its predecessor is dropped; see
+ * **How cheaply the drop is recorded depends on who authored the dot**, and only one of
+ * the two arms is a bound. This replica's own dots fold into a per-author compaction
+ * **floor** — O(authors), not O(elements dropped) — so a log fed only by [export] settles
+ * back to O([maxRecords]) after every pass. A *foreign* author's dot cannot: raising
+ * another author's floor entry would annihilate dots it may not have minted yet, so
+ * [Rga.dropWindow] records those in an explicit [RgaOp.Compact] costing one
+ * `(RgaId -> RgaId)` pair each — and nothing ever prunes them, because a purge retains
+ * `Compact` unconditionally and [Rga.piece] unions the positions it carries. So the
+ * honest in-memory bound is **O([maxRecords]) on the export path, plus one bodiless pair
+ * per foreign element ever windowed away on the [merge] path.**
+ *
+ * That second term is a strict improvement on what preceded it — before windowing, a
+ * merged-in foreign `Insert` was retained whole, body included — but it is growth, not a
+ * bound, and a replica that gossips accumulates it for as long as the process lives.
+ * Bounding it needs the same causal-stability argument segment retirement does, and is
+ * not attempted here. `WarpLogRecordExporterWindowingTest` measures both terms against
+ * each other.
+ *
+ * Windowing is sound without a causal-stability barrier because it deliberately forgets
+ * *position*, not *identity*: a dropped dot stays suppressed, so a peer that still holds
+ * the raw `Insert` cannot push the record back in through [merge] — [Rga.piece] merges
+ * the suppression and re-purges under it. Which suppressor does the work follows the same
+ * split as the cost: the **floor** for this replica's own dots, and the retained
+ * [RgaOp.Compact]'s compacted-id set for a foreign author's. What is given up is the
+ * stability of a survivor's position when its predecessor is dropped; see
  * [Rga.compactedBelow].
  *
  * ## What this does not bound: the total on disk
@@ -803,11 +822,12 @@ public class WarpLogRecordExporter(
      * export path (#1860). Running once per [maxRecords] evictions amortises them back to O(1)
      * per record; running per eviction would put an O(N) walk back on every single export.
      *
-     * The floor reaches disk through [activeSegment]: [Rga.piece] merges the delta's floor into
-     * it and purges the segment's own ops beneath it, so the segment write that follows carries
-     * the drop forward. Recovery unions the segments — the *sealed* ones still hold the dropped
-     * `Insert`s — and the merged floor purges them there too, which is why bounding the log in
-     * memory does not (yet) shrink the store.
+     * The drop reaches disk through [activeSegment]: [Rga.piece] merges the delta — a raised
+     * floor, plus an [RgaOp.Compact] for any foreign author's dots the pass took — into it and
+     * purges the segment's own ops beneath it, so the segment write that follows carries the
+     * drop forward. Recovery unions the segments — the *sealed* ones still hold the dropped
+     * `Insert`s — and the merged floor and `Compact` purge them there too, which is why
+     * bounding the log in memory does not (yet) shrink the store.
      */
     private fun windowPass(): Boolean {
         evictionsSincePass = 0

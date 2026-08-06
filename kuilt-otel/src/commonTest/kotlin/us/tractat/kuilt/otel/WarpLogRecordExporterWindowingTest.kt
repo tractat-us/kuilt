@@ -16,13 +16,17 @@ import kotlin.test.assertTrue
  * visibility flat, but the evicted record's `Insert` op — body and all — stayed in the
  * log forever, so the op-log grew with the number of records ever exported. The exporter
  * now batches `Rga.dropWindow` calls, which drop those ops and record the drop as a
- * per-author compaction **floor** rather than a per-element map.
+ * per-author compaction **floor** — for this replica's *own* dots. A foreign author's cannot
+ * fold into that floor and keep a per-element `RgaOp.Compact` pair instead.
  *
- * The floor is the whole safety story, and it is what these tests aim at: once the ops are
- * physically gone there is no tombstone left to suppress a peer that still holds them, so
- * only the floor can refuse the re-admission.
+ * Suppression is the whole safety story, and it is what most of these tests aim at: once the
+ * ops are physically gone there is no tombstone left to refuse a peer that still holds them.
+ * Which suppressor does the refusing follows the same split as the cost — the floor for own
+ * dots, the retained `RgaOp.Compact`'s compacted-id set for foreign ones — and so only the
+ * export path is O(`maxRecords`).
+ * [theOpLogIsBoundedOnTheExportPathButNotOnTheMergePath] keeps that split honest.
  */
-class WarpLogRecordExporterRetirementTest {
+class WarpLogRecordExporterWindowingTest {
 
     private val replicaA = ReplicaId("A")
     private val replicaB = ReplicaId("B")
@@ -77,6 +81,70 @@ class WarpLogRecordExporterRetirementTest {
         )
     }
 
+    @Test
+    fun theOpLogIsBoundedOnTheExportPathButNotOnTheMergePath() = runTest {
+        // The class KDoc's bound has two arms and only ONE of them is a bound — which is the
+        // whole reason this measures opCount rather than size. `Rga.dropWindow` folds THIS
+        // replica's dropped dots into its own compaction floor (O(authors)), but it cannot
+        // raise a foreign author's floor entry — that would annihilate dots the author may not
+        // have minted yet — so foreign dots keep an explicit `RgaOp.Compact` instead, and
+        // nothing ever prunes one. Same 200 records, same 5-record window, both paths, so the
+        // two endpoints are directly comparable.
+        //
+        // opCount UNDERSTATES the merge arm: a `Compact` is one op however many
+        // `(RgaId -> RgaId)` pairs it carries, and the residue here is 200 pairs. The SHAPE is
+        // what is pinned — the constants deliberately are not.
+        val batches = 40
+        val perBatch = 5
+
+        val exportOnly = exporterFor(maxRecords = 5, segmentOps = 8)
+        repeat(batches * perBatch) { i -> exportOnly.export(record(i)) }
+
+        val merging = exporterFor(maxRecords = 5, segmentOps = 8)
+        // A cap above everything it will ever hold, so the peer never windows its own log and
+        // every batch really does hand `merging` `perBatch` elements it has not seen.
+        val peer = exporterFor(replica = replicaB, maxRecords = batches * perBatch, segmentOps = 64)
+        var opsEarly = 0
+        repeat(batches) { batch ->
+            repeat(perBatch) { i -> peer.export(record(1_000 + batch * perBatch + i)) }
+            merging.merge(peer.snapshot())
+            if (batch == batches / 4) opsEarly = merging.snapshot().opCount
+        }
+        val opsLate = merging.snapshot().opCount
+
+        // Re-merging a log that adds no new element must add nothing: the residue tracks
+        // foreign elements windowed away, not the number of merge calls.
+        repeat(5) { merging.merge(peer.snapshot()) }
+
+        assertAll(
+            { assertEquals(5, exportOnly.snapshot().size, "export arm: the window must be intact") },
+            { assertEquals(5, merging.snapshot().size, "merge arm: the window must be intact") },
+            {
+                assertTrue(
+                    exportOnly.snapshot().opCount <= 3 * 5,
+                    "export path: ${batches * perBatch} records through a 5-record window must leave " +
+                        "an O(maxRecords) op-log; got ${exportOnly.snapshot().opCount}",
+                )
+            },
+            {
+                assertTrue(
+                    opsLate > opsEarly,
+                    "merge path: the op-log GROWS with the number of foreign batches windowed away " +
+                        "— that is what the class KDoc claims. Got $opsEarly -> $opsLate. If this " +
+                        "reddened because the merge path became bounded, correct the KDoc.",
+                )
+            },
+            {
+                assertEquals(
+                    opsLate,
+                    merging.snapshot().opCount,
+                    "re-merging the same log grew the op-log; the residue must track foreign elements, " +
+                        "not merge calls",
+                )
+            },
+        )
+    }
+
     // ---- Merge safety once the tombstones are gone ----
 
     @Test
@@ -128,7 +196,21 @@ class WarpLogRecordExporterRetirementTest {
 
         a.merge(b.snapshot())
 
-        assertEquals(5, a.snapshot().size, "a merge must not leave the window over cap")
+        assertAll(
+            { assertEquals(5, a.snapshot().size, "a merge must not leave the window over cap") },
+            {
+                // The name promises the OP-LOG, so measure it and not just visibility. Both
+                // logs arrive already windowed at 5, so an un-windowed merge would leave the
+                // whole 10-op union standing; the pass leaves the 5-record window plus the one
+                // `RgaOp.Compact` it had to mint for b's dropped dots (b authored them, so they
+                // cannot fold into a's floor). `<=` rather than `==`: a later change that
+                // reclaimed that pair too would be an improvement, not a regression.
+                assertTrue(
+                    a.snapshot().opCount <= 6,
+                    "the merge left an unwindowed op-log; got ${a.snapshot().opCount} ops",
+                )
+            },
+        )
     }
 
     @Test
