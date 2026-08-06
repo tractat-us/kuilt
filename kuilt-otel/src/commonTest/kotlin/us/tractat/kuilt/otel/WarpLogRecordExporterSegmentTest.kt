@@ -10,6 +10,7 @@ import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.RgaId
+import us.tractat.kuilt.crdt.RgaOp
 import us.tractat.kuilt.crdt.VersionVector
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -140,6 +141,28 @@ class WarpLogRecordExporterSegmentTest {
             }
             return rga
         }
+    }
+
+    // ---- opCount must see retained Compact ops, not just sequence + tombstones ----
+
+    /** Test-source shim over the production [opCountOf] — forwards, does not duplicate its logic. */
+    private fun opCountOfForTest(segment: Rga<LogRecord>): Int = opCountOf(segment)
+
+    @Test
+    fun opCountSeesCompactOpsSoTheRollThresholdIsNotUndercounted() = runTest {
+        val ids = mutableListOf<RgaId>()
+        var rga = Rga.empty<LogRecord>()
+        var tail = RgaId.HEAD
+        repeat(4) { i ->
+            val (next, op) = rga.insertAfter(replicaA, tail, record(i))
+            rga = next
+            tail = op.id
+            ids += op.id
+        }
+        val compacted = rga.apply(RgaOp.Compact(rga.positionsFor(setOf(ids[0]))))
+
+        // 3 surviving Inserts + 1 retained Compact.
+        assertEquals(4, opCountOfForTest(compacted), "a Compact is an op and occupies segment budget")
     }
 
     // ---- The headline claim: the per-export write is bounded, not merely smaller ----

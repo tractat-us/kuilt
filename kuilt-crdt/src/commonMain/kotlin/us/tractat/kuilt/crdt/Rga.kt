@@ -261,6 +261,16 @@ public class Rga<V> private constructor(
     public val size: Int get() = sequence.count { it !in tombstones }
 
     /**
+     * How many operations this log holds — Inserts, Removes and retained `Compact`s alike.
+     *
+     * A consumer that partitions the op-log across storage segments budgets in ops, and a
+     * `Compact` occupies budget exactly as an `Insert` does. It is invisible to both
+     * [sequence] and [tombstones], so a `sequence.size + tombstones.size` estimate silently
+     * undercounts a segment that carries one.
+     */
+    public val opCount: Int get() = ops.size
+
+    /**
      * Insert [value] immediately after the element with [after] id, minting a
      * new [RgaId] on behalf of [replica].
      *

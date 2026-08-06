@@ -27,6 +27,21 @@ import us.tractat.kuilt.crdt.ReplicaId
 private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpLogRecordExporter")
 
 /**
+ * How many ops [segment] holds, for the roll threshold.
+ *
+ * Delegates to [Rga.opCount], which counts every op — Inserts, Removes and retained
+ * `Compact`s alike. A `sequence.size + tombstones.size` projection is blind to `Compact`
+ * (invisible to both), so it would silently undercount a segment that carries one.
+ *
+ * Top-level (not a class member) because it depends only on [segment], not on any
+ * exporter instance state — which also lets test source call it directly ([Rga.opCount]
+ * is `public`, so nothing but naming keeps `opCountOf` itself internal here).
+ * Internal so `WarpLogRecordExporterSegmentTest`'s `opCountOfForTest` shim can call the
+ * production function instead of duplicating its logic.
+ */
+internal fun opCountOf(segment: Rga<LogRecord>): Int = segment.opCount
+
+/**
  * A CRDT-backed log-record exporter.
  *
  * Log records are stored in an [Rga]`<`[LogRecord]`>`: an ordered, append-only
@@ -635,14 +650,6 @@ public class WarpLogRecordExporter(
             next = nextSegmentNumber,
         ),
     )
-
-    /**
-     * How many ops [segment] holds, for the roll threshold. A `Remove` whose `Insert`
-     * lives in another segment appears only in [Rga.tombstones], so the two projections
-     * are disjoint exactly where they should be and the sum is the true op count.
-     */
-    private fun opCountOf(segment: Rga<LogRecord>): Int =
-        segment.sequence.size + segment.tombstones.size
 
     // ── Health bookkeeping ─────────────────────────────────────────────────────
     //
