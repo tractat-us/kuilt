@@ -167,6 +167,20 @@ public class Rga<V> private constructor(
     /** This replica's current Lamport timestamp (max seen + 1 after any op). */
     public val lamport: Long,
     /**
+     * Per-author high-water of dots this replica has **compacted away** — every dot
+     * `(r, s)` with `s <= compactedBelow[r]` is permanently suppressed.
+     *
+     * This is the bounded form of [RgaOp.Compact]: a `Compact` retains one
+     * `(RgaId -> RgaId)` pair per dropped element forever, so it is Θ(elements ever);
+     * a floor is O(authors). It can only describe a **downward-closed** compacted set,
+     * which [dropWindow] guarantees by advancing it across a contiguous own-dot run only.
+     *
+     * Merged by [VersionVector.ceilWith] under [piece]: the product of (op-set under
+     * union) and (floor under elementwise max) is a join-semilattice, so the [Quilted]
+     * laws hold by construction. Part of [equals] — it is state, not a cache.
+     */
+    public val compactedBelow: VersionVector = VersionVector.EMPTY,
+    /**
      * Pre-computed derived state. When non-null (all mutation paths), the fields are
      * used directly instead of scanning [ops]. When null (deserialization via
      * [fromOps]), each field is computed from [ops] on first access.
@@ -293,7 +307,7 @@ public class Rga<V> private constructor(
             compactedIds = compactedIds,
             compactPositions = compactPositions,
         )
-        return Rga(newOps, newLamport, newCache) to op
+        return Rga(newOps, newLamport, compactedBelow, newCache) to op
     }
 
     /**
@@ -343,7 +357,7 @@ public class Rga<V> private constructor(
             compactedIds = compactedIds,
             compactPositions = compactPositions,
         )
-        return Rga(newOps, lamport, newCache) to op
+        return Rga(newOps, lamport, compactedBelow, newCache) to op
     }
 
     /**
@@ -395,6 +409,32 @@ public class Rga<V> private constructor(
     }
 
     /**
+     * This state with its compaction floor raised to `compactedBelow ceilWith [floor]`,
+     * purging every op the raised floor now covers.
+     *
+     * Low-level: it will happily raise **another** author's entry, which is unsound as a
+     * local decision — a foreign dot that has not been minted yet would be annihilated
+     * rather than resurfacing at the window boundary. Prefer [dropWindow], which raises
+     * only this replica's own entry. This entry point exists for absorbing a floor that
+     * arrived from its own author over the wire, and for tests.
+     */
+    public fun withCompactedBelow(floor: VersionVector): Rga<V> {
+        val merged = compactedBelow.ceilWith(floor)
+        if (merged == compactedBelow) return this
+        return Rga(purgeBelow(ops, merged), lamport, merged, cacheAfterFloor(merged))
+    }
+
+    /** Rebuild the derived caches after the floor rose to [merged]. */
+    private fun cacheAfterFloor(merged: VersionVector): RgaCache<V> = RgaCache(
+        insertsById = insertsById.filterKeys { !merged.contains(it.dot) },
+        // maxSeqByReplica must NOT drop: the floor is itself evidence those seqs were minted.
+        maxSeqByReplica = maxSeqByReplica.mergeMax(merged.entries),
+        tombstones = tombstones.filterTo(mutableSetOf()) { !merged.contains(it.dot) },
+        compactedIds = compactedIds,
+        compactPositions = compactPositions,
+    )
+
+    /**
      * Returns a positions map for [ids]: each id mapped to its [RgaOp.Insert.after].
      * All ids must be present in [insertsById] (non-compacted — live or tombstoned).
      * Used by [us.tractat.kuilt.quilter.RgaGcCoordinator] to build positions
@@ -425,7 +465,7 @@ public class Rga<V> private constructor(
     }
 
     private fun applyInsert(op: RgaOp.Insert<V>): Rga<V> {
-        if (op.id in compactedIds) return this
+        if (op.id in compactedIds || compactedBelow.contains(op.id.dot)) return this
         val newOps = ops + op
         val newLamport = maxOf(lamport, op.id.lamport)
         val newCache = RgaCache(
@@ -435,11 +475,11 @@ public class Rga<V> private constructor(
             compactedIds = compactedIds,
             compactPositions = compactPositions,
         )
-        return Rga(newOps, newLamport, newCache)
+        return Rga(newOps, newLamport, compactedBelow, newCache)
     }
 
     private fun applyRemove(op: RgaOp.Remove<V>): Rga<V> {
-        if (op.id in compactedIds) return this
+        if (op.id in compactedIds || compactedBelow.contains(op.id.dot)) return this
         val newOps = ops + op
         val newCache = RgaCache(
             insertsById = insertsById,
@@ -448,7 +488,7 @@ public class Rga<V> private constructor(
             compactedIds = compactedIds,
             compactPositions = compactPositions,
         )
-        return Rga(newOps, lamport, newCache)
+        return Rga(newOps, lamport, compactedBelow, newCache)
     }
 
     private fun applyCompact(op: RgaOp.Compact): Rga<V> {
@@ -472,7 +512,7 @@ public class Rga<V> private constructor(
             compactedIds = compactedIds + gcIds,
             compactPositions = compactPositions + compactOp.positions,
         )
-        return Rga(newOps, lamport, newCache)
+        return Rga(newOps, lamport, compactedBelow, newCache)
     }
 
     /**
@@ -514,21 +554,32 @@ public class Rga<V> private constructor(
      * Any [RgaOp.Compact] ops in the union are applied eagerly so that Insert/Remove
      * ops already GC'd on one peer do not re-inflate the op-log on merge.
      *
+     * [compactedBelow] merges by [VersionVector.ceilWith] and suppresses alongside
+     * [compactedIds]: a peer that still holds the raw ops under the other side's floor
+     * must not resurrect them. The state is the product of (op-set under union) and
+     * (floor under elementwise max), so both components are join-semilattices and the
+     * laws above still hold.
+     *
      * Derived caches are merged incrementally — no full O(ops) rescan on the merged result.
      */
     override fun piece(other: Rga<V>): Rga<V> {
+        val mergedFloor = compactedBelow.ceilWith(other.compactedBelow)
         val rawUnion = ops + other.ops
         val mergedLamport = maxOf(lamport, other.lamport)
         val mergedCompactedIds = compactedIds + other.compactedIds
         val mergedCompactPositions = compactPositions + other.compactPositions
+        // Fast path only when NOTHING is suppressed — an empty id-set with a non-empty
+        // floor still has to filter, and vice versa.
+        val suppresses = mergedCompactedIds.isNotEmpty() || mergedFloor.entries.isNotEmpty()
+        val survives = { id: RgaId -> id !in mergedCompactedIds && !mergedFloor.contains(id.dot) }
         val rawInsertsById = insertsById + other.insertsById
-        val mergedInsertsById = if (mergedCompactedIds.isEmpty()) rawInsertsById
-            else rawInsertsById.filterKeys { it !in mergedCompactedIds }
+        val mergedInsertsById = if (!suppresses) rawInsertsById else rawInsertsById.filterKeys(survives)
         val rawTombstones = tombstones + other.tombstones
-        val mergedTombstones = if (mergedCompactedIds.isEmpty()) rawTombstones
-            else rawTombstones.filterTo(mutableSetOf()) { it !in mergedCompactedIds }
-        val mergedMaxSeq = maxSeqByReplica.mergeMax(other.maxSeqByReplica)
-        val mergedOps = if (mergedCompactedIds.isEmpty()) rawUnion else purge(rawUnion, mergedCompactedIds)
+        val mergedTombstones = if (!suppresses) rawTombstones
+            else rawTombstones.filterTo(mutableSetOf(), survives)
+        val mergedMaxSeq = maxSeqByReplica.mergeMax(other.maxSeqByReplica).mergeMax(mergedFloor.entries)
+        val mergedOps = if (!suppresses) rawUnion
+            else purgeBelow(purge(rawUnion, mergedCompactedIds), mergedFloor)
         val newCache = RgaCache(
             insertsById = mergedInsertsById,
             maxSeqByReplica = mergedMaxSeq,
@@ -536,22 +587,33 @@ public class Rga<V> private constructor(
             compactedIds = mergedCompactedIds,
             compactPositions = mergedCompactPositions,
         )
-        return Rga(mergedOps, mergedLamport, newCache)
+        return Rga(mergedOps, mergedLamport, mergedFloor, newCache)
     }
 
     /**
-     * Two [Rga] instances are equal when their op-sets are equal — i.e. they
-     * represent the same CRDT state. The [lamport] high-water mark is a clock
-     * convenience, not part of the value: two converged replicas may differ in
-     * [lamport] if one advanced its clock by merging with a peer that had a higher
-     * clock, so including it in equality would break `a.piece(a) == a` in that case.
+     * Two [Rga] instances are equal when their op-sets **and** their [compactedBelow]
+     * floors are equal — i.e. they represent the same CRDT state.
      *
-     * This matches [Fugue.equals], which is also ops-only.
+     * The floor is part of the value, not a cache of the op-set. Two replicas can hold
+     * identical surviving ops and still disagree about what may be re-admitted: one that
+     * has floored `(r, 1..3)` will silently drop a late `Insert` with dot `(r, 2)`, while
+     * one that has not will absorb it and grow a record the other can never show. They
+     * are different states and must not compare equal — otherwise `piece` could return a
+     * state `equal` to an input whose future behaviour differs, and the delta-fingerprint
+     * that [us.tractat.kuilt.quilter.Quilter] derives from equality would elide a real
+     * change. It also keeps `a.piece(b) == b.piece(a)` honest: the floor merges by
+     * elementwise max, so both sides carry it and both sides must see it.
+     *
+     * The [lamport] high-water mark stays out: it is a clock convenience, and two
+     * converged replicas may differ in it if one advanced its clock by merging with a
+     * peer that had a higher clock, so including it would break `a.piece(a) == a`.
+     *
+     * [Fugue.equals] is still ops-only — it has no floor.
      */
     override fun equals(other: Any?): Boolean =
-        other is Rga<*> && ops == other.ops
+        other is Rga<*> && ops == other.ops && compactedBelow == other.compactedBelow
 
-    override fun hashCode(): Int = ops.hashCode()
+    override fun hashCode(): Int = 31 * ops.hashCode() + compactedBelow.hashCode()
 
     override fun toString(): String = "Rga(${toList()})"
 
@@ -707,6 +769,7 @@ public class Rga<V> private constructor(
         public fun <V> empty(): Rga<V> = Rga(
             ops = emptySet(),
             lamport = 0L,
+            compactedBelow = VersionVector.EMPTY,
             cache = RgaCache.empty(),
         )
 
@@ -714,9 +777,31 @@ public class Rga<V> private constructor(
          * Package-internal factory for deserialization via [RgaSerializer].
          * Uses the private constructor with no cache; derived state is computed
          * from the op-log lazily on first access.
+         *
+         * The ops are purged against [compactedBelow] on construction, so a decoded
+         * blob whose op-set contradicts its own floor cannot present a resurrected
+         * element — the floor wins, exactly as it does on every other path.
          */
-        internal fun <V> fromOps(ops: Set<RgaOp<V>>, lamport: Long): Rga<V> =
-            Rga(ops, lamport)
+        internal fun <V> fromOps(
+            ops: Set<RgaOp<V>>,
+            lamport: Long,
+            compactedBelow: VersionVector = VersionVector.EMPTY,
+        ): Rga<V> = Rga(purgeBelow(ops, compactedBelow), lamport, compactedBelow)
+
+        /**
+         * Drop every [RgaOp.Insert]/[RgaOp.Remove] op whose dot is at-or-below [floor].
+         * [RgaOp.Compact] ops carry no dot of their own and are kept.
+         */
+        internal fun <V> purgeBelow(ops: Set<RgaOp<V>>, floor: VersionVector): Set<RgaOp<V>> {
+            if (floor.entries.isEmpty()) return ops
+            return ops.filterTo(mutableSetOf()) { op ->
+                when (op) {
+                    is RgaOp.Insert -> !floor.contains(op.id.dot)
+                    is RgaOp.Remove -> !floor.contains(op.id.dot)
+                    is RgaOp.Compact -> true
+                }
+            }
+        }
 
         /**
          * Returns a [kotlinx.serialization.KSerializer] for [Rga]`<V>` that correctly threads
