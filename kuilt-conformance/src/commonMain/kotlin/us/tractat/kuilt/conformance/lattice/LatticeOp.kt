@@ -40,10 +40,24 @@ import kotlin.random.Random
  * | generator as bound | 30.2% | 39.7% | 34.6% | 9.3% | **500 / 45,797** |
  * | removes deleted | 28.4% | 43.2% | 39.3% | **0.0%** | **0 / 47,059** |
  *
- * Ancestry, concurrency and join-non-triviality — the three floors a reviewer reaches for, and the
- * three a generic `Quilted` can compute — are all *satisfied* by the arm that finds nothing.
- * Ancestry even goes slightly **up** when the removes are deleted. The retirement rate is the only
+ * Ancestry, concurrency and join-non-triviality — the three a reviewer reaches for, and the three a
+ * generic `Quilted` can compute — are all *satisfied* by the arm that finds nothing. Concurrency and
+ * join-non-triviality even go **up** when the removes are deleted. The retirement rate is the only
  * column that separates a searching generator from a vacuous one.
+ *
+ * **The asymmetry is a standing assertion, not only this table.** `VacuityFloorSelfTest`
+ * (`:kuilt-conformance`'s `commonTest`) runs the two arms live — the `ORMapConvergenceTest` harness
+ * as it stands, and that same harness with every [RETIRE] op filtered out of its alphabet — and
+ * asserts the vacuous one breaches the retirement floor while **clearing all three others**. It
+ * prints both reports, so the contrast is visible on a green run rather than only here.
+ *
+ * **The table is not re-derivable from its own description, and the self-test does not try to be.**
+ * "Same generator, removes deleted" leaves the branch structure open, and the branch structure
+ * decides where the pool cap truncates — so it decides the triple and step counts. Four spellings
+ * were measured while closing #2152 and none reproduces both the published 47,059 triples and the
+ * published percentages; all four reach this same conclusion, which is what is pinned. (Note also
+ * that join-non-triviality was the probe's own measurement: the *shipped* fourth rate is the no-op
+ * ceiling, and [VacuityReport] carries no inner-join column.)
  */
 public enum class OpKind {
     /** Adds an observation: a put, an add, an insert, an increment. */
