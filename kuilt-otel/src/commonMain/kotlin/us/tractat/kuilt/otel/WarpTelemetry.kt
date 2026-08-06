@@ -101,7 +101,17 @@ public class WarpTelemetry(
      *
      * Call once at startup, before any calls to [spans.export][WarpSpanExporter.export],
      * [metrics.incrementSum][WarpMetricExporter.incrementSum],
-     * [logs.export][WarpLogRecordExporter.export], or [WarpOtlpBridge.drain].
+     * [logs.export][WarpLogRecordExporter.export] **or
+     * [logs.merge][WarpLogRecordExporter.merge]**, or [WarpOtlpBridge.drain] — and never
+     * concurrently with any of them.
+     *
+     * "Never concurrently" is not politeness. [WarpLogRecordExporter.recover] deliberately stays
+     * outside that exporter's write mutex, because an un-recovered exporter's segment numbering
+     * starts at its construction defaults: a [logs.merge][WarpLogRecordExporter.merge] racing this
+     * allocates a segment number the persisted index already uses and overwrites a live key, in
+     * either serialization order. A lock there would order the writes while suggesting a safety it
+     * cannot deliver, so this contract is the safety.
+     *
      * Idempotent: a second call simply re-reads and re-decodes the same bytes.
      */
     public suspend fun recover() {

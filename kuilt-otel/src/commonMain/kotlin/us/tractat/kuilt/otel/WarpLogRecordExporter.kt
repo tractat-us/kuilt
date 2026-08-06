@@ -247,25 +247,49 @@ public class WarpLogRecordExporter(
      * **Do not narrow this to [commit] alone.** It looks equivalent and holds the lock for less
      * time, and it is wrong twice: two turns would still build in one order and acquire in
      * another, and a turn could still build its whole batch while another turn's commit is
-     * in flight — which is the double-staging window verbatim. Both are also **invisible to the
-     * tests**, and that is not an oversight to be fixed by a better test. A double-stage is
-     * idempotent at every step ([applyRetirement] filters, `removeAll` and `remove` no-op, and a
-     * repeat delete of an absent key is a no-op), so it leaves no trace on [store] to assert on;
-     * and the residual reorder window shrinks from one store write wide to a few instructions
-     * wide, which a stress loop does not reach. Serializing the *whole* turn is what makes both
-     * unrepresentable, so this shape is load-bearing where no assertion can be.
+     * in flight — which is the double-staging window verbatim.
+     *
+     * The narrow form is not wrong everywhere, and the sibling makes the distinction checkable.
+     * [WarpSpanExporter] holds its coroutine `Mutex` over the durable section **alone** and is
+     * correct, *because* it re-encodes the latest state inside that section — its bytes are
+     * derived after the mutex is held, so no batch it writes can be stale (#1053). This class
+     * cannot borrow that argument: [commit] is handed bytes that were encoded before it was
+     * called, over field mutations ([appendToActiveSegment], [windowPass], [rollActiveSegment],
+     * [adoptRemoteSegment]) that are already applied. Re-deriving inside [commit] is not on
+     * offer either — a batch is an ordered sequence of writes across several keys, and an
+     * interleaved turn has already moved the fields those writes describe. So: one write, a
+     * narrow mutex; a multi-key batch built from mutated state, the whole turn.
+     *
+     * `anExportDoesNotBuildItsBatchWhileAnotherExportsCommitIsInFlight`
+     * (`WarpLogRecordExporterConcurrencyTest`) is what pins the narrow form out, and the
+     * observable it uses is the log rather than the store. A double-stage is idempotent at every
+     * step ([applyRetirement] filters, `removeAll` and `remove` no-op, and a repeat delete of an
+     * absent key is a no-op), so it leaves no trace on [store] to assert on — but the *in-memory*
+     * insert a second turn performs while the first is parked in `store.write` is visible through
+     * [snapshot] immediately. One property is still unasserted: the residual reorder between
+     * build order and acquire order shrinks from one store write wide to a few instructions wide,
+     * which a stress loop does not reach.
      *
      * A [Mutex] and not [lock] because a turn suspends — holding a thread-blocking lock across
      * `store.write` would park a dispatcher thread for the length of an I/O. It is a real
      * mutual-exclusion primitive, not `limitedParallelism(1)` confinement: this type owns no scope
-     * and no dispatcher, and stays correct on a multi-threaded one.
+     * and no dispatcher, and stays correct on a multi-threaded one. Named `writeMutex` rather than
+     * the sibling's `ioMutex` deliberately: the two cover different spans, and `ioMutex` would name
+     * exactly the narrower one the paragraphs above ban.
      *
      * **Acquisition order is [writeMutex] then [lock], never the reverse.** [snapshot] takes only
      * [lock], and [commit] takes [lock] briefly while holding this one.
      *
-     * The cost is that concurrent [export]s queue rather than overlap. They were never genuinely
-     * concurrent: every one of them rewrites the *same* active-segment key, so overlapping only
-     * decided which of them won.
+     * The cost has two halves and only one of them is free. **Export against export** was never
+     * genuinely concurrent: every one of them rewrites the *same* active-segment key, so
+     * overlapping only decided which of them won, and queueing them changes nothing but the word
+     * for it. **Merge against export** is a real new serialization: a [merge] does an O(remote)
+     * CRDT join and writes a whole adopted segment, and every [export] now waits behind that — on
+     * the logging hot path, where the capture edge above this exporter (`CapturingAppender` in
+     * `:kuilt-otel-logging`) is a bounded queue that drops the oldest events once it fills. A
+     * gossiping replica therefore pays for this mutex in log events. It is still the right trade —
+     * the alternative is a store that silently discards records [export] has already returned
+     * [ExportResult.Success] for — but it is a trade, not free.
      */
     private val writeMutex = Mutex()
 
