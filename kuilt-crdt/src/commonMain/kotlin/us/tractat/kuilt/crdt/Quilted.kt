@@ -69,8 +69,54 @@ public interface Quilted<S : Quilted<S>> {
      * the zoo (`GCounter`, `ORSet`, …) does not use this GC path; the default empty set
      * keeps the capability non-breaking for them — they contribute nothing to any
      * delivered vector.
+     *
+     * **This is only half the delivered surface.** A consumer folding a delivered frontier
+     * must read `causalDots() ∪ {dots at-or-below causalFloor()}` — the union is the contract,
+     * not a partition. The two halves are not guaranteed disjoint: [Rga.dropWindow]'s
+     * contiguity walk can raise the floor past an own dot a still-retained `Compact` op
+     * already recorded (stepping over an inherited or previously-explicit `Compact` so the
+     * floor doesn't wedge below it), leaving that dot beneath the floor *and* still re-emitted
+     * here. The overlap is harmless — every consumer only ever asks "was this dot delivered,"
+     * never "which half reported it."
      */
     public fun causalDots(): Set<Dot> = emptySet()
+
+    /**
+     * The per-author high-water of dots this state **delivered and has since compacted away
+     * without retaining their identities**.
+     *
+     * The bounded companion to [causalDots]. An op-log CRDT that garbage-collects must keep
+     * its delivered frontier gap-free, or the author's high-water pins below the gap forever
+     * and all downstream GC stalls. [Rga] keeps it gap-free across an explicit `RgaOp.Compact`
+     * by re-emitting every id that op recorded through [causalDots] — correct, but the record
+     * it re-emits from is Θ(elements ever), and the replicator recomputes the fold on **every**
+     * state change. A high-water says the same thing about a whole compacted prefix in
+     * O(authors), which is what lets a windowed log stop growing.
+     *
+     * So the two are read together: a dot is delivered if it is in [causalDots] **or** at or
+     * below this floor — read the union, not a partition. The halves can overlap (see
+     * [causalDots] for why); that overlap is harmless, since no consumer needs to know which
+     * half reported a given dot.
+     *
+     * It can only describe a **downward-closed** compacted set. `Rga.dropWindow` guarantees
+     * that by advancing the floor across a contiguous own-dot run only, recording every other
+     * drop as an explicit `Compact` that [causalDots] still re-emits. A CRDT whose compaction
+     * is not downward-closed must keep re-emitting through [causalDots] and leave this
+     * defaulted.
+     *
+     * The default is empty, so every delta-state CRDT in the zoo is unaffected — they neither
+     * compact nor participate in this GC path.
+     *
+     * **Aggregated across nesting, wherever [causalDots] is.** Every composite that unions the
+     * dots beneath it raises its floor the same way, by elementwise max ([VersionVector.ceilWith])
+     * over the same reachable set: [LatticeProduct] across its two components, and
+     * `JsonNode.Object` / `JsonNode.Array` / `JsonCrdt` across every nested [Rga]. It stays empty
+     * unless something beneath is floored — no shipped path floors a nested `Rga`, but
+     * `Rga.dropWindow` is public, so a consumer can hand one to any of them. A composite left on
+     * the default would then report a frontier missing exactly the dots [causalDots] can no
+     * longer re-emit. A new composite that overrides [causalDots] must override this too.
+     */
+    public fun causalFloor(): VersionVector = VersionVector.EMPTY
 }
 
 /**

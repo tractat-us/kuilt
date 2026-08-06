@@ -52,6 +52,19 @@ public class LatticeProduct<A : Quilted<A>, B : Quilted<B>>(
      */
     override fun causalDots(): Set<Dot> = first.causalDots() + second.causalDots()
 
+    /**
+     * The elementwise max of both components' compaction floors — the floor counterpart of
+     * the [causalDots] union above.
+     *
+     * Sound because a dot at-or-below the merged floor is at-or-below [A]'s floor or at-or-below
+     * [B]'s, so some component delivered it and therefore the product did — and it is the highest
+     * floor the two components' own floors justify. Without it a product wrapping a floored [Rga]
+     * would inherit the empty default while its [causalDots] no longer carries the floored dots,
+     * and a consumer folding a delivered frontier would under-report it. Both components default
+     * to [VersionVector.EMPTY], so this is a no-op for every non-compacting pair.
+     */
+    override fun causalFloor(): VersionVector = first.causalFloor().ceilWith(second.causalFloor())
+
     override fun equals(other: Any?): Boolean =
         other is LatticeProduct<*, *> && first == other.first && second == other.second
 

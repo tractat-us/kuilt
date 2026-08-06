@@ -629,6 +629,20 @@ public class Rga<V> private constructor(
     override fun causalDots(): Set<Dot> = engine<V>().causalDots(ops)
 
     /**
+     * The delivered dots this replica compacted away **without** keeping their ids — exactly
+     * [compactedBelow].
+     *
+     * The bounded half of the delivered surface: *raising* it purges an own dot's op without
+     * recording a [RgaOp.Compact] for it — no per-dot id set, which is what keeps this O(authors)
+     * instead of O(elements). That does not mean every dot beneath the floor is absent from
+     * [causalDots], though: [dropWindow]'s contiguity walk steps over an own dot a still-retained
+     * `Compact` already recorded (an inherited or previously-explicit one), so that dot can end up
+     * beneath the floor while [causalDots] keeps re-emitting it. Read the two as a union, as
+     * [Quilted.causalFloor] describes — the overlap is harmless.
+     */
+    override fun causalFloor(): VersionVector = compactedBelow
+
+    /**
      * Merge two replicas' op-logs. The result is the idempotent union — both
      * replicas converge to the same [toList] after [piece].
      *

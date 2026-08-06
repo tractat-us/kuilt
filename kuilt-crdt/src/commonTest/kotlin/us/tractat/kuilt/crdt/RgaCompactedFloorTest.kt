@@ -594,4 +594,179 @@ class RgaCompactedFloorTest {
             { assertEquals(6L, fresh.id.seq, "so the decoded floor is the only thing holding my high-water up") },
         )
     }
+
+    // ── Quilted.causalFloor() — the capability that exports the floor ────────
+
+    @Test
+    fun theDefaultCausalFloorIsEmptySoNonOpLogCrdtsAreUnaffected() {
+        assertEquals(VersionVector.EMPTY, GSet.of("x").causalFloor())
+    }
+
+    /**
+     * In this construction — one `dropWindow` call, no prior `Compact` — the dots the floor
+     * swallowed are **gone** from [Rga.causalDots] and [Rga.causalFloor] is the only thing
+     * that still says they were delivered. A consumer folding a delivered frontier reads both
+     * halves as a union — `causalDots() ∪ {dots at-or-below causalFloor()}` — which is what
+     * PR 3 teaches `Quilter` to do. That union is the contract; it is not always a partition —
+     * see `anOwnDotAlreadyCompactedExplicitlyDoesNotWedgeTheFloorForever`, where a later
+     * `dropWindow` raises the floor past a dot a still-retained `Compact` already re-emits.
+     *
+     * The third arm binds through the [Quilted] supertype on purpose, and is **not** a
+     * restatement of the first. Had this shipped as the `Quilted<S>.causalFloor()`
+     * **extension** it was first specced as — plus a more specific `Rga<V>` one — the first
+     * arm resolves to the `Rga` extension and passes, and
+     * [theDefaultCausalFloorIsEmptySoNonOpLogCrdtsAreUnaffected] resolves to the generic one
+     * and passes too. Both are green while a `Quilter` holding a `Quilted<S>` has nothing to
+     * call at all. This arm is the only thing that fails in that world, so the receiver the
+     * one consumer that matters actually uses is pinned rather than assumed.
+     */
+    @Test
+    fun rgaReportsItsFloorAndStopsReEmittingTheDotsBeneathIt() {
+        val (rga, ops) = chain(5)
+        val floored = rga.dropWindow(me, ops.take(3).map { it.id }.toSet())!!.first
+        val asQuilted: Quilted<Rga<String>> = floored
+
+        assertAll(
+            { assertEquals(VersionVector.of(mapOf(me to 3L)), floored.causalFloor()) },
+            {
+                assertEquals(
+                    setOf(Dot(me, 4L), Dot(me, 5L)),
+                    floored.causalDots(),
+                    "the floor carries the dropped dots now — re-emitting would make the capability pointless",
+                )
+            },
+            {
+                assertEquals(
+                    VersionVector.of(mapOf(me to 3L)),
+                    asQuilted.causalFloor(),
+                    "and it must dispatch through Quilted — that is the only receiver a Quilter has",
+                )
+            },
+        )
+    }
+
+    /**
+     * Every existing floor assertion above runs on a single-author [chain], where `dropWindow`
+     * folds the whole drop into the floor and returns `compactOp == null`. That never builds the
+     * state the "delivered = [Rga.causalDots] **or** at-or-below [Rga.causalFloor]" contract is
+     * actually written for: one holding **both** a raised floor and a retained `Compact`, which is
+     * what a drop spanning two authors produces.
+     *
+     * The two halves are asserted jointly and in both directions — their union is exactly the set
+     * delivered before the drop (nothing lost, nothing over-claimed). For *this* single call they
+     * also do not overlap, so the floored dots genuinely left [Rga.causalDots] rather than being
+     * reported twice — but that is a property of this one call, not a general guarantee: a later
+     * `dropWindow` can raise the floor past a dot a still-retained `Compact` already recorded, and
+     * the two halves overlap then (see `anOwnDotAlreadyCompactedExplicitlyDoesNotWedgeTheFloorForever`).
+     * The union is what every consumer actually relies on; the disjointness here is incidental.
+     */
+    @Test
+    fun aFloorAndARetainedCompactTogetherCoverEveryDeliveredDot() {
+        val (mine, myOps) = chain(3)
+        val (theirs, theirOps) = chain(3, author = peer, prefix = "p")
+        val merged = mine.piece(theirs)
+        val deliveredBefore = merged.causalDots()
+
+        // My seqs 1-2 are a contiguous own prefix and fold into the floor; the peer's seq 1
+        // can never be floored locally, so it is recorded as an explicit Compact instead.
+        val (state, _) = merged.dropWindow(me, setOf(myOps[0].id, myOps[1].id, theirOps[0].id))!!
+
+        val floor = state.causalFloor()
+        val beneathFloor = floor.entries.flatMapTo(mutableSetOf()) { (author, high) ->
+            (1L..high).map { Dot(author, it) }
+        }
+        assertAll(
+            { assertTrue(state.ops.any { it is RgaOp.Compact }, "the state holds a retained Compact") },
+            { assertEquals(VersionVector.of(mapOf(me to 2L)), floor, "and a non-empty floor — both at once") },
+            {
+                assertEquals(
+                    deliveredBefore,
+                    state.causalDots() + beneathFloor,
+                    "read together the halves cover exactly what was delivered — no dot lost, none invented",
+                )
+            },
+            {
+                assertEquals(
+                    emptySet<Dot>(),
+                    state.causalDots() intersect beneathFloor,
+                    "and they do not overlap — the floored dots really did leave causalDots",
+                )
+            },
+        )
+    }
+
+    // ── Composite aggregation — a floor beneath a composite must reach its surface ───
+
+    private fun leaf(text: String): JsonNode =
+        JsonNode.Leaf(MVRegister.empty<JsonValue>().set(me, JsonValue.Str(text)))
+
+    /**
+     * A [JsonNode.Array] authored by [author] whose first element has been folded into the floor,
+     * leaving [survivor] as its one live element and `{author: 1}` as its floor.
+     */
+    private fun flooredArray(author: ReplicaId, survivor: JsonNode): JsonNode.Array {
+        val (one, first) = Rga.empty<JsonNode>().insertAfter(author, RgaId.HEAD, leaf("dropped"))
+        val (two, _) = one.insertAfter(author, first.id, survivor)
+        return JsonNode.Array(two.dropWindow(author, setOf(first.id))!!.first)
+    }
+
+    /**
+     * [LatticeProduct] unions its components' [Quilted.causalDots]; its floor has to rise to both
+     * the same way, or a product wrapping a floored [Rga] reports a frontier missing exactly the
+     * dots the floor swallowed. The two components are floored on **different** authors so that
+     * taking either one alone — not just dropping the override — fails.
+     */
+    @Test
+    fun aLatticeProductRaisesItsFloorToBothComponents() {
+        val (mineRaw, myOps) = chain(3)
+        val (theirsRaw, theirOps) = chain(2, author = peer, prefix = "p")
+        val mineFloored = mineRaw.dropWindow(me, setOf(myOps[0].id, myOps[1].id))!!.first
+        val theirsFloored = theirsRaw.dropWindow(peer, setOf(theirOps[0].id))!!.first
+
+        val product = LatticeProduct.of(mineFloored, theirsFloored)
+
+        assertEquals(
+            VersionVector.of(mapOf(me to 2L, peer to 1L)),
+            product.causalFloor(),
+            "a product's floor is the elementwise max of both components' — either alone under-reports",
+        )
+    }
+
+    /** The nested array is floored on a different author from the outer one, so neither half alone passes. */
+    @Test
+    fun aJsonArrayRaisesItsFloorToTheArraysNestedInsideIt() {
+        val outer = flooredArray(me, flooredArray(peer, leaf("kept")))
+
+        assertEquals(
+            VersionVector.of(mapOf(me to 1L, peer to 1L)),
+            outer.causalFloor(),
+            "an array's floor is its own RGA's raised by every element's — not one or the other",
+        )
+    }
+
+    @Test
+    fun aJsonObjectRaisesItsFloorToTheArraysBeneathIt() {
+        val map = ORMap.empty<String, JsonNode>()
+            .piece { it.put(me, "mine", flooredArray(me, leaf("x"))) }
+            .piece { it.put(me, "theirs", flooredArray(peer, leaf("y"))) }
+
+        assertEquals(
+            VersionVector.of(mapOf(me to 1L, peer to 1L)),
+            JsonNode.Object(map).causalFloor(),
+            "every value's floor reaches the object's surface, not just one of them",
+        )
+    }
+
+    @Test
+    fun aJsonDocumentRaisesItsFloorToTheArraysBeneathIt() {
+        val doc = JsonCrdt.empty(me)
+            .set("mine", flooredArray(me, leaf("x")))
+            .set("theirs", flooredArray(peer, leaf("y")))
+
+        assertEquals(
+            VersionVector.of(mapOf(me to 1L, peer to 1L)),
+            doc.causalFloor(),
+            "the document root aggregates too — it is the receiver a Quilter over a JsonCrdt holds",
+        )
+    }
 }
