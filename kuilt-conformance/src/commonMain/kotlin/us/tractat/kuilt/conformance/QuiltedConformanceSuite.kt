@@ -61,11 +61,12 @@ public class RetirementReAssertion<S : Quilted<S>>(
  * and absorption checks to be meaningful; more variety is better. The type's
  * `equals` must reflect lattice equality — the laws are checked with `==`.
  *
- * A type that can **retire** — a map or set with `remove`, a register whose write supersedes the
- * last one — additionally sets [retirementIsMeaningful] and names the assert/retire/re-assert
- * shape, plus the subject predicate that makes the retirement observable, in
- * [retirementReAssertion]; see [samplesReAssertAfterRetirement] for why that shape is the one a
- * hand-picked list keeps missing, and why naming the three states alone did not pin it.
+ * A type that can **retire** additionally sets [retirementIsMeaningful] and names the
+ * assert/retire/re-assert shape, plus the subject predicate that makes the retirement observable,
+ * in [retirementReAssertion]; see [samplesReAssertAfterRetirement] for why that shape is the one a
+ * hand-picked list keeps missing, and why naming the three states alone did not pin it. What
+ * counts as retiring is defined once, in [us.tractat.kuilt.conformance.lattice.OpKind] — including
+ * the reading this surface is licensed to take that the lattice bindings are not.
  */
 public abstract class QuiltedConformanceSuite<S : Quilted<S>> {
 
@@ -74,11 +75,29 @@ public abstract class QuiltedConformanceSuite<S : Quilted<S>> {
 
     /**
      * Whether this type can **retire** — stop showing something it once showed, while still only
-     * moving *up* the lattice. A map with `remove`, a set with `remove`, a register whose write
-     * supersedes the previous one: all retire. A grow-only type — a counter, `GSet`, `IntMax` —
-     * does not, and leaves this `false` (the default) so nothing here applies to it.
+     * moving *up* the lattice.
      *
-     * A binding that sets this to `true` must also name the shape in [retirementReAssertion].
+     * **What counts as retiring is defined in exactly one place:**
+     * [us.tractat.kuilt.conformance.lattice.OpKind], as *an op retires when it takes an observation
+     * back without putting another in its place*. Read it there rather than re-deriving it here;
+     * the definition has drifted between surfaces twice already, which is why it now has a single
+     * home (#2146, #2159).
+     *
+     * **This surface reads it more generously than the lattice bindings do, deliberately.** A
+     * register's `set` *supersedes* rather than withdraws, so `MVRegisterConvergenceTest` declares
+     * no retiring op at all — yet `MVRegisterConformanceTest` sets this `true` and names a `set`
+     * that stops the register showing an earlier value. [OpKind] carries the rule that makes both
+     * right: **classify strictly where the answer is averaged, generously where it is checked.**
+     * There the classification feeds a *rate* — the retirement vacuity floor — which a label every
+     * op carries would clear by construction. Here it gates a *single constructed triple whose
+     * every step is asserted* ([samplesReAssertAfterRetirement]), so a generous reading buys one
+     * more checked shape and can inflate nothing; and a supersession that did not really stop the
+     * old value being shown reds the guard rather than passing it.
+     *
+     * A binding that sets this to `true` must also name the shape in [retirementReAssertion]. The
+     * `false` default is an **opt-out, not evidence**: a type that genuinely cannot retire reads
+     * `false`, and so does a retiring binding that has not named its triple yet (#2167). A binding
+     * that leaves it `false` on a type its lattice binding declares retiring should say why.
      */
     public open val retirementIsMeaningful: Boolean get() = false
 

@@ -5,6 +5,60 @@ import kotlin.random.Random
 /**
  * Whether an op **asserts** something new or **retires** something an earlier op asserted.
  *
+ * ## The test, stated once
+ *
+ * **An op retires when it takes an observation back without putting another in its place.**
+ *
+ * Read that off the type's *observable value*, never its encoding. `remove`, `unset`, `leave` and
+ * `disable` retire; `MovableTree.move` retires, because the node stops being under its old parent,
+ * even though the move log only grows. A register's `set` does **not**: it stops the old value
+ * being shown, but only by showing a new one in the same place. That is supersession, and the
+ * without-a-replacement clause is exactly what excludes it. `PNCounter.decrement` does not either
+ * — it adds to a second grow-only tally, and the earlier increment's contribution stays where it
+ * was.
+ *
+ * **This is the definition, and it is meant to be stated only here.** A surface that classifies an
+ * op cites this section rather than re-deriving it — [VacuityFloors.NOTHING_TO_RETIRE], a
+ * binding's alphabet comment, and across the module
+ * [us.tractat.kuilt.conformance.QuiltedConformanceSuite.retirementIsMeaningful] all do. Adding a
+ * fourth statement of it is the defect, not the documentation.
+ *
+ * ## Where a surface may answer differently, and the only reason it may
+ *
+ * `QuiltedConformanceSuite.retirementIsMeaningful` reads a register's `set` **as** a retirement —
+ * the opposite answer, on the same op, of the one above — and is right to. The licence is not
+ * about the op:
+ *
+ * > **Classify strictly where the answer is averaged. A surface may classify generously where the
+ * > answer is checked.**
+ *
+ * Here the answer is **averaged**, so a generous label destroys the measurement.
+ * [VacuityFloors.effectiveRetireSteps] is a rate over every step the pool builder took, and
+ * [LatticeLawHarness.measureVacuity] counts a step toward it when the op is [RETIRE] *and* the
+ * step changed the state. On an alphabet whose ops are *all* [RETIRE] those two counters partition
+ * the steps, so the retirement rate is identically `1 − noOpRate` — pinned at ≥ 75% by the 25%
+ * no-op ceiling alone, and unable to come out low whatever the generator does.
+ * `MVRegisterConvergenceTest`'s alphabet is a single `set`; declaring it [RETIRE] would clear its
+ * retirement floor by construction. That is the very vacuity this floor exists to catch, arriving
+ * through the classification instead of through the generator.
+ *
+ * There the answer is **checked**, so a generous label costs an obligation instead.
+ * `retirementIsMeaningful` gates one constructed triple in which every step is asserted: the named
+ * subject must be shown, then **not** shown, then shown again. Reading supersession as retirement
+ * buys one more checked shape and can inflate nothing, because nothing is averaged — and if a
+ * register's `set` did not really stop the old value being shown, the guard reds rather than
+ * passes. Both surfaces are therefore right about `set`, for a reason each states where it
+ * declares.
+ *
+ * ## Why the definition lives here
+ *
+ * Because this KDoc has already been wrong about retirement twice. It claimed `LWWRegister` "has
+ * no removal at all" — false when written, since `unset` is a documented tombstone, and
+ * contradicted outright once #2142 bound an `unset-high` op as [RETIRE]; #2146 corrected it. Then
+ * this surface and surface 3 were caught shipping opposite tests for the same `set` on the same
+ * type (#2159). A definition restated in three places drifts in three places; stated once and
+ * cited, a surface that disagrees has to say why — which is the section above.
+ *
  * **This cannot be computed; the binding has to declare it.** A removal is *more information*, so
  * `s → s.remove(k)` moves **up** the join-semilattice exactly as `s → s.add(k)` does, and
  * `s ⊔ s.remove(k) == s.remove(k)` holds. There is no expression in the
@@ -66,8 +120,8 @@ public enum class OpKind {
     /**
      * Withdraws an observation an earlier op made: a remove, a departure, a re-parent.
      *
-     * "Withdraws" is about the *observable value*, not the encoding — `MovableTree.move` retires the
-     * node from its previous parent's children even though the move log only grows.
+     * Whether an op qualifies is the test at the top of [OpKind] — not restated here, because
+     * restating it is how the two surfaces drifted apart in the first place.
      */
     RETIRE,
 }
@@ -239,9 +293,8 @@ public class VacuityFloors(
          * all the same shape. `GSet`, `GCounter`, `PNCounter` and `IntMax` genuinely only grow, and
          * `DotContext` only records dots it has seen. But `MVRegister` *supersedes* — `set` drops
          * the values it causally dominates — and `BoundedCounter`'s `spend` and `transfer` consume
-         * quota by adding to grow-only tallies. Neither grows in the naive sense; both qualify,
-         * because in neither is there an op that takes an observation back without putting another
-         * in its place. That is the test, and each binding argues it where it declares this.
+         * quota by adding to grow-only tallies. Neither grows in the naive sense; both qualify
+         * under the test at the top of [OpKind], and each binding argues it where it declares this.
          *
          * **Reach for it only when a retiring op could not be written.** A binding that *could*
          * retire and does not is the vacuity shape itself, not a candidate for a waiver: `LWWMap`

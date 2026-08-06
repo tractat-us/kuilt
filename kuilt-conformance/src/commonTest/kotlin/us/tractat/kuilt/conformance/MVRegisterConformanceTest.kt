@@ -12,7 +12,15 @@ internal class MVRegisterConformanceTest : QuiltedConformanceSuite<MVRegister<St
     private val x = base.set(a, "x")
     private val y = base.set(b, "y")
 
-    /** A's second write retires the dot carrying "x" — the register's only form of removal. */
+    /**
+     * A's second write stops the register showing "x", by superseding the dot that carried it.
+     *
+     * Under the test in `OpKind` that is **supersession, not retirement** — it puts a value in the
+     * place of the one it drops — and `MVRegisterConvergenceTest` accordingly declares no `RETIRE`
+     * op for the same `set`. It counts here because this surface *checks* the shape rather than
+     * averaging it, which is the carve-out `OpKind` states; the guard below reds if this write
+     * does not really stop "x" being shown.
+     */
     private val xRetired = x.set(a, "x2")
 
     /** …and its third puts "x" back, under a dot the retirement never saw. */
