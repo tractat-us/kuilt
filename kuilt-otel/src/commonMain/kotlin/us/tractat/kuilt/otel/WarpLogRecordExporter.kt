@@ -329,15 +329,59 @@ public class WarpLogRecordExporter(
         class Put(val key: StoreKey, val bytes: ByteArray) : StoreAction
 
         /**
+         * The **commit point** of a retirement: write [bytes] — an index naming [numbers] under
+         * [LogSegmentIndex.retired] — and, only once that write has *returned*, move [numbers]
+         * out of [sealedSegments]/[sealedContents] and onto [retiringSegments].
+         *
+         * The in-memory move being an effect of this action rather than of building the batch is
+         * what upholds the one invariant the delete path rests on: **a number appears in an
+         * on-disk `retired` list only after a write carrying its covering state was confirmed
+         * durable.** [retiringSegments] is what every later [encodeIndex] reads, so a move applied
+         * while the batch was still being built would let the *next* batch's leading index write —
+         * which is emitted **before** that batch's [activeSegmentWrite] — publish a retirement
+         * whose covering write never landed. [loadPersistedState] then sweeps it with no check,
+         * and records a recovery could still have read are gone.
+         *
+         * That is not a theoretical window. A quota-bound store fails **large** writes while small
+         * ones succeed (`IndexedDbDurableStore` does): the segment blob is ~123 KB at
+         * [DEFAULT_LOG_SEGMENT_OPS] and the index is tiny, so such a store refuses exactly the
+         * covering write and accepts exactly the ledger write, indefinitely.
+         */
+        class CommitRetirement(val bytes: ByteArray, val numbers: List<Int>) : StoreAction
+
+        /**
          * Best-effort delete of retired segment [number]'s key.
          *
-         * Always ordered **after** the [Put] of the index that moved [number] into
-         * [LogSegmentIndex.retired], and that index [Put] is always ordered after the
-         * active-segment write carrying the state that supersedes it. [commit] applies a batch
-         * strictly in order and stops at the first failed [Put], so those two orderings are
-         * enforced by construction rather than by remembering to keep them.
+         * Always ordered **after** the [CommitRetirement] whose index named [number] under
+         * [LogSegmentIndex.retired] — earlier in this same batch, or in an earlier batch (or an
+         * earlier *process*) for a number whose delete was refused and is being retried. That
+         * ledger write is itself ordered after the [activeSegmentWrite] carrying the state that
+         * supersedes [number], and [commit] applies a batch strictly in order and stops at the
+         * first failed write, so both orderings are enforced by construction rather than by
+         * remembering to keep them.
+         *
+         * The startup counterpart in [loadPersistedState] deletes with no ordering of its own —
+         * it sweeps [LogSegmentIndex.retired] before it reads anything. It is sound for a
+         * different reason, one batch ordering alone would not give it: [CommitRetirement] is the
+         * only thing that can put a number on that list, so anything the next process finds there
+         * was already covered by a write that landed first.
          */
         class Sweep(val number: Int) : StoreAction
+    }
+
+    /**
+     * The retirement half of one batch: the actions that carry it to disk, and the numbers those
+     * actions will move onto the ledger **if** the ledger write lands.
+     *
+     * [staged] is deliberately not applied to any field here. It is threaded to the other index
+     * write a batch can carry ([rollActiveSegment]), which has to project it — that write is
+     * encoded while the batch is built, so without the projection it would name a segment the
+     * [StoreAction.CommitRetirement] queued just above it has already retired, undoing the ledger.
+     */
+    private class PendingRetirement(val staged: List<Int>, val actions: List<StoreAction>) {
+        companion object {
+            val NONE = PendingRetirement(emptyList(), emptyList())
+        }
     }
 
     /**
@@ -462,15 +506,23 @@ public class WarpLogRecordExporter(
         val contents = mutableMapOf<Int, SegmentContent>()
         for (number in index.sealedSegments) {
             val segment = readSegment(number)
+            val absorbed = if (segment == null) null else absorb(merged, segment, number)
             // Unknown content must mean KEEP, so this records Pinned rather than leaving a
             // lookup miss behind: a segment that could not be read must not be retirable, and
-            // it stays named by the index so the next clean start can recover it.
-            contents[number] = if (segment == null) SegmentContent.Pinned else contentOf(segment, number)
-            if (segment != null) merged = absorb(merged, segment, number)
+            // it stays named by the index so the next clean start can recover it. A segment whose
+            // `absorb` threw is exactly as unknown — its ops are not in the union this run's
+            // suppression state will be judged against, so recording its ids would let a later
+            // pass find them all "covered" and delete a segment nothing here ever read.
+            contents[number] = if (segment == null || absorbed == null) {
+                SegmentContent.Pinned
+            } else {
+                contentOf(segment, number)
+            }
+            if (absorbed != null) merged = absorbed
         }
         val active = readSegment(index.active) ?: Rga.empty()
         return RecoveredState(
-            log = absorb(merged, active, index.active),
+            log = absorb(merged, active, index.active) ?: merged,
             sealedSegments = index.sealedSegments,
             sealedContents = contents,
             ledger = outstanding,
@@ -494,10 +546,14 @@ public class WarpLogRecordExporter(
         }
     }
 
-    private fun absorb(into: Rga<LogRecord>, segment: Rga<LogRecord>, number: Int): Rga<LogRecord> =
+    /**
+     * Union [segment] into [into], or `null` if the union threw — so the caller can tell "absorbed
+     * nothing" apart from "absorbed and it added nothing", which retirement has to know.
+     */
+    private fun absorb(into: Rga<LogRecord>, segment: Rga<LogRecord>, number: Int): Rga<LogRecord>? =
         runCatchingCancellable { into.piece(segment) }.getOrElse { cause ->
             logger.warn(cause) { "otel.logs: segment $number could not be absorbed, dropping its records" }
-            into
+            null
         }
 
     /**
@@ -584,12 +640,13 @@ public class WarpLogRecordExporter(
      */
     private fun adoptNumberingOnly(recovered: RecoveredState) {
         sealedSegments.clear()
-        sealedSegments.addAll(recovered.sealedSegments)
+        sealedSegments.addAll(recovered.sealedSegments.distinct())
         if (recovered.activeNumber !in sealedSegments) sealedSegments += recovered.activeNumber
         // Records were NOT installed, so nothing is known about any segment's content and every
-        // one of them is un-retirable for this run. An empty map is how that is said: absence is
-        // never a retirement candidate.
-        sealedContents.clear()
+        // one of them is un-retirable for this run. Said as a map full of Pinned rather than as an
+        // empty one: "absence is never a candidate" is a property of how retirableSegments happens
+        // to iterate, whereas an explicit Pinned per sealed number is a property of the data.
+        installSealedContents(emptyMap())
         retiringSegments.clear()
         retiringSegments.addAll(recovered.ledger)
         nextSegmentNumber = recovered.nextSegmentNumber
@@ -603,9 +660,8 @@ public class WarpLogRecordExporter(
     private fun install(recovered: RecoveredState, entries: List<Pair<RgaId, LogRecord>>) {
         log = recovered.log
         sealedSegments.clear()
-        sealedSegments.addAll(recovered.sealedSegments)
-        sealedContents.clear()
-        sealedContents.putAll(recovered.sealedContents)
+        sealedSegments.addAll(recovered.sealedSegments.distinct())
+        installSealedContents(recovered.sealedContents)
         retiringSegments.clear()
         retiringSegments.addAll(recovered.ledger)
         activeSegment = recovered.activeSegment
@@ -616,6 +672,22 @@ public class WarpLogRecordExporter(
         // index dirty and let the next batch rewrite it without the confirmed deletions.
         indexPersisted = !recovered.ledgerDirty
         installDerivedState(entries)
+    }
+
+    /**
+     * Refill [sealedContents] so its keys are **exactly** [sealedSegments], taking what [known]
+     * supplies and [SegmentContent.Pinned] for the rest. Must hold [lock], after
+     * [sealedSegments] is set.
+     *
+     * The pairing is what makes retirement's vacuity hazard unrepresentable rather than merely
+     * unwritten — see [retirableSegments]. Both recovery paths run through here so neither can
+     * leave a sealed segment with no entry: an absent entry is the shape a future
+     * `sealedContents[n] ?: SegmentContent.Ids(emptySet())` would read as "empty, therefore
+     * retirable", and that reading deletes a user's telemetry on a transient read error.
+     */
+    private fun installSealedContents(known: Map<Int, SegmentContent>) {
+        sealedContents.clear()
+        sealedSegments.forEach { number -> sealedContents[number] = known[number] ?: SegmentContent.Pinned }
     }
 
     /**
@@ -708,7 +780,7 @@ public class WarpLogRecordExporter(
                 // add that write itself or its floor never reaches disk — and retirement has to
                 // follow it, never precede it.
                 if (windowPassDue() && windowPass()) {
-                    adopted + activeSegmentWrite() + retireSupersededSegments()
+                    adopted + activeSegmentWrite() + retireSupersededSegments().actions
                 } else {
                     adopted
                 }
@@ -733,8 +805,17 @@ public class WarpLogRecordExporter(
      *
      * The order is load-bearing, not incidental: a [StoreAction.Sweep] deletes a segment's
      * records, and it is safe only after the state that supersedes them is durable. Stopping at
-     * the first failed [StoreAction.Put] is what enforces that — a batch whose active-segment
-     * write or ledger write did not land never reaches its sweeps.
+     * the first failed write is what enforces that — a batch whose active-segment write or ledger
+     * write did not land never reaches its sweeps.
+     *
+     * **This is also where a retirement becomes real in memory**, and that is what carries the
+     * ordering *between* batches — which stopping at the first failure does not, because a failed
+     * batch does not stop the process. [StoreAction.CommitRetirement] moves its numbers onto
+     * [retiringSegments] only after `store.write` has returned, so a batch that failed at or
+     * before its active-segment write leaves that field exactly as it found it, and the next
+     * batch's **leading** index write — emitted before its own active-segment write — has nothing
+     * uncovered to publish. It is that invariant, not any within-batch order, that lets
+     * [loadPersistedState] sweep [LogSegmentIndex.retired] before it reads a thing.
      *
      * A failed **sweep**, by contrast, must not fail the export: the record was durably written,
      * and reporting [ExportResult.Failure] because a delete of superseded garbage was refused
@@ -747,6 +828,10 @@ public class WarpLogRecordExporter(
             actions.forEach { action ->
                 when (action) {
                     is StoreAction.Put -> store.write(action.key, action.bytes)
+                    is StoreAction.CommitRetirement -> {
+                        store.write(INDEX_KEY, action.bytes)
+                        lock.withLock { applyRetirement(action.numbers) }
+                    }
                     is StoreAction.Sweep -> if (sweep(action.number)) swept += action.number
                 }
             }
@@ -780,6 +865,21 @@ public class WarpLogRecordExporter(
     }
 
     /**
+     * Apply a retirement whose ledger write has **returned**: move [numbers] off the sealed
+     * layout and onto the in-memory ledger. Must hold [lock].
+     *
+     * The only writer of [retiringSegments] outside recovery, and it runs only from
+     * [StoreAction.CommitRetirement] — which is why every number this field holds is already
+     * named under [LogSegmentIndex.retired] on disk, and why every number a later [encodeIndex]
+     * publishes there was covered by a write that landed first.
+     */
+    private fun applyRetirement(numbers: List<Int>) {
+        sealedSegments.removeAll(numbers.toSet())
+        numbers.forEach { number -> sealedContents.remove(number) }
+        retiringSegments += numbers.filter { it !in retiringSegments }
+    }
+
+    /**
      * Best-effort delete of one retired segment's key; returns whether the key is gone.
      *
      * Guarded on its own, for the same reason [sweepLegacyKey] is: a store whose `delete` throws
@@ -808,14 +908,17 @@ public class WarpLogRecordExporter(
      */
     private fun pendingWrites(retire: Boolean): List<StoreAction> {
         val actions = mutableListOf<StoreAction>()
-        // The index names the active segment, so it has to exist on disk before any
-        // content is written into a segment it announces. Encoded before
-        // retireSupersededSegments() runs, so it can never be the write that commits a
-        // retirement — that has to come after the active-segment write below.
+        // The index names the active segment, so it has to exist on disk before any content is
+        // written into a segment it announces. It can never be the write that COMMITS a
+        // retirement, and not because of where it sits in this list: it is `encodeIndex()` over
+        // the live fields, and `retiringSegments` only ever holds numbers a
+        // StoreAction.CommitRetirement already put on disk (see applyRetirement). So this write
+        // restates the ledger; it cannot extend it.
         if (!indexPersisted) actions += StoreAction.Put(INDEX_KEY, encodeIndex())
         actions += activeSegmentWrite()
-        if (retire) actions += retireSupersededSegments()
-        if (activeOpCount >= segmentOps) actions += rollActiveSegment()
+        val retirement = if (retire) retireSupersededSegments() else PendingRetirement.NONE
+        actions += retirement.actions
+        if (activeOpCount >= segmentOps) actions += rollActiveSegment(retirement.staged)
         return actions
     }
 
@@ -833,14 +936,25 @@ public class WarpLogRecordExporter(
      * The sealing point is also where the segment's content is recorded, from the segment
      * itself while it is still in hand. Recording it here rather than re-reading the key later
      * is what makes retirability decidable without opening every sealed segment on every pass.
+     *
+     * [staged] is this batch's retirement, which has **not** been applied to any field yet — it
+     * lands in [commit], after its ledger write returns. The index written here has to project it
+     * anyway, because on disk this write follows that ledger write: without the projection it
+     * would re-name a retired segment as sealed and drop it from [LogSegmentIndex.retired],
+     * leaving a swept key named as live forever in a format with no key enumeration.
      */
-    private fun rollActiveSegment(): List<StoreAction> {
+    private fun rollActiveSegment(staged: List<Int>): List<StoreAction> {
         sealedSegments += activeNumber
         sealedContents[activeNumber] = contentOf(activeSegment, activeNumber)
         activeNumber = nextSegmentNumber++
         activeSegment = Rga.empty()
         activeOpCount = 0
-        return listOf(StoreAction.Put(INDEX_KEY, encodeIndex()))
+        return listOf(
+            StoreAction.Put(
+                INDEX_KEY,
+                encodeIndex(sealed = sealedSegments - staged.toSet(), retired = ledgerWith(staged)),
+            ),
+        )
     }
 
     /**
@@ -873,16 +987,31 @@ public class WarpLogRecordExporter(
         activeOpCount++
     }
 
-    /** Must hold [lock]. */
-    private fun encodeIndex(): ByteArray = cbor.encodeToByteArray(
+    /**
+     * Encode the index over [sealed] and [retired], defaulting to the layout as it stands.
+     * Must hold [lock].
+     *
+     * The two parameters exist for the one write that has to describe a layout no field holds
+     * yet: an index emitted *after* a [StoreAction.CommitRetirement] in the same batch, whose
+     * move is applied only once that write returns. Every other caller passes the fields, and so
+     * can only ever restate a ledger that is already on disk.
+     */
+    private fun encodeIndex(
+        sealed: List<Int> = sealedSegments,
+        retired: List<Int> = retiringSegments,
+    ): ByteArray = cbor.encodeToByteArray(
         indexSerializer,
         LogSegmentIndex(
-            sealedSegments = sealedSegments.sorted(),
+            sealedSegments = sealed.sorted(),
             active = activeNumber,
             next = nextSegmentNumber,
-            retired = retiringSegments.sorted(),
+            retired = retired.sorted(),
         ),
     )
+
+    /** The ledger this batch would leave behind if [staged] commits. Must hold [lock]. */
+    private fun ledgerWith(staged: List<Int>): List<Int> =
+        retiringSegments + staged.filter { it !in retiringSegments }
 
     // ── Retiring superseded segments ───────────────────────────────────────────
 
@@ -919,35 +1048,58 @@ public class WarpLogRecordExporter(
      * and it would be deleted. Iterating the evidence means an unknown segment is not a candidate
      * at all — see [SegmentContent].
      *
+     * The `check` makes that defence **total** rather than a property of this one function's
+     * shape. [sealedContents] holds an entry for *exactly* the sealed segments — [SegmentContent.Pinned]
+     * wherever nothing is known — so there is no absent entry for a future `sealedContents[n] ?:`
+     * to invent a meaning for, and the hazard is unrepresentable rather than merely unwritten
+     * here. Every mutation site pairs the two ([applyRetirement], [rollActiveSegment],
+     * [adoptRemoteSegment], [installSealedContents]); this is the point at which a break would
+     * cost a user's telemetry, so it is where it is caught.
+     *
      * Coverage has two sources and both must be read: the O(authors) [Rga.compactedBelow] floor,
      * which absorbs this replica's own windowed-away dots, and [Rga.compactedIds], which is where
      * a *foreign* author's land because [Rga.dropWindow] can never raise a foreign floor entry.
      */
     private fun retirableSegments(): List<Int> {
+        check(sealedContents.keys == sealedSegments.toSet()) {
+            "otel.logs: sealedContents must describe exactly the sealed segments — a sealed segment " +
+                "nothing is known about is Pinned, never absent; got ${sealedContents.keys} for $sealedSegments"
+        }
         val floor = log.compactedBelow
         val compacted = log.compactedIds
         val retirable = mutableListOf<Int>()
         for ((number, content) in sealedContents) {
             if (content !is SegmentContent.Ids) continue
-            if (number !in sealedSegments) continue
             if (content.ids.all { id -> floor.contains(id.dot) || id in compacted }) retirable += number
         }
         return retirable
     }
 
     /**
-     * Move every retirable segment onto the sweep ledger and emit the actions that carry the
-     * retirement to disk. Must hold [lock], and must be appended **after** the active-segment
-     * write of a batch that has just run a [windowPass].
+     * **Stage** every retirable segment and emit the actions that carry the retirement to disk.
+     * Must hold [lock], and must be appended **after** the active-segment write of a batch that
+     * has just run a [windowPass].
      *
      * The order, extending this file's own precedent that the index is the commit point:
      *
      * 1. the covering state — the raised floor, and any `RgaOp.Compact` the pass minted — rides
      *    in the active-segment write the caller has already queued ahead of this;
      * 2. an index write moves the numbers out of `sealedSegments` and into
-     *    [LogSegmentIndex.retired]: **the commit point**;
+     *    [LogSegmentIndex.retired]: **the commit point**, and the point at which the same move is
+     *    applied in memory ([StoreAction.CommitRetirement]);
      * 3. the keys are swept;
      * 4. a later index write drops the confirmed deletions from the ledger ([ledgerSwept]).
+     *
+     * **Nothing here touches [sealedSegments], [sealedContents] or [retiringSegments].** That is
+     * the load-bearing part, not a stylistic one. Those fields are what [encodeIndex] reads, so
+     * moving a number onto the ledger while the batch was still being *built* would publish it on
+     * the **next** batch's leading index write — which is emitted before that batch's
+     * active-segment write, and so before anything covers it. [loadPersistedState] sweeps
+     * [LogSegmentIndex.retired] unconditionally and before it reads a thing, so the next start
+     * would then delete a segment whose covering write never landed: not suppression lost, but
+     * records a recovery could still have read, gone. Staging the move and applying it in [commit]
+     * after the ledger write returns makes that state unrepresentable — which is also what lets
+     * that unconditional startup sweep be correct.
      *
      * Both crash windows are safe, and for different reasons. A crash between 1 and 2 leaves the
      * segment named as sealed and present, so recovery simply reads it and the floor re-purges
@@ -960,25 +1112,32 @@ public class WarpLogRecordExporter(
      * already invisible. It is *suppression* that would be lost. Delete a segment whose covering
      * floor never reached disk and the restarted replica holds neither the `Insert`, nor its
      * `Remove`, nor anything that refuses them — so a peer that still holds the raw ops re-admits
-     * the records as live on the next [merge]. Sweeps are queued behind the [StoreAction.Put]s
-     * they depend on and [commit] stops at the first failed `Put`, which is what makes the order
-     * hold rather than merely be documented.
+     * the records as live on the next [merge]. Sweeps are queued behind the writes they depend on
+     * and [commit] stops at the first failed write, which is what makes the order hold rather than
+     * merely be documented.
      *
      * Every outstanding ledger entry is re-swept, not just this batch's, so a delete that failed
-     * once is retried without waiting for a restart.
+     * once is retried without waiting for a restart. That is also why an empty [retirableSegments]
+     * still emits a ledger write when the ledger is non-empty: it restates a ledger already on
+     * disk, and stages nothing.
      */
-    private fun retireSupersededSegments(): List<StoreAction> {
+    private fun retireSupersededSegments(): PendingRetirement {
         val retirable = retirableSegments()
-        if (retirable.isEmpty() && retiringSegments.isEmpty()) return emptyList()
-        sealedSegments.removeAll(retirable.toSet())
-        retirable.forEach { number -> sealedContents.remove(number) }
-        retiringSegments += retirable.filter { it !in retiringSegments }
-        if (retiringSegments.isEmpty()) return emptyList()
-        logger.debug { "otel.logs: retiring superseded segments $retirable; ledger now $retiringSegments" }
-        return buildList {
-            add(StoreAction.Put(INDEX_KEY, encodeIndex()))
-            retiringSegments.forEach { number -> add(StoreAction.Sweep(number)) }
-        }
+        if (retirable.isEmpty() && retiringSegments.isEmpty()) return PendingRetirement.NONE
+        val ledger = ledgerWith(retirable)
+        logger.debug { "otel.logs: retiring superseded segments $retirable; ledger would be $ledger" }
+        return PendingRetirement(
+            staged = retirable,
+            actions = buildList {
+                add(
+                    StoreAction.CommitRetirement(
+                        bytes = encodeIndex(sealed = sealedSegments - retirable.toSet(), retired = ledger),
+                        numbers = retirable,
+                    ),
+                )
+                ledger.forEach { number -> add(StoreAction.Sweep(number)) }
+            },
+        )
     }
 
     // ── Health bookkeeping ─────────────────────────────────────────────────────

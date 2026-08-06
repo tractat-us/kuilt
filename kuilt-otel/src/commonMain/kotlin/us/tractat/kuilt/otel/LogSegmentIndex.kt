@@ -28,6 +28,13 @@ import kotlinx.serialization.Serializable
  *   the delete idempotently. Numbers leave this list only on an index write that follows a
  *   confirmed delete.
  *
+ *   **A number reaches this list only after a write carrying its covering state was confirmed
+ *   durable.** That is the whole warrant for the next start deleting these keys unconditionally,
+ *   before it reads anything — the sweep re-checks nothing, so the guarantee has to have been
+ *   established when the number was written here. The exporter upholds it by never moving a
+ *   number onto its in-memory mirror of this list until the write that publishes it has returned;
+ *   see `WarpLogRecordExporter`'s `StoreAction.CommitRetirement`.
+ *
  *   Defaulted so an index written by a build that predates retirement still decodes.
  */
 @Serializable
