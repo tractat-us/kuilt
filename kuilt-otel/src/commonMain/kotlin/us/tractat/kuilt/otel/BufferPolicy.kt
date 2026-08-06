@@ -28,6 +28,14 @@ public enum class BufferPolicy {
      * differently: [WarpSpanExporter] evicts the newest *buffered* span and admits the
      * arrival; [WarpLogRecordExporter] refuses the arrival, which at a full buffer is
      * the newest record there is. See each exporter's KDoc.
+     *
+     * **Neither policy is the thing that bounds the total, and choosing this one does not
+     * exempt a replica from the other half.** Refusing the arrival means a saturated
+     * [WarpLogRecordExporter] appends no op on the export path — but
+     * [WarpLogRecordExporter.merge] folds a peer's log in wholesale whatever the policy, and
+     * what a peer wrote cannot fold into this replica's compaction floor. So a gossiping
+     * replica still accumulates a small suppression record per foreign record windowed away,
+     * under either policy. See [WarpLogRecordExporter]'s KDoc for the two-arm shape.
      */
     DROP_NEWEST,
 }

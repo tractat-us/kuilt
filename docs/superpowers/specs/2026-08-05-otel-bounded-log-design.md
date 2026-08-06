@@ -269,10 +269,20 @@ it has no drop set and needs no window pass.
 
 A sealed segment is retirable iff every op it holds is an `Insert`/`Remove` now covered by
 the compacted floor or a retained `Compact`, **and** it carries no `Compact` op that has
-not been consolidated. The second clause is what keeps
-`aCompactionInheritedFromTheLegacyBlobIsNeverDropped`
-(`WarpLogRecordExporterSegmentTest.kt:354-382`) green — the legacy segment 0 and every
-`adoptRemoteSegment` segment can carry foreign `Compact`s.
+not been consolidated. The legacy segment 0 and every `adoptRemoteSegment` segment can
+carry `Compact`s.
+
+> **Corrected while landing Task 12.** This paragraph originally named
+> `aCompactionInheritedFromTheLegacyBlobIsNeverDropped` as what the second clause keeps
+> green. It is not: that test's fixture compacts a record **this replica authored**, so once
+> windowing walks past it the per-author floor suppresses it whether or not the `Compact`
+> survives — the test pins *"the record does not come back"*, never *"the `Compact` survived"*.
+> The clause-2 guards are `aMergedSegmentIsRetiredOnlyWhenItCarriesNoCompact` (a **foreign**
+> author's `Compact`, with a retired-anyway control arm) and
+> `droppingTheSegmentCarryingACompactReAdmitsAForeignAuthorsRecord` (the counterfactual: delete
+> the carrier and the foreign author's records really do come back), both in
+> `WarpLogRecordExporterRetirementTest`. Acceptance criterion 4 still holds — the legacy test
+> passes unmodified — but it is not evidence for this clause.
 
 **Fix `opCountOf` first** (`WarpLogRecordExporter.kt:613-614`): `sequence.size +
 tombstones.size` is Compact-blind — a live instance of the #2126 trap ("`Compact` is

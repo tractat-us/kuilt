@@ -25,6 +25,19 @@ import kotlin.test.assertTrue
  * never retired ([aMergedSegmentIsRetiredOnlyWhenItCarriesNoCompact]), and the delete is ordered
  * behind both the covering write and the ledger write that names it
  * ([theLedgerIsCommittedAfterTheCoveringWriteAndBeforeTheKeyIsDeleted]).
+ *
+ * **These two are the guards for "a segment carrying a `Compact` is never retired", and the
+ * legacy-blob test next door is not.** `WarpLogRecordExporterSegmentTest`'s
+ * `aCompactionInheritedFromTheLegacyBlobIsNeverDropped` compacts a record **this** replica
+ * authored, so once windowing walks past it the per-author floor suppresses it whether or not the
+ * `Compact` survives — it pins *"the record does not come back"*, never *"the `Compact` survived"*.
+ * [aMergedSegmentIsRetiredOnlyWhenItCarriesNoCompact] uses a foreign author with a retired-anyway
+ * control arm, and [droppingTheSegmentCarryingACompactReAdmitsAForeignAuthorsRecord] supplies the
+ * counterfactual. Do not cite the legacy test for this clause.
+ *
+ * The reclamation side is measured in the two units a device runs out of: keys a recovery has to
+ * open ([recoverOpensABoundedNumberOfKeysNoMatterHowManyRecordsWereEverExported]) and bytes left
+ * resident ([bytesOnDiskAreBoundedByTheWindowNotByRecordsEverExported]).
  */
 class WarpLogRecordExporterRetirementTest {
 

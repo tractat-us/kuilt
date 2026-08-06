@@ -140,6 +140,17 @@ internal fun opCountOf(segment: Rga<LogRecord>): Int = segment.opCount
  * not attempted here. `WarpLogRecordExporterWindowingTest` measures both terms against
  * each other.
  *
+ * **[Rga.compact] is not the mechanism, and could not be.** It is the obvious candidate — it is
+ * the reclamation this codebase already had — and it reclaims *nothing at all* here, for a
+ * structural reason rather than a tuning one. Its condition 4 refuses to collect a tombstone that
+ * is still some live element's `after`, and this log is an append **chain**: every record is
+ * inserted after the previous one, so every element except the tail is the predecessor of a live
+ * successor. [BufferPolicy.DROP_OLDEST] evicts index 0, which is the element furthest from being
+ * the tail. So the one tombstone [Rga.compact] would accept is the one this exporter never
+ * produces. (Its condition 3 is a second, independent block: a delivered frontier is a fact about
+ * peers, and this class holds a [DurableStore], not a [us.tractat.kuilt.core.Seam].) Windowing
+ * exists because forgetting *position* needs no barrier at all — the next paragraph is why.
+ *
  * Windowing is sound without a causal-stability barrier because it deliberately forgets
  * *position*, not *identity*: a dropped dot stays suppressed, so a peer that still holds
  * the raw `Insert` cannot push the record back in through [merge] — [Rga.piece] merges
