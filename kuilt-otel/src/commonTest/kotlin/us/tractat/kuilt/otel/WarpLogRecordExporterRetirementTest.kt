@@ -92,6 +92,13 @@ class WarpLogRecordExporterRetirementTest {
 
         /** Records behind [perRecordBytes]. Small: it only has to price one record. */
         const val PER_RECORD_SAMPLE = 20
+
+        /**
+         * Merges in [aGossipFedReplicaRetiresThroughTheMergePath]. Even, and comfortably more than
+         * two roll cycles per half, so comparing the two halves' peak rewrite compares like with
+         * like rather than two points on one cycle.
+         */
+        const val MERGE_ROUNDS = 40
     }
 
     // ---- The headline claim: recovery opens a bounded number of keys ----
@@ -259,26 +266,58 @@ class WarpLogRecordExporterRetirementTest {
 
     @Test
     fun aGossipFedReplicaRetiresThroughTheMergePath() = runTest {
-        // `merge` has to call retirement itself, and a test set that only drives `export` cannot
-        // see that: a retirement wired solely into `pendingWrites` leaves every test above green.
+        // `merge` has to run the whole write tail itself, and a test set that only drives `export`
+        // cannot see that: anything wired solely into `pendingWrites` leaves every test above
+        // green.
         //
         // DROP_NEWEST is the configuration where the difference is total rather than incidental.
         // It refuses arrivals instead of evicting, so once the buffer is saturated `export`
         // returns before queueing a single action — the export path writes NOTHING, forever. A
-        // replica in that state fed only by gossip would accumulate one key per merge for as long
-        // as the process lives.
+        // replica in that state is driven entirely by gossip.
+        //
+        // Two claims, measured in the two units that actually move here. **Bytes rewritten** is
+        // the one a key count is blind to: a merge's window pass MINTS an `RgaOp.Compact` for the
+        // foreign dots it took — this replica's own dots fold into the floor and only shrink the
+        // segment, a foreign author's cannot — so a merge path that wrote the active segment but
+        // never ROLLED it appended an op per merge to a segment nothing ever sealed and rewrote
+        // that one key in full every time. Θ(merges²) bytes, on one key, with the key count
+        // pinned flat at 2 throughout: the shape `segmentOps` exists to rule out, and invisible to
+        // every assertion in this file that counts keys.
+        //
+        // **What is reclaimed** is the second, and it is deliberately not stated as a flat key
+        // count, because the key count is not flat and the class KDoc does not claim it is. A
+        // sealed segment that was active when a pass minted a `Compact` is `Pinned` forever, so a
+        // gossip-fed replica accretes one key per `segmentOps` ops — the residue the design admits
+        // and §9 of the spec declined to consolidate. What retirement owes is everything NOT
+        // pinned that way, and that is exactly what is asserted: the merge path adopts a fresh
+        // key per merge holding the peer's whole log, every one of them `Compact`-free, and all of
+        // them have to go.
         val store = RecordingStore()
         val a = exporterFor(store, maxRecords = 5, bufferPolicy = BufferPolicy.DROP_NEWEST, segmentOps = 4)
         val peer = exporterFor(RecordingStore(), replica = replicaB, maxRecords = 10_000, segmentOps = 64)
         repeat(20) { i -> a.export(record(i, body = "a$i")) }
 
-        var early = 0
-        repeat(40) { round ->
+        val rewritten = mutableListOf<Int>()
+        val compactFree = mutableListOf<Int>()
+        repeat(MERGE_ROUNDS) { round ->
             repeat(5) { i -> peer.export(record(1_000 + round * 5 + i)) }
+            // The key this merge will REWRITE, read from the index *before* the merge so a roll
+            // inside it cannot move the answer. Every other segment write a merge makes lands
+            // under a freshly allocated number — a new key is capacity, not amplification.
+            val active = StoreKey(
+                segmentKeyForTest(decodeIndexForTest(requireNotNull(store.read(INDEX_KEY_FOR_TEST))).active),
+            )
+            val mark = store.operations().size
             a.merge(peer.snapshot())
-            if (round == 10) early = segmentKeys(store).size
+            rewritten += store.operations().drop(mark)
+                .filter { it.kind == StoreOpKind.WRITE && it.key == active }
+                .sumOf { requireNotNull(it.bytes).size }
+            compactFree += segmentKeys(store).count { key ->
+                decodeSegmentForTest(requireNotNull(store.read(StoreKey(key)))).compactOpCount == 0
+            }
         }
-        val late = segmentKeys(store).size
+        val earlyPeak = rewritten.take(MERGE_ROUNDS / 2).max()
+        val latePeak = rewritten.drop(MERGE_ROUNDS / 2).max()
 
         assertAll(
             {
@@ -286,11 +325,31 @@ class WarpLogRecordExporterRetirementTest {
                     store.operations().any {
                         it.kind == StoreOpKind.DELETE && it.key.name.startsWith("otel.logs.seg.")
                     },
-                    "40 merges into a saturated DROP_NEWEST buffer retired nothing; the export path " +
-                        "writes nothing at all in that state, so merge has to retire or nobody does",
+                    "$MERGE_ROUNDS merges into a saturated DROP_NEWEST buffer retired nothing; the " +
+                        "export path writes nothing at all in that state, so merge has to retire or " +
+                        "nobody does",
                 )
             },
-            { assertTrue(late <= early, "the store gained keys across 30 further merges: $early -> $late") },
+            {
+                // Bounded, not flat: the rewrite cycles as the segment fills and rolls. Peaks are
+                // what a growing key shows up in, and a half-run holds several whole cycles.
+                assertTrue(
+                    latePeak <= earlyPeak,
+                    "the merge path is rewriting an ever-growing key: the largest active-segment " +
+                        "rewrite went $earlyPeak -> $latePeak bytes across the two halves of " +
+                        "$MERGE_ROUNDS merges. A merge that never rolls grows it by one Compact " +
+                        "every time; the whole series was $rewritten",
+                )
+            },
+            {
+                assertEquals(
+                    compactFree.first(),
+                    compactFree.max(),
+                    "the Compact-free segments a merge adopts are not being reclaimed: the resident " +
+                        "count went ${compactFree.first()} -> ${compactFree.max()} across " +
+                        "$MERGE_ROUNDS merges, each of which adopts one",
+                )
+            },
             { assertEquals(5, a.snapshot().size, "the window must still be intact") },
         )
     }
