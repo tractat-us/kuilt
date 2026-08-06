@@ -1,5 +1,8 @@
 package us.tractat.kuilt.crdt
 
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.cbor.Cbor
+import kotlinx.serialization.serializer
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -501,5 +504,71 @@ class RgaCompactedFloorTest {
         }
         // 5 live inserts + the one inherited Compact. NOT 200-ish singleton Compacts.
         assertTrue(rga.ops.size <= 8, "an inherited Compact must not make the bound fake; got ${rga.ops.size}")
+    }
+
+    // ── seq survival across a floor — the #639 regression class ─────────────
+
+    /**
+     * The invariant [dropWindow] must never break: a floor rises, and the per-author seq
+     * high-water does **not** fall back with the ops it purged. The floor is itself the
+     * evidence those seqs were minted, so both the cached path (`cacheAfterFloor`) and the
+     * cacheless recompute (`computeMaxSeqByReplica`, which the wire decode reaches through
+     * [Rga.fromOps]) have to fold it in. If either regresses, the next mint re-issues a seq
+     * that already exists and two distinct records share a dot — #639, relocated to the floor.
+     *
+     * The window is drained **completely**, so no surviving [RgaOp.Insert] can hold the
+     * high-water up on the recomputed side; that is what makes the second assertion sensitive
+     * to the floor rather than to the op-log.
+     */
+    @Test
+    fun aFlooredReplicaNeverReusesASeqItAlreadyMinted() {
+        val (rga, ops) = chain(5)
+        val floored = rga.dropWindow(me, ops.map { it.id }.toSet())!!.first
+
+        // Everything is gone; the floor is what remembers. Force the cacheless path too.
+        val reloaded = Rga.fromOps(floored.ops, floored.lamport, floored.compactedBelow)
+
+        val (_, freshFromCached) = floored.insertAfter(me, RgaId.HEAD, "next")
+        val (_, freshFromReloaded) = reloaded.insertAfter(me, RgaId.HEAD, "next")
+
+        assertAll(
+            { assertTrue(floored.ops.isEmpty(), "the window drained — no op survives to carry the seq") },
+            { assertEquals(6L, freshFromCached.id.seq, "cached path must not regress the high-water") },
+            { assertEquals(6L, freshFromReloaded.id.seq, "and neither may the recomputed path (#639)") },
+        )
+    }
+
+    /**
+     * The same evidence has to survive the **wire**, which is the cacheless path in production:
+     * `RgaSerializer` decodes through [Rga.fromOps], with no cache to inherit.
+     *
+     * Deliberately **mixed-author**. My whole prefix folds into the floor and leaves no op
+     * behind, while the peer's records keep the op-set non-empty — so the decoded log holds no
+     * dot of mine at all, and only the decoded floor can hold my high-water up. A same-author
+     * partial drop cannot pin this: the highest retained `Insert` carries the high-water on its
+     * own, and the assertion then passes whether or not the recompute consults the floor.
+     */
+    @OptIn(ExperimentalSerializationApi::class)
+    @Test
+    fun aFlooredReplicaSurvivesAWireRoundTripWithoutRegressingItsSeq() {
+        val (mine, myOps) = chain(5)
+        val (theirs, _) = chain(3, author = peer, prefix = "p")
+        val floored = mine.piece(theirs).dropWindow(me, myOps.map { it.id }.toSet())!!.first
+        val cbor = Cbor { alwaysUseByteString = true }
+        val ser = Rga.wireSerializer(serializer<String>())
+
+        val decoded = cbor.decodeFromByteArray(ser, cbor.encodeToByteArray(ser, floored))
+        val (_, fresh) = decoded.insertAfter(me, RgaId.HEAD, "next")
+
+        assertAll(
+            { assertTrue(decoded.ops.isNotEmpty(), "the peer's records keep the decoded op-log non-empty") },
+            {
+                assertTrue(
+                    decoded.ops.none { it is RgaOp.Insert && it.id.replicaId == me },
+                    "yet no dot of mine survives it",
+                )
+            },
+            { assertEquals(6L, fresh.id.seq, "so the decoded floor is the only thing holding my high-water up") },
+        )
     }
 }
