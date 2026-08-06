@@ -243,13 +243,25 @@ class WarpLogRecordExporterSegmentTest {
         // Segments are never dropped, so the total is NOT bounded — the honest claim is
         // that partitioning the op-log across keys does not inflate it. Both policies,
         // because F3 was a policy-specific regression that only measuring one hid.
+        //
+        // The cap is deliberately above the export count, so nothing is evicted and both
+        // sides hold the identical 200-Insert op-log — which is the only configuration in
+        // which their totals are comparable at all. Under cap pressure they are not:
+        // windowing (#2127) carries a drop to disk as a floor absorbed into the ACTIVE
+        // segment, so a one-key layout — whose active segment *is* the whole log — purges
+        // everything it windows away, while a sealed segment keeps its dropped ops until
+        // segment retirement lands. Comparing totals there would measure that gap (real, and
+        // the rest of #2127) rather than the layout question this test is named for, and
+        // comparing bytes-per-op would compare different op *mixes* (the one-key side keeps
+        // only bodied Inserts; the segments also hold cheap bodiless Removes). Cap pressure
+        // on both policies is measured next door, by bothBufferPoliciesBoundThePerExportWrite.
         for (policy in BufferPolicy.entries) {
             val segmented = RecordingStore()
-            exporterFor(store = segmented, maxRecords = 20, bufferPolicy = policy, segmentOps = 8)
+            exporterFor(store = segmented, maxRecords = 1_000, bufferPolicy = policy, segmentOps = 8)
                 .also { e -> repeat(200) { e.export(record(it)) } }
 
             val singleBlob = RecordingStore()
-            exporterFor(store = singleBlob, maxRecords = 20, bufferPolicy = policy, segmentOps = 100_000)
+            exporterFor(store = singleBlob, maxRecords = 1_000, bufferPolicy = policy, segmentOps = 100_000)
                 .also { e -> repeat(200) { e.export(record(it)) } }
 
             // A 15% allowance for the per-segment CBOR framing and the index.

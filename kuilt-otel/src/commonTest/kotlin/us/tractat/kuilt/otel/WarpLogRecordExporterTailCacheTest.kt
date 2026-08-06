@@ -289,10 +289,13 @@ class WarpLogRecordExporterTailCacheTest {
      * every append. Drives the same [Rga] mutations in the same order, so the resulting
      * op-log — and therefore the encoded bytes — must be identical.
      *
-     * It is the **caches** this is an oracle for, so the admission policy is production's,
-     * not history's: [BufferPolicy.DROP_NEWEST] refuses the arrival (#2127). Transcribing
-     * the superseded evict-the-tail reading here would make every divergence it produced
-     * read as a cache bug.
+     * It is the **caches** this is an oracle for, so every *policy* here is production's, not
+     * history's: [BufferPolicy.DROP_NEWEST] refuses the arrival, and the op-log is windowed in
+     * batches through [Rga.dropWindow] (both #2127). Transcribing the superseded evict-the-tail
+     * reading — or leaving the windowing out — would make every divergence it produced read as
+     * a cache bug. The windowing transcription costs the oracle nothing: production computes
+     * the window from [Rga.sequence]/[Rga.tombstones] too, so that part was never cached on
+     * either side.
      */
     private class ReferenceLogExporter(
         private val replica: ReplicaId,
@@ -302,6 +305,7 @@ class WarpLogRecordExporterTailCacheTest {
         var log: Rga<LogRecord> = Rga.empty()
             private set
         private var seenIds: Map<ByteString, RgaId> = emptyMap()
+        private var evictionsSincePass: Int = 0
 
         fun export(record: LogRecord) {
             if (record.recordId in seenIds) return
@@ -309,11 +313,13 @@ class WarpLogRecordExporterTailCacheTest {
             val (newLog, insertOp) = log.insertAfter(replica = replica, after = tailId(), value = record)
             log = newLog
             seenIds = seenIds + (record.recordId to insertOp.id)
+            if (windowPassDue()) windowPass()
         }
 
         fun merge(remote: Rga<LogRecord>) {
             log = log.piece(remote)
             seenIds = log.entries().associate { (rgaId, record) -> record.recordId to rgaId }
+            if (windowPassDue()) windowPass()
         }
 
         private fun admit(): Boolean {
@@ -327,9 +333,34 @@ class WarpLogRecordExporterTailCacheTest {
                     val evictedRecord = log.toList()[0]
                     log = newLog
                     seenIds = seenIds - evictedRecord.recordId
+                    evictionsSincePass++
                     true
                 }
             }
+        }
+
+        private fun windowPassDue(): Boolean = evictionsSincePass >= maxRecords || log.size > maxRecords
+
+        private fun windowPass() {
+            evictionsSincePass = 0
+            val dropped = idsOutsideWindow() ?: return
+            val (newLog, _) = log.dropWindow(replica, dropped) ?: return
+            log = newLog
+            seenIds = log.entries().associate { (rgaId, record) -> record.recordId to rgaId }
+        }
+
+        private fun idsOutsideWindow(): Set<RgaId>? {
+            val sequence = log.sequence
+            val tombstones = log.tombstones
+            var visibleSeen = 0
+            var cut = sequence.size
+            for (i in sequence.indices.reversed()) {
+                if (visibleSeen == maxRecords) break
+                if (sequence[i] !in tombstones) visibleSeen++
+                cut = i
+            }
+            if (cut == 0) return null
+            return sequence.subList(0, cut).toSet()
         }
 
         private fun tailId(): RgaId {

@@ -16,6 +16,7 @@ import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.RgaId
 import us.tractat.kuilt.crdt.RgaOp
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.piece
 
 // Explicit, package-qualified name — NOT the `logger {}` lambda form. On
 // Kotlin/Native the lambda form resolves to an EMPTY logger name, which would make
@@ -111,25 +112,36 @@ internal fun opCountOf(segment: Rga<LogRecord>): Int = segment.opCount
  * order-independent — and the persisted [Rga] wire form derives its Lamport clock
  * from the op-set, so nothing is lost by not persisting it per segment.
  *
- * ## What this does not bound: the total
+ * ## Windowing the in-memory op-log
  *
- * Segments are **never dropped**. [maxRecords] bounds *visibility* exactly, as it
- * always has — eviction tombstones one record at a time — but the tombstoned
- * record's `Insert` op still carries its full body and still sits in its segment.
- * Total bytes on disk therefore grow with the number of records ever exported,
- * exactly as they did before, and the store gains roughly one key per [segmentOps]
- * operations. What is fixed here is the **write amplification**: those bytes are
- * written once each, instead of once per record that follows them.
+ * Eviction only *tombstones*: the evicted record's `Insert` op — body and all — stays
+ * in the log, so the in-memory op-log grew with the number of records ever exported
+ * even though [maxRecords] held visibility flat. [Rga.dropWindow] is the bounded fix,
+ * and this exporter calls it in **batches** ([windowPass]): everything outside the
+ * retained window is dropped from `log`, and the drop is recorded as a per-author
+ * compaction **floor** — O(authors), not O(elements dropped).
  *
- * Dropping the ops outright is the obvious next step, and it is deliberately not
- * taken here, because it is a **garbage collection of CRDT state** whose safety
- * precondition is causal stability — every replica has seen them. A local
- * "this segment is fully superseded" test cannot establish that. [Rga.piece] is a
- * set union, so once `Insert(X)` and `Remove(X)` are both gone, a peer holding the
- * old ops re-admits `X` as live; and an `RgaOp.Compact` dropped along with its
- * segment silently revokes [Rga]'s "once compacted, always compacted" guarantee.
- * Doing it properly needs [Rga.compact] and the version vectors it demands, which
- * this exporter has no way to obtain.
+ * That is sound without a causal-stability barrier because windowing deliberately
+ * forgets *position*, not *identity*: the floor keeps suppressing a dropped dot, so a
+ * peer that still holds the raw `Insert` cannot push the record back in through
+ * [merge] — [Rga.piece] merges the floor and re-purges under it. What is given up is
+ * the stability of a survivor's position when its predecessor is dropped; see
+ * [Rga.compactedBelow].
+ *
+ * ## What this does not bound: the total on disk
+ *
+ * Segments are **never dropped**. A windowed-away `Insert` leaves `log`, but it stays
+ * in whichever *sealed* segment it landed in, so total bytes on disk still grow with
+ * the number of records ever exported and the store still gains roughly one key per
+ * [segmentOps] operations. Only the **active** segment shrinks, because the floor is
+ * absorbed into it (that is also how the drop reaches disk at all: recovery unions the
+ * segments, and the floor purges everything beneath it in the union, exactly as it did
+ * in memory).
+ *
+ * Retiring a fully-superseded segment is the next step and is deliberately not taken
+ * here. It is not simply "delete a key": an `RgaOp.Compact` dropped along with its
+ * segment silently revokes [Rga]'s "once compacted, always compacted" guarantee, and a
+ * segment is only superseded once the floor covers **every** op it holds.
  *
  * @param replica The [ReplicaId] for this device/process. Must be unique and stable
  *   across restarts (a UUID is recommended).
@@ -194,6 +206,13 @@ public class WarpLogRecordExporter(
 
     /** Number of visible (non-tombstoned) records in [log] — the eviction gate. */
     private var visibleCount: Int = 0
+
+    /**
+     * Evictions since the last [windowPass]. One of the two things that make a pass due —
+     * see [windowPassDue], and [windowPass] for why passes are batched rather than
+     * per-eviction.
+     */
+    private var evictionsSincePass: Int = 0
 
     // Maps recordId → RgaId of the Insert op, so that re-export is a no-op.
     // Mutated in place on export()/eviction and rebuilt from the op-log on recover().
@@ -506,6 +525,10 @@ public class WarpLogRecordExporter(
                 // The op `insertAfter` already handed back is exactly what the segment
                 // needs — the append is O(1) and the encode below is O(segmentOps).
                 appendToActiveSegment(insertOp)
+                // Before pendingWrites(), never after: a pass rewrites `activeSegment`, and
+                // the active-segment write pendingWrites() already owes is what carries the
+                // resulting floor to disk.
+                if (windowPassDue()) windowPass()
                 pendingWrites()
             }
         }.getOrElse { cause ->
@@ -546,7 +569,14 @@ public class WarpLogRecordExporter(
                 log = log.piece(remote)
                 // A remote insert can land anywhere, including after the local tail.
                 rebuildDerivedState()
-                adoptRemoteSegment(remote)
+                val adopted = adoptRemoteSegment(remote)
+                // A merge is the only path that can push the buffer past the cap without
+                // evicting (see [admit]), and under DROP_NEWEST it is the ONLY path that can
+                // grow the log at all — that policy never evicts, so the eviction counter
+                // alone would leave a gossiping DROP_NEWEST exporter unwindowed forever.
+                // Unlike export(), nothing here writes the active segment, so a pass has to
+                // add that write itself or its floor never reaches disk.
+                if (windowPassDue() && windowPass()) adopted + activeSegmentWrite() else adopted
             }
         }.getOrElse { cause ->
             logger.error(cause) { "WarpLogRecordExporter: buffer update failed during merge" }
@@ -593,10 +623,14 @@ public class WarpLogRecordExporter(
         // The index names the active segment, so it has to exist on disk before any
         // content is written into a segment it announces.
         if (!indexPersisted) actions += StoreAction(INDEX_KEY, encodeIndex())
-        actions += StoreAction(segmentKey(activeNumber), cbor.encodeToByteArray(logSerializer, activeSegment))
+        actions += activeSegmentWrite()
         if (activeOpCount >= segmentOps) actions += rollActiveSegment()
         return actions
     }
+
+    /** The write that puts the current [activeSegment] on disk under its own key. Must hold [lock]. */
+    private fun activeSegmentWrite(): StoreAction =
+        StoreAction(segmentKey(activeNumber), cbor.encodeToByteArray(logSerializer, activeSegment))
 
     /**
      * Seal the full active segment and open a fresh one. Must hold [lock].
@@ -734,10 +768,83 @@ public class WarpLogRecordExporter(
         appendToActiveSegment(removeOp)
         seenIds.remove(evictedRecord.recordId)
         visibleCount--
+        evictionsSincePass++
         // DROP_OLDEST removes visible index 0. With at least one element still standing the
         // first and last visible elements are distinct, so `tail` is untouched; at zero there
         // is nothing left to append after.
         if (visibleCount == 0) tail = RgaId.HEAD
+    }
+
+    // ── Windowing the in-memory op-log ─────────────────────────────────────────
+
+    /**
+     * Whether the in-memory log has drifted far enough from the retained window to owe a
+     * [windowPass]. Must hold [lock].
+     *
+     * Two arms, because the two policies drift in different ways and neither arm covers the
+     * other. [BufferPolicy.DROP_OLDEST] evicts one record per arrival, so [visibleCount] is
+     * pinned *at* the cap and never exceeds it — only the eviction count grows. A [merge] can
+     * push [visibleCount] past the cap outright, and under [BufferPolicy.DROP_NEWEST] that is
+     * the only way the log grows at all: that policy refuses arrivals rather than evicting, so
+     * its eviction count is permanently zero.
+     */
+    private fun windowPassDue(): Boolean =
+        evictionsSincePass >= maxRecords || visibleCount > maxRecords
+
+    /**
+     * Drop everything outside the retained window from the in-memory log, and absorb the
+     * resulting compaction record into the active segment. Returns whether anything moved.
+     * Must hold [lock].
+     *
+     * **Batched, not per-eviction**, and the reason is the derived-state caches: a pass reads
+     * [Rga.sequence], which is a cold lazy on every new [Rga] instance, so it costs a full
+     * `computeSequence()` plus the [rebuildDerivedState] walk afterwards. Those O(N) walks are
+     * exactly what the incremental `tail`/[visibleCount]/[seenIds] caches exist to keep off the
+     * export path (#1860). Running once per [maxRecords] evictions amortises them back to O(1)
+     * per record; running per eviction would put an O(N) walk back on every single export.
+     *
+     * The floor reaches disk through [activeSegment]: [Rga.piece] merges the delta's floor into
+     * it and purges the segment's own ops beneath it, so the segment write that follows carries
+     * the drop forward. Recovery unions the segments — the *sealed* ones still hold the dropped
+     * `Insert`s — and the merged floor purges them there too, which is why bounding the log in
+     * memory does not (yet) shrink the store.
+     */
+    private fun windowPass(): Boolean {
+        evictionsSincePass = 0
+        val dropped = idsOutsideWindow() ?: return false
+        val (newLog, delta) = log.dropWindow(replica, dropped) ?: return false
+        // dropWindow returns null only for an EMPTY drop set; a set that changes nothing —
+        // ids already under the floor, or never delivered here — comes back as this very
+        // state with an inert delta. Persisting that would rewrite the segment for nothing.
+        if (newLog === log) return false
+        log = newLog
+        activeSegment = activeSegment.piece(delta)
+        activeOpCount = opCountOf(activeSegment)
+        rebuildDerivedState()
+        return true
+    }
+
+    /**
+     * Every id in [log] that falls outside the retained window of [maxRecords] visible records
+     * — the leading prefix of [Rga.sequence], found by walking back from the end and counting
+     * visible ids. `null` when nothing falls outside. Must hold [lock].
+     *
+     * Tombstones inside the window are retained along with it and counted against nothing;
+     * tombstones in the prefix are dropped with it, which is the point — an evicted record's
+     * `Insert` *and* its `Remove` both leave the log.
+     */
+    private fun idsOutsideWindow(): Set<RgaId>? {
+        val sequence = log.sequence
+        val tombstones = log.tombstones
+        var visibleSeen = 0
+        var cut = sequence.size
+        for (i in sequence.indices.reversed()) {
+            if (visibleSeen == maxRecords) break
+            if (sequence[i] !in tombstones) visibleSeen++
+            cut = i
+        }
+        if (cut == 0) return null
+        return sequence.subList(0, cut).toSet()
     }
 
     /**
