@@ -33,6 +33,14 @@ A distributed system has no central clock. "Has everyone seen op X?" is answered
 
 `Rga` overrides this: it emits one dot per `Insert` op, plus the compacted ids recorded in any `Compact` op (to keep the contiguous frontier intact after GC removes raw inserts from the log).
 
+### The `causalFloor()` hook
+
+`causalDots()` is only half the delivered surface. Re-emitting from a `Compact` op keeps the frontier gap-free, but that op retains one `(id → predecessor)` pair per dropped element **forever**, so the record is Θ(elements ever) — fatal for a log that windows continuously. `Rga.dropWindow` therefore folds a contiguous run of the replica's **own** dots into a downward-closed per-author floor (`Rga.compactedBelow`) instead, which is O(authors). A floor keeps no ids, so those dots simply vanish from `causalDots()`.
+
+`Quilted.causalFloor()` is what reports them. It defaults to `VersionVector.EMPTY`, so every CRDT that does not compact this way is unaffected. **A consumer folding a delivered frontier must read both**: a dot is delivered if it is in `causalDots()` *or* at-or-below `causalFloor()`. Reading only the dots pins the author's high-water below the floor forever and stalls all further GC for that author.
+
+The floor can only describe a *downward-closed* compacted set. Everything `dropWindow` cannot fold — a foreign author's dots, or own dots above the first retained one — keeps an explicit `Compact` entry that `causalDots()` still re-emits. A CRDT whose compaction is not downward-closed leaves `causalFloor()` defaulted and keeps re-emitting.
+
 ### The `Rga.compact()` safety conditions
 
 A tombstoned `Insert(id)` is eligible to be dropped when ALL of:

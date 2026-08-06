@@ -594,4 +594,51 @@ class RgaCompactedFloorTest {
             { assertEquals(6L, fresh.id.seq, "so the decoded floor is the only thing holding my high-water up") },
         )
     }
+
+    // ── Quilted.causalFloor() — the capability that exports the floor ────────
+
+    @Test
+    fun theDefaultCausalFloorIsEmptySoNonOpLogCrdtsAreUnaffected() {
+        assertEquals(VersionVector.EMPTY, GSet.of("x").causalFloor())
+    }
+
+    /**
+     * The capability's whole point: the dots the floor swallowed are **gone** from
+     * [Rga.causalDots] — no `Compact` op records them — and [Rga.causalFloor] is the only
+     * thing that still says they were delivered. A consumer folding a delivered frontier has
+     * to read both halves, which is what PR 3 teaches `Quilter` to do.
+     *
+     * The third arm binds through the [Quilted] supertype on purpose, and is **not** a
+     * restatement of the first. Had this shipped as the `Quilted<S>.causalFloor()`
+     * **extension** it was first specced as — plus a more specific `Rga<V>` one — the first
+     * arm resolves to the `Rga` extension and passes, and
+     * [theDefaultCausalFloorIsEmptySoNonOpLogCrdtsAreUnaffected] resolves to the generic one
+     * and passes too. Both are green while a `Quilter` holding a `Quilted<S>` has nothing to
+     * call at all. This arm is the only thing that fails in that world, so the receiver the
+     * one consumer that matters actually uses is pinned rather than assumed.
+     */
+    @Test
+    fun rgaReportsItsFloorAndStopsReEmittingTheDotsBeneathIt() {
+        val (rga, ops) = chain(5)
+        val floored = rga.dropWindow(me, ops.take(3).map { it.id }.toSet())!!.first
+        val asQuilted: Quilted<Rga<String>> = floored
+
+        assertAll(
+            { assertEquals(VersionVector.of(mapOf(me to 3L)), floored.causalFloor()) },
+            {
+                assertEquals(
+                    setOf(Dot(me, 4L), Dot(me, 5L)),
+                    floored.causalDots(),
+                    "the floor carries the dropped dots now — re-emitting would make the capability pointless",
+                )
+            },
+            {
+                assertEquals(
+                    VersionVector.of(mapOf(me to 3L)),
+                    asQuilted.causalFloor(),
+                    "and it must dispatch through Quilted — that is the only receiver a Quilter has",
+                )
+            },
+        )
+    }
 }

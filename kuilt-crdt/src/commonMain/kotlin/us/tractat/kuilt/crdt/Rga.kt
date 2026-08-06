@@ -629,6 +629,16 @@ public class Rga<V> private constructor(
     override fun causalDots(): Set<Dot> = engine<V>().causalDots(ops)
 
     /**
+     * The delivered dots this replica compacted away **without** keeping their ids — exactly
+     * [compactedBelow].
+     *
+     * The bounded half of the delivered surface. A dot at or below this floor was delivered
+     * and its op is purged, but no [RgaOp.Compact] holds its id, so [causalDots] cannot
+     * re-emit it and does not try. Read the two together, as [Quilted.causalFloor] describes.
+     */
+    override fun causalFloor(): VersionVector = compactedBelow
+
+    /**
      * Merge two replicas' op-logs. The result is the idempotent union — both
      * replicas converge to the same [toList] after [piece].
      *

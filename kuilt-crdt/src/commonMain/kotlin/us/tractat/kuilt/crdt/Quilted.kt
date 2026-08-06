@@ -69,8 +69,44 @@ public interface Quilted<S : Quilted<S>> {
      * the zoo (`GCounter`, `ORSet`, …) does not use this GC path; the default empty set
      * keeps the capability non-breaking for them — they contribute nothing to any
      * delivered vector.
+     *
+     * **This is only half the delivered surface.** Dots swallowed by [causalFloor] are
+     * delivered too and are deliberately *not* re-emitted here — the floor keeps no id set
+     * to re-emit them from, which is exactly what bounds it. A consumer folding a delivered
+     * frontier must read both.
      */
     public fun causalDots(): Set<Dot> = emptySet()
+
+    /**
+     * The per-author high-water of dots this state **delivered and has since compacted away
+     * without retaining their identities**.
+     *
+     * The bounded companion to [causalDots]. An op-log CRDT that garbage-collects must keep
+     * its delivered frontier gap-free, or the author's high-water pins below the gap forever
+     * and all downstream GC stalls. [Rga] keeps it gap-free across an explicit `RgaOp.Compact`
+     * by re-emitting every id that op recorded through [causalDots] — correct, but the record
+     * it re-emits from is Θ(elements ever), and the replicator recomputes the fold on **every**
+     * state change. A high-water says the same thing about a whole compacted prefix in
+     * O(authors), which is what lets a windowed log stop growing.
+     *
+     * So the two are read together: a dot is delivered if it is in [causalDots] **or** at or
+     * below this floor. The dots beneath the floor will never appear in [causalDots] again.
+     *
+     * It can only describe a **downward-closed** compacted set. `Rga.dropWindow` guarantees
+     * that by advancing the floor across a contiguous own-dot run only, recording every other
+     * drop as an explicit `Compact` that [causalDots] still re-emits. A CRDT whose compaction
+     * is not downward-closed must keep re-emitting through [causalDots] and leave this
+     * defaulted.
+     *
+     * The default is empty, so every delta-state CRDT in the zoo is unaffected — they neither
+     * compact nor participate in this GC path.
+     *
+     * **Not aggregated across nesting.** `JsonNode.Array` unions the [causalDots] of every
+     * nested [Rga], but nothing unions their floors. Harmless while nothing floors a nested
+     * `Rga`; a `JsonCrdt` that starts compacting must aggregate here too, or it silently
+     * under-reports its own frontier.
+     */
+    public fun causalFloor(): VersionVector = VersionVector.EMPTY
 }
 
 /**
