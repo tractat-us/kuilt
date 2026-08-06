@@ -2,8 +2,6 @@
 
 package us.tractat.kuilt.otel
 
-import kotlinx.atomicfu.locks.reentrantLock
-import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.bytestring.ByteString
 import kotlinx.serialization.cbor.Cbor
@@ -66,38 +64,6 @@ class WarpLogRecordExporterSegmentTest {
         bufferPolicy = bufferPolicy,
         segmentOps = segmentOps,
     )
-
-    /**
-     * A [DurableStore] that records the size of every [write] payload and can report
-     * the total bytes currently resident. Backed by an in-memory map, guarded by an
-     * explicit lock (kuilt policy: primitives, never dispatcher confinement).
-     */
-    private class RecordingStore : DurableStore {
-        private val lock = reentrantLock()
-        private val backing = mutableMapOf<StoreKey, ByteArray>()
-        private val payloadSizes = mutableListOf<Int>()
-
-        override suspend fun read(key: StoreKey): ByteArray? = lock.withLock { backing[key]?.copyOf() }
-
-        override suspend fun write(key: StoreKey, bytes: ByteArray): Unit = lock.withLock {
-            backing[key] = bytes.copyOf()
-            payloadSizes += bytes.size
-        }
-
-        override suspend fun delete(key: StoreKey): Unit = lock.withLock { backing.remove(key) }
-
-        /** Bytes written per [write] call, in call order. */
-        fun writes(): List<Int> = lock.withLock { payloadSizes.toList() }
-
-        /** Total bytes currently resident across every live key. */
-        fun residentBytes(): Int = lock.withLock { backing.values.sumOf { it.size } }
-
-        fun keys(): Set<String> = lock.withLock { backing.keys.map { it.name }.toSet() }
-
-        fun putRaw(key: StoreKey, bytes: ByteArray): Unit = lock.withLock { backing[key] = bytes.copyOf() }
-
-        fun resetWriteLog(): Unit = lock.withLock { payloadSizes.clear() }
-    }
 
     /**
      * A compacted legacy [blob], plus a [laggingPeer] whose op-log still holds the
@@ -254,13 +220,12 @@ class WarpLogRecordExporterSegmentTest {
         // comparing bytes-per-op would compare different op *mixes* (the one-key side keeps
         // only bodied Inserts; the segments also hold cheap bodiless Removes).
         //
-        // That has a cost worth stating plainly rather than hand-waving: **total resident
-        // bytes under cap pressure are now measured NOWHERE.** This test used to measure it
-        // and no longer can — the property is genuinely false post-windowing, so it cannot be
-        // restored as written, and the neighbouring bothBufferPoliciesBoundThePerExportWrite
-        // is not a substitute (it bounds one export's *write size*, not the total on disk).
-        // What would make the dimension measurable again is segment retirement — the rest of
-        // #2127 — after which a windowed-away Insert leaves the store instead of only `log`.
+        // The dimension this test used to measure — total resident bytes under cap pressure —
+        // is measured by WarpLogRecordExporterRetirementTest instead, and in the unit that
+        // matters for a device rather than in bytes: how many keys a recovery has to open.
+        // It cannot be restored *here* as written, because "the segmented layout costs no more
+        // than one blob" is genuinely false while a sealed segment is between being windowed
+        // away and being retired.
         //
         // No policy loop, for the same reason. With no cap pressure DROP_NEWEST refuses
         // nothing and DROP_OLDEST evicts nothing, so both policies drive the identical op
@@ -332,23 +297,6 @@ class WarpLogRecordExporterSegmentTest {
         )
     }
 
-    /** Delegates to [backing], but throws on reading [poisoned]. */
-    private class FailReadOfStore(private val backing: DurableStore, private val poisoned: StoreKey) : DurableStore {
-        override suspend fun read(key: StoreKey): ByteArray? {
-            if (key == poisoned) throw IllegalStateException("simulated transient read failure on $key")
-            return backing.read(key)
-        }
-
-        override suspend fun write(key: StoreKey, bytes: ByteArray): Unit = backing.write(key, bytes)
-        override suspend fun delete(key: StoreKey): Unit = backing.delete(key)
-    }
-
-    /** Delegates to [backing], but throws on every delete. */
-    private class FailDeleteStore(private val backing: DurableStore) : DurableStore {
-        override suspend fun read(key: StoreKey): ByteArray? = backing.read(key)
-        override suspend fun write(key: StoreKey, bytes: ByteArray): Unit = backing.write(key, bytes)
-        override suspend fun delete(key: StoreKey): Unit = throw IllegalStateException("simulated delete failure")
-    }
     // ---- Round-trip through the segments ----
 
     @Test
@@ -541,28 +489,6 @@ class WarpLogRecordExporterSegmentTest {
                 { assertEquals(legacy, retried.snapshot().toList(), "write #$failingWrite: records lost") },
             )
         }
-    }
-
-    /** Fails the [failOn]-th [write] call, then keeps failing until [failing] is cleared. */
-    private class FailNthWriteStore(private val failOn: Int) : DurableStore {
-        private val lock = reentrantLock()
-        private val backing = mutableMapOf<StoreKey, ByteArray>()
-        private var writes = 0
-        var failing: Boolean = true
-
-        override suspend fun read(key: StoreKey): ByteArray? = lock.withLock { backing[key]?.copyOf() }
-
-        override suspend fun write(key: StoreKey, bytes: ByteArray) {
-            lock.withLock {
-                writes++
-                if (failing && writes >= failOn) throw IllegalStateException("simulated crash on write $writes")
-                backing[key] = bytes.copyOf()
-            }
-        }
-
-        override suspend fun delete(key: StoreKey): Unit = lock.withLock { backing.remove(key) }
-
-        fun putRaw(key: StoreKey, bytes: ByteArray): Unit = lock.withLock { backing[key] = bytes.copyOf() }
     }
 
     @Test

@@ -209,9 +209,17 @@ public class Rga<V> private constructor(
 ) : Quilted<Rga<V>> {
 
     /**
-     * All ids that have been garbage-collected by any [RgaOp.Compact] in this op-log.
+     * All ids that have been garbage-collected by any [RgaOp.Compact] in this op-log — the
+     * *unbounded* half of the compaction record, as against the O(authors) [compactedBelow] floor.
+     *
+     * Public because a consumer that partitions the op-log across storage segments has to decide
+     * whether a segment is fully superseded before it may drop it, and suppression comes from the
+     * two together: a dot is suppressed iff [compactedBelow] contains it **or** its id is in this
+     * set. Reading only the floor would judge a *foreign* author's windowed-away element
+     * unsuppressed — [dropWindow] can never fold a foreign dot into the floor — and so keep its
+     * segment on disk forever.
      */
-    private val compactedIds: Set<RgaId> by lazy {
+    public val compactedIds: Set<RgaId> by lazy {
         cache?.compactedIds ?: computeCompactedIds()
     }
 
@@ -302,6 +310,23 @@ public class Rga<V> private constructor(
      * undercounts a segment that carries one.
      */
     public val opCount: Int get() = ops.size
+
+    /**
+     * How many [RgaOp.Compact] ops this log retains.
+     *
+     * Public for the same storage-partitioning reason as [compactedIds], but answering the
+     * converse question. A `Compact` is the only carrier of this class's "once compacted, always
+     * compacted" guarantee for the ids it names, and **nothing ever prunes one** — [purgeBelow]
+     * keeps it unconditionally and [piece] unions the positions it carries — so a consumer that
+     * drops the storage holding one silently revokes that guarantee, and a peer that never
+     * received the compaction can re-admit the purged element on the next [piece]. A segment
+     * holding a `Compact` therefore may never be dropped, however superseded its other ops are.
+     *
+     * Deliberately not `compactedIds.isNotEmpty()`: that projection is blind to a `Compact`
+     * carrying an empty positions map, and "may I delete this?" must not be decided by a
+     * predicate with a false-negative case.
+     */
+    public val compactOpCount: Int get() = ops.count { it is RgaOp.Compact }
 
     /**
      * Insert [value] immediately after the element with [after] id, minting a
