@@ -23,9 +23,14 @@ internal class TwoPhaseSetConformanceTest : QuiltedConformanceSuite<TwoPhaseSet<
      * [TwoPhaseSet.contains] is `element in added && element !in removed`, both components are
      * grow-only, and so the tombstone is permanent by construction — *"once removed, an element can
      * never be re-added; even a fresh add will be masked."* That is the type's defining wart, not an
-     * omission in this sample list: no state anywhere above `abMinusA` can make
-     * [RetirementReAssertion.shows] read `true` for "a" again, and the ORSet one rung up exists
-     * precisely to fix it.
+     * omission in this sample list, and the ORSet one rung up exists precisely to fix it.
+     *
+     * **Measured, not assumed.** A probe binding declaring `true` with the most honest triple
+     * available — `a`, `abMinusA`, and `abMinusA.piece(abMinusA.add("a"))` — does not reach
+     * [RetirementReAssertion.shows] at all. It reds one assertion earlier, on *"the three states
+     * must be distinct": `expected <3> but was <2>`*. Re-adding after the tombstone is not merely
+     * invisible, it is a **no-op on the state**: the add contributes `"a"` to a grow-only `added`
+     * that already contains it, so the join lands back on `abMinusA` itself.
      *
      * A predicate on some *other* subject — `elements.isNotEmpty()`, say, retired by removing "a"
      * and re-asserted by adding "c" — would go true → false → true and pass. It would also be the
