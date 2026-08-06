@@ -1,19 +1,3 @@
-/**
- * [contiguousFrontier] over a CRDT that carries a **compaction floor** (#2127).
- *
- * A raised [us.tractat.kuilt.crdt.Rga.compactedBelow] purges its ops and — unlike an
- * `RgaOp.Compact` — records no id set, so those dots leave
- * [us.tractat.kuilt.crdt.Quilted.causalDots]. Counting the contiguous frontier from `0`
- * would stop at the first swallowed seq, and because the floor is downward-closed that seq
- * is `1` — so the author's delivered high-water collapses to `0` and every downstream GC
- * stalls forever. Starting each author's walk at
- * [us.tractat.kuilt.crdt.Quilted.causalFloor] bridges exactly the dots the floor asserts
- * were delivered.
- *
- * The last test drives the **live replicator**, not the helper: it is what pins the call
- * site actually passing the floor. Every helper-level test here would pass just as well
- * against a `Quilter` that still called `contiguousFrontier(dots, VersionVector.EMPTY)`.
- */
 @file:OptIn(
     kotlinx.serialization.ExperimentalSerializationApi::class,
     kotlinx.coroutines.ExperimentalCoroutinesApi::class,
@@ -37,6 +21,22 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
+/**
+ * [contiguousFrontier] over a CRDT that carries a **compaction floor** (#2127).
+ *
+ * A raised [us.tractat.kuilt.crdt.Rga.compactedBelow] purges its ops and — unlike an
+ * `RgaOp.Compact` — records no id set, so those dots leave
+ * [us.tractat.kuilt.crdt.Quilted.causalDots]. Counting the contiguous frontier from `0`
+ * would stop at the first swallowed seq, and because the floor is downward-closed that seq
+ * is `1` — so the author's delivered high-water collapses to `0` and every downstream GC
+ * stalls forever. Starting each author's walk at
+ * [us.tractat.kuilt.crdt.Quilted.causalFloor] bridges exactly the dots the floor asserts
+ * were delivered.
+ *
+ * The last test drives the **live replicator**, not the helper: it is what pins the call
+ * site actually passing the floor. Every helper-level test here would pass just as well
+ * against a `Quilter` that still called `contiguousFrontier(dots, VersionVector.EMPTY)`.
+ */
 class QuilterCausalFloorTest {
 
     private val a = ReplicaId("a")
@@ -98,12 +98,11 @@ class QuilterCausalFloorTest {
     }
 
     /**
-     * The walk is O(dots above the floor), not O(floor). A correctness test alone would pass
-     * against a Θ(floor) enumeration, so the shape is measured directly: ten million swallowed
-     * seqs must cost nothing to step over.
-     *
-     * **A hang here is a stop-and-fix signal, not a reason to shrink the constant** — it means
-     * the walk is enumerating the very dots the floor exists to skip.
+     * Correctness over a floor deep enough (ten million) that a Θ(floor) enumeration would be
+     * an obviously wrong implementation choice, not a runtime-measured one. The O(dots above the
+     * floor) shape is guaranteed by [contiguousHighWater]'s construction — `var n = from; while
+     * ((n + 1L) in seqs) n++` starts at `from` and never touches a seq below it — not by
+     * anything this test times.
      */
     @Test
     fun aHugeFloorCostsNothingToWalk() {
@@ -125,7 +124,7 @@ class QuilterCausalFloorTest {
     fun aWindowedRgaUnderAQuilterKeepsItsDeliveredFrontier() = runTest(UnconfinedTestDispatcher()) {
         val loom = InMemoryLoom()
         val seam = loom.host(Pattern("floor-frontier"))
-        loom.join(InMemoryTag("b"))
+        val peer = loom.join(InMemoryTag("b"))
         val replicator = Quilter(
             replica = a,
             seam = seam,
@@ -168,5 +167,7 @@ class QuilterCausalFloorTest {
                 )
             },
         )
+
+        peer.close()
     }
 }
