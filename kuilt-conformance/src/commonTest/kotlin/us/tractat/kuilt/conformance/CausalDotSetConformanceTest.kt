@@ -28,6 +28,12 @@ internal class CausalDotSetConformanceTest : QuiltedConformanceSuite<Causal<DotS
 
     override val retirementIsMeaningful: Boolean get() = true
 
-    override fun retirementReAssertion(): Triple<Causal<DotSet>, Causal<DotSet>, Causal<DotSet>> =
-        Triple(asserted, retired, reAsserted)
+    override fun retirementReAssertion(): RetirementReAssertion<Causal<DotSet>> =
+        RetirementReAssertion(
+            subject = "the membership the dots carry",
+            asserted = asserted,
+            retired = retired,
+            reAsserted = reAsserted,
+            shows = { it.store.dots.isNotEmpty() },
+        )
 }

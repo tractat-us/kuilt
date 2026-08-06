@@ -23,6 +23,12 @@ internal class MVRegisterConformanceTest : QuiltedConformanceSuite<MVRegister<St
 
     override val retirementIsMeaningful: Boolean get() = true
 
-    override fun retirementReAssertion(): Triple<MVRegister<String>, MVRegister<String>, MVRegister<String>> =
-        Triple(x, xRetired, xReAsserted)
+    override fun retirementReAssertion(): RetirementReAssertion<MVRegister<String>> =
+        RetirementReAssertion(
+            subject = """the value "x"""",
+            asserted = x,
+            retired = xRetired,
+            reAsserted = xReAsserted,
+            shows = { "x" in it.values },
+        )
 }

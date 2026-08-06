@@ -31,6 +31,12 @@ internal class LWWMapConformanceTest : QuiltedConformanceSuite<LWWMap<String, St
 
     override val retirementIsMeaningful: Boolean get() = true
 
-    override fun retirementReAssertion(): Triple<LWWMap<String, String>, LWWMap<String, String>, LWWMap<String, String>> =
-        Triple(asserted, retired, reAsserted)
+    override fun retirementReAssertion(): RetirementReAssertion<LWWMap<String, String>> =
+        RetirementReAssertion(
+            subject = """key "k3"""",
+            asserted = asserted,
+            retired = retired,
+            reAsserted = reAsserted,
+            shows = { "k3" in it.entries },
+        )
 }

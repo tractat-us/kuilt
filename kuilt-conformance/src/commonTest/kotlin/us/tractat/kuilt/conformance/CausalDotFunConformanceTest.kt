@@ -36,9 +36,12 @@ internal class CausalDotFunConformanceTest : QuiltedConformanceSuite<Causal<DotF
 
     override val retirementIsMeaningful: Boolean get() = true
 
-    override fun retirementReAssertion(): Triple<
-        Causal<DotFun<String>>,
-        Causal<DotFun<String>>,
-        Causal<DotFun<String>>,
-        > = Triple(asserted, retired, reAsserted)
+    override fun retirementReAssertion(): RetirementReAssertion<Causal<DotFun<String>>> =
+        RetirementReAssertion(
+            subject = "the register's value",
+            asserted = asserted,
+            retired = retired,
+            reAsserted = reAsserted,
+            shows = { it.store.values.isNotEmpty() },
+        )
 }
