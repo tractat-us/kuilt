@@ -359,13 +359,62 @@ class RgaCompactedFloorTest {
         )
     }
 
+    /**
+     * A **genuine** second replica — built through the receive path ([Rga.apply]) rather than by
+     * aliasing the local state — absorbs a floor-only delta. This covers `deltaOf`'s `emptySet()`
+     * arm; the residue arm is covered by the sibling below.
+     */
     @Test
     fun theDeltaFromDropWindowCarriesTheSameDropToAPeer() {
         val (rga, ops) = chain(5)
-        val peerReplica = rga
-        val (_, delta) = rga.dropWindow(me, ops.take(3).map { it.id }.toSet())!!
+        val remote = ops.fold(Rga.empty<String>()) { acc, op -> acc.apply(op) }
+        assertEquals(rga.toList(), remote.toList(), "the two replicas start converged")
 
-        assertEquals(listOf("r3", "r4"), peerReplica.piece(delta).toList(), "a peer merging the delta drops too")
+        val (state, delta) = rga.dropWindow(me, ops.take(3).map { it.id }.toSet())!!
+
+        assertAll(
+            { assertEquals(listOf("r3", "r4"), remote.piece(delta).toList(), "a peer merging the delta drops too") },
+            { assertEquals(state, remote.piece(delta), "and lands on exactly the local state") },
+        )
+    }
+
+    /**
+     * The delta's **residue** arm — `deltaOf`'s `setOf(compactOp)`.
+     *
+     * Every other delta assertion here uses a fully contiguous own drop, where `compactOp` is
+     * `null`, so dropping that arm entirely leaves them all green while a peer silently never
+     * learns of any foreign-author drop and keeps the record forever. That is this issue's
+     * unbounded-log disease relocated to the peer, so the drop has to be **mixed**: an own
+     * contiguous prefix that folds into the floor *plus* a foreign dot that cannot, and the
+     * peer must lose both.
+     */
+    @Test
+    fun theDeltaCarriesTheResidueToAPeerAsWellAsTheFloor() {
+        val (s1, m1) = Rga.empty<String>().insertAfter(me, RgaId.HEAD, "m1")
+        val (s2, m2) = s1.insertAfter(me, m1.id, "m2")
+        val (s3, p1) = s2.insertAfter(peer, m2.id, "p1")
+        val (s4, m3) = s3.insertAfter(me, p1.id, "m3")
+        val (local, m4) = s4.insertAfter(me, m3.id, "m4")
+        val remote = listOf(m1, m2, p1, m3, m4).fold(Rga.empty<String>()) { acc, op -> acc.apply(op) }
+        assertEquals(local.toList(), remote.toList(), "the two replicas start converged")
+
+        // My seqs 1..2 fold into the floor; the peer's dot cannot, so it must ride the delta
+        // as an explicit Compact. My seq 3 is retained, which is what stops the floor at 2.
+        val (state, delta) = local.dropWindow(me, setOf(m1.id, m2.id, p1.id))!!
+
+        assertAll(
+            { assertEquals(VersionVector.of(mapOf(me to 2L)), delta.compactedBelow, "the delta's floor arm") },
+            {
+                assertEquals(
+                    setOf(p1.id),
+                    delta.ops.filterIsInstance<RgaOp.Compact>().flatMap { it.positions.keys }.toSet(),
+                    "and its residue arm — without this the peer never hears about p1",
+                )
+            },
+            { assertEquals(listOf("m3", "m4"), state.toList(), "locally all three go") },
+            { assertEquals(listOf("m3", "m4"), remote.piece(delta).toList(), "and all three go on the peer too") },
+            { assertEquals(state, remote.piece(delta), "the peer lands on exactly the local state") },
+        )
     }
 
     /**
