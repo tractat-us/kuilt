@@ -133,9 +133,12 @@ long-offline device with a skewed clock can mis-order against its peers; a trace
 straddles an offline and an online device only completes once the offline half syncs;
 and local storage settles for a device that only records its own activity — it keeps
 about a capful and stops growing — while a device that also passes its neighbours'
-records along keeps a small note for each one it ages out, so its storage still creeps
-up slowly over a long run. Either way, when a cap is hit the items dropped to make room
-are always *logged*, never silently discarded.
+records along can never quite let go of them. Ageing one out leaves behind a marker
+saying "this one is retired", the marker has to be kept forever, and keeping it means
+keeping the batch of records filed alongside it — in full, bodies and all. So that
+device's storage keeps growing over a long run, by whole records rather than by a little
+bookkeeping. Either way, when a cap is hit the items dropped to make room are always
+*logged*, never silently discarded.
 
 ## Going deeper
 

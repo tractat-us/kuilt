@@ -78,14 +78,25 @@ delta-temporality retry bug is structurally impossible.
   [WarpLogRecordExporter.export] calls therefore holds O([DEFAULT_MAX_LOG_RECORDS]) ops and
   a flat number of keys however long it runs, and startup reads that many keys rather than
   one per segment ever written (#2127).
-  **That is one arm of the claim, not the whole of it.** A record that arrived from a *peer*
-  through [WarpLogRecordExporter.merge] cannot fold into the per-author floor — raising
-  another author's floor would annihilate records it has not written yet — so each one
-  windowed away leaves a small bodiless suppression record behind, in memory and on the one
-  segment that seals it. That residue is far smaller than retaining the record whole, but it
-  is growth, not a bound: a replica that gossips accumulates it for as long as the process
-  lives. Bounding it needs the same causal-stability argument tombstone collection does, and
-  is not attempted. The span and metric exporters still rewrite their whole state per export.
+  **That is one arm of the claim, not the whole of it — and the other arm costs whole
+  records, not a small note.** A record that arrived from a *peer* through
+  [WarpLogRecordExporter.merge] cannot fold into the per-author floor — raising another
+  author's floor would annihilate records it has not written yet — so each one windowed away
+  is suppressed by an explicit compaction record instead. *In memory* that is one bodiless
+  `(id -> id)` pair per element. *On disk it is not bodiless at all:* nothing prunes a
+  compaction record, so a segment carrying one is pinned, and a pinned segment is retained
+  **entire** — every record it holds, bodies included, permanently. Two shapes reach it. A
+  sealed segment that happened to be active when a pass minted one keeps its full
+  [DEFAULT_LOG_SEGMENT_OPS] operations (~123 KB at the defaults) forever. And
+  [WarpLogRecordExporter.merge] persists the peer's op-log verbatim under a key of its own,
+  so merging from a peer that has itself windowed a foreign author's records — which is any
+  peer in a steady-state mesh — pins that peer's whole log: megabytes per merge at the
+  default [DEFAULT_MAX_LOG_RECORDS]. So the gossip path is growth, not a bound, and a replica
+  that gossips accumulates it for as long as the process lives. Bounding it needs the same
+  causal-stability argument tombstone collection does; consolidation — rewriting a pinned
+  segment's compaction record forward so the segment can go — was considered and declined,
+  and nothing implements it. The span and metric exporters still rewrite their whole state
+  per export.
 - **Cardinality estimation.** HyperLogLog gives ~0.81% relative error at default
   precision (`p=14`). Small cardinalities (< ~5 distinct elements) have higher
   relative error; the linear-counting correction reduces but does not eliminate this.

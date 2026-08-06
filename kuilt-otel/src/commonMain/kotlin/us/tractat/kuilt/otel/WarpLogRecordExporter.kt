@@ -183,10 +183,23 @@ internal fun opCountOf(segment: Rga<LogRecord>): Int = segment.opCount
  *   every op it holds is superseded — never on the absence of evidence to the contrary. A
  *   segment whose content could not be read keeps its key and its place in the index.
  *
- * The residue is the merge path's, again: a foreign author's dots are covered by an explicit
- * `Compact`, which lands in the active segment and pins whatever segment it seals into. So the
- * on-disk total settles for a replica fed by [export] and still grows for one fed by gossip —
- * the same split the in-memory bound has.
+ * The residue is the merge path's, again — and **on disk it is not the bodiless pair the
+ * in-memory bound is priced in.** A foreign author's dots are covered by an explicit
+ * [RgaOp.Compact], nothing prunes one, and any segment carrying one is therefore pinned — where
+ * pinned means retained **entire**: every [RgaOp.Insert] it holds, bodies included, for the life
+ * of the store. Two shapes reach it:
+ *
+ * - a sealed segment that happened to be active when a pass minted a `Compact` keeps its full
+ *   [segmentOps] ops — ~123 KB at [DEFAULT_LOG_SEGMENT_OPS]; and
+ * - a [merge] persists the remote op-log **verbatim** under a key of its own, so merging from a
+ *   peer whose log carries a `Compact` — which any peer that has itself windowed a foreign
+ *   author's dots does, i.e. any peer in a steady-state mesh — pins that peer's whole log. At
+ *   [DEFAULT_MAX_LOG_RECORDS] that is megabytes per merge.
+ *
+ * So the on-disk total settles for a replica fed by [export] and grows in **whole records** for
+ * one fed by gossip — a coarser split than the in-memory bound's. Consolidation — rewriting a
+ * pinned segment's `Compact` forward so the segment itself can go — is the obvious escape and is
+ * deliberately absent: §9 of the design declined it, and nothing implements it.
  *
  * @param replica The [ReplicaId] for this device/process. Must be unique and stable
  *   across restarts (a UUID is recommended).
