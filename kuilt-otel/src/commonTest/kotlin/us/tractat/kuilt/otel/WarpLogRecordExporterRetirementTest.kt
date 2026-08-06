@@ -103,6 +103,44 @@ class WarpLogRecordExporterRetirementTest {
         )
     }
 
+    @Test
+    fun aGossipFedReplicaRetiresThroughTheMergePath() = runTest {
+        // `merge` has to call retirement itself, and a test set that only drives `export` cannot
+        // see that: a retirement wired solely into `pendingWrites` leaves every test above green.
+        //
+        // DROP_NEWEST is the configuration where the difference is total rather than incidental.
+        // It refuses arrivals instead of evicting, so once the buffer is saturated `export`
+        // returns before queueing a single action — the export path writes NOTHING, forever. A
+        // replica in that state fed only by gossip would accumulate one key per merge for as long
+        // as the process lives.
+        val store = RecordingStore()
+        val a = exporterFor(store, maxRecords = 5, bufferPolicy = BufferPolicy.DROP_NEWEST, segmentOps = 4)
+        val peer = exporterFor(RecordingStore(), replica = replicaB, maxRecords = 10_000, segmentOps = 64)
+        repeat(20) { i -> a.export(record(i, body = "a$i")) }
+
+        var early = 0
+        repeat(40) { round ->
+            repeat(5) { i -> peer.export(record(1_000 + round * 5 + i)) }
+            a.merge(peer.snapshot())
+            if (round == 10) early = segmentKeys(store).size
+        }
+        val late = segmentKeys(store).size
+
+        assertAll(
+            {
+                assertTrue(
+                    store.operations().any {
+                        it.kind == StoreOpKind.DELETE && it.key.name.startsWith("otel.logs.seg.")
+                    },
+                    "40 merges into a saturated DROP_NEWEST buffer retired nothing; the export path " +
+                        "writes nothing at all in that state, so merge has to retire or nobody does",
+                )
+            },
+            { assertTrue(late <= early, "the store gained keys across 30 further merges: $early -> $late") },
+            { assertEquals(5, a.snapshot().size, "the window must still be intact") },
+        )
+    }
+
     // ---- Unknown content must mean KEEP ----
 
     @Test
@@ -227,42 +265,66 @@ class WarpLogRecordExporterRetirementTest {
         // SUPPRESSION. Delete a segment whose covering floor never reached disk and the
         // restarted replica holds neither the Insert, nor its Remove, nor anything that refuses
         // them, so a peer that still holds the raw ops re-admits the records as live.
+        // Delimited PER EXPORT, not over the whole stream. `export()` is one batch, so the ops it
+        // adds are exactly that batch — and the batch is the unit the ordering claim is about.
+        // Scanning the flat stream instead lets the *previous* batch's active-segment write stand
+        // in for this one's, which is precisely the stale covering state the order exists to
+        // prevent: an inverted order still reads as "an active write, then the ledger".
         val store = RecordingStore()
         val exporter = exporterFor(store)
-        repeat(300) { i -> exporter.export(record(i)) }
-
-        val ops = store.operations()
-        val deletes = ops.withIndex().filter {
-            it.value.kind == StoreOpKind.DELETE && it.value.key.name.startsWith("otel.logs.seg.")
+        val batches = mutableListOf<List<StoreOperation>>()
+        var seen = 0
+        repeat(300) { i ->
+            exporter.export(record(i))
+            val ops = store.operations()
+            batches += ops.subList(seen, ops.size)
+            seen = ops.size
         }
-        assertTrue(deletes.isNotEmpty(), "precondition: something must have been retired")
+
+        val retiring = batches.filter { batch ->
+            batch.any { it.kind == StoreOpKind.DELETE && it.key.name.startsWith("otel.logs.seg.") }
+        }
+        assertTrue(retiring.isNotEmpty(), "precondition: something must have been retired")
 
         assertAll(
-            *deletes.map { (at, delete) ->
+            *retiring.map { batch ->
                 {
-                    val number = delete.key.name.substringAfterLast('.').toInt()
-                    val commitAt = ops.take(at).indexOfLast {
-                        it.kind == StoreOpKind.WRITE && it.key == INDEX_KEY_FOR_TEST
+                    val swept = batch.withIndex().filter {
+                        it.value.kind == StoreOpKind.DELETE && it.value.key.name.startsWith("otel.logs.seg.")
                     }
-                    val index = decodeIndexForTest(requireNotNull(ops[commitAt].bytes))
-                    val covering = ops[commitAt - 1]
+                    val numbers = swept.map { it.value.key.name.substringAfterLast('.').toInt() }
+                    val commitAt = batch.indexOfFirst {
+                        it.kind == StoreOpKind.WRITE && it.key == INDEX_KEY_FOR_TEST &&
+                            decodeIndexForTest(requireNotNull(it.bytes)).retired.isNotEmpty()
+                    }
+                    assertTrue(commitAt >= 0, "no ledger write in the batch that swept $numbers")
+                    val index = decodeIndexForTest(requireNotNull(batch[commitAt].bytes))
                     assertAll(
                         {
                             assertTrue(
-                                number in index.retired && number !in index.sealedSegments,
-                                "segment $number was deleted before an index write moved it onto the " +
-                                    "ledger; a crash here loses the key forever: $index",
+                                swept.all { it.index > commitAt },
+                                "a key was deleted before the ledger write that names it; a crash there " +
+                                    "loses the key forever, in a format with no key enumeration",
                             )
                         },
                         {
-                            assertEquals(
-                                StoreKey(segmentKeyForTest(index.active)),
-                                covering.key,
-                                "the write immediately before the ledger commit must be the ACTIVE " +
-                                    "segment carrying the state that supersedes segment $number",
+                            assertTrue(
+                                numbers.all { it in index.retired && it !in index.sealedSegments },
+                                "the ledger write does not name every key this batch deleted: $index vs $numbers",
                             )
                         },
-                        { assertEquals(StoreOpKind.WRITE, covering.kind, "the covering action must be a write") },
+                        {
+                            // The covering state — the raised floor — rides in this write. Read
+                            // from the same batch, so an inverted order has nothing to fall back on.
+                            val covering = batch.getOrNull(commitAt - 1)
+                            assertEquals(
+                                StoreKey(segmentKeyForTest(index.active)),
+                                covering?.key,
+                                "the write immediately before the ledger commit must be THIS batch's " +
+                                    "active-segment write; retiring $numbers on a stale floor lets a peer " +
+                                    "resurrect their records",
+                            )
+                        },
                     )
                 }
             }.toTypedArray(),
