@@ -11,11 +11,13 @@ import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.newFixedThreadPoolContext
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.RgaId
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -193,12 +195,17 @@ class WarpLogRecordExporterConcurrencyTest {
     }
 
     /**
-     * Writes to the **active** segment's key — the merge path's evidence that a window pass ran.
+     * Writes to segment [ACTIVE_SEGMENT]'s key — the merge path's evidence that a window pass ran.
      *
-     * `merge` writes an adopted segment under a freshly allocated number and never rolls the
-     * active one, so the active segment's key is written on that path only by the
-     * `activeSegmentWrite()` a pass adds. [ACTIVE_SEGMENT] is the number a fresh exporter opens
-     * on, and nothing on the merge path advances it.
+     * `merge` writes an adopted segment under a **freshly allocated** number, so the only other
+     * segment write it can make is the `activeSegmentWrite()` a pass adds — and until the first
+     * roll the active segment is still the number a fresh exporter opens on. A write to this one
+     * key is therefore a positive sighting of a pass.
+     *
+     * A **lower bound**, not a count: a pass grows the active segment (it mints an `RgaOp.Compact`
+     * for the foreign dots it took), so once it crosses `segmentOps` the merge path rolls and
+     * later passes write a higher-numbered key. The only reader is a precondition, which needs
+     * nothing more than the bound.
      */
     private fun windowPassWrites(store: RecordingStore) = store.operations().count {
         it.kind == StoreOpKind.WRITE && it.key.name == segmentKeyForTest(ACTIVE_SEGMENT)
@@ -412,44 +419,54 @@ class WarpLogRecordExporterConcurrencyTest {
         val dispatcher = newFixedThreadPoolContext(THREADS, "otel-log-turn-exclusion")
         try {
             runBlocking {
-                val store = ParkFirstWriteStore()
-                val exporter = WarpLogRecordExporter(replicaA, store)
+                // The only bound on this body. `store.entered.await()` and `joinAll` are both
+                // unbounded, and this is a REAL-time `runBlocking`, so a turn that never reaches
+                // its parked write — or never leaves it — hangs rather than fails, and takes the
+                // whole `:kuilt-otel:jvmTest` job's timeout with it. Unreachable today; a wedge
+                // that only manifests as "the job timed out" is the shape this repo has been
+                // bitten by before, so the ceiling is stated rather than assumed. Generous on
+                // purpose — it is a wedge backstop, never an assertion about how fast this runs.
+                withTimeout(TEST_WEDGE_BACKSTOP) {
+                    val store = ParkFirstWriteStore()
+                    val exporter = WarpLogRecordExporter(replicaA, store)
 
-                val first = launch(dispatcher) { exporter.export(record(0)) }
-                store.entered.await() // `first` is now parked inside its first store.write
-                val second = launch(dispatcher) { exporter.export(record(1)) }
-                // Generous on purpose. The negative direction is what needs the window: under the
-                // narrow variant `second` inserts within microseconds of being scheduled, so any
-                // wait long enough to see it is long enough. Under the shipped fix `second` is
-                // parked on the mutex and no wait changes that.
-                delay(SETTLE_MILLIS)
-                val stagedWhileParked = exporter.snapshot().toList().size
+                    val first = launch(dispatcher) { exporter.export(record(0)) }
+                    store.entered.await() // `first` is now parked inside its first store.write
+                    val second = launch(dispatcher) { exporter.export(record(1)) }
+                    // Generous on purpose. The negative direction is what needs the window: under
+                    // the narrow variant `second` inserts within microseconds of being scheduled,
+                    // so any wait long enough to see it is long enough. Under the shipped fix
+                    // `second` is parked on the mutex and no wait changes that.
+                    delay(SETTLE_MILLIS)
+                    val stagedWhileParked = exporter.snapshot().toList().size
 
-                store.release.complete(Unit)
-                joinAll(first, second)
-                val afterRelease = exporter.snapshot().toList().size
+                    store.release.complete(Unit)
+                    joinAll(first, second)
+                    val afterRelease = exporter.snapshot().toList().size
 
-                assertAll(
-                    {
-                        assertEquals(
-                            1,
-                            stagedWhileParked,
-                            "a second export built its batch while the first turn's commit was in " +
-                                "flight: it took `lock`, inserted into the log and encoded a batch " +
-                                "over state the in-flight turn is still writing. Build order is no " +
-                                "longer apply order, and the retirement staging window is open again",
-                        )
-                    },
-                    {
-                        // Without this the assertion above is satisfied by an export that never
-                        // ran at all — it is what proves the second turn had a record to insert.
-                        assertEquals(
-                            2,
-                            afterRelease,
-                            "the second export did not land once the first turn's commit completed",
-                        )
-                    },
-                )
+                    assertAll(
+                        {
+                            assertEquals(
+                                1,
+                                stagedWhileParked,
+                                "a second export built its batch while the first turn's commit was " +
+                                    "in flight: it took `lock`, inserted into the log and encoded a " +
+                                    "batch over state the in-flight turn is still writing. Build " +
+                                    "order is no longer apply order, and the retirement staging " +
+                                    "window is open again",
+                            )
+                        },
+                        {
+                            // Without this the assertion above is satisfied by an export that never
+                            // ran at all — it is what proves the second turn had a record to insert.
+                            assertEquals(
+                                2,
+                                afterRelease,
+                                "the second export did not land once the first turn's commit completed",
+                            )
+                        },
+                    )
+                }
             }
         } finally {
             dispatcher.close()
@@ -469,7 +486,7 @@ class WarpLogRecordExporterConcurrencyTest {
         private const val FOREIGN_RECORDS = 4
         private const val FOREIGN_ID_BASE = 1_000
 
-        /** The segment number a fresh exporter opens on; the merge path never advances it. */
+        /** The segment number a fresh exporter opens on — the first key a merge-path pass rewrites. */
         private const val ACTIVE_SEGMENT = 0
 
         /** How long the parked-turn test lets a second export run before looking at the log. */

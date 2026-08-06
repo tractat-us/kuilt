@@ -739,6 +739,63 @@ class WarpLogRecordExporterRetirementTest {
     }
 
     @Test
+    fun aRefusedSegmentWriteCannotSealASegmentThatWasNeverWritten() = runTest {
+        // The **roll** half of "a layout change becomes real in memory only after the write that
+        // publishes it has returned". `StoreAction.CommitRetirement` earned that rule and
+        // [aRetirementIsNeverPublishedByABatchWhoseCoveringWriteWasRefused] pins it; the roll was
+        // the last move still applied while the batch was being BUILT, and it fails the same way
+        // under the same store.
+        //
+        // A quota-bound store refuses LARGE writes and accepts small ones, so it refuses every
+        // ~123 KB segment blob while every index write of a few ints lands. A roll that seals at
+        // build time therefore moves `activeNumber` into `sealedSegments` in memory even though
+        // the batch died at its active-segment write and that key was never written — and because
+        // a failed batch leaves the index dirty, the NEXT batch's leading index write publishes
+        // the phantom. It is not transient: `readSegment` returns null on the next start, the
+        // segment is recorded `Pinned`, and a Pinned segment is never retirable. One episode of
+        // quota pressure makes "recover() opens a bounded number of keys" permanently false.
+        //
+        // Export-only on purpose. A merge would have its adopted-segment write refused first, so
+        // the batch would die before reaching the roll at all, and the run would prove nothing.
+        val store = RecordingStore()
+        val quota = RefuseSegmentWritesStore(store)
+        val exporter = exporterFor(quota)
+        repeat(200) { i -> exporter.export(record(i)) }
+        val sealedWhileHealthy = decodeIndexForTest(requireNotNull(store.read(INDEX_KEY_FOR_TEST))).sealedSegments
+
+        quota.refuseSegmentWrites()
+        repeat(200) { i -> exporter.export(record(1_000 + i)) }
+
+        val onDisk = decodeIndexForTest(requireNotNull(store.read(INDEX_KEY_FOR_TEST)))
+        val phantom = onDisk.sealedSegments.filterNot { segmentKeyForTest(it) in segmentKeys(store) }
+
+        assertAll(
+            {
+                assertTrue(
+                    quota.refusedWrites() > 0,
+                    "precondition: the store must actually have refused the covering write",
+                )
+            },
+            {
+                // Without this the assertion below passes on a run that never rolled at all.
+                assertTrue(
+                    sealedWhileHealthy.isNotEmpty(),
+                    "precondition: the healthy phase must actually have sealed a segment",
+                )
+            },
+            {
+                assertEquals(
+                    emptyList(),
+                    phantom,
+                    "the index names sealed segments $phantom whose keys were never written — a " +
+                        "build-time seal survived the batch whose covering write was refused, and " +
+                        "every future start will read them back as permanently Pinned",
+                )
+            },
+        )
+    }
+
+    @Test
     fun noIndexWriteEverNamesARetiredSegmentAsSealedAgain() = runTest {
         // One batch can carry TWO index writes: the ledger commit, and then a roll's, when the
         // pass pushed the active segment past `segmentOps`. The roll's is encoded while the batch
