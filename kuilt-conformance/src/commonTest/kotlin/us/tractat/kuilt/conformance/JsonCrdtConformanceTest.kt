@@ -86,6 +86,12 @@ internal class JsonCrdtConformanceTest : QuiltedConformanceSuite<JsonCrdt>() {
 
     override val retirementIsMeaningful: Boolean get() = true
 
-    override fun retirementReAssertion(): Triple<JsonCrdt, JsonCrdt, JsonCrdt> =
-        Triple(jAsserted, jRetired, jReAsserted)
+    override fun retirementReAssertion(): RetirementReAssertion<JsonCrdt> =
+        RetirementReAssertion(
+            subject = """key "j"""",
+            asserted = jAsserted,
+            retired = jRetired,
+            reAsserted = jReAsserted,
+            shows = { "j" in it.keys },
+        )
 }

@@ -37,6 +37,12 @@ internal class ORMapConformanceTest : QuiltedConformanceSuite<ORMap<String, GCou
 
     override val retirementIsMeaningful: Boolean get() = true
 
-    override fun retirementReAssertion(): Triple<ORMap<String, GCounter>, ORMap<String, GCounter>, ORMap<String, GCounter>> =
-        Triple(withVotes, votesRetired, votesReAsserted)
+    override fun retirementReAssertion(): RetirementReAssertion<ORMap<String, GCounter>> =
+        RetirementReAssertion(
+            subject = """key "votes"""",
+            asserted = withVotes,
+            retired = votesRetired,
+            reAsserted = votesReAsserted,
+            shows = { "votes" in it.keys },
+        )
 }

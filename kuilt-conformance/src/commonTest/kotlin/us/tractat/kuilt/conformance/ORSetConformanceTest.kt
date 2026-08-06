@@ -30,6 +30,12 @@ internal class ORSetConformanceTest : QuiltedConformanceSuite<ORSet<String>>() {
 
     override val retirementIsMeaningful: Boolean get() = true
 
-    override fun retirementReAssertion(): Triple<ORSet<String>, ORSet<String>, ORSet<String>> =
-        Triple(x, xRetired, xReAsserted)
+    override fun retirementReAssertion(): RetirementReAssertion<ORSet<String>> =
+        RetirementReAssertion(
+            subject = """element "x"""",
+            asserted = x,
+            retired = xRetired,
+            reAsserted = xReAsserted,
+            shows = { it.contains("x") },
+        )
 }

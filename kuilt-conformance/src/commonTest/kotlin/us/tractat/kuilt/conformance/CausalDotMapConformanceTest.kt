@@ -36,9 +36,12 @@ internal class CausalDotMapConformanceTest : QuiltedConformanceSuite<Causal<DotM
 
     override val retirementIsMeaningful: Boolean get() = true
 
-    override fun retirementReAssertion(): Triple<
-        Causal<DotMap<String, DotSet>>,
-        Causal<DotMap<String, DotSet>>,
-        Causal<DotMap<String, DotSet>>,
-        > = Triple(asserted, retired, reAsserted)
+    override fun retirementReAssertion(): RetirementReAssertion<Causal<DotMap<String, DotSet>>> =
+        RetirementReAssertion(
+            subject = """key "x"""",
+            asserted = asserted,
+            retired = retired,
+            reAsserted = reAsserted,
+            shows = { "x" in it.store.entries },
+        )
 }
