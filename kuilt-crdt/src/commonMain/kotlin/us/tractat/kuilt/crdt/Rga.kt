@@ -436,8 +436,12 @@ public class Rga<V> private constructor(
      * rather than resurfacing at the window boundary. Prefer [dropWindow], which raises
      * only this replica's own entry. This entry point exists for absorbing a floor that
      * arrived from its own author over the wire, and for tests.
+     *
+     * `internal`, not `public`, for exactly that reason: the sound public paths are [dropWindow]
+     * (raises only this replica's own entry) and [piece]/[fromOps] (absorb a floor its author
+     * already decided on).
      */
-    public fun withCompactedBelow(floor: VersionVector): Rga<V> {
+    internal fun withCompactedBelow(floor: VersionVector): Rga<V> {
         val merged = compactedBelow.ceilWith(floor)
         if (merged == compactedBelow) return this
         return Rga(purgeBelow(ops, merged), lamport, merged, cacheAfterFloor(merged))
@@ -471,15 +475,26 @@ public class Rga<V> private constructor(
      * surviving successor — the barrier [compact] uses — would reclaim nothing at all under a
      * drop-oldest window, which is the whole reason this entry point exists.
      *
-     * @return `(newState, delta)` — the delta is a minimal [Rga] that any peer absorbs through
+     * **Not yet safe under a [us.tractat.kuilt.quilter.Quilter].** A raised floor purges its ops
+     * and — unlike [RgaOp.Compact] — records no id set, so those dots vanish from [causalDots].
+     * `Quilter` truncates an author at the first gap in its delivered dots, and a downward-closed
+     * floor removes that author's seq 1, so the author's contiguous delivered frontier collapses
+     * to `0` rather than to a partial value. The regressed frontier is then gossiped, and
+     * [compact]'s condition 3 (`delivered.dominates(frontierMax)`) can never be satisfied again —
+     * tombstone GC stops permanently for that author. Until #2127 lands `Quilted.causalFloor()`
+     * and the matching `Quilter` frontier change, use this entry point only outside a `Quilter`.
+     *
+     * @return `(newState, delta)` — the delta is a minimal [Rga], wrapped as a [Patch] so it
+     *   cannot be swapped with the state at a destructuring site, that any peer absorbs through
      *   [piece] to perform the same drop — or `null` if [dropped] is empty.
      */
-    public fun dropWindow(self: ReplicaId, dropped: Set<RgaId>): Pair<Rga<V>, Rga<V>>? {
+    public fun dropWindow(self: ReplicaId, dropped: Set<RgaId>): Pair<Rga<V>, Patch<Rga<V>>>? {
         if (dropped.isEmpty()) return null
         val ownSeqs = dropped.mapNotNullTo(mutableSetOf()) { if (it.replicaId == self) it.seq else null }
-        // Own dots ALREADY dropped explicitly — recorded in a retained Compact, so absent from
-        // insertsById and never handed to dropWindow again. Without these the walk cannot step
-        // over them and the floor wedges below the first one FOREVER (see the wedge test).
+        // Own dots ALREADY dropped explicitly — recorded in a retained Compact, and therefore
+        // never *reappear* in insertsById; a caller may still re-pass one, which the residue
+        // filter below tolerates. Without these the walk cannot step over them and the floor
+        // wedges below the first one FOREVER (see the wedge test).
         val ownCompacted = compactedIds.mapNotNullTo(mutableSetOf()) { if (it.replicaId == self) it.seq else null }
         var floorSeq = compactedBelow[self]
         while ((floorSeq + 1L) in ownSeqs || (floorSeq + 1L) in ownCompacted) floorSeq++
@@ -491,7 +506,7 @@ public class Rga<V> private constructor(
         val compactOp = if (residue.isEmpty()) null else RgaOp.Compact(positionsFor(residue))
 
         val state = withCompactedBelow(newFloor).let { if (compactOp == null) it else it.apply(compactOp) }
-        return state to deltaOf<V>(newFloor, compactOp)
+        return state to Patch(deltaOf<V>(newFloor, compactOp))
     }
 
     /** Rebuild the derived caches after the floor rose to [merged]. */
@@ -648,7 +663,11 @@ public class Rga<V> private constructor(
         val rawTombstones = tombstones + other.tombstones
         val mergedTombstones = if (!suppresses) rawTombstones
             else rawTombstones.filterTo(mutableSetOf(), survives)
-        val mergedMaxSeq = maxSeqByReplica.mergeMax(other.maxSeqByReplica).mergeMax(mergedFloor.entries)
+        // No fold of `mergedFloor` here: every construction site maintains
+        // `maxSeqByReplica[r] >= compactedBelow[r]` (the cacheless base cases resolve through
+        // computeMaxSeqByReplica, which folds the floor), so `a.maxSeq ⊔ b.maxSeq` already
+        // dominates `F_a ⊔ F_b`. Adding one back would be dead code, not defence in depth.
+        val mergedMaxSeq = maxSeqByReplica.mergeMax(other.maxSeqByReplica)
         val mergedOps = if (!suppresses) rawUnion
             else purgeBelow(purge(rawUnion, mergedCompactedIds), mergedFloor)
         val newCache = RgaCache(
@@ -706,9 +725,11 @@ public class Rga<V> private constructor(
      * purges the ops beneath it, so the op-log holds no evidence at all that those seqs were
      * minted, and a window that drained entirely would leave this map empty and let
      * [nextSeqFor] hand back `1` — a dot the floor itself suppresses, so the next record would
-     * be silently annihilated by the very next [piece]. The two cached paths ([cacheAfterFloor],
-     * [piece]) already merge the floor in; this is the no-cache path, which the wire decode
-     * reaches through [fromOps] (#2127).
+     * be silently annihilated by the very next [piece]. This is the no-cache path, which the wire
+     * decode reaches through [fromOps] (#2127); [cacheAfterFloor] folds the floor in on the path
+     * that raises one. [piece] needs no fold of its own — folding here and there makes
+     * `maxSeqByReplica[r] >= compactedBelow[r]` hold at every construction site, so the merged
+     * high-water already dominates the merged floor.
      */
     private fun computeMaxSeqByReplica(): Map<ReplicaId, Long> =
         engine<V>().maxSeqByReplica(ops).mergeMax(compactedBelow.entries)

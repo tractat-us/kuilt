@@ -104,7 +104,9 @@ import kotlin.test.assertEquals
  * contents; [RGA_FLOORED] is the vector that carries a **two-author** floor and therefore puts
  * `VersionVector.entries`' canonical sort on the wire *inside an `Rga`*, where encoding the floor
  * as a plain map would reintroduce merge order. See [rgaFloored] for why a single-author floor
- * would have been vacuous.
+ * would have been vacuous. The constant [RGA] replaced is kept as [RGA_PRE_FLOOR] — the only
+ * bytes in the repo an older encoder actually produced, and what makes
+ * [thePreFloorGoldenStillDecodesToTheSameValue] a receipt rather than a restatement.
  *
  * **Regenerate only on a deliberate encoding change, and expect every vector to move together.**
  * A single vector changing on one target and not another is the exact defect this file exists to
@@ -208,6 +210,32 @@ class CanonicalGoldenVectorTest {
             { assertEquals(RGA_FLOORED, hex(Rga.wireSerializer(String.serializer()), rgaFloored()), "Rga floored") },
             { assertEquals(FUGUE, hex(Fugue.wireSerializer(String.serializer()), fugue()), "Fugue") },
             { assertEquals(JSON_CRDT, hex(JsonCrdt.serializer(), jsonCrdt()), "JsonCrdt") },
+        )
+    }
+
+    /**
+     * The wire break #2127 accepted, pinned against **bytes an older build actually wrote**
+     * rather than against a reconstruction of them.
+     *
+     * `RgaFloorWireTest.aPreFloorBlobStillDecodesToAnUnflooredState` covers the same direction,
+     * but it mints the legacy blob from a hand-written stand-in struct, so it can only show that
+     * today's decoder accepts today's *idea* of the old shape. [RGA_PRE_FLOOR] is the constant
+     * #2127 overwrote, so a future format change that silently stopped tolerating an absent
+     * `compactedBelow` reddens here even if the stand-in were edited to match it.
+     *
+     * The decoded value must equal [rga] exactly — [Rga.equals] folds [Rga.compactedBelow], so an
+     * absent field reading as anything but [VersionVector.EMPTY] fails this assertion.
+     */
+    @Test
+    fun thePreFloorGoldenStillDecodesToTheSameValue() {
+        val ser = Rga.wireSerializer(String.serializer())
+
+        val decoded = cbor.decodeFromByteArray(ser, unhex(RGA_PRE_FLOOR))
+
+        assertAll(
+            { assertEquals(rga(), decoded, "a blob written before #2127 still decodes to the value it held") },
+            { assertEquals(VersionVector.EMPTY, decoded.compactedBelow, "with no floor, which is what it meant") },
+            { assertEquals(RGA, hex(ser, decoded), "and re-encodes in today's format, floor field and all") },
         )
     }
 
@@ -359,6 +387,9 @@ class CanonicalGoldenVectorTest {
         cbor.encodeToByteArray(ser, value).joinToString("") { byte ->
             (byte.toInt() and 0xFF).toString(radix = 16).padStart(2, '0')
         }
+
+    private fun unhex(text: String): ByteArray =
+        ByteArray(text.length / 2) { i -> text.substring(i * 2, i * 2 + 2).toInt(radix = 16).toByte() }
 
     // ── Constructions ─────────────────────────────────────────────────────────
     //
@@ -870,6 +901,26 @@ class CanonicalGoldenVectorTest {
                 "7100ffffbf617400626964bf676c616d706f727401697265706c6963614964647a756c756373657101ff6176617a6161bf" +
                 "676c616d706f72743b7fffffffffffffff697265706c6963614964606373657100ffffbf617401626964bf676c616d706f" +
                 "727401697265706c6963614964647a756c756373657101ffffff6e636f6d70616374656442656c6f77bfffff"
+        /**
+         * [RGA]'s **pre-#2127** bytes: the same [rga] fixture encoded by a build whose wire struct
+         * had no `compactedBelow` field at all. Recovered verbatim from the constant #2127
+         * overwrote (`61b51351~1`), against a [rga] construction that commit left byte-identical.
+         *
+         * It is the one artefact in the repo that makes the backward-compatibility claim a
+         * *receipt* rather than an argument: `RgaFloorWireTest.aPreFloorBlobStillDecodesToAnUnflooredState`
+         * proves the decoder tolerates an absent field, but it builds the legacy blob from a
+         * hand-written `LegacyRgaFrame` stand-in — so it can only ever show that today's decoder
+         * accepts today's idea of the old shape. These bytes were written by the old encoder.
+         */
+        const val RGA_PRE_FLOOR =
+            "bf636f70739fbf617400626964bf676c616d706f727401697265706c696361496465616c7068616373657101ff617661" +
+                "616161bf676c616d706f72743b7fffffffffffffff697265706c6963614964606373657100ffffbf617400626964bf67" +
+                "6c616d706f727401697265706c69636149646564656c74616373657101ff617661646161bf676c616d706f72743b7fff" +
+                "ffffffffffff697265706c6963614964606373657100ffffbf617400626964bf676c616d706f727401697265706c6963" +
+                "614964646d696b656373657101ff6176616d6161bf676c616d706f72743b7fffffffffffffff697265706c6963614964" +
+                "606373657100ffffbf617400626964bf676c616d706f727401697265706c6963614964647a756c756373657101ff6176" +
+                "617a6161bf676c616d706f72743b7fffffffffffffff697265706c6963614964606373657100ffffbf617401626964bf" +
+                "676c616d706f727401697265706c6963614964647a756c756373657101ffffffff"
         const val RGA_FLOORED =
             "bf636f70739fbf617400626964bf676c616d706f727403697265706c696361496465616c7068616373657103ff617662" +
                 "61326161bf676c616d706f727402697265706c696361496465616c7068616373657102ffffbf617400626964bf676c616d" +

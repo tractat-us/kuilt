@@ -198,7 +198,16 @@ class RgaCompactedFloorTest {
         )
     }
 
-    /** The same evidence has to survive [Rga.piece] — a floor absorbed from a peer counts too. */
+    /**
+     * The same evidence has to survive [Rga.piece] — a floor absorbed from a peer counts too.
+     *
+     * The mechanism is **not** a fold inside [Rga.piece], which has none and needs none: the peer
+     * is cacheless, so `computeMaxSeqByReplica` folds the floor into *its* high-water at
+     * construction, and `piece` then carries that across with `mergeMax(other.maxSeqByReplica)`.
+     * Folding the merged floor a second time in `piece` could never change the result — every
+     * construction site maintains `maxSeqByReplica[r] >= compactedBelow[r]` — and a guard that
+     * did so was deleted as dead code once the cacheless path was fixed at the source (#2127).
+     */
     @Test
     fun mergingInAFloorRaisesTheSeqHighWaterToo() {
         val (rga, _) = chain(2)
@@ -207,7 +216,7 @@ class RgaCompactedFloorTest {
 
         val (_, op) = rga.piece(flooredPeer).insertAfter(me, RgaId.HEAD, "fresh")
 
-        assertEquals(10L, op.id.seq, "piece must fold the merged floor into the seq high-water")
+        assertEquals(10L, op.id.seq, "the peer's floor-derived high-water must carry across piece")
     }
 
     @Test
@@ -253,7 +262,7 @@ class RgaCompactedFloorTest {
         val (rga, ops) = chain(5)
         val dropped = ops.take(3).map { it.id }.toSet()
 
-        val (state, delta) = rga.dropWindow(me, dropped)!!
+        val (state, patch) = rga.dropWindow(me, dropped)!!
 
         assertAll(
             { assertEquals(VersionVector.of(mapOf(me to 3L)), state.compactedBelow) },
@@ -267,7 +276,7 @@ class RgaCompactedFloorTest {
             {
                 assertEquals(
                     VersionVector.of(mapOf(me to 3L)),
-                    delta.compactedBelow,
+                    patch.delta.compactedBelow,
                     "the delta carries the floor",
                 )
             },
@@ -373,11 +382,11 @@ class RgaCompactedFloorTest {
         val remote = ops.fold(Rga.empty<String>()) { acc, op -> acc.apply(op) }
         assertEquals(rga.toList(), remote.toList(), "the two replicas start converged")
 
-        val (state, delta) = rga.dropWindow(me, ops.take(3).map { it.id }.toSet())!!
+        val (state, patch) = rga.dropWindow(me, ops.take(3).map { it.id }.toSet())!!
 
         assertAll(
-            { assertEquals(listOf("r3", "r4"), remote.piece(delta).toList(), "a peer merging the delta drops too") },
-            { assertEquals(state, remote.piece(delta), "and lands on exactly the local state") },
+            { assertEquals(listOf("r3", "r4"), remote.piece(patch).toList(), "a peer merging the delta drops too") },
+            { assertEquals(state, remote.piece(patch), "and lands on exactly the local state") },
         )
     }
 
@@ -403,20 +412,20 @@ class RgaCompactedFloorTest {
 
         // My seqs 1..2 fold into the floor; the peer's dot cannot, so it must ride the delta
         // as an explicit Compact. My seq 3 is retained, which is what stops the floor at 2.
-        val (state, delta) = local.dropWindow(me, setOf(m1.id, m2.id, p1.id))!!
+        val (state, patch) = local.dropWindow(me, setOf(m1.id, m2.id, p1.id))!!
 
         assertAll(
-            { assertEquals(VersionVector.of(mapOf(me to 2L)), delta.compactedBelow, "the delta's floor arm") },
+            { assertEquals(VersionVector.of(mapOf(me to 2L)), patch.delta.compactedBelow, "the delta's floor arm") },
             {
                 assertEquals(
                     setOf(p1.id),
-                    delta.ops.filterIsInstance<RgaOp.Compact>().flatMap { it.positions.keys }.toSet(),
+                    patch.delta.ops.filterIsInstance<RgaOp.Compact>().flatMap { it.positions.keys }.toSet(),
                     "and its residue arm — without this the peer never hears about p1",
                 )
             },
             { assertEquals(listOf("m3", "m4"), state.toList(), "locally all three go") },
-            { assertEquals(listOf("m3", "m4"), remote.piece(delta).toList(), "and all three go on the peer too") },
-            { assertEquals(state, remote.piece(delta), "the peer lands on exactly the local state") },
+            { assertEquals(listOf("m3", "m4"), remote.piece(patch).toList(), "and all three go on the peer too") },
+            { assertEquals(state, remote.piece(patch), "the peer lands on exactly the local state") },
         )
     }
 
@@ -502,8 +511,9 @@ class RgaCompactedFloorTest {
                 rga = rga.dropWindow(me, drop)!!.first
             }
         }
-        // 5 live inserts + the one inherited Compact. NOT 200-ish singleton Compacts.
-        assertTrue(rga.ops.size <= 8, "an inherited Compact must not make the bound fake; got ${rga.ops.size}")
+        // 5 live inserts + the one inherited Compact. NOT 200-ish singleton Compacts. Exact, not a
+        // bound: the count is deterministic, and slack here would hide residue accumulating.
+        assertEquals(6, rga.ops.size, "an inherited Compact must not make the bound fake")
     }
 
     // ── seq survival across a floor — the #639 regression class ─────────────
