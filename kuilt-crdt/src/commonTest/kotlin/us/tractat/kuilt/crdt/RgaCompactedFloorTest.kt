@@ -603,10 +603,13 @@ class RgaCompactedFloorTest {
     }
 
     /**
-     * The capability's whole point: the dots the floor swallowed are **gone** from
-     * [Rga.causalDots] — no `Compact` op records them — and [Rga.causalFloor] is the only
-     * thing that still says they were delivered. A consumer folding a delivered frontier has
-     * to read both halves, which is what PR 3 teaches `Quilter` to do.
+     * In this construction — one `dropWindow` call, no prior `Compact` — the dots the floor
+     * swallowed are **gone** from [Rga.causalDots] and [Rga.causalFloor] is the only thing
+     * that still says they were delivered. A consumer folding a delivered frontier reads both
+     * halves as a union — `causalDots() ∪ {dots at-or-below causalFloor()}` — which is what
+     * PR 3 teaches `Quilter` to do. That union is the contract; it is not always a partition —
+     * see `anOwnDotAlreadyCompactedExplicitlyDoesNotWedgeTheFloorForever`, where a later
+     * `dropWindow` raises the floor past a dot a still-retained `Compact` already re-emits.
      *
      * The third arm binds through the [Quilted] supertype on purpose, and is **not** a
      * restatement of the first. Had this shipped as the `Quilted<S>.causalFloor()`
@@ -650,8 +653,12 @@ class RgaCompactedFloorTest {
      * what a drop spanning two authors produces.
      *
      * The two halves are asserted jointly and in both directions — their union is exactly the set
-     * delivered before the drop (nothing lost, nothing over-claimed), and they do not overlap, so
-     * the floored dots genuinely left [Rga.causalDots] rather than being reported twice.
+     * delivered before the drop (nothing lost, nothing over-claimed). For *this* single call they
+     * also do not overlap, so the floored dots genuinely left [Rga.causalDots] rather than being
+     * reported twice — but that is a property of this one call, not a general guarantee: a later
+     * `dropWindow` can raise the floor past a dot a still-retained `Compact` already recorded, and
+     * the two halves overlap then (see `anOwnDotAlreadyCompactedExplicitlyDoesNotWedgeTheFloorForever`).
+     * The union is what every consumer actually relies on; the disjointness here is incidental.
      */
     @Test
     fun aFloorAndARetainedCompactTogetherCoverEveryDeliveredDot() {

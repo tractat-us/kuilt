@@ -632,9 +632,13 @@ public class Rga<V> private constructor(
      * The delivered dots this replica compacted away **without** keeping their ids — exactly
      * [compactedBelow].
      *
-     * The bounded half of the delivered surface. A dot at or below this floor was delivered
-     * and its op is purged, but no [RgaOp.Compact] holds its id, so [causalDots] cannot
-     * re-emit it and does not try. Read the two together, as [Quilted.causalFloor] describes.
+     * The bounded half of the delivered surface: *raising* it purges an own dot's op without
+     * recording a [RgaOp.Compact] for it — no per-dot id set, which is what keeps this O(authors)
+     * instead of O(elements). That does not mean every dot beneath the floor is absent from
+     * [causalDots], though: [dropWindow]'s contiguity walk steps over an own dot a still-retained
+     * `Compact` already recorded (an inherited or previously-explicit one), so that dot can end up
+     * beneath the floor while [causalDots] keeps re-emitting it. Read the two as a union, as
+     * [Quilted.causalFloor] describes — the overlap is harmless.
      */
     override fun causalFloor(): VersionVector = compactedBelow
 

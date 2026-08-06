@@ -70,10 +70,14 @@ public interface Quilted<S : Quilted<S>> {
      * keeps the capability non-breaking for them — they contribute nothing to any
      * delivered vector.
      *
-     * **This is only half the delivered surface.** Dots swallowed by [causalFloor] are
-     * delivered too and are deliberately *not* re-emitted here — the floor keeps no id set
-     * to re-emit them from, which is exactly what bounds it. A consumer folding a delivered
-     * frontier must read both.
+     * **This is only half the delivered surface.** A consumer folding a delivered frontier
+     * must read `causalDots() ∪ {dots at-or-below causalFloor()}` — the union is the contract,
+     * not a partition. The two halves are not guaranteed disjoint: [Rga.dropWindow]'s
+     * contiguity walk can raise the floor past an own dot a still-retained `Compact` op
+     * already recorded (stepping over an inherited or previously-explicit `Compact` so the
+     * floor doesn't wedge below it), leaving that dot beneath the floor *and* still re-emitted
+     * here. The overlap is harmless — every consumer only ever asks "was this dot delivered,"
+     * never "which half reported it."
      */
     public fun causalDots(): Set<Dot> = emptySet()
 
@@ -90,7 +94,9 @@ public interface Quilted<S : Quilted<S>> {
      * O(authors), which is what lets a windowed log stop growing.
      *
      * So the two are read together: a dot is delivered if it is in [causalDots] **or** at or
-     * below this floor. The dots beneath the floor will never appear in [causalDots] again.
+     * below this floor — read the union, not a partition. The halves can overlap (see
+     * [causalDots] for why); that overlap is harmless, since no consumer needs to know which
+     * half reported a given dot.
      *
      * It can only describe a **downward-closed** compacted set. `Rga.dropWindow` guarantees
      * that by advancing the floor across a contiguous own-dot run only, recording every other
