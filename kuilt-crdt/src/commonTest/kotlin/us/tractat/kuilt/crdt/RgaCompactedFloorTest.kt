@@ -12,12 +12,16 @@ class RgaCompactedFloorTest {
     private val peer = ReplicaId("b")
 
     /** Append [n] records as [author], returning the state and the ops in mint order. */
-    private fun chain(n: Int, author: ReplicaId = me): Pair<Rga<String>, List<RgaOp.Insert<String>>> {
+    private fun chain(
+        n: Int,
+        author: ReplicaId = me,
+        prefix: String = "r",
+    ): Pair<Rga<String>, List<RgaOp.Insert<String>>> {
         var rga = Rga.empty<String>()
         var tail = RgaId.HEAD
         val ops = mutableListOf<RgaOp.Insert<String>>()
         repeat(n) { i ->
-            val (next, op) = rga.insertAfter(author, tail, "r$i")
+            val (next, op) = rga.insertAfter(author, tail, "$prefix$i")
             rga = next
             tail = op.id
             ops += op
@@ -289,19 +293,39 @@ class RgaCompactedFloorTest {
         )
     }
 
+    /**
+     * The floor entry raised is keyed to [me], so it is not enough that a peer's dot goes to the
+     * residue — a peer's **seq** must not advance the walk either. The two authors are given
+     * *disjoint* dropped seqs (mine 1, theirs 2 and 3) precisely so the two failures separate:
+     * a walk that forgets to filter by author reaches 3 and floors my own retained seqs 2 and 3
+     * out of existence. Asserting only the peer's floor entry cannot see that; `toList()` can.
+     */
     @Test
     fun dropWindowNeverRaisesAForeignAuthorsFloor() {
-        val (mine, myOps) = chain(2)
-        val (theirs, theirOps) = chain(2, author = peer)
+        val (mine, myOps) = chain(3)
+        val (theirs, theirOps) = chain(3, author = peer, prefix = "p")
         val merged = mine.piece(theirs)
 
-        val (state, _) = merged.dropWindow(me, setOf(myOps[0].id, theirOps[0].id))!!
+        val (state, _) = merged.dropWindow(me, setOf(myOps[0].id, theirOps[1].id, theirOps[2].id))!!
 
         val explicit = state.ops.filterIsInstance<RgaOp.Compact>().flatMap { it.positions.keys }.toSet()
         assertAll(
             { assertEquals(0L, state.compactedBelow[peer], "a peer's dots are never floored locally") },
-            { assertEquals(1L, state.compactedBelow[me]) },
-            { assertEquals(setOf(theirOps[0].id), explicit, "the peer's dot is dropped explicitly instead") },
+            { assertEquals(1L, state.compactedBelow[me], "and a peer's seq never advances my floor") },
+            {
+                assertEquals(
+                    setOf(theirOps[1].id, theirOps[2].id),
+                    explicit,
+                    "the peer's dots are dropped explicitly instead",
+                )
+            },
+            {
+                assertEquals(
+                    listOf("r1", "r2", "p0"),
+                    state.toList(),
+                    "my own retained seqs 2 and 3 must survive a peer's seq-3 drop",
+                )
+            },
         )
     }
 
