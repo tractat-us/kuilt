@@ -206,26 +206,24 @@ class WarpLogRecordExporterSegmentTest {
 
     @Test
     fun theStoreIsNoLargerThanTheOpLogItHolds() = runTest {
-        // Segments are never dropped, so the total is NOT bounded — the honest claim is
-        // that partitioning the op-log across keys does not inflate it.
+        // The claim is narrow and deliberately so: partitioning the op-log across keys does
+        // not INFLATE it. Whether the total is bounded is a different question, answered
+        // elsewhere — see below.
         //
-        // The cap is deliberately above the export count, so nothing is evicted and both
-        // sides hold the identical 200-Insert op-log — which is the only configuration in
-        // which their totals are comparable at all. Under cap pressure they are not:
-        // windowing (#2127) carries a drop to disk as a floor absorbed into the ACTIVE
-        // segment, so a one-key layout — whose active segment *is* the whole log — purges
-        // everything it windows away, while a sealed segment keeps its dropped ops until
-        // segment retirement lands. Comparing totals there would measure that gap (real, and
-        // the rest of #2127) rather than the layout question this test is named for, and
-        // comparing bytes-per-op would compare different op *mixes* (the one-key side keeps
-        // only bodied Inserts; the segments also hold cheap bodiless Removes).
+        // The cap is deliberately above the export count, so nothing is evicted, nothing is
+        // windowed, nothing is retired, and both sides hold the identical 200-Insert op-log —
+        // which is the only configuration in which their totals are comparable at all. Under
+        // cap pressure they are not: windowing (#2127) carries a drop to disk as a floor
+        // absorbed into the ACTIVE segment, so a one-key layout — whose active segment *is* the
+        // whole log — purges everything it windows away in the same breath, while a sealed
+        // segment keeps its dropped ops until the next pass retires it. Comparing totals across
+        // that lag would measure the lag rather than the layout question this test is named
+        // for, and comparing bytes-per-op would compare different op *mixes* (the one-key side
+        // keeps only bodied Inserts; the segments also hold cheap bodiless Removes).
         //
-        // The dimension this test used to measure — total resident bytes under cap pressure —
-        // is measured by WarpLogRecordExporterRetirementTest instead, and in the unit that
-        // matters for a device rather than in bytes: how many keys a recovery has to open.
-        // It cannot be restored *here* as written, because "the segmented layout costs no more
-        // than one blob" is genuinely false while a sealed segment is between being windowed
-        // away and being retired.
+        // The bound itself is measured by WarpLogRecordExporterRetirementTest, in the two units
+        // that matter for a device rather than in a ratio against a hypothetical one-key
+        // layout: how many keys a recovery has to open, and how many bytes stay resident.
         //
         // No policy loop, for the same reason. With no cap pressure DROP_NEWEST refuses
         // nothing and DROP_OLDEST evicts nothing, so both policies drive the identical op

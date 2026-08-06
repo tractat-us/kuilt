@@ -70,13 +70,22 @@ delta-temporality retry bug is structurally impossible.
   [DEFAULT_MAX_LOG_RECORDS]); the metric buffer at [DEFAULT_MAX_METRICS] distinct series.
   Evicted entries are always logged — never silently dropped. Counters are O(1)
   regardless of offline duration (a counter compresses losslessly).
-- **Bounded *write*, for logs — not a bounded total.** [WarpLogRecordExporter]
-  persists its op-log in segments of [DEFAULT_LOG_SEGMENT_OPS] operations, so one
-  export rewrites one segment instead of the whole log. Segments are never dropped:
-  total bytes still grow with the number of records ever exported, the store gains
-  roughly one key per segment, and startup reads all of them. Bounding the total is
-  a garbage collection of CRDT state that needs a causal-stability barrier — see
-  #2127. The span and metric exporters still rewrite their whole state per export.
+- **For logs, the total settles on the export path and still grows on the gossip path.**
+  [WarpLogRecordExporter] persists its op-log in segments of [DEFAULT_LOG_SEGMENT_OPS]
+  operations, so one export rewrites one segment rather than the whole log; it then
+  periodically drops everything outside the retained window from memory and deletes any
+  sealed segment the resulting suppression state fully covers. A device fed only by its own
+  [WarpLogRecordExporter.export] calls therefore holds O([DEFAULT_MAX_LOG_RECORDS]) ops and
+  a flat number of keys however long it runs, and startup reads that many keys rather than
+  one per segment ever written (#2127).
+  **That is one arm of the claim, not the whole of it.** A record that arrived from a *peer*
+  through [WarpLogRecordExporter.merge] cannot fold into the per-author floor — raising
+  another author's floor would annihilate records it has not written yet — so each one
+  windowed away leaves a small bodiless suppression record behind, in memory and on the one
+  segment that seals it. That residue is far smaller than retaining the record whole, but it
+  is growth, not a bound: a replica that gossips accumulates it for as long as the process
+  lives. Bounding it needs the same causal-stability argument tombstone collection does, and
+  is not attempted. The span and metric exporters still rewrite their whole state per export.
 - **Cardinality estimation.** HyperLogLog gives ~0.81% relative error at default
   precision (`p=14`). Small cardinalities (< ~5 distinct elements) have higher
   relative error; the linear-counting correction reduces but does not eliminate this.

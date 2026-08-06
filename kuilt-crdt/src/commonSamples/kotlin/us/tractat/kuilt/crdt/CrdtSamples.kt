@@ -407,6 +407,40 @@ internal fun sampleRga() {
     check(mergedByA.toList() == mergedByB.toList())
 }
 
+/**
+ * Keep only the newest entries of an append-only log, and keep the rest *away* — a peer
+ * that still holds the old entries cannot push them back in.
+ */
+@Suppress("unused")
+internal fun sampleRgaDropWindow() {
+    val a = ReplicaId("A")
+
+    var log = Rga.empty<String>()
+    var after = RgaId.HEAD
+    val ids = (1..5).map { i ->
+        val (next, op) = log.insertAfter(replica = a, after = after, value = "entry-$i")
+        log = next
+        after = op.id
+        op.id
+    }
+    val peer = log // a peer that still holds all five inserts
+
+    // Retain the newest two; drop the rest.
+    val (windowed, delta) = checkNotNull(log.dropWindow(self = a, dropped = ids.take(3).toSet()))
+    check(windowed.toList() == listOf("entry-4", "entry-5"))
+
+    // This replica's OWN dots fold into a floor — one entry per author, not one per element.
+    check(windowed.causalFloor()[a] == 3L)
+    check(windowed.compactOpCount == 0)
+
+    // The drop is permanent suppression, not deletion: merging the peer's log back in
+    // re-purges the dropped entries instead of resurrecting them.
+    check(windowed.piece(peer).toList() == listOf("entry-4", "entry-5"))
+
+    // Any peer performs the same drop by absorbing the returned delta.
+    check(peer.piece(delta.delta).toList() == listOf("entry-4", "entry-5"))
+}
+
 // ── MovableTree ───────────────────────────────────────────────────────────────
 
 /**

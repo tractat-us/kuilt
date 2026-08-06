@@ -54,6 +54,14 @@ class WarpLogRecordExporterRetirementTest {
         segmentOps = segmentOps,
     )
 
+    /**
+     * A **fixed-width** record. The byte-accounting tests below compare a store's resident total
+     * early and late in one run, and a body that gains a character when the id gains a digit
+     * would read as growth-with-N that has nothing to do with what is under test.
+     */
+    private fun sizedRecord(id: Int) =
+        record(id, body = "log record body number ${id.toString().padStart(6, '0')}")
+
     private fun segmentKeys(store: RecordingStore): Set<String> =
         store.keys().filter { it.startsWith("otel.logs.seg.") }.toSet()
 
@@ -101,6 +109,113 @@ class WarpLogRecordExporterRetirementTest {
             late <= early,
             "the store gained keys across 900 further records through a 10-record window: $early -> $late",
         )
+    }
+
+    @Test
+    fun bytesOnDiskAreBoundedByTheWindowNotByRecordsEverExported() = runTest {
+        // The key count and the byte total are different claims, and only one of them is what a
+        // phone runs out of. A layout that kept ONE key and let it grow forever satisfies every
+        // key-counting test in this file, so the total is measured directly here.
+        //
+        // The control arm is the same 1000 records through a cap none of them reach: no eviction,
+        // so no window pass, so no retirement — which is precisely the Θ(records ever) layout that
+        // shipped before this change. Without it "the total stopped growing" could be read off a
+        // store that never held much in the first place.
+        // The total is **not** flat to the byte, and asserting that it is would be a false
+        // claim that reddens on an unrelated change. It creeps by a few dozen bytes as the
+        // Lamport counters and seqs inside the retained ops gain a CBOR integer width — and
+        // that creep SATURATES. So what is asserted is the shape: the growth over the second,
+        // ten-times-longer stretch must not exceed the growth over the first. Θ(records ever)
+        // would make it ten times larger; measured, it is an order of magnitude smaller.
+        val unbounded = RecordingStore()
+        exporterFor(unbounded, maxRecords = 10_000)
+            .also { e -> repeat(1_000) { i -> e.export(sizedRecord(i)) } }
+
+        val bounded = RecordingStore()
+        val exporter = exporterFor(bounded, maxRecords = 10)
+        repeat(100) { i -> exporter.export(sizedRecord(i)) }
+        val early = bounded.residentBytes()
+        repeat(900) { i -> exporter.export(sizedRecord(100 + i)) }
+        val late = bounded.residentBytes()
+        repeat(9_000) { i -> exporter.export(sizedRecord(1_000 + i)) }
+        val later = bounded.residentBytes()
+
+        assertAll(
+            {
+                assertTrue(
+                    later - late <= late - early,
+                    "resident bytes are still growing with records ever exported: $early -> $late " +
+                        "over 900 records, then $late -> $later over 9,000",
+                )
+            },
+            {
+                assertTrue(
+                    later * 5 < unbounded.residentBytes(),
+                    "the windowed run is not materially smaller than the Θ(records ever) control: " +
+                        "$later vs ${unbounded.residentBytes()} bytes",
+                )
+            },
+            // Without this the two assertions above pass trivially on a store that lost the log.
+            { assertEquals(10, exporter.snapshot().size, "and the window itself must be intact") },
+        )
+    }
+
+    @Test
+    fun bothBufferPoliciesBoundTheTotalNotJustThePerExportWrite() = runTest {
+        // `WarpLogRecordExporterSegmentTest.bothBufferPoliciesBoundThePerExportWrite` bounds what
+        // ONE export writes; this bounds what the store *holds*. Both policies owe it, and they
+        // discharge it for opposite reasons — which is why the per-policy arm below is asserted
+        // rather than left to read as an incidentally flat number.
+        //
+        // DROP_NEWEST refuses the arrival, so a saturated buffer appends no op and writes nothing
+        // at all: its total is flat because the exporter fell silent. DROP_OLDEST keeps evicting,
+        // keeps writing, and its total is flat because each window pass drops the superseded ops
+        // and retires the segments holding them. A test that only measured the total could not
+        // tell those apart, and would pass on a DROP_OLDEST that had silently stopped exporting.
+        //
+        // Scoped to local exports, as the design is. The merge path — where DROP_NEWEST's
+        // eviction count is permanently zero, so only the size arm of the trigger can fire — is
+        // pinned by `aGossipFedReplicaRetiresThroughTheMergePath` and, in memory, by
+        // `WarpLogRecordExporterWindowingTest.aFullDropNewestBufferDoesNotGrowUnboundedWhenAPeerMergesIn`.
+        for (policy in BufferPolicy.entries) {
+            val store = RecordingStore()
+            val exporter = exporterFor(store, maxRecords = 10, bufferPolicy = policy)
+            repeat(100) { i -> exporter.export(sizedRecord(i)) }
+            val early = store.residentBytes()
+            repeat(900) { i -> exporter.export(sizedRecord(100 + i)) }
+            val late = store.residentBytes()
+            store.resetWriteLog()
+            repeat(9_000) { i -> exporter.export(sizedRecord(1_000 + i)) }
+            val later = store.residentBytes()
+
+            assertAll(
+                { assertEquals(10, exporter.snapshot().size, "$policy: the cap must hold") },
+                {
+                    // Same shape, and for the same reason, as
+                    // bytesOnDiskAreBoundedByTheWindowNotByRecordsEverExported: the residual creep
+                    // is CBOR integer width, and it saturates.
+                    assertTrue(
+                        later - late <= late - early,
+                        "$policy: resident bytes are still growing with records ever exported: " +
+                            "$early -> $late over 900 records, then $late -> $later over 9,000",
+                    )
+                },
+                {
+                    when (policy) {
+                        BufferPolicy.DROP_NEWEST -> assertEquals(
+                            emptyList<Int>(),
+                            store.writes(),
+                            "$policy: a saturated buffer must write nothing at all",
+                        )
+                        BufferPolicy.DROP_OLDEST -> assertTrue(
+                            store.writes().isNotEmpty(),
+                            "$policy: precondition — this policy keeps writing, so the flat total " +
+                                "above is reclamation rather than silence",
+                        )
+                    }
+                },
+            )
+        }
     }
 
     @Test

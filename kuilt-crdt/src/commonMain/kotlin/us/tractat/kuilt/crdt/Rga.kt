@@ -513,6 +513,8 @@ public class Rga<V> private constructor(
      * @return `(newState, delta)` — the delta is a minimal [Rga], wrapped as a [Patch] so it
      *   cannot be swapped with the state at a destructuring site, that any peer absorbs through
      *   [piece] to perform the same drop — or `null` if [dropped] is empty.
+     *
+     * @sample us.tractat.kuilt.crdt.sampleRgaDropWindow
      */
     public fun dropWindow(self: ReplicaId, dropped: Set<RgaId>): Pair<Rga<V>, Patch<Rga<V>>>? {
         if (dropped.isEmpty()) return null

@@ -40,6 +40,7 @@ class CrdtSamplesRunTest {
             "sampleBloomFilter" to ::sampleBloomFilter,
             "sampleFugue" to ::sampleFugue,
             "sampleRga" to ::sampleRga,
+            "sampleRgaDropWindow" to ::sampleRgaDropWindow,
             "sampleMovableTree" to ::sampleMovableTree,
             "sampleHyperLogLog" to ::sampleHyperLogLog,
             "sampleHyperLogLogMerge" to ::sampleHyperLogLogMerge,

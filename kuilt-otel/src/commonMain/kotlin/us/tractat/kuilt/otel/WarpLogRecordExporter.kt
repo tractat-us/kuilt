@@ -336,8 +336,16 @@ public class WarpLogRecordExporter(
     // ── Persisted segments ───────────────────────────────────────────────────
     //
     // Guarded by `lock`, like everything above. Only the segment NUMBERS are held —
-    // the ops live in `log`, and the segments are a persistence partition of it:
-    // `log.ops == union(segment.ops)` is the invariant every write path preserves.
+    // the ops live in `log`, and the segments are how it is persisted.
+    //
+    // The invariant is that **the segments' union `piece`s to `log`** — NOT that their op-sets
+    // are equal. Set equality held before windowing and is false now: a windowed-away `Insert`
+    // leaves `log` but stays in whichever SEALED segment it landed in until that segment is
+    // retired, so the raw union is a strict superset. What makes recovery exact is that the
+    // union is taken with `Rga.piece`, which merges the floor and the retained `Compact`s the
+    // active segment carries and re-purges those ops under them. Every write path preserves the
+    // `piece` form: a pass's covering state rides in the active-segment write, and a segment is
+    // retired only once that state covers every op it holds.
     //
     // A number leaves `sealedSegments` in exactly one way: it moves to `retiringSegments`,
     // which is the on-disk ledger's in-memory mirror, and is deleted from there. It is never
