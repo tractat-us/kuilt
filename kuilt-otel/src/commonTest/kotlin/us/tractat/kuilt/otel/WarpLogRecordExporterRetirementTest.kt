@@ -146,10 +146,11 @@ class WarpLogRecordExporterRetirementTest {
         // phone runs out of. A layout that kept ONE key and let it grow forever satisfies every
         // key-counting test in this file, so the total is measured directly here.
         //
-        // The control arm is the same 1000 records through a cap none of them reach: no eviction,
-        // so no window pass, so no retirement — which is precisely the Θ(records ever) layout that
-        // shipped before this change. Without it "the total stopped growing" could be read off a
-        // store that never held much in the first place.
+        // The scale comes from [perRecordBytes] — a short run through a cap it never reaches, so
+        // nothing is evicted, windowed or retired and the store holds one record per record. That
+        // IS the Θ(records ever) layout that shipped before this change, priced per record. Without
+        // it "the total stopped growing" could be read off a store that never held much.
+        //
         // The total is **not** flat to the byte, and asserting that it is would be a false claim
         // that reddens on an unrelated change: it creeps as the Lamport counters and seqs inside
         // the retained ops gain a CBOR integer width, and the creep saturates. So the unit is a
