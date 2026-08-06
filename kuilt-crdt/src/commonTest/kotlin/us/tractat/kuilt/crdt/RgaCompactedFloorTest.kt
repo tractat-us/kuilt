@@ -575,6 +575,12 @@ class RgaCompactedFloorTest {
                     "yet no dot of mine survives it",
                 )
             },
+            {
+                assertTrue(
+                    decoded.ops.none { it is RgaOp.Compact && it.positions.keys.any { k -> k.replicaId == me } },
+                    "nor does a surviving Compact carry my dots — otherwise it, not the floor, would hold my high-water up",
+                )
+            },
             { assertEquals(6L, fresh.id.seq, "so the decoded floor is the only thing holding my high-water up") },
         )
     }

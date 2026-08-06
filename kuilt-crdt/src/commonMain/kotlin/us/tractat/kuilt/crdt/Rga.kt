@@ -497,6 +497,7 @@ public class Rga<V> private constructor(
     /** Rebuild the derived caches after the floor rose to [merged]. */
     private fun cacheAfterFloor(merged: VersionVector): RgaCache<V> = RgaCache(
         insertsById = insertsById.filterKeys { !merged.contains(it.dot) },
+        // Sole pin: RgaCompactedFloorTest.aFloorRaisedPastTheHeldOpsStillHoldsTheSeqHighWaterUp.
         // maxSeqByReplica must NOT drop: the floor is itself evidence those seqs were minted.
         maxSeqByReplica = maxSeqByReplica.mergeMax(merged.entries),
         tombstones = tombstones.filterTo(mutableSetOf()) { !merged.contains(it.dot) },
