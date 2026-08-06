@@ -679,10 +679,15 @@ public class LatticeLawHarness<S : Quilted<S>>(
      * Each floor fails on its own with its own message. That separation is the point of the whole
      * task: deleting a binding's retiring op must red the **retirement** floor and leave ancestry
      * and concurrency green, because ancestry and concurrency are exactly the metrics that stay
-     * healthy while a generator stops searching (measured: ancestry 28.4% and concurrency 43.2% on
-     * an arm that found 0 violations in 47,059 triples — *higher* on both than the arm that found
-     * 500). A single aggregate assertion would report "the generator is vacuous" and lose the one
-     * bit of information worth having, which is *how*.
+     * healthy while a generator stops searching: on an arm that found 0 violations in 47,059
+     * triples, ancestry read 28.4% and concurrency 43.2% — the latter *higher* than the 39.7% of the
+     * arm that found 500, and both far above their floors. `VacuityFloorSelfTest` holds that
+     * asymmetry as a standing assertion. A single aggregate assertion would report "the generator is
+     * vacuous" and lose the one bit of information worth having, which is *how*.
+     *
+     * **The floors are checked in declaration order and the first breach raises**, so a failure
+     * naming one floor says nothing about the ones below it — the no-op ceiling is checked last.
+     * Call [measureVacuity] instead when you need every rate regardless of which one broke.
      */
     public fun checkVacuityFloors(seeds: LongRange): VacuityReport {
         val report = measureVacuity(seeds)
