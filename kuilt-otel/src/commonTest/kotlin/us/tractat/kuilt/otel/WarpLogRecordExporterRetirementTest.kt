@@ -6,6 +6,7 @@ import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -128,6 +129,38 @@ class WarpLogRecordExporterRetirementTest {
         a.merge(b.snapshot())
 
         assertEquals(5, a.snapshot().size, "a merge must not leave the window over cap")
+    }
+
+    @Test
+    fun aRecordDroppedByAPassAloneCanBeExportedAgain() = runTest {
+        // A pass replaces the log wholesale, so the derived state has to be rebuilt from it.
+        // The dedup map is the one that fails silently: leave it stale and a record the window
+        // dropped is still marked "already exported", so re-exporting it is swallowed and the
+        // record is simply lost. Nothing throws and the visible order stays plausible.
+        //
+        // The record has to be one the *pass* dropped and eviction never touched, or this is
+        // vacuous: evictOldest frees the dedup slot itself, so anything that reached the window
+        // by being evicted is already covered by that older guard. Exactly maxRecords local
+        // exports evict nothing; the merge then doubles the visible count and the pass — not
+        // eviction — is what takes the surplus away.
+        val a = exporterFor(maxRecords = 5, segmentOps = 4)
+        val b = exporterFor(replica = replicaB, maxRecords = 5, segmentOps = 4)
+        val mine = (0 until 5).map { record(it, body = "a$it") }
+        val theirs = (0 until 5).map { record(100 + it, body = "b$it") }
+        mine.forEach { a.export(it) }
+        theirs.forEach { b.export(it) }
+
+        a.merge(b.snapshot())
+
+        val survivors = a.snapshot().toList()
+        val dropped = (mine + theirs).firstOrNull { it !in survivors }
+        assertNotNull(dropped, "precondition: the merge-path pass must have dropped something")
+        a.export(dropped)
+
+        assertTrue(
+            dropped in a.snapshot().toList(),
+            "a record the window dropped must be re-exportable; its dedup slot was not freed",
+        )
     }
 
     // ---- The drop has to survive a restart ----
