@@ -520,11 +520,17 @@ public class Quilter<S : Quilted<S>>(
     // ---- private helpers ----
 
     /**
-     * Recomputes [deliveredLocal] from the current [state]'s [Quilted.causalDots] as the
-     * **contiguous frontier**: per author, the highest `seq` such that every seq in
-     * `1..seq` is present. A gap truncates that author at the gap (dots `{1,2,4}` →
-     * frontier `2`). Called after every state mutation; the value only changes for
-     * dot-carrying CRDTs ([us.tractat.kuilt.crdt.Rga]).
+     * Recomputes [deliveredLocal] from the current [state]'s [Quilted.causalDots] and
+     * [Quilted.causalFloor] as the **contiguous frontier**: per author, the highest `seq` such
+     * that every seq in `causalFloor()[author] + 1 .. seq` is present in the dots. A gap
+     * truncates that author at the gap (dots `{1,2,4}` over an empty floor → frontier `2`).
+     * Called after every state mutation; the value only changes for dot-carrying CRDTs
+     * ([us.tractat.kuilt.crdt.Rga]).
+     *
+     * Both projections are read off **one** [state] snapshot: reading the flow twice could
+     * straddle a concurrent update and pair a floor with dots from a different state. (Every
+     * caller holds [lock], so the two reads would in fact agree today — taking the snapshot
+     * once makes that independent of the locking discipline rather than contingent on it.)
      *
      * When the vector **advances** — on local [apply] *and* on every inbound delivery
      * ([applyAndDrain], [drainPendingInbound], [onFullState]) — this replica [gossipDelivered]s
@@ -535,7 +541,8 @@ public class Quilter<S : Quilted<S>>(
      */
     private fun recomputeDeliveredLocal() {
         val previous = _deliveredLocal.value
-        _deliveredLocal.value = contiguousFrontier(_state.value.causalDots())
+        val snapshot = _state.value
+        _deliveredLocal.value = contiguousFrontier(snapshot.causalDots(), snapshot.causalFloor())
         recomputeCut()
         if (_deliveredLocal.value != previous) gossipDelivered()
     }
@@ -1171,23 +1178,45 @@ public class Quilter<S : Quilted<S>>(
 }
 
 /**
- * The contiguous (gap-free) frontier of a set of causal [Dot]s: for each author, the
- * highest `seq` such that every seq in `1..seq` is present. A gap stops the frontier at
- * the gap — dots `{1, 2, 4}` for one author yield high-water `2`. Authors with no dot at
- * `seq == 1` contribute nothing (omitted, reading as `0`). This is exactly the
- * **delivered** quantity the causal-stability barrier requires (ADR-003 addendum v3).
+ * The contiguous (gap-free) frontier of a set of causal [Dot]s, walked up from [floor]: for
+ * each author, the highest `seq` such that every seq in `floor[author] + 1 .. seq` is present
+ * in [dots]. A gap stops the frontier at the gap — dots `{1, 2, 4}` over an empty floor yield
+ * high-water `2`. Authors with no dot at `seq == 1` and no floor entry contribute nothing
+ * (omitted, reading as `0`). This is exactly the **delivered** quantity the causal-stability
+ * barrier requires (ADR-003 addendum v3).
+ *
+ * [floor] is [Quilted.causalFloor] — the dots a compacting CRDT delivered and has since purged
+ * *without retaining their identities*, so they are no longer in [dots]. Counting from `0`
+ * would stop at the first swallowed seq; because a floor is downward-closed that seq is `1`,
+ * so the author's high-water would collapse to `0`, be gossiped as a regression, and pin every
+ * downstream GC below the gap **forever**. The floor asserts those dots were delivered, so the
+ * walk starts above them.
+ *
+ * The two halves are a **union, not a partition** — a dot at or below [floor] may also appear
+ * in [dots] (see [Quilted.causalDots]). That is harmless here: the walk only ever reads seqs
+ * strictly above the floor, so a duplicate below it is simply never consulted.
+ *
+ * [floor] is deliberately **not** defaulted. `VersionVector.EMPTY` is exactly the pre-#2127
+ * behaviour, so a default would let a future call site silently reintroduce the frontier
+ * collapse this parameter exists to prevent.
  */
-internal fun contiguousFrontier(dots: Set<Dot>): VersionVector {
+internal fun contiguousFrontier(dots: Set<Dot>, floor: VersionVector): VersionVector {
     val seqsByAuthor: Map<ReplicaId, Set<Long>> = dots
         .groupBy(keySelector = { it.replica }, valueTransform = { it.seq })
         .mapValues { (_, seqs) -> seqs.toSet() }
-    val highWaters = seqsByAuthor.mapValues { (_, seqs) -> contiguousHighWater(seqs) }
+    val authors = seqsByAuthor.keys + floor.entries.keys
+    val highWaters = authors.associateWith { author ->
+        contiguousHighWater(seqsByAuthor[author].orEmpty(), from = floor[author])
+    }
     return VersionVector.of(highWaters)
 }
 
-/** The highest `n` such that `1..n` are all in [seqs`; `0` if `1` is absent. */
-private fun contiguousHighWater(seqs: Set<Long>): Long {
-    var n = 0L
+/**
+ * The highest `n >= from` such that every seq in `from + 1 .. n` is in [seqs]; [from] itself
+ * if `from + 1` is absent. O(n - from) — never O(from), which is what keeps a deep floor free.
+ */
+private fun contiguousHighWater(seqs: Set<Long>, from: Long): Long {
+    var n = from
     while ((n + 1L) in seqs) n++
     return n
 }

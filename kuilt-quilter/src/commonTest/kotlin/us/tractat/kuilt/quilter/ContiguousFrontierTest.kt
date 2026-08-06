@@ -17,32 +17,32 @@ class ContiguousFrontierTest {
 
     @Test
     fun emptyDotsYieldEmptyVector() {
-        assertEquals(VersionVector.EMPTY, contiguousFrontier(emptySet()))
+        assertEquals(VersionVector.EMPTY, contiguousFrontier(emptySet(), VersionVector.EMPTY))
     }
 
     @Test
     fun contiguousRunBecomesItsHighWater() {
         val dots = setOf(Dot(a, 1L), Dot(a, 2L), Dot(a, 3L))
-        assertEquals(VersionVector.of(mapOf(a to 3L)), contiguousFrontier(dots))
+        assertEquals(VersionVector.of(mapOf(a to 3L)), contiguousFrontier(dots, VersionVector.EMPTY))
     }
 
     @Test
     fun gapTruncatesAtTheGap() {
         // dots {1,2,4} → frontier 2 (4 is past the gap at 3).
         val dots = setOf(Dot(a, 1L), Dot(a, 2L), Dot(a, 4L))
-        assertEquals(VersionVector.of(mapOf(a to 2L)), contiguousFrontier(dots))
+        assertEquals(VersionVector.of(mapOf(a to 2L)), contiguousFrontier(dots, VersionVector.EMPTY))
     }
 
     @Test
     fun missingSeqOneContributesNothing() {
         // No seq 1 for a ⇒ a reads as 0 (omitted from the canonical vector).
         val dots = setOf(Dot(a, 2L), Dot(a, 3L))
-        assertEquals(VersionVector.EMPTY, contiguousFrontier(dots))
+        assertEquals(VersionVector.EMPTY, contiguousFrontier(dots, VersionVector.EMPTY))
     }
 
     @Test
     fun authorsAreIndependent() {
         val dots = setOf(Dot(a, 1L), Dot(a, 2L), Dot(b, 1L), Dot(b, 3L))
-        assertEquals(VersionVector.of(mapOf(a to 2L, b to 1L)), contiguousFrontier(dots))
+        assertEquals(VersionVector.of(mapOf(a to 2L, b to 1L)), contiguousFrontier(dots, VersionVector.EMPTY))
     }
 }

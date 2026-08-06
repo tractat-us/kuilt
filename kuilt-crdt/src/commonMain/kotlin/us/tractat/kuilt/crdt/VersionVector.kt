@@ -22,9 +22,9 @@ import kotlinx.serialization.Serializable
  *   for unrelated reasons:
  *   - [combine] builds the map from `entries.keys + other.entries.keys`, a `LinkedHashSet` in
  *     **merge order**.
- *   - `Quilter.contiguousFrontier` groups a **merge-ordered** `Set<Dot>` by replica — and *this*
- *     is the producer that reaches the wire, as `QuiltMessage.Delivered.vector`. [combine] is
- *     not on that path at all.
+ *   - `Quilter.contiguousFrontier` groups a **merge-ordered** `Set<Dot>` by replica, then appends
+ *     any author known only to the CRDT's compaction floor — and *this* is the producer that
+ *     reaches the wire, as `QuiltMessage.Delivered.vector`. [combine] is not on that path at all.
  *
  *   The canonical serializer fixes this **at encode time, regardless of how the map was built**,
  *   which is why neither producer sorts and neither one needs to. Sorting a producer would not

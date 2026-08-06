@@ -775,8 +775,9 @@ class CanonicalSerializationTest {
      * `authors` set inside `combine` is the obvious cheaper-looking alternative fix, and it would
      * turn that test green while leaving this one red. It would also be **wrong on the shipped
      * path**, which does not go through `combine` at all — `Quilter`'s delivered vector is built by
-     * `contiguousFrontier(dots)`, i.e. `dots.groupBy { it.replica }`, whose `LinkedHashMap` is in
-     * the iteration order of a merge-ordered `Set<Dot>`. Every public entry point that can mint a
+     * `contiguousFrontier(dots, floor)`, whose author order comes from `dots.groupBy { it.replica }`
+     * — a `LinkedHashMap` in the iteration order of a merge-ordered `Set<Dot>`, with any
+     * floor-only author appended after it. Every public entry point that can mint a
      * vector — the constructor, [VersionVector.of], `combine` — has to land on the same bytes, and
      * only canonicalising at the encoder achieves that for all of them at once.
      *
