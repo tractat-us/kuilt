@@ -131,8 +131,11 @@ It works on every platform kuilt targets — phones (Android, iOS), desktop and 
 A few things to know going in: timestamps come from each device's own clock, so a
 long-offline device with a skewed clock can mis-order against its peers; a trace that
 straddles an offline and an online device only completes once the offline half syncs;
-and local storage is bounded — when a cap is hit, evicted items are always *logged*,
-never silently dropped.
+and local storage settles for a device that only records its own activity — it keeps
+about a capful and stops growing — while a device that also passes its neighbours'
+records along keeps a small note for each one it ages out, so its storage still creeps
+up slowly over a long run. Either way, when a cap is hit the items dropped to make room
+are always *logged*, never silently discarded.
 
 ## Going deeper
 

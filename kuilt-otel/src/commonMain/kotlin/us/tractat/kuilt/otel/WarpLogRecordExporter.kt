@@ -145,10 +145,13 @@ internal fun opCountOf(segment: Rga<LogRecord>): Int = segment.opCount
  * structural reason rather than a tuning one. Its condition 4 refuses to collect a tombstone that
  * is still some live element's `after`, and this log is an append **chain**: every record is
  * inserted after the previous one, so every element except the tail is the predecessor of a live
- * successor. [BufferPolicy.DROP_OLDEST] evicts index 0, which is the element furthest from being
- * the tail. So the one tombstone [Rga.compact] would accept is the one this exporter never
- * produces. (Its condition 3 is a second, independent block: a delivered frontier is a fact about
- * peers, and this class holds a [DurableStore], not a [us.tractat.kuilt.core.Seam].) Windowing
+ * successor. [BufferPolicy.DROP_OLDEST] evicts index 0, which at every [maxRecords] above one is
+ * the element furthest from being the tail — so the one tombstone condition 4 would accept is the
+ * one this exporter never produces. At `maxRecords = 1` that stops holding: index 0 *is* the tail,
+ * and the record replacing it is appended after [RgaId.HEAD], so condition 4 would accept the
+ * eviction. It reclaims nothing there either, because condition 3 blocks independently and at
+ * every cap: a delivered frontier is a fact about peers, and this class holds a [DurableStore],
+ * not a [us.tractat.kuilt.core.Seam]. Windowing
  * exists because forgetting *position* needs no barrier at all — the next paragraph is why.
  *
  * Windowing is sound without a causal-stability barrier because it deliberately forgets

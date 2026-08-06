@@ -237,6 +237,7 @@ class WarpLogRecordExporterTailCacheTest {
             .flatMap { policy -> listOf(policy to ROOMY_CAP, policy to SINGLETON_CAP) }
             .flatMap { config -> listOf(config to DEFAULT_LOG_SEGMENT_OPS, config to ROLLING_SEGMENT_OPS) }
         var anyWindowed = false
+        var anyRolled = false
         for ((config, segmentOps) in configurations) {
             val (policy, cap) = config
             val store = InMemoryDurableStore()
@@ -260,6 +261,23 @@ class WarpLogRecordExporterTailCacheTest {
                         reference.merge(remote)
                     }
                 }
+            }
+
+            // What the rolling arm is FOR, checked rather than assumed: at ROLLING_SEGMENT_OPS the
+            // ~20-op script has to really roll, so the round-trip below recovers a `piece`-union of
+            // several SEALED segments re-purged under the active one's floor. `anyWindowed` cannot
+            // stand in for this — windowing already fires at DEFAULT_LOG_SEGMENT_OPS, so that flag
+            // is true with this whole arm deleted, and raising ROLLING_SEGMENT_OPS back toward the
+            // default would silently take the arm's coverage to zero without reddening anything.
+            if (segmentOps == ROLLING_SEGMENT_OPS) {
+                val indexBytes = assertNotNull(
+                    store.read(INDEX_KEY_FOR_TEST),
+                    "$policy/cap=$cap: the script wrote no segment index at all",
+                )
+                // `active` starts at 0 and advances only on a roll, and numbers are never reused —
+                // so `> 0` is "a segment was sealed", and unlike reading `sealedSegments` directly
+                // it stays true after that sealed segment is retired away again.
+                anyRolled = anyRolled || decodeIndexForTest(indexBytes).active > 0
             }
 
             // Rga equality is op-set equality, so this asserts the op-log read back through the
@@ -306,10 +324,22 @@ class WarpLogRecordExporterTailCacheTest {
         // Non-vacuity for the whole cross-product: if no configuration ever windowed, every
         // equality above is an equality between two logs that only ever grew, and the oracle
         // says nothing about the reclaiming path it was extended to cover.
-        assertTrue(
-            anyWindowed,
-            "no configuration reached a window pass, so the recovered op-logs were never re-purged " +
-                "under a floor — the script no longer exercises reclamation at all",
+        assertAll(
+            {
+                assertTrue(
+                    anyWindowed,
+                    "no configuration reached a window pass, so the recovered op-logs were never " +
+                        "re-purged under a floor — the script no longer exercises reclamation at all",
+                )
+            },
+            {
+                assertTrue(
+                    anyRolled,
+                    "no configuration at segmentOps=$ROLLING_SEGMENT_OPS ever sealed a segment, so " +
+                        "every round-trip recovered from a single active segment and the rolling " +
+                        "arm of the cross-product covers nothing the default arm does not",
+                )
+            },
         )
     }
 

@@ -2083,10 +2083,18 @@ This is the only PR in the plan whose body may say `closes #2127`. State the mea
 Checked against the tests rather than transcribed from §6. Two criteria are **not** fully met and
 say so; a criterion recorded as met that is not is worse than one recorded as open.
 
-Measured at 1,000 records, `maxRecords = 10`, `segmentOps = 8`. The right-hand column is the same
-run with a cap above the record count, so nothing is ever evicted, windowed or retired — which is
-what the store looked like before this work. It **understates** the old in-memory cost, because a
-pre-change run at `maxRecords = 10` also carried ~990 `Remove` ops on top of the 1,000 `Insert`s.
+Measured at 1,000 records, `maxRecords = 10`, `segmentOps = 8`. The **left-hand** column —
+**Nothing reclaimed** — is the control: the same run with a cap above the record count, so nothing
+is ever evicted, windowed or retired, which is what the store looked like before this work. The
+right-hand column, **As landed**, is this branch. The control **understates** the old in-memory
+cost, because a pre-change run at `maxRecords = 10` also carried ~990 `Remove` ops on top of the
+1,000 `Insert`s.
+
+Every number in the table below, and the peak that follows it, was **measured at this commit** by
+an ad-hoc run — none of them is pinned by an assertion. The committed tests deliberately assert
+loose shapes around them instead (`store.reads() <= 12`, `peakOps <= 64`, "under forty records'
+worth of bytes"), so a harmless layout change does not redden the suite. Read the table as a
+snapshot of the effect, not as a contract: if a later change moves these numbers, nothing reddens.
 
 | Axis | Nothing reclaimed | As landed |
 |------|------------------:|----------:|
@@ -2105,7 +2113,7 @@ the trough, because a pass fires periodically and sampling only at the end reads
 | 3 | The in-memory op-log is bounded on the same terms | **Met on the export path, deliberately UNMET on the merge path.** `theInMemoryOpLogStaysBoundedAcrossManyMoreRecordsThanTheWindow` pins the export arm; `theOpLogIsBoundedOnTheExportPathButNotOnTheMergePath` pins that the merge arm **grows**, and would redden if it ever stopped. A foreign author's dots cannot fold into this replica's floor, so each keeps an explicit `RgaOp.Compact` pair that nothing prunes. Bounding it needs the causal-stability argument this design deliberately avoids |
 | 4 | `aMergeCannotResurrectRecordsThisReplicaAlreadyEvicted` and `aCompactionInheritedFromTheLegacyBlobIsNeverDropped` pass unmodified | **Met** — both verified character-for-character identical to `origin/main` |
 | 5 | Both policies bound the **total**, not only the per-export write; the merge path asserted explicitly | **Met, scoped to local exports as §6 scopes it** — `bothBufferPoliciesBoundTheTotalNotJustThePerExportWrite` measures the resident total under both, and asserts *why* each is flat (`DROP_NEWEST` writes nothing at all once saturated; `DROP_OLDEST` keeps writing and reclaims). The merge path is asserted by `aGossipFedReplicaRetiresThroughTheMergePath` (disk) and `aFullDropNewestBufferDoesNotGrowUnboundedWhenAPeerMergesIn` (memory) |
-| 6 | Lattice laws over **mixed** explicit-`Compact` / floor states | **Met, but only after Task 12 closed a gap.** `theLatticeLawsHoldOverFlooredStates` (Task 2) derives all three operands from one state by raising a floor, so the two suppressors never meet — exactly the configuration the criterion names is the one it did not cover. `theLatticeLawsHoldWhenAFloorMeetsAnExplicitCompact` adds floor-only × `Compact`-only × both, with a non-vacuity guard that the two operands really suppress different records |
+| 6 | Lattice laws over **mixed** explicit-`Compact` / floor states | **Met, but only after Task 12 closed a gap.** `theLatticeLawsHoldOverFlooredStates` (Task 2) derives all three operands from one state by raising a floor, so the two suppressors never meet — exactly the configuration the criterion names is the one it did not cover. `theLatticeLawsHoldWhenAFloorMeetsAnExplicitCompact` adds floor-only × `Compact`-only × both, behind a two-part non-vacuity guard: the `Compact`-only operand must really retain a `Compact` (`compactOpCount > 0` — otherwise a `positionsFor` returning nothing leaves it equal to the plain state, whose list still differs from the floored one), *and* the two operands must suppress different records |
 | 7 | Seq survival across a floor raise plus a cacheless reload | **Met** — `aFloorRaisedPastTheHeldOpsStillHoldsTheSeqHighWaterUp`, `mergingInAFloorRaisesTheSeqHighWaterToo`, `aFlooredReplicaNeverReusesASeqItAlreadyMinted`, `aFlooredReplicaSurvivesAWireRoundTripWithoutRegressingItsSeq` (the reload), and `rgaReportsItsFloorAndStopsReEmittingTheDotsBeneathIt` for the `OpLogEngine.deliveredDots` contribution |
 | 8 | A `Quilter` over a floored `Rga` keeps a gap-free delivered frontier, computed without enumerating the swallowed dots — **assert both** | **Value met; the cost half is argued, not measured.** `QuilterCausalFloorTest` pins the value, including through a live replicator, and `QuilterFloorAbsorptionTest` (#2179) pins it on the path it exists for — a *second* replica that never held the floored ops. `aHugeFloorCostsNothingToWalk` probes correctness at a floor of 10,000,000 but asserts no timing; the O(dots above the floor) shape comes from `contiguousHighWater`'s construction, not from anything the suite measures. A Θ(floor) implementation would pass it, slowly |
 

@@ -161,8 +161,19 @@ class RgaCompactedFloorTest {
                 )
             },
             {
-                // Non-vacuity: the two operands must really suppress different things, or every
-                // law above is being proved over one state wearing two hats.
+                // Non-vacuity, half one: the Compact-only operand must actually carry a retained
+                // `Compact`. Without this, a `positionsFor` that returned nothing would leave
+                // `compactOnly == rga` — whose list still differs from `floorOnly`'s, so the list
+                // comparison below would pass while no explicit Compact was ever in play.
+                assertTrue(
+                    compactOnly.compactOpCount > 0,
+                    "the Compact-only operand retains no Compact op at all, so the laws above are " +
+                        "floor-against-plain, not floor-against-Compact",
+                )
+            },
+            {
+                // Non-vacuity, half two: the two operands must really suppress different things,
+                // or every law above is being proved over one state wearing two hats.
                 assertTrue(
                     floorOnly.toList() != compactOnly.toList(),
                     "the floor-only and Compact-only operands suppress the same records, so this " +

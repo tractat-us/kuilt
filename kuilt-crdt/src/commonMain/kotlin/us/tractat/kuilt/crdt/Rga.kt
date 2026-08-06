@@ -304,10 +304,15 @@ public class Rga<V> private constructor(
     /**
      * How many operations this log holds — Inserts, Removes and retained `Compact`s alike.
      *
-     * A consumer that partitions the op-log across storage segments budgets in ops, and a
-     * `Compact` occupies budget exactly as an `Insert` does. It is invisible to both
+     * A consumer that partitions the op-log across storage segments budgets in ops, and **in that
+     * budget** a `Compact` occupies one slot exactly as an `Insert` does. It is invisible to both
      * [sequence] and [tombstones], so a `sequence.size + tombstones.size` estimate silently
      * undercounts a segment that carries one.
+     *
+     * The equality is one of *count*, not of cost: a `Compact` carries a `(RgaId -> RgaId)` pair
+     * per position it suppresses and no value at all, so on the wire or on disk it can be much
+     * smaller — or, having absorbed a whole window, much larger — than an `Insert` carrying one
+     * element. A consumer budgeting **bytes** must measure them; this count will mislead it.
      */
     public val opCount: Int get() = ops.size
 
