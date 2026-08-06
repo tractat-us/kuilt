@@ -78,6 +78,22 @@ class WarpLogRecordExporterRetirementTest {
     private fun segmentKeys(store: RecordingStore): Set<String> =
         store.keys().filter { it.startsWith("otel.logs.seg.") }.toSet()
 
+    private companion object {
+        /** Where the byte tests take their first reading — well past the first retirements. */
+        const val EARLY_MARK = 100
+
+        /**
+         * Where they take the second. Deliberately not larger: the exporter logs a line per
+         * eviction, and one test emitting ~10,000 of them overruns the wasm test harness's
+         * 1 MB-per-service-message ceiling and fails `wasmJsBrowserTest` with a message about
+         * discovering no tests. The claim does not need the extra decade — see the assertions.
+         */
+        const val LATE_MARK = 1_200
+
+        /** Records behind [perRecordBytes]. Small: it only has to price one record. */
+        const val PER_RECORD_SAMPLE = 20
+    }
+
     // ---- The headline claim: recovery opens a bounded number of keys ----
 
     @Test
@@ -134,43 +150,53 @@ class WarpLogRecordExporterRetirementTest {
         // so no window pass, so no retirement — which is precisely the Θ(records ever) layout that
         // shipped before this change. Without it "the total stopped growing" could be read off a
         // store that never held much in the first place.
-        // The total is **not** flat to the byte, and asserting that it is would be a false
-        // claim that reddens on an unrelated change. It creeps by a few dozen bytes as the
-        // Lamport counters and seqs inside the retained ops gain a CBOR integer width — and
-        // that creep SATURATES. So what is asserted is the shape: the growth over the second,
-        // ten-times-longer stretch must not exceed the growth over the first. Θ(records ever)
-        // would make it ten times larger; measured, it is an order of magnitude smaller.
-        val unbounded = RecordingStore()
-        exporterFor(unbounded, maxRecords = 10_000)
-            .also { e -> repeat(1_000) { i -> e.export(sizedRecord(i)) } }
+        // The total is **not** flat to the byte, and asserting that it is would be a false claim
+        // that reddens on an unrelated change: it creeps as the Lamport counters and seqs inside
+        // the retained ops gain a CBOR integer width, and the creep saturates. So the unit is a
+        // measured record rather than a magic constant — a Θ(records ever) store gains one
+        // record's worth of bytes per record, and this one gains less than two across all of them.
+        val oneRecord = perRecordBytes()
 
-        val bounded = RecordingStore()
-        val exporter = exporterFor(bounded, maxRecords = 10)
-        repeat(100) { i -> exporter.export(sizedRecord(i)) }
-        val early = bounded.residentBytes()
-        repeat(900) { i -> exporter.export(sizedRecord(100 + i)) }
-        val late = bounded.residentBytes()
-        repeat(9_000) { i -> exporter.export(sizedRecord(1_000 + i)) }
-        val later = bounded.residentBytes()
+        val store = RecordingStore()
+        val exporter = exporterFor(store, maxRecords = 10)
+        repeat(EARLY_MARK) { i -> exporter.export(sizedRecord(i)) }
+        val early = store.residentBytes()
+        repeat(LATE_MARK - EARLY_MARK) { i -> exporter.export(sizedRecord(EARLY_MARK + i)) }
+        val late = store.residentBytes()
 
         assertAll(
             {
                 assertTrue(
-                    later - late <= late - early,
-                    "resident bytes are still growing with records ever exported: $early -> $late " +
-                        "over 900 records, then $late -> $later over 9,000",
+                    late - early < 2 * oneRecord,
+                    "${LATE_MARK - EARLY_MARK} further records through a 10-record window added " +
+                        "${late - early} bytes, which is more than two records' worth ($oneRecord " +
+                        "each). Θ(records ever) would have added ${(LATE_MARK - EARLY_MARK) * oneRecord}",
                 )
             },
             {
                 assertTrue(
-                    later * 5 < unbounded.residentBytes(),
-                    "the windowed run is not materially smaller than the Θ(records ever) control: " +
-                        "$later vs ${unbounded.residentBytes()} bytes",
+                    late < 40 * oneRecord,
+                    "the resident total is $late bytes — far more than the 10-record window plus a " +
+                        "few segments can account for at $oneRecord bytes a record",
                 )
             },
             // Without this the two assertions above pass trivially on a store that lost the log.
             { assertEquals(10, exporter.snapshot().size, "and the window itself must be intact") },
         )
+    }
+
+    /**
+     * Bytes one record costs on disk, measured from a short run through a cap it never reaches —
+     * so nothing is evicted, windowed or retired and the store holds one record per record.
+     *
+     * The scale the two byte tests are stated in. A ratio against a measured record survives the
+     * encoding changing under it; an absolute byte ceiling does not.
+     */
+    private suspend fun perRecordBytes(): Int {
+        val store = RecordingStore()
+        val exporter = exporterFor(store, maxRecords = 10_000)
+        repeat(PER_RECORD_SAMPLE) { i -> exporter.export(sizedRecord(i)) }
+        return store.residentBytes() / PER_RECORD_SAMPLE
     }
 
     @Test
@@ -190,27 +216,26 @@ class WarpLogRecordExporterRetirementTest {
         // eviction count is permanently zero, so only the size arm of the trigger can fire — is
         // pinned by `aGossipFedReplicaRetiresThroughTheMergePath` and, in memory, by
         // `WarpLogRecordExporterWindowingTest.aFullDropNewestBufferDoesNotGrowUnboundedWhenAPeerMergesIn`.
+        val oneRecord = perRecordBytes()
         for (policy in BufferPolicy.entries) {
             val store = RecordingStore()
             val exporter = exporterFor(store, maxRecords = 10, bufferPolicy = policy)
-            repeat(100) { i -> exporter.export(sizedRecord(i)) }
+            repeat(EARLY_MARK) { i -> exporter.export(sizedRecord(i)) }
             val early = store.residentBytes()
-            repeat(900) { i -> exporter.export(sizedRecord(100 + i)) }
-            val late = store.residentBytes()
             store.resetWriteLog()
-            repeat(9_000) { i -> exporter.export(sizedRecord(1_000 + i)) }
-            val later = store.residentBytes()
+            repeat(LATE_MARK - EARLY_MARK) { i -> exporter.export(sizedRecord(EARLY_MARK + i)) }
+            val late = store.residentBytes()
 
             assertAll(
                 { assertEquals(10, exporter.snapshot().size, "$policy: the cap must hold") },
                 {
-                    // Same shape, and for the same reason, as
+                    // Same unit, and for the same reason, as
                     // bytesOnDiskAreBoundedByTheWindowNotByRecordsEverExported: the residual creep
                     // is CBOR integer width, and it saturates.
                     assertTrue(
-                        later - late <= late - early,
-                        "$policy: resident bytes are still growing with records ever exported: " +
-                            "$early -> $late over 900 records, then $late -> $later over 9,000",
+                        late - early < 2 * oneRecord,
+                        "$policy: ${LATE_MARK - EARLY_MARK} further records added ${late - early} " +
+                            "bytes, more than two records' worth ($oneRecord each)",
                     )
                 },
                 {
