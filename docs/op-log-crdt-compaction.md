@@ -39,6 +39,8 @@ A distributed system has no central clock. "Has everyone seen op X?" is answered
 
 `Quilted.causalFloor()` is what reports them. It defaults to `VersionVector.EMPTY`, so every CRDT that does not compact this way is unaffected. **A consumer folding a delivered frontier must read both**: a dot is delivered if it is in `causalDots()` *or* at-or-below `causalFloor()`. Reading only the dots pins the author's high-water below the floor forever and stalls all further GC for that author.
 
+`Quilter` does exactly that: its contiguous-frontier walk starts each author at `causalFloor()[author]` rather than at `0`, so a floored prefix is bridged and only a genuine gap *above* the floor truncates. The walk costs O(dots above the floor), never O(floor) — which is the whole point of recording a compacted prefix as a high-water instead of an id set.
+
 The floor can only describe a *downward-closed* compacted set. Everything `dropWindow` cannot fold — a foreign author's dots, or own dots above the first retained one — keeps an explicit `Compact` entry that `causalDots()` still re-emits. A CRDT whose compaction is not downward-closed leaves `causalFloor()` defaulted and keeps re-emitting.
 
 ### The `Rga.compact()` safety conditions

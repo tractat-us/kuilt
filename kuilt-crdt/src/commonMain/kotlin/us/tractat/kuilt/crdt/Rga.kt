@@ -475,14 +475,15 @@ public class Rga<V> private constructor(
      * surviving successor — the barrier [compact] uses — would reclaim nothing at all under a
      * drop-oldest window, which is the whole reason this entry point exists.
      *
-     * **Not yet safe under a [us.tractat.kuilt.quilter.Quilter].** A raised floor purges its ops
-     * and — unlike [RgaOp.Compact] — records no id set, so those dots vanish from [causalDots].
-     * `Quilter` truncates an author at the first gap in its delivered dots, and a downward-closed
-     * floor removes that author's seq 1, so the author's contiguous delivered frontier collapses
-     * to `0` rather than to a partial value. The regressed frontier is then gossiped, and
-     * [compact]'s condition 3 (`delivered.dominates(frontierMax)`) can never be satisfied again —
-     * tombstone GC stops permanently for that author. Until #2127 lands `Quilted.causalFloor()`
-     * and the matching `Quilter` frontier change, use this entry point only outside a `Quilter`.
+     * **The floor is reported through [causalFloor], not [causalDots].** A raised floor purges its
+     * ops and — unlike [RgaOp.Compact] — records no id set, so those dots leave [causalDots]
+     * entirely. A consumer folding a delivered frontier must therefore read the two together (a
+     * dot is delivered if it is in [causalDots] **or** at-or-below [causalFloor]); reading only
+     * the dots would stop the walk at the first swallowed seq, and since the floor is
+     * downward-closed that seq is `1`, collapsing the author's frontier to `0` — a regression
+     * that, once gossiped, would leave [compact]'s condition 3 (`delivered.dominates(frontierMax)`)
+     * permanently unsatisfiable for that author. `Quilter` reads both (#2127); a consumer that
+     * folds its own frontier must do the same.
      *
      * @return `(newState, delta)` — the delta is a minimal [Rga], wrapped as a [Patch] so it
      *   cannot be swapped with the state at a destructuring site, that any peer absorbs through

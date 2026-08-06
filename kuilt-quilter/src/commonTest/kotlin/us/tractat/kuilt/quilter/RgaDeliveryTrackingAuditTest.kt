@@ -34,7 +34,7 @@ class RgaDeliveryTrackingAuditTest {
     private val b = ReplicaId("b")
     private val c = ReplicaId("c")
 
-    private fun frontier(rga: Rga<*>): VersionVector = contiguousFrontier(rga.causalDots())
+    private fun frontier(rga: Rga<*>): VersionVector = contiguousFrontier(rga.causalDots(), rga.causalFloor())
 
     /** Three inserts by [a] at HEAD → dense dots (a,1),(a,2),(a,3). Returns the rga + ids. */
     private fun threeByA(): Triple<Rga<String>, List<RgaId>, Rga<String>> {

@@ -123,7 +123,8 @@ class QuiltMessageTest {
      * The vector as the shipped path actually builds it: [contiguousFrontier] over a set of dots.
      *
      * `Quilter`'s `_deliveredLocal` — the field gossiped as [QuiltMessage.Delivered.vector] — is
-     * `contiguousFrontier(dots)`, which is `dots.groupBy { it.replica }`: a `LinkedHashMap` in the
+     * `contiguousFrontier(dots, floor)`, whose author order is `dots.groupBy { it.replica }`: a
+     * `LinkedHashMap` in the
      * **iteration order of the dot set**, and that set is built by merging deltas, so its order is
      * delivery history. So the wire vector is order-dependent for a reason
      * `VersionVector.combine` has nothing to do with — two peers holding the same dots can gossip
@@ -144,11 +145,11 @@ class QuiltMessageTest {
 
         fun frame(order: List<Dot>): List<Byte> = Cbor.encodeToByteArray(
             msgSerializer,
-            QuiltMessage.Delivered(sender = a, vector = contiguousFrontier(LinkedHashSet(order))),
+            QuiltMessage.Delivered(sender = a, vector = contiguousFrontier(LinkedHashSet(order), VersionVector.EMPTY)),
         ).toList()
 
-        val arrivalOrder = contiguousFrontier(LinkedHashSet(dots))
-        val reverseOrder = contiguousFrontier(LinkedHashSet(dots.reversed()))
+        val arrivalOrder = contiguousFrontier(LinkedHashSet(dots), VersionVector.EMPTY)
+        val reverseOrder = contiguousFrontier(LinkedHashSet(dots.reversed()), VersionVector.EMPTY)
 
         assertEquals(3, arrivalOrder.entries.size, "the probe is vacuous unless the frontier is multi-entry")
         assertNotEquals(

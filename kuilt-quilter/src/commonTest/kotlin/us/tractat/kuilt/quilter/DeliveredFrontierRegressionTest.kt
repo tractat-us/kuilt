@@ -24,7 +24,7 @@ class DeliveredFrontierRegressionTest {
         val (r1, _) = Rga.empty<String>().insertAfter(a, RgaId.HEAD, "x") // (a,1)
         val (r2, opY) = r1.insertAfter(a, RgaId.HEAD, "y")                // (a,2)
         val (r3, _) = r2.insertAfter(a, RgaId.HEAD, "z")                  // (a,3)
-        assertEquals(3L, contiguousFrontier(r3.causalDots())[a], "before GC: delivered[a] = 3")
+        assertEquals(3L, contiguousFrontier(r3.causalDots(), r3.causalFloor())[a], "before GC: delivered[a] = 3")
 
         // tombstone the MIDDLE dot (a,2); x and z were inserted after HEAD, so y has no successor
         val (r4, _) = r3.removeAt(r3.sequence.indexOf(opY.id))!!
@@ -32,10 +32,18 @@ class DeliveredFrontierRegressionTest {
         val (r5, _) = r4.compact(stableCut = full, frontierMax = full, delivered = full)!!
 
         // No regression — the Compact re-emits (a,2), keeping the prefix gap-free.
-        assertEquals(3L, contiguousFrontier(r5.causalDots())[a], "delivered[a] must NOT regress after GC")
+        assertEquals(
+            3L,
+            contiguousFrontier(r5.causalDots(), r5.causalFloor())[a],
+            "delivered[a] must NOT regress after GC",
+        )
 
         // …and the frontier still advances: a 4th insert (seq 4) reaches 4, not stuck at the gap.
         val (r6, _) = r5.insertAfter(a, RgaId.HEAD, "w") // (a,4)
-        assertEquals(4L, contiguousFrontier(r6.causalDots())[a], "frontier advances past the GC'd dot")
+        assertEquals(
+            4L,
+            contiguousFrontier(r6.causalDots(), r6.causalFloor())[a],
+            "frontier advances past the GC'd dot",
+        )
     }
 }
