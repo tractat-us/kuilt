@@ -517,8 +517,15 @@ class RgaCompactedFloorTest {
      * that already exists and two distinct records share a dot — #639, relocated to the floor.
      *
      * The window is drained **completely**, so no surviving [RgaOp.Insert] can hold the
-     * high-water up on the recomputed side; that is what makes the second assertion sensitive
-     * to the floor rather than to the op-log.
+     * high-water up on the recomputed side; that is what makes the recomputed assertion
+     * sensitive to the floor rather than to the op-log.
+     *
+     * The cached arm is a **contrast**, not an independent pin, and deliberately so: a floor
+     * [dropWindow] raised can never exceed the high-water this replica had already minted, so
+     * `cacheAfterFloor`'s own fold is a no-op on every state reachable through this entry point.
+     * Its pin is [aFloorRaisedPastTheHeldOpsStillHoldsTheSeqHighWaterUp], which reaches past the
+     * held ops through [Rga.withCompactedBelow]. What the arm buys here is that the two paths are
+     * asserted to agree in one place — the divergence, not either value alone, is the bug.
      */
     @Test
     fun aFlooredReplicaNeverReusesASeqItAlreadyMinted() {
@@ -533,8 +540,8 @@ class RgaCompactedFloorTest {
 
         assertAll(
             { assertTrue(floored.ops.isEmpty(), "the window drained — no op survives to carry the seq") },
-            { assertEquals(6L, freshFromCached.id.seq, "cached path must not regress the high-water") },
-            { assertEquals(6L, freshFromReloaded.id.seq, "and neither may the recomputed path (#639)") },
+            { assertEquals(6L, freshFromCached.id.seq, "the cached path does not regress the high-water") },
+            { assertEquals(6L, freshFromReloaded.id.seq, "and the recomputed path must agree (#639)") },
         )
     }
 
