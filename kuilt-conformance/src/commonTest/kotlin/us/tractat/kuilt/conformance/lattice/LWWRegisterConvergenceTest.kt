@@ -59,9 +59,9 @@ internal class LWWRegisterConvergenceTest : LatticeLawSuite<LWWRegister<String>>
             // exactly like a set and, once it wins, `value` reads null. That withdraws an
             // observation an earlier op made, which is what OpKind.RETIRE names. The binding
             // measured 0.0% retiring steps until this op existed, though `unset` has always been
-            // there — the #2100 vacuity shape. (`OpKind`'s KDoc table still reads "LWWRegister has
-            // no removal at all"; that was already inaccurate and this binding now contradicts it
-            // out loud — see the PR body.)
+            // there — the #2100 vacuity shape. (`OpKind`'s KDoc used to read "LWWRegister has no
+            // removal at all", which this binding contradicted out loud; #2146 removed the claim
+            // and now records why it was wrong.)
             LatticeOp("unset-high", OpKind.RETIRE) { state, replicaIndex, random ->
                 state.unset(ReplicaId("R$replicaIndex"), 2 * random.nextLong(5L, 10L) + 1)
             },
