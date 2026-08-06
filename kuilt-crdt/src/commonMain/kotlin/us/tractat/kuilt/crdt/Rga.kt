@@ -186,9 +186,11 @@ public class Rga<V> private constructor(
      * per-element map, and therefore the Θ(elements ever) cost, this field exists to remove.
      * So a survivor whose predecessor was floored away re-roots to [RgaId.HEAD] instead, and
      * HEAD's child list is sorted by id **descending**: a high-lamport survivor can land ahead
-     * of older HEAD-anchored records written by someone else. The visible effect is
-     * cross-author — `dropWindow` raises only the local author's entry, and a survivor of that
-     * author is the *newest* record anyway, so a single-author log is unaffected.
+     * of older HEAD-anchored records. This is **not** confined to cross-author logs. One author
+     * that mints `A` after HEAD, `B` after HEAD, then `C` after `A` reads `B, A, C` (HEAD's two
+     * children sort descending, so the later `B` leads); flooring `A` re-roots `C` to HEAD, where
+     * its still-higher lamport puts it ahead of `B` — `C, B`. [insertAt] at index `0` produces
+     * that after-HEAD shape routinely, so a single-author log reorders too.
      *
      * This is a **reordering, not a divergence.** The sequence stays a deterministic function
      * of `(ops, compactedBelow)`, and [piece] merges the floor on both sides, so every replica
@@ -439,6 +441,57 @@ public class Rga<V> private constructor(
         val merged = compactedBelow.ceilWith(floor)
         if (merged == compactedBelow) return this
         return Rga(purgeBelow(ops, merged), lamport, merged, cacheAfterFloor(merged))
+    }
+
+    /**
+     * Drop [dropped] from this log — the **un-gated history-windowing** path (#254), not the
+     * causal-stability barrier of [compact].
+     *
+     * Windowing deliberately forgets position, so unlike [compact] it may drop a live element
+     * and needs no stability gate: reroot-to-HEAD keeps the retained window reachable, and a
+     * concurrent `Insert(J, after = dropped-I)` resurfaces at the window boundary rather than
+     * being orphaned.
+     *
+     * The drop is recorded in the cheapest sound form. This replica's **own** dots that form a
+     * contiguous run up from `compactedBelow[self] + 1` fold into the floor — O(authors), and
+     * the reason a windowed log stops growing. Everything else (a foreign author's dots; own
+     * dots above the first retained one) keeps an explicit [RgaOp.Compact] entry, which costs
+     * one `(RgaId -> RgaId)` pair each.
+     *
+     * Only [self]'s floor entry is ever raised. Raising a foreign author's would annihilate a
+     * dot that author may not have minted yet; this replica, by contrast, can never hold an
+     * undelivered dot of its own. (The reason is *not* that a single-author log is somehow
+     * safe — see [compactedBelow], where the reorder is shown to bite within one author too.)
+     *
+     * **The floor's positional reroot degrades to [RgaId.HEAD].** A floor writes no
+     * [RgaOp.Compact.positions], so a survivor whose predecessor this call floored away
+     * re-roots to HEAD rather than to that predecessor's surviving ancestor, and can overtake
+     * older HEAD-anchored records. That is a stated part of this contract, not a defect: see
+     * [compactedBelow] for why it is accepted. Refusing to floor past a dot that still has a
+     * surviving successor — the barrier [compact] uses — would reclaim nothing at all under a
+     * drop-oldest window, which is the whole reason this entry point exists.
+     *
+     * @return `(newState, delta)` — the delta is a minimal [Rga] that any peer absorbs through
+     *   [piece] to perform the same drop — or `null` if [dropped] is empty.
+     */
+    public fun dropWindow(self: ReplicaId, dropped: Set<RgaId>): Pair<Rga<V>, Rga<V>>? {
+        if (dropped.isEmpty()) return null
+        val ownSeqs = dropped.mapNotNullTo(mutableSetOf()) { if (it.replicaId == self) it.seq else null }
+        // Own dots ALREADY dropped explicitly — recorded in a retained Compact, so absent from
+        // insertsById and never handed to dropWindow again. Without these the walk cannot step
+        // over them and the floor wedges below the first one FOREVER (see the wedge test).
+        val ownCompacted = compactedIds.mapNotNullTo(mutableSetOf()) { if (it.replicaId == self) it.seq else null }
+        var floorSeq = compactedBelow[self]
+        while ((floorSeq + 1L) in ownSeqs || (floorSeq + 1L) in ownCompacted) floorSeq++
+        val newFloor = compactedBelow.ceilWith(VersionVector.of(mapOf(self to floorSeq)))
+
+        // `it in insertsById` is load-bearing: positionsFor calls getValue and throws on an
+        // unknown id, and a caller may legitimately re-pass an id an earlier drop already took.
+        val residue = dropped.filterTo(mutableSetOf()) { !newFloor.contains(it.dot) && it in insertsById }
+        val compactOp = if (residue.isEmpty()) null else RgaOp.Compact(positionsFor(residue))
+
+        val state = withCompactedBelow(newFloor).let { if (compactOp == null) it else it.apply(compactOp) }
+        return state to deltaOf<V>(newFloor, compactOp)
     }
 
     /** Rebuild the derived caches after the floor rose to [merged]. */
@@ -812,6 +865,16 @@ public class Rga<V> private constructor(
             lamport: Long,
             compactedBelow: VersionVector = VersionVector.EMPTY,
         ): Rga<V> = Rga(purgeBelow(ops, compactedBelow), lamport, compactedBelow)
+
+        /**
+         * A minimal state carrying only a compaction record, for propagation through [piece].
+         * The lamport is `0` deliberately: [piece] takes the elementwise max, so a delta can
+         * never drag a peer's clock backwards.
+         */
+        private fun <V> deltaOf(floor: VersionVector, compactOp: RgaOp.Compact?): Rga<V> {
+            val ops: Set<RgaOp<V>> = if (compactOp == null) emptySet() else setOf(compactOp)
+            return Rga(ops, 0L, floor, null)
+        }
 
         /**
          * Drop every [RgaOp.Insert]/[RgaOp.Remove] op whose dot is at-or-below [floor].

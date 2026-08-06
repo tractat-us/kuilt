@@ -2,6 +2,7 @@ package us.tractat.kuilt.crdt
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import us.tractat.kuilt.test.assertAll
 
@@ -211,5 +212,221 @@ class RgaCompactedFloorTest {
         val (grown, op) = floored.insertAfter(me, RgaId.HEAD, "fresh")
         assertEquals(listOf("fresh"), grown.toList())
         assertTrue(op.id.seq > 5L, "the next seq must not reuse a swallowed one")
+    }
+
+    /**
+     * The companion to [aSurvivorWhosePredecessorWasFlooredRerootsToHeadAndCanOvertake], and the
+     * reason [Rga.compactedBelow]'s KDoc no longer claims the reorder is cross-author only.
+     * `insertAt(replica, 0, v)` anchors after HEAD, so one author routinely holds two
+     * HEAD-children; flooring the elder's subtree root lets its successor re-root to HEAD and
+     * overtake the younger sibling. Written as an executed counterexample rather than prose so
+     * the claim cannot quietly become false again.
+     */
+    @Test
+    fun aSingleAuthorLogReordersTooWhenAFlooredPredecessorForcesARerootToHead() {
+        val (s1, a) = Rga.empty<String>().insertAfter(me, RgaId.HEAD, "A")
+        val (s2, _) = s1.insertAfter(me, RgaId.HEAD, "B")
+        val (rga, _) = s2.insertAfter(me, a.id, "C")
+
+        assertEquals(listOf("B", "A", "C"), rga.toList(), "HEAD's two children sort descending")
+
+        val floored = rga.withCompactedBelow(VersionVector.of(mapOf(me to 1L)))
+
+        assertEquals(
+            listOf("C", "B"),
+            floored.toList(),
+            "with A floored, C re-roots to HEAD and overtakes B — inside a single author",
+        )
+    }
+
+    // ── dropWindow — the sound mint path ────────────────────────────────────
+
+    @Test
+    fun dropWindowFoldsAContiguousOwnPrefixIntoTheFloorAndLeavesNoResidue() {
+        val (rga, ops) = chain(5)
+        val dropped = ops.take(3).map { it.id }.toSet()
+
+        val (state, delta) = rga.dropWindow(me, dropped)!!
+
+        assertAll(
+            { assertEquals(VersionVector.of(mapOf(me to 3L)), state.compactedBelow) },
+            { assertEquals(listOf("r3", "r4"), state.toList()) },
+            {
+                assertTrue(
+                    state.ops.none { it is RgaOp.Compact },
+                    "a fully contiguous own prefix needs no explicit Compact — that is the whole bound",
+                )
+            },
+            {
+                assertEquals(
+                    VersionVector.of(mapOf(me to 3L)),
+                    delta.compactedBelow,
+                    "the delta carries the floor",
+                )
+            },
+        )
+    }
+
+    @Test
+    fun dropWindowStopsTheFloorAtTheFirstOwnGapAndRecordsTheRestExplicitly() {
+        val (rga, ops) = chain(5)
+        // Drop seqs 1, 2 and 4 — 3 is retained, so the floor may only reach 2.
+        val dropped = setOf(ops[0].id, ops[1].id, ops[3].id)
+
+        val (state, _) = rga.dropWindow(me, dropped)!!
+
+        val explicit = state.ops.filterIsInstance<RgaOp.Compact>().flatMap { it.positions.keys }.toSet()
+        assertAll(
+            {
+                assertEquals(
+                    VersionVector.of(mapOf(me to 2L)),
+                    state.compactedBelow,
+                    "the floor stops below the gap",
+                )
+            },
+            { assertEquals(setOf(ops[3].id), explicit, "the above-gap drop is recorded explicitly") },
+            { assertEquals(listOf("r2", "r4"), state.toList(), "and the retained record in the gap survives") },
+        )
+    }
+
+    @Test
+    fun dropWindowNeverRaisesAForeignAuthorsFloor() {
+        val (mine, myOps) = chain(2)
+        val (theirs, theirOps) = chain(2, author = peer)
+        val merged = mine.piece(theirs)
+
+        val (state, _) = merged.dropWindow(me, setOf(myOps[0].id, theirOps[0].id))!!
+
+        val explicit = state.ops.filterIsInstance<RgaOp.Compact>().flatMap { it.positions.keys }.toSet()
+        assertAll(
+            { assertEquals(0L, state.compactedBelow[peer], "a peer's dots are never floored locally") },
+            { assertEquals(1L, state.compactedBelow[me]) },
+            { assertEquals(setOf(theirOps[0].id), explicit, "the peer's dot is dropped explicitly instead") },
+        )
+    }
+
+    @Test
+    fun dropWindowReturnsNullWhenNothingIsDropped() {
+        val (rga, _) = chain(3)
+        assertNull(rga.dropWindow(me, emptySet()))
+    }
+
+    /**
+     * The residue filter's `it in insertsById` arm. Task 9 windows by id set, and an id an
+     * earlier pass already took explicitly is gone from `insertsById` while still failing the
+     * floor test (a peer's dot is never floored), so it reaches [Rga.positionsFor] — which is
+     * `getValue` and throws. Re-dropping must be a no-op, not a crash.
+     */
+    @Test
+    fun dropWindowToleratesAnIdAnEarlierDropAlreadyTook() {
+        val (s1, myFirst) = Rga.empty<String>().insertAfter(me, RgaId.HEAD, "mine0")
+        val (s2, mySecond) = s1.insertAfter(me, myFirst.id, "mine1")
+        val (s3, theirFirst) = s2.insertAfter(peer, mySecond.id, "theirs0")
+        val (merged, _) = s3.insertAfter(peer, theirFirst.id, "theirs1")
+
+        val (once, _) = merged.dropWindow(me, setOf(theirFirst.id))!!
+        val (twice, _) = once.dropWindow(me, setOf(theirFirst.id, myFirst.id))!!
+
+        assertAll(
+            { assertEquals(listOf("mine0", "mine1", "theirs1"), once.toList()) },
+            { assertEquals(1L, twice.compactedBelow[me], "the own dot still folds into the floor") },
+            { assertEquals(0L, twice.compactedBelow[peer], "and the peer's floor is still untouched") },
+            { assertEquals(listOf("mine1", "theirs1"), twice.toList(), "the re-passed id is simply skipped") },
+        )
+    }
+
+    @Test
+    fun theDeltaFromDropWindowCarriesTheSameDropToAPeer() {
+        val (rga, ops) = chain(5)
+        val peerReplica = rga
+        val (_, delta) = rga.dropWindow(me, ops.take(3).map { it.id }.toSet())!!
+
+        assertEquals(listOf("r3", "r4"), peerReplica.piece(delta).toList(), "a peer merging the delta drops too")
+    }
+
+    /**
+     * The bound, measured rather than argued. If `ops.size` tracks the record count instead of
+     * the window, `dropWindow` is minting explicit `Compact` entries it should have folded into
+     * the floor — the Θ(elements ever) cost #2127 exists to remove.
+     */
+    @Test
+    fun repeatedWindowingKeepsTheOpLogFlatRatherThanGrowingWithEveryDrop() {
+        var rga = Rga.empty<String>()
+        var tail = RgaId.HEAD
+        val window = ArrayDeque<RgaId>()
+        repeat(200) { i ->
+            val (next, op) = rga.insertAfter(me, tail, "r$i")
+            rga = next
+            tail = op.id
+            window.addLast(op.id)
+            if (window.size > 5) {
+                val drop = buildSet { repeat(window.size - 5) { add(window.removeFirst()) } }
+                rga = rga.dropWindow(me, drop)!!.first
+            }
+        }
+        assertAll(
+            { assertEquals(5, rga.size, "the window holds") },
+            { assertEquals(5, rga.ops.size, "and the op-log holds too — no per-drop residue accumulates") },
+            { assertEquals(VersionVector.of(mapOf(me to 195L)), rga.compactedBelow) },
+        )
+    }
+
+    /**
+     * The wedge. An own dot dropped *explicitly* on an earlier pass is absent from
+     * `insertsById`, so it never reappears in a later `dropped` set. A contiguity walk that
+     * consults only the current drop set therefore freezes the floor below that dot forever.
+     *
+     * Not adversarial: `WarpLogRecordExporterSegmentTest`'s legacy-blob fixture carries a
+     * `Compact` of the replica's **own** dot, so the upgrade population — long-lived devices,
+     * precisely the ones that need the bound — is exactly the wedged population.
+     */
+    @Test
+    fun anOwnDotAlreadyCompactedExplicitlyDoesNotWedgeTheFloorForever() {
+        val (rga, ops) = chain(6)
+        // Simulate an inherited/merged explicit Compact of our OWN seq 1 — the legacy-blob shape.
+        val inherited = rga.apply(RgaOp.Compact(rga.positionsFor(setOf(ops[0].id))))
+
+        // Now window away seqs 2..4. Seq 1 is gone already and will never be in `dropped` again.
+        val (state, _) = inherited.dropWindow(me, ops.subList(1, 4).map { it.id }.toSet())!!
+
+        assertAll(
+            {
+                assertEquals(
+                    VersionVector.of(mapOf(me to 4L)),
+                    state.compactedBelow,
+                    "the walk must step OVER the already-compacted seq 1, not stop below it",
+                )
+            },
+            { assertEquals(listOf("r4", "r5"), state.toList()) },
+        )
+    }
+
+    /** The wedge's cost, measured: a single inherited `Compact` must not un-bound the log. */
+    @Test
+    fun anInheritedCompactDoesNotMakeEveryLaterDropExplicitResidue() {
+        var rga = Rga.empty<String>()
+        var tail = RgaId.HEAD
+        val ids = mutableListOf<RgaId>()
+        repeat(3) { i ->
+            val (next, op) = rga.insertAfter(me, tail, "seed$i")
+            rga = next
+            tail = op.id
+            ids += op.id
+        }
+        rga = rga.apply(RgaOp.Compact(rga.positionsFor(setOf(ids[0])))) // the inherited Compact
+
+        val window = ArrayDeque(ids.drop(1))
+        repeat(200) { i ->
+            val (next, op) = rga.insertAfter(me, tail, "r$i")
+            rga = next
+            tail = op.id
+            window.addLast(op.id)
+            if (window.size > 5) {
+                val drop = buildSet { repeat(window.size - 5) { add(window.removeFirst()) } }
+                rga = rga.dropWindow(me, drop)!!.first
+            }
+        }
+        // 5 live inserts + the one inherited Compact. NOT 200-ish singleton Compacts.
+        assertTrue(rga.ops.size <= 8, "an inherited Compact must not make the bound fake; got ${rga.ops.size}")
     }
 }
