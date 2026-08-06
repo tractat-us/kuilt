@@ -28,17 +28,30 @@ import kotlinx.serialization.encoding.encodeStructure
  * same logical state (same op set, different delivery order) produce identical bytes.
  * This mirrors the fix applied to [FugueSerializer] (issue #713).
  *
- * Wire format: `{ "ops": List<RgaOp<V>> }`
+ * Wire format: `{ "ops": List<RgaOp<V>>, "compactedBelow": VersionVector }`
  *
  * Note: the field "ops" is encoded as a List (not a Set) so that the canonical sort order
  * is preserved in the wire encoding. Decoders reconstruct the Set by reading the list —
  * the semantic meaning is unchanged (an op-log is a set of unique ops).
  *
+ * [Rga.compactedBelow] is on the wire because it is part of the **value**: [Rga.equals]
+ * compares it, so a format that dropped it would make `decode(encode(x)) != x` for any
+ * windowed state and break the very delta-fingerprinting invariant #779 established. It costs
+ * O(authors) and rides through [VersionVector]'s own [CanonicalMapSerializer], so two replicas
+ * at the same logical state still emit identical bytes (#2127).
+ *
+ * This is a one-directional wire break, and a pre-#2127 decoder's failure mode on a post-#2127
+ * blob depends on the codec: a strict codec (`Cbor {}`) meets `compactedBelow` as an unknown key
+ * and throws. A codec with `ignoreUnknownKeys = true` instead skips the field silently and
+ * decodes an unfloored state — losing the floor's suppression, so that peer can re-accept a
+ * purged dot a third peer redelivers. See `RgaFloorWireTest`'s KDoc for the full consequence.
+ *
  * The [Rga.lamport] high-water is **not** encoded on the wire. On decode it is derived
  * from the op-set as `max(op.id.lamport)` over all ops (Insert/Remove ids are real Rga
- * ids; Compact positions.keys are the ids of compacted Inserts). This makes the serialized
- * form a pure function of the logical ([equals]) value, satisfying the content-addressing
- * and Quilter delta-fingerprinting invariant (issue #779).
+ * ids; Compact positions.keys are the ids of compacted Inserts), floored by the compaction
+ * floor — see [deriveLamport]. This makes the serialized form a pure function of the logical
+ * ([equals]) value, satisfying the content-addressing and Quilter delta-fingerprinting
+ * invariant (issue #779).
  */
 @OptIn(ExperimentalSerializationApi::class)
 internal class RgaSerializer<V>(vSerializer: KSerializer<V>) : KSerializer<Rga<V>> {
@@ -46,9 +59,11 @@ internal class RgaSerializer<V>(vSerializer: KSerializer<V>) : KSerializer<Rga<V
     private val opSerializer: KSerializer<RgaOp<V>> = RgaOpSerializer(vSerializer)
     private val opsSetSerializer: KSerializer<Set<RgaOp<V>>> = SetSerializer(opSerializer)
     private val opsListSerializer: KSerializer<List<RgaOp<V>>> = ListSerializer(opSerializer)
+    private val floorSerializer: KSerializer<VersionVector> = VersionVector.serializer()
 
     override val descriptor: SerialDescriptor = buildClassSerialDescriptor("Rga") {
         element("ops", opsListSerializer.descriptor)
+        element("compactedBelow", floorSerializer.descriptor)
     }
 
     /**
@@ -64,42 +79,67 @@ internal class RgaSerializer<V>(vSerializer: KSerializer<V>) : KSerializer<Rga<V
     override fun serialize(encoder: Encoder, value: Rga<V>): Unit = encoder.encodeStructure(descriptor) {
         val sortedOps = value.ops.sortedWith(opComparator())
         encodeSerializableElement(descriptor, 0, opsListSerializer, sortedOps)
+        encodeSerializableElement(descriptor, 1, floorSerializer, value.compactedBelow)
     }
 
     override fun deserialize(decoder: Decoder): Rga<V> = decoder.decodeStructure(descriptor) {
         var ops: Set<RgaOp<V>>? = null
+        var floor: VersionVector? = null
 
         mainLoop@ while (true) {
             when (val index = decodeElementIndex(descriptor)) {
                 CompositeDecoder.DECODE_DONE -> break@mainLoop
                 0 -> ops = decodeSerializableElement(descriptor, 0, opsListSerializer).toSet()
+                1 -> floor = decodeSerializableElement(descriptor, 1, floorSerializer)
                 else -> error("Unexpected index $index in Rga deserializer")
             }
         }
 
         val decodedOps = ops ?: emptySet()
-        Rga.fromOps(decodedOps, deriveLamport(decodedOps))
+        val decodedFloor = floor ?: VersionVector.EMPTY
+        Rga.fromOps(decodedOps, deriveLamport(decodedOps, decodedFloor), decodedFloor)
     }
 
     companion object {
         /**
-         * Derive the Lamport high-water from the op-set alone.
+         * Derive the Lamport high-water from the op-set, floored by [compactedBelow].
          *
          * - [RgaOp.Insert] and [RgaOp.Remove] carry real [RgaId]s whose [RgaId.lamport]
          *   values bound the clock.
          * - [RgaOp.Compact] carries no id of its own but its [RgaOp.Compact.positions] keys
          *   are the real [RgaId]s of compacted Inserts — those must be included so the derived
          *   clock covers compacted state.
-         * - Empty op-set → 0L (same as the initial value in [Rga.empty]).
+         * - Empty op-set and empty floor → 0L (same as the initial value in [Rga.empty]).
+         *
+         * A floor purges the ops it covers, so their lamports are no longer readable. Their
+         * **seqs** are, and each own insert advances both by one, so `lamport >= seq` for an own
+         * dot and the floor's high-water is a sound *lower* bound.
+         *
+         * **A lower bound is not the invariant, and this does not fully close the hole.** A merge
+         * can inflate the clock far above the seq ([Rga.apply] takes `maxOf(lamport, op.id.lamport)`),
+         * so a log whose window drains **entirely** decodes with `lamport = seq`, and re-minting
+         * climbs back through lamports the purged ids already used. Two distinct same-author ids
+         * then share a lamport, and [RgaId.compareTo] — which tiebreaks on `(lamport, replicaId)`
+         * only — returns `0` for them on any peer still holding the purged inserts, breaking the
+         * total order the canonical op sort rests on. Explicit [RgaOp.Compact.positions] keys were
+         * structurally immune because they carry whole [RgaId]s; a floor deliberately discards the
+         * lamport. Tracked as #2170, which needs a high-water carried beside the floor.
+         *
+         * Unreachable through a fixed-size export window — it never drains, and the survivors carry
+         * the true high-water — but [Rga.dropWindow] is public API. `RgaFloorWireTest` pins both the
+         * safe case and the bounded form of the hazard.
          */
-        internal fun <V> deriveLamport(ops: Set<RgaOp<V>>): Long =
-            ops.flatMap { op ->
+        internal fun <V> deriveLamport(ops: Set<RgaOp<V>>, compactedBelow: VersionVector): Long {
+            val fromOps = ops.flatMap { op ->
                 when (op) {
                     is RgaOp.Insert -> listOf(op.id.lamport)
                     is RgaOp.Remove<*> -> listOf(op.id.lamport)
                     is RgaOp.Compact -> op.positions.keys.map { it.lamport }
                 }
-            }.maxOrNull()?.coerceAtLeast(0L) ?: 0L
+            }.maxOrNull() ?: 0L
+            val fromFloor = compactedBelow.entries.values.maxOrNull() ?: 0L
+            return maxOf(fromOps, fromFloor).coerceAtLeast(0L)
+        }
     }
 
     /**

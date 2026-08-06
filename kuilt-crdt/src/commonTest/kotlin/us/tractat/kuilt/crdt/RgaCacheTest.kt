@@ -3,6 +3,7 @@ package us.tractat.kuilt.crdt
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import us.tractat.kuilt.test.assertAll
 
 /**
  * Cache-threading correctness for [Rga].
@@ -174,5 +175,51 @@ class RgaCacheTest {
         val fromScratch = Rga.fromOps(r4.ops, r4.lamport)
         assertEquals(fromScratch.insertsById, r4.insertsById)
         assertEquals(merged.toList(), merged.piece(merged).toList(), "piece is idempotent on cached state")
+    }
+
+    /**
+     * The same equivalence over a state carrying a **compaction floor** (#2127).
+     *
+     * Every other case in this file builds an unfloored state, so the cache-vs-recompute
+     * equivalence they assert is structurally blind to `cacheAfterFloor` (which folds the floor
+     * into [Rga.maxSeqByReplica]) diverging from `computeMaxSeqByReplica` (which must fold it
+     * too). It stays green not because the property holds under a floor but because no test here
+     * ever constructs one.
+     *
+     * The drop is deliberately **mixed** and drains `a` entirely: an own contiguous prefix that
+     * folds into the floor, plus a foreign dot that cannot and rides an explicit [RgaOp.Compact].
+     * With every one of `a`'s inserts purged, the op-log holds no evidence at all that seqs 1..3
+     * were minted — the floor is the only record, so a recompute that ignores it disagrees with
+     * the incrementally-threaded cache and the next mint would re-issue a live seq (#639).
+     */
+    @Test
+    fun cachedStateEqualsFromScratchOverAFlooredState() {
+        val (s1, m1) = Rga.empty<String>().insertAfter(a, RgaId.HEAD, "m1")
+        val (s2, m2) = s1.insertAfter(a, m1.id, "m2")
+        val (s3, m3) = s2.insertAfter(a, m2.id, "m3")
+        val (s4, p1) = s3.insertAfter(b, m3.id, "p1")
+        val (s5, p2) = s4.insertAfter(b, p1.id, "p2")
+        val (s6, _) = s5.insertAfter(b, p2.id, "p3")
+        // A tombstone that outlives the floor, so the recompute has to agree about it too.
+        val (seeded, _) = s6.removeAt(s6.toList().indexOf("p2"))!!
+
+        // My seqs 1..3 fold into the floor; the peer's p1 cannot, so it stays an explicit Compact.
+        val incremental = seeded.dropWindow(a, setOf(m1.id, m2.id, m3.id, p1.id))!!.first
+        val fromScratch = Rga.fromOps(incremental.ops, incremental.lamport, incremental.compactedBelow)
+
+        assertAll(
+            { assertEquals(VersionVector.of(mapOf(a to 3L)), incremental.compactedBelow, "the floor drained a") },
+            {
+                assertEquals(
+                    fromScratch.maxSeqByReplica,
+                    incremental.maxSeqByReplica,
+                    "the recomputed high-water must fold the floor exactly as the cache does",
+                )
+            },
+            { assertEquals(fromScratch.insertsById, incremental.insertsById) },
+            { assertEquals(fromScratch.tombstones, incremental.tombstones) },
+            { assertEquals(fromScratch.toList(), incremental.toList()) },
+            { assertEquals(fromScratch, incremental, "and the two are one value") },
+        )
     }
 }
