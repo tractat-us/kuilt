@@ -40,6 +40,12 @@ import kotlinx.serialization.encoding.encodeStructure
  * O(authors) and rides through [VersionVector]'s own [CanonicalMapSerializer], so two replicas
  * at the same logical state still emit identical bytes (#2127).
  *
+ * This is a one-directional wire break, and a pre-#2127 decoder's failure mode on a post-#2127
+ * blob depends on the codec: a strict codec (`Cbor {}`) meets `compactedBelow` as an unknown key
+ * and throws. A codec with `ignoreUnknownKeys = true` instead skips the field silently and
+ * decodes an unfloored state — losing the floor's suppression, so that peer can re-accept a
+ * purged dot a third peer redelivers. See `RgaFloorWireTest`'s KDoc for the full consequence.
+ *
  * The [Rga.lamport] high-water is **not** encoded on the wire. On decode it is derived
  * from the op-set as `max(op.id.lamport)` over all ops (Insert/Remove ids are real Rga
  * ids; Compact positions.keys are the ids of compacted Inserts), floored by the compaction

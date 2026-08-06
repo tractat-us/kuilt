@@ -104,6 +104,7 @@ class RgaFloorWireTest {
         assertAll(
             { assertEquals(2, zuluFirst.compactedBelow.entries.size, "a one-entry floor would pin no order") },
             { assertEquals(zuluFirst, alphaFirst, "the two merge orders are one logical value") },
+            { assertEquals(zuluFirst, roundTrip(zuluFirst), "and the decoded value equals the one that was encoded") },
             {
                 assertEquals(
                     cbor.encodeToByteArray(ser, zuluFirst).toList(),
@@ -138,6 +139,7 @@ class RgaFloorWireTest {
         assertAll(
             { assertTrue(drained.ops.isEmpty(), "the window drained — no op survives to carry the clock") },
             { assertEquals(3L, decoded.lamport, "the floor is the only surviving evidence of the clock") },
+            { assertEquals(drained, decoded, "and the decoded value equals the one that was encoded") },
             {
                 val (_, fresh) = decoded.insertAfter(me, RgaId.HEAD, "next")
                 assertTrue(fresh.id.seq > 3L, "and the next seq still does not collide, seq was ${fresh.id.seq}")
@@ -153,8 +155,18 @@ class RgaFloorWireTest {
      * index 1, and the floor defaults to [VersionVector.EMPTY] — which is exactly what such a blob
      * meant, because no floor existed to record.
      *
-     * The other direction does **not** hold and is not made to: a pre-#2127 decoder meets
-     * `compactedBelow` as an unknown key and throws. That is the accepted, pre-1.0 wire break.
+     * The other direction does **not** hold and is not made to, but its failure mode depends on
+     * the codec. A **strict** codec (`Cbor {}`) meets `compactedBelow` as an unknown key and
+     * throws — loud, and safe by construction. A codec with `ignoreUnknownKeys = true` — the
+     * prevailing convention in this repo (`RaftEngine.kt`, `RelayEnvelope.kt`, `AdmitMessage.kt`,
+     * `LobbyMessage.kt`, `RaftRelay.kt`, `RoutedUnicastRouter.kt`, `CoreLearnerAdmission.kt`,
+     * `SignalingMessage.kt`) — **silently skips the field** and decodes an unfloored state. Nothing
+     * is lost at that instant, but the floor's *suppression* is: that peer will re-accept any
+     * purged dot redelivered by a third peer, its [Rga.equals]/[Rga.hashCode] (which fold
+     * [Rga.compactedBelow]) disagree with the sender's for one logical state, and its next
+     * [Rga.piece] can hand the resurrected element back. Because `ignoreUnknownKeys = true` is the
+     * common case, the silent branch — not the throwing one — is the one a mixed deployment is
+     * likely to hit. That is the accepted, pre-1.0 wire break.
      */
     @Test
     fun aPreFloorBlobStillDecodesToAnUnflooredState() {
