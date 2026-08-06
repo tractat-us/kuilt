@@ -48,6 +48,26 @@ class RgaCompactedFloorTest {
         assertEquals(listOf("r3", "r4"), reapplied.toList(), "a late raw apply must not resurrect")
     }
 
+    /**
+     * The `Remove` arm of the same guard. It cannot be pinned through [Rga.toList] — the record
+     * is already invisible either way — so this asserts on the **state**: admitting the `Remove`
+     * would put an op at-or-below the floor back into [Rga.ops], and the very next [Rga.piece]
+     * would purge it again, so `a.piece(a) != a` and idempotence is gone.
+     */
+    @Test
+    fun aRemoveBeneathTheFloorIsNotReAdmitted() {
+        val (rga, ops) = chain(5)
+        val floored = rga.withCompactedBelow(VersionVector.of(mapOf(me to 3L)))
+
+        val reapplied = floored.apply(RgaOp.Remove<String>(ops[0].id))
+
+        assertAll(
+            { assertEquals(floored, reapplied, "a late raw Remove must not re-enter the op-log") },
+            { assertEquals(floored.ops, reapplied.ops, "and specifically must not grow ops") },
+            { assertEquals(reapplied, reapplied.piece(reapplied), "so piece stays idempotent") },
+        )
+    }
+
     @Test
     fun aMergeWithAPeerHoldingTheRawInsertsDoesNotResurrectThem() {
         val (rga, _) = chain(5)
@@ -89,6 +109,35 @@ class RgaCompactedFloorTest {
         )
     }
 
+    /**
+     * Pins the **accepted** cost documented on [Rga.compactedBelow]: a floor records no
+     * positions, so `computeSequence`'s #293 reroot has nothing to walk and a survivor whose
+     * predecessor was floored away lands on [RgaId.HEAD]. HEAD's child list is sorted by id
+     * descending, so the high-lamport survivor `b1` overtakes `b0` — a record it used to trail.
+     *
+     * This is a reordering, not a divergence: the order is still a function of `(ops, floor)`.
+     * The test exists so that if anyone later *fixes* the reroot, they see the cost they paid
+     * (a per-element positions map is exactly what the floor removes) rather than a silent
+     * behaviour change.
+     */
+    @Test
+    fun aSurvivorWhosePredecessorWasFlooredRerootsToHeadAndCanOvertake() {
+        val (s1, a1) = Rga.empty<String>().insertAfter(me, RgaId.HEAD, "a1")
+        val (s2, _) = s1.insertAfter(peer, RgaId.HEAD, "b0")
+        val (s3, a2) = s2.insertAfter(me, a1.id, "a2")
+        val (rga, _) = s3.insertAfter(peer, a2.id, "b1")
+
+        assertEquals(listOf("b0", "a1", "a2", "b1"), rga.toList(), "b1 trails b0 while its ancestor lives")
+
+        val floored = rga.withCompactedBelow(VersionVector.of(mapOf(me to 2L)))
+
+        assertEquals(
+            listOf("b1", "b0"),
+            floored.toList(),
+            "with a1/a2 floored, b1 re-roots to HEAD and outranks the older b0",
+        )
+    }
+
     @Test
     fun twoStatesDifferingOnlyInTheirFloorAreNotEqual() {
         val (rga, _) = chain(5)
@@ -112,6 +161,33 @@ class RgaCompactedFloorTest {
         val (_, op) = floored.insertAfter(me, RgaId.HEAD, "fresh")
 
         assertEquals(10L, op.id.seq, "the floor is the only record that seqs 3..9 were minted")
+    }
+
+    /**
+     * [Rga.fromOps] purges on construction, so a state whose op-set contradicts its own floor
+     * cannot exist. This is the path a wire decode takes: without the purge the decoded value
+     * would hold ops at-or-below its floor, the first [Rga.piece] would drop them, and
+     * `a.piece(a) != a`. Asserts the op-set as well as the sequence — the ops are the state,
+     * and a decoded blob could carry a *tombstoned* floored id that [Rga.toList] never shows.
+     */
+    @Test
+    fun fromOpsPurgesAnOpSetThatContradictsItsOwnFloor() {
+        val (rga, _) = chain(5)
+        val floor = VersionVector.of(mapOf(me to 3L))
+
+        val decoded = Rga.fromOps(rga.ops, rga.lamport, floor)
+
+        assertAll(
+            { assertEquals(listOf("r3", "r4"), decoded.toList(), "the floored records stay hidden") },
+            {
+                assertTrue(
+                    decoded.ops.none { it is RgaOp.Insert && it.id.seq <= 3L },
+                    "and their ops never enter the log",
+                )
+            },
+            { assertEquals(decoded, decoded.piece(decoded), "so piece is idempotent on a decoded value") },
+            { assertEquals(rga.withCompactedBelow(floor), decoded, "same value as the locally-floored state") },
+        )
     }
 
     /** The same evidence has to survive [Rga.piece] — a floor absorbed from a peer counts too. */

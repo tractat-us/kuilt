@@ -178,6 +178,23 @@ public class Rga<V> private constructor(
      * Merged by [VersionVector.ceilWith] under [piece]: the product of (op-set under
      * union) and (floor under elementwise max) is a join-semilattice, so the [Quilted]
      * laws hold by construction. Part of [equals] — it is state, not a cache.
+     *
+     * **Accepted constraint: a floor's positional reroot degrades to [RgaId.HEAD].** An
+     * [RgaOp.Compact] records each dropped element's predecessor, so a survivor whose
+     * predecessor was GC'd re-attaches to that predecessor's own surviving ancestor
+     * (`computeSequence`'s #293 reroot). A floor records nothing — recording it would be the
+     * per-element map, and therefore the Θ(elements ever) cost, this field exists to remove.
+     * So a survivor whose predecessor was floored away re-roots to [RgaId.HEAD] instead, and
+     * HEAD's child list is sorted by id **descending**: a high-lamport survivor can land ahead
+     * of older HEAD-anchored records written by someone else. The visible effect is
+     * cross-author — `dropWindow` raises only the local author's entry, and a survivor of that
+     * author is the *newest* record anyway, so a single-author log is unaffected.
+     *
+     * This is a **reordering, not a divergence.** The sequence stays a deterministic function
+     * of `(ops, compactedBelow)`, and [piece] merges the floor on both sides, so every replica
+     * that has absorbed the same ops and the same floor computes the identical order. What is
+     * given up is the *stability* of a survivor's position across its predecessor being
+     * dropped — the price of the bound, paid deliberately.
      */
     public val compactedBelow: VersionVector = VersionVector.EMPTY,
     /**
@@ -662,17 +679,25 @@ public class Rga<V> private constructor(
      * This produces the canonical RGA sequence: deterministic across all replicas
      * that have seen the same op-log, regardless of insertion order.
      *
-     * **Positional reroot (#293).** An [RgaOp.Insert] whose `after` has been compacted away
-     * does not simply jump to [RgaId.HEAD]. Instead, [nearestPresentAncestor] chain-walks
-     * [compactPositions] — the union of all [RgaOp.Compact] `positions` maps — until it
-     * reaches either a present (non-compacted) id or [RgaId.HEAD]. This preserves the
-     * relative order of surviving elements: a successor of a GC'd element stays below
-     * the GC'd element's own surviving predecessor rather than floating to the top.
+     * **Positional reroot (#293) — [RgaOp.Compact] only.** An [RgaOp.Insert] whose `after` was
+     * removed *by a `Compact`* does not simply jump to [RgaId.HEAD]. Instead,
+     * [nearestPresentAncestor] chain-walks [compactPositions] — the union of all
+     * [RgaOp.Compact] `positions` maps — until it reaches either a present (non-compacted) id
+     * or [RgaId.HEAD]. This preserves the relative order of surviving elements: a successor of
+     * a GC'd element stays below the GC'd element's own surviving predecessor rather than
+     * floating to the top.
      *
      * The chain-walk is bounded: compaction only removes causally-stable tombstones (barrier
      * condition 4 ensures no surviving successor exists for the element being GC'd when it
      * is GC'd by [compact]), so the positions map is acyclic and terminates at HEAD or a
      * live element within at most O(compacted depth) steps.
+     *
+     * **A [compactedBelow] floor does not get this.** A floor records no positions — that map
+     * is the Θ(elements ever) cost the floor exists to eliminate — so [compactPositions] has no
+     * entry for a floored predecessor and the walk falls through to [RgaId.HEAD]. A survivor
+     * whose predecessor was floored away therefore **re-roots to HEAD**, not to the floored
+     * element's surviving ancestor. See [compactedBelow] for why that is accepted rather than
+     * fixed.
      */
     private fun computeSequence(): List<RgaId> {
         // Group each insert op by its effective predecessor: HEAD if `after` is HEAD or present,
