@@ -67,6 +67,14 @@ public sealed class JsonNode : Quilted<JsonNode> {
             .flatMap { it.causalDots() }
             .toSet()
 
+        /**
+         * The elementwise max of the [causalFloor]s of every node beneath this object — the
+         * floor counterpart of the [causalDots] union above, over the same reachable set.
+         */
+        override fun causalFloor(): VersionVector = map.keys
+            .mapNotNull { map[it] }
+            .fold(VersionVector.EMPTY) { floor, node -> floor.ceilWith(node.causalFloor()) }
+
         override fun equals(other: Any?): Boolean = other is Object && map == other.map
         override fun hashCode(): Int = map.hashCode()
         override fun toString(): String = "JsonNode.Object($map)"
@@ -91,6 +99,17 @@ public sealed class JsonNode : Quilted<JsonNode> {
          */
         override fun causalDots(): Set<Dot> =
             rga.causalDots() + rga.toList().flatMap { it.causalDots() }.toSet()
+
+        /**
+         * This array's own [Rga.causalFloor] raised by the [causalFloor] of every element it
+         * holds — the floor counterpart of the [causalDots] union above, over the same set.
+         *
+         * A floored [Rga] records no ids, so its dots have already left [causalDots]; a
+         * composite that did not aggregate here would report a frontier missing exactly those
+         * dots and stall the GC this capability exists to keep moving.
+         */
+        override fun causalFloor(): VersionVector =
+            rga.toList().fold(rga.causalFloor()) { floor, node -> floor.ceilWith(node.causalFloor()) }
 
         override fun equals(other: Any?): Boolean = other is Array && rga == other.rga
         override fun hashCode(): Int = rga.hashCode()

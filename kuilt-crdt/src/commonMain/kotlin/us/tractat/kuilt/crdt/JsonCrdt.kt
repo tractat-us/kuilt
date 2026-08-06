@@ -116,6 +116,18 @@ public class JsonCrdt internal constructor(
         .toSet()
 
     /**
+     * The elementwise max of the [Quilted.causalFloor]s of every node reachable from the root —
+     * the floor counterpart of the [causalDots] union above, over the same reachable set.
+     *
+     * A nested [Rga] that has floored a prefix no longer reports those dots through
+     * [causalDots], so a document that inherited the empty default would hand the replicator a
+     * frontier with a permanent hole in it.
+     */
+    override fun causalFloor(): VersionVector = root.keys
+        .mapNotNull { root[it] }
+        .fold(VersionVector.EMPTY) { floor, node -> floor.ceilWith(node.causalFloor()) }
+
+    /**
      * Returns a copy of this document configured to issue mutations on behalf of
      * [replica]. Call this after deserialization to restore the local replica id.
      */

@@ -101,10 +101,14 @@ public interface Quilted<S : Quilted<S>> {
      * The default is empty, so every delta-state CRDT in the zoo is unaffected — they neither
      * compact nor participate in this GC path.
      *
-     * **Not aggregated across nesting.** `JsonNode.Array` unions the [causalDots] of every
-     * nested [Rga], but nothing unions their floors. Harmless while nothing floors a nested
-     * `Rga`; a `JsonCrdt` that starts compacting must aggregate here too, or it silently
-     * under-reports its own frontier.
+     * **Aggregated across nesting, wherever [causalDots] is.** Every composite that unions the
+     * dots beneath it raises its floor the same way, by elementwise max ([VersionVector.ceilWith])
+     * over the same reachable set: [LatticeProduct] across its two components, and
+     * `JsonNode.Object` / `JsonNode.Array` / `JsonCrdt` across every nested [Rga]. It stays empty
+     * unless something beneath is floored — no shipped path floors a nested `Rga`, but
+     * `Rga.dropWindow` is public, so a consumer can hand one to any of them. A composite left on
+     * the default would then report a frontier missing exactly the dots [causalDots] can no
+     * longer re-emit. A new composite that overrides [causalDots] must override this too.
      */
     public fun causalFloor(): VersionVector = VersionVector.EMPTY
 }
