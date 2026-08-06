@@ -314,11 +314,11 @@ class WarpLogRecordExporterRetirementTest {
         return ForeignResurrection(carriers, bodies.filter { it.startsWith("foreign") })
     }
 
-    /** A foreign replica's op-log, carrying no compaction of its own. */
-    private fun foreignLog(): Rga<LogRecord> {
+    /** A foreign replica's op-log of [count] records, carrying no compaction of its own. */
+    private fun foreignLog(count: Int = 6): Rga<LogRecord> {
         var rga = Rga.empty<LogRecord>()
         var tail = RgaId.HEAD
-        repeat(6) { i ->
+        repeat(count) { i ->
             val (next, op) = rga.insertAfter(replica = replicaB, after = tail, value = record(500 + i, "foreign$i"))
             rga = next
             tail = op.id
@@ -520,6 +520,53 @@ class WarpLogRecordExporterRetirementTest {
                 assertTrue(
                     offences.isEmpty(),
                     "a retirement reached disk without its covering write: $offences",
+                )
+            },
+        )
+    }
+
+    @Test
+    fun noIndexWriteEverNamesARetiredSegmentAsSealedAgain() = runTest {
+        // One batch can carry TWO index writes: the ledger commit, and then a roll's, when the
+        // pass pushed the active segment past `segmentOps`. The roll's is encoded while the batch
+        // is still being built — before the ledger's move has been applied to any field — so it
+        // has to *project* that move. Without the projection it lands on disk AFTER the ledger
+        // write and undoes it: the segment is named as sealed again and dropped from `retired`,
+        // while the sweep that follows in the same batch deletes its key anyway. The result is a
+        // key named as live forever, in a format with no key enumeration to ever find it again.
+        //
+        // Stated over the whole write stream rather than one batch, because that is the property
+        // — segment numbers are never reused, so a number that has been retired must never appear
+        // under `sealedSegments` in any later index write, whichever call site emitted it.
+        //
+        // The configuration is not arbitrary and a pure-export run does NOT reach this. A pass on
+        // the export path can only shrink the active segment — it purges this replica's own ops
+        // under the raised floor and adds no op — so `activeOpCount` cannot cross `segmentOps` on
+        // the way out of one, and the roll never fires in a retiring batch. It takes a *foreign*
+        // author's dots: those cannot fold into the floor, so the pass mints an `RgaOp.Compact`
+        // that ADDS an op to the active segment. Hence the merge, and a `segmentOps` small enough
+        // for that one extra op to tip the roll.
+        val store = RecordingStore()
+        val exporter = exporterFor(store, maxRecords = 5, segmentOps = 2)
+        exporter.merge(foreignLog(2))
+        repeat(300) { i -> exporter.export(record(i)) }
+
+        val indexes = store.operations()
+            .filter { it.kind == StoreOpKind.WRITE && it.key == INDEX_KEY_FOR_TEST }
+            .map { decodeIndexForTest(requireNotNull(it.bytes)) }
+        val retired = mutableSetOf<Int>()
+        val resurrected = mutableListOf<Int>()
+        indexes.forEach { index ->
+            resurrected += index.sealedSegments.filter { it in retired }
+            retired += index.retired
+        }
+
+        assertAll(
+            { assertTrue(retired.isNotEmpty(), "precondition: something must have been retired") },
+            {
+                assertTrue(
+                    resurrected.isEmpty(),
+                    "an index write named already-retired segments $resurrected as sealed again",
                 )
             },
         )
