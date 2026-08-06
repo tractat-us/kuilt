@@ -9,6 +9,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.io.bytestring.ByteString
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.runCatchingCancellable
@@ -210,6 +212,52 @@ public class WarpLogRecordExporter(
     // correctness must hold under a real multi-threaded dispatcher, not just the
     // test dispatcher. limitedParallelism(1) confinement is BANNED — see CLAUDE.md.
     private val lock = reentrantLock()
+
+    /**
+     * Serializes one **write turn** — build a batch under [lock], then apply it to [store] — so
+     * that a batch reaches the store in the order it was built.
+     *
+     * [lock] alone cannot give that. It is a thread-blocking primitive, so it is released the
+     * instant the batch is built and every `store.write` in [commit] runs outside it. Two
+     * overlapping turns therefore build in one order and land in another, and the CRDT's own
+     * convergence does not rescue the store, because a batch does not *merge* into a key — it
+     * **overwrites** it:
+     *
+     * - the **active-segment write** carries that whole segment, so a turn whose bytes were
+     *   encoded first and land last silently discards the other turn's records. [export] has
+     *   already returned [ExportResult.Success] for them, which is the one thing this class
+     *   promises never to do (see "Key inversion"). Measured, not argued: before this mutex, 32
+     *   concurrent exports on a real thread pool recovered **zero** of the eight records the
+     *   exporter still held.
+     * - the **index write** carries the whole layout, so a stale one drops the segment numbers a
+     *   fresher one had just added. With no key-enumeration API a segment the index stops naming
+     *   is unreachable and unsweepable forever.
+     * - a [StoreAction.Sweep] is ordered behind its **own** batch's covering write, and nothing
+     *   ordered it against another batch's. A delete could therefore land on a segment whose
+     *   covering floor a stale active-segment write had just overwritten away — precisely the
+     *   inversion [retireSupersededSegments] names as the unsafe order, reached without inverting
+     *   anything *within* a batch.
+     *
+     * Building **inside** the same critical section that applies is what makes build order and
+     * apply order the same order by construction rather than a property to be maintained. It also
+     * closes the window the deferred retirement move opened: a turn cannot read [sealedSegments]
+     * between another turn's [retireSupersededSegments] and its [applyRetirement], so a segment
+     * number cannot be staged for retirement twice.
+     *
+     * A [Mutex] and not [lock] because a turn suspends — holding a thread-blocking lock across
+     * `store.write` would park a dispatcher thread for the length of an I/O. It is a real
+     * mutual-exclusion primitive, not `limitedParallelism(1)` confinement: this type owns no scope
+     * and no dispatcher, and stays correct on a multi-threaded one.
+     *
+     * **Acquisition order is [writeMutex] then [lock], never the reverse.** [snapshot] takes only
+     * [lock], and [commit] takes [lock] briefly while holding this one.
+     *
+     * The cost is that concurrent [export]s queue rather than overlap. They were never genuinely
+     * concurrent: every one of them rewrites the *same* active-segment key, so overlapping only
+     * decided which of them won.
+     */
+    private val writeMutex = Mutex()
+
     private var log: Rga<LogRecord> = Rga.empty()
 
     // ── Derived state, threaded forward across export() calls ────────────────
@@ -363,8 +411,10 @@ public class WarpLogRecordExporter(
          * The startup counterpart in [loadPersistedState] deletes with no ordering of its own —
          * it sweeps [LogSegmentIndex.retired] before it reads anything. It is sound for a
          * different reason, one batch ordering alone would not give it: [CommitRetirement] is the
-         * only thing that can put a number on that list, so anything the next process finds there
-         * was already covered by a write that landed first.
+         * only thing that can **extend** that list, so anything the next process finds there was
+         * already covered by a write that landed first. (Every other index write *restates* the
+         * list — a leading `Put(INDEX_KEY, encodeIndex())` writes those same numbers out again,
+         * which is free; it is the number appearing for the first time that has to be covered.)
          */
         class Sweep(val number: Int) : StoreAction
     }
@@ -436,13 +486,21 @@ public class WarpLogRecordExporter(
     )
 
     /**
-     * Recover persisted log state from [store]. Call once at startup before
-     * any calls to [export].
+     * Recover persisted log state from [store]. Call once at startup, before any call to
+     * [export] **or [merge]**, and never concurrently with either.
      *
      * Rebuilds the dedup map from the op-log so that re-export of previously
      * persisted records remains a no-op after a process restart.
      *
      * If no persisted state exists, the exporter starts with an empty log.
+     *
+     * Deliberately **not** serialized by [writeMutex], unlike [export] and [merge]. Mutual
+     * exclusion here would order the store writes while suggesting a safety it cannot deliver: an
+     * un-recovered exporter's segment numbering starts at its construction defaults, so a [merge]
+     * that runs before this returns allocates a segment number the persisted index already uses
+     * and overwrites a live key — whichever order the two are serialized in. What makes a
+     * pre-recovery call unsafe is the numbering, not the interleaving, so the fix is the contract
+     * on this line rather than a lock.
      *
      * **Never throws.** An unreadable store or an undecodable entry degrades this
      * exporter to "start fresh" rather than propagating. The caller installs log
@@ -710,7 +768,10 @@ public class WarpLogRecordExporter(
      * one reachable, and a caller on the logging path cannot handle a thrown
      * exception: it would surface inside an application's own logging call (#1860).
      */
-    public suspend fun export(record: LogRecord): ExportResult {
+    public suspend fun export(record: LogRecord): ExportResult = writeMutex.withLock { exportTurn(record) }
+
+    /** [export]'s write turn: build the batch, then apply it. Must hold [writeMutex]. */
+    private suspend fun exportTurn(record: LogRecord): ExportResult {
         val actions = runCatchingCancellable {
             lock.withLock {
                 if (record.recordId in seenIds) return ExportResult.Success
@@ -765,7 +826,10 @@ public class WarpLogRecordExporter(
      * join, the dedup rebuild, the encode, or the [store] is returned as
      * [ExportResult.Failure] and reflected on [health].
      */
-    public suspend fun merge(remote: Rga<LogRecord>): ExportResult {
+    public suspend fun merge(remote: Rga<LogRecord>): ExportResult = writeMutex.withLock { mergeTurn(remote) }
+
+    /** [merge]'s write turn: build the batch, then apply it. Must hold [writeMutex]. */
+    private suspend fun mergeTurn(remote: Rga<LogRecord>): ExportResult {
         val actions = runCatchingCancellable {
             lock.withLock {
                 log = log.piece(remote)
@@ -1055,6 +1119,17 @@ public class WarpLogRecordExporter(
      * here. Every mutation site pairs the two ([applyRetirement], [rollActiveSegment],
      * [adoptRemoteSegment], [installSealedContents]); this is the point at which a break would
      * cost a user's telemetry, so it is where it is caught.
+     *
+     * **It fails the export, and that is the intended trade.** The `check` throws, and this runs
+     * inside the batch-building block of [export]/[merge], so a break is caught there and returned
+     * as [ExportResult.Failure] — the record is not durably written and [ExporterHealth.failed]
+     * counts it. A silent `continue` past the broken segment would be the alternative, and on a
+     * path that deletes a user's telemetry an inconsistency of exactly this kind is the one thing
+     * that must not be stepped over. The blast radius is bounded twice over. Only a batch that
+     * just ran a [windowPass] reaches here at all, and a pass comes due about once per
+     * [maxRecords] evictions — so at most one export in [maxRecords] can be refused by it. And the
+     * refused record is not lost: the throw happens *after* the insert, so it is already in [log]
+     * and in [activeSegment], and the next batch's active-segment write carries it to disk.
      *
      * Coverage has two sources and both must be read: the O(authors) [Rga.compactedBelow] floor,
      * which absorbs this replica's own windowed-away dots, and [Rga.compactedIds], which is where
