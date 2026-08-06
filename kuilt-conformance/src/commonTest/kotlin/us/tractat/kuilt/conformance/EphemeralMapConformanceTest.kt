@@ -21,13 +21,36 @@ internal class EphemeralMapConformanceTest : QuiltedConformanceSuite<EphemeralMa
     private val r2 = ReplicaId("R2")
     private val r3 = ReplicaId("R3")
 
+    private val r1Present = EphemeralMap.empty<String>().put(r1, "alpha", clock = 1L)
+
+    /**
+     * `leave` publishes a null-value entry that outranks every entry the replica published before
+     * it, so R1 stops being shown at all — an observation withdrawn with nothing put in its place,
+     * which is retirement under [us.tractat.kuilt.conformance.lattice.OpKind] and the reading
+     * `EphemeralMapConvergenceTest`'s `leave` op already takes.
+     */
+    private val r1Departed = EphemeralMap.empty<String>().leave(r1, clock = 2L)
+
+    /**
+     * A departed replica returns only by publishing at a clock **strictly above** its own
+     * departure clock — the rejoin the tombstone's permanence is specified against.
+     *
+     * Clock 4, not 3: the multi-replica sample below already publishes R1 at clock 3, and
+     * `dominates` leaves two *present* entries at one clock un-ordered — the single-writer contract
+     * precludes them, so a shared tag across the sample list would red `pieceIsCommutative` rather
+     * than say anything about retirement.
+     */
+    private val r1ReJoined = EphemeralMap.empty<String>().put(r1, "alpha", clock = 4L)
+
     override fun samples(): List<EphemeralMap<String>> = listOf(
         // bottom element
         EphemeralMap.empty(),
         // single present entry
-        EphemeralMap.empty<String>().put(r1, "alpha", clock = 1L),
+        r1Present,
         // single departure
-        EphemeralMap.empty<String>().leave(r1, clock = 2L),
+        r1Departed,
+        // rejoin above the departure clock
+        r1ReJoined,
         // two independent replicas
         EphemeralMap.empty<String>()
             .put(r1, "alpha", clock = 1L)
@@ -42,4 +65,15 @@ internal class EphemeralMapConformanceTest : QuiltedConformanceSuite<EphemeralMa
             .leave(r2, clock = 2L)
             .put(r3, "z", clock = 7L),
     )
+
+    override val retirementIsMeaningful: Boolean get() = true
+
+    override fun retirementReAssertion(): RetirementReAssertion<EphemeralMap<String>> =
+        RetirementReAssertion(
+            subject = "R1's presence",
+            asserted = r1Present,
+            retired = r1Departed,
+            reAsserted = r1ReJoined,
+            shows = { it.entries[r1]?.value != null },
+        )
 }
