@@ -285,7 +285,8 @@ class WarpLogRecordExporterRetirementTest {
         // every assertion in this file that counts keys.
         //
         // **What is reclaimed** is the second, and it is deliberately not stated as a flat key
-        // count, because the key count is not flat and the class KDoc does not claim it is. A
+        // count, because the key count is not flat on the gossip path and the class KDoc scopes
+        // its flat-key-count claim to the export path, not this one. A
         // sealed segment that was active when a pass minted a `Compact` is `Pinned` forever, so a
         // gossip-fed replica accretes one key per `segmentOps` ops — the residue the design admits
         // and §9 of the spec declined to consolidate. What retirement owes is everything NOT

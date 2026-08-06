@@ -169,8 +169,9 @@ internal fun opCountOf(segment: Rga<LogRecord>): Int = segment.opCount
  * stays in whichever *sealed* segment it landed in. A sealed segment whose every op the
  * suppression state already covers contributes **nothing** to what recovery reconstructs —
  * the union re-purges those ops under the floor and the retained `Compact`s — so its key can
- * be deleted. That is what a [windowPass] does next, and it is what keeps the number of keys
- * recovery opens flat instead of growing with the records ever exported.
+ * be deleted. That is what a [windowPass] does next, and **on the export path** it is what keeps
+ * the number of keys recovery opens flat instead of growing with the records ever exported — the
+ * gossip path's key count is not bound this way; see below.
  *
  * It is not simply "delete a key", and two rules make it safe:
  *
@@ -1182,10 +1183,14 @@ public class WarpLogRecordExporter(
      * the layout and open [StoreAction.CommitRoll.opening] as the active segment. Must hold
      * [lock].
      *
-     * The counterpart of [applyRetirement], and the only writer of these five fields outside
-     * recovery. [writeMutex] serializes whole turns, so nothing can have allocated a segment
-     * number between this action being built and being applied; [maxOf] states that rather than
-     * relying on it.
+     * The post-durable counterpart of [applyRetirement] for the roll: both move their fields only
+     * after the write that publishes the move has returned. It is not the only writer of the six
+     * fields it touches outside recovery — see [retirableSegments]'s KDoc for the full
+     * enumeration of mutation sites. One of those, [adoptRemoteSegment], is **not yet**
+     * post-durable — it still moves the layout at build time, before its write returns; that gap
+     * is filed as #2186. [writeMutex] serializes whole turns, so nothing can have allocated a
+     * segment number between this action being built and being applied; [maxOf] states that
+     * rather than relying on it.
      */
     private fun applyRoll(roll: StoreAction.CommitRoll) {
         sealedSegments += roll.sealing
