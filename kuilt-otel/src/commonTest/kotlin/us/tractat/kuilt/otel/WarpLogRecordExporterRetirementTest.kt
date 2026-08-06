@@ -238,6 +238,94 @@ class WarpLogRecordExporterRetirementTest {
         }
     }
 
+    @Test
+    fun droppingTheSegmentCarryingACompactReAdmitsAForeignAuthorsRecord() = runTest {
+        // [aMergedSegmentIsRetiredOnlyWhenItCarriesNoCompact] pins the DECISION — a segment
+        // carrying an `RgaOp.Compact` keeps its key — and says why in a comment. This pins the
+        // "why" itself, end to end, and on the path the pin exists for: a **foreign** author's
+        // dots. `Rga.dropWindow` cannot fold those into this replica's floor, so the retained
+        // `Compact` is the only thing suppressing them. Nothing else in this file reaches that:
+        // [aPeerHoldingRetiredRecordsStillCannotPushThemBackIn] resurrects on the own-dot floor
+        // path, and the legacy-blob test's Compact names an id THIS replica authored.
+        //
+        // Two arms over one scenario. The counterfactual deletes the keys that actually carry a
+        // Compact — decoded from the store, not guessed — and merges the same foreign log back.
+        // Without it "never retired" is a claim about a segment nothing would have missed.
+        val kept = foreignResurrectionRun(dropTheCompactCarryingSegments = false)
+        val dropped = foreignResurrectionRun(dropTheCompactCarryingSegments = true)
+
+        assertAll(
+            {
+                assertTrue(
+                    kept.compactCarryingSegments > 0,
+                    "precondition: windowing a foreign author's dots must have minted a Compact somewhere",
+                )
+            },
+            {
+                assertTrue(
+                    dropped.foreignBodies.isNotEmpty(),
+                    "counterfactual: dropping the Compact must let the peer re-admit its records, or " +
+                        "pinning the segment that carries one is guarding nothing",
+                )
+            },
+            {
+                assertTrue(
+                    kept.foreignBodies.isEmpty(),
+                    "a foreign author's windowed-away records came back; got ${kept.foreignBodies}",
+                )
+            },
+        )
+    }
+
+    /** What one arm of [droppingTheSegmentCarryingACompactReAdmitsAForeignAuthorsRecord] observed. */
+    private class ForeignResurrection(val compactCarryingSegments: Int, val foreignBodies: List<String>)
+
+    /**
+     * Merge a foreign log, window it away, restart, and merge the same log back — reporting which
+     * of the foreign records came back.
+     *
+     * With [dropTheCompactCarryingSegments] every key whose decoded segment holds an
+     * `RgaOp.Compact` is deleted before the restart, which is precisely what retiring one would
+     * have done.
+     *
+     * The restarted exporter's window is wide enough for both logs on purpose. At the run's
+     * 5-record cap the merge would immediately window the foreign records away again in *both*
+     * arms, and the assertion would read windowing rather than suppression — green either way.
+     */
+    private suspend fun foreignResurrectionRun(dropTheCompactCarryingSegments: Boolean): ForeignResurrection {
+        val store = RecordingStore()
+        val foreign = foreignLog()
+        val a = exporterFor(store, maxRecords = 5, segmentOps = 4)
+        a.merge(foreign)
+        repeat(200) { i -> a.export(record(1_000 + i, body = "mine$i")) }
+
+        var carriers = 0
+        for (key in segmentKeys(store)) {
+            val bytes = store.read(StoreKey(key)) ?: continue
+            if (decodeSegmentForTest(bytes).compactOpCount == 0) continue
+            carriers++
+            if (dropTheCompactCarryingSegments) store.delete(StoreKey(key))
+        }
+
+        val restarted = exporterFor(store, maxRecords = 100, segmentOps = 4)
+        restarted.recover()
+        restarted.merge(foreign)
+        val bodies = restarted.snapshot().toList().mapNotNull { it.body }
+        return ForeignResurrection(carriers, bodies.filter { it.startsWith("foreign") })
+    }
+
+    /** A foreign replica's op-log, carrying no compaction of its own. */
+    private fun foreignLog(): Rga<LogRecord> {
+        var rga = Rga.empty<LogRecord>()
+        var tail = RgaId.HEAD
+        repeat(6) { i ->
+            val (next, op) = rga.insertAfter(replica = replicaB, after = tail, value = record(500 + i, "foreign$i"))
+            rga = next
+            tail = op.id
+        }
+        return rga
+    }
+
     /** A foreign replica's op-log, optionally carrying an [RgaOp.Compact] of its own. */
     private fun remoteLog(carriesCompact: Boolean): Rga<LogRecord> {
         var rga = Rga.empty<LogRecord>()
@@ -360,6 +448,117 @@ class WarpLogRecordExporterRetirementTest {
                 )
             },
             { assertEquals(live, restarted.snapshot().toList(), "the interrupted retirement cost records") },
+        )
+    }
+
+    @Test
+    fun aRetirementIsNeverPublishedByABatchWhoseCoveringWriteWasRefused() = runTest {
+        // The window the two crash tests below cannot reach, because a crash STOPS the process.
+        // Here it does not: the store keeps refusing the segment write while accepting every index
+        // write, and the exporter carries on and builds the NEXT batch on whatever the failed one
+        // left behind. That next batch opens with `if (!indexPersisted) Put(INDEX_KEY, ...)` —
+        // BEFORE its own active-segment write — so anything a failed batch moved onto the ledger
+        // in memory is published there with nothing covering it. `loadPersistedState` then sweeps
+        // `retired` unconditionally, before it reads a thing.
+        //
+        // A quota-bound store is exactly this shape, not an exotic one: `IndexedDbDurableStore`
+        // refuses LARGE writes and accepts small ones, and the segment blob is ~123 KB at
+        // DEFAULT_LOG_SEGMENT_OPS against an index of a few ints.
+        //
+        // The property, stated over the write stream rather than over one batch's shape: a number
+        // reaches an on-disk `retired` list only after a write carrying its covering state landed.
+        // Restating a number the store already holds under `retired` is free — it is the number
+        // appearing for the FIRST time that has to be covered.
+        val store = RecordingStore()
+        val quota = RefuseSegmentWritesStore(store)
+        val exporter = exporterFor(quota)
+        val batches = mutableListOf<List<StoreOperation>>()
+        var seen = 0
+
+        repeat(200) { i ->
+            exporter.export(record(i))
+            val ops = store.operations()
+            batches += ops.subList(seen, ops.size)
+            seen = ops.size
+        }
+        quota.refuseSegmentWrites()
+        repeat(200) { i ->
+            exporter.export(record(1_000 + i))
+            val ops = store.operations()
+            batches += ops.subList(seen, ops.size)
+            seen = ops.size
+        }
+
+        val published = mutableSetOf<Int>()
+        val offences = mutableListOf<String>()
+        var commits = 0
+        batches.forEach { batch ->
+            batch.forEachIndexed { at, operation ->
+                if (operation.kind != StoreOpKind.WRITE || operation.key != INDEX_KEY_FOR_TEST) return@forEachIndexed
+                val index = decodeIndexForTest(requireNotNull(operation.bytes))
+                val fresh = index.retired.toSet() - published
+                published += index.retired
+                if (fresh.isEmpty()) return@forEachIndexed
+                commits++
+                val covering = batch.getOrNull(at - 1)
+                if (covering?.key != StoreKey(segmentKeyForTest(index.active))) {
+                    offences += "retired $fresh with ${covering?.key ?: "nothing"} before it, not " +
+                        "${segmentKeyForTest(index.active)}"
+                }
+            }
+        }
+
+        assertAll(
+            {
+                assertTrue(
+                    quota.refusedWrites() > 0,
+                    "precondition: the store must actually have refused the covering write",
+                )
+            },
+            { assertTrue(commits > 0, "precondition: something must have been retired") },
+            {
+                assertTrue(
+                    offences.isEmpty(),
+                    "a retirement reached disk without its covering write: $offences",
+                )
+            },
+        )
+    }
+
+    @Test
+    fun aRefusedCoveringWriteCannotCostRecordsARecoveryWasStillReading() = runTest {
+        // The consequence of the ordering above, priced in records. While the store refuses every
+        // segment write it accepts every index write, so NOTHING a recovery reads can change — the
+        // record-bearing keys are frozen at the last write that landed. The only thing that can
+        // move is the ledger, and a ledger entry is a DELETE the next start performs before it
+        // reads anything. So a difference here is not "the last few exports were not durable"
+        // (they were refused, and reported as failures); it is records that were durable, that a
+        // restart WOULD have reconstructed, destroyed by a retirement nothing covered.
+        val store = RecordingStore()
+        val quota = RefuseSegmentWritesStore(store)
+        val exporter = exporterFor(quota)
+        repeat(300) { i -> exporter.export(record(i)) }
+        val beforePressure = exporterFor(store).also { it.recover() }.snapshot().toList()
+
+        quota.refuseSegmentWrites()
+        repeat(300) { i -> exporter.export(record(1_000 + i)) }
+        val after = exporterFor(store).also { it.recover() }.snapshot().toList()
+
+        assertAll(
+            { assertTrue(beforePressure.isNotEmpty(), "precondition: the healthy phase must leave records") },
+            {
+                assertTrue(
+                    quota.refusedWrites() > 0,
+                    "precondition: the store must actually have refused the covering write",
+                )
+            },
+            {
+                assertEquals(
+                    beforePressure,
+                    after,
+                    "a store that refused every covering write still lost records a recovery was reading",
+                )
+            },
         )
     }
 

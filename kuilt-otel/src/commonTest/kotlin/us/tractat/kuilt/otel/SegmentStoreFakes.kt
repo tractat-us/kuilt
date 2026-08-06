@@ -5,6 +5,7 @@ package us.tractat.kuilt.otel
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.serialization.cbor.Cbor
+import us.tractat.kuilt.crdt.Rga
 
 /**
  * [DurableStore] fakes shared by the tests that exercise [WarpLogRecordExporter]'s segmented
@@ -142,14 +143,59 @@ internal class FailRetirementLedgerStore(private val backing: DurableStore) : Du
         key == INDEX_KEY_FOR_TEST && decodeIndexForTest(bytes).retired.isNotEmpty()
 }
 
+/**
+ * Delegates to [backing], but once [refuseSegmentWrites] is called it throws on every write to a
+ * segment key and keeps accepting every other one.
+ *
+ * The other fakes here model a **crash** — the process stops, so nothing after the refused write
+ * happens at all. This models the shape that does not stop: a store that keeps refusing one class
+ * of write while the exporter carries on and builds the *next* batch on whatever state the failed
+ * one left behind. `IndexedDbDurableStore` under quota pressure does exactly this — it refuses
+ * **large** writes while small ones succeed. The segment blob is ~123 KB at
+ * `DEFAULT_LOG_SEGMENT_OPS` and the index is a handful of ints, so the key split here *is* the
+ * size split: it refuses exactly the write that carries a retirement's covering state, and accepts
+ * exactly the write that would commit the retirement.
+ */
+internal class RefuseSegmentWritesStore(private val backing: DurableStore) : DurableStore {
+    private val lock = reentrantLock()
+    private var refusing = false
+    private var refused = 0
+
+    fun refuseSegmentWrites(): Unit = lock.withLock { refusing = true }
+
+    /** How many segment writes have been refused — a precondition guard, never an assertion. */
+    fun refusedWrites(): Int = lock.withLock { refused }
+
+    override suspend fun read(key: StoreKey): ByteArray? = backing.read(key)
+
+    override suspend fun write(key: StoreKey, bytes: ByteArray) {
+        val refuse = lock.withLock {
+            val refuse = refusing && key.name.startsWith(SEGMENT_KEY_PREFIX_FOR_TEST)
+            if (refuse) refused++
+            refuse
+        }
+        if (refuse) throw IllegalStateException("simulated quota refusal of a ${bytes.size}-byte write to $key")
+        backing.write(key, bytes)
+    }
+
+    override suspend fun delete(key: StoreKey): Unit = backing.delete(key)
+}
+
 /** The exporter's index key, duplicated here because the production constant is private. */
 internal val INDEX_KEY_FOR_TEST: StoreKey = StoreKey("otel.logs.idx")
 
+/** The exporter's segment-key prefix, duplicated here because the production constant is private. */
+internal const val SEGMENT_KEY_PREFIX_FOR_TEST: String = "otel.logs.seg."
+
 /** Segment key `n`, duplicated here because the production helper is private. */
-internal fun segmentKeyForTest(number: Int): String = "otel.logs.seg.$number"
+internal fun segmentKeyForTest(number: Int): String = "$SEGMENT_KEY_PREFIX_FOR_TEST$number"
 
 private val indexCbor = Cbor { alwaysUseByteString = true }
 
 /** Decode a persisted [LogSegmentIndex] so a test can assert on the layout the exporter wrote. */
 internal fun decodeIndexForTest(bytes: ByteArray): LogSegmentIndex =
     indexCbor.decodeFromByteArray(LogSegmentIndex.serializer(), bytes)
+
+/** Decode a persisted segment so a test can see what a key actually carries. */
+internal fun decodeSegmentForTest(bytes: ByteArray): Rga<LogRecord> =
+    indexCbor.decodeFromByteArray(Rga.wireSerializer(LogRecord.serializer()), bytes)
