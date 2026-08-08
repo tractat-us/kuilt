@@ -2,7 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Stop paying one CRDT append pass, one segment encode and two durable file writes **per log record**; pay them once per batch of records instead.
+**Goal:** Stop paying one CRDT append pass, one segment encode and a durable file write **per log record**; pay them once per batch of records instead.
+
+> **Status: Tasks 1–6 are shipped** (#2196, #2197, #2199, #2201, #2203) and **#2194 is closed**. Only Task 7 (docs) may remain.
+>
+> **Where the prescribed test code and the shipped test code disagree, `main` wins.** Eleven defects were found in this document while executing it — four by design review, seven by the workers running it — and several were in prescribed tests that did not compile or asserted nothing. The corrections landed in the PRs above; this document was patched to match but is no longer the source of truth for those files. Read it for the *reasoning* (especially the three "Architecture decisions"), not as a transcript.
 
 **Architecture:** Three layers change, bottom-up. `:kuilt-crdt` gains two bulk mutators on `Rga` (`insertAllAfter`, `removeFirst`) so a run of appends and a run of evictions each cost **one** `ops + newOps` copy and **one** cache build instead of one per element. `:kuilt-otel` gains `WarpLogRecordExporter.export(records: List<LogRecord>)` — a write turn that admits a run of records, mutates the log twice, encodes the active segment once and writes it once. `:kuilt-otel-logging` changes its drain from `for (event in events)` to *drain-what's-already-queued*, so the batch forms only when the producer is outrunning the drain.
 
@@ -1535,11 +1539,13 @@ import kotlin.time.Instant
  * The drain must export what is **already queued** as one turn, not one turn per
  * event (#2194).
  *
- * Capturing one log line cost two durable file writes; a burst of N lines cost 2N,
- * which is why `CapturingAppender` had to warn that "the exporter is draining slower
- * than this application logs". These pin the amortisation, and pin that it is
- * opportunistic — a lone line on an idle app is still exported immediately, so no
- * durability window is introduced.
+ * A single export from cold costs **two** durable file writes — the segment and the
+ * index. A sustained burst costs about **N + 2**, not 2N: `indexPersisted` goes true
+ * after the first write, so the index is rewritten only on a segment roll. Either way
+ * the cost scales with the number of *records*, which is why `CapturingAppender` had to
+ * warn that "the exporter is draining slower than this application logs". These pin the
+ * amortisation, and pin that it is opportunistic — a lone line on an idle app is still
+ * exported immediately, so no durability window is introduced.
  */
 class CapturingAppenderBatchingTest {
 
@@ -1798,8 +1804,9 @@ git add kuilt-otel-logging/src/commonMain/kotlin/us/tractat/kuilt/otel/logging/C
 git commit -m "feat(otel-logging): drain what is already queued, as one export turn
 
 Closes #2194. The drain ran one export per event, so a burst of N log lines cost
-2N durable file writes. It now blocks for the first event and takes whatever is
-already queued, up to CAPTURE_BATCH_MAX.
+about N+2 durable file writes (two for a single cold export; the index is
+rewritten only on a segment roll thereafter). It now blocks for the first event
+and takes whatever is already queued, up to CAPTURE_BATCH_MAX.
 
 Opportunistic, not timed: nothing is held back waiting for a batch to form, so a
 lone line on an idle app is exported immediately and the durability contract is
