@@ -22,6 +22,7 @@
 - **`runCatchingCancellable`, never bare `runCatching`**, in any suspend/coroutine context.
 - **Run every new test alone** (`--tests "*<OneTest>*"`) before committing — a green suite is not proof each test passes in isolation. Read the **results XML**, not the console line: a class can produce zero results silently in this repo (#2185).
 - **`assertAll(vararg assertions: () -> Unit)` takes NON-suspending lambdas.** A `suspend` call inside an assertion block is a compile error, so drive the subject first and assert on the result afterwards. Every test in this plan that exercises `export`/`capture` follows that shape.
+- **Every amortisation claim needs a CONTROL ARM, not just an assertion about the batched run.** The whole plan is about paying a fixed cost once instead of once per record, and that property is invisible to any assertion on *output* — order, contents and counts are identical whether the implementation batches or loops. So a test named "…becomes one export…" must run the same input through the per-record path in the same test and assert the batched arm is strictly cheaper. Without the control arm it pins ordering and silently describes the rest. This defect shipped in **two** of this plan's prescribed tests and was caught by the workers, not by review; assume the next one has it too.
 - **`./gradlew verifyDocCitations`** after touching a doc snippet or the source it cites (~1 s).
 
 ---
@@ -1270,7 +1271,9 @@ package us.tractat.kuilt.otel.logging
 
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.otel.DurableStore
 import us.tractat.kuilt.otel.InMemoryDurableStore
+import us.tractat.kuilt.otel.StoreKey
 import us.tractat.kuilt.otel.WarpLogRecordExporter
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
@@ -1278,6 +1281,7 @@ import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Instant
 
@@ -1292,6 +1296,27 @@ class LogCaptureBatchTest {
         override fun now(): Instant = Instant.fromEpochSeconds(epochSeconds = 1L, nanosecondAdjustment = 0)
     }
 
+    /**
+     * Counts store writes, so the batching claim can be *pinned* rather than described.
+     *
+     * Nested rather than package-level on purpose: `:kuilt-otel`'s own counting fakes are
+     * not visible from this module's test source set, and a top-level name here would
+     * risk colliding with Task 5's `CapturingAppenderBatchingTest` fixtures.
+     */
+    private class WriteCountingStore(private val delegate: DurableStore = InMemoryDurableStore()) : DurableStore {
+        var writes: Int = 0
+            private set
+
+        override suspend fun read(key: StoreKey): ByteArray? = delegate.read(key)
+
+        override suspend fun write(key: StoreKey, bytes: ByteArray) {
+            writes++
+            delegate.write(key, bytes)
+        }
+
+        override suspend fun delete(key: StoreKey): Unit = delegate.delete(key)
+    }
+
     private fun event(message: String, logger: String = "com.example.App", level: LogLevel = LogLevel.INFO) =
         NormalizedLogEvent(level = level, loggerName = logger, message = message, attributes = emptyMap())
 
@@ -1304,12 +1329,35 @@ class LogCaptureBatchTest {
 
     @Test
     fun aRunOfEventsBecomesOneExportInOrder() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
-        val exporter = WarpLogRecordExporter(ReplicaId("device-1"), InMemoryDurableStore())
+        val batchedStore = WriteCountingStore()
+        val exporter = WarpLogRecordExporter(ReplicaId("device-1"), batchedStore)
         val capture = LogCapture(exporter, CaptureConfig(), fixedClock, Random(1))
 
         capture.captureAll(listOf(event("a"), event("b"), event("c")))
 
-        assertEquals(listOf("a", "b", "c"), exporter.snapshot().toList().map { it.body })
+        // The control arm — the same three events one at a time. Without it this test
+        // asserts ONLY ordering, and passes identically if `captureAll` loops
+        // `capture()` per event: the "one export" half of its own name would be
+        // described and never pinned. Assert the batched run is *cheaper* rather than
+        // pinning an exact count, so it stays robust to how many keys one turn touches.
+        val perEventStore = WriteCountingStore()
+        val perEventCapture = LogCapture(
+            WarpLogRecordExporter(ReplicaId("device-1"), perEventStore),
+            CaptureConfig(),
+            fixedClock,
+            Random(1),
+        )
+        listOf(event("a"), event("b"), event("c")).forEach { perEventCapture.capture(it) }
+
+        assertAll(
+            { assertEquals(listOf("a", "b", "c"), exporter.snapshot().toList().map { it.body }) },
+            {
+                assertTrue(
+                    batchedStore.writes < perEventStore.writes,
+                    "batched run wrote ${batchedStore.writes} times, per-event run ${perEventStore.writes}",
+                )
+            },
+        )
     }
 
     /**
@@ -1336,13 +1384,14 @@ class LogCaptureBatchTest {
 
     @Test
     fun aRunWithNothingToExportIsNull() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        // Driven first: `assertAll` takes NON-suspending lambdas, so a `captureAll`
+        // call inside an assertion block does not compile.
+        val emptyRun = capture().captureAll(emptyList())
+        val allExcludedRun = capture().captureAll(listOf(event("internal", logger = "us.tractat.kuilt.otel.X")))
+
         assertAll(
-            { assertNull(capture().captureAll(emptyList())) },
-            {
-                assertNull(
-                    capture().captureAll(listOf(event("internal", logger = "us.tractat.kuilt.otel.X"))),
-                )
-            },
+            { assertNull(emptyRun) },
+            { assertNull(allExcludedRun) },
         )
     }
 }
