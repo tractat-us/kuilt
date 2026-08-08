@@ -187,7 +187,12 @@ jobs:
     needs: detect
     if: needs.detect.outputs.docs-only != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 45, not 30: a PR touching :kuilt-crdt or :kuilt-otel invalidates lintAnalyzeDebug across the
+    # whole downstream cone, so it executes everywhere instead of serving FROM-CACHE — and each
+    # execution emits the metadata errors tracked in #2172. Three PRs in the #2127 series were
+    # cancelled at ~30m for this and went green on a re-run of identical code. This buys headroom;
+    # it does not reduce the cost. #2191 is the reduction work.
+    timeout-minutes: 45
     env:
       # Shared S3 build cache (Fly Tigris). Read on every build; pushed only from
       # main (gated in settings.gradle.kts). Absent ⇒ off. Build scans auto-publish
