@@ -20,7 +20,8 @@
 - **No production dispatchers in test sources** (`Dispatchers.{Unconfined,Default,IO,Main}`, `GlobalScope`).
 - **Never `advanceUntilIdle()`** — bounded `advanceTimeBy` / `runCurrent()` only.
 - **`runCatchingCancellable`, never bare `runCatching`**, in any suspend/coroutine context.
-- **Run every new test alone** (`--tests "*<OneTest>*"`) before committing — a green suite is not proof each test passes in isolation.
+- **Run every new test alone** (`--tests "*<OneTest>*"`) before committing — a green suite is not proof each test passes in isolation. Read the **results XML**, not the console line: a class can produce zero results silently in this repo (#2185).
+- **`assertAll(vararg assertions: () -> Unit)` takes NON-suspending lambdas.** A `suspend` call inside an assertion block is a compile error, so drive the subject first and assert on the result afterwards. Every test in this plan that exercises `export`/`capture` follows that shape.
 - **`./gradlew verifyDocCitations`** after touching a doc snippet or the source it cites (~1 s).
 
 ---
@@ -736,8 +737,14 @@ class WarpLogRecordExporterBatchTest {
         val store = CountingStore()
         val exporter = WarpLogRecordExporter(ReplicaId("device-1"), store)
 
+        // Hoisted out of assertAll: `assertAll(vararg assertions: () -> Unit)` takes
+        // NON-suspending lambdas, so a suspending `export` call inside one does not
+        // compile. Applies to every assertion block in this file that wants to drive
+        // the exporter — drive it first, assert on the result after.
+        val result = exporter.export(emptyList())
+
         assertAll(
-            { assertEquals(ExportResult.Success, exporter.export(emptyList())) },
+            { assertEquals(ExportResult.Success, result) },
             { assertEquals(0, store.writes) },
             { assertEquals(0L, exporter.health.value.accepted) },
         )
@@ -1901,7 +1908,17 @@ Add whatever tiny `private fun drainedFromSomeQueue(): List<LogRecord>` stub the
 - [ ] **Step 2: Verify the sample compiles**
 
 Run: `./gradlew :kuilt-otel:compileTestKotlinJvm`
-Expected: BUILD SUCCESSFUL. A broken `@sample` breaks the build — these are load-bearing.
+Expected: BUILD SUCCESSFUL. Sample **bodies** are compiled as part of `commonTest`, so a sample that references a renamed API is a hard compile error — that much is load-bearing.
+
+**But a dangling `@sample` _link_ is not.** The two are different checks and only one of them gates. `compileTestKotlinJvm` compiles the sample's code; it never looks at the KDoc tag pointing to it. An unresolved `@sample` surfaces only in Dokka, as `w: Unable to resolve a @sample link` — and `failOnWarning` is unset repo-wide, so `dokkaGenerateModuleHtml` still returns BUILD SUCCESSFUL and `ci-required` stays green. Measured on this branch, not assumed.
+
+Consequence for sequencing: Task 3 adds `@sample us.tractat.kuilt.otel.sampleBulkExport` while the function does not exist until this task, and **nothing goes red in between**. That is fine, but it means the link's resolution is *not* verified by any gate — so check it by eye here:
+
+```bash
+grep -rn "sampleBulkExport" kuilt-otel/src/
+```
+
+Expected: the `@sample` tag in `WarpLogRecordExporter.kt` **and** the `internal suspend fun sampleBulkExport` in `Samples.kt`. If only the first appears, the link is dangling and no build will tell you.
 
 - [ ] **Step 3: Add the cookbook entry**
 
