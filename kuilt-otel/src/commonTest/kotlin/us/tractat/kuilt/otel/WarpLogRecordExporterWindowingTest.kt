@@ -221,7 +221,7 @@ class WarpLogRecordExporterWindowingTest {
         // record is simply lost. Nothing throws and the visible order stays plausible.
         //
         // The record has to be one the *pass* dropped and eviction never touched, or this is
-        // vacuous: evictOldest frees the dedup slot itself, so anything that reached the window
+        // vacuous: evictLeading frees the dedup slot itself, so anything that reached the window
         // by being evicted is already covered by that older guard. Exactly maxRecords local
         // exports evict nothing; the merge then doubles the visible count and the pass — not
         // eviction — is what takes the surplus away.

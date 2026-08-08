@@ -102,12 +102,13 @@ internal fun opCountOf(segment: Rga<LogRecord>): Int = segment.opCount
  * (`otel.logs.seg.<n>`), plus a small [LogSegmentIndex] naming the live ones
  * (`otel.logs.idx`).
  *
- * [export] appends the [us.tractat.kuilt.crdt.RgaOp.Insert] that
- * [Rga.insertAfter] already returns to the **active** segment and rewrites only
- * that segment, so the encode-and-write cost is O([segmentOps]) — a constant,
- * independent of how many records the log holds. The previous layout re-encoded
- * and rewrote the entire log on every single record, which is O(N) work once per
- * record: Θ(N²) time and Θ(N²) bytes to accumulate N records (#1860).
+ * [export] appends the [us.tractat.kuilt.crdt.RgaOp.Insert]s that
+ * [Rga.insertAllAfter] already returns to the **active** segment and rewrites only
+ * that segment **once per turn**, so the encode-and-write cost is O([segmentOps])
+ * per turn — a constant, independent of how many records the log holds, and
+ * amortised across however many records the turn took (#2194). The previous layout
+ * re-encoded and rewrote the entire log on every single record, which is O(N) work
+ * once per record: Θ(N²) time and Θ(N²) bytes to accumulate N records (#1860).
  *
  * Recovery reads the segments named by the index and unions them with [Rga.piece].
  * Set union is commutative and idempotent, so the reconstruction is exact and
@@ -327,7 +328,7 @@ public class WarpLogRecordExporter(
     //
     // All three are functions of `log` alone and were recomputed from it on every
     // export. That is pure waste in this access pattern: `Rga` is immutable, so
-    // `insertAfter` hands back a NEW instance whose `sequence` lazy is cold —
+    // `insertAllAfter` hands back a NEW instance whose `sequence` lazy is cold —
     // meaning a full `computeSequence()` (a groupBy plus a sortedDescending per
     // sibling group) ran once per exported record, plus two more O(N) passes for
     // the eviction gate and the tail filter. Maintaining them incrementally makes
@@ -338,8 +339,8 @@ public class WarpLogRecordExporter(
     // empties the log, a merge whose remote inserts sort after the local tail, and a
     // recover() that replaces the log wholesale — are pinned by
     // WarpLogRecordExporterTailCacheTest. Eviction is the *only* thing that can remove
-    // an element on the export path, and it only ever removes visible index 0, so no
-    // export can invalidate `tail` while the log is non-empty.
+    // an element on the export path, and it only ever removes a leading prefix of the
+    // visible sequence, so no export can invalidate `tail` while the log is non-empty.
 
     /** Predecessor for the next append: the last visible element, or [RgaId.HEAD] when empty. */
     private var tail: RgaId = RgaId.HEAD
@@ -440,6 +441,15 @@ public class WarpLogRecordExporter(
         private val indexSerializer = LogSegmentIndex.serializer()
 
         private fun segmentKey(number: Int) = StoreKey("$SEGMENT_KEY_PREFIX$number")
+
+        /**
+         * The most ops one record can add to the active segment: its `Insert`, plus the
+         * `Remove` of the record it evicted under [BufferPolicy.DROP_OLDEST].
+         */
+        private const val OPS_PER_RECORD = 2
+
+        /** How much of an evicted record's body the audit line carries. */
+        private const val EVICTION_BODY_CHARS = 80
     }
 
     /** One durable-store mutation. */
@@ -860,61 +870,294 @@ public class WarpLogRecordExporter(
     }
 
     /**
-     * Export one log record: append it to the [Rga] and durably flush to [store].
+     * Export one log record — the degenerate one-element case of [export].
      *
-     * Returns [ExportResult.Success] after the durable write.
-     *
-     * Two paths return [ExportResult.Success] with **no** durable write, because there
-     * was nothing to write: a record whose [LogRecord.recordId] was already exported
-     * (including across process restarts after [recover]) is not inserted twice, and a
-     * record refused by the buffer cap under [BufferPolicy.DROP_NEWEST] is not inserted
-     * at all. Neither is a failure, and neither counts towards
-     * [ExporterHealth.accepted] — which means "records durably taken", not "calls that
-     * returned `Success`".
-     *
-     * **Never throws.** Every failure — a throwing [store], and also a failure
-     * inside the in-memory CRDT insert, the eviction, or the CBOR encode — is
-     * returned as [ExportResult.Failure] and reflected on [health]. The store is
-     * the failure this method was originally written for, but it is not the only
-     * one reachable, and a caller on the logging path cannot handle a thrown
-     * exception: it would surface inside an application's own logging call (#1860).
+     * See that overload for the full contract; nothing about durability differs.
+     * A one-record call still returns after its own durable write.
      */
-    public suspend fun export(record: LogRecord): ExportResult = writeMutex.withLock { exportTurn(record) }
+    public suspend fun export(record: LogRecord): ExportResult = export(listOf(record))
 
-    /** [export]'s write turn: build the actions, then apply them. Must hold [writeMutex]. */
-    private suspend fun exportTurn(record: LogRecord): ExportResult {
+    /**
+     * Export a **batch** of log records: append them to the [Rga] and durably flush
+     * to [store] as one write turn.
+     *
+     * Returns [ExportResult.Success] after the durable write, exactly as the
+     * single-record overload does — **the durability contract is unchanged**. This is
+     * not OpenTelemetry's `BatchLogRecordProcessor`, which trades a flush window for
+     * amortisation; nothing here is held back in the hope more arrives. A batch is
+     * whatever the caller already has in hand, and it is written before this returns.
+     * What is amortised is the *fixed* cost of a turn — one CRDT append pass, one CBOR
+     * encode of the active segment, one segment write — across however many records the
+     * caller supplied, instead of paying it once per record (#2194).
+     *
+     * Records are admitted **in order**, and dedup and the buffer cap stay per-record
+     * decisions: a [LogRecord.recordId] already exported (including earlier in this
+     * same batch, and including across restarts after [recover]) is skipped, and a
+     * record refused by the cap under [BufferPolicy.DROP_NEWEST] is not inserted.
+     * Neither counts towards [ExporterHealth.accepted], which means *records durably
+     * taken*.
+     *
+     * ## A batch may span more than one turn
+     *
+     * [segmentOps] bounds how many bytes one export rewrites, so a batch that would
+     * overfill the active segment is split: each turn takes as many records as still
+     * fit, writes, rolls, and the next turn continues. (The bound is *approximate* by
+     * exactly one op: a [windowPass] runs after the records are admitted and can `piece`
+     * one [RgaOp.Compact] into the active segment outside the turn's budget, so a turn
+     * can end at `segmentOps + 1` before the roll seals it. That overshoot exists on the
+     * per-record path today, and is bounded at one op either way.)
+     *
+     * Splitting means the batch is **not atomic**: an earlier turn's records are durable
+     * even if a later one fails.
+     *
+     * **Every turn is attempted, even after one fails.** A failing turn has already
+     * admitted its records to the in-memory log and to [activeSegment] before its write
+     * was refused, so those records are *not* lost — the next successful
+     * active-segment write carries them to disk (the same property
+     * [retirableSegments] relies on). Abandoning the remainder of a batch would
+     * therefore lose records that looping the single-record overload keeps: a
+     * quota-bound store that refuses the ~123 KB segment write while accepting small
+     * ones would drop everything after the first failed turn, permanently, on every
+     * batch, for as long as the condition lasts. So the loop runs to the end and the
+     * **first** [ExportResult.Failure] is returned once it does.
+     *
+     * A turn also never admits more than [maxRecords] records, so the eviction it
+     * computes is always a prefix of what the buffer already held.
+     *
+     * An empty [records] is [ExportResult.Success] and touches neither the log nor the
+     * store.
+     *
+     * **Never throws.** Every failure — a throwing [store], and also a failure inside
+     * the in-memory CRDT insert, the eviction, or the CBOR encode — is returned as
+     * [ExportResult.Failure] and reflected on [health]. The store is the failure this
+     * method was originally written for, but it is not the only one reachable, and a
+     * caller on the logging path cannot handle a thrown exception: it would surface
+     * inside an application's own logging call (#1860).
+     *
+     * @sample us.tractat.kuilt.otel.sampleBulkExport
+     */
+    public suspend fun export(records: List<LogRecord>): ExportResult {
+        var from = 0
+        var firstFailure: ExportResult.Failure? = null
+        while (from < records.size) {
+            val outcome = writeMutex.withLock { exportTurn(records, from) }
+            val result = outcome.result
+            if (firstFailure == null && result is ExportResult.Failure) firstFailure = result
+            from += outcome.consumed
+        }
+        return firstFailure ?: ExportResult.Success
+    }
+
+    /** How far one [exportTurn] got, and how it ended. */
+    private class TurnOutcome(val consumed: Int, val result: ExportResult)
+
+    /**
+     * One write turn over `records[from until …]`: decide the run, mutate the log
+     * twice, build the turn's actions, then apply them. Must hold [writeMutex].
+     *
+     * Always consumes **at least one** record — otherwise [export]'s loop would not
+     * terminate — even when the active segment is already at or past [segmentOps],
+     * which a [recover] against a store written with a larger [segmentOps] can produce.
+     */
+    private suspend fun exportTurn(records: List<LogRecord>, from: Int): TurnOutcome {
+        var consumed = 0
+        var accepted = 0
         val actions = runCatchingCancellable {
             lock.withLock {
-                if (record.recordId in seenIds) return ExportResult.Success
-                if (!admit(record)) return ExportResult.Success
-                val (newLog, insertOp) = log.insertAfter(
-                    replica = replica,
-                    after = tail,
-                    value = record,
-                )
-                log = newLog
-                tail = insertOp.id
-                visibleCount++
-                seenIds[record.recordId] = insertOp.id
-                // The op `insertAfter` already handed back is exactly what the segment
-                // needs — the append is O(1) and the encode below is O(segmentOps).
-                appendToActiveSegment(insertOp)
-                // Before pendingWrites(), never after: a pass rewrites `activeSegment`, and
-                // the active-segment write pendingWrites() already owes is what carries the
-                // resulting floor to disk.
+                val admitted = ArrayList<LogRecord>()
+                // Dedup within the batch as well as against the log: `seenIds` is not
+                // updated until the inserts are minted below, so two copies of one id
+                // inside a single batch would otherwise both be admitted.
+                val pending = HashSet<ByteString>()
+                var evictions = 0
+                while (from + consumed < records.size && fitsInTurn(consumed, evictions)) {
+                    val record = records[from + consumed]
+                    consumed++
+                    if (record.recordId in seenIds || !pending.add(record.recordId)) continue
+                    if (visibleCount + admitted.size - evictions < maxRecords) {
+                        admitted += record
+                        continue
+                    }
+                    // The `when` is exhaustive on purpose — a new [BufferPolicy] constant
+                    // must not fall through to eviction on a public enum shared with
+                    // [WarpSpanExporter].
+                    when (bufferPolicy) {
+                        // DROP_NEWEST refuses the incoming record, which is what "drop the
+                        // newest" means here: at a full buffer the newest record is the one
+                        // arriving. So this replica never authors a `Remove`, and the ops it
+                        // contributes to the shared op-log are a downward-closed prefix — the
+                        // property #2127's bound relies on for this policy. It bounds what is
+                        // *emitted*, not what the buffer holds: [merge] can still push
+                        // [visibleCount] past [maxRecords], after which this gate simply keeps
+                        // refusing.
+                        BufferPolicy.DROP_NEWEST -> {
+                            refuse(record)
+                            pending.remove(record.recordId)
+                        }
+                        BufferPolicy.DROP_OLDEST -> {
+                            evictions++
+                            admitted += record
+                        }
+                    }
+                }
+                accepted = admitted.size
+                applyTurn(admitted, evictions)
+                // Before pendingWrites(), never after: a pass rewrites `activeSegment`,
+                // and the active-segment write pendingWrites() already owes is what
+                // carries the resulting floor to disk.
                 val windowed = windowPassDue() && windowPass()
-                pendingWrites(retire = windowed)
+                // A turn that changed nothing owes nothing. The single-record path
+                // returns EARLY on a dedup hit and on a DROP_NEWEST refusal, so both
+                // cost ZERO store writes — a property export()'s KDoc states outright,
+                // and one a batched turn silently drops unless it is restored here.
+                // Without this guard a DROP_NEWEST exporter at a full buffer rewrites
+                // the whole ~123 KB active segment on every drain cycle while accepting
+                // nothing, forever; and an anti-entropy caller re-exporting an
+                // already-exported page pays a segment rewrite per turn for a no-op.
+                if (admitted.isEmpty() && evictions == 0 && !windowed) {
+                    emptyList()
+                } else {
+                    pendingWrites(retire = windowed)
+                }
             }
         }.getOrElse { cause ->
             logger.error(cause) {
-                "WarpLogRecordExporter: buffer update failed for record ${record.recordId}"
+                "WarpLogRecordExporter: buffer update failed for a batch of ${records.size - from} record(s) " +
+                    "starting at ${records.getOrNull(from)?.recordId}"
             }
-            return failure(cause)
+            return TurnOutcome(consumed = maxOf(consumed, 1), result = failure(cause))
         }
-        return commit(actions) { cause ->
+        // Nothing to write, so nothing to report: an all-dedup or all-refused turn is
+        // Success with no durable write and no movement on `accepted`, exactly as the
+        // single-record path's two early returns were.
+        if (actions.isEmpty()) return TurnOutcome(consumed = consumed, result = ExportResult.Success)
+        val result = commit(actions) { cause ->
             logger.error(cause) {
-                "WarpLogRecordExporter: durable write failed for record ${record.recordId}"
+                "WarpLogRecordExporter: durable write failed for a batch of $accepted record(s)"
             }
+        }
+        return TurnOutcome(
+            consumed = consumed,
+            result = if (result is ExportResult.Success) success(accepted) else result,
+        )
+    }
+
+    /**
+     * Whether a turn that has already taken [consumed] records and owes [evictions]
+     * tombstones may take one more without breaching [segmentOps]. Must hold [lock].
+     *
+     * A record costs at most two ops in the active segment — its `Insert`, plus the
+     * `Remove` of whatever it evicted — so the bound is checked against the worst case
+     * rather than the actual eviction count, which is not known until the record has
+     * been admitted. That makes the turn slightly conservative while the buffer is
+     * still filling (no evictions yet, so the segment ends half-full and the next turn
+     * continues into it); it never makes it wrong.
+     *
+     * Also caps a turn at [maxRecords] records, which is what lets [applyTurn] evict a
+     * *prefix* of the existing buffer rather than having to evict records the same turn
+     * just inserted. That cap is what makes [Rga.removeFirst]'s `require` unreachable
+     * from here: the last eviction a turn can owe needs `admitted >= maxRecords - 1`
+     * while `consumed < maxRecords`, which forces the eviction count to stop exactly at
+     * the pre-turn [visibleCount].
+     *
+     * **The bound is on the record-driven ops only.** A [windowPass] runs *after* the
+     * records are admitted and `piece`s its delta into [activeSegment], which can mint
+     * one [RgaOp.Compact] outside this budget — so a turn can end at `segmentOps + 1`
+     * before [flushActiveSegment] rolls it. That overshoot is bounded at one op and
+     * exists identically on the per-record path today; it is named here so the
+     * "[segmentOps] is a ceiling" claim is not read as exact.
+     */
+    private fun fitsInTurn(consumed: Int, evictions: Int): Boolean {
+        if (consumed >= maxRecords) return false
+        if (consumed == 0) return true
+        return activeOpCount + consumed + evictions + OPS_PER_RECORD <= segmentOps
+    }
+
+    /**
+     * Apply one turn's decisions to [log] in **two** CRDT mutations — the whole point
+     * of the batch. Must hold [lock].
+     *
+     * Eviction runs first and always removes a prefix of what the buffer already held,
+     * so nothing this turn inserts can be evicted by it ([fitsInTurn] caps the turn at
+     * [maxRecords]). Both halves go through [Rga]'s bulk mutators, so each pays one
+     * `ops + newOps` copy and one cache build for the run instead of one per record,
+     * and the RGA sequence is materialised once rather than once per eviction.
+     *
+     * ## Two ways this is not *bit*-identical to the per-record loop
+     *
+     * Both are unreachable at the production [DEFAULT_MAX_LOG_RECORDS] and neither
+     * changes the visible sequence, but "indistinguishable from the loop" is exact at
+     * the [Rga] level and only *observationally* exact here, so they are written down.
+     *
+     * - **Evictions that empty the buffer re-root the run.** When a turn's evictions
+     *   take the whole pre-turn buffer, [evictLeading] sets `tail = RgaId.HEAD` before
+     *   the inserts, so the run chains after HEAD where the loop would have chained
+     *   after the tombstoned predecessor. Same visible order, different `after` links in
+     *   the op-log. Reachable only when a turn is as large as the buffer, i.e.
+     *   `maxRecords` at or below a turn's size — test-scale configuration, not the
+     *   10,000-record default.
+     * - **A record re-arriving in the same turn that evicts it is skipped.** [seenIds]
+     *   is read at admission time, before this function runs, so a batch containing a
+     *   record whose id the same turn is about to evict finds it still present and skips
+     *   it; the loop would evict first and then re-admit. Contrived, and arguably the
+     *   better answer.
+     */
+    private fun applyTurn(admitted: List<LogRecord>, evictions: Int) {
+        if (evictions > 0) evictLeading(evictions, admitted)
+        if (admitted.isEmpty()) return
+        val (newLog, inserts) = log.insertAllAfter(replica = replica, after = tail, values = admitted)
+        log = newLog
+        tail = inserts.last().id
+        visibleCount += inserts.size
+        inserts.forEach { insert -> seenIds[insert.value.recordId] = insert.id }
+        appendToActiveSegment(inserts)
+    }
+
+    /**
+     * Tombstone the [count] oldest visible records, logging each. Must hold [lock].
+     *
+     * Every drop is logged individually — the class KDoc promises an audit trail
+     * detailed enough to correlate against a backend's log index, and a batch changes
+     * how many evictions happen per turn, not how many records are lost.
+     *
+     * The entries are read **before** the removal, off the instance whose [Rga.sequence]
+     * `removeFirst` is about to walk, so the lazy is computed once for both.
+     */
+    private fun evictLeading(count: Int, admitted: List<LogRecord>) {
+        val evicted = log.entries().take(count)
+        // Each eviction is still paired with the record that displaced it, so the audit
+        // line keeps the `incoming recordId=` correlation the per-record path had. The
+        // first `maxRecords - visibleCount` admissions fit without evicting, so the
+        // displacing record is counted from the END of the admitted run.
+        val firstDisplacer = admitted.size - count
+        evicted.forEachIndexed { index, (_, record) ->
+            logger.warn {
+                "WarpLogRecordExporter: buffer cap ($maxRecords) reached, evicting record " +
+                    "recordId=${record.recordId} body=${record.body?.take(EVICTION_BODY_CHARS)} " +
+                    "policy=$bufferPolicy (incoming recordId=${admitted[firstDisplacer + index].recordId})"
+            }
+        }
+        val (newLog, removes) = log.removeFirst(count)
+        log = newLog
+        // The tombstones are ops like any other, so they ride in the active segment.
+        // They hide the records; they reclaim nothing by themselves. Each evicted
+        // record's own `Insert` — body and all — stays in whichever segment it landed
+        // in until a window pass suppresses it and that segment is retired.
+        appendToActiveSegment(removes)
+        evicted.forEach { (_, record) -> seenIds.remove(record.recordId) }
+        visibleCount -= count
+        evictionsSincePass += count
+        // DROP_OLDEST removes a leading prefix of the visible sequence. With at least
+        // one element still standing the first and last visible elements are distinct,
+        // so `tail` is untouched; at zero there is nothing left to append after.
+        if (visibleCount == 0) tail = RgaId.HEAD
+    }
+
+    /** Log a [BufferPolicy.DROP_NEWEST] refusal. Must hold [lock]. */
+    private fun refuse(incoming: LogRecord) {
+        logger.warn {
+            "WarpLogRecordExporter: buffer cap ($maxRecords) reached, refusing incoming record " +
+                "recordId=${incoming.recordId} body=${incoming.body?.take(EVICTION_BODY_CHARS)} policy=$bufferPolicy"
         }
     }
 
@@ -948,7 +1191,7 @@ public class WarpLogRecordExporter(
                 rebuildDerivedState()
                 val adopted = adoptRemoteSegment(remote)
                 // A merge is the only path that can push the buffer past the cap without
-                // evicting (see [admit]), and under DROP_NEWEST it is the ONLY path that can
+                // evicting (see [exportTurn]), and under DROP_NEWEST it is the ONLY path that can
                 // grow the log at all — that policy never evicts, so the eviction counter
                 // alone would leave a gossiping DROP_NEWEST exporter unwindowed forever.
                 // Unlike export(), nothing here writes the active segment, so a pass has to
@@ -965,19 +1208,25 @@ public class WarpLogRecordExporter(
             logger.error(cause) { "WarpLogRecordExporter: buffer update failed during merge" }
             return failure(cause)
         }
-        return commit(actions) { cause ->
+        val result = commit(actions) { cause ->
             logger.error(cause) { "WarpLogRecordExporter: durable write failed during merge" }
         }
+        return if (result is ExportResult.Success) storeSucceeded() else result
     }
 
     // ── Segmented persistence ──────────────────────────────────────────────────
 
     /**
-     * Apply one turn's store mutations **in order**, then report it through [health].
+     * Apply one turn's store mutations **in order**, and report a *failure* through
+     * [health].
      *
-     * One export is **one** accepted write no matter how many keys its turn
-     * touched, so [ExporterHealth.accepted] keeps meaning "records durably taken",
-     * not "store calls made".
+     * **Success is the caller's to report, not this function's.** A turn touches
+     * several keys and takes an arbitrary number of records through admission, and
+     * [ExporterHealth.accepted] counts *records*, not store calls — a count only the
+     * caller has ([exportTurn] reports it with the count; [mergeTurn] reports through
+     * [storeSucceeded], because a merge takes no records through admission at all). A
+     * failure needs no such count: a refused write is a store fact regardless of who
+     * called, so [failure] stays here.
      *
      * The order is load-bearing, not incidental: a [StoreAction.Sweep] deletes a segment's
      * records, and it is safe only after the state that supersedes them is durable. Stopping at
@@ -1024,13 +1273,13 @@ public class WarpLogRecordExporter(
             }
         }.fold(
             onSuccess = {
-                lock.withLock { ledgerSwept(swept, batchFailed = false) }
-                success()
+                lock.withLock { ledgerSwept(swept, turnFailed = false) }
+                ExportResult.Success
             },
             onFailure = { cause ->
                 // A half-applied turn can have left the index naming segments that
                 // were never written. Rewriting it on the next attempt re-converges.
-                lock.withLock { ledgerSwept(swept, batchFailed = true) }
+                lock.withLock { ledgerSwept(swept, turnFailed = true) }
                 logFailure(cause)
                 failure(cause)
             },
@@ -1046,9 +1295,9 @@ public class WarpLogRecordExporter(
      * whose sweep failed stay in [retiringSegments], and therefore stay named on disk, so the
      * next turn — or the next process start — re-attempts them.
      */
-    private fun ledgerSwept(swept: List<Int>, batchFailed: Boolean) {
+    private fun ledgerSwept(swept: List<Int>, turnFailed: Boolean) {
         retiringSegments.removeAll(swept.toSet())
-        indexPersisted = !batchFailed && swept.isEmpty()
+        indexPersisted = !turnFailed && swept.isEmpty()
     }
 
     /**
@@ -1225,10 +1474,17 @@ public class WarpLogRecordExporter(
         )
     }
 
-    /** Absorb one op into the active segment. Must hold [lock]. */
-    private fun appendToActiveSegment(op: RgaOp<LogRecord>) {
-        activeSegment = activeSegment.apply(op)
-        activeOpCount++
+    /**
+     * Absorb a run of ops into the active segment. Must hold [lock].
+     *
+     * The per-op `apply` loop stays: the active segment is bounded at [segmentOps] ops,
+     * so it is Θ(segmentOps) not Θ(N), and `apply` handles `Insert` and `Remove`
+     * uniformly where [Rga]'s bulk mutators do not.
+     */
+    private fun appendToActiveSegment(ops: List<RgaOp<LogRecord>>) {
+        if (ops.isEmpty()) return
+        ops.forEach { op -> activeSegment = activeSegment.apply(op) }
+        activeOpCount += ops.size
     }
 
     /**
@@ -1403,9 +1659,25 @@ public class WarpLogRecordExporter(
     // correct under a real multi-threaded dispatcher without taking `lock` —
     // and without extending `lock`'s hold time across the durable write.
 
-    /** Record a successful durable write and return [ExportResult.Success]. */
-    private fun success(): ExportResult {
-        healthState.update { it.copy(accepted = it.accepted + 1, consecutiveFailures = 0) }
+    /** Record a successful durable write of [records] records and return [ExportResult.Success]. */
+    private fun success(records: Int): ExportResult {
+        healthState.update { it.copy(accepted = it.accepted + records, consecutiveFailures = 0) }
+        return ExportResult.Success
+    }
+
+    /**
+     * Record that the store accepted a write that carried **no admitted records** — the
+     * [merge] path. Clears [ExporterHealth.consecutiveFailures] without touching
+     * [ExporterHealth.accepted].
+     *
+     * The split is what keeps `accepted` answering "is this device's own telemetry
+     * landing?" on a gossiping replica. A merge writes a whole adopted segment and is
+     * real evidence the store is up, so it must clear the failure streak; it takes
+     * nothing through admission, so counting it would let a replica that has exported
+     * nothing at all report a healthy climbing count.
+     */
+    private fun storeSucceeded(): ExportResult {
+        healthState.update { it.copy(consecutiveFailures = 0) }
         return ExportResult.Success
     }
 
@@ -1430,61 +1702,6 @@ public class WarpLogRecordExporter(
      */
     private fun recordRecoveryFailure(cause: Throwable) {
         healthState.update { it.copy(recoveryFailed = true, lastFailure = cause) }
-    }
-
-    /**
-     * Make room for [incoming], or refuse it. Returns `false` when the record must not be
-     * inserted at all. Must be called with [lock] held.
-     *
-     * [BufferPolicy.DROP_NEWEST] refuses the incoming record, which is what "drop the
-     * newest" means here: at a full buffer the newest record is the one arriving. So this
-     * replica never authors a `Remove`, and the ops it contributes to the shared op-log
-     * are a downward-closed prefix — the property #2127's bound relies on for this policy.
-     * It bounds what is *emitted*, not what the buffer holds: [merge] can still push
-     * [visibleCount] past [maxRecords], after which this gate simply keeps refusing.
-     *
-     * The `when` is exhaustive on purpose — a new [BufferPolicy] constant must not fall
-     * through to eviction on a public enum shared with [WarpSpanExporter].
-     */
-    private fun admit(incoming: LogRecord): Boolean {
-        if (visibleCount < maxRecords) return true
-        return when (bufferPolicy) {
-            BufferPolicy.DROP_NEWEST -> {
-                logger.warn {
-                    "WarpLogRecordExporter: buffer cap ($maxRecords) reached, refusing incoming record " +
-                        "recordId=${incoming.recordId} body=${incoming.body?.take(80)} policy=$bufferPolicy"
-                }
-                false
-            }
-            BufferPolicy.DROP_OLDEST -> {
-                evictOldest(incoming)
-                true
-            }
-        }
-    }
-
-    /** Evict the oldest visible record to make room for [incoming]. Must hold [lock]. */
-    private fun evictOldest(incoming: LogRecord) {
-        val (newLog, removeOp) = log.removeAt(0) ?: return
-        val evictedRecord = log.toList()[0]
-        logger.warn {
-            "WarpLogRecordExporter: buffer cap ($maxRecords) reached, evicting record " +
-                "recordId=${evictedRecord.recordId} body=${evictedRecord.body?.take(80)} " +
-                "policy=$bufferPolicy (incoming recordId=${incoming.recordId})"
-        }
-        log = newLog
-        // The tombstone is an op like any other, so it rides in the active segment. It hides
-        // the record; it reclaims nothing by itself. The evicted record's own `Insert` — body
-        // and all — stays in whichever segment it landed in until a window pass suppresses it
-        // and that segment is retired (see the class KDoc).
-        appendToActiveSegment(removeOp)
-        seenIds.remove(evictedRecord.recordId)
-        visibleCount--
-        evictionsSincePass++
-        // DROP_OLDEST removes visible index 0. With at least one element still standing the
-        // first and last visible elements are distinct, so `tail` is untouched; at zero there
-        // is nothing left to append after.
-        if (visibleCount == 0) tail = RgaId.HEAD
     }
 
     // ── Windowing the in-memory op-log ─────────────────────────────────────────
