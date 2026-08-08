@@ -118,6 +118,72 @@ class RgaCompactedFloorTest {
     }
 
     /**
+     * The same laws over states where the two suppressors are **mixed** — one replica carrying
+     * only a floor, another carrying only an explicit [RgaOp.Compact], a third carrying both.
+     *
+     * [theLatticeLawsHoldOverFlooredStates] derives all three of its operands from one state by
+     * raising a floor, so every operand suppresses the same way and the two mechanisms never meet.
+     * That is the configuration a real session is *least* likely to be in: `dropWindow` mints a
+     * floor for its own dots and an explicit `Compact` for a foreign author's in the same call, so
+     * any replica that has both windowed locally and merged a peer's window carries a mixture —
+     * and `piece` has to join a floor against a compacted-id set, not just a floor against a floor.
+     */
+    @Test
+    fun theLatticeLawsHoldWhenAFloorMeetsAnExplicitCompact() {
+        val (rga, ops) = chain(6)
+        // Only a floor: a's own window, folded.
+        val floorOnly = rga.withCompactedBelow(VersionVector.of(mapOf(me to 2L)))
+        // Only explicit ops: the same suppression a peer would record for a foreign author.
+        val compactOnly = rga.apply(RgaOp.Compact(rga.positionsFor(setOf(ops[3].id, ops[4].id))))
+        // Both, and overlapping neither cleanly: a floor past a different point, plus its own op.
+        val mixed = rga
+            .withCompactedBelow(VersionVector.of(mapOf(me to 1L, peer to 9L)))
+            .apply(RgaOp.Compact(rga.positionsFor(setOf(ops[4].id))))
+
+        assertAll(
+            { assertEquals(floorOnly, floorOnly.piece(floorOnly), "idempotent") },
+            { assertEquals(compactOnly, compactOnly.piece(compactOnly), "idempotent over explicit ops") },
+            { assertEquals(mixed, mixed.piece(mixed), "idempotent over a mixed state") },
+            { assertEquals(floorOnly.piece(compactOnly), compactOnly.piece(floorOnly), "commutative") },
+            { assertEquals(mixed.piece(compactOnly), compactOnly.piece(mixed), "commutative, mixed") },
+            {
+                assertEquals(
+                    floorOnly.piece(compactOnly).piece(mixed),
+                    floorOnly.piece(compactOnly.piece(mixed)),
+                    "associative",
+                )
+            },
+            {
+                assertEquals(
+                    floorOnly.piece(compactOnly).hashCode(),
+                    compactOnly.piece(floorOnly).hashCode(),
+                    "hashCode agrees with equals",
+                )
+            },
+            {
+                // Non-vacuity, half one: the Compact-only operand must actually carry a retained
+                // `Compact`. Without this, a `positionsFor` that returned nothing would leave
+                // `compactOnly == rga` — whose list still differs from `floorOnly`'s, so the list
+                // comparison below would pass while no explicit Compact was ever in play.
+                assertTrue(
+                    compactOnly.compactOpCount > 0,
+                    "the Compact-only operand retains no Compact op at all, so the laws above are " +
+                        "floor-against-plain, not floor-against-Compact",
+                )
+            },
+            {
+                // Non-vacuity, half two: the two operands must really suppress different things,
+                // or every law above is being proved over one state wearing two hats.
+                assertTrue(
+                    floorOnly.toList() != compactOnly.toList(),
+                    "the floor-only and Compact-only operands suppress the same records, so this " +
+                        "proves nothing about the two mechanisms meeting: ${floorOnly.toList()}",
+                )
+            },
+        )
+    }
+
+    /**
      * Pins the **accepted** cost documented on [Rga.compactedBelow]: a floor records no
      * positions, so `computeSequence`'s #293 reroot has nothing to walk and a survivor whose
      * predecessor was floored away lands on [RgaId.HEAD]. HEAD's child list is sorted by id

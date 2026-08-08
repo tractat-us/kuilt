@@ -54,7 +54,14 @@
 - `kuilt-crdt/src/commonTest/.../RgaCompactedFloorTest.kt` — Tasks 2, 3, 5
 - `kuilt-crdt/src/commonTest/.../RgaFloorWireTest.kt` — Task 4
 - `kuilt-quilter/src/commonTest/.../QuilterCausalFloorTest.kt` — Task 7
-- `kuilt-otel/src/commonTest/.../WarpLogRecordExporterRetirementTest.kt` — Tasks 9, 10, 12
+- `kuilt-otel/src/commonTest/.../WarpLogRecordExporterWindowingTest.kt` — Task 9
+- `kuilt-otel/src/commonTest/.../WarpLogRecordExporterRetirementTest.kt` — Tasks 10, 12
+- `kuilt-quilter/src/commonTest/.../QuilterFloorAbsorptionTest.kt` — Task 12 (#2179)
+
+> Task 9 named its file `…RetirementTest.kt` before retirement existed; it landed as
+> `…WindowingTest.kt`, which is what it tests, and Task 10 then created a genuinely
+> retirement-named file beside it. The two names below are resolved per-site rather than
+> substituted, because each one meant a different file.
 
 ---
 
@@ -1646,7 +1653,7 @@ EOF
 
 **Files:**
 - Modify: `kuilt-otel/.../WarpLogRecordExporter.kt`
-- Create: `kuilt-otel/src/commonTest/kotlin/us/tractat/kuilt/otel/WarpLogRecordExporterRetirementTest.kt`
+- Create: `kuilt-otel/src/commonTest/kotlin/us/tractat/kuilt/otel/WarpLogRecordExporterWindowingTest.kt` (named `…RetirementTest.kt` when this task was written, before Task 10 existed)
 
 **Interfaces:**
 - Consumes: `Rga.dropWindow(self, dropped)` from Task 3.
@@ -1811,7 +1818,7 @@ fun aFullDropNewestBufferDoesNotGrowUnboundedWhenAPeerMergesIn() = runTest {
 **Files:**
 - Modify: `kuilt-otel/.../LogSegmentIndex.kt`
 - Modify: `kuilt-otel/.../WarpLogRecordExporter.kt`
-- Modify: `kuilt-otel/src/commonTest/.../WarpLogRecordExporterRetirementTest.kt`
+- Create: `kuilt-otel/src/commonTest/.../WarpLogRecordExporterRetirementTest.kt` (a **new** file — Task 9's tests stayed in `…WindowingTest.kt`)
 
 **Interfaces:**
 - Consumes: Task 9's `windowPass`.
@@ -1873,7 +1880,9 @@ The default keeps an index written by an older build decodable.
 
 - [ ] **Step 4: Implement retirement**
 
-A sealed segment is retirable iff every op it holds is an `Insert`/`Remove` now covered by the log's floor or a retained `Compact`, **and** it carries no `Compact` op of its own that has not been consolidated. The second clause is what keeps `aCompactionInheritedFromTheLegacyBlobIsNeverDropped` green — segment 0 from the legacy migration and every `adoptRemoteSegment` segment can carry foreign `Compact`s.
+A sealed segment is retirable iff every op it holds is an `Insert`/`Remove` now covered by the log's floor or a retained `Compact`, **and** it carries no `Compact` op of its own that has not been consolidated. Segment 0 from the legacy migration and every `adoptRemoteSegment` segment can carry `Compact`s.
+
+> **Corrected while landing Task 12.** This step originally said the second clause is what keeps `aCompactionInheritedFromTheLegacyBlobIsNeverDropped` green. It is not, and Step 5b above says why without drawing the conclusion: that test's fixture carries a `Compact` of the replica's **own** dot, so once windowing walks past it the per-author floor suppresses the record whether or not the `Compact` survives. The test pins *"the record does not come back"*, never *"the `Compact` survived"*. Clause 2 is guarded by `aMergedSegmentIsRetiredOnlyWhenItCarriesNoCompact` (a **foreign** author's `Compact`, with a retired-anyway control arm) and `droppingTheSegmentCarryingACompactReAdmitsAForeignAuthorsRecord` (the counterfactual), both landed in Task 10.
 
 The exporter does not hold each sealed segment in memory. Rather than re-reading them, track retirability as segments are sealed: a segment is a candidate once every id it contributed is covered. Simplest correct implementation — record each sealed segment's contributed ids at seal time:
 
@@ -2068,6 +2077,52 @@ Confirm the test-compile tasks show `EXECUTED`, not `FROM-CACHE`.
 This is the only PR in the plan whose body may say `closes #2127`. State the measured before/after for all three axes — keys opened by `recover()`, bytes on disk, in-memory op count — as numbers from the tests, not estimates.
 
 ---
+
+## Acceptance criteria — as landed
+
+Checked against the tests rather than transcribed from §6. Two criteria are **not** fully met and
+say so; a criterion recorded as met that is not is worse than one recorded as open.
+
+Measured at 1,000 records, `maxRecords = 10`, `segmentOps = 8`. The **left-hand** column —
+**Nothing reclaimed** — is the control: the same run with a cap above the record count, so nothing
+is ever evicted, windowed or retired, which is what the store looked like before this work. The
+right-hand column, **As landed**, is this branch. The control **understates** the old in-memory
+cost, because a pre-change run at `maxRecords = 10` also carried ~990 `Remove` ops on top of the
+1,000 `Insert`s.
+
+Every number in the table below, and the peak that follows it, was **measured at this commit** by
+an ad-hoc run — none of them is pinned by an assertion. The committed tests deliberately assert
+loose shapes around them instead (`store.reads() <= 12`, `peakOps <= 64`, "under forty records'
+worth of bytes"), so a harmless layout change does not redden the suite. Read the table as a
+snapshot of the effect, not as a contract: if a later change moves these numbers, nothing reddens.
+
+| Axis | Nothing reclaimed | As landed |
+|------|------------------:|----------:|
+| Keys `recover()` opens | 127 | **4** |
+| Keys resident | 126 | **4** |
+| Bytes resident | 162,277 | **2,518** |
+| In-memory ops | 1,000 | **10** |
+
+In-memory peak across 500 records through a 10-record window: **28** ops (final 10) — the peak, not
+the trough, because a pass fires periodically and sampling only at the end reads the trough.
+
+| # | Criterion | Status |
+|---|-----------|--------|
+| 1 | `recover()` opens O(`maxRecords`/`segmentOps`) + 1 keys, counted not inferred | **Met on the export path** — `recoverOpensABoundedNumberOfKeysNoMatterHowManyRecordsWereEverExported` counts `DurableStore.read` calls (4 against a ceiling of 12); `theStoreStopsGainingKeysOnceTheWindowIsFull` measures the same thing on the write side. Both drive only `export`. **Not bounded on the gossip path, and not covered by a dedicated test:** a merge-adopted segment that carries an `RgaOp.Compact` is `Pinned` forever — never retired, see the class KDoc — so a gossip-fed replica's key count grows with the number of such merges, the same shape criteria 3 and 5 already record for the memory and disk totals |
+| 2 | Bytes on disk are O(`maxRecords`·record + replicas), not Θ(records ever) | **Met on the export path** — `bytesOnDiskAreBoundedByTheWindowNotByRecordsEverExported` prices everything in a **measured** record (`perRecordBytes()`, from a short run through a cap it never reaches, which *is* the Θ(records) layout) and asserts two things: 1,100 further records add less than **two records'** worth of bytes, and the whole resident total is under **forty records**. Not flat to the byte — the residual creep is CBOR integer width and it saturates: 2,444 / 2,444 / 2,450 / 2,518 / 2,518 / 2,524 / 2,524 bytes at 50 / 100 / 250 / 500 / 1k / 2.5k / 50k records |
+| 3 | The in-memory op-log is bounded on the same terms | **Met on the export path, deliberately UNMET on the merge path.** `theInMemoryOpLogStaysBoundedAcrossManyMoreRecordsThanTheWindow` pins the export arm; `theOpLogIsBoundedOnTheExportPathButNotOnTheMergePath` pins that the merge arm **grows**, and would redden if it ever stopped. A foreign author's dots cannot fold into this replica's floor, so each keeps an explicit `RgaOp.Compact` pair that nothing prunes. Bounding it needs the causal-stability argument this design deliberately avoids |
+| 4 | `aMergeCannotResurrectRecordsThisReplicaAlreadyEvicted` and `aCompactionInheritedFromTheLegacyBlobIsNeverDropped` pass unmodified | **Met** — both verified character-for-character identical to `origin/main` |
+| 5 | Both policies bound the **total**, not only the per-export write; the merge path asserted explicitly | **Met, scoped to local exports as §6 scopes it** — `bothBufferPoliciesBoundTheTotalNotJustThePerExportWrite` measures the resident total under both, and asserts *why* each is flat (`DROP_NEWEST` writes nothing at all once saturated; `DROP_OLDEST` keeps writing and reclaims). The merge path is asserted by `aFullDropNewestBufferDoesNotGrowUnboundedWhenAPeerMergesIn` (memory) and, **for a strictly narrower disk claim than this row once cited it for**, `aGossipFedReplicaRetiresThroughTheMergePath`. That test gives its peer `maxRecords = 10_000` over 200 records, so the peer never windows and never carries an `RgaOp.Compact` — its adopted segments are all `Compact`-free and all reclaimable, which is exactly what the test asserts (that count is flat) alongside a bound on the bytes one merge rewrites. **The realistic gossip case is not covered and is not bounded:** a peer that has itself windowed a foreign author's records carries a `Compact`, `adoptRemoteSegment` persists it verbatim, and that pins the peer's whole log on disk forever. The disk total on the merge path is growth, as criterion 3 says the memory total is |
+| 6 | Lattice laws over **mixed** explicit-`Compact` / floor states | **Met, but only after Task 12 closed a gap.** `theLatticeLawsHoldOverFlooredStates` (Task 2) derives all three operands from one state by raising a floor, so the two suppressors never meet — exactly the configuration the criterion names is the one it did not cover. `theLatticeLawsHoldWhenAFloorMeetsAnExplicitCompact` adds floor-only × `Compact`-only × both, behind a two-part non-vacuity guard: the `Compact`-only operand must really retain a `Compact` (`compactOpCount > 0` — otherwise a `positionsFor` returning nothing leaves it equal to the plain state, whose list still differs from the floored one), *and* the two operands must suppress different records |
+| 7 | Seq survival across a floor raise plus a cacheless reload | **Met** — `aFloorRaisedPastTheHeldOpsStillHoldsTheSeqHighWaterUp`, `mergingInAFloorRaisesTheSeqHighWaterToo`, `aFlooredReplicaNeverReusesASeqItAlreadyMinted`, `aFlooredReplicaSurvivesAWireRoundTripWithoutRegressingItsSeq` (the reload), and `rgaReportsItsFloorAndStopsReEmittingTheDotsBeneathIt` for the `OpLogEngine.deliveredDots` contribution |
+| 8 | A `Quilter` over a floored `Rga` keeps a gap-free delivered frontier, computed without enumerating the swallowed dots — **assert both** | **Value met; the cost half is argued, not measured.** `QuilterCausalFloorTest` pins the value, including through a live replicator, and `QuilterFloorAbsorptionTest` (#2179) pins it on the path it exists for — a *second* replica that never held the floored ops. `aHugeFloorCostsNothingToWalk` probes correctness at a floor of 10,000,000 but asserts no timing; the O(dots above the floor) shape comes from `contiguousHighWater`'s construction, not from anything the suite measures. A Θ(floor) implementation would pass it, slowly |
+
+**#2179 is discharged** by `QuilterFloorAbsorptionTest`: B absorbs a floor-carrying state having
+never held the floored ops and reports them delivered; a late raw op carrying the exact dropped dot
+is suppressed rather than resurrected; and a tombstone A mints *after* B joined is collected, which
+the stable cut can only reach on B's row. All three redden when the frontier walk is fed
+`VersionVector.EMPTY` instead of the floor — the tombstone is minted late for exactly that reason,
+since a stable cut is monotonic and one from A's solo phase is collected whatever B reports.
 
 ## Self-review notes
 

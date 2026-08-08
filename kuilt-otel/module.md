@@ -70,13 +70,33 @@ delta-temporality retry bug is structurally impossible.
   [DEFAULT_MAX_LOG_RECORDS]); the metric buffer at [DEFAULT_MAX_METRICS] distinct series.
   Evicted entries are always logged — never silently dropped. Counters are O(1)
   regardless of offline duration (a counter compresses losslessly).
-- **Bounded *write*, for logs — not a bounded total.** [WarpLogRecordExporter]
-  persists its op-log in segments of [DEFAULT_LOG_SEGMENT_OPS] operations, so one
-  export rewrites one segment instead of the whole log. Segments are never dropped:
-  total bytes still grow with the number of records ever exported, the store gains
-  roughly one key per segment, and startup reads all of them. Bounding the total is
-  a garbage collection of CRDT state that needs a causal-stability barrier — see
-  #2127. The span and metric exporters still rewrite their whole state per export.
+- **For logs, the total settles on the export path and still grows on the gossip path.**
+  [WarpLogRecordExporter] persists its op-log in segments of [DEFAULT_LOG_SEGMENT_OPS]
+  operations, so one export rewrites one segment rather than the whole log; it then
+  periodically drops everything outside the retained window from memory and deletes any
+  sealed segment the resulting suppression state fully covers. A device fed only by its own
+  [WarpLogRecordExporter.export] calls therefore holds O([DEFAULT_MAX_LOG_RECORDS]) ops and
+  a flat number of keys however long it runs, and startup reads that many keys rather than
+  one per segment ever written (#2127).
+  **That is one arm of the claim, not the whole of it — and the other arm costs whole
+  records, not a small note.** A record that arrived from a *peer* through
+  [WarpLogRecordExporter.merge] cannot fold into the per-author floor — raising another
+  author's floor would annihilate records it has not written yet — so each one windowed away
+  is suppressed by an explicit compaction record instead. *In memory* that is one bodiless
+  `(id -> id)` pair per element. *On disk it is not bodiless at all:* nothing prunes a
+  compaction record, so a segment carrying one is pinned, and a pinned segment is retained
+  **entire** — every record it holds, bodies included, permanently. Two shapes reach it. A
+  sealed segment that happened to be active when a pass minted one keeps its full
+  [DEFAULT_LOG_SEGMENT_OPS] operations (~123 KB at the defaults) forever. And
+  [WarpLogRecordExporter.merge] persists the peer's op-log verbatim under a key of its own,
+  so merging from a peer that has itself windowed a foreign author's records — which is any
+  peer in a steady-state mesh — pins that peer's whole log: megabytes per merge at the
+  default [DEFAULT_MAX_LOG_RECORDS]. So the gossip path is growth, not a bound, and a replica
+  that gossips accumulates it for as long as the process lives. Bounding it needs the same
+  causal-stability argument tombstone collection does; consolidation — rewriting a pinned
+  segment's compaction record forward so the segment can go — was considered and declined,
+  and nothing implements it. The span and metric exporters still rewrite their whole state
+  per export.
 - **Cardinality estimation.** HyperLogLog gives ~0.81% relative error at default
   precision (`p=14`). Small cardinalities (< ~5 distinct elements) have higher
   relative error; the linear-counting correction reduces but does not eliminate this.

@@ -431,6 +431,61 @@ assertAll(
 )
 ```
 
+**Intent:** keep only the newest N entries of a shared, replicated list or log — a chat backlog, an
+audit trail, an on-device telemetry buffer — and actually *get the memory back*. Removing an entry
+from an `Rga` only hides it: the insert, body and all, stays in the op-log forever, so a cap on how
+much is *visible* is not a cap on how much is *held*. And once you do delete those ops, a peer that
+never heard about the removal will happily re-add them on the next merge.
+**Primitive:** `Rga.dropWindow(self, dropped)` (`us.tractat.kuilt.crdt`). It drops the ops **and**
+leaves a suppression record behind, so the entries stay gone across a merge. Pair it with
+`Rga.sequence`/`Rga.tombstones` to work out which ids fall outside the window you want to keep.
+
+<!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleRgaDropWindow -->
+```kotlin
+val a = ReplicaId("A")
+
+var log = Rga.empty<String>()
+var after = RgaId.HEAD
+val ids = (1..5).map { i ->
+    val (next, op) = log.insertAfter(replica = a, after = after, value = "entry-$i")
+    log = next
+    after = op.id
+    op.id
+}
+val peer = log // a peer that still holds all five inserts
+
+// Retain the newest two; drop the rest.
+val (windowed, delta) = checkNotNull(log.dropWindow(self = a, dropped = ids.take(3).toSet()))
+check(windowed.toList() == listOf("entry-4", "entry-5"))
+
+// This replica's OWN dots fold into a floor — one entry per author, not one per element.
+check(windowed.causalFloor()[a] == 3L)
+check(windowed.compactOpCount == 0)
+
+// The drop is permanent suppression, not deletion: merging the peer's log back in
+// re-purges the dropped entries instead of resurrecting them.
+check(windowed.piece(peer).toList() == listOf("entry-4", "entry-5"))
+
+// Any peer performs the same drop by absorbing the returned delta.
+check(peer.piece(delta.delta).toList() == listOf("entry-4", "entry-5"))
+```
+
+**How cheap the drop is depends on who wrote the entry, and only one of the two arms is a bound.**
+Your own entries fold into a per-author *floor* — one number per author, however many entries you
+drop — which is why a log you alone append to settles back to O(window). An entry **another** peer
+wrote cannot: raising someone else's floor would annihilate entries they have not written yet, so
+`dropWindow` records those individually, and nothing prunes those records. So the honest shape is
+**bounded on the local-append path, still growing on the gossip path** — a strict improvement on
+retaining the whole entry, but not a bound. Say so wherever you quote a bound.
+
+Two more things to know before you reach for it. The window is *positional*: an entry whose
+predecessor you dropped re-anchors to the front of the list rather than to that predecessor, so
+relative order with older entries is not preserved (see `Rga.compactedBelow`). And if you replicate
+through `Quilter`, read `causalFloor()` alongside `causalDots()` when you fold a delivered
+frontier — the floored dots leave `causalDots()` entirely, and a walk that counts only dots reports
+a frontier of zero for that author and stalls every downstream collection. `Quilter` already does
+this; hand-rolled frontier arithmetic must too.
+
 ## Liveness & presence
 
 People close laptops, step into lifts, and lose Wi-Fi. When that happens your app has to say

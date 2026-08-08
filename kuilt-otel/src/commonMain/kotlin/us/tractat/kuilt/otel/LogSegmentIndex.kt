@@ -19,10 +19,28 @@ import kotlinx.serialization.Serializable
  *   any content lands in it, so a crash can leave it naming a segment the store lacks
  *   — recovery treats that as empty.
  * @property next The next segment number to hand out. Monotonic; numbers are never reused.
+ * @property retired Segments whose records are all superseded and whose keys are being deleted
+ *   — the **sweep ledger**.
+ *
+ *   There is no key-enumeration API, so a segment the index simply forgets is unreachable and
+ *   unsweepable forever. Moving a number here is the **commit point** of a retirement: a crash
+ *   between that write and the delete leaves the number named, and the next start re-attempts
+ *   the delete idempotently. Numbers leave this list only on an index write that follows a
+ *   confirmed delete.
+ *
+ *   **A number reaches this list only after a write carrying its covering state was confirmed
+ *   durable.** That is the whole warrant for the next start deleting these keys unconditionally,
+ *   before it reads anything — the sweep re-checks nothing, so the guarantee has to have been
+ *   established when the number was written here. The exporter upholds it by never moving a
+ *   number onto its in-memory mirror of this list until the write that publishes it has returned;
+ *   see `WarpLogRecordExporter`'s `StoreAction.CommitRetirement`.
+ *
+ *   Defaulted so an index written by a build that predates retirement still decodes.
  */
 @Serializable
 internal data class LogSegmentIndex(
     val sealedSegments: List<Int>,
     val active: Int,
     val next: Int,
+    val retired: List<Int> = emptyList(),
 )

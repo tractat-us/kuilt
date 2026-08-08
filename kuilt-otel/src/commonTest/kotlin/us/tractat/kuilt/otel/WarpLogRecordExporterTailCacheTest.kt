@@ -27,7 +27,10 @@ import kotlin.test.assertTrue
  * the exporter and a cache-free transcription of the same algorithm ([ReferenceLogExporter]) and
  * asserts both the resulting order **and the op-log recovered from the store** agree. The op-log — not the byte layout — is what must not move: #1860 replaced the
  * single persisted blob with segments, so the check is now "persist, recover, compare op-logs",
- * which pins the same equivalence across a layout that is free to change again.
+ * which pins the same equivalence across a layout that is free to change again. It is run at a
+ * rolling `segmentOps` as well as the default (#2127): at the default the script never fills a
+ * segment, so the round-trip recovers from one active segment and never touches the reclaiming
+ * path at all.
  */
 class WarpLogRecordExporterTailCacheTest {
 
@@ -47,11 +50,13 @@ class WarpLogRecordExporterTailCacheTest {
         store: DurableStore = InMemoryDurableStore(),
         maxRecords: Int = DEFAULT_MAX_LOG_RECORDS,
         bufferPolicy: BufferPolicy = BufferPolicy.DROP_OLDEST,
+        segmentOps: Int = DEFAULT_LOG_SEGMENT_OPS,
     ) = WarpLogRecordExporter(
         replica = replica,
         store = store,
         maxRecords = maxRecords,
         bufferPolicy = bufferPolicy,
+        segmentOps = segmentOps,
     )
 
     private fun bodies(records: List<LogRecord>): List<String?> = records.map { it.body }
@@ -221,11 +226,22 @@ class WarpLogRecordExporterTailCacheTest {
         // both caps saturate instead and the script's later exports are all refused, which is
         // its own thing worth pinning: a merge can push the log PAST the cap, and the gate
         // has to keep refusing afterwards rather than reading a stale count.
+        //
+        // `segmentOps` is crossed in too, and the SMALL value is the load-bearing one. At the
+        // 256-op default the script's ~20 ops never fill a segment, so the round-trip below
+        // recovers from a single active segment and has zero coverage of the reclaiming path:
+        // no roll, no sealed segment, no retirement. At 2 the script rolls repeatedly, so the
+        // recovered op-log is a `piece`-union of several sealed segments re-purged under the
+        // floor the active one carries — which is what recovery actually is now.
         val configurations = listOf(BufferPolicy.DROP_OLDEST, BufferPolicy.DROP_NEWEST)
             .flatMap { policy -> listOf(policy to ROOMY_CAP, policy to SINGLETON_CAP) }
-        for ((policy, cap) in configurations) {
+            .flatMap { config -> listOf(config to DEFAULT_LOG_SEGMENT_OPS, config to ROLLING_SEGMENT_OPS) }
+        var anyWindowed = false
+        var anyRolled = false
+        for ((config, segmentOps) in configurations) {
+            val (policy, cap) = config
             val store = InMemoryDurableStore()
-            val exporter = exporterFor(store = store, maxRecords = cap, bufferPolicy = policy)
+            val exporter = exporterFor(store = store, maxRecords = cap, bufferPolicy = policy, segmentOps = segmentOps)
             val reference = ReferenceLogExporter(replicaA, cap, policy)
 
             // A remote op-log whose inserts are concurrent with the local ones.
@@ -247,34 +263,84 @@ class WarpLogRecordExporterTailCacheTest {
                 }
             }
 
-            // Rga equality is op-set equality, so this asserts the op-log read back through
-            // the segmented layout is exactly the one the reference implementation computes.
-            val roundTripped = exporterFor(store = store, maxRecords = cap, bufferPolicy = policy)
+            // What the rolling arm is FOR, checked rather than assumed: at ROLLING_SEGMENT_OPS the
+            // ~20-op script has to really roll, so the round-trip below recovers a `piece`-union of
+            // several SEALED segments re-purged under the active one's floor. `anyWindowed` cannot
+            // stand in for this — windowing already fires at DEFAULT_LOG_SEGMENT_OPS, so that flag
+            // is true with this whole arm deleted, and raising ROLLING_SEGMENT_OPS back toward the
+            // default would silently take the arm's coverage to zero without reddening anything.
+            if (segmentOps == ROLLING_SEGMENT_OPS) {
+                val indexBytes = assertNotNull(
+                    store.read(INDEX_KEY_FOR_TEST),
+                    "$policy/cap=$cap: the script wrote no segment index at all",
+                )
+                // `active` starts at 0 and advances only on a roll, and numbers are never reused —
+                // so `> 0` is "a segment was sealed", and unlike reading `sealedSegments` directly
+                // it stays true after that sealed segment is retired away again.
+                anyRolled = anyRolled || decodeIndexForTest(indexBytes).active > 0
+            }
+
+            // Rga equality is op-set equality, so this asserts the op-log read back through the
+            // segmented layout is exactly the one the reference implementation computes — held
+            // across a rolling segmentOps too, where recovery has to re-purge several sealed
+            // segments under the active one's floor to get there. Equality is kept rather than
+            // relaxed to visible records BECAUSE it survives that: a reclaiming round-trip that
+            // reproduces the op-set exactly is a stronger statement than one that reproduces
+            // only what is visible, and relaxing an assertion that still holds buys nothing.
+            val roundTripped = exporterFor(
+                store = store,
+                maxRecords = cap,
+                bufferPolicy = policy,
+                segmentOps = segmentOps,
+            )
             roundTripped.recover()
+            anyWindowed = anyWindowed || roundTripped.snapshot().causalFloor().entries.isNotEmpty()
+            val where = "$policy/cap=$cap/segmentOps=$segmentOps"
             assertAll(
                 {
                     assertEquals(
                         bodies(reference.log.toList()),
                         bodies(exporter.snapshot().toList()),
-                        "$policy/cap=$cap: visible order diverged from the reference",
+                        "$where: visible order diverged from the reference",
                     )
                 },
                 {
                     assertEquals(
                         reference.log,
                         roundTripped.snapshot(),
-                        "$policy/cap=$cap: the op-log recovered from the store is not the reference's",
+                        "$where: the op-log recovered from the store is not the reference's",
                     )
                 },
                 {
                     assertEquals(
                         bodies(reference.log.toList()),
                         bodies(roundTripped.snapshot().toList()),
-                        "$policy/cap=$cap: recovered visible order diverged from the reference",
+                        "$where: recovered visible order diverged from the reference",
                     )
                 },
             )
         }
+
+        // Non-vacuity for the whole cross-product: if no configuration ever windowed, every
+        // equality above is an equality between two logs that only ever grew, and the oracle
+        // says nothing about the reclaiming path it was extended to cover.
+        assertAll(
+            {
+                assertTrue(
+                    anyWindowed,
+                    "no configuration reached a window pass, so the recovered op-logs were never " +
+                        "re-purged under a floor — the script no longer exercises reclamation at all",
+                )
+            },
+            {
+                assertTrue(
+                    anyRolled,
+                    "no configuration at segmentOps=$ROLLING_SEGMENT_OPS ever sealed a segment, so " +
+                        "every round-trip recovered from a single active segment and the rolling " +
+                        "arm of the cross-product covers nothing the default arm does not",
+                )
+            },
+        )
     }
 
     private sealed interface Step {
@@ -289,10 +355,19 @@ class WarpLogRecordExporterTailCacheTest {
      * every append. Drives the same [Rga] mutations in the same order, so the resulting
      * op-log — and therefore the encoded bytes — must be identical.
      *
-     * It is the **caches** this is an oracle for, so the admission policy is production's,
-     * not history's: [BufferPolicy.DROP_NEWEST] refuses the arrival (#2127). Transcribing
-     * the superseded evict-the-tail reading here would make every divergence it produced
-     * read as a cache bug.
+     * It is the **caches** this is an oracle for, so every *policy* here is production's, not
+     * history's: [BufferPolicy.DROP_NEWEST] refuses the arrival, and the op-log is windowed in
+     * batches through [Rga.dropWindow] (both #2127). Transcribing the superseded evict-the-tail
+     * reading — or leaving the windowing out — would make every divergence it produced read as
+     * a cache bug. The windowing transcription costs the oracle nothing: production computes
+     * the window from [Rga.sequence]/[Rga.tombstones] too, so that part was never cached on
+     * either side.
+     *
+     * That transcription is **verbatim**, deliberately, which means the window walk itself is
+     * NOT differentially covered here: a bug *in the walk* is copied to both sides and they
+     * agree on the wrong answer. Accepted, for the reason just given — but do not read this
+     * oracle as coverage of the walk. What the walk owes is pinned directly, by
+     * `WarpLogRecordExporterWindowingTest`.
      */
     private class ReferenceLogExporter(
         private val replica: ReplicaId,
@@ -302,6 +377,7 @@ class WarpLogRecordExporterTailCacheTest {
         var log: Rga<LogRecord> = Rga.empty()
             private set
         private var seenIds: Map<ByteString, RgaId> = emptyMap()
+        private var evictionsSincePass: Int = 0
 
         fun export(record: LogRecord) {
             if (record.recordId in seenIds) return
@@ -309,11 +385,13 @@ class WarpLogRecordExporterTailCacheTest {
             val (newLog, insertOp) = log.insertAfter(replica = replica, after = tailId(), value = record)
             log = newLog
             seenIds = seenIds + (record.recordId to insertOp.id)
+            if (windowPassDue()) windowPass()
         }
 
         fun merge(remote: Rga<LogRecord>) {
             log = log.piece(remote)
             seenIds = log.entries().associate { (rgaId, record) -> record.recordId to rgaId }
+            if (windowPassDue()) windowPass()
         }
 
         private fun admit(): Boolean {
@@ -327,9 +405,34 @@ class WarpLogRecordExporterTailCacheTest {
                     val evictedRecord = log.toList()[0]
                     log = newLog
                     seenIds = seenIds - evictedRecord.recordId
+                    evictionsSincePass++
                     true
                 }
             }
+        }
+
+        private fun windowPassDue(): Boolean = evictionsSincePass >= maxRecords || log.size > maxRecords
+
+        private fun windowPass() {
+            evictionsSincePass = 0
+            val dropped = idsOutsideWindow() ?: return
+            val (newLog, _) = log.dropWindow(replica, dropped) ?: return
+            log = newLog
+            seenIds = log.entries().associate { (rgaId, record) -> record.recordId to rgaId }
+        }
+
+        private fun idsOutsideWindow(): Set<RgaId>? {
+            val sequence = log.sequence
+            val tombstones = log.tombstones
+            var visibleSeen = 0
+            var cut = sequence.size
+            for (i in sequence.indices.reversed()) {
+                if (visibleSeen == maxRecords) break
+                if (sequence[i] !in tombstones) visibleSeen++
+                cut = i
+            }
+            if (cut == 0) return null
+            return sequence.subList(0, cut).toSet()
         }
 
         private fun tailId(): RgaId {
@@ -341,6 +444,12 @@ class WarpLogRecordExporterTailCacheTest {
     private companion object {
         private const val ROOMY_CAP = 4
         private const val SINGLETON_CAP = 1
+
+        /**
+         * Small enough that the ~20-op script rolls the active segment repeatedly, so the
+         * round-trip recovers from several *sealed* segments rather than from one active one.
+         */
+        private const val ROLLING_SEGMENT_OPS = 2
         private const val REMOTE_ID_1: Byte = 50
         private const val REMOTE_ID_2: Byte = 51
 
