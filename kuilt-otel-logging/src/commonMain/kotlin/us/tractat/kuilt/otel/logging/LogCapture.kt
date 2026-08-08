@@ -23,8 +23,10 @@ import kotlin.time.Clock
  * eviction warning, store-failure errors), so capturing those would feed a
  * captured eviction-warn back into export → evict again → warn again — a
  * self-sustaining loop that crowds out real application logs. To make that
- * impossible, [capture] drops any event whose `loggerName` is under the
- * exporter's own package (`us.tractat.kuilt.otel`) before building a record.
+ * impossible, any event whose `loggerName` is under the exporter's own package
+ * (`us.tractat.kuilt.otel`) is dropped before a record is built. Both [capture]
+ * and [captureAll] reach that decision through one private mapper, so batching a
+ * run of events cannot weaken it into a per-run filter.
  *
  * The exclusion is scoped to **only** the exporter's own `us.tractat.kuilt.otel.*`
  * loggers — narrow enough to break the export feedback loop, but no broader. In
@@ -136,8 +138,47 @@ public class LogCapture(
      * The one exception is a caller that invokes this directly from its own log
      * site without going through an edge: `resolvedAttributes` is then `null` and
      * the mapper is applied here, which for such a caller *is* emit time.
+     *
+     * See [captureAll] for the batched counterpart — same mapping, same gates, one
+     * export for a whole run of events.
      */
     public suspend fun capture(event: NormalizedLogEvent): ExportResult? {
+        val record = recordFor(event) ?: return null
+        return exporter.export(record)
+    }
+
+    /**
+     * Map a **run** of events to `LogRecord`s and export them as one write turn.
+     *
+     * The batched counterpart of [capture], and the drain's entry point since #2194:
+     * the exporter's fixed per-turn cost — one CRDT append pass, one CBOR encode, one
+     * segment write — is paid once for the whole run instead of once per line.
+     *
+     * Every per-event decision is unchanged and still per-event. The self-capture
+     * exclusion, the [CaptureConfig.minLevel] gate and the trace/sampling gate each
+     * drop their own events out of the run before any record is built; the survivors
+     * are exported together. Durability is unchanged — nothing is held back waiting
+     * for the run to grow (see `WarpLogRecordExporter.export`).
+     *
+     * Returns `null` when the run produced no records at all — either it was empty or
+     * every event was dropped — so a caller can tell "nothing to do" from an export
+     * result.
+     */
+    public suspend fun captureAll(events: List<NormalizedLogEvent>): ExportResult? {
+        val records = events.mapNotNull { event -> recordFor(event) }
+        if (records.isEmpty()) return null
+        return exporter.export(records)
+    }
+
+    /**
+     * The [LogRecord] [event] produces, or `null` if it is dropped before one is built.
+     *
+     * The single decision point shared by [capture] and [captureAll], so a per-event
+     * gate cannot come to mean two different things on the two paths. Every gate here
+     * reads the values [resolveAtEdge] snapshotted on the caller — never the ambient
+     * provider or the mapper — so emit-time semantics survive the drain (#1034, #1630).
+     */
+    private fun recordFor(event: NormalizedLogEvent): LogRecord? {
         if (droppedBeforeRecord(event)) return null
         // Trace/sampling gate. A null provider is M1 always-on capture, no stamp.
         // The trace was resolved at the edge (resolveAtEdge) and rides on the event;
@@ -157,7 +198,7 @@ public class LogCapture(
         }
         val now = clock.now()
         val epochNanos = now.epochSeconds * NANOS_PER_SECOND + now.nanosecondsOfSecond
-        val record = LogRecord(
+        return LogRecord(
             recordId = ByteString(random.nextBytes(RECORD_ID_BYTES)),
             severityNumber = event.level.severityNumber,
             severityText = event.level.severityText,
@@ -171,14 +212,14 @@ public class LogCapture(
             traceId = traceId,
             spanId = spanId,
         )
-        return exporter.export(record)
     }
 
     /**
      * Whether [event] is dropped before any `LogRecord` is built — the exporter's
      * own loggers (the self-capture exclusion invariant) or below
-     * [CaptureConfig.minLevel]. Shared by [capture] and [resolveAtEdge] so the edge
-     * never pays the attribute mapper for a line that produces no record.
+     * [CaptureConfig.minLevel]. Shared by [recordFor] — and so by both [capture] and
+     * [captureAll] — and by [resolveAtEdge], so the edge never pays the attribute
+     * mapper for a line that produces no record.
      */
     private fun droppedBeforeRecord(event: NormalizedLogEvent): Boolean =
         event.loggerName.startsWith(KUILT_INTERNAL_LOGGER_PREFIX) ||
