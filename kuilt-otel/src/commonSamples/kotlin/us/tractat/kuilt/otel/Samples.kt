@@ -32,6 +32,31 @@ internal suspend fun sampleWarpLogRecordExporter() {
 }
 
 /** @suppress — sample only */
+internal suspend fun sampleBulkExport() {
+    val exporter = WarpLogRecordExporter(
+        replica = ReplicaId("device-uuid-abc123"),
+        store = InMemoryDurableStore(),
+    )
+
+    // Hand the exporter everything you already hold, in one call. One CRDT append pass,
+    // one CBOR encode of the active segment, one segment write — for the whole run,
+    // instead of once per record.
+    val pending: List<LogRecord> = drainedFromSomeQueue()
+    when (val result = exporter.export(pending)) {
+        ExportResult.Success -> Unit // every record in the run is now durable
+        is ExportResult.Failure -> {
+            // The store refused. Earlier records in the run may already be durable — a run
+            // too large for one segment is split across turns — so this is "stop", not
+            // "none of it landed".
+            println("export failed: ${result.cause}")
+        }
+    }
+}
+
+/** Stands in for whatever queue the application drains — see [sampleBulkExport]. */
+private fun drainedFromSomeQueue(): List<LogRecord> = emptyList()
+
+/** @suppress — sample only */
 internal suspend fun sampleWarpTelemetry() {
     val telemetry = WarpTelemetry(
         replica = ReplicaId("device-uuid-abc123"),

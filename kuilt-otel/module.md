@@ -27,6 +27,24 @@ delta-temporality retry bug is structurally impossible.
 @sample us.tractat.kuilt.otel.sampleWarpTelemetry
 ```
 
+## When an app suddenly has a lot to say
+
+Saving one log line used to cost a full round of bookkeeping and two writes to the
+device's storage — every single time. Hand over a handful of lines at once and that
+cost is paid once for the lot, so an app that gets chatty for a moment doesn't have
+to pay for each line separately.
+
+Nothing is delayed to make that happen. A batch is only ever what the caller already
+had in hand, and it is on disk before the call returns — a lone line on a quiet app
+is written just as promptly as before.
+
+[WarpLogRecordExporter.export] takes either a single record or a list of them. The
+list overload admits the whole run to the [Rga], encodes the active segment once and
+writes it once, rather than repeating that per record; a run too large for one
+segment is split across turns, so a failure means "stop", not "none of it landed"
+(#2194). Dedup and the buffer cap remain per-record decisions. Its KDoc carries a
+worked example.
+
 ## What's here (slices A1–A5 + WAL-JVM + WAL-iOS + WAL-wasm)
 
 | Type | What it does |
