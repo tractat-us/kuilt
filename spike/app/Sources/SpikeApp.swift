@@ -3,6 +3,16 @@ import SpikeKit
 
 @main
 struct SpikeApp: App {
+    init() {
+        // Auto-lock suspends the app, which freezes its coroutines and stops all console output —
+        // and a suspended app is still "alive" in the process list, with no crash and no error. On
+        // a long unattended run that is indistinguishable from the wedge #1860 is about: during
+        // this probe's own bisect, a screen lock truncated a run at n≈7,000 and read exactly like
+        // the field failure it was hunting. Holding the idle timer off removes a failure mode that
+        // fakes the bug under investigation.
+        UIApplication.shared.isIdleTimerDisabled = true
+    }
+
     var body: some Scene {
         WindowGroup { ContentView() }
     }
