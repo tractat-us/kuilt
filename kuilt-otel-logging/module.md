@@ -80,6 +80,14 @@ Your `log.info { … }` call does not wait for the record to be written — it h
 line to a queue and returns, and a drain writes it just behind you. On a slow device
 with a large buffer that drain can fall behind a chatty app and stay behind.
 
+When it does fall behind it stops writing one line at a time. It takes everything
+already waiting — up to `CAPTURE_BATCH_MAX` — and writes that whole run in one go,
+so catching up costs far less per line than falling behind did. You get this without
+asking for it, and without anything being held back to arrange it: a batch is only
+ever made of lines that were *already* queued, so a lone line on a quiet app is
+written just as promptly as before. One forms exactly when your app is outrunning
+the drain, and never when it isn't (#2194).
+
 The queue is bounded (`CAPTURE_QUEUE_CAPACITY`) and drops the **oldest** line when
 it is full, because it lives in the host application's memory: an unbounded queue
 here is unbounded heap growth in the app being observed. Suspending the caller
