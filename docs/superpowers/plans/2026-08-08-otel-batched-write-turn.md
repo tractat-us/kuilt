@@ -95,9 +95,9 @@ Behaviour-free. Does the rename first so Task 3's diff shows only the batching.
 
 - [ ] **Step 1: Find every informal use**
 
-Run: `grep -n "batch" kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpLogRecordExporter.kt`
+Run: `grep -ni "batch" kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpLogRecordExporter.kt`
 
-Expected: ~25 hits, all in KDoc/comments, none in an identifier.
+Expected: **63 hits** — `-i` matters, a case-sensitive grep misses the `Batch`/`Batched` ones. 58 are prose and get substituted; 5 are identifiers and stay (see Step 2).
 
 - [ ] **Step 2: Rewrite each hit to name the turn**
 
@@ -110,13 +110,36 @@ Substitute by meaning, not by regex. The four shapes that occur:
 | "a batch that failed at or before its active-segment write" | "a turn that failed at or before its active-segment write" |
 | "Apply a batch of store mutations **in order**" (on `commit`) | "Apply one turn's store mutations **in order**" |
 
-Leave `PendingRetirement`, `StoreAction`, `commit(actions:)` and every other identifier alone — none of them says "batch".
+**A fifth shape the table misses: three hits mean "grouped / periodic", not "the turn's actions".** Line 122 ("calls it in **batches** ([windowPass])"), line 352 ("why passes are **batched** rather than per-eviction") and line 1511 ("**Batched**, not per-eviction") describe a window pass running once per `maxRecords` evictions. "Turn" is wrong there — a pass happens *inside* a turn. Use "passes" / "grouped". Leaving them would be the worse error: they are closer to the *new* sense than the old one, so they would read as a live collision.
+
+Leave the identifiers alone. **One of them does say "batch"** — `ledgerSwept(swept, batchFailed: Boolean)` at `:1049`, called from `commit` at `:1027`/`:1033`. Renaming it would break this task's comments-only property, so it stays here and is picked up by Task 3, which rewrites `commit` anyway. Its KDoc will read "a **turn** that swept anything…" over a parameter still named `batchFailed` until then. The others — `PendingRetirement`, `StoreAction`, `commit(actions:)`, and the test name `anExportDoesNotBuildItsBatchWhileAnotherExportsCommitIsInFlight` cited from `writeMutex`'s KDoc — genuinely do not, or are citations that would dangle if renamed without the test.
+
+Two hits need rewording rather than substitution, because "turn" already appears in the same sentence and a literal swap reads as a tautology: `:283` "no batch it writes can be stale" → "no write it makes can be stale"; `:289` "a multi-key batch built from mutated state, the whole turn" → "several keys' writes built from mutated state, the whole turn".
 
 - [ ] **Step 3: Confirm nothing but comments moved**
 
-Run: `git diff --stat && git diff -U0 kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpLogRecordExporter.kt | grep -E '^[+-]' | grep -vE '^[+-]{3}' | grep -vE '^[+-]\s*(\*|//)' | grep -vE '^[+-]\s*$'`
+Run: `git diff --stat && git diff -U0 kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpLogRecordExporter.kt | grep -E '^[+-]' | grep -vE '^[+-]{3}' | grep -vE '^[+-]\s*(/?\*|//)' | grep -vE '^[+-]\s*$'`
 
 Expected: the second command prints **nothing** — every changed line is a comment line.
+
+Note the `/?` in the comment pattern: without it, a **single-line** KDoc (`/** … */`) starts with `/` and slips past the filter, so the check reports false positives on exactly the lines it should be excusing.
+
+Back it with a check that does not depend on getting a regex right — strip every comment from both revisions and compare the remainder:
+
+```bash
+python3 - <<'PY'
+import re, subprocess
+def strip(rev):
+    p = "kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpLogRecordExporter.kt"
+    src = subprocess.run(["git", "show", f"{rev}:{p}"], capture_output=True, text=True).stdout
+    src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)   # block and KDoc comments
+    src = re.sub(r"//[^\n]*", "", src)                # line comments
+    return re.sub(r"\s+", " ", src).strip()
+print("code identical after comment strip:", strip("origin/main") == strip("HEAD"))
+PY
+```
+
+Expected: `True`.
 
 - [ ] **Step 4: Build and lint**
 
@@ -1174,11 +1197,15 @@ Expected: every one passes alone.
 
 - [ ] **Step 7: Prove the tests catch the bug — revert and confirm red**
 
-```bash
-git stash push kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpLogRecordExporter.kt
-```
+> **Never `git stash` here, or anywhere in this repo.** `refs/stash` is **repo-global** — it is
+> shared by every linked worktree of the same clone, and several agents run concurrently against
+> this one. A `git stash push` in a dispatched worktree is visible to, and poppable by, an
+> unrelated session. Use a patch file when you need to park a change:
+> `git diff > /tmp/t3-revert.patch` … `git apply -R /tmp/t3-revert.patch`.
 
-That will not compile (the test calls the new overload), which is not a useful red. Instead, temporarily make `export(records)` a loop over the single-record path:
+Reverting the production file wholesale would not compile — the test calls the new overload — which
+is not a useful red. Instead, temporarily make `export(records)` a loop over the single-record path,
+keeping the signature:
 
 ```kotlin
     public suspend fun export(records: List<LogRecord>): ExportResult {
