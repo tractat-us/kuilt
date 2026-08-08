@@ -46,9 +46,15 @@ import us.tractat.kuilt.core.runCatchingCancellable
  * The producer is the application's own logging call, and [log] can neither
  * suspend nor fail, so an unbounded queue makes "the drain is slower than the
  * producer" mean **unbounded heap growth in the host application** — during normal
- * operation, not just at teardown. At the field's measured export cost a Debug
- * build on an A12 against a large store structurally cannot sustain one log line
- * per second (#1860), so this is reachable, not theoretical.
+ * operation, not just at teardown. At the field's measured **per-record** export
+ * cost — a ~9 ms floor on a Debug A12 that never amortised, plus a growing Θ(N)
+ * term (#1860) — a burst structurally could not be drained, so this was reachable
+ * at ordinary logging rates. Since #2194 the drain exports what is already queued
+ * as one turn, so that fixed cost is divided by the batch and the bound is far
+ * harder to reach. It is not gone: the queue is what absorbs a burst the drain
+ * cannot swallow in one turn, and an overflow now means the application is
+ * outrunning an *amortised* drain — a much stronger signal than it used to be, and
+ * one worth acting on rather than tuning away.
  *
  * The queue therefore holds [CAPTURE_QUEUE_CAPACITY] events and drops the **oldest**
  * beyond that:
@@ -209,9 +215,9 @@ internal class CapturingAppender(
             // and so this very line is excluded from capture. Never the empty-lambda
             // form — see InternalLoggerNameGuardTest.
             KotlinLogging.logger(OVERFLOW_LOGGER_NAME).warn {
-                "log capture queue overflowed (capacity=$capacity): the exporter is draining slower than this " +
-                    "application logs, so the oldest captured events are being dropped. Read " +
-                    "LogCaptureInstallation.health.value.droppedEvents for the running total."
+                "log capture queue overflowed (capacity=$capacity): this application is logging faster than " +
+                    "the exporter can drain, even batched, so the oldest captured events are being dropped. " +
+                    "Read LogCaptureInstallation.health.value.droppedEvents for the running total."
             }
         } catch (ignoredReportFailure: Throwable) {
             // Deliberately swallowed, and deliberately NOT rethrowing cancellation:

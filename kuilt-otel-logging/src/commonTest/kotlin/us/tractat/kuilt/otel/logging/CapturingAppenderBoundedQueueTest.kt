@@ -224,9 +224,63 @@ class CapturingAppenderBoundedQueueTest {
         )
     }
 
+    /**
+     * Batching amortises the drain; it does not make the queue unbounded. A burst
+     * larger than the queue still drops the oldest and still counts every drop — the
+     * bound is the queue's, not the drain's, and #2194 must not have quietly moved it.
+     *
+     * Driven at a batch cap **below** and **above** the queue depth, which is the part
+     * [aDrainSlowerThanItsProducerCannotGrowTheQueueWithoutBound] cannot say on its
+     * own: the survivor set and the drop count must be *independent* of how much of
+     * the queue one turn swallows. A drain allowed to take the whole queue at once
+     * must not thereby rescue events the channel already dropped at `log()` time, and
+     * a drain capped below the queue must not drop any extra.
+     */
+    @Test
+    fun batchingTheDrainDoesNotWidenTheQueue() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        fun burstThrough(maxBatchSize: Int): Pair<List<String?>, Long> {
+            val exporter = WarpLogRecordExporter(
+                ReplicaId("device-1"),
+                SlowStore(InMemoryDurableStore(), writeCost = 1.seconds),
+            )
+            val capture = LogCapture(exporter, CaptureConfig(), fixedClock, Random(1))
+            val appender = CapturingAppender(
+                capture,
+                RecordingAppender(),
+                backgroundScope,
+                capacity = QUEUE,
+                maxBatchSize = maxBatchSize,
+            )
+
+            withGlobalCapture(appender) {
+                repeat(BURST) { appender.log(appEvent("event $it")) }
+                testScheduler.advanceTimeBy(DRAIN_WINDOW)
+                testScheduler.runCurrent()
+            }
+            return exporter.snapshot().toList().map { it.body } to appender.health.value.droppedEvents
+        }
+
+        val (belowCapBodies, belowCapDropped) = burstThrough(maxBatchSize = BATCH_BELOW_QUEUE)
+        val (aboveCapBodies, aboveCapDropped) = burstThrough(maxBatchSize = QUEUE * BATCH_ABOVE_QUEUE_FACTOR)
+
+        val survivors = List(QUEUE) { "event ${BURST - QUEUE + it}" }
+        assertAll(
+            { assertEquals(survivors, belowCapBodies, "a batch cap below the queue must not drop anything extra") },
+            { assertEquals((BURST - QUEUE).toLong(), belowCapDropped) },
+            { assertEquals(survivors, aboveCapBodies, "a batch cap above the queue must not rescue a dropped event") },
+            { assertEquals((BURST - QUEUE).toLong(), aboveCapDropped) },
+        )
+    }
+
     private companion object {
         /** A queue small enough to overflow cheaply; the production depth is [CAPTURE_QUEUE_CAPACITY]. */
         private const val QUEUE = 8
+
+        /** A batch cap forcing several turns to swallow one full queue. */
+        private const val BATCH_BELOW_QUEUE = 2
+
+        /** Multiplied by [QUEUE] for a cap the whole queue fits inside, as production's does. */
+        private const val BATCH_ABOVE_QUEUE_FACTOR = 4
 
         /** Comfortably more than [QUEUE], so the drop path runs many times. */
         private const val BURST = 64
