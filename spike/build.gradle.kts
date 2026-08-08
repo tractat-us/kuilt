@@ -30,6 +30,11 @@ kotlin {
             // header); the deps only exist to exercise the shipping API on-device.
             implementation(project(":kuilt-nw"))
             implementation(project(":kuilt-session"))
+            // #1860 on-device measurement: OtelStallProbe times Rga.insertAfter against the whole
+            // WarpLogRecordExporter write turn on real hardware. kuilt-otel exposes kuilt-crdt as
+            // `api`, so Rga comes with it. Same throwaway status as everything else here — the
+            // probe answers one question and is deleted once #1860 closes.
+            implementation(project(":kuilt-otel"))
             // #1467 field diagnosis: the fabric already logs its whole dial/connection path
             // (nw.loom.*, nw.dial, nw.api.state, and the #1560 nw_error capture) at DEBUG.
             // The suite raises the level at startup so a device console run shows that trace.

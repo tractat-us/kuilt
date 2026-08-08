@@ -35,6 +35,29 @@ final class Model: ObservableObject {
     @Published var prompt = ""
 
     private let suite = ConnectivitySuite()
+    private let otelProbe = OtelStallProbe()
+
+    /// #1860 measurement. Unlike the connectivity scenarios this needs no second phone and no
+    /// human — it times `Rga.insertAfter` against the whole exporter write turn and prints the
+    /// curve. Every line goes to stdout so `devicectl --console` is the whole retrieval story;
+    /// the on-screen log is a convenience for a run started by tapping.
+    func startOtelProbe(recover: Bool = false) {
+        guard !running else { return }
+        self.role = recover ? "otel-probe-recover" : "otel-probe"
+        self.running = true
+        self.rows = []
+        self.report = ""
+        self.log = "starting otel probe (\(self.role))…"
+        let sink: (String) -> Void = { [weak self] line in
+            print("[probe] " + line)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.log = line + "\n" + self.log
+                if line.hasPrefix("===PROBE-END===") { self.running = false }
+            }
+        }
+        if recover { otelProbe.startRecover(onLine: sink) } else { otelProbe.start(onLine: sink) }
+    }
 
     func start(role: String) {
         guard !running else { return }
@@ -123,6 +146,13 @@ struct ContentView: View {
                 Button("Join · S7 go offline") { model.start(role: "join-s7") }
                     .buttonStyle(.bordered).disabled(model.running)
             }
+            // #1860 measurement — one phone, no partner, no human at a toggle.
+            HStack(spacing: 16) {
+                Button("otel probe · grow") { model.startOtelProbe() }
+                    .buttonStyle(.bordered).disabled(model.running)
+                Button("otel probe · recover") { model.startOtelProbe(recover: true) }
+                    .buttonStyle(.bordered).disabled(model.running)
+            }
             if model.running {
                 HStack(spacing: 8) { ProgressView(); Text("running \(model.role)…").font(.caption) }
             }
@@ -186,7 +216,13 @@ struct ContentView: View {
             // "host-s4" must not fall through to the full battery. `-s6`/`-s7` still need a human
             // at the Airplane Mode toggle — the launch arg only starts them.
             let args = ProcessInfo.processInfo.arguments
-            if args.contains("host-s4") { model.start(role: "host-s4") }
+            // `otel-probe-recover` must be tested BEFORE `otel-probe`: `contains` is exact-match
+            // per element, but the recover launch passes both-looking args nowhere near each
+            // other only by convention, and ordering the specific case first is the same
+            // discipline the `-s4`/`-s6` variants above already needed.
+            if args.contains("otel-probe-recover") { model.startOtelProbe(recover: true) }
+            else if args.contains("otel-probe") { model.startOtelProbe() }
+            else if args.contains("host-s4") { model.start(role: "host-s4") }
             else if args.contains("join-s4") { model.start(role: "join-s4") }
             else if args.contains("host-s6") { model.start(role: "host-s6") }
             else if args.contains("join-s6") { model.start(role: "join-s6") }
