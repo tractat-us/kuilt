@@ -44,6 +44,32 @@ package us.tractat.kuilt.otel.logging
 public const val CAPTURE_QUEUE_CAPACITY: Int = 1024
 
 /**
+ * The most events one drain turn hands to the exporter at once.
+ *
+ * The drain does not wait for a batch to form: it blocks for the first event and
+ * then takes whatever is **already queued**, up to this many. So a batch only grows
+ * when the application is outrunning the drain — which is exactly the condition
+ * worth amortising — and a lone log line on an idle app is exported immediately,
+ * with the same durability it always had. Nothing is held back, so there is no
+ * flush window to lose on a crash.
+ *
+ * ## Why a cap at all, and why this number
+ *
+ * - **One turn's memory.** The batch is materialised as a list of `LogRecord`s
+ *   before it is exported, so the cap bounds what one turn holds beyond the queue
+ *   itself.
+ * - **One segment's bytes.** `WarpLogRecordExporter` splits a batch that would
+ *   overfill the active segment, so a cap far above `DEFAULT_LOG_SEGMENT_OPS` buys
+ *   nothing — the exporter would split it straight back down. Matching that order
+ *   of magnitude keeps the two from arguing.
+ * - **Diminishing returns.** The fixed per-turn cost is divided by the batch size,
+ *   so the difference between 256 and 1024 is the difference between paying 0.4%
+ *   and 0.1% of it. The queue depth ([CAPTURE_QUEUE_CAPACITY]) is what absorbs a
+ *   burst; this is only how much of it is swallowed per turn.
+ */
+public const val CAPTURE_BATCH_MAX: Int = 256
+
+/**
  * An out-of-band health signal for the log-capture edge.
  *
  * ## Why this exists

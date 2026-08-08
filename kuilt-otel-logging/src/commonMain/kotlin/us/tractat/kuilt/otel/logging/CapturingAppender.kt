@@ -20,11 +20,26 @@ import us.tractat.kuilt.core.runCatchingCancellable
  * delegating to a previously-installed appender (so console output is preserved).
  *
  * oshai's [log] callback is synchronous and may run on any thread, but
- * [LogCapture.capture] is `suspend`. A single dedicated drain coroutine bridges
+ * [LogCapture.captureAll] is `suspend`. A single dedicated drain coroutine bridges
  * the two: [log] hands events off to a [Channel], and the drain coroutine consumes
  * them in FIFO order. This is the legitimate single-writer channel-drain pattern —
  * it preserves per-producer insertion order without relying on dispatcher
  * confinement for mutual exclusion.
+ *
+ * ## The drain takes what is already queued, as one export turn (#2194)
+ *
+ * It blocks for the first event, then greedily takes whatever is **already
+ * enqueued** behind it — up to [maxBatchSize] — and hands the run to
+ * [LogCapture.captureAll], which exports it as a single write turn. The exporter's
+ * fixed per-turn cost (one CRDT append pass, one CBOR encode, one segment write) is
+ * then paid once for the whole run instead of once per line.
+ *
+ * **Opportunistic, not timed.** There is no flush interval and no clock: nothing is
+ * ever held back in the hope more arrives, so a lone line on an idle app is exported
+ * with exactly the latency and durability it had before, and a crash can lose nothing
+ * a per-event drain would have kept. A batch forms only when the application is
+ * outrunning the drain, which is precisely the case worth amortising — and it
+ * self-equilibrates there, because a larger batch drains faster per line.
  *
  * ## The queue is bounded, and overflowing it drops the oldest (#2124)
  *
@@ -61,12 +76,15 @@ import us.tractat.kuilt.core.runCatchingCancellable
  *
  * @param capacity queue depth. Defaults to [CAPTURE_QUEUE_CAPACITY]; overridden
  *   only by tests, which need to overflow a queue cheaply.
+ * @param maxBatchSize the most events one drain turn exports at once. Defaults to
+ *   [CAPTURE_BATCH_MAX]; overridden only by tests, which need several turns cheaply.
  */
 internal class CapturingAppender(
     private val capture: LogCapture,
     private val delegate: Appender,
     scope: CoroutineScope,
     private val capacity: Int = CAPTURE_QUEUE_CAPACITY,
+    private val maxBatchSize: Int = CAPTURE_BATCH_MAX,
 ) : Appender {
     // A MutableStateFlow owns no CoroutineScope, so the health surface adds no
     // scope ownership to this type. `update {}` is an atomic CAS loop — a real
@@ -92,14 +110,38 @@ internal class CapturingAppender(
     private val overflowReported = atomic(false)
 
     init {
-        scope.launch {
-            for (event in events) {
-                // Best-effort: a failed export must never crash the app's logging
-                // path, and must never re-log through this same appender (a capture
-                // feedback loop), so a failure is dropped. runCatchingCancellable
-                // still rethrows CancellationException for clean teardown.
-                runCatchingCancellable { capture.capture(event) }
+        require(maxBatchSize >= 1) { "maxBatchSize must be at least 1; got $maxBatchSize" }
+        scope.launch { drain() }
+    }
+
+    /**
+     * Consume the queue in runs: block for one event, take whatever is already
+     * behind it, export the run as one turn, repeat until the channel closes.
+     *
+     * The greedy second loop is what makes this opportunistic rather than timed —
+     * [Channel.tryReceive] never suspends, so it can only find company that was
+     * *already* queued. Nothing waits for a batch to grow.
+     */
+    private suspend fun drain() {
+        val batch = ArrayList<NormalizedLogEvent>(maxBatchSize)
+        while (true) {
+            // receiveCatching() rather than `for (event in events)` because the first
+            // element and the rest are now taken by different means; a null here is
+            // the closed channel, which is the same termination `for` gave.
+            val first = events.receiveCatching().getOrNull() ?: break
+            batch += first
+            while (batch.size < maxBatchSize) {
+                batch += events.tryReceive().getOrNull() ?: break
             }
+            // Best-effort: a failed export must never crash the app's logging path,
+            // and must never re-log through this same appender (a capture feedback
+            // loop), so a failure is dropped. runCatchingCancellable still rethrows
+            // CancellationException for clean teardown.
+            //
+            // `batch` is safe to reuse: captureAll maps it to records and returns
+            // before this line does, so nothing downstream holds the list we clear.
+            runCatchingCancellable { capture.captureAll(batch) }
+            batch.clear()
         }
     }
 
