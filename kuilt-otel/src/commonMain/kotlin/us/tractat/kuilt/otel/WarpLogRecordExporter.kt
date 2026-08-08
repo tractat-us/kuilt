@@ -119,7 +119,7 @@ internal fun opCountOf(segment: Rga<LogRecord>): Int = segment.opCount
  * Eviction only *tombstones*: the evicted record's `Insert` op — body and all — stays
  * in the log, so the in-memory op-log grew with the number of records ever exported
  * even though [maxRecords] held visibility flat. [Rga.dropWindow] is the fix, and this
- * exporter calls it in **batches** ([windowPass]): everything outside the retained
+ * exporter calls it in **passes** ([windowPass]): everything outside the retained
  * window is dropped from `log`.
  *
  * **How cheaply the drop is recorded depends on who authored the dot**, and only one of
@@ -242,14 +242,14 @@ public class WarpLogRecordExporter(
     private val lock = reentrantLock()
 
     /**
-     * Serializes one **write turn** — build a batch under [lock], then apply it to [store] — so
-     * that a batch reaches the store in the order it was built.
+     * Serializes one **write turn** — build the turn's actions under [lock], then apply them to
+     * [store] — so that a turn's actions reach the store in the order they were built.
      *
      * [lock] alone cannot give that. It is a thread-blocking primitive, so it is released the
-     * instant the batch is built and every `store.write` in [commit] runs outside it. Two
+     * instant the actions are built and every `store.write` in [commit] runs outside it. Two
      * overlapping turns therefore build in one order and land in another, and the CRDT's own
-     * convergence does not rescue the store, because a batch does not *merge* into a key — it
-     * **overwrites** it:
+     * convergence does not rescue the store, because a turn's write does not *merge* into a key —
+     * it **overwrites** it:
      *
      * - the **active-segment write** carries that whole segment, so a turn whose bytes were
      *   encoded first and land last silently discards the other turn's records. [export] has
@@ -260,11 +260,11 @@ public class WarpLogRecordExporter(
      * - the **index write** carries the whole layout, so a stale one drops the segment numbers a
      *   fresher one had just added. With no key-enumeration API a segment the index stops naming
      *   is unreachable and unsweepable forever.
-     * - a [StoreAction.Sweep] is ordered behind its **own** batch's covering write, and nothing
-     *   ordered it against another batch's. A delete could therefore land on a segment whose
+     * - a [StoreAction.Sweep] is ordered behind its **own** turn's covering write, and nothing
+     *   ordered it against another turn's. A delete could therefore land on a segment whose
      *   covering floor a stale active-segment write had just overwritten away — precisely the
      *   inversion [retireSupersededSegments] names as the unsafe order, reached without inverting
-     *   anything *within* a batch.
+     *   anything *within* a turn.
      *
      * Building **inside** the same critical section that applies is what makes build order and
      * apply order the same order by construction rather than a property to be maintained. It also
@@ -274,19 +274,19 @@ public class WarpLogRecordExporter(
      *
      * **Do not narrow this to [commit] alone.** It looks equivalent and holds the lock for less
      * time, and it is wrong twice: two turns would still build in one order and acquire in
-     * another, and a turn could still build its whole batch while another turn's commit is
+     * another, and a turn could still build all its actions while another turn's commit is
      * in flight — which is the double-staging window verbatim.
      *
      * The narrow form is not wrong everywhere, and the sibling makes the distinction checkable.
      * [WarpSpanExporter] holds its coroutine `Mutex` over the durable section **alone** and is
      * correct, *because* it re-encodes the latest state inside that section — its bytes are
-     * derived after the mutex is held, so no batch it writes can be stale (#1053). This class
+     * derived after the mutex is held, so no write it makes can be stale (#1053). This class
      * cannot borrow that argument: [commit] is handed bytes that were encoded before it was
      * called, over field mutations ([appendToActiveSegment], [windowPass], [adoptRemoteSegment])
      * that are already applied. Re-deriving inside [commit] is not on
-     * offer either — a batch is an ordered sequence of writes across several keys, and an
+     * offer either — a turn is an ordered sequence of writes across several keys, and an
      * interleaved turn has already moved the fields those writes describe. So: one write, a
-     * narrow mutex; a multi-key batch built from mutated state, the whole turn.
+     * narrow mutex; several keys' writes built from mutated state, the whole turn.
      *
      * `anExportDoesNotBuildItsBatchWhileAnotherExportsCommitIsInFlight`
      * (`WarpLogRecordExporterConcurrencyTest`) is what pins the narrow form out, and the
@@ -349,7 +349,7 @@ public class WarpLogRecordExporter(
 
     /**
      * Evictions since the last [windowPass]. One of the two things that make a pass due —
-     * see [windowPassDue], and [windowPass] for why passes are batched rather than
+     * see [windowPassDue], and [windowPass] for why passes are grouped rather than
      * per-eviction.
      */
     private var evictionsSincePass: Int = 0
@@ -408,8 +408,8 @@ public class WarpLogRecordExporter(
     /**
      * Whether the store holds an index matching [sealedSegments]/[activeNumber].
      *
-     * Cleared on any failed batch, so the next attempt rewrites it: a partially
-     * applied batch can have left the index naming segments that were never written.
+     * Cleared on any failed turn, so the next attempt rewrites it: a partially
+     * applied turn can have left the index naming segments that were never written.
      */
     private var indexPersisted: Boolean = false
 
@@ -452,12 +452,12 @@ public class WarpLogRecordExporter(
          * [LogSegmentIndex.retired] — and, only once that write has *returned*, move [numbers]
          * out of [sealedSegments]/[sealedContents] and onto [retiringSegments].
          *
-         * The in-memory move being an effect of this action rather than of building the batch is
+         * The in-memory move being an effect of this action rather than of building the turn is
          * what upholds the one invariant the delete path rests on: **a number appears in an
          * on-disk `retired` list only after a write carrying its covering state was confirmed
          * durable.** [retiringSegments] is what every later [encodeIndex] reads, so a move applied
-         * while the batch was still being built would let the *next* batch's leading index write —
-         * which is emitted **before** that batch's [activeSegmentWrite] — publish a retirement
+         * while the turn was still being built would let the *next* turn's leading index write —
+         * which is emitted **before** that turn's [activeSegmentWrite] — publish a retirement
          * whose covering write never landed. [loadPersistedState] then sweeps it with no check,
          * and records a recovery could still have read are gone.
          *
@@ -475,17 +475,17 @@ public class WarpLogRecordExporter(
          *
          * Same shape and same reason as [CommitRetirement]: a layout change becomes real in
          * memory only after the write that publishes it has returned. The write it depends on is
-         * this batch's [activeSegmentWrite], queued and applied earlier, and [commit] stops at
+         * this turn's [activeSegmentWrite], queued and applied earlier, and [commit] stops at
          * the first failure — so a refused segment write leaves the segment **un-sealed** and the
-         * next batch rewrites the same key.
+         * next turn rewrites the same key.
          *
-         * Sealing while the batch was still being *built* was wrong twice, and both harms are
+         * Sealing while the turn was still being *built* was wrong twice, and both harms are
          * reachable through the same store shape [CommitRetirement] names — a quota-bound store
          * that refuses **large** writes while small ones succeed:
          *
-         * - **A stranded `Compact`.** A roll fires inside a *retiring* batch only when a foreign
+         * - **A stranded `Compact`.** A roll fires inside a *retiring* turn only when a foreign
          *   author's dots forced the pass to mint an [RgaOp.Compact] (this replica's own dots fold
-         *   into the floor and only shrink the segment). In exactly that batch, a refused
+         *   into the floor and only shrink the segment). In exactly that turn, a refused
          *   [activeSegmentWrite] leaves the segment sealed in memory as [SegmentContent.Pinned]
          *   while its key on disk still holds the *pre-pass* bytes without the `Compact` — and
          *   nothing ever rewrites a sealed key. In-memory `log.compactedIds` still covers those
@@ -512,16 +512,16 @@ public class WarpLogRecordExporter(
          * Best-effort delete of retired segment [number]'s key.
          *
          * Always ordered **after** the [CommitRetirement] whose index named [number] under
-         * [LogSegmentIndex.retired] — earlier in this same batch, or in an earlier batch (or an
+         * [LogSegmentIndex.retired] — earlier in this same turn, or in an earlier turn (or an
          * earlier *process*) for a number whose delete was refused and is being retried. That
          * ledger write is itself ordered after the [activeSegmentWrite] carrying the state that
-         * supersedes [number], and [commit] applies a batch strictly in order and stops at the
-         * first failed write, so both orderings are enforced by construction rather than by
+         * supersedes [number], and [commit] applies a turn's actions strictly in order and stops
+         * at the first failed write, so both orderings are enforced by construction rather than by
          * remembering to keep them.
          *
          * The startup counterpart in [loadPersistedState] deletes with no ordering of its own —
          * it sweeps [LogSegmentIndex.retired] before it reads anything. It is sound for a
-         * different reason, one batch ordering alone would not give it: [CommitRetirement] is the
+         * different reason, one turn's ordering alone would not give it: [CommitRetirement] is the
          * only thing that can **extend** that list, so anything the next process finds there was
          * already covered by a write that landed first. (Every other index write *restates* the
          * list — a leading `Put(INDEX_KEY, encodeIndex())` writes those same numbers out again,
@@ -531,12 +531,12 @@ public class WarpLogRecordExporter(
     }
 
     /**
-     * The retirement half of one batch: the actions that carry it to disk, and the numbers those
+     * The retirement half of one turn: the actions that carry it to disk, and the numbers those
      * actions will move onto the ledger **if** the ledger write lands.
      *
      * [staged] is deliberately not applied to any field here. It is threaded to the other index
-     * write a batch can carry ([rollActiveSegment]), which has to project it — that write is
-     * encoded while the batch is built, so without the projection it would name a segment the
+     * write a turn can carry ([rollActiveSegment]), which has to project it — that write is
+     * encoded while the turn is built, so without the projection it would name a segment the
      * [StoreAction.CommitRetirement] queued just above it has already retired, undoing the ledger.
      */
     private class PendingRetirement(val staged: List<Int>, val actions: List<StoreAction>) {
@@ -838,7 +838,7 @@ public class WarpLogRecordExporter(
         activeOpCount = opCountOf(recovered.activeSegment)
         nextSegmentNumber = recovered.nextSegmentNumber
         // A ledger the recovered index named is stale the moment its sweep lands, so leave the
-        // index dirty and let the next batch rewrite it without the confirmed deletions.
+        // index dirty and let the next turn rewrite it without the confirmed deletions.
         indexPersisted = !recovered.ledgerDirty
         installDerivedState(entries)
     }
@@ -881,7 +881,7 @@ public class WarpLogRecordExporter(
      */
     public suspend fun export(record: LogRecord): ExportResult = writeMutex.withLock { exportTurn(record) }
 
-    /** [export]'s write turn: build the batch, then apply it. Must hold [writeMutex]. */
+    /** [export]'s write turn: build the actions, then apply them. Must hold [writeMutex]. */
     private suspend fun exportTurn(record: LogRecord): ExportResult {
         val actions = runCatchingCancellable {
             lock.withLock {
@@ -939,7 +939,7 @@ public class WarpLogRecordExporter(
      */
     public suspend fun merge(remote: Rga<LogRecord>): ExportResult = writeMutex.withLock { mergeTurn(remote) }
 
-    /** [merge]'s write turn: build the batch, then apply it. Must hold [writeMutex]. */
+    /** [merge]'s write turn: build the actions, then apply them. Must hold [writeMutex]. */
     private suspend fun mergeTurn(remote: Rga<LogRecord>): ExportResult {
         val actions = runCatchingCancellable {
             lock.withLock {
@@ -973,30 +973,30 @@ public class WarpLogRecordExporter(
     // ── Segmented persistence ──────────────────────────────────────────────────
 
     /**
-     * Apply a batch of store mutations **in order**, then report it through [health].
+     * Apply one turn's store mutations **in order**, then report it through [health].
      *
-     * One export is **one** accepted write no matter how many keys its batch
+     * One export is **one** accepted write no matter how many keys its turn
      * touched, so [ExporterHealth.accepted] keeps meaning "records durably taken",
      * not "store calls made".
      *
      * The order is load-bearing, not incidental: a [StoreAction.Sweep] deletes a segment's
      * records, and it is safe only after the state that supersedes them is durable. Stopping at
-     * the first failed write is what enforces that — a batch whose active-segment write or ledger
+     * the first failed write is what enforces that — a turn whose active-segment write or ledger
      * write did not land never reaches its sweeps.
      *
      * **This is also where a layout change becomes real in memory**, and that is what carries the
-     * ordering *between* batches — which stopping at the first failure does not, because a failed
-     * batch does not stop the process. Both index writes that move the layout are effects applied
-     * here rather than while the batch was built:
+     * ordering *between* turns — which stopping at the first failure does not, because a failed
+     * turn does not stop the process. Both index writes that move the layout are effects applied
+     * here rather than while the turn was built:
      *
      * - [StoreAction.CommitRetirement] moves its numbers onto [retiringSegments] only after
-     *   `store.write` has returned, so a batch that failed at or before its active-segment write
-     *   leaves that field exactly as it found it, and the next batch's **leading** index write —
+     *   `store.write` has returned, so a turn that failed at or before its active-segment write
+     *   leaves that field exactly as it found it, and the next turn's **leading** index write —
      *   emitted before its own active-segment write — has nothing uncovered to publish. It is that
-     *   invariant, not any within-batch order, that lets [loadPersistedState] sweep
+     *   invariant, not any within-turn order, that lets [loadPersistedState] sweep
      *   [LogSegmentIndex.retired] before it reads a thing.
      * - [StoreAction.CommitRoll] seals the active segment only after its own write has returned,
-     *   so a refused [activeSegmentWrite] leaves the segment un-sealed and the next batch rewrites
+     *   so a refused [activeSegmentWrite] leaves the segment un-sealed and the next turn rewrites
      *   the same key — rather than sealing, in memory, a key that on disk lacks the very
      *   [RgaOp.Compact] the pass just minted into it.
      *
@@ -1028,7 +1028,7 @@ public class WarpLogRecordExporter(
                 success()
             },
             onFailure = { cause ->
-                // A half-applied batch can have left the index naming segments that
+                // A half-applied turn can have left the index naming segments that
                 // were never written. Rewriting it on the next attempt re-converges.
                 lock.withLock { ledgerSwept(swept, batchFailed = true) }
                 logFailure(cause)
@@ -1042,9 +1042,9 @@ public class WarpLogRecordExporter(
      * Must hold [lock].
      *
      * A confirmed deletion can only leave [LogSegmentIndex.retired] on a **later** index write,
-     * so a batch that swept anything leaves the index dirty even though it succeeded. Numbers
+     * so a turn that swept anything leaves the index dirty even though it succeeded. Numbers
      * whose sweep failed stay in [retiringSegments], and therefore stay named on disk, so the
-     * next batch — or the next process start — re-attempts them.
+     * next turn — or the next process start — re-attempts them.
      */
     private fun ledgerSwept(swept: List<Int>, batchFailed: Boolean) {
         retiringSegments.removeAll(swept.toSet())
@@ -1148,12 +1148,12 @@ public class WarpLogRecordExporter(
      *
      * **Nothing here touches [sealedSegments], [sealedContents], [activeSegment], [activeNumber]
      * or [nextSegmentNumber]** — the same discipline, and for the same reason, as
-     * [retireSupersededSegments]. A seal applied while the batch was still being built survives a
-     * batch whose [activeSegmentWrite] was refused, which strands the pass's `RgaOp.Compact` on a
+     * [retireSupersededSegments]. A seal applied while the turn was still being built survives a
+     * turn whose [activeSegmentWrite] was refused, which strands the pass's `RgaOp.Compact` on a
      * key nothing will ever rewrite and, under sustained refusal, seals segment numbers that were
      * never written at all. See [StoreAction.CommitRoll], which is where the move is applied.
      *
-     * [staged] is this batch's retirement, which has **not** been applied to any field yet either
+     * [staged] is this turn's retirement, which has **not** been applied to any field yet either
      * — it lands in [commit], after its ledger write returns. The index encoded here has to
      * project it anyway, because on disk this write follows that ledger write: without the
      * projection it would re-name a retired segment as sealed and drop it from
@@ -1237,7 +1237,7 @@ public class WarpLogRecordExporter(
      *
      * The parameters exist for the writes that have to describe a layout no field holds yet — a
      * [StoreAction.CommitRetirement]'s, and the [StoreAction.CommitRoll] that can follow it in the
-     * same batch — because each move is applied only once its own write returns. Every other
+     * same turn — because each move is applied only once its own write returns. Every other
      * caller passes the fields, and so can only ever restate a ledger that is already on disk.
      */
     private fun encodeIndex(
@@ -1255,7 +1255,7 @@ public class WarpLogRecordExporter(
         ),
     )
 
-    /** The ledger this batch would leave behind if [staged] commits. Must hold [lock]. */
+    /** The ledger this turn would leave behind if [staged] commits. Must hold [lock]. */
     private fun ledgerWith(staged: List<Int>): List<Int> =
         retiringSegments + staged.filter { it !in retiringSegments }
 
@@ -1303,15 +1303,15 @@ public class WarpLogRecordExporter(
      * cost a user's telemetry, so it is where it is caught.
      *
      * **It fails the export, and that is the intended trade.** The `check` throws, and this runs
-     * inside the batch-building block of [export]/[merge], so a break is caught there and returned
+     * inside the turn-building block of [export]/[merge], so a break is caught there and returned
      * as [ExportResult.Failure] — the record is not durably written and [ExporterHealth.failed]
      * counts it. A silent `continue` past the broken segment would be the alternative, and on a
      * path that deletes a user's telemetry an inconsistency of exactly this kind is the one thing
-     * that must not be stepped over. The blast radius is bounded twice over. Only a batch that
+     * that must not be stepped over. The blast radius is bounded twice over. Only a turn that
      * just ran a [windowPass] reaches here at all, and a pass comes due about once per
      * [maxRecords] evictions — so at most one export in [maxRecords] can be refused by it. And the
      * refused record is not lost: the throw happens *after* the insert, so it is already in [log]
-     * and in [activeSegment], and the next batch's active-segment write carries it to disk.
+     * and in [activeSegment], and the next turn's active-segment write carries it to disk.
      *
      * Coverage has two sources and both must be read: the O(authors) [Rga.compactedBelow] floor,
      * which absorbs this replica's own windowed-away dots, and [Rga.compactedIds], which is where
@@ -1334,7 +1334,7 @@ public class WarpLogRecordExporter(
 
     /**
      * **Stage** every retirable segment and emit the actions that carry the retirement to disk.
-     * Must hold [lock], and must be appended **after** the active-segment write of a batch that
+     * Must hold [lock], and must be appended **after** the active-segment write of a turn that
      * has just run a [windowPass].
      *
      * The order, extending this file's own precedent that the index is the commit point:
@@ -1349,8 +1349,8 @@ public class WarpLogRecordExporter(
      *
      * **Nothing here touches [sealedSegments], [sealedContents] or [retiringSegments].** That is
      * the load-bearing part, not a stylistic one. Those fields are what [encodeIndex] reads, so
-     * moving a number onto the ledger while the batch was still being *built* would publish it on
-     * the **next** batch's leading index write — which is emitted before that batch's
+     * moving a number onto the ledger while the turn was still being *built* would publish it on
+     * the **next** turn's leading index write — which is emitted before that turn's
      * active-segment write, and so before anything covers it. [loadPersistedState] sweeps
      * [LogSegmentIndex.retired] unconditionally and before it reads a thing, so the next start
      * would then delete a segment whose covering write never landed: not suppression lost, but
@@ -1373,7 +1373,7 @@ public class WarpLogRecordExporter(
      * and [commit] stops at the first failed write, which is what makes the order hold rather than
      * merely be documented.
      *
-     * Every outstanding ledger entry is re-swept, not just this batch's, so a delete that failed
+     * Every outstanding ledger entry is re-swept, not just this turn's, so a delete that failed
      * once is retried without waiting for a restart. That is also why an empty [retirableSegments]
      * still emits a ledger write when the ledger is non-empty: it restates a ledger already on
      * disk, and stages nothing.
@@ -1508,7 +1508,7 @@ public class WarpLogRecordExporter(
      * resulting compaction record into the active segment. Returns whether anything moved.
      * Must hold [lock].
      *
-     * **Batched, not per-eviction**, and the reason is the derived-state caches: a pass reads
+     * **Grouped, not per-eviction**, and the reason is the derived-state caches: a pass reads
      * [Rga.sequence], which is a cold lazy on every new [Rga] instance, so it costs a full
      * `computeSequence()` plus the [rebuildDerivedState] walk afterwards. Those O(N) walks are
      * exactly what the incremental `tail`/[visibleCount]/[seenIds] caches exist to keep off the
