@@ -410,6 +410,90 @@ public class Rga<V> private constructor(
     }
 
     /**
+     * Append [values] as a chain starting immediately after [after], minting one
+     * [RgaOp.Insert] per element on behalf of [replica].
+     *
+     * The bulk sibling of [insertAfter], and **indistinguishable from calling it in a
+     * loop**: the same ids, the same `after` links, the same Lamport clock, the same
+     * op-set. What differs is the cost. [insertAfter] rebuilds `ops` and `insertsById`
+     * on every call, so appending `k` elements to an `N`-op log is `k` copies of `N` —
+     * Θ(k·N). This pays **one** `ops + newOps` and **one** cache build for the whole
+     * run, so it is Θ(N + k).
+     *
+     * That is the amortisation `WarpLogRecordExporter` needs to stop paying a Θ(N)
+     * append per log record (#2194), and it needs no persistent data structure and no
+     * new dependency on this deliberately dependency-free module. It does **not**
+     * remove the Θ(N) term — one copy per run remains, which is #2193.
+     *
+     * An empty [values] returns `this` — the same instance, not a copy.
+     *
+     * @return the new state, and the ops to broadcast **in append order**.
+     */
+    public fun insertAllAfter(
+        replica: ReplicaId,
+        after: RgaId,
+        values: List<V>,
+    ): Pair<Rga<V>, List<RgaOp.Insert<V>>> {
+        if (values.isEmpty()) return this to emptyList()
+        var newLamport = lamport
+        var seq = nextSeqFor(replica) - 1L
+        var predecessor = after
+        val minted = ArrayList<RgaOp.Insert<V>>(values.size)
+        values.forEach { value ->
+            newLamport += 1L
+            seq += 1L
+            val id = RgaId(lamport = newLamport, replicaId = replica, seq = seq)
+            minted += RgaOp.Insert(id = id, value = value, after = predecessor)
+            predecessor = id
+        }
+        val newCache = RgaCache(
+            insertsById = insertsById + minted.associateBy { it.id },
+            maxSeqByReplica = maxSeqByReplica + (replica to seq),
+            tombstones = tombstones,
+            compactedIds = compactedIds,
+            compactPositions = compactPositions,
+        )
+        return Rga(ops + minted, newLamport, compactedBelow, newCache) to minted
+    }
+
+    /**
+     * Tombstone the first [count] **visible** elements, minting one [RgaOp.Remove] each.
+     *
+     * The bulk sibling of `removeAt(0)` repeated, and indistinguishable from it: the
+     * same ids tombstoned, in the same order. The cost differs the same way
+     * [insertAllAfter]'s does — one `ops + removes` copy and one cache build for the
+     * whole run, and **one** [sequence] materialisation rather than one per removal.
+     * That second saving is the larger one in practice: every `removeAt` returns a new
+     * instance whose `sequence` lazy is cold, so a loop of `k` removals recomputes the
+     * full RGA order `k` times.
+     *
+     * Existing tombstones are skipped rather than counted, exactly as `removeAt(0)`
+     * skips them — [count] is a number of *visible* elements.
+     *
+     * A [count] of zero or less returns `this` (the same instance, not a copy).
+     *
+     * @throws IllegalArgumentException if [count] exceeds [size].
+     * @return the new state, and the ops to broadcast in removal order.
+     */
+    public fun removeFirst(count: Int): Pair<Rga<V>, List<RgaOp.Remove<V>>> {
+        if (count <= 0) return this to emptyList()
+        val visible = visibleSequence()
+        require(count <= visible.size) {
+            "removeFirst($count) exceeds the visible size of ${visible.size}"
+        }
+        val removed = visible.subList(0, count)
+        val minted = removed.map { id -> RgaOp.Remove<V>(id = id) }
+        val newCache = RgaCache(
+            insertsById = insertsById,
+            maxSeqByReplica = maxSeqByReplica,
+            tombstones = tombstones + removed,
+            compactedIds = compactedIds,
+            compactPositions = compactPositions,
+        )
+        return Rga(ops + minted, lamport, compactedBelow, newCache) to minted
+    }
+
+    /**
      * Garbage-collect tombstoned elements that are **causally stable** under the
      * eviction-safe causal-stability barrier (ADR-003 addendum v3, #262).
      *
