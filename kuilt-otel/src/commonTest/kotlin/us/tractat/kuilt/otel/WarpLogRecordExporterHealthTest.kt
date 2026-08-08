@@ -116,9 +116,10 @@ class WarpLogRecordExporterHealthTest {
      * cap under [BufferPolicy.DROP_NEWEST] (#2127).
      *
      * Asserted on `accepted` directly rather than on the store, because "no bytes were
-     * written" is **not** evidence for it — `commit(emptyList())` performs no write and
-     * still calls `success()`. Only the early return in `export`, ahead of `commit`, keeps
-     * this true, and only this assertion notices if that return moves.
+     * written" is **not** evidence for it: a turn reports `success(accepted)` with the
+     * count it admitted, so a turn that admitted nothing and wrote nothing would still
+     * report — harmlessly at zero — if the count were ever replaced by a constant. Only
+     * this assertion notices that.
      */
     @Test
     fun aRefusedRecordDoesNotCountAsADurableWrite() = runTest {

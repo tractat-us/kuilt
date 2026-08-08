@@ -28,10 +28,15 @@ package us.tractat.kuilt.otel
  * start", and an observer that needs wall-clock timing can stamp its own
  * observations of the flow.
  *
- * @property accepted Durable writes that **succeeded**. Counts writes, not
- *   `Success` returns: a dedup no-op returns [ExportResult.Success] without
- *   touching the store and is deliberately not counted, so an all-dedup state
- *   cannot masquerade as a healthy climbing count.
+ * @property accepted Log records **durably taken** by [WarpLogRecordExporter.export],
+ *   cumulative. Counts records, not calls and not store writes: one batched export of
+ *   256 records moves this by 256, and one export of a record whose id was already
+ *   taken moves it by zero — a dedup no-op returns [ExportResult.Success] without
+ *   touching the store, so an all-dedup state cannot masquerade as a healthy climbing
+ *   count. A record refused by the buffer cap under [BufferPolicy.DROP_NEWEST] is not
+ *   counted either, for the same reason. A successful `merge` does not move this at
+ *   all — it takes no records through admission — but does clear
+ *   [consecutiveFailures], because the store accepting it is evidence the store is up.
  * @property failed Durable writes that threw, cumulative across the process.
  * @property consecutiveFailures Failed writes since the last successful one.
  *   Resets to zero on any success — distinguishes "currently down" from
