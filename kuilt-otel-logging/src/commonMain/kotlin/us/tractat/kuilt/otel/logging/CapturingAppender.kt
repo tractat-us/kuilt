@@ -20,20 +20,41 @@ import us.tractat.kuilt.core.runCatchingCancellable
  * delegating to a previously-installed appender (so console output is preserved).
  *
  * oshai's [log] callback is synchronous and may run on any thread, but
- * [LogCapture.capture] is `suspend`. A single dedicated drain coroutine bridges
+ * [LogCapture.captureAll] is `suspend`. A single dedicated drain coroutine bridges
  * the two: [log] hands events off to a [Channel], and the drain coroutine consumes
  * them in FIFO order. This is the legitimate single-writer channel-drain pattern —
  * it preserves per-producer insertion order without relying on dispatcher
  * confinement for mutual exclusion.
+ *
+ * ## The drain takes what is already queued, as one export turn (#2194)
+ *
+ * It blocks for the first event, then greedily takes whatever is **already
+ * enqueued** behind it — up to [maxBatchSize] — and hands the run to
+ * [LogCapture.captureAll], which exports it as a single write turn. The exporter's
+ * fixed per-turn cost (one CRDT append pass, one CBOR encode, one segment write) is
+ * then paid once for the whole run instead of once per line.
+ *
+ * **Opportunistic, not timed.** There is no flush interval and no clock: nothing is
+ * ever held back in the hope more arrives, so a lone line on an idle app is exported
+ * with exactly the latency and durability it had before, and a crash can lose nothing
+ * a per-event drain would have kept. A batch forms only when the application is
+ * outrunning the drain, which is precisely the case worth amortising — and it
+ * self-equilibrates there, because a larger batch drains faster per line.
  *
  * ## The queue is bounded, and overflowing it drops the oldest (#2124)
  *
  * The producer is the application's own logging call, and [log] can neither
  * suspend nor fail, so an unbounded queue makes "the drain is slower than the
  * producer" mean **unbounded heap growth in the host application** — during normal
- * operation, not just at teardown. At the field's measured export cost a Debug
- * build on an A12 against a large store structurally cannot sustain one log line
- * per second (#1860), so this is reachable, not theoretical.
+ * operation, not just at teardown. At the field's measured **per-record** export
+ * cost — a ~9 ms floor on a Debug A12 that never amortised, plus a growing Θ(N)
+ * term (#1860) — a burst structurally could not be drained, so this was reachable
+ * at ordinary logging rates. Since #2194 the drain exports what is already queued
+ * as one turn, so that fixed cost is divided by the batch and the bound is far
+ * harder to reach. It is not gone: the queue is what absorbs a burst the drain
+ * cannot swallow in one turn, and an overflow now means the application is
+ * outrunning an *amortised* drain — a much stronger signal than it used to be, and
+ * one worth acting on rather than tuning away.
  *
  * The queue therefore holds [CAPTURE_QUEUE_CAPACITY] events and drops the **oldest**
  * beyond that:
@@ -61,12 +82,15 @@ import us.tractat.kuilt.core.runCatchingCancellable
  *
  * @param capacity queue depth. Defaults to [CAPTURE_QUEUE_CAPACITY]; overridden
  *   only by tests, which need to overflow a queue cheaply.
+ * @param maxBatchSize the most events one drain turn exports at once. Defaults to
+ *   [CAPTURE_BATCH_MAX]; overridden only by tests, which need several turns cheaply.
  */
 internal class CapturingAppender(
     private val capture: LogCapture,
     private val delegate: Appender,
     scope: CoroutineScope,
     private val capacity: Int = CAPTURE_QUEUE_CAPACITY,
+    private val maxBatchSize: Int = CAPTURE_BATCH_MAX,
 ) : Appender {
     // A MutableStateFlow owns no CoroutineScope, so the health surface adds no
     // scope ownership to this type. `update {}` is an atomic CAS loop — a real
@@ -92,14 +116,38 @@ internal class CapturingAppender(
     private val overflowReported = atomic(false)
 
     init {
-        scope.launch {
-            for (event in events) {
-                // Best-effort: a failed export must never crash the app's logging
-                // path, and must never re-log through this same appender (a capture
-                // feedback loop), so a failure is dropped. runCatchingCancellable
-                // still rethrows CancellationException for clean teardown.
-                runCatchingCancellable { capture.capture(event) }
+        require(maxBatchSize >= 1) { "maxBatchSize must be at least 1; got $maxBatchSize" }
+        scope.launch { drain() }
+    }
+
+    /**
+     * Consume the queue in runs: block for one event, take whatever is already
+     * behind it, export the run as one turn, repeat until the channel closes.
+     *
+     * The greedy second loop is what makes this opportunistic rather than timed —
+     * [Channel.tryReceive] never suspends, so it can only find company that was
+     * *already* queued. Nothing waits for a batch to grow.
+     */
+    private suspend fun drain() {
+        val batch = ArrayList<NormalizedLogEvent>(maxBatchSize)
+        while (true) {
+            // receiveCatching() rather than `for (event in events)` because the first
+            // element and the rest are now taken by different means; a null here is
+            // the closed channel, which is the same termination `for` gave.
+            val first = events.receiveCatching().getOrNull() ?: break
+            batch += first
+            while (batch.size < maxBatchSize) {
+                batch += events.tryReceive().getOrNull() ?: break
             }
+            // Best-effort: a failed export must never crash the app's logging path,
+            // and must never re-log through this same appender (a capture feedback
+            // loop), so a failure is dropped. runCatchingCancellable still rethrows
+            // CancellationException for clean teardown.
+            //
+            // `batch` is safe to reuse: captureAll maps it to records and returns
+            // before this line does, so nothing downstream holds the list we clear.
+            runCatchingCancellable { capture.captureAll(batch) }
+            batch.clear()
         }
     }
 
@@ -167,9 +215,9 @@ internal class CapturingAppender(
             // and so this very line is excluded from capture. Never the empty-lambda
             // form — see InternalLoggerNameGuardTest.
             KotlinLogging.logger(OVERFLOW_LOGGER_NAME).warn {
-                "log capture queue overflowed (capacity=$capacity): the exporter is draining slower than this " +
-                    "application logs, so the oldest captured events are being dropped. Read " +
-                    "LogCaptureInstallation.health.value.droppedEvents for the running total."
+                "log capture queue overflowed (capacity=$capacity): this application is logging faster than " +
+                    "the exporter can drain, even batched, so the oldest captured events are being dropped. " +
+                    "Read LogCaptureInstallation.health.value.droppedEvents for the running total."
             }
         } catch (ignoredReportFailure: Throwable) {
             // Deliberately swallowed, and deliberately NOT rethrowing cancellation:
