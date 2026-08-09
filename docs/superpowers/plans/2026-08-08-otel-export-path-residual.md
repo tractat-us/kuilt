@@ -8,6 +8,8 @@
 
 **Tech Stack:** Kotlin Multiplatform, kotlinx-coroutines, kotlinx-atomicfu, kotlin-logging (oshai).
 
+**Issues:** Task 1 → [#2218](https://github.com/tractat-us/kuilt/issues/2218) · Task 2 → [#2219](https://github.com/tractat-us/kuilt/issues/2219) · Task 3 → [#2193](https://github.com/tractat-us/kuilt/issues/2193).
+
 ## The measurement this comes from
 
 On-device, iPhone XS, Debug K/N, post-#2194, at the production `maxRecords = 10_000`

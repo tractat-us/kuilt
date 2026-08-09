@@ -8,6 +8,8 @@
 
 **Tech Stack:** Kotlin Multiplatform, kotlinx-coroutines, kotlinx-serialization-cbor, kotlinx-atomicfu. JVM/Android `FileChannel.map()`; Apple `platform.posix` mmap; wasmJs unavailable in v1.
 
+**Epic:** [#2210](https://github.com/tractat-us/kuilt/issues/2210) — sub-issues #2211 … #2217, one per task below.
+
 **Design:** [`docs/superpowers/specs/2026-08-08-kuilt-bolt-design.md`](../specs/2026-08-08-kuilt-bolt-design.md). Read it before Task 1 — particularly "Why the obvious approach does not work" and "The invariant". This plan implements that spec and does not re-argue it.
 
 ## A note on how this plan is written
