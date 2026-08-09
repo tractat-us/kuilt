@@ -67,11 +67,37 @@ public interface OpLogCrdt<Id : Any, Op : Any> {
 
 `LogOp`, `OpLogEngine`'s adapters and `Rga.ops` are all `internal`, so `:kuilt-bolt` can see nothing. Something must be exposed and `explicitApi()` makes it a compatibility commitment. Three options:
 
-1. **Make `Rga.ops` public.** Smallest diff, worst outcome — it exposes the whole internal representation and forecloses both #2193's Phase 3B `RgaCache` work and any future backing change.
-2. **Promote `LogOp` and add `OpLogCrdt` (recommended).** Exposes exactly the three-way classification and the dot projection an archive needs. `LogOp` is already the *stable* description of op-log shape — it was extracted precisely because `RgaOp` and `FugueOp` both reduce to it — so it is the right thing to commit to.
-3. **Duplicate the classification inside `:kuilt-bolt`.** No new public surface in `:kuilt-crdt`, but the archive would need `ops` anyway, so it does not actually avoid option 1 — and it puts the safety-critical `Compact` classification in two places.
+1. **Make `Rga.ops` public.** Smallest diff, worst outcome — it publishes the concrete
+   `Set<RgaOp<V>>` *field*, which pins the representation and forecloses both #2193's Phase 3B
+   `RgaCache` work and any future backing change.
+2. **Promote `LogOp` and add `OpLogCrdt` (recommended).** Exposes exactly the three-way
+   classification and the dot projection an archive needs.
+3. **Duplicate the classification inside `:kuilt-bolt`.** No new public surface in `:kuilt-crdt`, but
+   the archive would need the ops anyway, so it does not actually avoid option 1 — and it puts the
+   safety-critical `Compact` classification in two places.
 
-Recommend (2), and say why (1) and (3) are worse. If the reviewer disagrees, the disagreement is cheap here and expensive after `:kuilt-bolt` exists.
+**Make the argument precisely, because the obvious version of it is self-defeating.** "Option 1
+exposes too much" cannot be the reason to prefer option 2 while option 2 offers
+`operations(): Sequence<Op>`, which also yields every retained op — a reviewer applying that
+rationale consistently would reject both. The real distinction is **representation independence**: a
+`Sequence` is a *view* any future backing can stream, where `internal val ops: Set<RgaOp<V>>` is a
+concrete field whose type is the representation. Say that, not "less surface".
+
+Note also that `classify`/`dotOf` are instance methods, so an archive cannot classify an op without a
+live CRDT in hand. Acceptable for v1 — only the append path classifies, and it always has one — but
+state it, because a future replay-side validator would want them free-standing.
+
+**The op-serializer question belongs in this task, not Task 2.** The design rests future readability
+on the canonical serializers. `RgaOpSerializer` is `public` (`RgaOpSerializer.kt:32`), but
+**`FugueOpSerializer` and `FugueSerializer` are `internal`** (`FugueSerializer.kt:153`, `:35`) — so
+`:kuilt-bolt` cannot canonically encode a `FugueOp` at all. A worker who hits that will reach for the
+compiler-generated sealed serializer, which has a **different wire format** (class-discriminator
+polymorphism rather than the canonical `t`-tag) and the CBOR polymorphic-`V` limitation the canonical
+serializers exist to bypass — producing an archive silently outside the golden-vector guarantee.
+
+Resolve it here: either promote `FugueOpSerializer`, or put `opSerializer(vSerializer): KSerializer<Op>`
+on `OpLogCrdt` so a consumer cannot wire the wrong one for either CRDT. The second is preferable —
+it makes the correct serializer unmissable rather than merely available.
 
 - [ ] **Step 1** — write `OpLogCrdtTest` asserting, for both `Rga` and `Fugue`: `operations()` yields every op in the log; `classify` returns `Insert`/`Remove`/`Compact` matching the concrete op type; `dotOf` agrees with `RgaId.dot` / the `Fugue` equivalent. **Cover `Fugue` explicitly** — the two are not symmetric (`Rga` has a `compactedBelow` floor, `Fugue` has none), and a test written only against `Rga` would let a `Fugue`-shaped bug through.
 - [ ] **Step 2** — run, confirm unresolved-reference failures.
@@ -99,7 +125,19 @@ public interface Bolt<Op> {
 }
 ```
 
-**Frame fields are fixed now** — this is the expensive-to-change part: append offset; arrival timestamp; the causal dots covered; a reserved optional key slot for later event-time indexing.
+**Segment header and frame fields are fixed now** — this is the expensive-to-change part.
+
+Each **segment** opens with a magic number, a **format version**, and a self-description of what the
+archive holds (op serializer, element type). A format justified by "read by future versions" must be
+able to say which version wrote it; retrofitting that later is the expensive change this fixes.
+
+Each **frame** carries: append offset; arrival timestamp; **insert-only** dots; a reserved key slot.
+
+**Dots are informational; the append offset is the resume cursor.** A `Remove` mints no dot — it
+reuses its target `Insert`'s id — so a frame of removes either claims its targets' *old* dots, in
+which case a resume-from-dot cursor skips it and **replays a removed record as live**, or claims
+nothing. Scoped replay by dot range is therefore defined over **inserts only**, and property 4 below
+must test it that way.
 
 **The clock is injected.** Arrival timestamps come from an injected `Clock`, never `Clock.System` reached for directly — time is a dependency in this repo, and a bolt with a wall-clock read inside it cannot be tested deterministically.
 
@@ -110,7 +148,8 @@ public interface Bolt<Op> {
 1. **Round-trip** — appended ops replay identically, in order.
 2. **The firewall** — a bolt fed ops including a `Compact` **retains** the ops that `Compact` suppresses. *Mutation-check it: remove the discard and this test must redden.* This is the safety property of the whole module.
 3. **Asymmetric retention, end-to-end** — a small-`maxRecords` live `Rga` plus a bolt; window the live replica; assert the bolt still replays the windowed records **and** that the live replica no longer holds them. This is the capability the module exists for; pin it directly rather than inferring it.
-4. **Scoped replay** — by arrival-time range, and by dot range, each returning exactly the frames in scope.
+   **This property must ALSO be exercised through a gossiping `WarpLogRecordExporter`, not only a hand-driven `Rga`** — see Task 6. A bare-`Rga` version of this test passes while the shipped wiring archives nothing that arrived by merge, which is precisely the headline scenario.
+4. **Scoped replay** — by arrival-time range, and by dot range **over inserts only**, each returning exactly the frames in scope. A test that scopes removes by dot is testing something the format deliberately does not promise.
 5. **Empty append is a no-op** that writes no frame.
 6. **`availability()` is honest** — a bolt reporting `Available` must accept an append.
 
@@ -132,7 +171,8 @@ public interface Bolt<Op> {
 
 Hazards to handle and to say out loud in KDoc:
 
-- **Remapping.** A `MappedByteBuffer` is a fixed-size window; growing the archive means mapping a new region. Chunk into fixed-size segments rather than remapping one growing file.
+- **Disk-full under mmap is SIGBUS, not an exception — and it makes the module's stated failure posture unachievable if unhandled.** Extending a mapped file, or `ftruncate`ing to segment size (which allocates **sparsely**), defers physical allocation to first page-touch. On a full disk that touch is a SIGBUS on POSIX and an unspecified VM error on the JVM — the process dies, taking the application's logging with it, which is the one outcome "best-effort" promises to avoid. **Eagerly, physically pre-allocate each segment at roll time — a real write, not `ftruncate`** — so exhaustion surfaces as a catchable I/O failure at a segment boundary. External truncation of a mapped file is the same class and gets the same answer.
+- **Remapping.** A `MappedByteBuffer` is a fixed-size window; growing the archive means mapping a new region. Chunk into fixed-size segments rather than remapping one growing file. (This is also what makes eager pre-allocation affordable — one allocation per segment, not per append.)
 - **Durability is `force()`, not `write()`.** Bytes in a mapped buffer are not durable until msync. The synchronous backend's contract — "fsync'd before `append` returns" — is exactly this call.
 - **Torn frames.** A crash mid-append leaves a partial frame. Frames carry a length prefix and a checksum; replay stops at the first frame that does not validate and reports how far it got. **A truncated archive must not throw** — it must replay what is intact, on the same reasoning `WarpLogRecordExporter.recover()` never throws.
 - **Windows/JVM unmapping** is not portable; do not add a `close()` contract that depends on prompt unmapping.
@@ -149,6 +189,7 @@ Test through `BoltConformanceSuite` plus crash-recovery tests in the style of `F
 
 **This backend is not the default on Apple, and the KDoc must say why:**
 
+- **SIGBUS on page-touch**, exactly as in Task 3, and worse here: an iOS device that is full is a routine state, not an edge case. Eager physical pre-allocation per segment is mandatory on this backend, not advisory.
 - **Jetsam.** Mapped dirty pages count against an iOS app's memory footprint. A growing mapped archive on a phone is a way to get the app killed. A phone should retain least anyway — the server is this backend's customer.
 - **Data Protection.** A file's protection class can make it unreadable while the device is locked. A background-writing archive needs an explicit class chosen deliberately, and this is a failure that appears only on real hardware.
 
@@ -170,11 +211,17 @@ No filesystem exists. v1 returns `BoltAvailability.Unavailable` with a reason, s
 
 **Files:** `kuilt-bolt/src/commonMain/.../BoltDecorator.kt`; modify `WarpLogRecordExporter` to publish applied ops.
 
-The exporter does not publish applied ops today, but the tee point exists — `export()` already holds them, returned from `insertAllAfter` / `removeFirst`.
+**There are two paths and the second is the one that matters. Do not ship only the first.**
 
-**Do not put a `Bolt` parameter on `WarpLogRecordExporter`.** The whole point of the decorator is that the exporter stays ignorant of archiving and the bolt stays ignorant of telemetry, so the same decorator serves any `Rga`/`Fugue` owner.
+`export()` holds its ops already, returned from `insertAllAfter` / `removeFirst` — a straightforward tee.
 
-**Failure semantics — best-effort with a counted signal.** A full archive disk must not take down the application's logging, and a failed append must not fail the export. But silent loss is the inversion #1860 was about: count failures and expose them, mirroring `ExporterHealth`.
+**`merge()` produces no op stream.** It is `log = log.piece(remote)` (`mergeTurn`), a state join. Gossip is how a phone's records reach a server, so a decorator that tees only `export()` gives a server-side bolt containing the server's own telemetry and **zero phone records** — the exact capability this module's Goal line calls impossible today. The merge path must publish too, by enumerating `remote`'s operations through `OpLogCrdt.operations()`.
+
+**And that raises deduplication, which append-only does not give for free.** Anti-entropy re-merges the same remote log repeatedly, so appending `remote`'s ops per round writes one full copy of the peer's log **per round**. The frame's dots cannot dedup a `Remove` (it mints no dot), so identity must include an `Insert`/`Remove` discriminator on the same id. Cheapest sound design: an in-memory set of appended op identities, rebuilt from the archive's tail on open. **Unbounded growth per merge round is the failure to design against**, and it must have a test that merges the same remote twice and asserts the archive did not double.
+
+**Do not put a `Bolt` parameter on `WarpLogRecordExporter`.** The exporter stays ignorant of archiving and the bolt ignorant of telemetry, so the same decorator serves any `Rga`/`Fugue` owner.
+
+**Failure semantics — best-effort, reporting identities, not a tally.** A full archive disk must not take down the application's logging, and a failed append must not fail the export. But a failed append here means the record is lost from *both* sides once the live replica windows it away — so the health surface carries the failed frames' **dots and offset range**, per this repo's #1466/#1860 rule to log identities and state rather than sizes. A bare `failed++` makes every recovery — defer windowing, re-feed, correlate against a backend — unimplementable.
 
 **Ordering hazard to pin:** if the decorator publishes ops before the exporter's durable write returns, a failed export leaves the bolt holding records the live replica does not. That is *acceptable* for an archive — a superset is the point — but it must be a stated property with a test, not an accident.
 

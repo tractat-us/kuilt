@@ -60,12 +60,35 @@ Three consequences, each load-bearing:
    `Compact` is suppression. A bolt keeps the first two and drops the third. This is the only
    deliberate divergence from CRDT semantics in the design, and it is what lets a bolt retain more
    than its source.
-3. **It never merges back.** A bolt's op-set is a strict superset of its source's. Feeding it back
-   into the mesh would resurrect every windowed record everywhere. `Bolt` therefore does not
-   implement `Quilted` and exposes no `piece`.
+3. **It never merges back.** `Bolt` does not implement `Quilted` and exposes no `piece`.
 
-A replay is consequently **not a valid CRDT state**. Recovery replays a *bounded suffix*; the
-unbounded read is deliberately the awkward one to reach for.
+### Why (3) holds — and why the obvious reason is wrong
+
+The tempting justification is "a bolt's op-set is a strict superset, so merging it back would
+resurrect every windowed record everywhere." **That is false**, by the same mechanism this document
+opened with. Suppression is monotone and wins every join: `piece` re-purges the union under
+`mergedFloor`/`mergedCompactedIds`, and `applyInsert` drops a suppressed op outright
+(`Rga.kt:671`). Merge a replay into any replica that still holds the suppression and the records are
+purged again on contact. A *fresh* joiner with an empty floor would absorb them as live, but its
+next sync with a suppressing peer re-purges them — transient, and self-healing.
+
+The real hazard is one step further on, and it is permanent:
+
+> **A replay may be read. It must never be authored from.**
+
+Replaying into a fresh `Rga` gives a structurally valid state — out-of-order `Remove`s are
+tolerated, and orphaned `Insert`s reroot to `HEAD` deterministically (a reordering, matching the
+accepted `compactedBelow` degradation, not corruption). The damage appears if that replica then
+**mints ops**. `nextSeqFor` derives from `maxSeqByReplica` over the ops present, and a bolt is
+best-effort — so a replay missing frames at the tail lets the replica re-mint an already-used
+`(replica, seq)` dot carrying *different content*. That breaks the dense per-author delivery counter
+every causal-stability version vector depends on, silently and mesh-wide, and nothing purges it
+because the dot was never suppressed.
+
+"A replay is not a valid CRDT state" is too vague to prevent this — it does not stop anyone writing
+`bolt.replay(…).fold(Rga.empty()) { r, op -> r.apply(op) }` out of entirely public API. The contract
+must name the failure: **read a replay; never author from a replica seeded by one.** Recovery
+replays a *bounded suffix*, and the unbounded read is deliberately the awkward one to reach for.
 
 ## Scope: op-log CRDTs only
 
@@ -133,21 +156,43 @@ uses for a facility that is real on some runtimes and absent on others.
 
 ### Frame format — fixed now, because it is expensive to change
 
+Each **segment** opens with a header carrying a **magic number, a format version, and what the
+archive holds** (which op serializer, which element type). A format whose whole rationale is "read
+by future versions of the code that wrote it" must be able to say which version wrote it —
+retrofitting a version field into a versionless format is exactly the expensive change this section
+exists to prevent.
+
+Each **frame** then carries:
+
 | Field | Purpose |
 |---|---|
-| append offset | physical seek; monotonic; the only strictly ordered coordinate |
+| append offset | physical seek; monotonic; **the resume cursor** |
 | arrival timestamp | "what did this node write last Tuesday", with no knowledge of `V` |
-| causal dots covered | exact resume for recovery, and "replay from dot X" |
+| insert dots covered | informational and **insert-only** — see below |
 | reserved key slot | lets event-time indexing be layered later without a format change |
+
+**Dots are informational, not a cursor.** A `Remove` mints no dot — it reuses its target `Insert`'s
+id — and removes arrive arbitrarily later than their targets (a gossiped tombstone for an old
+record). So a frame of `Remove`s either claims its targets' *old* dots, in which case a
+resume-from-dot cursor skips the frame and **replays a removed record as live**, or claims nothing,
+in which case dot-scoped replay cannot answer "these inserts and their subsequent removals". With
+ops interleaving from several replicas, the append offset is the only sound resume coordinate.
+Scoped replay by dot range is therefore defined over **inserts only**, and the KDoc must say so.
 
 **Arrival time is not event time.** A delta merged from a peer arrives long after it happened. The
 distinction must be in the KDoc, because a consumer who conflates them will draw wrong conclusions
 from a correct archive.
 
-Ops are serialized with the **canonical** serializers (`RgaOpSerializer` is already public), not the
-compiler-generated ones — not for wire parity, since a bolt is a local file, but because the
-canonical form is the one with a stability guarantee and golden vectors behind it, and an archive is
-read by *future* versions of the code that wrote it.
+**Serialization — and a gap the plan must close.** Ops are serialized with the **canonical**
+serializers, not compiler-generated ones: not for wire parity (a bolt is a local file) but because
+the canonical form is the one with golden vectors and a stability guarantee behind it.
+`RgaOpSerializer` is `public` (`RgaOpSerializer.kt:32`), but **`FugueOpSerializer` and
+`FugueSerializer` are `internal`** (`FugueSerializer.kt:153`, `:35`) — so a bolt cannot canonically
+encode a `FugueOp` at all today. The fallback a worker would reach for, the compiler-generated
+sealed serializer, has a *different* wire format (class-discriminator polymorphism rather than the
+canonical `t`-tag) and hits the CBOR polymorphic-`V` limitation those serializers exist to bypass.
+Op-serializer availability is therefore part of the public-surface decision below, not a detail —
+and it is a **third** `Rga`/`Fugue` asymmetry, alongside the floor.
 
 ## Backends
 
@@ -164,6 +209,20 @@ asynchronous one.
 `platform.posix` interop is already proven in-tree — `NSFileManagerDurableStore` imports `memcpy`,
 `rename`, `errno`.
 
+### Disk-full under mmap is SIGBUS, not a catchable failure
+
+This is the hazard that would otherwise make the failure posture below **unachievable rather than
+merely wrong**. Extending a mapped file — or `ftruncate`ing to segment size, which allocates
+**sparsely** — defers physical allocation to first page-touch. On a full disk that touch is a
+**SIGBUS** on POSIX and an unspecified VM error on the JVM. Neither is an exception `append` can
+catch and convert into an `AppendResult`; the process dies, taking the application's logging with
+it, which is the one thing "best-effort" promises will not happen.
+
+So each segment is **eagerly, physically pre-allocated** at roll time — a real write, not
+`ftruncate` — so that disk exhaustion surfaces as a catchable I/O failure at a segment boundary
+rather than a signal in the middle of an append. External truncation of a mapped file is the same
+class of hazard and gets the same answer.
+
 **A bolt does not use `DurableStore`.** That SPI is whole-blob overwrite
 (`write(key, bytes)`, fsync'd), which is why the segmented layout had to exist at all — segments
 bound how much gets rewritten per record. An archive is append-only, and mmap is excellent for
@@ -175,18 +234,59 @@ A **decorator over the op stream**. The CRDT owner publishes the ops it applied;
 consumes them. The exporter stays ignorant of archiving and the bolt stays ignorant of telemetry, so
 the same decorator serves any `Rga`/`Fugue` owner rather than only the log exporter.
 
-`WarpLogRecordExporter` does not publish applied ops today, but the tee point exists: `export()`
-already holds them, returned from `insertAllAfter` / `removeFirst`.
+### There are TWO paths, and the second one is the headline scenario
+
+`WarpLogRecordExporter.export()` holds its ops already — returned from `insertAllAfter` /
+`removeFirst` — so the local path is a straightforward tee.
+
+**`merge()` is not.** It is `log = log.piece(remote)` (`WarpLogRecordExporter.kt`, `mergeTurn`) — a
+state join that produces **no op stream at all**. And gossip is exactly how a phone's records reach
+a server. A design that tees only `export()` gives a server-side bolt containing the server's own
+telemetry and **zero phone records** — which is the precise capability this document opens by
+calling impossible. Teeing only the local path would leave it impossible.
+
+So the merge path must publish too, by enumerating `remote`'s operations through the same
+`OpLogCrdt.operations()` the archive already needs.
+
+### That raises deduplication, which append-only does not give for free
+
+Anti-entropy re-merges the same remote log repeatedly. Appending `remote`'s ops on every merge round
+writes **one full copy of the peer's log per round**. Two things make naive dedup insufficient:
+
+- a `Remove` **mints no dot** — it reuses its target `Insert`'s id — so the frame's causal-dots field
+  cannot identify a repeated `Remove`;
+- an op's identity is stable, but the archive is append-only, so "have I seen this?" needs an index,
+  not a scan.
+
+The plan must design this explicitly. Cheapest sound option: keep an in-memory set of appended op
+identities (`RgaId` plus a discriminator for `Insert` vs `Remove` on the same id), rebuilt from the
+archive's own tail on open. Whatever is chosen, **unbounded growth per merge round is the failure to
+design against**, and it is the merge path — not the local one — where it bites.
+
+### Test consequence
+
+A conformance test that drives a bare `Rga` directly will pass while the shipped wiring fails the
+mission. The asymmetric-retention property must be exercised **through a gossiping exporter**, not
+only through a hand-driven CRDT.
 
 ## Failure semantics
 
-**Best-effort, with a counted in-process health signal**, mirroring `ExporterHealth`. A node running
-both replicas has the in-memory one as its source of truth, and a full archive disk must not take
-down the application's logging. But silent loss is the inversion #1860 was about, so a failed append
-is counted and readable in-process.
-
+**Best-effort**, with an in-process health signal. A node running both replicas has the in-memory
+one as its source of truth, and a full archive disk must not take down the application's logging.
 "Maximum safety" therefore means *the append is fsync'd before `append` returns* — not *the
 application dies if it cannot be*.
+
+**But a bare counter is the wrong signal here, and this repo already knows why.** A failed append is
+uniquely bad in this module: the live replica will subsequently window that record away, so it is
+lost from *both* sides — permanently, and with nothing anywhere able to say which record it was. The
+standing rule from #1466/#1860 is **log identities and state, not sizes**: a count says *that*
+something was lost, the identities say *what*.
+
+So the health surface carries the failed frames' **identities** — dots, and the offset range —
+not just a tally. Without them no recovery is even implementable: a consumer cannot defer windowing
+for the affected records, cannot re-feed them, and cannot correlate the gap against a backend. This
+is the one place the module's own "retention policy is out of scope" stance must not be read as
+"give the consumer nothing to act on."
 
 ## Testing
 

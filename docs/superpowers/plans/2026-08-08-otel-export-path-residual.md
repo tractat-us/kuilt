@@ -197,9 +197,11 @@ Add the reporter. Rate-limit on a **count** rather than a clock — this type ow
      * to be the thing being reported.
      */
     private fun reportDropsPeriodically() {
-        val total = healthState.value.dropped + healthState.value.refused
-        if (total / DROP_REPORT_INTERVAL == lastDropReport) return
-        lastDropReport = total / DROP_REPORT_INTERVAL
+        val health = healthState.value                      // ONE read — both fields, one snapshot
+        val bucket = (health.dropped + health.refused) / DROP_REPORT_INTERVAL
+        if (bucket == lastDropReport) return
+        lastDropReport = bucket
+        val total = health.dropped + health.refused
         logger.info {
             "WarpLogRecordExporter: buffer cap ($maxRecords) recycling under $bufferPolicy — " +
                 "$total record(s) dropped or refused so far. This is the cap doing its job; read " +
@@ -208,13 +210,33 @@ Add the reporter. Rate-limit on a **count** rather than a clock — this type ow
     }
 ```
 
-`lastDropReport` is a `private var Long` under `lock` (every caller already holds it).
+**`lastDropReport` must start at `-1L`, not `0L`.** At `0L` the first bucket compares equal to the
+initial value, so nothing is logged until drop number `DROP_REPORT_INTERVAL` — and an exporter that
+drops 800 records with an interval of 1000 would log **nothing, ever**, while an operator who never
+polls `health` sees no evidence of loss. That is precisely the #1860 shape this step's own
+justification invokes. Starting at `-1L` makes the *first* drop report, then once per bucket.
+
+`lastDropReport` is a `private var Long = -1L` under `lock` (every caller already holds it —
+`evictLeading` and the refusal site both run inside the turn-building `lock.withLock` block).
+
+**`DROP_REPORT_INTERVAL = 10_000`** — one line per buffer-worth of churn at `DEFAULT_MAX_LOG_RECORDS`.
+Coarse on purpose: the *number* is the signal and it lives on `health`; this line only has to be
+frequent enough to be noticed and rare enough not to become the thing being reported.
 
 **Level drops from `warn` to `info`**: a cap behaving as configured is not a warning. Say so in the commit message — someone alerting on `warn` from this logger will notice.
 
-- [ ] **Step 5: Update the class KDoc's promise**
+- [ ] **Step 5: Update the KDoc promises — there are three, not one, plus dead code**
 
 The class KDoc says "**Every drop is logged** with enough detail to correlate against a backend's log index." That is now false. Replace with an accurate statement: every drop is **counted** on `health`, and a periodic line reports the running total. Say plainly that per-record correlation was given up deliberately and why.
+
+Also, in the same task and easy to miss:
+
+- **`evictLeading`'s own KDoc** restates the same "every drop is logged individually" promise. Rewrite it too — a class KDoc corrected while the function KDoc still promises the old behaviour is worse than neither.
+- **`evictLeading`'s `admitted: List<LogRecord>` parameter becomes unused.** It exists only to supply the `incoming recordId=` correlation to the log line. Remove the parameter and its argument at the `applyTurn` call site.
+- **`EVICTION_BODY_CHARS` becomes dead** once both log sites go. Remove it.
+- The internal-logger naming comment at the top of the file justifies itself with "the exporter logs on its eviction hot path". Soften rather than delete — the summary line keeps the same logger name, so the self-capture exclusion argument still holds and must keep its explanation.
+
+`detekt` will catch the dead parameter and constant, but the plan's file list claims precision and a worker should not discover them from a lint failure.
 
 - [ ] **Step 6: Verify and commit**
 
@@ -246,7 +268,7 @@ Note in the PR that this is the same production-logging volume #2185's "directio
 - Modify: `kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpLogRecordExporter.kt:1127` (`evictLeading`)
 - Test: extend `WarpLogRecordExporterBatchTest`
 
-**Interfaces:** none — internal only.
+**Interfaces:** this task **adds public API to `:kuilt-crdt`** — see Step 3. It is not internal-only, and budgeting it as such is how it gets attempted and abandoned.
 
 `evictLeading` does `log.entries().take(count)`. `Rga.entries()` is `sequence.filter { … }.map { … }` — **two eager Θ(N) lists** built in full before `take(128)` throws almost all of it away. Measured ≈0.18 ms/record at 10,000 ops, and fixed by neither Phase 3A nor 3B. It is mine, from #2199's Task 3, and I waved it through in planning as "O(N) once per turn, acceptable".
 
@@ -301,8 +323,9 @@ Replace the head of `evictLeading`:
         val evictedRecords = evictedIds.map { id -> log.valueAt(id) }
 ```
 
-If `Rga` exposes no by-id value accessor, the cheapest correct form keeps `entries()` but stops the double materialisation:
-`log.entries().asSequence().take(count).toList()` — `entries()` still builds the lists, so **prefer adding a small `Rga.valueAt(id): V` accessor** and say so in the PR. The `insertsById` map already backs it in O(1).
+**`Rga.valueAt(id): V` is effectively mandatory, and it must be `public`.** `insertsById` is `internal` to `:kuilt-crdt`, so `:kuilt-otel` cannot reach it — and `explicitApi()` means the accessor is a public-API addition to the CRDT, with the KDoc and `@sample` obligations this repo attaches to those. Budget that step; do not discover it as a cross-module compile failure and then reach for the fallback.
+
+**There is no useful fallback.** `log.entries().asSequence().take(count).toList()` looks like one and is not: `entries()` has already built both eager Θ(N) lists before `asSequence()` sees anything, so it recovers ~0% of the measured 0.18 ms/record. If the accessor is rejected, this task should be dropped rather than implemented in a form that buys nothing.
 
 - [ ] **Step 4: Verify and commit**
 
@@ -345,7 +368,12 @@ Threading is valid **only when `after` is the last element of the full `sequence
 
 Two rules follow:
 
-1. **The guard lives inside `Rga`, never in the caller.** Thread only when `after == sequence.lastOrNull() ?: RgaId.HEAD` on the full sequence; otherwise pass `null`. Inferring "this is an append" from caller intent is exactly how the exporter's `tail` — which *looks* like an append and is not — gets through.
+1. **The guard lives inside `Rga`, never in the caller.** Thread only when
+   `after == (sequence.lastOrNull() ?: RgaId.HEAD)` on the full sequence; otherwise pass `null`.
+   **Note the parentheses** — `==` binds tighter than `?:`, so the unparenthesised form parses as
+   `(after == sequence.lastOrNull()) ?: RgaId.HEAD` and does not compile. Inferring "this is an
+   append" from caller intent is exactly how the exporter's `tail` — which *looks* like an append and
+   is not — gets through.
 2. **The guard must not force the cold lazy.** On the fill path nothing reads `sequence` until the first eviction, so a naive `sequence.last()` check re-introduces the very `computeSequence()` this task removes, on a path that today never pays it. Carry a **nullable** materialised sequence in `RgaCache` and thread only when one is already present.
 
 #### Every construction site, with its disposition
@@ -354,17 +382,37 @@ Two rules follow:
 |---|---|
 | `insertAfter`, `insertAllAfter` | Thread **iff** the guard holds; else `null` |
 | `insertAt` | Delegates to `insertAfter` — inherits the guard |
-| `removeAt`, `removeFirst`, `applyRemove` | Thread the **same list reference** unconditionally — a `Remove` changes neither `insertsById` nor `compactPositions`, and `sequence` includes tombstones |
+| `removeAt`, `removeFirst` | Thread the **same list reference**. These already force the lazy (both go through `visibleSequence()`), so the reference is in hand for free — **and this is where warmth enters the chain** |
+| `applyRemove` | Thread **only if a cached sequence is already present**, else `null`. Correctness is identical to its siblings, but this path never reads `sequence` today, so "unconditionally" would force a full `computeSequence()` on **every remote `Remove`** — a new Θ(N) per-op cost on the gossip path, violating rule 2 |
 | `applyInsert` (remote) | `null` — a remote op lands anywhere |
 | `applyCompact`, `compact` | `null`, implemented once in the shared `withCompactCaches` |
 | `withCompactedBelow` / `cacheAfterFloor` | `null` — a floor removes elements *and* HEAD-re-roots survivors |
 | `dropWindow` | `null` (via the floor path) |
 | `piece` | `null` — a union reorders arbitrarily |
 | `fromOps` (wire decode) | `null` — no cache today; unchanged |
+| `empty()` | **`null`.** Seeding `emptyList()` would thread from birth, but then every append turn on the fill path pays an O(N) list copy on a path that today reads the sequence not at all — the same "cost on a path that never pays it" rule 2 argues from. Warmth arrives at the first eviction instead |
+| `deltaOf` | `null` — already constructs with `cache = null`; unchanged, listed so the table is genuinely exhaustive |
+
+**How warmth propagates, which is the load-bearing mechanism and not an implementation detail.**
+Every site above either propagates an *already-present* cached sequence or passes `null`, and
+`empty()`/`fromOps` start `null` — so if that were the whole story the guard would never fire and the
+optimisation would deliver exactly zero. The chain is warmed by `removeFirst`/`removeAt`, which force
+the lazy anyway and thread the result forward. So the first eviction after a start, a merge, a window
+pass or a recovery pays one `computeSequence()` and every append turn after it threads. On the
+exporter's steady state that is the common case, because eviction tombstones only the *leading*
+prefix, leaving `tail == sequence.last()`.
 
 - [ ] **Step 1: Write the failing tests, parameterised over `after` position**
 
-The test shape matters more than usual: a suite that covers "every entry point" with chained-append data passes while all three divergence shapes hide. Cover at minimum — `after` = full-sequence tail (must thread), `after` = `HEAD` on a non-empty log (must not), `after` = mid-sequence (must not), `after` = last *visible* with a trailing tombstone (must not — the production counterexample). Assert `threaded.sequence == Rga.fromOpsForTest(threaded.ops).sequence` in every case.
+The test shape matters more than usual: a suite that covers "every entry point" with chained-append data passes while all three divergence shapes hide. Cover at minimum — `after` = full-sequence tail (must thread), `after` = `HEAD` on a non-empty log (must not), `after` = mid-sequence (must not), `after` = last *visible* with a trailing tombstone (must not — the production counterexample).
+
+**The oracle is a cache-free reconstruction of the same state.** `Rga.fromOps` is `internal` and so reachable from `:kuilt-crdt`'s own `commonTest`, but it needs the Lamport clock and the floor as well as the ops — the assertion is
+
+```kotlin
+assertEquals(Rga.fromOps(threaded.ops, threaded.lamport, threaded.compactedBelow).sequence, threaded.sequence)
+```
+
+(check the actual `fromOps` signature before copying — it is `internal` and has moved before). An oracle that reconstructs from ops alone would drop the floor and disagree for reasons that have nothing to do with threading.
 
 - [ ] **Step 2: Confirm they fail** (`Unresolved reference` on the new cache field).
 
