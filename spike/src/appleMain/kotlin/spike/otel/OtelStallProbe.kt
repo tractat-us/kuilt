@@ -95,6 +95,28 @@ public class OtelStallProbe {
         const val RECOVER_EXPORTS = 20
 
         /**
+         * Records per write turn in the #2193 arms — the run size `LogCapture` drains with
+         * (#2201/#2203) and the unit every per-record figure below divides by.
+         */
+        const val RUN = 128
+
+        /**
+         * The op counts the #2193 arms hold. **10,000 is the binding row** and is deliberately
+         * not in the issue's original table: `DEFAULT_MAX_LOG_RECORDS` is 10,000, so that — not
+         * 8,000 — is where a production exporter's steady state sits.
+         */
+        val HOLD = intArrayOf(250, 2_000, 4_000, 6_000, 8_000, 10_000)
+
+        /** Timed repeats for [armD] (cheap: one op-set copy each). */
+        const val D_REPEATS = 40
+
+        /** Timed repeats for [armE] (one full `computeSequence` each — the expensive one). */
+        const val E_REPEATS = 20
+
+        /** Timed turns for [armG]. Small so the log barely grows while it is being measured. */
+        const val G_TURNS = 12
+
+        /**
          * Body size in bytes, matching the field store's ~490 B/record average
          * (3,888,587 bytes / 7,917 records) once CBOR framing and the id are accounted for.
          *
@@ -103,6 +125,22 @@ public class OtelStallProbe {
          */
         const val BODY_BYTES = 420
     }
+
+    /**
+     * Monotonic record counter for the #2193 arms, shared across every arm and bucket so no two
+     * records in one process share a `recordId` — see [nextRecord].
+     */
+    private var recordSeq = 1_000_000
+
+    /**
+     * Somewhere for a timed result to go.
+     *
+     * Kotlin/Native does not aggressively elide an allocating call whose result is unused, but
+     * "does not today" is not a property a measurement should rest on: every arm folds something
+     * O(1) off its result into here, and the total is printed at the end of the run so the chain
+     * is observable from outside the process.
+     */
+    private var sink = 0L
 
     /**
      * Run both arms and stream every line to [onLine].
@@ -161,6 +199,266 @@ public class OtelStallProbe {
             }
         }
     }
+
+    /**
+     * Arms D/E/F/G — [#2193](https://github.com/tractat-us/kuilt/issues/2193): decompose the
+     * residual that #2194's batched write turn left behind.
+     *
+     * ## Why this needs four more arms
+     *
+     * Arms A and B measured `insertAfter` on a log **grown from empty**. That workload never
+     * evicts, so it never reads [Rga.sequence] and never pays a `computeSequence()` at all — and
+     * the exporter's steady state is nothing like it. A full buffer evicts one record per arrival,
+     * and its write turn pays at least three Θ(N) terms, of which a persistent (CHAMP-backed)
+     * collection would fix exactly one:
+     *
+     * | Term | Arm | Fixed by a persistent collection? |
+     * |---|---|---|
+     * | `ops + newOps`, `insertsById + …` | [armD] | **Yes** — the issue's stated subject |
+     * | cold `computeSequence()` on the mutated instance | [armE] | No |
+     * | the whole turn, in situ | [armF] | — |
+     *
+     * That is a **fork**, and it decides the whole issue: if the copy dominates, a persistent
+     * collection (and the module split it forces on every consumer) is the fix; if the cold
+     * `computeSequence` dominates, the fix is threading the sequence forward in `RgaCache` — no
+     * dependency, no module split, and `Fugue` already ships exactly that design (`FugueSeqState`,
+     * #1211). The two must therefore be timed **apart**, on the same hardware, in one process.
+     *
+     * ## Why [armG] exists on top of D and E
+     *
+     * D and E are measured on a **pure-insert** log of `n` ops, which is the cleanest isolation but
+     * is not the shape the exporter is in: at `maxRecords = n` the steady-state log carries the `n`
+     * visible inserts *plus* the tombstoned inserts and their `Remove`s, up to the next window
+     * pass — so `ops` runs to ~3n and `sequence` to ~2n. D:E measured at a single `n` gives the
+     * ratio; it does not give the split of [armF]'s actual cost, because the two terms scale off
+     * *different* sizes. [armG] closes that by replaying `applyTurn`'s three CRDT steps —
+     * `entries()`, `removeFirst`, `insertAllAfter` — against a genuinely steady-state-shaped log,
+     * with no store underneath. `F − G` is then everything the exporter does that is not the CRDT.
+     */
+    public fun startResidual(onLine: (String) -> Unit) {
+        CoroutineScope(Dispatchers.Default).launch {
+            runCatching {
+                onLine("===PROBE-BEGIN=== issue=2193 mode=residual run=$RUN")
+                onLine(deviceLine())
+                onLine("--- arms D/E/F/G: the post-#2194 residual, decomposed ---")
+                HOLD.forEach { hold ->
+                    armD(hold, onLine)
+                    armE(hold, onLine)
+                    armG(hold, onLine)
+                    armF(hold, onLine)
+                }
+                onLine("sink=$sink")
+                onLine("===PROBE-END===")
+            }.onFailure { failure ->
+                onLine("===PROBE-FAILED=== $failure")
+                onLine("===PROBE-END===")
+            }
+        }
+    }
+
+    /**
+     * Arm D — the op-set copy alone.
+     *
+     * Times [Rga.insertAllAfter] for a run of [RUN] against a log holding `hold` ops, and
+     * **never touches the result's [Rga.sequence]** — so the only Θ(N) work in the timed region is
+     * `ops + minted` and `insertsById + …`, which is precisely the term a persistent collection
+     * would remove. Every repeat mutates the *same* base, so the op count under measurement is
+     * fixed rather than climbing through the loop.
+     */
+    private fun armD(hold: Int, onLine: (String) -> Unit) {
+        val replica = ReplicaId("probe")
+        val base = grownLog(hold, replica)
+        val values = List(RUN) { nextRecord() }
+        val stat = Stat()
+        repeat(D_REPEATS) {
+            val started = TimeSource.Monotonic.markNow()
+            val (next, _) = base.log.insertAllAfter(replica = replica, after = base.tail, values = values)
+            stat.add(started.elapsedNow().inWholeMicroseconds)
+            // opCount is `ops.size` — O(1), and it does not force the sequence lazy. It exists
+            // only so the result is observed and cannot be treated as dead.
+            sink += next.opCount
+        }
+        onLine("D hold=$hold ops=${base.log.opCount} ${stat.line(RUN)}")
+    }
+
+    /**
+     * Arm E — the cold `computeSequence()` alone.
+     *
+     * The mutation happens **outside** the timed region and the base's own lazy is warmed before
+     * the loop, so the only thing timed is the first [Rga.sequence] read on the mutated instance.
+     * Timing `state.removeFirst(1).first.sequence` as one expression would fold in `removeFirst`'s
+     * own `visibleSequence()` — possibly a second `computeSequence`, on the base — plus both
+     * op-set copies, and the D-versus-E fork is exactly what that would destroy.
+     */
+    private fun armE(hold: Int, onLine: (String) -> Unit) {
+        val replica = ReplicaId("probe")
+        val base = grownLog(hold, replica)
+        sink += base.log.sequence.size // warm the base's lazy, untimed — see the KDoc
+        val stat = Stat()
+        repeat(E_REPEATS) {
+            val mutated = base.log.removeFirst(1).first // NOT timed
+            val started = TimeSource.Monotonic.markNow()
+            val size = mutated.sequence.size // the cold computeSequence, and only it
+            stat.add(started.elapsedNow().inWholeMicroseconds)
+            sink += size
+        }
+        onLine("E hold=$hold ops=${base.log.opCount} ${stat.line(RUN)}")
+    }
+
+    /**
+     * Arm G — `applyTurn`'s CRDT work, on a steady-state-shaped log, decomposed into its three
+     * steps and with no store underneath.
+     *
+     * The steps mirror `WarpLogRecordExporter.applyTurn` exactly: `evictLeading` reads
+     * [Rga.entries] (which forces the cold `computeSequence`, then filters and maps it), calls
+     * [Rga.removeFirst] (whose own `visibleSequence()` now hits a warm lazy), and then
+     * [Rga.insertAllAfter] appends the run. `G.entries` is therefore the E term *at the shape the
+     * exporter is actually in*, and `G.remove + G.insert` is the D term at that shape.
+     *
+     * The log advances every turn, exactly as the exporter's does — a loop that re-measured the
+     * same instance would find the lazy warm from the second turn on and report the E term as free.
+     */
+    private fun armG(hold: Int, onLine: (String) -> Unit) {
+        val replica = ReplicaId("probe")
+        var held = steadyLog(hold, replica)
+        val entries = Stat()
+        val removes = Stat()
+        val inserts = Stat()
+        repeat(G_TURNS) {
+            var started = TimeSource.Monotonic.markNow()
+            val visible = held.log.entries()
+            entries.add(started.elapsedNow().inWholeMicroseconds)
+            sink += visible.size
+
+            started = TimeSource.Monotonic.markNow()
+            val (afterRemove, _) = held.log.removeFirst(RUN)
+            removes.add(started.elapsedNow().inWholeMicroseconds)
+
+            val values = List(RUN) { nextRecord() }
+            started = TimeSource.Monotonic.markNow()
+            val (afterInsert, minted) = afterRemove.insertAllAfter(replica, held.tail, values)
+            inserts.add(started.elapsedNow().inWholeMicroseconds)
+
+            held = Held(afterInsert, minted.last().id)
+        }
+        onLine(
+            "G hold=$hold ops=${held.log.opCount} seq=${held.log.sequence.size} " +
+                "entries[${entries.line(RUN)}] remove[${removes.line(RUN)}] insert[${inserts.line(RUN)}]",
+        )
+    }
+
+    /**
+     * Arm F — the exporter's real steady state, which is the workload that actually matters.
+     *
+     * A [WarpLogRecordExporter] at `maxRecords = hold` is filled to the cap first (untimed), so
+     * every subsequent record evicts one; only then is `export(List)` timed, in runs of [RUN],
+     * over enough turns to cross a whole window-pass cycle. Neither the issue's table nor arms
+     * A/B ever measured this: both grew a log from empty, which evicts nothing.
+     *
+     * A real [NSFileManagerDurableStore] over a real directory in the app container, and a fresh
+     * directory per `hold` so one bucket's segments are never another's starting condition.
+     */
+    private suspend fun armF(hold: Int, onLine: (String) -> Unit) {
+        val dir = freshDirectory("otel-probe-2193-$hold")
+        val exporter = WarpLogRecordExporter(
+            replica = ReplicaId("probe"),
+            store = NSFileManagerDurableStore(dir),
+            maxRecords = hold,
+        )
+
+        val fillStarted = TimeSource.Monotonic.markNow()
+        var filled = 0
+        while (filled < hold) {
+            val take = minOf(RUN, hold - filled)
+            exporter.export(List(take) { nextRecord() })
+            filled += take
+        }
+        val fillMs = fillStarted.elapsedNow().inWholeMilliseconds
+
+        // One window-pass cycle is `hold` evictions; at RUN records (and so RUN evictions) per
+        // turn that is hold/RUN turns. Overshoot it so the pass itself is inside the measurement
+        // rather than straddling its end.
+        val turns = hold / RUN + 4
+        val stat = Stat()
+        var failures = 0
+        repeat(turns) {
+            val batch = List(RUN) { nextRecord() }
+            val started = TimeSource.Monotonic.markNow()
+            val result = exporter.export(batch)
+            stat.add(started.elapsedNow().inWholeMicroseconds)
+            if (result !is us.tractat.kuilt.otel.ExportResult.Success) failures++
+        }
+
+        val snapshot = exporter.snapshot()
+        onLine(
+            "F hold=$hold visible=${snapshot.size} ops=${snapshot.opCount} seq=${snapshot.sequence.size} " +
+                "turns=$turns fillMs=$fillMs failures=$failures bytes=${directoryBytes(dir)} ${stat.line(RUN)}",
+        )
+        NSFileManager.defaultManager.removeItemAtPath(dir, null)
+    }
+
+    /** An [Rga] and the id its next append chains after. */
+    private class Held(val log: Rga<LogRecord>, val tail: RgaId)
+
+    /**
+     * A log of exactly [hold] inserts and nothing else, with its [Rga.sequence] lazy left **cold**.
+     *
+     * Built with one bulk call rather than a loop: the construction is not what is being measured,
+     * and `hold` separate `insertAfter`s would be Θ(hold²) of setup before the first timing.
+     */
+    private fun grownLog(hold: Int, replica: ReplicaId): Held {
+        val (log, minted) = Rga.empty<LogRecord>()
+            .insertAllAfter(replica, RgaId.HEAD, List(hold) { nextRecord() })
+        return Held(log, minted.last().id)
+    }
+
+    /**
+     * A log in the shape a full exporter's is: [hold] visible records, plus the tombstones and
+     * `Remove`s a half-window of evictions has left behind.
+     *
+     * Half a window on purpose. The exporter's log oscillates — `sequence` climbs from `hold` to
+     * `2·hold` as records are evicted and drops back at the window pass — so the midpoint is the
+     * representative point, and starting either at the floor or at the ceiling would measure the
+     * best or the worst case and call it the steady state.
+     */
+    private fun steadyLog(hold: Int, replica: ReplicaId): Held {
+        var held = grownLog(hold, replica)
+        repeat(maxOf(1, hold / 2 / RUN)) {
+            val (afterRemove, _) = held.log.removeFirst(RUN)
+            val (afterInsert, minted) = afterRemove.insertAllAfter(replica, held.tail, List(RUN) { nextRecord() })
+            held = Held(afterInsert, minted.last().id)
+        }
+        return held
+    }
+
+    /**
+     * A directory under the app container's Documents, emptied first.
+     *
+     * Named per bucket so `devicectl device copy from --domain-type appDataContainer` can pull any
+     * one of them if a printed number ever needs re-deriving from the store itself.
+     */
+    private fun freshDirectory(name: String): String {
+        val documents = NSSearchPathForDirectoriesInDomains(
+            NSDocumentDirectory,
+            NSUserDomainMask,
+            true,
+        ).first() as String
+        val dir = "$documents/$name"
+        val manager = NSFileManager.defaultManager
+        if (manager.fileExistsAtPath(dir)) manager.removeItemAtPath(dir, null)
+        manager.createDirectoryAtPath(dir, true, null, null)
+        return dir
+    }
+
+    /**
+     * A distinct record per call.
+     *
+     * Distinct because `WarpLogRecordExporter` dedups on `recordId`: a repeated id is silently
+     * skipped, and a turn of 128 duplicates would be a turn that admits nothing and measures the
+     * dedup path. The counter runs across every arm and bucket, so no two records in one process
+     * collide either.
+     */
+    private fun nextRecord(): LogRecord = record(recordSeq++)
 
     /**
      * Arm A — [Rga.insertAfter] with nothing else in the frame.
@@ -318,6 +616,48 @@ public class OtelStallProbe {
         val info = NSProcessInfo.processInfo
         return "host os=${info.operatingSystemVersionString} cores=${info.processorCount} " +
             "memoryGB=${info.physicalMemory / (1024uL * 1024uL * 1024uL)}"
+    }
+}
+
+/**
+ * Accumulates microsecond timings over a whole bucket and formats them once.
+ *
+ * Unlike [Bucketed] this emits nothing on its own — the #2193 arms measure a fixed number of
+ * repeats at a fixed op count and want one line per (arm, bucket), not a rolling curve.
+ *
+ * Reports **max as well as mean**, for the reason [OtelStallProbe.startResidual]'s arms exist at
+ * all: a stall is a tail phenomenon, and iOS auto-lock (held off by `isIdleTimerDisabled`, but
+ * worth being able to see regress) suspends the app mid-run in a way that shows up in the max and
+ * is invisible in the mean.
+ *
+ * Every figure is given twice — per call, and divided by the run size — because the arms are not
+ * commensurable otherwise: arm F's turn is a run of records, arms D and E each pay once per turn,
+ * and only the per-record column lets the three be compared or added.
+ */
+private class Stat {
+    private var sumMicros = 0L
+    private var maxMicros = 0L
+    private var count = 0
+
+    fun add(micros: Long) {
+        sumMicros += micros
+        if (micros > maxMicros) maxMicros = micros
+        count++
+    }
+
+    /** `meanMs=… maxMs=… perRecMeanMs=… perRecMaxMs=…`, the last two divided by [run]. */
+    fun line(run: Int): String {
+        if (count == 0) return "meanMs=n/a maxMs=n/a perRecMeanMs=n/a perRecMaxMs=n/a n=0"
+        val mean = sumMicros.toDouble() / count / 1000.0
+        val max = maxMicros / 1000.0
+        return "meanMs=${micro(mean)} maxMs=${micro(max)} " +
+            "perRecMeanMs=${micro(mean / run)} perRecMaxMs=${micro(max / run)} n=$count"
+    }
+
+    /** Six decimal places: a per-record figure at the small buckets lands in the microseconds. */
+    private fun micro(value: Double): String {
+        val scaled = (value * 1_000_000).toLong()
+        return "${scaled / 1_000_000}.${(scaled % 1_000_000).toString().padStart(6, '0')}"
     }
 }
 

@@ -51,6 +51,25 @@ final class Model: ObservableObject {
     /// human — it times `Rga.insertAfter` against the whole exporter write turn and prints the
     /// curve. Every line goes to stdout so `devicectl --console` is the whole retrieval story;
     /// the on-screen log is a convenience for a run started by tapping.
+    /// #2193 measurement — arms D/E/F/G decomposing what #2194's batched write turn left behind.
+    /// Same retrieval story as the #1860 probe: every line goes to stdout for `devicectl --console`.
+    func startOtelResidual() {
+        guard !running else { return }
+        self.role = "otel-residual"
+        self.running = true
+        self.rows = []
+        self.report = ""
+        self.log = "starting otel residual probe…"
+        otelProbe.startResidual(onLine: { [weak self] line in
+            print("[probe] " + line)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.log = line + "\n" + self.log
+                if line.hasPrefix("===PROBE-END===") { self.running = false }
+            }
+        })
+    }
+
     func startOtelProbe(recover: Bool = false) {
         guard !running else { return }
         self.role = recover ? "otel-probe-recover" : "otel-probe"
@@ -163,6 +182,11 @@ struct ContentView: View {
                 Button("otel probe · recover") { model.startOtelProbe(recover: true) }
                     .buttonStyle(.bordered).disabled(model.running)
             }
+            // #2193 measurement — the post-#2194 residual, decomposed. Also one phone, no partner.
+            HStack(spacing: 16) {
+                Button("otel probe · residual") { model.startOtelResidual() }
+                    .buttonStyle(.bordered).disabled(model.running)
+            }
             if model.running {
                 HStack(spacing: 8) { ProgressView(); Text("running \(model.role)…").font(.caption) }
             }
@@ -230,7 +254,8 @@ struct ContentView: View {
             // per element, but the recover launch passes both-looking args nowhere near each
             // other only by convention, and ordering the specific case first is the same
             // discipline the `-s4`/`-s6` variants above already needed.
-            if args.contains("otel-probe-recover") { model.startOtelProbe(recover: true) }
+            if args.contains("otel-residual") { model.startOtelResidual() }
+            else if args.contains("otel-probe-recover") { model.startOtelProbe(recover: true) }
             else if args.contains("otel-probe") { model.startOtelProbe() }
             else if args.contains("host-s4") { model.start(role: "host-s4") }
             else if args.contains("join-s4") { model.start(role: "join-s4") }
