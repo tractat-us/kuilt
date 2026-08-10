@@ -138,7 +138,12 @@ saying "this one is retired", the marker has to be kept forever, and keeping it 
 keeping the batch of records filed alongside it — in full, bodies and all. So that
 device's storage keeps growing over a long run, by whole records rather than by a little
 bookkeeping. Either way, when a cap is hit the items dropped to make room are always
-*logged*, never silently discarded.
+accounted for, never quietly discarded. How they are accounted for depends on how fast
+they go: things that are dropped rarely get a note written about each one, while things
+that are dropped constantly — as ordinary log lines are, once the store is full — are
+*counted* instead, exactly, with an occasional note saying how many. A note per dropped
+line would arrive as often as the lines themselves, which tells you nothing you did not
+already know.
 
 ## Going deeper
 

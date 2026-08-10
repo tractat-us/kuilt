@@ -24,9 +24,11 @@ import us.tractat.kuilt.crdt.piece
 // Kotlin/Native the lambda form resolves to an EMPTY logger name, which would make
 // this internal logger indistinguishable from an application logger and defeat the
 // self-capture exclusion in :kuilt-otel-logging (`LogCapture` drops events whose
-// loggerName starts with `us.tractat.kuilt`). The exporter logs on its eviction
-// hot path, so an unnamed log here would be re-captured and re-exported in an
-// unbounded loop. Keep this name stable and under the kuilt package.
+// loggerName starts with `us.tractat.kuilt`). The exporter still logs from the
+// eviction path — rate-limited now (#2218) rather than per record, but under load
+// that is a line arriving while records are being exported, so an unnamed log here
+// would be re-captured and re-exported, feeding itself. Keep this name stable and
+// under the kuilt package.
 private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpLogRecordExporter")
 
 /**
@@ -71,8 +73,18 @@ internal fun opCountOf(segment: Rga<LogRecord>): Int = segment.opCount
  * ## Buffer cap
  *
  * [maxRecords] bounds how many records stay visible, and [bufferPolicy] decides which
- * record gives way. **Every drop is logged** with enough detail to correlate against a
- * backend's log index.
+ * record gives way. **Every drop is counted** — exactly, per record, on
+ * [ExporterHealth.dropped] and [ExporterHealth.refused] — and a rate-limited `info` line
+ * reports the running total so the loss is not silent for a consumer who never reads
+ * [health].
+ *
+ * Per-record correlation was given up deliberately (#2218). This class used to log every
+ * drop with the evicted record's id and body, detailed enough to line up against a backend's
+ * log index — written when eviction was exceptional. At [DEFAULT_MAX_LOG_RECORDS] the buffer
+ * is full permanently, so every exported record evicts one and that line became a per-record
+ * narration of a ring buffer doing exactly what it is configured to do, on the export hot
+ * path. A signal that fires always is not one. What is lost is *which* records went; what is
+ * kept, and is what an operator actually reads, is *how many*.
  *
  * - [BufferPolicy.DROP_OLDEST] evicts visible index 0 and then inserts the arrival, so
  *   the buffer is a sliding window over the most recent [maxRecords] records.
@@ -355,6 +367,38 @@ public class WarpLogRecordExporter(
      */
     private var evictionsSincePass: Int = 0
 
+    /**
+     * Which [DROP_REPORT_INTERVAL]-wide bucket of `dropped + refused` [reportDropsPeriodically]
+     * has already spoken for. Guarded by [lock] — both call sites run inside the turn-building
+     * `lock.withLock` block.
+     *
+     * **Starts at `-1`, not `0`.** At `0` the first bucket compares equal to the initial value,
+     * so nothing would be logged until drop number [DROP_REPORT_INTERVAL] — an exporter that
+     * drops 800 records would then log **nothing, ever**, while an operator who never polls
+     * [health] sees no evidence of loss. That is exactly the silent-loss inversion (#1860) this
+     * summary line exists to prevent. At `-1` the *first* drop reports, then once per bucket.
+     */
+    private var lastDropReport: Long = -1L
+
+    /**
+     * How many summary lines [reportDropsPeriodically] has actually emitted. Guarded by [lock].
+     *
+     * Exists so [lastDropReport]'s `-1` seed is *pinned* rather than merely argued for. The seed
+     * is the difference between reporting the first drop and reporting nothing until drop
+     * [DROP_REPORT_INTERVAL] — but it is invisible to every assertion on exporter output, and
+     * the line itself goes to the logger, which this module cannot capture (`:kuilt-otel` does
+     * not depend on `:kuilt-otel-logging`, and its self-capture exclusion would drop the line
+     * anyway). Counting emissions is what makes a `-1` → `0` mutation go red.
+     *
+     * Note that observing the *seed* is not enough: `lastDropReport == 0` holds after one drop
+     * under **both** seeds. The count is the discriminator.
+     *
+     * `internal` for test verification only, following [Rga.insertsById]'s precedent; nothing in
+     * production reads it.
+     */
+    internal var dropSummariesEmitted: Int = 0
+        private set
+
     // Maps recordId → RgaId of the Insert op, so that re-export is a no-op.
     // Mutated in place on export()/eviction and rebuilt from the op-log on recover().
     private val seenIds: MutableMap<ByteString, RgaId> = mutableMapOf()
@@ -448,8 +492,15 @@ public class WarpLogRecordExporter(
          */
         private const val OPS_PER_RECORD = 2
 
-        /** How much of an evicted record's body the audit line carries. */
-        private const val EVICTION_BODY_CHARS = 80
+        /**
+         * How many drops-plus-refusals between summary lines — one line per buffer-worth of
+         * churn at [DEFAULT_MAX_LOG_RECORDS].
+         *
+         * Coarse on purpose: the *number* is the signal and it lives on [health]; this line only
+         * has to be frequent enough to be noticed and rare enough not to become the thing being
+         * reported.
+         */
+        private const val DROP_REPORT_INTERVAL = 10_000L
     }
 
     /** One durable-store mutation. */
@@ -991,7 +1042,7 @@ public class WarpLogRecordExporter(
                         // [visibleCount] past [maxRecords], after which this gate simply keeps
                         // refusing.
                         BufferPolicy.DROP_NEWEST -> {
-                            refuse(record)
+                            recordRefusal()
                             pending.remove(record.recordId)
                         }
                         BufferPolicy.DROP_OLDEST -> {
@@ -1103,7 +1154,7 @@ public class WarpLogRecordExporter(
      *   better answer.
      */
     private fun applyTurn(admitted: List<LogRecord>, evictions: Int) {
-        if (evictions > 0) evictLeading(evictions, admitted)
+        if (evictions > 0) evictLeading(evictions)
         if (admitted.isEmpty()) return
         val (newLog, inserts) = log.insertAllAfter(replica = replica, after = tail, values = admitted)
         log = newLog
@@ -1114,29 +1165,39 @@ public class WarpLogRecordExporter(
     }
 
     /**
-     * Tombstone the [count] oldest visible records, logging each. Must hold [lock].
+     * Tombstone the [count] oldest visible records, counting each. Must hold [lock].
      *
-     * Every drop is logged individually — the class KDoc promises an audit trail
-     * detailed enough to correlate against a backend's log index, and a batch changes
-     * how many evictions happen per turn, not how many records are lost.
+     * Every drop is **counted** on [ExporterHealth.dropped] — exactly, per record, with a
+     * rate-limited summary line for a reader who never polls health ([reportDropsPeriodically]).
+     * It is no longer logged individually, and the per-record `recordId`/`body` correlation
+     * against a backend's log index is deliberately gone with it: at [DEFAULT_MAX_LOG_RECORDS]
+     * the buffer is full permanently, so *every* exported record evicts one and that line was a
+     * per-record narration of a ring buffer doing what it is configured to do — on the export
+     * hot path, where it was measured (#2218).
      *
-     * The entries are read **before** the removal, off the instance whose [Rga.sequence]
+     * The ids are read **before** the removal, off the instance whose [Rga.sequence]
      * `removeFirst` is about to walk, so the lazy is computed once for both.
      */
-    private fun evictLeading(count: Int, admitted: List<LogRecord>) {
-        val evicted = log.entries().take(count)
-        // Each eviction is still paired with the record that displaced it, so the audit
-        // line keeps the `incoming recordId=` correlation the per-record path had. The
-        // first `maxRecords - visibleCount` admissions fit without evicting, so the
-        // displacing record is counted from the END of the admitted run.
-        val firstDisplacer = admitted.size - count
-        evicted.forEachIndexed { index, (_, record) ->
-            logger.warn {
-                "WarpLogRecordExporter: buffer cap ($maxRecords) reached, evicting record " +
-                    "recordId=${record.recordId} body=${record.body?.take(EVICTION_BODY_CHARS)} " +
-                    "policy=$bufferPolicy (incoming recordId=${admitted[firstDisplacer + index].recordId})"
-            }
-        }
+    private fun evictLeading(count: Int) {
+        // The leading `count` VISIBLE ids, taken off `sequence` LAZILY. [Rga.entries] would
+        // build two eager Θ(N) lists here and then discard all but `count` of them — ≈0.18 ms
+        // per record at [DEFAULT_MAX_LOG_RECORDS], measured on an iPhone XS (#2219). `sequence`
+        // is already warm on this instance: `removeFirst` below walks the same lazy.
+        //
+        // This is Θ(leading tombstones + count), NOT Θ(count): eviction tombstones accumulate
+        // at the HEAD of `sequence`, and [windowPassDue] only clears them once per [maxRecords]
+        // evictions, so the walk skips up to that many before it finds the first visible id.
+        // Still strictly less than the full pass it replaces, and one Θ(N) list allocation
+        // rather than three — `removeFirst` retains the third (its `visibleSequence()`), which
+        // is why this cuts the term rather than removing it.
+        val tombstoned = log.tombstones
+        val evicted = log.sequence.asSequence()
+            .filter { id -> id !in tombstoned }
+            .take(count)
+            .map { id -> log.valueAt(id) }
+            .toList()
+        healthState.update { it.copy(dropped = it.dropped + count) }
+        reportDropsPeriodically()
         val (newLog, removes) = log.removeFirst(count)
         log = newLog
         // The tombstones are ops like any other, so they ride in the active segment.
@@ -1144,7 +1205,7 @@ public class WarpLogRecordExporter(
         // record's own `Insert` — body and all — stays in whichever segment it landed
         // in until a window pass suppresses it and that segment is retired.
         appendToActiveSegment(removes)
-        evicted.forEach { (_, record) -> seenIds.remove(record.recordId) }
+        evicted.forEach { record -> seenIds.remove(record.recordId) }
         visibleCount -= count
         evictionsSincePass += count
         // DROP_OLDEST removes a leading prefix of the visible sequence. With at least
@@ -1153,11 +1214,46 @@ public class WarpLogRecordExporter(
         if (visibleCount == 0) tail = RgaId.HEAD
     }
 
-    /** Log a [BufferPolicy.DROP_NEWEST] refusal. Must hold [lock]. */
-    private fun refuse(incoming: LogRecord) {
-        logger.warn {
-            "WarpLogRecordExporter: buffer cap ($maxRecords) reached, refusing incoming record " +
-                "recordId=${incoming.recordId} body=${incoming.body?.take(EVICTION_BODY_CHARS)} policy=$bufferPolicy"
+    /**
+     * Count a [BufferPolicy.DROP_NEWEST] refusal. Must hold [lock].
+     *
+     * Named for what it *does* rather than for the decision it records: it no longer logs, and a
+     * name like `refuse` reads as the refusal itself and invites a log line back onto the path
+     * this exists to keep quiet. The count lands on [ExporterHealth.refused]; the periodic
+     * summary is shared with eviction because both are the same cap doing the same job.
+     */
+    private fun recordRefusal() {
+        healthState.update { it.copy(refused = it.refused + 1) }
+        reportDropsPeriodically()
+    }
+
+    /**
+     * Say out loud, at most once per [DROP_REPORT_INTERVAL] drops, that the buffer is
+     * recycling — so the loss is not silent for a consumer who never reads [health].
+     * Must hold [lock].
+     *
+     * Counted rather than timed: this type owns no [kotlin.time.Clock], and a wall-clock
+     * read per eviction is exactly the kind of per-record cost this change exists to remove
+     * (the same argument [ExporterHealth]'s KDoc already makes about `lastFailure`). The
+     * interval is deliberately coarse — the *number* is the signal and it is on [health];
+     * this line only has to be frequent enough to be noticed and rare enough not to be the
+     * thing being reported.
+     *
+     * Level is `info`, not `warn`: a cap behaving exactly as configured is not a warning.
+     */
+    private fun reportDropsPeriodically() {
+        // ONE read of the flow — both fields off one snapshot, so the bucket cannot straddle
+        // a concurrent update and report a total neither value ever had.
+        val health = healthState.value
+        val total = health.dropped + health.refused
+        val bucket = total / DROP_REPORT_INTERVAL
+        if (bucket == lastDropReport) return
+        lastDropReport = bucket
+        dropSummariesEmitted++
+        logger.info {
+            "WarpLogRecordExporter: buffer cap ($maxRecords) recycling under $bufferPolicy — " +
+                "$total record(s) dropped or refused so far. This is the cap doing its job; read " +
+                "ExporterHealth.dropped / .refused for the running totals."
         }
     }
 

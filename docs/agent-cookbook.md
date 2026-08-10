@@ -441,6 +441,29 @@ never heard about the removal will happily re-add them on the next merge.
 leaves a suppression record behind, so the entries stay gone across a merge. Pair it with
 `Rga.sequence`/`Rga.tombstones` to work out which ids fall outside the window you want to keep.
 
+**Reading only the head, without paying for the whole log.** `toList()` and `entries()` each build
+two lists the size of the log, so working out "which ids fall outside the window" by materialising
+everything and then taking a handful throws nearly all of that work away. Walk `Rga.sequence`
+lazily instead, filter `Rga.tombstones`, `take` what you need, and resolve just those with
+`Rga.valueAt(id)` — an O(1) read of one element by its id:
+
+<!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleRgaHeadWindow -->
+```kotlin
+    // Remove the first entry. It is TOMBSTONED, not gone — still in `sequence`, and its value
+    // is still readable — which is exactly why the walk has to filter `tombstones` itself.
+    log = checkNotNull(log.removeAt(0)).first
+    check(ids.first() in log.tombstones)
+    check(log.valueAt(ids.first()) == "entry-1")
+
+    // The two oldest VISIBLE entries, resolving only those two.
+    val head = log.sequence.asSequence()
+        .filter { id -> id !in log.tombstones }
+        .take(2)
+        .map { id -> log.valueAt(id) }
+        .toList()
+    check(head == listOf("entry-2", "entry-3"))
+```
+
 <!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleRgaDropWindow -->
 ```kotlin
 val a = ReplicaId("A")

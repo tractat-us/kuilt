@@ -297,6 +297,32 @@ public class Rga<V> private constructor(
         .map { id -> id to insertsById.getValue(id).value }
 
     /**
+     * The element [id] carries — O(1), and the only way to read **one** element's value.
+     *
+     * [toList] and [entries] are the whole-log readers: each builds two eager Θ(N) lists, so a
+     * caller that wants the first few elements pays for all of them. This is the piecewise form,
+     * and it exists so such a caller can walk [sequence] lazily — filter [tombstones], `take` what
+     * it needs, and resolve only those.
+     *
+     * @sample us.tractat.kuilt.crdt.sampleRgaHeadWindow
+     *
+     * `WarpLogRecordExporter`'s eviction path is why: at a 10,000-record cap it read the leading
+     * ~128 records per turn out of `entries()` and discarded the rest, ≈0.18 ms per record on an
+     * iPhone XS (#2219).
+     *
+     * **Takes an [RgaId], so it cannot be a positional `get(index)`.** A positional accessor would
+     * have to materialise the visible sequence to resolve the index — the exact cost this avoids —
+     * and an index is not a stable handle in a replicated sequence anyway: a concurrent remote
+     * insert shifts it. An [RgaId] names the same element on every replica, forever.
+     *
+     * @throws NoSuchElementException if [id] is not present — it was never inserted, or it was
+     *   compacted away ([compactedIds]) and its `Insert` op is gone. A **tombstoned** id is still
+     *   present and still resolves: the value is retained until compaction, which is what lets a
+     *   caller read what it is about to remove.
+     */
+    public fun valueAt(id: RgaId): V = insertsById.getValue(id).value
+
+    /**
      * The number of visible elements.
      */
     public val size: Int get() = sequence.count { it !in tombstones }

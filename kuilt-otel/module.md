@@ -66,7 +66,7 @@ worked example.
 | [MetricKind] | SUM / GAUGE / CARDINALITY. |
 | [ExportResult] | Typed result of span/log `export()` / `merge()`. |
 | [MetricExportResult] | Typed result of metric mutations. |
-| [BufferPolicy] | Span/log bounded-buffer eviction strategy (always logs what it drops). |
+| [BufferPolicy] | Span/log bounded-buffer eviction strategy (spans log each drop; log records count them on [ExporterHealth]). |
 | [MetricBufferPolicy] | Metric bounded-buffer eviction strategy (always logs what it drops). |
 
 ## Deferred (follow-up PRs)
@@ -86,8 +86,12 @@ worked example.
   configurable assembly window.
 - **Bounded buffer.** The span and log buffers are capped ([DEFAULT_MAX_SPANS],
   [DEFAULT_MAX_LOG_RECORDS]); the metric buffer at [DEFAULT_MAX_METRICS] distinct series.
-  Evicted entries are always logged — never silently dropped. Counters are O(1)
-  regardless of offline duration (a counter compresses losslessly).
+  Eviction is never silent, but it is reported differently by rate: spans and metrics
+  log each drop; log records are counted exactly on [ExporterHealth.dropped] /
+  [ExporterHealth.refused] with one rate-limited summary line, because at
+  [DEFAULT_MAX_LOG_RECORDS] every exported record evicts one and a per-record line
+  would narrate the cap doing its job. Counters are O(1) regardless of offline
+  duration (a counter compresses losslessly).
 - **For logs, the total settles on the export path and still grows on the gossip path.**
   [WarpLogRecordExporter] persists its op-log in segments of [DEFAULT_LOG_SEGMENT_OPS]
   operations, so one export rewrites one segment rather than the whole log; it then
