@@ -141,17 +141,29 @@ predecessor dot resolves to a span in the set").
 ## Failure handling
 
 `clear()` returns `Failure` when the durable write of the turn fails, exactly as
-`export()` does; the in-memory drop has already happened, so the store and memory disagree
-until the next attempt or `recover()`. Retrying `clear()` re-converges: the floor is
-idempotent and a repeat delete is a no-op.
+`export()` does. Retrying re-converges: raising the floor is idempotent and a repeat delete
+is a no-op.
+
+**On failure the in-memory drop has already happened, so the observable count reads zero
+while the store still holds records.** This is the contract, not an accident of ordering: a
+turn builds its actions from already-mutated state, which is how all three write paths in
+this class work. A caller must therefore **treat any non-`Success` as "count unknown"** and
+not start a from-empty measurement from that state.
+
+Re-reading the store on the failure path to restore agreement was considered and rejected:
+`recover()` degrades to "start fresh" when a read fails, so on a store that is failing
+writes — the case that produced the failure — it would leave memory empty again and report
+success at lying. A half-guarantee here is worse than a stated limit. On `Success` the count
+reads zero synchronously, because the drop precedes the write.
 
 A refused segment delete does **not** leak permanently. The number is on the ledger
 (`LogSegmentIndex.retired`) only after a write carrying its covering state was confirmed
 durable, and `loadPersistedState` sweeps the ledger unconditionally at the next start.
 
-`clear()` does not touch `health`. `ExporterHealth` exists because "on the logging path
-every caller discards [the return value]" — a clear has a caller that reads it, and leaving
-`health` alone keeps `failed > 0` meaning "the store is rejecting writes".
+A failed clear **does** move `ExporterHealth.failed`, and should: the store really did
+reject a write, which is exactly what that counter means. A successful clear never moves
+`accepted`, which keeps meaning "records durably taken" rather than "store calls made".
+Both fall out of reusing the existing `commit()` rather than being arranged for.
 
 ## What `clear()` does not do
 
