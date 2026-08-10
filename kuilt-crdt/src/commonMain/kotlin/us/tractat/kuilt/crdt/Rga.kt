@@ -300,8 +300,16 @@ public class Rga<V> private constructor(
      * inspect the full ordered sequence (e.g. `WindowPolicy.byCount`).
      *
      * A mutation that can prove the result without recomputing threads it forward through
-     * [RgaCache.sequence] (#2193), so an append-then-read loop pays one `computeSequence()`
-     * rather than one per turn. Every other path leaves it `null` and this recomputes once.
+     * [RgaCache.sequence] (#2193), so a chain of appends pays one `computeSequence()` rather
+     * than one per turn. Every other path leaves it `null` and this recomputes once.
+     *
+     * **Only a *threaded* order propagates, not merely a materialized one.** The chain is armed
+     * by [removeAt] / [removeFirst] / [insertAt], which force this lazy and thread the result on;
+     * an instance whose [sequence] was forced by a **plain read** carries nothing in
+     * [RgaCache.sequence], so `insertAfter` on it threads nothing and the next read recomputes.
+     * An append-then-read loop therefore still pays one `computeSequence()` per turn. That is
+     * unclaimed value rather than a correctness problem — the guard's premise holds equally for a
+     * forced lazy — and closing it is tracked by #2225.
      */
     public val sequence: List<RgaId> by lazy { cache?.sequence ?: computeSequence() }
 
@@ -550,9 +558,13 @@ public class Rga<V> private constructor(
      * remove the Θ(N) term — one `ops` copy per run remains, which is #2193's Phase 3A.
      *
      * When this really is an append — `after` is the last element of the **full**
-     * [sequence] — and the order is already materialized, it is threaded forward instead
-     * of being recomputed (#2193's Phase 3B). Any other `after`, or a cold sequence, passes
-     * nothing on and the next read rebuilds once.
+     * [sequence] — and this instance is carrying a *threaded* order, that order is extended
+     * instead of being recomputed (#2193's Phase 3B). Any other `after`, or an instance not
+     * carrying one, passes nothing on and the next read rebuilds once.
+     *
+     * "Carrying a threaded order" is narrower than "has a materialized [sequence]": an instance
+     * whose lazy was forced by a plain read does **not** qualify today, so an append after a read
+     * threads nothing even though the guard's premise holds. Tracked by #2225; see [sequence].
      *
      * An empty [values] returns `this` — the same instance, not a copy.
      *
