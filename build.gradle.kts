@@ -2021,10 +2021,70 @@ val forbidUnlintedModule by tasks.registering {
     }
 }
 
+// Guard: forbid `:kuilt-bolt` rejoining the CRDT lattice (#2212, epic #2210).
+//
+// A bolt is a WRITE-ONLY archive. Its whole reason to exist is that it consumes operations, never
+// states, and never joins the lattice — which is what lets a server's archive retain a year beside
+// a phone that retains an hour. Suppression is monotone and contagious through `Quilted.piece`
+// (`Rga.piece` takes the elementwise MAX of the compaction floors and the UNION of the compacted
+// ids, then purges under both), so the instant a bolt could be `piece`d with anything, its
+// retention would become the group's business again and the module would be pointless.
+//
+// The invariant is therefore enforced by ABSENCE, and absence is exactly what no runtime test can
+// observe: there is no value to assert about a method that is not there. A source scan can, and a
+// compile-level absence is worth more than a test — a consumer who cannot NAME `piece` on a bolt
+// cannot call it, in any version, from any module.
+//
+// Scope is `:kuilt-bolt`'s MAIN sources only. Test sources legitimately build `Rga` fixtures and
+// merge them, and the module's own KDoc must be free to explain what it does not do — hence the
+// shared `KotlinCodeScanner`, which blanks comments and string literals so PROSE about `piece` and
+// `Quilted` (there is a good deal of it, deliberately) is invisible here while code is not.
+//
+// `Patch` is deliberately NOT scanned. It is the state-fragment type a bolt must never absorb, but
+// banning the token would guard a hypothetical: absorbing one requires `piece`, which this guard
+// already forbids, and the extra rule would only fire on a KDoc-adjacent identifier some future
+// backend legitimately needed. Two tokens, both load-bearing, is the whole rule.
+val forbidBoltRejoiningTheLattice by tasks.registering {
+    group = "verification"
+    description = "Fails if :kuilt-bolt's main sources name Quilted or piece — a bolt must never merge back (#2212)."
+    val sources = kotlinSourcesIn(listOf(project(":kuilt-bolt").projectDir.resolve("src")), "**/*Main/**/*.kt")
+    inputs.files(sources).withPropertyName("boltMainSources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // See "Guard plumbing" above: the stamp is what makes UP-TO-DATE possible (#1827). The verdict
+    // is a pure function of the scanned files' contents, which a RELATIVE fingerprint captures.
+    val stamp = layout.buildDirectory.file("verification/forbid-bolt-rejoining-the-lattice.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    val rootPath = rootDir
+    doLast {
+        val banned = Regex("""(?<![A-Za-z0-9_])(Quilted|piece)(?![A-Za-z0-9_])""")
+        val offenders = sources.files.sortedBy { it.invariantSeparatorsPath }.asSequence()
+            .flatMap { file ->
+                KotlinCodeScanner.stripNonCode(file.readText()).lineSequence().withIndex()
+                    .mapNotNull { (i, line) ->
+                        banned.find(line)?.let { "${file.relativeTo(rootPath)}:${i + 1}  ${it.value}" }
+                    }
+            }.toList()
+        if (offenders.isNotEmpty()) {
+            error(
+                "`:kuilt-bolt` main source names `Quilted` or `piece`. A bolt is a write-only archive: " +
+                    "it consumes operations, never states, and must never merge back into the lattice — " +
+                    "`piece` would make its source's forgetting contagious again and defeat the whole " +
+                    "module (#2212). If a bolt genuinely needs to READ a CRDT, take an `OpLogCrdt`, not a " +
+                    "`Quilted`:\n  " + offenders.joinToString("\n  "),
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText("ok — ${sources.files.size} :kuilt-bolt main sources scanned\n")
+    }
+}
+
 // Run the guards as part of `check` (hence `build`, hence CI) in every module.
 allprojects {
     tasks.matching { it.name == "check" }.configureEach {
         dependsOn(rootProject.tasks.named("forbidUnboundedSwatchDelivery"))
+        dependsOn(rootProject.tasks.named("forbidBoltRejoiningTheLattice"))
         dependsOn(rootProject.tasks.named("forbidUnlintedModule"))
         dependsOn(rootProject.tasks.named("forbidSourcelessKmpTarget"))
         dependsOn(rootProject.tasks.named("forbidPortProbeRebind"))
