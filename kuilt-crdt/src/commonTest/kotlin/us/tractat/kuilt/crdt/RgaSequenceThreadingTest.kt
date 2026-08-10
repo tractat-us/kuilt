@@ -324,9 +324,9 @@ class RgaSequenceThreadingTest {
 
     /**
      * The load-bearing assertion. A run shaped exactly like `WarpLogRecordExporter`'s steady
-     * state — `entries()` to read the head, `removeFirst(k)` to evict it, `insertAllAfter(tail)`
-     * to append the turn — must compute the RGA order **once**, on the first turn, and never
-     * again.
+     * state — walk `sequence` for the leading visible ids, `removeFirst(k)` to evict them,
+     * `insertAllAfter(tail)` to append the turn — must compute the RGA order **once**, on the
+     * first turn, and never again.
      *
      * Recomputations are counted structurally rather than with a production counter: a turn
      * recomputes exactly when the state it starts from carries no threaded order, because
@@ -349,9 +349,12 @@ class RgaSequenceThreadingTest {
         val threadedAfterAppend = mutableListOf<Boolean>()
         val handedBackTheThreadedList = mutableListOf<Boolean>()
         repeat(TURNS) { turn ->
-            // evictLeading: read the head off the pre-removal instance, then tombstone it.
+            // evictLeading: walk `sequence` for the leading visible ids and resolve only those
+            // (#2219 replaced an `entries()` call here), then tombstone them. Either way this
+            // read is what forces the lazy; `removeFirst` below is what threads it on.
             if (log.threadedSequence == null) recomputedOnTurn += turn
-            log.entries().take(BATCH)
+            val tombstoned = log.tombstones
+            log.sequence.asSequence().filter { it !in tombstoned }.take(BATCH).map { log.valueAt(it) }.toList()
             val (afterEvict, _) = log.removeFirst(BATCH)
             // applyTurn: append the turn after the last visible element.
             val (afterAppend, inserts) = afterEvict.insertAllAfter(a, tail, List(BATCH) { "t$turn.$it" })
