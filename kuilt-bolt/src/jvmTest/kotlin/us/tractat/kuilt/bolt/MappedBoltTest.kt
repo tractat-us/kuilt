@@ -191,6 +191,44 @@ class MappedBoltTest {
     }
 
     /**
+     * A directory removed underneath a live archive is recreated, by **both** the append path and
+     * the availability probe.
+     *
+     * Two arms, deliberately, because one would leave the other's claim untested: the first appends
+     * *without* asking [Bolt.availability] first, so it can only pass if `roll` carries its own
+     * `mkdirs`; the second only probes, so it can only pass if `availability` does. If either path
+     * lacked it the two answers would disagree, and `Available` would stop meaning "an append is
+     * accepted" — the one thing that signal exists to promise.
+     */
+    @Test
+    fun aDirectoryRemovedUnderneathIsRecreatedByBothTheAppendAndTheProbe() =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val directory = tempArchiveDirectory()
+            // One frame per segment, so the append below must roll — which is the path that allocates.
+            val bolt = mappedBolt(FixedClock(EPOCH), directory, segmentFrameBytes = 1L)
+            val (afterFirst, first) = Rga.empty<String>().insertAt(ALICE, 0, "first")
+            assertIs<AppendResult.Written>(bolt.append(listOf(first)))
+
+            directory.deleteRecursively()
+            val (_, second) = afterFirst.insertAt(ALICE, 1, "second")
+            val appendedIntoAVanishedDirectory = bolt.append(listOf(second))
+            directory.deleteRecursively()
+            val probed = bolt.availability()
+            val recreatedByTheProbe = directory.isDirectory
+
+            assertAll(
+                {
+                    assertIs<AppendResult.Written>(
+                        appendedIntoAVanishedDirectory,
+                        "the append path recreates the directory rather than raising FileNotFoundException",
+                    )
+                },
+                { assertEquals(BoltAvailability.Available, probed, "and the probe agrees with it") },
+                { assertTrue(recreatedByTheProbe, "because the probe recreates it too") },
+            )
+        }
+
+    /**
      * Synchronous and asynchronous are **one mechanism and a flag**: they must produce the same
      * archive, byte for byte, or they are two implementations pretending to be one.
      *

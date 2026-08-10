@@ -162,6 +162,11 @@ public class MappedBolt<Id : Any, V, Op : Any>(
      * racing you for it. So a genuinely full disk shows up as [AppendResult.Failed] from [append]
      * while this said [BoltAvailability.Available] — that is the *achievable* guarantee, and the
      * eager pre-allocation above is what makes it a `Failed` rather than a dead process.
+     *
+     * It **recreates a directory that has gone missing**, rather than only reporting it. A probe with
+     * a side effect is unusual, and it is here so the two answers cannot disagree: an append would
+     * recreate it too, so reporting `Unavailable` for something the very next call repairs would make
+     * this signal wrong in the direction it exists to rule out.
      */
     override fun availability(): BoltAvailability = lock.withLock {
         val damaged = unappendable
@@ -258,6 +263,10 @@ public class MappedBolt<Id : Any, V, Op : Any>(
         // A retired segment is read back from its FILE, so flush it before letting go of its
         // mapping — this is the only point at which that is guaranteed to have happened.
         active?.force()
+        // A directory removed underneath a live archive is recreated rather than turned into a
+        // FileNotFoundException, so that this agrees with `availability`, which does the same. If it
+        // cannot be recreated the RandomAccessFile below fails, which is the answer either way.
+        directory.mkdirs()
         val file = File(directory, segmentName(nextIndex))
         val segment = Segment(file, allocate(file, sizeBytes), sizeBytes.toInt(), writePosition = 0)
         segment.write(
