@@ -84,6 +84,13 @@ import java.nio.Buffer as NioBuffer
  * One directory belongs to one bolt: there is no cross-process file lock, and two bolts over one
  * directory will interleave segment indices and corrupt each other.
  *
+ * [replay] copies the **active** segment's written prefix while holding the lock — that is what makes
+ * a concurrent append unobservable half-written — so a replay stalls appends for the length of one
+ * `memcpy` of at most [segmentFrameBytes]. Every older segment is read from its file, outside the
+ * lock. A replay is a whole-archive read either way: v1 does no segment-level pruning, so a
+ * [ReplayScope.FromOffset] resume costs the same as [ReplayScope.All] even though the segment
+ * headers carry the `baseOffset` a prune would need (#2236).
+ *
  * @param directory holds this archive's segment files. Created if absent.
  * @param format how ops are classified and encoded — see [BoltArchiveFormat].
  * @param clock stamps each frame's arrival time. **Required**: time is a dependency here.
@@ -189,8 +196,11 @@ public class MappedBolt<Id : Any, V, Op : Any>(
         val frame = encodeFrame(RawFrame(clock.now(), insertDots, key = null, ops = encodedOps))
         val offset = nextOffset
         return when (val outcome = segmentFor(frame.size)) {
+            // `offset` is the refusal's, not this frame's: an archive whose newest segment cannot be
+            // read has no append offset to report, and reporting `0` there would name a byte range
+            // the failure has nothing to do with.
             is SegmentOutcome.Refused ->
-                AppendResult.Failed(outcome.reason, insertDots, offset, endOffset = null, cause = outcome.cause)
+                AppendResult.Failed(outcome.reason, insertDots, outcome.offset, endOffset = null, cause = outcome.cause)
 
             is SegmentOutcome.Ready -> {
                 outcome.segment.write(frame)
@@ -206,7 +216,7 @@ public class MappedBolt<Id : Any, V, Op : Any>(
      * otherwise a freshly rolled one — or the reason none could be had. Called under [lock].
      */
     private fun segmentFor(frameBytes: Int): SegmentOutcome {
-        unappendable?.let { return SegmentOutcome.Refused(it, cause = null) }
+        unappendable?.let { return SegmentOutcome.Refused(it, offset = null, cause = null) }
         active?.takeIf { it.hasRoomFor(frameBytes) }?.let { return SegmentOutcome.Ready(it) }
         // A frame bigger than the budget lands ALONE in a segment sized to fit it rather than being
         // refused: the budget bounds accumulation, it is not a record-size cap.
@@ -214,6 +224,7 @@ public class MappedBolt<Id : Any, V, Op : Any>(
         if (sizeBytes > Int.MAX_VALUE) {
             return SegmentOutcome.Refused(
                 "a $frameBytes-byte frame needs a $sizeBytes-byte segment, larger than one mapping can be",
+                offset = nextOffset,
                 cause = null,
             )
         }
@@ -221,6 +232,7 @@ public class MappedBolt<Id : Any, V, Op : Any>(
             return SegmentOutcome.Refused(
                 "mapped archive is full: $sizeBytes more bytes needed, " +
                     "${capacityBytes - usedBytes} of $capacityBytes free",
+                offset = nextOffset,
                 cause = null,
             )
         }
@@ -229,7 +241,7 @@ public class MappedBolt<Id : Any, V, Op : Any>(
         } catch (failure: IOException) {
             // The catchable failure the eager pre-allocation exists to produce: a full or read-only
             // volume surfaces HERE, as a refused append, rather than as a SIGBUS on a later page.
-            SegmentOutcome.Refused("could not pre-allocate a segment under $directory: $failure", failure)
+            SegmentOutcome.Refused("could not pre-allocate a segment under $directory: $failure", nextOffset, failure)
         }
     }
 
@@ -470,12 +482,14 @@ public class MappedBolt<Id : Any, V, Op : Any>(
     /**
      * One segment's mapped window, and how much of it has been written.
      *
-     * Three typed views of one buffer, and the typing is load-bearing rather than stylistic: `Java 9`
-     * gave `ByteBuffer`/`MappedByteBuffer` covariant overrides of `position`, `clear` and
-     * `duplicate`, so a call bound to the subtype compiles to a signature that does not exist on
-     * older Android runtimes (`minSdk` here is 24) and fails with `NoSuchMethodError` at runtime, not
-     * at build time. Binding `position` to [NioBuffer] and `put`/`get` to [ByteBuffer] picks the
-     * signatures that have been there since 1.4.
+     * Two typed views of one buffer, and the typing is load-bearing rather than stylistic. Java 9
+     * gave `ByteBuffer` covariant overrides of the `Buffer` positioning methods — `position`,
+     * `limit`, `clear` — so a call bound to `ByteBuffer` compiles against
+     * `ByteBuffer.position(I)Ljava/nio/ByteBuffer;`, which does not exist on the older Android
+     * runtimes this module still targets (`minSdk` is 24) and fails there with `NoSuchMethodError` at
+     * runtime rather than at build time. Binding those calls to [NioBuffer] picks
+     * `Buffer.position(I)Ljava/nio/Buffer;`, which has been there since 1.4; `put`/`get`/`force` were
+     * never re-declared and are bound normally.
      */
     private class Segment(
         val file: File,
@@ -529,7 +543,7 @@ public class MappedBolt<Id : Any, V, Op : Any>(
 
     private sealed interface SegmentOutcome {
         class Ready(val segment: Segment) : SegmentOutcome
-        class Refused(val reason: String, val cause: Throwable?) : SegmentOutcome
+        class Refused(val reason: String, val offset: Long?, val cause: Throwable?) : SegmentOutcome
     }
 
     private companion object {
