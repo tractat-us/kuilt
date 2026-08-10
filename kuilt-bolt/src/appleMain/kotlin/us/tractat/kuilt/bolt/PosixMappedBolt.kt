@@ -91,7 +91,7 @@ import kotlin.time.Instant
  *    `0x2144DF1C`, which no zero field can equal), and `MINIMUM_BODY_BYTES` rejects an impossibly
  *    small body. **Both are load-bearing and neither is redundant** — mutating either one alone
  *    leaves the other refusing the zero run, so a single-mutation reading would wrongly conclude one
- *    could be deleted. Do not "simplify" either; `PosixMappedBoltTest.aPreAllocatedTailReplaysClean`
+ *    could be deleted. Do not "simplify" either; `PosixMappedBoltTest.aPreAllocatedTailReplaysCleanAndNeverAsPhantomFrames`
  *    pins the pair.
  *
  *    Because a zero tail is *expected* rather than damage, replay treats it as the end of a segment's
@@ -301,17 +301,23 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
         // authority on their own bytes, and MAP_SHARED writes are coherent with read(2), so a
         // concurrent append is either wholly visible to this reader or wholly invisible to it —
         // never half of a frame, because a frame's CRC covers its own length prefix.
-        val views = lock.withLock {
+        // Nothing is EMITTED under the lock — `emit` suspends for as long as the collector takes, and
+        // holding a mutex across that would stall every append behind a slow reader. So the locked
+        // section only decides, and the emitting happens after it.
+        val opened = lock.withLock {
             // Opening is what ADOPTS an archive already on disk, so a consumer that only ever reads —
             // never appends — must still go through it, or it would replay an empty archive over a
-            // directory full of frames. An archive that cannot be opened replays as Truncated at the
-            // start rather than as a clean empty one: "I could not read it" and "it holds nothing"
-            // are different answers, and only one of them is true.
-            if (ensureOpen() !is BoltAvailability.Available) {
-                return@flow emit(Truncated(nextOffset, TruncationReason.SegmentHeader))
-            }
-            segments.map { SegmentView(it.path, it.baseOffset, it.writtenFrameBytes) }
+            // directory full of frames.
+            val usable = ensureOpen() is BoltAvailability.Available
+            Opened(
+                views = if (usable) segments.map { SegmentView(it.path, it.baseOffset, it.writtenFrameBytes) } else null,
+                cursor = nextOffset,
+            )
         }
+        // An archive that cannot be opened replays as Truncated at the start rather than as a clean
+        // empty one: "I could not read it" and "it holds nothing" are different answers, and only one
+        // of them is true.
+        val views = opened.views ?: return@flow emit(Truncated(opened.cursor, TruncationReason.SegmentHeader))
         for (view in views) {
             if (skippable(view, scope)) continue
             val bytes = readWholeFile(view.path)
@@ -418,28 +424,36 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
     private fun rollSegment(offset: Long, allocation: Long): Segment {
         val index = (segments.lastOrNull()?.index ?: -1L) + 1L
         val path = directory.withTrailingSlash() + segmentName(index)
-        val fd = open(path, O_RDWR or O_CREAT or O_EXCL, S_IRUSR or S_IWUSR)
+        val fd = platform.posix.open(path, O_RDWR or O_CREAT or O_EXCL, S_IRUSR or S_IWUSR)
         if (fd < 0) throw PosixFailure(posixFailure("could not create segment $path"))
-        val mapping = try {
+        var mapping: Mapping? = null
+        try {
             preallocate(fd, allocation, path)
             val address = mmap(null, allocation.convert(), PROT_READ or PROT_WRITE, MAP_SHARED, fd, 0)
             if (address == null || address.rawValue.toLong() == MMAP_FAILED) {
                 throw PosixFailure(posixFailure("could not map segment $path"))
             }
-            Mapping(fd, address.reinterpret(), allocation)
+            val mapped = Mapping(fd, address.reinterpret(), allocation)
+            mapping = mapped
+            val header = encodeSegmentHeader(
+                SegmentHeader(BOLT_FORMAT_VERSION, format.opFormat, format.elementType, baseOffset = offset),
+            )
+            copyInto(mapped, 0L, header)
+            if (synchronous) syncRange(mapped, 0L, header.size.toLong())?.let { throw PosixFailure(it) }
         } catch (failure: PosixFailure) {
-            close(fd)
+            // Everything above is undone before the failure escapes: the OLD active segment is still
+            // mapped and still appendable, which is what makes a refused roll survivable rather than
+            // the end of this bolt's life. The half-built file is left on disk for the next open to
+            // adopt or discard — it holds no frame, so it can lose nothing.
+            mapping?.let { munmap(it.address, it.bytes.convert()) }
+            platform.posix.close(fd)
             throw failure
         }
-        val header = encodeSegmentHeader(
-            SegmentHeader(BOLT_FORMAT_VERSION, format.opFormat, format.elementType, baseOffset = offset),
-        )
-        copyInto(mapping, 0L, header)
-        if (synchronous) syncRange(mapping, 0L, header.size.toLong())?.let { throw PosixFailure(it) }
+        val live = checkNotNull(mapping) { "a segment rolled without failing must have a mapping" }
         unmapActive()
-        active = mapping
+        active = live
         usedBytes += allocation
-        return Segment(index, path, offset, headerBytes, allocation, writtenFrameBytes = 0L)
+        return Segment(index, path, offset, BOLT_FORMAT_VERSION, headerBytes, allocation, writtenFrameBytes = 0L)
             .also { segments += it }
     }
 
@@ -589,6 +603,9 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
         unmapActive()
         nextOffset = 0L
         usedBytes = 0L
+        // A re-open re-derives everything, this included: a repair reported from a PREVIOUS open of
+        // the same bolt would be a claim about bytes that are no longer there.
+        repaired = null
         val names = NSFileManager.defaultManager
             .contentsOfDirectoryAtPath(directory.withoutTrailingSlash(), error = null)
             ?: return BoltAvailability.Unavailable("archive directory $directory could not be listed")
@@ -616,6 +633,7 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
                 index = index,
                 path = path,
                 baseOffset = header.baseOffset,
+                formatVersion = header.formatVersion,
                 headerBytes = bytes.size - buffer.size.toInt(),
                 fileBytes = bytes.size.toLong(),
                 writtenFrameBytes = 0L,
@@ -634,16 +652,16 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
     /** Scan [last]'s frames for the append cursor, repairing a torn tail, then map it. */
     private fun adoptLastSegment(last: Segment): BoltAvailability {
         val bytes = readWholeFile(last.path) ?: return wedge("segment ${last.path} could not be re-read")
-        val scan = scanFrameExtent(bytes, last.headerBytes)
+        val scan = scanFrameExtent(bytes, last.headerBytes, last.formatVersion)
         last.writtenFrameBytes = scan.frameBytes
         nextOffset = last.baseOffset + scan.frameBytes
         if (scan.torn) repaired = nextOffset
-        val fd = open(last.path, O_RDWR)
+        val fd = platform.posix.open(last.path, O_RDWR)
         if (fd < 0) return BoltAvailability.Unavailable(posixFailure("could not open segment ${last.path}"))
         val address = mmap(null, last.fileBytes.convert(), PROT_READ or PROT_WRITE, MAP_SHARED, fd, 0)
         if (address == null || address.rawValue.toLong() == MMAP_FAILED) {
             val reason = posixFailure("could not map segment ${last.path}")
-            close(fd)
+            platform.posix.close(fd)
             return BoltAvailability.Unavailable(reason)
         }
         val mapping = Mapping(fd, address.reinterpret(), last.fileBytes)
@@ -660,12 +678,14 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
     }
 
     /** How many frame bytes of [bytes] are intact, and whether what follows them is damage. */
-    private fun scanFrameExtent(bytes: ByteArray, headerBytes: Int): FrameExtent {
+    private fun scanFrameExtent(bytes: ByteArray, headerBytes: Int, formatVersion: Int): FrameExtent {
         val buffer = Buffer().apply { write(bytes, startIndex = headerBytes) }
         var frameBytes = 0L
         while (buffer.size > 0) {
             val before = buffer.size
-            readFrame(buffer, BOLT_FORMAT_VERSION) ?: return FrameExtent(
+            // The SEGMENT's declared version, never this build's: a later build adopting an earlier
+            // archive has to read that archive's frames with that archive's reader.
+            readFrame(buffer, formatVersion) ?: return FrameExtent(
                 frameBytes = frameBytes,
                 torn = !isZeroFrom(bytes, bytes.size - buffer.size.toInt()),
             )
@@ -700,15 +720,16 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
         check(ensureOpen() is BoltAvailability.Available) { "cannot seed a segment into an unopened archive" }
         val index = (segments.lastOrNull()?.index ?: -1L) + 1L
         val path = directory.withTrailingSlash() + segmentName(index)
-        val fd = open(path, O_RDWR or O_CREAT or O_EXCL, S_IRUSR or S_IWUSR)
+        val fd = platform.posix.open(path, O_RDWR or O_CREAT or O_EXCL, S_IRUSR or S_IWUSR)
         check(fd >= 0) { posixFailure("could not create seeded segment $path") }
         writeAll(fd, bytes, path)
-        close(fd)
+        platform.posix.close(fd)
         unmapActive()
         segments += Segment(
             index = index,
             path = path,
             baseOffset = baseOffset,
+            formatVersion = BOLT_FORMAT_VERSION,
             headerBytes = headerBytes,
             fileBytes = bytes.size.toLong(),
             writtenFrameBytes = bytes.size.toLong() - headerBytes,
@@ -790,7 +811,7 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
         val mapping = active ?: return
         active = null
         munmap(mapping.address, mapping.bytes.convert())
-        close(mapping.fd)
+        platform.posix.close(mapping.fd)
     }
 
     /**
@@ -802,7 +823,7 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
      */
     @Suppress("ReturnCount")
     private fun readWholeFile(path: String): ByteArray? {
-        val fd = open(path, O_RDONLY)
+        val fd = platform.posix.open(path, O_RDONLY)
         if (fd < 0) return null
         try {
             val size = lseek(fd, 0, SEEK_END)
@@ -819,7 +840,7 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
             }
             return out
         } finally {
-            close(fd)
+            platform.posix.close(fd)
         }
     }
 
@@ -845,6 +866,7 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
         val index: Long,
         val path: String,
         val baseOffset: Long,
+        val formatVersion: Int,
         val headerBytes: Int,
         val fileBytes: Long,
         var writtenFrameBytes: Long,
@@ -854,6 +876,9 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
     }
 
     private class SegmentView(val path: String, val baseOffset: Long, val writtenFrameBytes: Long)
+
+    /** What one locked look at the archive tells [replay]: the segments to read, or why there are none. */
+    private class Opened(val views: List<SegmentView>?, val cursor: Long)
 
     private class Mapping(val fd: Int, val address: CPointer<ByteVar>, val bytes: Long)
 
