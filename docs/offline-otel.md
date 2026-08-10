@@ -92,7 +92,8 @@ eventually-consistent, brokerless convergence.
   window. Eventually-complete, with a latency ceiling.
 - **Bounded buffer.** Offline-forever can't buffer forever — but the degradation is
   asymmetric: metrics compress losslessly while logs/traces degrade gracefully under a
-  cap, and the exporter *logs what it dropped*, never silently truncating.
+  cap, and the exporter *counts what it dropped* (`ExporterHealth.dropped` /
+  `.refused`, plus a rate-limited summary line), never silently truncating.
 - **Cardinality.** Unique-count metrics use HyperLogLog (~0.81% relative error at the
   default precision); precision is fixed per metric and changing it after production
   data exists is wire-breaking.

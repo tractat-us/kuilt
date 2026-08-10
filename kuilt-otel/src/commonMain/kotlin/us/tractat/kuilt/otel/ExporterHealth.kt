@@ -53,6 +53,32 @@ public data class ExporterHealth(
     public val consecutiveFailures: Int = 0,
     public val lastFailure: Throwable? = null,
     public val recoveryFailed: Boolean = false,
+
+    /**
+     * Records evicted by the buffer cap under [BufferPolicy.DROP_OLDEST], cumulative.
+     *
+     * This is the **only** per-record account of eviction. Until #2218 the exporter emitted
+     * one `warn` per evicted record; at [DEFAULT_MAX_LOG_RECORDS] the buffer is full
+     * permanently, so that was a line per exported record narrating a ring buffer behaving
+     * exactly as configured — measurable on the export hot path and useless as a signal,
+     * because a signal that fires always is not one. The count is exact; a rate-limited
+     * summary line still says it out loud for a consumer who never reads health.
+     *
+     * Not to be confused with `CaptureHealth.droppedEvents` in `:kuilt-otel-logging`, which
+     * counts events discarded by the capture queue *above* this exporter — those never
+     * reached it. This counts records the exporter took and then recycled.
+     */
+    public val dropped: Long = 0L,
+
+    /**
+     * Records refused by the buffer cap under [BufferPolicy.DROP_NEWEST], cumulative.
+     *
+     * Kept separate from [dropped] because the two are different events with different
+     * causes: an eviction means the buffer recycled, a refusal means this replica declined
+     * to author anything at all (which is what keeps its contribution to the shared op-log a
+     * downward-closed prefix — #2127).
+     */
+    public val refused: Long = 0L,
 ) {
     /**
      * Whether this exporter has never once written durably yet has failed at
