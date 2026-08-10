@@ -40,12 +40,14 @@ class MappedBoltTest {
      * its own fixed fields.
      *
      * **Mutation receipt — the single mutations are both GREEN, and that is the point.**
-     * Narrowing the frame CRC to the body alone (`crc32(framed, fromIndex = 4, …)` in `encodeFrame`
-     * and `readFrameV1`) leaves this green, because `MINIMUM_BODY_BYTES` still rejects a zero-length
-     * body. Deleting the `MINIMUM_BODY_BYTES` guard alone leaves it green too, because a zero run
-     * still checksums to `0x2144DF1C` against a stored `0`. Applying **both** reddens this test with
-     * `expected:<2> but was:<499>` — the padding decodes as phantom frames. Neither barrier is
-     * redundant, and a single-mutation reading of either one would wrongly conclude it could go.
+     * Narrowing the frame CRC to the body alone (`crc32(…, fromIndex = INT_BYTES)` in both
+     * `encodeFrame` and `readFrameV1`) leaves this green, because `MINIMUM_BODY_BYTES` still rejects
+     * a zero-length body. Deleting the `MINIMUM_BODY_BYTES` guard alone leaves it green too, because
+     * a zero run still checksums to `0x2144DF1C` against a stored `0`. Applying **both** reddens it —
+     * `java.io.EOFException: Buffer doesn't contain required number of bytes (size: 0, required: 8)`,
+     * thrown out of the replay as the padding's first phantom frame is decoded and found to have no
+     * timestamp in it. Neither barrier is redundant, and a single-mutation reading of either one
+     * would wrongly conclude it could go.
      */
     @Test
     fun aPreAllocatedTailReplaysAsACleanTailRatherThanPhantomFrames() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
