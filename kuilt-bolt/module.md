@@ -25,6 +25,7 @@ enforced by the types, not by a comment.
 | `Bolt<Op>` | The archive. `append` puts edits in, `replay` reads them back, `availability` says whether this machine can store anything at all. |
 | `BoltArchiveFormat` | How edits are classified and turned into bytes. Build one with `BoltArchiveFormat.rga(…)` or `.fugue(…)`. |
 | `InMemoryBolt` | The reference archive — real bytes, real segments, bounded memory. Available on every platform. |
+| `PosixMappedBolt` | The archive that survives a restart, on iOS and macOS: one memory-mapped file per segment in a directory you name. **Not the default on a phone** — its own docs say why at length, and the short version is that the server is its customer. |
 
 ```kotlin
 val bolt = InMemoryBolt(BoltArchiveFormat.rga(serializer<String>()), clock)
