@@ -143,6 +143,29 @@ able to say which version wrote it; retrofitting that later is the expensive cha
 
 Each **frame** carries: append offset; arrival timestamp; **insert-only** dots; a reserved key slot.
 
+**A zero-filled region must not parse as a frame — checksum the length prefix, not just the body.**
+This is the hazard the whole format has to survive, because Tasks 3 and 4 *mandate* producing it: each
+segment is eagerly, physically pre-allocated at roll time (a real write, not `ftruncate`), so a
+zero-filled run sits immediately after the last written frame of every live segment. With a body-only
+checksum, eight zero bytes are a **syntactically valid empty frame** — `bodyLength == 0` clears every
+guard and `crc32(ByteArray(0)) == 0`, so the checksum *matches* — and the reader then either throws
+decoding an empty body or, if that is patched, walks an unbounded stream of valid empty frames. Task
+3's own acceptance criterion ("a truncated archive must not throw — it must replay what is intact")
+is unreachable that way. Covering the length prefix fixes it (`crc32` of four zero bytes is
+`0x2144DF1C`), and stops the prefix being the one unprotected field whose corruption silently
+truncates the archive. Reject an impossibly small `bodyLength` too, and give `readSegmentHeader` a
+*torn segment* path distinct from *foreign magic*: all-zero or short means stop quietly, a complete
+header with the wrong magic means throw. **Test a zero-filled tail after real frames** — that is the
+Task 3/4 shape.
+
+**Replay must report how far it got.** Stopping at the first frame that does not validate is right;
+stopping *silently* is a different decision. A mid-segment checksum failure otherwise hands the
+consumer a history with a hole punched in it, offsets that jump, and no signal — for a module whose
+entire product is "I still have what the live replica forgot", that is the one failure it cannot
+afford. Decide the shape in Task 2 (a terminal `ReplayEvent`, or a `verify()` alongside
+`availability()`), because `replay` returns `Flow<Archived<Op>>` and adding a terminal outcome once
+Task 6 has wired consumers is source-breaking for all of them.
+
 **Dots are informational; the append offset is the resume cursor.** A `Remove` mints no dot — it
 reuses its target `Insert`'s id — so a frame of removes either claims its targets' *old* dots, in
 which case a resume-from-dot cursor skips it and **replays a removed record as live**, or claims
@@ -156,12 +179,35 @@ must test it that way.
 **The conformance suite is where the invariant lives.** Every backend subclasses it. It must pin:
 
 1. **Round-trip** — appended ops replay identically, in order.
-2. **The firewall** — a bolt fed ops including a `Compact` **retains** the ops that `Compact` suppresses. *Mutation-check it: remove the discard and this test must redden.* This is the safety property of the whole module.
+2. **The firewall** — a bolt fed ops including a `Compact` archives the content ops and **the `Compact` itself is absent from the replay**. *Mutation-check it: remove the discard and this test must redden.* This is the safety property of the whole module.
+
+   > **Corrected after Task 2 (#2212 / PR #2227).** This property was originally worded as "a bolt
+   > **retains** the ops that `Compact` suppresses" — which **cannot fail**. A bolt stores frames and
+   > never *applies* a `Compact`, so retention is trivially true whether the discard exists or not. The
+   > assertion that discriminates is the **absence** of the `Compact` from the replay (plus, for an
+   > append of nothing but compaction records, that no frame is written at all). A suite written to
+   > the original wording would have been a green mutation on the module's core safety property, and
+   > every backend in Tasks 3–5 inherits it. Do not delete the absence assertions as redundant — they
+   > are the only load-bearing ones.
 3. **Asymmetric retention, end-to-end** — a small-`maxRecords` live `Rga` plus a bolt; window the live replica; assert the bolt still replays the windowed records **and** that the live replica no longer holds them. This is the capability the module exists for; pin it directly rather than inferring it.
    **This property must ALSO be exercised through a gossiping `WarpLogRecordExporter`, not only a hand-driven `Rga`** — see Task 6. A bare-`Rga` version of this test passes while the shipped wiring archives nothing that arrived by merge, which is precisely the headline scenario.
 4. **Scoped replay** — by arrival-time range, and by dot range **over inserts only**, each returning exactly the frames in scope. A test that scopes removes by dot is testing something the format deliberately does not promise.
 5. **Empty append is a no-op** that writes no frame.
-6. **`availability()` is honest** — a bolt reporting `Available` must accept an append.
+6. **`availability()` is honest** — a bolt reporting `Available` must accept an append, **and an
+   exhausted bolt must report `Unavailable` and fail the append**. The suite needs an exhaustion hook
+   (`newExhaustedBolt(clock): Bolt<…>?`, `null` for a backend that cannot be deterministically
+   exhausted) — without one this property **cannot fail**: every in-tree subclass builds an unbounded
+   bolt, so only the `Available` branch is ever taken and the surviving assertion duplicates property 1.
+   That vacuity is not theoretical — Task 2 hit the exact bug this property exists to catch
+   (`Available` returned whenever `usedBytes < capacityBytes`, while a ~68-byte segment header meant an
+   archive with 8 bytes free accepted no appends at all), and the unhooked suite stayed green on it.
+   Tasks 3–5 inherit this suite as their only shared check, on backends where exhaustion is a real
+   full disk.
+
+**A note on how to read properties 2 and 6, because both were originally worded so they could not
+fail.** For every property here, ask *"what mutation does this redden on?"* before writing it — not
+*"is this true?"*. A property that is true by construction of the type under test asserts nothing,
+and in a conformance suite that error is inherited by every implementation rather than caught once.
 
 **Fixture hazard for properties 2 and 3, found while writing Task 1's tests.** Both `Rga` and `Fugue`
 **silently return `null`** from `compact()` for an id that still anchors a live insert (`after` for
