@@ -120,6 +120,31 @@ internal data class RgaCache<V>(
     val tombstones: Set<RgaId>,
     val compactedIds: Set<RgaId>,
     val compactPositions: Map<RgaId, RgaId>,
+    /**
+     * The **full** materialized [Rga.sequence] — tombstones included — when this state's
+     * producer could prove it without recomputing, else `null` (#2193).
+     *
+     * Deliberately **required**, not defaulted: it gates a functional code path, and every
+     * construction site has to state its disposition rather than inherit `null` by accident.
+     * Threading a *wrong* list here is a silent divergence — [Rga.equals] compares `ops` and
+     * [Rga.compactedBelow] only, so two states carrying different orders still compare equal —
+     * and no equality assertion can see it. `null` is always sound; only pass a list when the
+     * producer holds the argument for it.
+     *
+     * Two rules govern who may pass one, both pinned by `RgaSequenceThreadingTest`:
+     *
+     * 1. **An append is only an append when `after` is the last element of the *full* sequence.**
+     *    Then it is the sole child of a leaf and the descending-id sibling tiebreak never
+     *    engages, so the result really is `old + minted`. "Last *visible* element" is not
+     *    enough: with a trailing tombstone the new op becomes a **sibling** of it and its higher
+     *    Lamport sorts it *ahead*, so the true order interleaves where a suffix would not.
+     * 2. **Producing one must never force the cold lazy.** [Rga.insertAfter] /
+     *    [Rga.insertAllAfter] / [Rga.applyRemove] thread only a sequence that is *already* in
+     *    hand; a `sequence.last()` probe would re-introduce the very `computeSequence()` this
+     *    exists to remove, on the fill path that today never pays it. Warmth enters the chain at
+     *    [Rga.removeAt] / [Rga.removeFirst] / [Rga.insertAt], which force the lazy anyway.
+     */
+    val sequence: List<RgaId>?,
 ) {
     companion object {
         fun <V> empty(): RgaCache<V> = RgaCache(
@@ -128,6 +153,10 @@ internal data class RgaCache<V>(
             tombstones = emptySet(),
             compactedIds = emptySet(),
             compactPositions = emptyMap(),
+            // Not `emptyList()`: seeding it would thread from birth, and then every append on
+            // the fill path would pay an O(N) list copy on a path that reads the sequence not
+            // at all. Warmth arrives at the first eviction instead — see rule 2 above.
+            sequence = null,
         )
     }
 }
@@ -269,8 +298,50 @@ public class Rga<V> private constructor(
      *
      * Exposed for `WindowPolicy` (in :kuilt-quilter) implementations that need to
      * inspect the full ordered sequence (e.g. `WindowPolicy.byCount`).
+     *
+     * A mutation that can prove the result without recomputing threads it forward through
+     * [RgaCache.sequence] (#2193), so an append-then-read loop pays one `computeSequence()`
+     * rather than one per turn. Every other path leaves it `null` and this recomputes once.
      */
-    public val sequence: List<RgaId> by lazy { computeSequence() }
+    public val sequence: List<RgaId> by lazy { cache?.sequence ?: computeSequence() }
+
+    /**
+     * The materialized [sequence] this instance **already holds**, or `null` when reading
+     * [sequence] would have to compute it. Never forces the lazy — that is the whole point.
+     *
+     * `internal` for `RgaSequenceThreadingTest`, whose "never recomputes" assertions are
+     * `assertSame(state.threadedSequence, state.sequence)`: a threaded list that [sequence]
+     * hands straight back is proof no `computeSequence()` ran, with no counter, no global
+     * state and no wall-clock. `insertsById` and `maxSeqByReplica` are `internal` for the
+     * same reason.
+     */
+    internal val threadedSequence: List<RgaId>? get() = cache?.sequence
+
+    /**
+     * `[base] + [minted]` when appending after [after] provably yields exactly that, else `null`.
+     *
+     * The guard is `after == base.last()` on the **full** sequence (or [RgaId.HEAD] when it is
+     * empty). Then [after] is a leaf — anything below it would follow it in the depth-first
+     * order — so each minted id joins an empty sibling list and the descending-id tiebreak never
+     * engages. Nothing pre-existing can move either: a freshly minted id is referenced by no
+     * `Insert.after` and by no [compactPositions] entry, so no orphan's reroot changes.
+     *
+     * Note the parentheses around the elvis. `==` binds tighter than `?:`, so
+     * `after != base.lastOrNull() ?: RgaId.HEAD` parses as `(after != base.lastOrNull()) ?: …`
+     * and does not typecheck as a condition.
+     *
+     * A `null` [base] returns `null` without touching [sequence] — rule 2 of [RgaCache.sequence].
+     * [minted] is only invoked when the guard holds, so a caller that fails it builds no ids.
+     */
+    private inline fun appendedSequence(
+        base: List<RgaId>?,
+        after: RgaId,
+        minted: () -> List<RgaId>,
+    ): List<RgaId>? {
+        if (base == null) return null
+        if (after != (base.lastOrNull() ?: RgaId.HEAD)) return null
+        return base + minted()
+    }
 
     // ---- Public API ----
 
@@ -369,6 +440,20 @@ public class Rga<V> private constructor(
         replica: ReplicaId,
         after: RgaId,
         value: V,
+    ): Pair<Rga<V>, RgaOp.Insert<V>> = mintInsert(replica, after, value, base = threadedSequence)
+
+    /**
+     * [insertAfter], with the caller's view of an already-materialized [sequence].
+     *
+     * [base] is the full sequence when the caller is holding one (it just forced the lazy, or
+     * this instance carries a threaded one) and `null` otherwise — it is never a reason to
+     * *compute* one. [appendedSequence] decides whether it may be threaded onward.
+     */
+    private fun mintInsert(
+        replica: ReplicaId,
+        after: RgaId,
+        value: V,
+        base: List<RgaId>?,
     ): Pair<Rga<V>, RgaOp.Insert<V>> {
         val newLamport = lamport + 1L
         val seq = nextSeqFor(replica)
@@ -381,6 +466,7 @@ public class Rga<V> private constructor(
             tombstones = tombstones,
             compactedIds = compactedIds,
             compactPositions = compactPositions,
+            sequence = appendedSequence(base, after) { listOf(id) },
         )
         return Rga(newOps, newLamport, compactedBelow, newCache) to op
     }
@@ -397,6 +483,11 @@ public class Rga<V> private constructor(
      * visible element). Computes the [after] id from the current visible
      * sequence.
      *
+     * Reading [visibleSequence] forces [sequence], so the materialized list is in hand for
+     * free and is offered to the threading guard (#2193) — an append-at-the-end `insertAt`
+     * loop therefore computes the order once rather than once per call. A prepend or a
+     * mid-sequence insert fails the guard and the next call recomputes, exactly as before.
+     *
      * @throws IndexOutOfBoundsException if [index] is outside `0..size`.
      */
     public fun insertAt(
@@ -409,7 +500,7 @@ public class Rga<V> private constructor(
             "insertAt($index) out of range; visible size is ${visible.size}"
         }
         val after = if (index == 0) RgaId.HEAD else visible[index - 1]
-        return insertAfter(replica = replica, after = after, value = value)
+        return mintInsert(replica = replica, after = after, value = value, base = sequence)
     }
 
     /**
@@ -431,6 +522,11 @@ public class Rga<V> private constructor(
             tombstones = tombstones + id,
             compactedIds = compactedIds,
             compactPositions = compactPositions,
+            // The same list, not a copy: a Remove leaves `insertsById` untouched and
+            // `computeSequence` reads nothing else, so the order is literally unchanged.
+            // `visibleSequence()` above already forced the lazy, so this is where warmth
+            // enters the chain at no cost (#2193).
+            sequence = sequence,
         )
         return Rga(newOps, lamport, compactedBelow, newCache) to op
     }
@@ -449,7 +545,12 @@ public class Rga<V> private constructor(
      * That is the amortisation `WarpLogRecordExporter` needs to stop paying a Θ(N)
      * append per log record (#2194), and it needs no persistent data structure and no
      * new dependency on this deliberately dependency-free module. It does **not**
-     * remove the Θ(N) term — one copy per run remains, which is #2193.
+     * remove the Θ(N) term — one `ops` copy per run remains, which is #2193's Phase 3A.
+     *
+     * When this really is an append — `after` is the last element of the **full**
+     * [sequence] — and the order is already materialized, it is threaded forward instead
+     * of being recomputed (#2193's Phase 3B). Any other `after`, or a cold sequence, passes
+     * nothing on and the next read rebuilds once.
      *
      * An empty [values] returns `this` — the same instance, not a copy.
      *
@@ -478,6 +579,7 @@ public class Rga<V> private constructor(
             tombstones = tombstones,
             compactedIds = compactedIds,
             compactPositions = compactPositions,
+            sequence = appendedSequence(threadedSequence, after) { minted.map { it.id } },
         )
         return Rga(ops + minted, newLamport, compactedBelow, newCache) to minted
     }
@@ -488,10 +590,13 @@ public class Rga<V> private constructor(
      * The bulk sibling of `removeAt(0)` repeated, and indistinguishable from it: the
      * same ids tombstoned, in the same order. The cost differs the same way
      * [insertAllAfter]'s does — one `ops + removes` copy and one cache build for the
-     * whole run, and **one** [sequence] materialisation rather than one per removal.
-     * That second saving is the larger one in practice: every `removeAt` returns a new
-     * instance whose `sequence` lazy is cold, so a loop of `k` removals recomputes the
-     * full RGA order `k` times.
+     * whole run.
+     *
+     * It also materializes [sequence] once rather than once per removal, though since
+     * #2193 that is the smaller half: `removeAt` now threads the order forward (a `Remove`
+     * cannot reorder anything, so the same list is handed on), and a loop of `k` removals
+     * computes it once too. Before that it was `k` full recomputations, which is why this
+     * paragraph used to call the sequence the larger saving.
      *
      * Existing tombstones are skipped rather than counted, exactly as `removeAt(0)`
      * skips them — [count] is a number of *visible* elements.
@@ -515,6 +620,10 @@ public class Rga<V> private constructor(
             tombstones = tombstones + removed,
             compactedIds = compactedIds,
             compactPositions = compactPositions,
+            // Same list, not a copy — `Remove`s leave `insertsById`, and therefore the order,
+            // untouched. `visibleSequence()` above already forced the lazy, so this is free,
+            // and it is the step that warms the chain for the appends that follow (#2193).
+            sequence = sequence,
         )
         return Rga(ops + minted, lamport, compactedBelow, newCache) to minted
     }
@@ -661,6 +770,9 @@ public class Rga<V> private constructor(
         tombstones = tombstones.filterTo(mutableSetOf()) { !merged.contains(it.dot) },
         compactedIds = compactedIds,
         compactPositions = compactPositions,
+        // A floor both removes elements and re-roots their survivors to HEAD (see
+        // [compactedBelow]), so nothing about the prior order survives. Recompute.
+        sequence = null,
     )
 
     /**
@@ -703,6 +815,11 @@ public class Rga<V> private constructor(
             tombstones = tombstones,
             compactedIds = compactedIds,
             compactPositions = compactPositions,
+            // Never threaded, even under [appendedSequence]'s guard. A remote op lands
+            // anywhere, and — unlike a freshly minted local id — it can be the missing
+            // predecessor an already-held orphan reroots through, moving elements the guard
+            // does not look at. The next read rebuilds once.
+            sequence = null,
         )
         return Rga(newOps, newLamport, compactedBelow, newCache)
     }
@@ -716,6 +833,11 @@ public class Rga<V> private constructor(
             tombstones = tombstones + op.id,
             compactedIds = compactedIds,
             compactPositions = compactPositions,
+            // Correctness is [removeAt]'s — a `Remove` cannot reorder anything — but this path
+            // never reads [sequence] today, so it propagates an already-present list and never
+            // forces one: threading unconditionally would put a full `computeSequence()` on
+            // every remote `Remove`, a new per-op Theta(N) on the gossip path (rule 2).
+            sequence = threadedSequence,
         )
         return Rga(newOps, lamport, compactedBelow, newCache)
     }
@@ -740,6 +862,10 @@ public class Rga<V> private constructor(
             tombstones = tombstones - gcIds,
             compactedIds = compactedIds + gcIds,
             compactPositions = compactPositions + compactOp.positions,
+            // Compaction drops elements and reroots their survivors through
+            // [compactPositions], so the prior order does not survive it. Shared by the
+            // self-initiated [compact] and the remote [applyCompact] alike.
+            sequence = null,
         )
         return Rga(newOps, lamport, compactedBelow, newCache)
     }
@@ -833,6 +959,8 @@ public class Rga<V> private constructor(
             tombstones = mergedTombstones,
             compactedIds = mergedCompactedIds,
             compactPositions = mergedCompactPositions,
+            // A union reorders arbitrarily — the other side's inserts interleave by id.
+            sequence = null,
         )
         return Rga(mergedOps, mergedLamport, mergedFloor, newCache)
     }
