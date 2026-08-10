@@ -408,6 +408,42 @@ internal fun sampleRga() {
 }
 
 /**
+ * Read only the **head** of a long log, without paying to materialise all of it.
+ *
+ * [Rga.toList] and [Rga.entries] are whole-log readers — each builds two eager lists the size
+ * of the log — so taking a handful off the front throws nearly all of that work away. Walking
+ * [Rga.sequence] lazily and resolving just the ids you keep, with [Rga.valueAt], is O(head)
+ * instead.
+ */
+@Suppress("unused")
+internal fun sampleRgaHeadWindow() {
+    val a = ReplicaId("A")
+
+    var log = Rga.empty<String>()
+    var after = RgaId.HEAD
+    val ids = (1..5).map { i ->
+        val (next, op) = log.insertAfter(replica = a, after = after, value = "entry-$i")
+        log = next
+        after = op.id
+        op.id
+    }
+
+    // Remove the first entry. It is TOMBSTONED, not gone — still in `sequence`, and its value
+    // is still readable — which is exactly why the walk has to filter `tombstones` itself.
+    log = checkNotNull(log.removeAt(0)).first
+    check(ids.first() in log.tombstones)
+    check(log.valueAt(ids.first()) == "entry-1")
+
+    // The two oldest VISIBLE entries, resolving only those two.
+    val head = log.sequence.asSequence()
+        .filter { id -> id !in log.tombstones }
+        .take(2)
+        .map { id -> log.valueAt(id) }
+        .toList()
+    check(head == listOf("entry-2", "entry-3"))
+}
+
+/**
  * Keep only the newest entries of an append-only log, and keep the rest *away* — a peer
  * that still holds the old entries cannot push them back in.
  */

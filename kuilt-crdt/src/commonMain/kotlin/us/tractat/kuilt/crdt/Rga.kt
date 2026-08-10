@@ -302,11 +302,9 @@ public class Rga<V> private constructor(
      * [toList] and [entries] are the whole-log readers: each builds two eager Θ(N) lists, so a
      * caller that wants the first few elements pays for all of them. This is the piecewise form,
      * and it exists so such a caller can walk [sequence] lazily — filter [tombstones], `take` what
-     * it needs, and resolve only those:
+     * it needs, and resolve only those.
      *
-     * ```kotlin
-     * val head = sequence.asSequence().filter { it !in tombstones }.take(k).map { valueAt(it) }
-     * ```
+     * @sample us.tractat.kuilt.crdt.sampleRgaHeadWindow
      *
      * `WarpLogRecordExporter`'s eviction path is why: at a 10,000-record cap it read the leading
      * ~128 records per turn out of `entries()` and discarded the rest, ≈0.18 ms per record on an

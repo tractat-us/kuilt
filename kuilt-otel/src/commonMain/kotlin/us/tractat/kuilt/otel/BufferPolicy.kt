@@ -6,23 +6,40 @@ package us.tractat.kuilt.otel
  * ## Honest limits
  *
  * An offline-forever device cannot buffer forever. The degradation is intentionally
- * **asymmetric and logged**:
+ * **asymmetric and accounted for** — never silent:
  * - Metrics compress losslessly (a counter is O(1) regardless of how many increments
  *   happen offline). Buffer caps only apply to spans and logs.
- * - When a cap is hit, the [BufferPolicy] decides which spans to drop, and the
- *   exporter *always logs what it dropped* — never silently truncates.
+ * - When a cap is hit, the [BufferPolicy] decides what gives way, and the loss is
+ *   always visible. **How** it is made visible differs by exporter, because the two
+ *   run at very different rates:
+ *     - [WarpSpanExporter] logs **each** drop, with the victim's [SpanRecord.traceId]
+ *       and [SpanRecord.spanId], so an operator can correlate against their backend's
+ *       orphan-span index.
+ *     - [WarpLogRecordExporter] **counts** each drop exactly, on
+ *       [ExporterHealth.dropped] / [ExporterHealth.refused], and emits one
+ *       rate-limited summary line rather than one line per record. At
+ *       [DEFAULT_MAX_LOG_RECORDS] its buffer is full permanently, so every exported
+ *       record evicts one — a per-record line there narrates a ring buffer doing
+ *       exactly what it is configured to do, on the export hot path (#2218). Per-record
+ *       correlation was given up deliberately; the running total was not.
  *
  * The [DROP_OLDEST] strategy is usually right: oldest spans are already "done" and
- * are the least likely to complete a trace being actively sampled right now. A
- * span dropped here is logged with its [SpanRecord.traceId] and [SpanRecord.spanId]
- * so an operator can correlate against their backend's orphan-span index.
+ * are the least likely to complete a trace being actively sampled right now.
  */
 public enum class BufferPolicy {
-    /** Drop the oldest span when the buffer is full. **Logs each drop.** */
+    /**
+     * Drop the oldest buffered entry when the buffer is full.
+     *
+     * Accounted for either way, by the exporter's own means — [WarpSpanExporter] logs each
+     * drop, [WarpLogRecordExporter] counts it on [ExporterHealth.dropped]. See the enum KDoc.
+     */
     DROP_OLDEST,
 
     /**
-     * Drop the newest span when the buffer is full. **Logs each drop.**
+     * Drop the newest entry when the buffer is full.
+     *
+     * Accounted for either way — [WarpSpanExporter] logs each drop,
+     * [WarpLogRecordExporter] counts refusals on [ExporterHealth.refused]. See the enum KDoc.
      *
      * "Newest" is resolved per exporter, and the two shipped exporters resolve it
      * differently: [WarpSpanExporter] evicts the newest *buffered* span and admits the

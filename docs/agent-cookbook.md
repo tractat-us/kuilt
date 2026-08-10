@@ -447,8 +447,21 @@ everything and then taking a handful throws nearly all of that work away. Walk `
 lazily instead, filter `Rga.tombstones`, `take` what you need, and resolve just those with
 `Rga.valueAt(id)` — an O(1) read of one element by its id:
 
+<!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleRgaHeadWindow -->
 ```kotlin
-val head = log.sequence.asSequence().filter { it !in log.tombstones }.take(k).map { log.valueAt(it) }
+    // Remove the first entry. It is TOMBSTONED, not gone — still in `sequence`, and its value
+    // is still readable — which is exactly why the walk has to filter `tombstones` itself.
+    log = checkNotNull(log.removeAt(0)).first
+    check(ids.first() in log.tombstones)
+    check(log.valueAt(ids.first()) == "entry-1")
+
+    // The two oldest VISIBLE entries, resolving only those two.
+    val head = log.sequence.asSequence()
+        .filter { id -> id !in log.tombstones }
+        .take(2)
+        .map { id -> log.valueAt(id) }
+        .toList()
+    check(head == listOf("entry-2", "entry-3"))
 ```
 
 <!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleRgaDropWindow -->

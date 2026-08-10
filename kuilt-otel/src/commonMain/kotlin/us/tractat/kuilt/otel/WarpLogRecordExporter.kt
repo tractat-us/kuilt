@@ -380,6 +380,25 @@ public class WarpLogRecordExporter(
      */
     private var lastDropReport: Long = -1L
 
+    /**
+     * How many summary lines [reportDropsPeriodically] has actually emitted. Guarded by [lock].
+     *
+     * Exists so [lastDropReport]'s `-1` seed is *pinned* rather than merely argued for. The seed
+     * is the difference between reporting the first drop and reporting nothing until drop
+     * [DROP_REPORT_INTERVAL] — but it is invisible to every assertion on exporter output, and
+     * the line itself goes to the logger, which this module cannot capture (`:kuilt-otel` does
+     * not depend on `:kuilt-otel-logging`, and its self-capture exclusion would drop the line
+     * anyway). Counting emissions is what makes a `-1` → `0` mutation go red.
+     *
+     * Note that observing the *seed* is not enough: `lastDropReport == 0` holds after one drop
+     * under **both** seeds. The count is the discriminator.
+     *
+     * `internal` for test verification only, following [Rga.insertsById]'s precedent; nothing in
+     * production reads it.
+     */
+    internal var dropSummariesEmitted: Int = 0
+        private set
+
     // Maps recordId → RgaId of the Insert op, so that re-export is a no-op.
     // Mutated in place on export()/eviction and rebuilt from the op-log on recover().
     private val seenIds: MutableMap<ByteString, RgaId> = mutableMapOf()
@@ -1230,6 +1249,7 @@ public class WarpLogRecordExporter(
         val bucket = total / DROP_REPORT_INTERVAL
         if (bucket == lastDropReport) return
         lastDropReport = bucket
+        dropSummariesEmitted++
         logger.info {
             "WarpLogRecordExporter: buffer cap ($maxRecords) recycling under $bufferPolicy — " +
                 "$total record(s) dropped or refused so far. This is the cap doing its job; read " +

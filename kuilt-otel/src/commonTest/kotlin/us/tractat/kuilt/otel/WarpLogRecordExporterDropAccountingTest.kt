@@ -74,6 +74,37 @@ class WarpLogRecordExporterDropAccountingTest {
         assertAll(
             { assertEquals(0L, exporter.health.value.dropped) },
             { assertEquals(0L, exporter.health.value.refused) },
+            { assertEquals(0, exporter.dropSummariesEmitted, "nothing dropped, so nothing to announce") },
+        )
+    }
+
+    /**
+     * The **first** drop must be announced, not the [DROP_REPORT_INTERVAL]-th.
+     *
+     * This is the whole reason `lastDropReport` seeds at `-1` rather than `0`: at `0` the first
+     * bucket compares equal to the seed, so an exporter that drops fewer than one interval — 5
+     * here, against an interval of 10,000 — would emit **nothing, ever**, leaving an operator who
+     * never polls `health` with no evidence of loss. That is the silent-loss inversion (#1860) the
+     * summary line exists to prevent.
+     *
+     * Asserting on the seed would not catch it (`lastDropReport == 0` after one drop under *both*
+     * seeds), and the line itself is unobservable from this module — so this counts emissions.
+     * Mutate the seed to `0L` and this is the test that reddens.
+     */
+    @Test
+    fun theFirstDropIsAnnouncedEvenWellBelowTheReportInterval() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val exporter = WarpLogRecordExporter(ReplicaId("device-1"), InMemoryDurableStore(), maxRecords = CAP)
+        exporter.export(records(CAP + OVERFLOW))
+
+        assertAll(
+            { assertEquals(OVERFLOW.toLong(), exporter.health.value.dropped, "fixture must drop") },
+            {
+                assertEquals(
+                    1,
+                    exporter.dropSummariesEmitted,
+                    "the first drop announces itself, and the next $OVERFLOW share its bucket",
+                )
+            },
         )
     }
 
