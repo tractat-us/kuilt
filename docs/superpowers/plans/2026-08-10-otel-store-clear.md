@@ -32,7 +32,7 @@
 | `kuilt-otel/src/commonTest/.../WarpSpanExporterClearTest.kt` | Create | 5 |
 | `kuilt-otel/src/commonMain/.../WarpMetricExporter.kt` | Modify: add `clear()` | 6 |
 | `kuilt-otel/src/commonTest/.../WarpMetricExporterClearTest.kt` | Create | 6 |
-| `kuilt-otel/src/commonMain/.../WarpCausalClock.kt` | Modify: add `internal fun clearFrontier()` | 7 |
+| `kuilt-otel/src/commonMain/.../WarpCausalClock.kt` | Modify: add `internal fun clearFrontier()` | 5 |
 | `kuilt-otel/src/commonMain/.../WarpTelemetry.kt` | Modify: add `clear()` fan-out | 7 |
 | `kuilt-otel/src/commonTest/.../WarpTelemetryClearTest.kt` | Create | 7 |
 | `kuilt-otel/src/commonSamples/.../Samples.kt` | Modify: add `sampleWarpTelemetryClear` | 8 |
@@ -119,10 +119,21 @@ class WarpLogRecordExporterClearTest {
     }
 
     @Test
-    fun clearingAnAlreadyEmptyExporterSucceedsAndWritesNothing() = runTest {
-        val exporter = exporterFor(store = InMemoryDurableStore())
+    fun clearingAnAlreadyEmptyExporterSucceedsAndLeavesARecoverableStore() = runTest {
+        val store = InMemoryDurableStore()
+        val exporter = exporterFor(store = store)
+
         assertEquals(ExportResult.Success, exporter.clear())
-        assertEquals(emptyList(), exporter.snapshot().toList())
+
+        // Asserts a recoverable empty store, NOT "wrote nothing". A clear writes its index and
+        // active segment unconditionally — see clearTurn — and a test named for the absent
+        // write would pin the optimisation that breaks the retry.
+        val recovered = exporterFor(store = store)
+        recovered.recover()
+        assertAll(
+            { assertEquals(emptyList(), exporter.snapshot().toList()) },
+            { assertEquals(emptyList(), recovered.snapshot().toList()) },
+        )
     }
 
     @Test
@@ -240,18 +251,30 @@ Place `clear()` immediately after `merge()` in the file, so the three write turn
     private suspend fun clearTurn(): ExportResult {
         val actions = runCatchingCancellable {
             lock.withLock {
-                // retire = true is sound for exactly the reason it is on the other two paths:
-                // the pass has just put the current suppression state into `activeSegment`, and
-                // pendingWrites queues that write ahead of the retirement it gates.
-                if (windowPass(retain = 0)) pendingWrites(retire = true) else emptyList()
+                windowPass(retain = 0)
+                // Unconditional, and NOT gated on whether the pass moved anything. Gating is
+                // the obvious optimisation and it silently breaks the retry: a clear whose
+                // commit failed has already dropped everything in memory, so the retry's pass
+                // finds nothing left to drop, returns false, and a gated turn would write
+                // NOTHING and report Success while the store still holds every sealed segment.
+                //
+                // Unconditional costs one index write and one small active-segment write when
+                // clearing an already-empty exporter. That is the whole price, and it buys
+                // convergence by construction rather than by a flag tracking whether an
+                // earlier pass's covering write ever landed.
+                //
+                // retire = true is sound for the same reason it is on the other two paths: the
+                // pass has put the current suppression state into `activeSegment`, and
+                // pendingWrites queues that write ahead of the retirement it gates. On a retry
+                // the pass is a no-op but `activeSegment` still carries the floor from the
+                // first attempt, so the write is still covering and the sealed segments are
+                // still retirable against `log.compactedBelow`.
+                pendingWrites(retire = true)
             }
         }.getOrElse { cause ->
             logger.error(cause) { "WarpLogRecordExporter: buffer update failed during clear" }
             return failure(cause)
         }
-        // Nothing held, nothing dropped, nothing owed — and no store write, so a clear on an
-        // empty exporter costs zero keys rather than rewriting the active segment for nothing.
-        if (actions.isEmpty()) return ExportResult.Success
         val result = commit(actions) { cause ->
             logger.error(cause) { "WarpLogRecordExporter: durable write failed during clear" }
         }
@@ -402,7 +425,7 @@ git commit -m "test(otel): pin that clear() reclaims the sealed segment keys (pa
 - Consumes: `clear()`, `snapshot(): Rga<LogRecord>`, `merge(remote: Rga<LogRecord>): ExportResult`.
 - Produces: nothing new.
 
-**Why this is the load-bearing task:** it is the only thing separating this implementation from `log = Rga.empty()`, which passes every test in Tasks 1 and 2. If a future change swaps `dropWindow` for `empty()`, these two tests are what catches it.
+**What these two tests uniquely pin.** Tasks 1 and 2 already catch a naive `log = Rga.empty()` through the durable path — an empty floor makes `retirableSegments()` retire nothing, so every sealed segment survives and the fresh exporter recovers all the records. What those tests *cannot* express is the in-memory pair: that a peer's re-merge does not resurrect, and that no `RgaId` is re-minted. That is this task, and it is the only place either property is asserted.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -535,16 +558,26 @@ Append to `WarpLogRecordExporterClearTest`:
         store.refuse = false
         val retried = exporter.clear()
 
+        // THE assertion of this test. A retry that returns Success having written nothing
+        // passes every other line here — the live buffer was already empty from the failed
+        // attempt — while the store still holds every sealed segment and a restart brings
+        // all ten records back. Only recovering a fresh exporter can tell the two apart.
+        val recovered = exporterFor(store = store, segmentOps = 2)
+        recovered.recover()
+
         assertAll(
             { assertTrue(refused is ExportResult.Failure, "a refused durable write fails the clear") },
             { assertEquals(failedBefore + 1, failedAfterRefusal, "the store rejected a write, so `failed` moves") },
             { assertEquals(emptyList(), snapshotAfterRefusal, "the in-memory drop is not undone on failure") },
             { assertEquals(ExportResult.Success, retried, "a retry converges") },
+            { assertEquals(emptyList(), recovered.snapshot().toList(), "the retry actually reached the store") },
             { assertEquals(acceptedBefore, exporter.health.value.accepted, "no clear moves `accepted`") },
             { assertEquals(emptyList(), exporter.snapshot().toList()) },
         )
     }
 ```
+
+**This test is the one that catches the gating bug.** Before accepting it green, prove it red: temporarily change `clearTurn`'s locked section to `if (windowPass(retain = 0)) pendingWrites(retire = true) else emptyList()` — the natural-looking version — and confirm the `recovered.snapshot()` assertion fails with all ten records present. Then restore. If it stays green, the fixture never rolled a sealed segment; raise the record count.
 
 - [ ] **Step 2: Run it**
 
@@ -575,10 +608,18 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * A record whose export overlapped a [WarpLogRecordExporter.clear] must not reappear in the
- * store after that clear. `writeMutex` is what makes this hold — a turn builds its actions and
+ * Two arms, because neither is sufficient alone.
+ *
+ * The **deterministic** arm asserts a clear actually empties the store. The **concurrent** arm
+ * asserts the store and the live buffer still *agree* when a clear races in-flight exports —
+ * which is the race property, and is deliberately not "the store is empty": an export
+ * serialized after the clear legitimately survives, and which ones those are is not
+ * predictable. `writeMutex` is what makes agreement hold — a turn builds its actions and
  * applies them inside one critical section, so a clear cannot interleave between an export's
  * encode and its write and have the stale bytes land afterwards.
+ *
+ * The agreement assertion alone is satisfied by a `clear()` that drops nothing (live and
+ * recovered would agree on all of them), which is why the first arm exists.
  */
 class WarpLogRecordExporterClearConcurrencyTest {
 
@@ -600,9 +641,24 @@ class WarpLogRecordExporterClearConcurrencyTest {
         private companion object { private const val MAX_YIELDS = 6 }
     }
 
+    @Test
+    fun aClearAfterEveryExportHasCompletedLeavesTheStoreEmpty() = kotlinx.coroutines.test.runTest {
+        // The deterministic arm. Without it the concurrent arm below is satisfiable by a
+        // clear() that drops nothing — live and recovered would simply agree on everything.
+        val store = InMemoryDurableStore()
+        val exporter = WarpLogRecordExporter(ReplicaId("A"), store, segmentOps = 4)
+        repeat(CONCURRENT) { i -> exporter.export(record(i)) }
+
+        exporter.clear()
+
+        val recovered = WarpLogRecordExporter(ReplicaId("A"), store, segmentOps = 4)
+        recovered.recover()
+        assertEquals(emptyList(), recovered.snapshot().toList(), "a clear must actually empty the store")
+    }
+
     @OptIn(DelicateCoroutinesApi::class)
     @Test
-    fun noRecordFromBeforeAClearSurvivesInTheStore() {
+    fun theStoreAndTheBufferAgreeWhenAClearRacesConcurrentExports() {
         val dispatcher = newFixedThreadPoolContext(THREADS, "otel-log-clear-stress")
         try {
             runBlocking {
@@ -674,12 +730,15 @@ Open the PR with `part of #2208` — **not** a closing keyword; #2208 is not sat
 ### Task 5: `WarpSpanExporter.clear()`
 
 **Files:**
+- Modify: `kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpCausalClock.kt`
 - Modify: `kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpSpanExporter.kt`
 - Test: `kuilt-otel/src/commonTest/kotlin/us/tractat/kuilt/otel/WarpSpanExporterClearTest.kt` (create)
 
 **Interfaces:**
-- Consumes: existing private `lock`, `ioMutex`, `spans: ORSet<SpanRecord>`, `cbor`, `spanSerializer`, `STORE_KEY`.
-- Produces: `public suspend fun WarpSpanExporter.clear(): ExportResult`. Task 7 depends on it.
+- Consumes: existing private `lock`, `ioMutex`, `spans: ORSet<SpanRecord>`, `cbor`, `spanSerializer`, `STORE_KEY`, `causalClock: WarpCausalClock?`.
+- Produces: `public suspend fun WarpSpanExporter.clear(): ExportResult` and `internal fun WarpCausalClock.clearFrontier()`. Task 7 depends on both.
+
+**The frontier belongs here, not at the facade.** `WarpSpanExporter.clear()` is a public method in its own right — a caller can invoke it without going through `WarpTelemetry` — and leaving the causal frontier naming dots of spans it just removed breaks the totality `inferCausalLinks` claims. Since this exporter already holds the clock, it clears it.
 
 **Background:** `ORSet` removal **retains** `causal.context`, so the retired dots stay witnessed — a peer's re-merge of the pre-clear adds is dominated rather than resurrecting. That is the span analogue of the log floor, and it is why this writes an emptied set rather than deleting the key. `ORSet` has no bulk remove; the in-tree idiom is `spans.piece { it.remove(victim) }` (see `maybeEvict`).
 
@@ -759,7 +818,27 @@ Import `us.tractat.kuilt.otel.SpanKind` if it is not already resolved by the pac
 
 Expected: compilation failure — `clear()` is not defined.
 
-- [ ] **Step 3: Implement**
+- [ ] **Step 3: Add the clock's frontier reset**
+
+In `WarpCausalClock.kt`, after `frontier()`:
+
+```kotlin
+    /**
+     * Forget the causal frontier while leaving [seq] untouched — the clock's half of a
+     * span clear (#2208).
+     *
+     * The asymmetry is the point. [seq] must never regress: a reset one re-mints dots already
+     * used by earlier spans, which is the corruption this class's "Recovery is mandatory"
+     * section exists to prevent, and a clear is not a restart. The **frontier** must go,
+     * because after a span clear it names dots of spans no longer in the set, and
+     * [inferCausalLinks] resolves every predecessor dot against that set.
+     *
+     * The caller persists — [persist] is this class's explicit step, not an implicit one.
+     */
+    internal fun clearFrontier(): Unit = lock.withLock { frontier = emptySet() }
+```
+
+- [ ] **Step 4: Implement the span clear**
 
 Add to `WarpSpanExporter`, immediately after `merge()`:
 
@@ -776,6 +855,10 @@ Add to `WarpSpanExporter`, immediately after `merge()`:
      * The key is rewritten rather than deleted, because the retained context is what the
      * paragraph above rests on and it lives in those bytes.
      *
+     * A configured [WarpCausalClock]'s **frontier** is emptied here too, and its `seq` left
+     * alone. The frontier would otherwise name dots of spans this call just removed, which
+     * breaks the totality [inferCausalLinks] relies on.
+     *
      * Shares [ioMutex] with [export] and [merge] so a concurrent export cannot land a stale
      * encoded snapshot after the clear.
      */
@@ -785,6 +868,14 @@ Add to `WarpSpanExporter`, immediately after `merge()`:
                 spans = spans.elements.toList().fold(spans) { set, span -> set.piece { it.remove(span) } }
                 cbor.encodeToByteArray(spanSerializer, spans)
             }
+            // The frontier belongs to this method, not to the facade. It names dots of spans
+            // that no longer exist, and `inferCausalLinks` resolves every predecessor dot
+            // against the span set — so leaving it would break that totality for anyone who
+            // calls this exporter's clear() directly rather than WarpTelemetry.clear().
+            // `seq` is deliberately untouched; see WarpCausalClock.clearFrontier.
+            causalClock?.clearFrontier()
+            // Clock before spans, the same order and for the same reason as export() (#1053).
+            causalClock?.persist(store)
             store.write(STORE_KEY, encoded)
         }.fold(
             onSuccess = { ExportResult.Success },
@@ -796,7 +887,7 @@ Add to `WarpSpanExporter`, immediately after `merge()`:
     }
 ```
 
-- [ ] **Step 4: Run to verify it passes, then each test alone**
+- [ ] **Step 5: Run to verify it passes, then each test alone**
 
 ```bash
 ./gradlew :kuilt-otel:jvmTest --tests "*WarpSpanExporterClearTest*"
@@ -806,7 +897,7 @@ Add to `WarpSpanExporter`, immediately after `merge()`:
 
 Expected: PASS.
 
-- [ ] **Step 5: Measure the fold before accepting it**
+- [ ] **Step 6: Measure the fold before accepting it**
 
 `DEFAULT_MAX_SPANS` is 10,000 and the fold does one causal `piece` per element. The spec says measure rather than add a bulk API speculatively. Add a temporary timing harness:
 
@@ -825,7 +916,7 @@ Run it, read the number, then **delete this test** — it asserts nothing and wo
 
 Decision rule: if 2,000 spans clear in under ~200 ms on an idle box, ship the fold. Check `uptime` first — a loaded box distorts an absolute timing by orders of magnitude. If it is slower than that, **stop and escalate**: the fix is a bulk `ORSet.removeAll(elements)` in `:kuilt-crdt`, which is outside this plan's "do not modify `:kuilt-crdt`" constraint and needs a decision, not an improvisation.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpSpanExporter.kt \
@@ -983,18 +1074,17 @@ git commit -m "feat(otel): clear() empties a metric exporter, local-only by cons
 
 ---
 
-### Task 7: `WarpCausalClock` frontier reset and `WarpTelemetry.clear()`
+### Task 7: `WarpTelemetry.clear()`
 
 **Files:**
-- Modify: `kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpCausalClock.kt`
 - Modify: `kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpTelemetry.kt`
 - Test: `kuilt-otel/src/commonTest/kotlin/us/tractat/kuilt/otel/WarpTelemetryClearTest.kt` (create)
 
 **Interfaces:**
 - Consumes: `WarpLogRecordExporter.clear(): ExportResult` (Task 1), `WarpSpanExporter.clear(): ExportResult` (Task 5), `WarpMetricExporter.clear(): MetricExportResult` (Task 6).
-- Produces: `public suspend fun WarpTelemetry.clear(): ExportResult` and `internal fun WarpCausalClock.clearFrontier()`.
+- Produces: `public suspend fun WarpTelemetry.clear(): ExportResult`.
 
-**Why the frontier goes but `seq` stays:** `seq` must never regress — the clock's own KDoc says a reset re-mints dots already used by earlier spans and silently corrupts causality. The **frontier** must go, because after a span clear it names dots of spans that no longer exist, and `inferCausalLinks` claims every predecessor dot resolves to a span in the set.
+**The causal clock is Task 5's, not this task's.** `WarpSpanExporter.clear()` empties the frontier and persists the clock, because it owns the clock and is public in its own right. This facade only fans out. The clock test below still lives here, because the facade is where a consumer's "Clear store" button lands and the property has to hold end-to-end.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1067,27 +1157,7 @@ class WarpTelemetryClearTest {
 
 Expected: compilation failure — `clear()` is not defined on `WarpTelemetry`.
 
-- [ ] **Step 3: Add the clock's frontier reset**
-
-In `WarpCausalClock.kt`, after `frontier()`:
-
-```kotlin
-    /**
-     * Forget the causal frontier while leaving [seq] untouched — the clock's half of
-     * [WarpTelemetry.clear] (#2208).
-     *
-     * The asymmetry is the point. [seq] must never regress: a reset one re-mints dots already
-     * used by earlier spans, which is the corruption this class's "Recovery is mandatory"
-     * section exists to prevent, and a clear is not a restart. The **frontier** must go,
-     * because after a span clear it names dots of spans no longer in the set, and
-     * [inferCausalLinks] resolves every predecessor dot against that set.
-     *
-     * The caller persists — [persist] is this class's explicit step, not an implicit one.
-     */
-    internal fun clearFrontier(): Unit = lock.withLock { frontier = emptySet() }
-```
-
-- [ ] **Step 4: Add the fan-out**
+- [ ] **Step 3: Add the fan-out**
 
 In `WarpTelemetry.kt`, after `recover()`:
 
@@ -1111,19 +1181,15 @@ In `WarpTelemetry.kt`, after `recover()`:
      * - [metrics] can only forget **locally** — a monotonic join has no merge-safe forget, so a
      *   merge restores the old values. See [WarpMetricExporter.clear].
      *
-     * The causal clock's frontier is emptied and its `seq` is left alone; see
-     * [WarpCausalClock.clearFrontier].
+     * The causal clock's frontier is emptied and its `seq` left alone — by
+     * [WarpSpanExporter.clear], which owns the clock, so a caller reaching that exporter
+     * directly gets the same treatment. This facade adds nothing there.
      */
     public suspend fun clear(): ExportResult {
         val logsResult = logs.clear()
         val spansResult = spans.clear()
         val metricsResult = metrics.clear()
-        causalClock.clearFrontier()
-        val clockResult = runCatchingCancellable { causalClock.persist(store) }.fold(
-            onSuccess = { ExportResult.Success },
-            onFailure = { cause -> ExportResult.Failure(cause) },
-        )
-        return listOf(logsResult, spansResult, metricsResult.asExportResult(), clockResult)
+        return listOf(logsResult, spansResult, metricsResult.asExportResult())
             .filterIsInstance<ExportResult.Failure>()
             .firstOrNull()
             ?: ExportResult.Success
@@ -1136,9 +1202,7 @@ In `WarpTelemetry.kt`, after `recover()`:
     }
 ```
 
-Add `import us.tractat.kuilt.core.runCatchingCancellable` to `WarpTelemetry.kt`.
-
-- [ ] **Step 5: Run to verify it passes, then each test alone**
+- [ ] **Step 4: Run to verify it passes, then each test alone**
 
 ```bash
 ./gradlew :kuilt-otel:jvmTest --tests "*WarpTelemetryClearTest*"
@@ -1148,7 +1212,7 @@ Add `import us.tractat.kuilt.core.runCatchingCancellable` to `WarpTelemetry.kt`.
 
 Expected: PASS.
 
-- [ ] **Step 6: Add the clock assertion**
+- [ ] **Step 5: Add the clock assertion**
 
 Append to `WarpTelemetryClearTest`:
 
@@ -1193,18 +1257,17 @@ Append to `WarpTelemetryClearTest`:
 
 Add `us.tractat.kuilt.crdt.ReplicaId` and the `SpanKind`/`SpanRecord`/`ByteString` imports the fixture needs. **Do not** widen `WarpTelemetry`'s API to make this test easier — reading the persisted clock is both sufficient and closer to what a restart does.
 
-- [ ] **Step 7: Full-module verification and lint**
+- [ ] **Step 6: Full-module verification and lint**
 
 ```bash
 ./gradlew :kuilt-otel:build --rerun-tasks
 ./gradlew detektAll
 ```
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpCausalClock.kt \
-        kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpTelemetry.kt \
+git add kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpTelemetry.kt \
         kuilt-otel/src/commonTest/kotlin/us/tractat/kuilt/otel/WarpTelemetryClearTest.kt
 git commit -m "feat(otel): WarpTelemetry.clear() fans out across every signal (part of #2208)"
 ```
@@ -1252,11 +1315,13 @@ In `LogSegmentIndex`'s `retired` KDoc, after "There is no key-enumeration API, s
 
 `@sample` functions compile as part of `commonTest`, so a broken one breaks the build. Add to `kuilt-otel/src/commonSamples/kotlin/us/tractat/kuilt/otel/Samples.kt`:
 
+Every function in `Samples.kt` is `internal`, not `public` — match the file.
+
 ```kotlin
 /**
  * Emptying a telemetry store from a running app — no restart, no directory delete.
  */
-public suspend fun sampleWarpTelemetryClear() {
+internal suspend fun sampleWarpTelemetryClear() {
     val telemetry = WarpTelemetry(
         replica = ReplicaId("device-uuid-here"),
         store = InMemoryDurableStore(),
@@ -1278,13 +1343,15 @@ Add a row to `kuilt-otel/module.md`'s table describing `clear()` as the supporte
 
 - [ ] **Step 5: Add the cookbook entry**
 
-`docs/agent-cookbook.md` currently has **no** otel entries at all, so this needs a short section rather than only a row. Add a row to the "Don't build this yourself" table:
+`docs/agent-cookbook.md` **already has** a `## Telemetry & log capture` section (line 1067) with a row in the "Don't build this yourself" table (line 32) and a `verbatim` citation of `Samples.kt#sampleBulkExport` (line 1078). Extend it; do not add a second section.
+
+Add a row to the table, using the **existing** anchor — `#telemetry--log-capture`, not `#telemetry`, which would dangle:
 
 ```
-| deleting a telemetry store's files to reset it, or a "clear on next launch" flag so the delete lands before recovery | `WarpTelemetry.clear()` | [Telemetry](#telemetry) |
+| deleting a telemetry store's files to reset it, or a "clear on next launch" flag so the delete lands before recovery | `WarpTelemetry.clear()` | [Telemetry & log capture](#telemetry--log-capture) |
 ```
 
-Then add a `## Telemetry` section following the format of its neighbours, with a snippet cited `<!-- verbatim from kuilt-otel/src/commonSamples/kotlin/us/tractat/kuilt/otel/Samples.kt#sampleWarpTelemetryClear -->`. The block must match the source **character-for-character** modulo indentation, or use `<!-- condensed from … -->` if it genuinely cannot.
+Then add a snippet to that section in the format its existing `sampleBulkExport` block already uses, cited `<!-- verbatim from kuilt-otel/src/commonSamples/kotlin/us/tractat/kuilt/otel/Samples.kt#sampleWarpTelemetryClear -->`. The block must match the source **character-for-character** modulo indentation, or use `<!-- condensed from … -->` if it genuinely cannot.
 
 - [ ] **Step 6: Verify the citations and confirm the skill still routes**
 

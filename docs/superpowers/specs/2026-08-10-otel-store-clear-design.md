@@ -132,17 +132,37 @@ retraction mechanism the CRDTs deliberately lack.
 
 ### Causal clock
 
-`WarpCausalClock` gains an `internal` frontier reset that leaves `seq` untouched and
-persists. `seq` must not regress — the clock's own KDoc forbids it, and a regressed `seq`
-re-mints dots already used by earlier spans. The **frontier** must go, because it names
-dots of spans that no longer exist and `inferCausalLinks` claims totality ("every
-predecessor dot resolves to a span in the set").
+`WarpCausalClock` gains an `internal` frontier reset that leaves `seq` untouched. `seq` must
+not regress — the clock's own KDoc forbids it, and a regressed `seq` re-mints dots already
+used by earlier spans. The **frontier** must go, because it names dots of spans that no longer
+exist and `inferCausalLinks` claims totality ("every predecessor dot resolves to a span in the
+set").
+
+**`WarpSpanExporter.clear()` does this, not the facade.** The exporter already holds the clock
+and is a public entry point in its own right, so putting the reset at `WarpTelemetry.clear()`
+would leave the totality broken for anyone calling `spans.clear()` directly. The clock is
+persisted before the span write, the same order and for the same reason as `export()` (#1053).
 
 ## Failure handling
 
 `clear()` returns `Failure` when the durable write of the turn fails, exactly as
-`export()` does. Retrying re-converges: raising the floor is idempotent and a repeat delete
-is a no-op.
+`export()` does.
+
+**A clear emits its writes unconditionally — it must not be gated on whether the window pass
+moved anything, and that is not an optimisation worth having.** The first attempt drops
+everything in memory before any write. If its commit fails and the retry gates on the pass,
+the retry finds nothing left to drop, writes **nothing**, and returns `Success` while the
+store still holds every sealed segment — a restart then brings all of them back. Writing
+unconditionally costs one index write and one small active-segment write when clearing an
+already-empty exporter, and buys convergence by construction rather than by a flag tracking
+whether an earlier pass's covering write ever landed. On a retry the pass is a no-op but the
+active segment still carries the floor from the first attempt, so the write is still covering
+and the sealed segments are still retirable.
+
+One residue: if a failed clear is never retried and the app simply keeps exporting, the next
+successful export re-lands the floor but with `retire = false`, so the sealed segments are not
+reclaimed until the next natural window pass (roughly `maxRecords` evictions away). Records
+stay gone; only the bytes linger. Any later `clear()` reclaims them.
 
 **On failure the in-memory drop has already happened, so the observable count reads zero
 while the store still holds records.** This is the contract, not an accident of ordering: a
@@ -206,8 +226,11 @@ Load-bearing, roughly in order of what each would catch:
 - **Metrics**: the local-only limit is asserted, not assumed — a merge after clear *does*
   restore the old sum, pinned as the documented behaviour so a later change has to face it.
 - **Clock**: `tick()` → `clear()` → `tick()`; `seq` did not regress and the frontier emptied.
-- **Failure**: a store that throws on the turn's write returns `Failure` and leaves a state
-  a retry converges from.
+- **Failure and retry**: a store that throws on the turn's write returns `Failure`, and the
+  retry — once the store recovers — must leave a **fresh exporter recovering empty**. That last
+  clause is the assertion, not "the retry returned `Success`": a gated retry returns `Success`
+  having written nothing, with the live buffer already empty from the failed attempt, so every
+  weaker assertion passes. Prove this test red against the gated version before trusting it.
 - **Concurrency** (jvmTest, real threads, existing `@Suppress("ForbiddenImport")`
   precedent): interleaved `export()` and `clear()`; the store never ends holding a record
   from before the last clear.
@@ -227,10 +250,9 @@ Three of these are staleness rather than additions, and each is a claim `clear()
 - `Writerside/topics/otel-logs.md` covers the log store and needs the affordance.
 
 Plus: `@sample` functions in `kuilt-otel/src/commonSamples/`, `kuilt-otel/module.md`, an
-entry in `docs/agent-cookbook.md` (CLAUDE.md treats a new primitive with no cookbook entry
-as a broken build — note the cookbook currently has **no** otel entries, so this may want a
-short section rather than a row), a check that `.claude/skills/kuilt-primitives/SKILL.md`
-still routes, and `./gradlew verifyDocCitations`.
+entry in the cookbook's existing `## Telemetry & log capture` section (CLAUDE.md treats a new
+primitive with no cookbook entry as a broken build), a check that
+`.claude/skills/kuilt-primitives/SKILL.md` still routes, and `./gradlew verifyDocCitations`.
 
 ## Delivery
 
