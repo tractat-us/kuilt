@@ -441,6 +441,16 @@ never heard about the removal will happily re-add them on the next merge.
 leaves a suppression record behind, so the entries stay gone across a merge. Pair it with
 `Rga.sequence`/`Rga.tombstones` to work out which ids fall outside the window you want to keep.
 
+**Reading only the head, without paying for the whole log.** `toList()` and `entries()` each build
+two lists the size of the log, so working out "which ids fall outside the window" by materialising
+everything and then taking a handful throws nearly all of that work away. Walk `Rga.sequence`
+lazily instead, filter `Rga.tombstones`, `take` what you need, and resolve just those with
+`Rga.valueAt(id)` — an O(1) read of one element by its id:
+
+```kotlin
+val head = log.sequence.asSequence().filter { it !in log.tombstones }.take(k).map { log.valueAt(it) }
+```
+
 <!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleRgaDropWindow -->
 ```kotlin
 val a = ReplicaId("A")

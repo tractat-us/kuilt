@@ -298,6 +298,77 @@ class WarpLogRecordExporterBatchTest {
             )
         }
 
+    /**
+     * Eviction must not materialise the whole buffer to read its head.
+     *
+     * `entries()` builds two eager Theta(N) lists; `take(count)` then discards nearly all of
+     * it. At the production cap that was ~0.18 ms per record. This pins the *behaviour* (the
+     * right records are evicted, in order, at a cap much larger than one turn's eviction run)
+     * so a reimplementation that reads ids off `sequence` directly is provably equivalent —
+     * the cost itself is pinned by the probe on device, not here.
+     *
+     * Deliberately green before **and** after the rewrite: it is a characterisation test for a
+     * pure optimisation, not a red-first one.
+     */
+    @Test
+    fun evictionTakesTheOldestRecordsAtACapMuchLargerThanTheTurn() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val exporter = WarpLogRecordExporter(ReplicaId("device-1"), InMemoryDurableStore(), maxRecords = WIDE_CAP)
+        exporter.export(records(WIDE_CAP))
+        exporter.export(records(WIDE_CAP + WIDE_OVERFLOW).drop(WIDE_CAP))
+
+        assertEquals(
+            (WIDE_OVERFLOW until WIDE_CAP + WIDE_OVERFLOW).map { "event $it" },
+            exporter.snapshot().toList().map { it.body },
+            "the oldest WIDE_OVERFLOW records must go, and the rest must keep their order",
+        )
+    }
+
+    /**
+     * Eviction must forget **exactly** the record ids it evicted — the only thing the ids it
+     * reads are used for, and so the only observable that discriminates how it reads them.
+     *
+     * The sibling above asserts on `snapshot().toList()` and cannot do this job: the removal
+     * itself is `Rga.removeFirst(count)`, which takes no ids from the caller, so the visible
+     * sequence is identical however the eviction path reads its ids. What the ids *do* is drive
+     * `seenIds.remove` — the dedup map — so a misread is silent until a record is re-exported:
+     * forget too few and an evicted record can never be re-admitted (lost, silently); forget too
+     * many and a record still in the buffer is admitted twice.
+     *
+     * The third export is the one that matters: by then eviction has left a run of tombstones at
+     * the head of `sequence`, so reading ids off `sequence` **without** filtering them takes
+     * already-tombstoned ids and forgets nothing. The fourth export is what makes that visible.
+     */
+    @Test
+    fun evictionForgetsExactlyTheRecordIdsItEvicted() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val exporter = WarpLogRecordExporter(ReplicaId("device-1"), InMemoryDurableStore(), maxRecords = WIDE_CAP)
+        exporter.export(records(WIDE_CAP))
+        exporter.export(records(WIDE_CAP + WIDE_OVERFLOW).drop(WIDE_CAP))
+
+        // Record 0 was evicted, so it must be re-admitted rather than deduped — which evicts
+        // the record that is now oldest (WIDE_OVERFLOW), over a head of tombstones.
+        exporter.export(record(0))
+        val afterReadmit = exporter.snapshot().toList().map { it.body }
+        // That one, in turn, must have been forgotten too.
+        exporter.export(record(WIDE_OVERFLOW))
+        val afterSecondReadmit = exporter.snapshot().toList().map { it.body }
+        // A record still in the buffer must still be deduped.
+        exporter.export(record(WIDE_CAP + WIDE_OVERFLOW - 1))
+        val afterDedup = exporter.snapshot().toList().map { it.body }
+
+        assertAll(
+            { assertEquals("event 0", afterReadmit.last(), "an evicted record must be re-admitted") },
+            {
+                assertEquals(
+                    "event $WIDE_OVERFLOW",
+                    afterSecondReadmit.last(),
+                    "a record evicted over a head of tombstones must be forgotten too",
+                )
+            },
+            { assertEquals(WIDE_CAP, afterSecondReadmit.size, "the cap must still hold") },
+            { assertEquals(afterSecondReadmit, afterDedup, "a record still buffered must still dedup") },
+        )
+    }
+
     @Test
     fun anEmptyBatchIsSuccessAndWritesNothing() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val store = CountingStore()
@@ -326,6 +397,14 @@ class WarpLogRecordExporterBatchTest {
         private const val CAP = 8
 
         private const val EXTRA = 5
+
+        /**
+         * A cap several times an eviction run, so a head/tail confusion shows — and still
+         * small enough for wasmJs (#2183: never thousands of exports in this module).
+         */
+        private const val WIDE_CAP = 64
+
+        private const val WIDE_OVERFLOW = 20
 
         /**
          * The floor the batched path must beat. Deliberately far below the ~128x a

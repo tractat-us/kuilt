@@ -1156,11 +1156,27 @@ public class WarpLogRecordExporter(
      * per-record narration of a ring buffer doing what it is configured to do — on the export
      * hot path, where it was measured (#2218).
      *
-     * The entries are read **before** the removal, off the instance whose [Rga.sequence]
+     * The ids are read **before** the removal, off the instance whose [Rga.sequence]
      * `removeFirst` is about to walk, so the lazy is computed once for both.
      */
     private fun evictLeading(count: Int) {
-        val evicted = log.entries().take(count)
+        // The leading `count` VISIBLE ids, taken off `sequence` LAZILY. [Rga.entries] would
+        // build two eager Θ(N) lists here and then discard all but `count` of them — ≈0.18 ms
+        // per record at [DEFAULT_MAX_LOG_RECORDS], measured on an iPhone XS (#2219). `sequence`
+        // is already warm on this instance: `removeFirst` below walks the same lazy.
+        //
+        // This is Θ(leading tombstones + count), NOT Θ(count): eviction tombstones accumulate
+        // at the HEAD of `sequence`, and [windowPassDue] only clears them once per [maxRecords]
+        // evictions, so the walk skips up to that many before it finds the first visible id.
+        // Still strictly less than the full pass it replaces, and one Θ(N) list allocation
+        // rather than three — `removeFirst` retains the third (its `visibleSequence()`), which
+        // is why this cuts the term rather than removing it.
+        val tombstoned = log.tombstones
+        val evicted = log.sequence.asSequence()
+            .filter { id -> id !in tombstoned }
+            .take(count)
+            .map { id -> log.valueAt(id) }
+            .toList()
         healthState.update { it.copy(dropped = it.dropped + count) }
         reportDropsPeriodically()
         val (newLog, removes) = log.removeFirst(count)
@@ -1170,7 +1186,7 @@ public class WarpLogRecordExporter(
         // record's own `Insert` — body and all — stays in whichever segment it landed
         // in until a window pass suppresses it and that segment is retired.
         appendToActiveSegment(removes)
-        evicted.forEach { (_, record) -> seenIds.remove(record.recordId) }
+        evicted.forEach { record -> seenIds.remove(record.recordId) }
         visibleCount -= count
         evictionsSincePass += count
         // DROP_OLDEST removes a leading prefix of the visible sequence. With at least
