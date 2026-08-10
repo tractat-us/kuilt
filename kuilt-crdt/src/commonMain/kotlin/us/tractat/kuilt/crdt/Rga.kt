@@ -326,9 +326,11 @@ public class Rga<V> private constructor(
      * engages. Nothing pre-existing can move either: a freshly minted id is referenced by no
      * `Insert.after` and by no [compactPositions] entry, so no orphan's reroot changes.
      *
-     * Note the parentheses around the elvis. `==` binds tighter than `?:`, so
-     * `after != base.lastOrNull() ?: RgaId.HEAD` parses as `(after != base.lastOrNull()) ?: …`
-     * and does not typecheck as a condition.
+     * The parentheses around the elvis are for the reader, not the compiler: Kotlin's `?:`
+     * binds **tighter** than `!=` (the reverse of the C-family intuition), so dropping them
+     * compiles clean, warning-free, and means the same thing. Which is exactly why they are
+     * written — a reader who assumes C precedence sees a comparison against a bare
+     * `lastOrNull()` and reparenthesises the empty-[base] case away.
      *
      * A `null` [base] returns `null` without touching [sequence] — rule 2 of [RgaCache.sequence].
      * [minted] is only invoked when the guard holds, so a caller that fails it builds no ids.

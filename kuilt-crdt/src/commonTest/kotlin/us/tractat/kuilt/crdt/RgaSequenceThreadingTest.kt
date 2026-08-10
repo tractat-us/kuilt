@@ -179,6 +179,42 @@ class RgaSequenceThreadingTest {
         )
     }
 
+    /**
+     * [Rga.insertAt] resolves its index against `visibleSequence()`, which forces the order —
+     * so the materialized list is in hand for free and an append-at-the-end loop must thread
+     * from the **first** call, including onto an empty sequence.
+     *
+     * That empty case is the one the guard's `?: RgaId.HEAD` fallback exists for, and it is
+     * easy to lose: Kotlin's elvis binds *tighter* than `!=`, so a reader carrying the
+     * C-family precedence intuition sees a form that "obviously" compares against a bare
+     * `lastOrNull()` and is tempted to reparenthesise it into one. That variant compiles
+     * clean and warning-free, threads nothing on the first call, and every other case in this
+     * file stays green — this assertion is what reddens.
+     */
+    @Test
+    fun insertAtAppendsThreadFromTheFirstElementOnward() {
+        var log = Rga.empty<String>()
+        val threaded = mutableListOf<Boolean>()
+        val handedBack = mutableListOf<Boolean>()
+        repeat(CHAIN) { i ->
+            val (next, _) = log.insertAt(a, i, "v$i")
+            log = next
+            threaded += next.threadedSequence != null
+            handedBack += next.sequence === next.threadedSequence
+        }
+        val (prepended, _) = log.insertAt(a, 0, "front")
+
+        assertAll(
+            { assertTrue(threaded.all { it }, "every insertAt append must thread, the first one included") },
+            { assertTrue(handedBack.all { it }, "sequence must hand back the threaded list itself") },
+            { assertEquals(oracle(log).sequence, log.sequence) },
+            { assertEquals(List(CHAIN) { "v$it" }, log.toList()) },
+            { assertNull(prepended.threadedSequence, "insertAt(0) on a non-empty log is not an append") },
+            { assertEquals(oracle(prepended).sequence, prepended.sequence) },
+            { assertEquals(listOf("front") + List(CHAIN) { "v$it" }, prepended.toList()) },
+        )
+    }
+
     // ---- 2. Rule 2: threading never forces the cold lazy ------------------------------------
 
     /**
