@@ -7,10 +7,12 @@ import kotlinx.atomicfu.locks.withLock
 import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.addressOf
+import kotlinx.cinterop.alloc
 import kotlinx.cinterop.allocArray
 import kotlinx.cinterop.convert
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.plus
+import kotlinx.cinterop.ptr
 import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.toKString
 import kotlinx.cinterop.usePinned
@@ -19,6 +21,11 @@ import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.flow
 import kotlinx.io.Buffer
 import platform.Foundation.NSFileManager
+import platform.posix.EACCES
+import platform.posix.EEXIST
+import platform.posix.ENOENT
+import platform.posix.ENOTDIR
+import platform.posix.EPERM
 import platform.posix.MAP_SHARED
 import platform.posix.MS_SYNC
 import platform.posix.O_CREAT
@@ -29,6 +36,8 @@ import platform.posix.PROT_READ
 import platform.posix.PROT_WRITE
 import platform.posix.SEEK_END
 import platform.posix.SEEK_SET
+import platform.posix.S_IFDIR
+import platform.posix.S_IFMT
 import platform.posix.S_IRUSR
 import platform.posix.S_IWUSR
 import platform.posix.close
@@ -37,11 +46,13 @@ import platform.posix.getpagesize
 import platform.posix.lseek
 import platform.posix.memcpy
 import platform.posix.memset
+import platform.posix.mkdir
 import platform.posix.mmap
 import platform.posix.msync
 import platform.posix.munmap
 import platform.posix.open
 import platform.posix.read
+import platform.posix.stat
 import platform.posix.strerror_r
 import platform.posix.write
 import us.tractat.kuilt.crdt.Dot
@@ -218,8 +229,16 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
      * Damage anywhere other than the tail is never repaired. A middle segment with an unreadable
      * header wedges the bolt at [BoltAvailability.Unavailable], because appending past it would write
      * records no replay could ever reach.
+     *
+     * **Reading this opens the archive**, exactly as [availability] does. An archive is adopted
+     * lazily — the first append, replay or probe is what reads the directory — so a property that
+     * merely reported the current field would answer `null` on a freshly constructed bolt over a
+     * damaged archive, which is the one moment a consumer actually asks.
      */
-    public val repairedTailAt: Long? get() = lock.withLock { repaired }
+    public val repairedTailAt: Long? get() = lock.withLock {
+        ensureOpen()
+        repaired
+    }
 
     /**
      * A segment header's size for this format. Fixed: every field is fixed-width except the two
@@ -283,7 +302,14 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
         // concurrent append is either wholly visible to this reader or wholly invisible to it —
         // never half of a frame, because a frame's CRC covers its own length prefix.
         val views = lock.withLock {
-            wedged?.let { return@flow emit(Truncated(nextOffset, TruncationReason.SegmentHeader)) }
+            // Opening is what ADOPTS an archive already on disk, so a consumer that only ever reads —
+            // never appends — must still go through it, or it would replay an empty archive over a
+            // directory full of frames. An archive that cannot be opened replays as Truncated at the
+            // start rather than as a clean empty one: "I could not read it" and "it holds nothing"
+            // are different answers, and only one of them is true.
+            if (ensureOpen() !is BoltAvailability.Available) {
+                return@flow emit(Truncated(nextOffset, TruncationReason.SegmentHeader))
+            }
             segments.map { SegmentView(it.path, it.baseOffset, it.writtenFrameBytes) }
         }
         for (view in views) {
@@ -508,24 +534,45 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
     }
 
     private fun openArchive(): BoltAvailability {
-        val created = NSFileManager.defaultManager.createDirectoryAtPath(
-            path = directory.withoutTrailingSlash(),
-            withIntermediateDirectories = true,
-            attributes = null,
-            error = null,
-        )
-        if (!created) {
-            val code = errno
+        val code = makeDirectories(directory.withoutTrailingSlash())
+        if (code != null) {
             val reason = "archive directory $directory is not usable: errno=$code (${errnoText(code)})"
             // EACCES/EPERM is how a Data-Protection-locked device refuses, and the next unlock may
-            // resolve it — neither available nor permanently unavailable.
-            return if (code == platform.posix.EACCES || code == platform.posix.EPERM) {
+            // resolve it — neither available nor permanently unavailable. Unreachable off real
+            // hardware, so nothing in this repo's suite covers this branch.
+            return if (code == EACCES || code == EPERM) {
                 BoltAvailability.Unknown(reason)
             } else {
                 BoltAvailability.Unavailable(reason)
             }
         }
         return adoptExistingSegments()
+    }
+
+    /**
+     * Create [path] and any missing parents, returning the `errno` that stopped it or `null`.
+     *
+     * `mkdir(2)` rather than `NSFileManager.createDirectoryAtPath`, and the reason is the whole point
+     * of this class's failure reporting: Foundation reports an `NSError` and makes **no promise about
+     * `errno`**, so reading `errno` after a failed Foundation call yields whatever the last unrelated
+     * syscall left there. A cause that is merely plausible is worse than none.
+     */
+    private fun makeDirectories(path: String): Int? {
+        if (path.isEmpty() || path == "/") return null
+        if (mkdir(path, DIRECTORY_MODE.convert()) == 0) return null
+        val code = errno
+        if (code == EEXIST) return if (isDirectory(path)) null else ENOTDIR
+        if (code != ENOENT) return code
+        val parent = path.substringBeforeLast('/', missingDelimiterValue = "")
+        if (parent.isEmpty()) return code
+        makeDirectories(parent)?.let { return it }
+        return if (mkdir(path, DIRECTORY_MODE.convert()) == 0) null else errno
+    }
+
+    private fun isDirectory(path: String): Boolean = memScoped {
+        val info = alloc<stat>()
+        if (stat(path, info.ptr) != 0) return false
+        info.st_mode.toInt() and S_IFMT == S_IFDIR
     }
 
     /**
@@ -823,6 +870,9 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
         private const val SEGMENT_SUFFIX = ".bolt"
         private const val SEGMENT_INDEX_DIGITS = 16
         private const val PREALLOCATION_CHUNK_BYTES = 1 shl 16
+
+        /** `rwx------`: an archive is the owning application's business and nobody else's. */
+        private const val DIRECTORY_MODE = 448 // 0o700
 
         /** `mmap` reports failure as `(void *) -1`, which is what `MAP_FAILED` expands to. */
         private const val MMAP_FAILED = -1L
