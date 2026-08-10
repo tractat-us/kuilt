@@ -235,7 +235,7 @@ public class Rga<V> private constructor(
      * Excluded from the wire format by [@Transient].
      */
     @Transient private val cache: RgaCache<V>? = null,
-) : Quilted<Rga<V>> {
+) : Quilted<Rga<V>>, OpLogCrdt<RgaId, V, RgaOp<V>> {
 
     /**
      * All ids that have been garbage-collected by any [RgaOp.Compact] in this op-log — the
@@ -925,6 +925,34 @@ public class Rga<V> private constructor(
      */
     override fun causalFloor(): VersionVector = compactedBelow
 
+    // ---- OpLogCrdt ----
+
+    /**
+     * The ops this replica currently holds — see [OpLogCrdt.operations].
+     *
+     * A `Sequence` view, deliberately: the concrete collection behind the op-log is not part of
+     * the public contract, so it stays free to change.
+     *
+     * **Not a complete history.** [compact] drops ops and records a [RgaOp.Compact] naming what
+     * it dropped; [dropWindow] raises the [compactedBelow] floor and drops ops naming **nothing**.
+     * After either, the ops are gone from here.
+     */
+    override fun operations(): Sequence<RgaOp<V>> = ops.asSequence()
+
+    /** Classify one [RgaOp] — see [OpLogCrdt.classify]. Delegates to the sole classifier. */
+    override fun classify(op: RgaOp<V>): LogOp<RgaId> = classifyOp(op)
+
+    /** The causal dot [id] belongs to — see [OpLogCrdt.dotOf]. */
+    override fun dotOf(id: RgaId): Dot = id.dot
+
+    /**
+     * The canonical [RgaOpSerializer] — see [OpLogCrdt.opSerializer].
+     *
+     * The op-level counterpart of [wireSerializer], which serializes the whole state.
+     */
+    override fun opSerializer(vSerializer: KSerializer<V>): KSerializer<RgaOp<V>> =
+        Rga.opSerializer(vSerializer)
+
     /**
      * Merge two replicas' op-logs. The result is the idempotent union — both
      * replicas converge to the same [toList] after [piece].
@@ -1252,17 +1280,37 @@ public class Rga<V> private constructor(
             RgaSerializer(vSerializer)
 
         /**
+         * The canonical op serializer, without needing an [Rga] instance — the companion form of
+         * [OpLogCrdt.opSerializer].
+         *
+         * The instance method serves the **append** side, which always holds the replica it is
+         * appending from. A **decoder** does not: something reading ops back out of storage has
+         * bytes and no replica, and minting an empty [Rga] purely to obtain a serializer would be
+         * a tell that the codec was never an instance concern. [Fugue.opSerializer] mirrors this,
+         * so neither type forces that workaround.
+         *
+         * @param vSerializer the [kotlinx.serialization.KSerializer] for element type [V].
+         */
+        public fun <V> opSerializer(vSerializer: KSerializer<V>): KSerializer<RgaOp<V>> =
+            RgaOpSerializer(vSerializer)
+
+        /**
+         * The **sole** [RgaOp] → [LogOp] classifier. Both the internal [OpLogEngine] and the
+         * public [OpLogCrdt.classify] read it, so the insert/remove-versus-compaction split — a
+         * data-loss bug if a consumer gets it wrong — exists in exactly one place.
+         */
+        private fun <V> classifyOp(op: RgaOp<V>): LogOp<RgaId> = when (op) {
+            is RgaOp.Insert -> LogOp.Insert(op.id)
+            is RgaOp.Remove -> LogOp.Remove(op.id)
+            is RgaOp.Compact -> LogOp.Compact(op.positions.keys)
+        }
+
+        /**
          * The shared op-log core (op classification + causal-dot projection) for [Rga].
          * See [OpLogEngine].
          */
         private fun <V> engine(): OpLogEngine<RgaId, RgaOp<V>> = OpLogEngine(
-            view = { op ->
-                when (op) {
-                    is RgaOp.Insert -> LogOp.Insert(op.id)
-                    is RgaOp.Remove -> LogOp.Remove(op.id)
-                    is RgaOp.Compact -> LogOp.Compact(op.positions.keys)
-                }
-            },
+            view = { classifyOp(it) },
             dotOf = { it.dot },
         )
 

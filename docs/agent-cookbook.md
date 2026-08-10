@@ -510,6 +510,43 @@ frontier — the floored dots leave `causalDots()` entirely, and a walk that cou
 a frontier of zero for that author and stalls every downstream collection. `Quilter` already does
 this; hand-rolled frontier arithmetic must too.
 
+**I want the edit history, not the current value — and I want it to outlive what the replica
+forgets.** A replicated list is really a log of small edits, and `dropWindow`/`compact` above throw
+old ones away. If you want a record that *survives* that — an audit trail, an archive, a server
+holding a year of history beside a phone holding an hour — you cannot get it by merging: merging
+makes forgetting **contagious**, so a compacted peer propagates its compaction to everyone it syncs
+with. You have to consume the **operations** instead, as they arrive.
+
+**Primitive:** `OpLogCrdt` (`us.tractat.kuilt.crdt`), implemented by both `Rga` and `Fugue`.
+`operations()` is the live log, `classify(op)` splits it three ways, and `dotOf(id)` projects an
+id to its causal dot. The split is the safety-critical part: `LogOp.Insert` and `LogOp.Remove` are
+*content*, while `LogOp.Compact` is a record of *forgetting*. Keep the first two and discard the
+third and your history outlives its source's — which is the whole trick.
+
+<!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleOpLogCrdt -->
+```kotlin
+// The same three-way split for any op-log CRDT — Fugue implements the identical contract.
+val content = log.operations().filterNot { log.classify(it) is LogOp.Compact }
+check(content.count() == 2)
+
+// Inserts mint dots; a remove reuses its target's id, so a dot cursor is defined over
+// inserts only.
+val dots = log.operations()
+    .mapNotNull { (log.classify(it) as? LogOp.Insert)?.id }
+    .map { id -> log.dotOf(id) }
+    .toSet()
+check(dots == setOf(Dot(a, 1L), Dot(a, 2L)))
+```
+
+Two traps. **`operations()` is the *live* log, never a complete history** — a replica that has
+already compacted no longer holds what it dropped, and for `Rga` an op below the `compactedBelow`
+floor leaves with **no** `Compact` naming it. So feed an archive as ops arrive; you cannot
+reconstruct one from a replica afterwards. And **encode ops with `opSerializer`**, never a
+compiler-generated serializer: the generated one writes a different wire format and cannot encode a
+polymorphic element type under CBOR, putting your bytes outside the golden vectors that pin the
+format across versions. It is on the interface, and on the `Rga`/`Fugue` companions for a decoder
+that has bytes but no replica.
+
 ## Liveness & presence
 
 People close laptops, step into lifts, and lose Wi-Fi. When that happens your app has to say

@@ -234,7 +234,7 @@ public class Fugue<V> private constructor(
      * for the single-owner steal contract.
      */
     seqState: FugueSeqState? = null,
-) : Quilted<Fugue<V>> {
+) : Quilted<Fugue<V>>, OpLogCrdt<FugueId, V, FugueOp<V>> {
 
     /**
      * Ownership slot for the mutable [FugueSeqState]. Mutating operations
@@ -464,6 +464,37 @@ public class Fugue<V> private constructor(
      * frontier does not develop holes after GC.
      */
     override fun causalDots(): Set<Dot> = engine<V>().causalDots(ops)
+
+    // ---- OpLogCrdt ----
+
+    /**
+     * The ops this replica currently holds — see [OpLogCrdt.operations].
+     *
+     * A `Sequence` view, deliberately: the concrete collection behind the op-log is not part of
+     * the public contract, so it stays free to change.
+     *
+     * **Not a complete history**, but — unlike [Rga], which also carries an id-less
+     * `compactedBelow` floor — every id [Fugue] forgets is named by a retained [FugueOp.Compact],
+     * so what was dropped is always recoverable from the log itself.
+     */
+    override fun operations(): Sequence<FugueOp<V>> = ops.asSequence()
+
+    /** Classify one [FugueOp] — see [OpLogCrdt.classify]. Delegates to the sole classifier. */
+    override fun classify(op: FugueOp<V>): LogOp<FugueId> = classifyOp(op)
+
+    /** The causal dot [id] belongs to — see [OpLogCrdt.dotOf]. */
+    override fun dotOf(id: FugueId): Dot = id.dot
+
+    /**
+     * The canonical `FugueOpSerializer` — see [OpLogCrdt.opSerializer].
+     *
+     * The op-level counterpart of [wireSerializer], which serializes the whole state. That
+     * serializer is `internal`, so this method is the **only** way to reach it: a consumer who
+     * could not would reach for the compiler-generated sealed serializer and write bytes outside
+     * the golden-vector guarantee.
+     */
+    override fun opSerializer(vSerializer: KSerializer<V>): KSerializer<FugueOp<V>> =
+        Fugue.opSerializer(vSerializer)
 
     /**
      * Merge two replicas' op-logs. The result is idempotent set-union — both
@@ -1030,17 +1061,43 @@ public class Fugue<V> private constructor(
             FugueSerializer(vSerializer)
 
         /**
+         * The canonical op serializer, without needing a [Fugue] instance — the companion form of
+         * [OpLogCrdt.opSerializer].
+         *
+         * This matters more here than on [Rga]. `RgaOpSerializer` is already public, so an
+         * instance-free consumer of that type always had a route; `FugueOpSerializer` is
+         * `internal`, so before this the *only* way to canonically encode a [FugueOp] was to hold
+         * a replica — and a decoder reading ops back out of storage has bytes and no replica. The
+         * workaround was minting an empty [Fugue] purely to obtain a serializer, which is the tell
+         * that the codec was never an instance concern.
+         *
+         * Without it the reachable alternative is the compiler-generated sealed serializer, whose
+         * wire format differs (class-discriminator polymorphism rather than the canonical leading
+         * `t` tag) and which CBOR cannot encode for a polymorphic element type — bytes outside the
+         * golden-vector guarantee, written silently.
+         *
+         * @param vSerializer the [KSerializer] for element type [V].
+         */
+        public fun <V> opSerializer(vSerializer: KSerializer<V>): KSerializer<FugueOp<V>> =
+            FugueOpSerializer(vSerializer)
+
+        /**
+         * The **sole** [FugueOp] → [LogOp] classifier. Both the internal [OpLogEngine] and the
+         * public [OpLogCrdt.classify] read it, so the insert/remove-versus-compaction split — a
+         * data-loss bug if a consumer gets it wrong — exists in exactly one place.
+         */
+        private fun <V> classifyOp(op: FugueOp<V>): LogOp<FugueId> = when (op) {
+            is FugueOp.Insert -> LogOp.Insert(op.id)
+            is FugueOp.Remove -> LogOp.Remove(op.id)
+            is FugueOp.Compact -> LogOp.Compact(op.positions.keys)
+        }
+
+        /**
          * The shared op-log core (op classification + causal-dot projection) for [Fugue].
          * See [OpLogEngine].
          */
         private fun <V> engine(): OpLogEngine<FugueId, FugueOp<V>> = OpLogEngine(
-            view = { op ->
-                when (op) {
-                    is FugueOp.Insert -> LogOp.Insert(op.id)
-                    is FugueOp.Remove -> LogOp.Remove(op.id)
-                    is FugueOp.Compact -> LogOp.Compact(op.positions.keys)
-                }
-            },
+            view = { classifyOp(it) },
             dotOf = { it.dot },
         )
 
