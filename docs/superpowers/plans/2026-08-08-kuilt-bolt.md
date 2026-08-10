@@ -58,12 +58,20 @@ public sealed interface LogOp<out Id> {
 }
 
 /** An op-log CRDT, viewed as the sequence of operations it holds. */
-public interface OpLogCrdt<Id : Any, Op : Any> {
+public interface OpLogCrdt<Id : Any, V, Op : Any> {
     public fun operations(): Sequence<Op>
     public fun classify(op: Op): LogOp<Id>
     public fun dotOf(id: Id): Dot
+    public fun opSerializer(vSerializer: KSerializer<V>): KSerializer<Op>
 }
 ```
+
+> **Corrected after Task 1 shipped (#2211 / PR #2221) — later tasks must use the THREE-parameter
+> form.** The two-parameter `OpLogCrdt<Id : Any, Op : Any>` originally written here *cannot express*
+> `opSerializer`: there is no `V` to constrain the serializer to. A method-level `<V>` compiles but
+> admits `Rga<String>.opSerializer(serializer<Int>())` and produces garbage at runtime. The element
+> type is therefore an interface parameter, so `Rga<V> : OpLogCrdt<RgaId, V, RgaOp<V>>` is
+> compile-checked.
 
 **The argument this task must make, in the PR body.**
 
@@ -143,7 +151,7 @@ must test it that way.
 
 **The clock is injected.** Arrival timestamps come from an injected `Clock`, never `Clock.System` reached for directly — time is a dependency in this repo, and a bolt with a wall-clock read inside it cannot be tested deterministically.
 
-**Serialization uses the canonical serializers** (`RgaOpSerializer` is public), not compiler-generated ones — because an archive is read by future versions of the code that wrote it, and the canonical form is the one with golden vectors behind it.
+**Serialization goes through `OpLogCrdt.opSerializer(vSerializer)`** — never a compiler-generated serializer, and no longer by reaching for `RgaOpSerializer` directly. Task 1 put the canonical serializer on the interface precisely so the wrong one is unreachable rather than merely discouraged; `FugueOpSerializer` remains `internal`, so `opSerializer` is the only way to canonically encode a `FugueOp` at all. This matters because an archive is read by future versions of the code that wrote it, and the canonical form is the one with golden vectors behind it. Task 1 mutation-checked the trap: wiring `FugueOp.serializer(vSerializer)` instead reds two tests with `CborDecodingException: Expected start of map, but found 9F` — an indefinite-length CBOR *array* with a `type` discriminator rather than the canonical `t`-tag map.
 
 **The conformance suite is where the invariant lives.** Every backend subclasses it. It must pin:
 
@@ -154,6 +162,14 @@ must test it that way.
 4. **Scoped replay** — by arrival-time range, and by dot range **over inserts only**, each returning exactly the frames in scope. A test that scopes removes by dot is testing something the format deliberately does not promise.
 5. **Empty append is a no-op** that writes no frame.
 6. **`availability()` is honest** — a bolt reporting `Available` must accept an append.
+
+**Fixture hazard for properties 2 and 3, found while writing Task 1's tests.** Both `Rga` and `Fugue`
+**silently return `null`** from `compact()` for an id that still anchors a live insert (`after` for
+`Rga`; `parent`/`rightOrigin` for `Fugue`). So a fixture that removes the *first* of two elements and
+compacts gets **no compaction at all** — and because `compact` returns `null` rather than throwing, a
+suite that does not `assertNotNull` will happily test an *uncompacted* log while believing it is
+testing the firewall. Property 2 would then pass with the discard removed, which is the one outcome
+its mutation check exists to prevent. **Compact the trailing element, and `assertNotNull` the result.**
 
 **The one-way edge is enforced by absence.** `Bolt` must not implement `Quilted` and must expose no `piece`. Add a source-scan guard in the root build alongside the existing `forbid*` tasks — the property is "no path returns a live CRDT state from a bolt", and a compile-level absence is worth more than a runtime test.
 
