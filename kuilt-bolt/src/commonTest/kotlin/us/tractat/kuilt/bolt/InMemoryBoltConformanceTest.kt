@@ -53,10 +53,16 @@ class TinySegmentInMemoryBoltConformanceTest : BoltConformanceSuite() {
  * a consumer can call produces a torn one — which is exactly why the conformance suite needs the
  * hook.
  *
- * **The healthy segment after the damage is the point of the fixture.** With nothing behind the torn
- * segment, "stop the whole replay here" and "skip to the next segment" emit identical events, and
- * the mutation `aTruncatedArchiveStopsAtTheDamageAndSaysSo` exists to catch survives untouched. With
- * it there, a skip replays a frame from beyond the damage and the property reddens.
+ * **The healthy segment behind the damage is the point of the fixture, and NOT for the obvious
+ * reason.** Replacing `replay`'s `return@flow` with a bare `continue` reddens the property whatever
+ * the fixture looks like — the loop then falls through to the unconditional `emit(CleanTail)` and
+ * the verdict is simply wrong. What the follower defends against is the *tidier* rewrite, the one a
+ * future contributor would actually make: hoist the verdict out of the loop
+ * (`var stoppedAt: Truncated? = null` … `emit(stoppedAt ?: CleanTail)`) and `continue` past a
+ * damaged segment. That version emits exactly one correct-looking verdict and is **green against a
+ * fixture whose damage is last** — measured, not assumed. With a healthy segment behind the damage
+ * it reds on two assertions: a frame from beyond the damage is replayed, and `atOffset` reports the
+ * *later* segment's stop rather than the first one.
  *
  * The damage is a truncated frame rather than a torn header so the *frame* stop path is what the
  * suite drives; the header stop path is covered byte-for-byte in `BoltFrameCodecTest`.

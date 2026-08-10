@@ -74,9 +74,10 @@ abstract class BoltConformanceSuite {
      * offset, and the decision to stop the entire replay at it are all unasserted.
      *
      * **The damage must be followed by a HEALTHY segment** (or equivalent readable region) wherever
-     * the backend has more than one. That detail is the property's whole discriminating power: if the
-     * damaged region is last, "stop the replay" and "skip to the next region" produce identical
-     * output, and the mutation this obligation exists to catch stays green.
+     * the backend has more than one. That detail carries the property's discriminating power against
+     * the *plausible* mutation rather than the clumsy one — see
+     * [aTruncatedArchiveStopsAtTheDamageAndSaysSo]. A fixture whose damage is last leaves "stop the
+     * replay" and "skip to the next region, keeping the verdict" emitting identical events.
      */
     protected abstract suspend fun newTruncatedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>>
 
@@ -452,9 +453,12 @@ abstract class BoltConformanceSuite {
      *    hole in it and offsets that jump;
      * 4. every frame before the damage survives — the intact prefix is not discarded over a bad tail.
      *
-     * **Mutation receipt:** turning `emitFrames`' stop into a `continue` to the next segment reddens
-     * (1) and (4), because the healthy region after the damage replays and the verdict becomes
-     * [CleanTail]. Zeroing `Truncated.atOffset` reddens (2).
+     * **Mutation receipts.** Turning the stop into a bare `continue` reddens (1) and (4) — the
+     * verdict becomes [CleanTail] and a frame from beyond the damage replays. Zeroing
+     * `Truncated.atOffset` reddens (2). And the one the fixture's shape exists for: hoisting the
+     * verdict out of the segment loop and `continue`-ing past a damaged segment emits exactly one
+     * plausible-looking verdict, so it is **green** against a fixture whose damage is last and reds
+     * only because the backend puts a healthy region behind it.
      */
     @Test
     fun aTruncatedArchiveStopsAtTheDamageAndSaysSo() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
