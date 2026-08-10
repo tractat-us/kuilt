@@ -811,7 +811,7 @@ public class Rga<V> private constructor(
      * The op-level counterpart of [wireSerializer], which serializes the whole state.
      */
     override fun opSerializer(vSerializer: KSerializer<V>): KSerializer<RgaOp<V>> =
-        RgaOpSerializer(vSerializer)
+        Rga.opSerializer(vSerializer)
 
     /**
      * Merge two replicas' op-logs. The result is the idempotent union — both
@@ -1136,6 +1136,21 @@ public class Rga<V> private constructor(
          */
         public fun <V> wireSerializer(vSerializer: KSerializer<V>): KSerializer<Rga<V>> =
             RgaSerializer(vSerializer)
+
+        /**
+         * The canonical op serializer, without needing an [Rga] instance — the companion form of
+         * [OpLogCrdt.opSerializer].
+         *
+         * The instance method serves the **append** side, which always holds the replica it is
+         * appending from. A **decoder** does not: something reading ops back out of storage has
+         * bytes and no replica, and minting an empty [Rga] purely to obtain a serializer would be
+         * a tell that the codec was never an instance concern. [Fugue.opSerializer] mirrors this,
+         * so neither type forces that workaround.
+         *
+         * @param vSerializer the [kotlinx.serialization.KSerializer] for element type [V].
+         */
+        public fun <V> opSerializer(vSerializer: KSerializer<V>): KSerializer<RgaOp<V>> =
+            RgaOpSerializer(vSerializer)
 
         /**
          * The **sole** [RgaOp] → [LogOp] classifier. Both the internal [OpLogEngine] and the

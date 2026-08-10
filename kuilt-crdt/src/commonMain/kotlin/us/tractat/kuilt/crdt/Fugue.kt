@@ -494,7 +494,7 @@ public class Fugue<V> private constructor(
      * the golden-vector guarantee.
      */
     override fun opSerializer(vSerializer: KSerializer<V>): KSerializer<FugueOp<V>> =
-        FugueOpSerializer(vSerializer)
+        Fugue.opSerializer(vSerializer)
 
     /**
      * Merge two replicas' op-logs. The result is idempotent set-union — both
@@ -1059,6 +1059,27 @@ public class Fugue<V> private constructor(
          */
         public fun <V> wireSerializer(vSerializer: KSerializer<V>): KSerializer<Fugue<V>> =
             FugueSerializer(vSerializer)
+
+        /**
+         * The canonical op serializer, without needing a [Fugue] instance — the companion form of
+         * [OpLogCrdt.opSerializer].
+         *
+         * This matters more here than on [Rga]. `RgaOpSerializer` is already public, so an
+         * instance-free consumer of that type always had a route; `FugueOpSerializer` is
+         * `internal`, so before this the *only* way to canonically encode a [FugueOp] was to hold
+         * a replica — and a decoder reading ops back out of storage has bytes and no replica. The
+         * workaround was minting an empty [Fugue] purely to obtain a serializer, which is the tell
+         * that the codec was never an instance concern.
+         *
+         * Without it the reachable alternative is the compiler-generated sealed serializer, whose
+         * wire format differs (class-discriminator polymorphism rather than the canonical leading
+         * `t` tag) and which CBOR cannot encode for a polymorphic element type — bytes outside the
+         * golden-vector guarantee, written silently.
+         *
+         * @param vSerializer the [KSerializer] for element type [V].
+         */
+        public fun <V> opSerializer(vSerializer: KSerializer<V>): KSerializer<FugueOp<V>> =
+            FugueOpSerializer(vSerializer)
 
         /**
          * The **sole** [FugueOp] → [LogOp] classifier. Both the internal [OpLogEngine] and the

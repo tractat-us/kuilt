@@ -1,5 +1,6 @@
 package us.tractat.kuilt.crdt
 
+import kotlinx.serialization.builtins.serializer
 import kotlin.test.assertEquals
 
 /**
@@ -441,6 +442,36 @@ internal fun sampleRgaHeadWindow() {
         .map { id -> log.valueAt(id) }
         .toList()
     check(head == listOf("entry-2", "entry-3"))
+}
+
+/**
+ * Read a replicated list as the **edits that built it** rather than as its current value, and
+ * tell an edit apart from a record of forgetting.
+ */
+@Suppress("unused")
+internal fun sampleOpLogCrdt() {
+    val a = ReplicaId("A")
+
+    val (r1, _) = Rga.empty<String>().insertAt(a, 0, "x")
+    val (log, _) = r1.insertAt(a, 1, "y")
+
+    // The same three-way split for any op-log CRDT — Fugue implements the identical contract.
+    val content = log.operations().filterNot { log.classify(it) is LogOp.Compact }
+    check(content.count() == 2)
+
+    // Inserts mint dots; a remove reuses its target's id, so a dot cursor is defined over
+    // inserts only.
+    val dots = log.operations()
+        .mapNotNull { (log.classify(it) as? LogOp.Insert)?.id }
+        .map { id -> log.dotOf(id) }
+        .toSet()
+    check(dots == setOf(Dot(a, 1L), Dot(a, 2L)))
+
+    // Persist ops with the CANONICAL serializer — never a compiler-generated one, whose wire
+    // format differs and sits outside the golden vectors. Available without a replica too:
+    // `Rga.opSerializer(...)` / `Fugue.opSerializer(...)` on the companions, for a decoder.
+    val opSerializer = log.opSerializer(String.serializer())
+    check(opSerializer.descriptor.serialName.isNotEmpty())
 }
 
 /**

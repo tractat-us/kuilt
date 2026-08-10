@@ -56,6 +56,18 @@ public interface OpLogCrdt<Id : Any, V, Op : Any> {
      * [Rga.compactedBelow] floor leaves with **no** [LogOp.Compact] naming it. So this is the
      * live log, never a complete history, which is why an archive has to be fed as ops arrive
      * rather than reconstructed from a replica afterwards.
+     *
+     * **The returned sequence may be iterated more than once**, and every iteration observes the
+     * same ops — the replica is immutable, so a mutation produces a *new* replica rather than
+     * disturbing this one's stream.
+     *
+     * Stated because Kotlin's [Sequence] is multi-pass *unless its documentation says otherwise*,
+     * so silence here would still read as this guarantee while quietly reserving the right to
+     * withdraw it. A future backing that streams (a paged store, a lazily-decoded archive segment)
+     * must therefore re-open its cursor per `iterator()` call rather than hand out a one-shot one:
+     * constraining this to a single pass later would break consumers at **runtime**, with no
+     * compile-time signal, on the one surface this contract exists to keep swappable. Declaring
+     * the stronger guarantee now costs nothing today and keeps that door shut.
      */
     public fun operations(): Sequence<Op>
 

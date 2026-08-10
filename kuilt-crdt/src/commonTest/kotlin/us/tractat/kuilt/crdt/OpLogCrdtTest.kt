@@ -222,19 +222,77 @@ class OpLogCrdtTest {
     }
 
     /**
-     * The dots [OpLogCrdt] projects out of the classification must be exactly the delivered
-     * frontier the CRDT reports — inserts contribute their own dot, removes contribute none,
-     * and a `Compact` re-contributes the dots it swallowed. This is the property `:kuilt-bolt`'s
-     * insert-only dot field rests on, so pin it here rather than re-deriving it downstream.
+     * The dots [OpLogCrdt] projects out of the classification must be the fixture's **actual**
+     * delivered frontier — inserts contribute their own dot, removes contribute none, and a
+     * `Compact` re-contributes the dots it swallowed. This is the property `:kuilt-bolt`'s
+     * insert-only dot field rests on.
+     *
+     * **Asserted against a literal, not against `causalDots()`.** Comparing the two would be
+     * structurally green: `causalDots()` routes through the same `classifyOp` and the same
+     * `id.dot` that [deliveredDotsVia] does, so any mutation to either perturbs both sides
+     * identically and the equality survives. That comparison is still worth making — it catches
+     * the public [OpLogCrdt.classify] drifting from the internal engine — but it is a *different*
+     * property, and it is asserted separately below under its own name.
      */
     @Test
-    fun insertAndCompactDotsReconstructCausalDotsForBoth() {
+    fun insertAndCompactDotsReconstructTheDeliveredFrontierForBoth() {
+        val (rga, _) = rgaWithACompaction()
+        val (fugue, _) = fugueWithACompaction()
+
+        // Both fixtures are the same shape: a's first insert, b's first insert, a remove of b's
+        // element, then a compaction swallowing it. The remove mints no dot of its own and the
+        // Compact re-contributes the one it swallowed, so the frontier is both replicas at seq 1.
+        val expected = setOf(Dot(a, 1L), Dot(b, 1L))
+
+        assertAll(
+            { assertEquals(expected, deliveredDotsVia(rga), "Rga: classification must yield the delivered frontier") },
+            { assertEquals(expected, deliveredDotsVia(fugue), "Fugue: classification must yield the delivered frontier") },
+        )
+    }
+
+    /**
+     * The public [OpLogCrdt.classify] must not drift from the internal engine's own view.
+     *
+     * Both sides share `classifyOp` today, which is the point — this is the regression pin on
+     * that sharing, and it reddens the moment someone gives the public contract a second
+     * classifier. It deliberately proves nothing about the frontier *itself*; that is the test
+     * above.
+     */
+    @Test
+    fun classificationAgreesWithTheInternalEngineForBoth() {
         val (rga, _) = rgaWithACompaction()
         val (fugue, _) = fugueWithACompaction()
 
         assertAll(
             { assertEquals(rga.causalDots(), deliveredDotsVia(rga), "Rga: classification must reconstruct causalDots()") },
             { assertEquals(fugue.causalDots(), deliveredDotsVia(fugue), "Fugue: classification must reconstruct causalDots()") },
+        )
+    }
+
+    /**
+     * [OpLogCrdt.operations] promises a sequence that may be iterated more than once, with every
+     * iteration observing the same ops. Pinned because the KDoc *reserves* that guarantee against
+     * a future streaming backing — and a one-shot `Sequence` would break consumers at runtime with
+     * no compile-time signal. Iterates a **single returned instance** twice; re-calling
+     * `operations()` each time would pass even against `constrainOnce()`.
+     */
+    @Test
+    fun operationsMayBeIteratedMoreThanOnceForBoth() {
+        val (rga, _) = rgaWithACompaction()
+        val (fugue, _) = fugueWithACompaction()
+        val rgaOps = rga.operations()
+        val fugueOps = fugue.operations()
+
+        val rgaFirst = rgaOps.toList()
+        val rgaSecond = rgaOps.toList()
+        val fugueFirst = fugueOps.toList()
+        val fugueSecond = fugueOps.toList()
+
+        assertAll(
+            { assertTrue(rgaFirst.isNotEmpty(), "the fixture must hold ops for this to mean anything") },
+            { assertEquals(rgaFirst, rgaSecond, "Rga: a second pass must observe the same ops") },
+            { assertTrue(fugueFirst.isNotEmpty(), "the fixture must hold ops for this to mean anything") },
+            { assertEquals(fugueFirst, fugueSecond, "Fugue: a second pass must observe the same ops") },
         )
     }
 
