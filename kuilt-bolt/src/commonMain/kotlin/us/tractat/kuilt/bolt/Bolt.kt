@@ -68,6 +68,10 @@ public interface Bolt<Op> {
      * A cold [Flow] of the frames in [scope], in append order, terminated by exactly one verdict on
      * how the stream ended — [CleanTail] or [Truncated].
      *
+     * The verdict arrives on every replay **collected to completion**. A consumer that cuts the flow
+     * short — `take(n)`, `first()`, an early `return` from `collect` — gets no verdict, and that is
+     * the honest answer: it stopped reading before the archive said how it ended.
+     *
      * Each collection re-reads the archive, so a flow collected after a later [append] sees the
      * later frames too. The flow completes when the archive's tail is reached; it does not wait for
      * future appends.

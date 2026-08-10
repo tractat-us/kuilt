@@ -195,30 +195,132 @@ class BoltFrameCodecTest {
     }
 
     /**
-     * The same hazard one layer up: a segment pre-allocated but crashed before its header landed.
+     * The same hazard one layer up: a segment pre-allocated but crashed part-way through its header.
      *
      * A torn or absent header must stop replay quietly — it is a damaged tail, exactly like a torn
      * frame. A **complete** header with a foreign magic is the opposite case and must still throw:
      * that is bytes handed to the wrong decoder, and swallowing it would silently report an empty
      * archive where the real answer is "you opened the wrong file".
+     *
+     * ### Every torn case here carries a PRE-ALLOCATED TAIL, and that is the whole test
+     *
+     * Tasks 3 and 4 pre-allocate each segment with a real zero write, so a crash mid-header leaves a
+     * *prefix* of a header followed by a kilobyte of zeroes — never a short file. Written the
+     * obvious way, with `write(header, 0, 6)` and nothing after it, every case below collapses onto
+     * the length guard [aHeaderShorterThanTheFormatAllowsIsAStop] already covers, and the named
+     * paths are not exercised at all. The two that matter are the two the fixed fields cannot
+     * distinguish from a real header on their own:
+     *
+     * - **torn after the magic** — version reads `0`, which a bare range check calls a version from
+     *   before the first one, i.e. a reader mistake, i.e. a throw;
+     * - **torn after the fixed run** — both self-description strings read empty, which a bare
+     *   comparison calls an archive of a different op/element type, i.e. a throw.
+     *
+     * A throw out of either propagates through `emitFrames` and out of the replay flow, discarding
+     * every intact frame in every earlier segment — the one thing `Bolt.replay` promises it will not
+     * do. The header's CRC trailer is what makes them stops instead.
      */
     @Test
     fun aTornOrUnwrittenSegmentHeaderStopsQuietlyWhileAForeignOneStillThrows() {
-        val unwritten = Buffer().apply { write(ByteArray(size = 128)) }
-        val short = Buffer().apply { write(byteArrayOf(0x42, 0x4F, 0x4C)) } // "BOL" — torn mid-magic
-        val tornAfterMagic = Buffer().apply {
-            write(encodeSegmentHeader(SegmentHeader(BOLT_FORMAT_VERSION, opFormat, elementType, 0L)), 0, 6)
-        }
+        val whole = encodeSegmentHeader(SegmentHeader(BOLT_FORMAT_VERSION, opFormat, elementType, 0L))
+        val unwritten = preallocated { }
+        val tornAfterMagic = preallocated { write(whole, 0, MAGIC_BYTES + 2) }
+        val tornAfterTheFixedRun = preallocated { write(whole, 0, FIXED_RUN_BYTES) }
+        val tornInsideTheSelfDescription = preallocated { write(whole, 0, whole.size - 6) }
         val foreign = Buffer().apply { write("PKZIP-ish payload, definitely not ours".encodeToByteArray()) }
 
         assertAll(
             { assertNull(readSegmentHeader(unwritten, opFormat, elementType), "a pre-allocated segment is a stop") },
-            { assertNull(readSegmentHeader(short, opFormat, elementType), "so is one torn inside its magic") },
-            { assertNull(readSegmentHeader(tornAfterMagic, opFormat, elementType), "so is one torn after it") },
+            {
+                assertNull(
+                    readSegmentHeader(tornAfterMagic, opFormat, elementType),
+                    "so is one whose magic landed and whose version did not — version 0 is damage, not a demand",
+                )
+            },
+            {
+                assertNull(
+                    readSegmentHeader(tornAfterTheFixedRun, opFormat, elementType),
+                    "so is one whose fixed fields landed and whose self-description did not — empty is not a " +
+                        "different op format, it is an unfinished write",
+                )
+            },
+            {
+                assertNull(
+                    readSegmentHeader(tornInsideTheSelfDescription, opFormat, elementType),
+                    "so is one torn INSIDE a length-prefixed string, where the length word is right and " +
+                        "the characters it counts are not",
+                )
+            },
             {
                 assertFailsWith<BoltFormatException>("a complete foreign header is a reader mistake, not a torn tail") {
                     readSegmentHeader(foreign, opFormat, elementType)
                 }
+            },
+            {
+                assertNotNull(
+                    readSegmentHeader(preallocated { write(whole) }, opFormat, elementType),
+                    "and a WHOLE header followed by the same pre-allocated tail still reads, or the above " +
+                        "would pass for a bolt that refused every segment",
+                )
+            },
+        )
+    }
+
+    /**
+     * Bytes that run out **before** the header does — a short file rather than a pre-allocated one.
+     *
+     * Two different guards catch these, and both matter. Three bytes are refused on length before a
+     * field is read at all. A header one byte short of whole clears that check easily and is caught
+     * by the bounds check that locates the CRC trailer: without it, the reader believes a
+     * self-description length word it cannot satisfy and walks straight off the end of the buffer —
+     * an `EOFException` out of `readString`, an exception type `Bolt.replay` never documented and
+     * which discards every intact frame ahead of it.
+     */
+    @Test
+    fun aHeaderShorterThanTheFormatAllowsIsAStop() {
+        val short = Buffer().apply { write(byteArrayOf(0x42, 0x4F, 0x4C)) } // "BOL" — torn mid-magic
+        val header = encodeSegmentHeader(SegmentHeader(BOLT_FORMAT_VERSION, opFormat, elementType, 0L))
+        val almost = Buffer().apply { write(header, 0, header.size - 1) }
+
+        assertAll(
+            { assertNull(readSegmentHeader(short, opFormat, elementType), "three bytes cannot be a header") },
+            { assertNull(readSegmentHeader(almost, opFormat, elementType), "nor can one a byte short of whole") },
+        )
+    }
+
+    /**
+     * A header whose bytes were corrupted after the fact is a **stop**, not a throw.
+     *
+     * Corruption anywhere in the header — the base offset, a length word, a self-description
+     * character — is indistinguishable from a write that never finished, and both are damage. The
+     * control matters as much as the mutation: without it, a `readSegmentHeader` that returned
+     * `null` unconditionally would pass.
+     */
+    @Test
+    fun aCorruptedSegmentHeaderFailsItsChecksum() {
+        val whole = encodeSegmentHeader(SegmentHeader(BOLT_FORMAT_VERSION, opFormat, elementType, 4096L))
+        val flippedOffset = whole.copyOf().also { it[BASE_OFFSET_END] = (it[BASE_OFFSET_END] + 1).toByte() }
+        val flippedTrailer = whole.copyOf().also { it[it.size - 1] = (it[it.size - 1] + 1).toByte() }
+
+        assertAll(
+            {
+                assertNull(
+                    readSegmentHeader(Buffer().apply { write(flippedOffset) }, opFormat, elementType),
+                    "a flipped bit in the base offset is caught — an offset the reader trusted would " +
+                        "misplace every frame in the segment",
+                )
+            },
+            {
+                assertNull(
+                    readSegmentHeader(Buffer().apply { write(flippedTrailer) }, opFormat, elementType),
+                    "and so is one in the trailer itself",
+                )
+            },
+            {
+                assertNotNull(
+                    readSegmentHeader(Buffer().apply { write(whole) }, opFormat, elementType),
+                    "and the uncorrupted control decodes, or the above proves nothing",
+                )
             },
         )
     }
@@ -255,20 +357,40 @@ class BoltFrameCodecTest {
      *
      * Only the reject-the-future direction is testable while [BOLT_FORMAT_VERSION] is 1 — accepting
      * an older archive needs a v2 build to assert from, and this test should grow that half then.
+     *
+     * ### A version from the future must survive a CRC it cannot possibly match
+     *
+     * The last two cases pin the **read order**, which is the one part of the header layer where the
+     * obvious arrangement is wrong. A genuine v2 archive is expected to have a *different header
+     * length* — that is what a version field buys — so a v1 reader computes its CRC over the wrong
+     * range and the trailer necessarily fails. Check the trailer first and a real v2 archive is
+     * reported as a **torn tail**: replay stops silently, the operator is told the archive is
+     * damaged, and the one diagnostic the version field exists to produce is destroyed. So the
+     * version is read *before* the CRC, from bytes that have not been vouched for yet — and
+     * [aTornOrUnwrittenSegmentHeaderStopsQuietlyWhileAForeignOneStillThrows] is what keeps that
+     * cheap: a torn pre-allocated header reads version `0`, which is not from the future, so it
+     * falls through to the trailer and is still correctly called damage.
      */
     @Test
     fun theVersionFieldIsASeamAndRejectsOnlyWhatItCannotRead() {
-        val forged = { version: Int ->
+        val sealed = { version: Int ->
+            Buffer().apply { write(encodeSegmentHeader(SegmentHeader(version, opFormat, elementType, 0L))) }
+        }
+        val versionPatched = { version: Int ->
             val bytes = encodeSegmentHeader(SegmentHeader(BOLT_FORMAT_VERSION, opFormat, elementType, 0L))
-            bytes[VERSION_OFFSET + 3] = version.toByte()
+            bytes[VERSION_OFFSET + 3] = version.toByte() // the trailer is left STALE on purpose
             Buffer().apply { write(bytes) }
         }
 
-        val current = readSegmentHeader(forged(BOLT_FORMAT_VERSION), opFormat, elementType)
+        val current = readSegmentHeader(sealed(BOLT_FORMAT_VERSION), opFormat, elementType)
         val future = assertFailsWith<BoltFormatException> {
-            readSegmentHeader(forged(BOLT_FORMAT_VERSION + 1), opFormat, elementType)
+            readSegmentHeader(sealed(BOLT_FORMAT_VERSION + 1), opFormat, elementType)
         }
-        val nonsense = assertFailsWith<BoltFormatException> { readSegmentHeader(forged(0), opFormat, elementType) }
+        val nonsense = assertFailsWith<BoltFormatException> { readSegmentHeader(sealed(0), opFormat, elementType) }
+        val futureWithABadTrailer = assertFailsWith<BoltFormatException> {
+            readSegmentHeader(versionPatched(BOLT_FORMAT_VERSION + 1), opFormat, elementType)
+        }
+        val belowFirstWithABadTrailer = readSegmentHeader(versionPatched(0), opFormat, elementType)
         val unknownFrameVersion = assertFailsWith<BoltFormatException> {
             readFrame(Buffer().apply { write(encodeFrame(RawFrame(arrivedAt, emptySet(), null, emptyList()))) }, 99)
         }
@@ -277,6 +399,20 @@ class BoltFrameCodecTest {
             { assertEquals(BOLT_FORMAT_VERSION, assertNotNull(current).formatVersion, "the current version reads") },
             { assertTrue(future.message.orEmpty().contains("version"), "a future version is refused") },
             { assertTrue(nonsense.message.orEmpty().contains("version"), "so is a version below the first one") },
+            {
+                assertTrue(
+                    futureWithABadTrailer.message.orEmpty().contains("version"),
+                    "a future version is refused BEFORE the checksum is consulted — a v2 archive whose " +
+                        "header this build cannot even measure must say 'too new', never 'torn'",
+                )
+            },
+            {
+                assertNull(
+                    belowFirstWithABadTrailer,
+                    "while below-first is checked AFTER, because 0 is what a half-written header holds — " +
+                        "damage, not a demand",
+                )
+            },
             {
                 assertTrue(
                     unknownFrameVersion.message.orEmpty().contains("99"),
@@ -340,9 +476,31 @@ class BoltFrameCodecTest {
         )
     }
 
+    /**
+     * [prefix]'s bytes followed by a segment's eagerly pre-allocated, never-written remainder.
+     *
+     * Tasks 3 and 4 mandate that remainder — a real zero write at roll time, so disk exhaustion
+     * surfaces as a catchable failure rather than a SIGBUS. Every torn-header fixture is built
+     * through here rather than as a short buffer, because a short buffer is caught by the length
+     * guard and never reaches the field checks the fixture is aimed at.
+     */
+    private fun preallocated(prefix: Buffer.() -> Unit): Buffer = Buffer().apply {
+        prefix()
+        write(ByteArray(size = PREALLOCATED_TAIL))
+    }
+
     private companion object {
         /** Byte offset of the format-version Int in a segment header: it follows the 4-byte magic. */
         const val VERSION_OFFSET = 4
+
+        /** The `BOLT` magic, in bytes. */
+        const val MAGIC_BYTES = 4
+
+        /** Magic, version, flags and base offset — everything before the self-description strings. */
+        const val FIXED_RUN_BYTES = 4 + 4 + 4 + 8
+
+        /** Index of the base offset's last byte: it is the eighth byte of the field at [FIXED_RUN_BYTES] - 8. */
+        const val BASE_OFFSET_END = FIXED_RUN_BYTES - 1
 
         /** Stand-in for a segment's eagerly pre-allocated, not-yet-written remainder. */
         const val PREALLOCATED_TAIL = 64

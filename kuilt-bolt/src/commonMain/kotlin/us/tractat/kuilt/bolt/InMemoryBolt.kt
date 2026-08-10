@@ -151,6 +151,31 @@ public class InMemoryBolt<Id : Any, V, Op : Any>(
         }
     }
 
+    /**
+     * Append a segment built from raw [bytes] — [headerBytes] of header followed by whatever frame
+     * bytes there are, intact or not — whose first frame sits at the current append cursor.
+     *
+     * **Only a damaged archive needs this, and only a test wants one.** Every path a consumer can
+     * reach writes whole frames after a whole header, so [Truncated] is unreachable through the
+     * public API of this backend — and an unreachable verdict is one nothing asserts, which is how a
+     * "stop the whole replay" decision quietly becomes a "skip to the next segment" one. The hook
+     * exists so the conformance suite can drive the other branch, the same way `capacityBytes` lets
+     * it drive an exhausted one.
+     *
+     * The header inside [bytes] is the caller's to encode: it is being asked for archives whose
+     * bytes are *wrong*, so it cannot be handed a header this class believes in. [baseOffset] is
+     * passed in rather than taken silently so the caller's idea of where its bytes land is
+     * *checked* — a fixture that quietly disagreed with the cursor would build an archive damaged in
+     * a way it did not intend, and pass for the wrong reason.
+     */
+    internal fun seedRawSegment(bytes: ByteArray, baseOffset: Long, headerBytes: Int): Unit = lock.withLock {
+        require(headerBytes in 0..bytes.size) { "headerBytes $headerBytes is not within ${bytes.size} bytes" }
+        require(baseOffset == nextOffset) { "a segment seeded at $baseOffset would not follow the cursor $nextOffset" }
+        segments += Segment(baseOffset, bytes, headerBytes)
+        usedBytes += bytes.size
+        nextOffset += bytes.size - headerBytes
+    }
+
     /** Start a new segment whose first frame sits at [offset]. Called under [lock]. */
     private fun rollSegment(offset: Long): Segment {
         val header = encodeSegmentHeader(
@@ -161,7 +186,7 @@ public class InMemoryBolt<Id : Any, V, Op : Any>(
                 baseOffset = offset,
             ),
         )
-        return Segment(baseOffset = offset, header = header).also { segments += it }
+        return Segment(offset, header, header.size).also { segments += it }
     }
 
     override fun replay(scope: ReplayScope): Flow<ReplayEvent<Op>> = flow {
@@ -196,10 +221,12 @@ public class InMemoryBolt<Id : Any, V, Op : Any>(
     ): Truncated? {
         val buffer = Buffer().apply { write(snapshot.bytes, 0, snapshot.used) }
         // The header is the AUTHORITY on where this segment's frames start, not the in-memory
-        // bookkeeping: for a file-backed backend the bytes on disk are all there is. They agree
-        // here by construction, and `check` is what keeps that from being an assumption.
+        // bookkeeping: for a file-backed backend the bytes on disk are all there is. `check`, not a
+        // Truncated, because DAMAGE to that field can no longer reach here — the header's CRC
+        // trailer rejects it as torn first — so a disagreement at this point is a bookkeeping bug in
+        // this class, which is exactly what an assertion is for.
         val header = readSegmentHeader(buffer, format.opFormat, format.elementType)
-            ?: return Truncated(snapshot.baseOffset, "segment header is unwritten or torn")
+            ?: return Truncated(snapshot.baseOffset, TruncationReason.SegmentHeader)
         check(header.baseOffset == snapshot.baseOffset) {
             "segment header says its frames start at ${header.baseOffset}, bookkeeping says ${snapshot.baseOffset}"
         }
@@ -207,7 +234,7 @@ public class InMemoryBolt<Id : Any, V, Op : Any>(
         while (buffer.size > 0) {
             val before = buffer.size
             val raw = readFrame(buffer, header.formatVersion)
-                ?: return Truncated(offset, "frame is truncated, unwritten or fails its checksum")
+                ?: return Truncated(offset, TruncationReason.Frame)
             val endOffset = offset + (before - buffer.size)
             val archived = Archived(
                 offset = offset,
@@ -230,11 +257,16 @@ public class InMemoryBolt<Id : Any, V, Op : Any>(
         is ReplayScope.InsertsAbove -> frame.insertDots.any { it.seq > floor[it.replica] }
     }
 
-    /** One segment: its header bytes, then its frames, in one growing array. */
-    private class Segment(val baseOffset: Long, header: ByteArray) {
-        private var bytes: ByteArray = header.copyOf(newSize = maxOf(header.size, INITIAL_SEGMENT_CAPACITY))
-        private var used: Int = header.size
-        private val headerBytes: Int = header.size
+    /**
+     * One segment: its header bytes, then its frames, in one growing array.
+     *
+     * [initial] is the segment's opening content and [headerBytes] how much of it is header. For an
+     * ordinary roll those are the same thing; they are separate parameters only so a damaged archive
+     * can be seeded, header plus torn remainder, in one go.
+     */
+    private class Segment(val baseOffset: Long, initial: ByteArray, private val headerBytes: Int) {
+        private var bytes: ByteArray = initial.copyOf(newSize = maxOf(initial.size, INITIAL_SEGMENT_CAPACITY))
+        private var used: Int = initial.size
 
         /** How many FRAME bytes this segment holds — the header does not count. */
         val frameBytes: Long get() = (used - headerBytes).toLong()

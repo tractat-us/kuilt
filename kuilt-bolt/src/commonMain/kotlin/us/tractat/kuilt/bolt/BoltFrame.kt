@@ -14,11 +14,14 @@ import kotlin.time.Instant
  * One element of a [Bolt.replay] stream: a frame, or the **terminal verdict** on how the stream
  * ended.
  *
- * Exactly one terminal event is emitted, last, on every replay. That is the point of the type. A
- * replay that simply stopped at a bad frame and completed normally would hand a consumer an
- * incomplete history that is indistinguishable from a complete one — and for a module whose entire
- * product is "I still hold what the live replica forgot", silently returning a short answer is the
- * one failure it cannot afford.
+ * Exactly one terminal event is emitted, last, on every replay **collected to completion** — a
+ * consumer that cuts the flow short with `take(n)` or `first()` never reaches it, which is the
+ * honest answer for one that stopped reading before the archive said how it ended.
+ *
+ * That verdict is the point of the type. A replay that simply stopped at a bad frame and completed
+ * normally would hand a consumer an incomplete history that is indistinguishable from a complete
+ * one — and for a module whose entire product is "I still hold what the live replica forgot",
+ * silently returning a short answer is the one failure it cannot afford.
  *
  * Making the verdict an element of the stream rather than a separate `verify()` call is deliberate
  * on two counts: it binds the verdict to the exact bytes this replay read (a separate call races
@@ -56,6 +59,22 @@ public data class Archived<Op>(
 public data object CleanTail : ReplayEvent<Nothing>
 
 /**
+ * Which layer of the format refused to read, in a [Truncated] verdict.
+ *
+ * An enum rather than a message string, and that is the whole point of it: "do not parse this" is a
+ * comment on a `String` and a *structure* on an enum. A consumer that wants to branch on the cause —
+ * log it, retry the segment, resume from [Truncated.atOffset] — can, without an `assertEquals`
+ * against prose that a later reword silently breaks.
+ */
+public enum class TruncationReason {
+    /** A segment's header is unwritten, torn, or fails its checksum. */
+    SegmentHeader,
+
+    /** A frame is truncated, unwritten, or fails its checksum. */
+    Frame,
+}
+
+/**
  * The replay stopped early: the archive is damaged, or was still being written, at [atOffset].
  *
  * Every frame emitted before this one is intact and complete. Nothing after [atOffset] was read —
@@ -65,9 +84,12 @@ public data object CleanTail : ReplayEvent<Nothing>
  *
  * @property atOffset the append offset replay stopped at. For a torn tail this is where the next
  *   append will land, so it is also the point to resume from once the writer catches up.
- * @property reason what stopped it, for a log line — never parse this.
+ * @property reason which layer refused to read.
  */
-public data class Truncated(public val atOffset: Long, public val reason: String) : ReplayEvent<Nothing>
+public data class Truncated(
+    public val atOffset: Long,
+    public val reason: TruncationReason,
+) : ReplayEvent<Nothing>
 
 /**
  * Just the frames, discarding the terminal verdict.
@@ -113,8 +135,17 @@ private const val INT_BYTES: Long = 4L
  */
 internal const val MINIMUM_BODY_BYTES: Int = 8 + 4 + 4 + 4
 
-/** Magic, version, flags and base offset, plus the two length words of the self-description. */
-private const val MINIMUM_HEADER_BYTES: Int = 4 + 4 + 4 + 8 + 4 + 4
+/** Magic, version, flags and base offset — the fixed-width run before the self-description. */
+private const val FIXED_HEADER_BYTES: Long = 4L + 4L + 4L + 8L
+
+/** The two length-prefixed self-description strings: op format, then element type. */
+private const val SELF_DESCRIPTION_FIELDS: Int = 2
+
+/**
+ * The fixed run, plus the two empty self-description fields, plus the CRC trailer. The smallest a
+ * header can physically be — anything shorter is a segment whose header has not landed yet.
+ */
+private const val MINIMUM_HEADER_BYTES: Long = FIXED_HEADER_BYTES + 4L + 4L + 4L
 
 /**
  * A segment's opening header: what this archive holds, and where its frames start.
@@ -155,31 +186,93 @@ internal fun Buffer.writeLengthPrefixed(text: String) {
 
 internal fun Buffer.readLengthPrefixed(): String = readString(readInt().toLong())
 
-/** Encode [header] at the start of a segment. */
-internal fun encodeSegmentHeader(header: SegmentHeader): ByteArray = Buffer().apply {
-    writeInt(MAGIC)
-    writeInt(header.formatVersion)
-    writeInt(HEADER_FLAGS)
-    writeLong(header.baseOffset)
-    writeLengthPrefixed(header.opFormat)
-    writeLengthPrefixed(header.elementType)
-}.readByteArray()
+/**
+ * Encode [header] at the start of a segment, with a CRC-32 trailer over every byte before it.
+ *
+ * The trailer is what makes a **partially written** header distinguishable from a complete one. The
+ * fields alone cannot do it: every one of them is a plausible value when zero-filled, because a
+ * segment's unwritten remainder is zeroes and a header that landed halfway is a valid prefix
+ * followed by exactly that. Version `0` and an empty op-format string are the two shapes a crash
+ * mid-header produces, and without the trailer each has to be *guessed* at — as damage or as a
+ * reader mistake — with no way to be right about both.
+ */
+internal fun encodeSegmentHeader(header: SegmentHeader): ByteArray {
+    val fields = Buffer().apply {
+        writeInt(MAGIC)
+        writeInt(header.formatVersion)
+        writeInt(HEADER_FLAGS)
+        writeLong(header.baseOffset)
+        writeLengthPrefixed(header.opFormat)
+        writeLengthPrefixed(header.elementType)
+    }.readByteArray()
+    return Buffer().apply {
+        write(fields)
+        writeInt(crc32(fields))
+    }.readByteArray()
+}
 
 /**
- * Read a segment header off the front of [source]: the header, or `null` if there is no header
- * there **yet**.
+ * Where this header's CRC trailer ends — the header's total byte count — or `null` if [source] does
+ * not hold that many bytes.
+ *
+ * Locating the trailer means trusting the two self-description length words far enough to step over
+ * them, and in a torn header those words are whatever the pre-allocated region held. So each is
+ * bounds-checked against what is actually there, and an impossible one returns `null` instead of
+ * throwing out of a `readInt` deep inside the parse.
+ *
+ * **These checks only LOCATE the CRC; they never validate the header.** A length word that survives
+ * them is plausible, not correct — the trailer is the integrity authority, and a torn header that
+ * happens to carry in-range garbage lengths still fails it.
+ */
+private fun headerByteCount(source: Buffer): Int? {
+    val peek = source.peek()
+    if (source.size < FIXED_HEADER_BYTES) return null
+    peek.skip(FIXED_HEADER_BYTES)
+    var consumed = FIXED_HEADER_BYTES
+    repeat(SELF_DESCRIPTION_FIELDS) {
+        if (source.size - consumed < INT_BYTES) return null
+        val length = peek.readInt().toLong()
+        consumed += INT_BYTES
+        if (length < 0L || length > source.size - consumed) return null
+        peek.skip(length)
+        consumed += length
+    }
+    val total = consumed + INT_BYTES
+    return if (total <= source.size && total <= Int.MAX_VALUE) total.toInt() else null
+}
+
+/**
+ * Read a segment header off the front of [source]: the header, or `null` if there is no intact
+ * header there.
  *
  * Three outcomes, and keeping them apart is the whole job.
  *
- * - `null` — a **torn or unwritten** segment: fewer bytes than a header needs, or a magic of all
- *   zeroes. Every disk-backed backend produces the second one by construction, because segments are
- *   eagerly, physically pre-allocated at roll time; a crash between allocating a segment and
- *   writing its header leaves exactly this. It is a damaged tail, so replay stops quietly.
- * - **throws [BoltFormatException]** — a *complete* header this build cannot honour: a foreign
- *   magic, a version from the future, or an archive of a different op/element type. Every one of
- *   those is a reader mistake — bytes handed to the wrong decoder — and swallowing it would report
- *   an empty archive where the true answer is "you opened the wrong file".
+ * - `null` — a **torn or unwritten** segment: fewer bytes than a header needs, a magic of all
+ *   zeroes, or a CRC that does not match. Every disk-backed backend produces these by construction,
+ *   because segments are eagerly, physically pre-allocated at roll time; a crash anywhere between
+ *   allocating a segment and finishing its header leaves exactly one of them. It is a damaged tail,
+ *   so replay stops quietly.
+ * - **throws [BoltFormatException]** — a header this build cannot honour: a foreign magic, a version
+ *   from the future, a version below the first one, or an archive of a different op/element type.
+ *   Every one of those is a reader mistake — bytes handed to the wrong decoder — and swallowing it
+ *   would report an empty archive where the true answer is "you opened the wrong file".
  * - the header, otherwise.
+ *
+ * ### The version check runs BEFORE the CRC check, and the obvious order is wrong
+ *
+ * A genuine v2 archive is expected to have a **different header length** — that is what a format
+ * version is for. A v1 reader therefore computes the CRC over the wrong range and the check fails,
+ * so putting the CRC first would report a real v2 archive as *torn*, destroying precisely the
+ * diagnostic the version field exists to give. Reading the version first costs nothing: a torn
+ * pre-allocated header carries version `0`, which is not `> BOLT_FORMAT_VERSION`, so it falls
+ * through to the CRC and is still correctly reported as damage.
+ *
+ * The below-first-version check runs *after* the CRC, for the mirror-image reason: `0` is the value
+ * a torn header has, so treating it as a reader mistake before the trailer has spoken would throw on
+ * every backend's normal crash tail.
+ *
+ * **Nothing is consumed unless a header is returned** — not on a stop and not on a throw, so a
+ * backend reading through a persistent cursor can retry the same bytes once the writer catches up.
  *
  * **Stated limit:** a foreign format whose first four bytes are all zero is read as torn rather than
  * foreign. Deliberate — a zero prefix is overwhelmingly a pre-allocated segment, and diagnosing the
@@ -191,28 +284,39 @@ internal fun readSegmentHeader(
     expectedElementType: String,
 ): SegmentHeader? {
     if (source.size < MINIMUM_HEADER_BYTES) return null
-    val magic = source.peek().readInt()
+    val prefix = source.peek()
+    val magic = prefix.readInt()
     if (magic == UNWRITTEN) return null
     if (magic != MAGIC) {
         throw BoltFormatException("not a bolt archive: magic was 0x${magic.toHexString()}")
     }
-    source.skip(INT_BYTES)
-    val version = source.readInt()
     // Reject only what cannot be understood. A LATER build must still read an EARLIER archive —
     // rejecting `!= BOLT_FORMAT_VERSION` would make v2 unable to read v1, which is the opposite of
     // what shipping a version field is for.
-    if (version > BOLT_FORMAT_VERSION || version < FIRST_FORMAT_VERSION) {
+    val version = prefix.readInt()
+    if (version > BOLT_FORMAT_VERSION) {
         throw BoltFormatException("archive format version $version, this build reads $BOLT_FORMAT_VERSION")
     }
-    source.readInt() // reserved header flags
-    val baseOffset = source.readLong()
-    val opFormat = source.readLengthPrefixed()
-    val elementType = source.readLengthPrefixed()
+    val headerBytes = headerByteCount(source) ?: return null
+    val bytes = source.peek().readByteArray(headerBytes)
+    val fieldBytes = headerBytes - INT_BYTES.toInt()
+    val stored = Buffer().apply { write(bytes, startIndex = fieldBytes) }.readInt()
+    if (stored != crc32(bytes, toIndex = fieldBytes)) return null
+    if (version < FIRST_FORMAT_VERSION) {
+        throw BoltFormatException("archive format version $version is below the first there has ever been")
+    }
+    // Past the trailer every field is proven intact, so decoding them cannot run off the end.
+    val fields = Buffer().apply { write(bytes, endIndex = fieldBytes) }
+    fields.skip(FIXED_HEADER_BYTES - Long.SIZE_BYTES)
+    val baseOffset = fields.readLong()
+    val opFormat = fields.readLengthPrefixed()
+    val elementType = fields.readLengthPrefixed()
     if (opFormat != expectedOpFormat || elementType != expectedElementType) {
         throw BoltFormatException(
             "archive holds $opFormat<$elementType>, reader expects $expectedOpFormat<$expectedElementType>",
         )
     }
+    source.skip(headerBytes.toLong())
     return SegmentHeader(version, opFormat, elementType, baseOffset)
 }
 

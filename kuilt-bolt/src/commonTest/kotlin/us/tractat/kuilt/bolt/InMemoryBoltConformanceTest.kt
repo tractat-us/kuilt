@@ -1,7 +1,13 @@
 package us.tractat.kuilt.bolt
 
+import kotlinx.io.Buffer
+import kotlinx.io.readByteArray
 import kotlinx.serialization.serializer
+import us.tractat.kuilt.crdt.Rga
+import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.RgaId
 import us.tractat.kuilt.crdt.RgaOp
+import kotlin.test.assertIs
 import kotlin.time.Clock
 
 /** [InMemoryBolt] against the shared [BoltConformanceSuite] — the reference backend. */
@@ -12,6 +18,9 @@ class InMemoryBoltConformanceTest : BoltConformanceSuite() {
     /** Smaller than a single segment header, so the archive is full before the first append. */
     override fun newExhaustedBolt(clock: Clock): Bolt<RgaOp<String>> =
         InMemoryBolt(BoltArchiveFormat.rga(serializer<String>()), clock, capacityBytes = 8L)
+
+    override suspend fun newTruncatedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
+        truncatedInMemoryBolt(clock, intactFrames, InMemoryBolt.DEFAULT_SEGMENT_FRAME_BYTES)
 }
 
 /**
@@ -30,4 +39,74 @@ class TinySegmentInMemoryBoltConformanceTest : BoltConformanceSuite() {
 
     override fun newExhaustedBolt(clock: Clock): Bolt<RgaOp<String>> =
         InMemoryBolt(BoltArchiveFormat.rga(serializer<String>()), clock, segmentFrameBytes = 1L, capacityBytes = 8L)
+
+    override suspend fun newTruncatedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
+        truncatedInMemoryBolt(clock, intactFrames, segmentFrameBytes = 1L)
 }
+
+/**
+ * An in-memory archive of [intactFrames] ordinary frames, then a segment whose frame is **a byte
+ * short**, then a **healthy** segment behind the damage.
+ *
+ * The intact prefix is written through [Bolt.append], so those frames are the real thing rather than
+ * bytes this fixture believes are right. Only the last two segments are seeded raw, because nothing
+ * a consumer can call produces a torn one — which is exactly why the conformance suite needs the
+ * hook.
+ *
+ * **The healthy segment after the damage is the point of the fixture.** With nothing behind the torn
+ * segment, "stop the whole replay here" and "skip to the next segment" emit identical events, and
+ * the mutation `aTruncatedArchiveStopsAtTheDamageAndSaysSo` exists to catch survives untouched. With
+ * it there, a skip replays a frame from beyond the damage and the property reddens.
+ *
+ * The damage is a truncated frame rather than a torn header so the *frame* stop path is what the
+ * suite drives; the header stop path is covered byte-for-byte in `BoltFrameCodecTest`.
+ */
+private suspend fun truncatedInMemoryBolt(
+    clock: Clock,
+    intactFrames: Int,
+    segmentFrameBytes: Long,
+): Bolt<RgaOp<String>> {
+    require(intactFrames >= 1) { "the fixture stops AFTER a frame, so it needs at least one" }
+    val format: BoltArchiveFormat<RgaId, String, RgaOp<String>> = BoltArchiveFormat.rga(serializer<String>())
+    val bolt = InMemoryBolt(format, clock, segmentFrameBytes)
+    val alice = ReplicaId("alice")
+
+    var live = Rga.empty<String>()
+    var cursor = 0L
+    repeat(intactFrames) { index ->
+        val (next, op) = live.insertAt(alice, live.size, "intact-$index")
+        live = next
+        cursor = assertIs<AppendResult.Written>(bolt.append(listOf(op)), "the intact prefix must be written").endOffset
+    }
+
+    val (afterTorn, tornOp) = live.insertAt(alice, live.size, "torn")
+    val tornFrame = encodeFrame(RawFrame(clock.now(), setOf(tornOp.id.dot), null, listOf(format.encode(tornOp))))
+    val damaged = segmentBytes(format, baseOffset = cursor) { write(tornFrame, endIndex = tornFrame.size - 1) }
+    bolt.seedRawSegment(damaged.bytes, cursor, damaged.headerBytes)
+
+    val behindTheDamage = cursor + tornFrame.size - 1
+    val (_, healthyOp) = afterTorn.insertAt(alice, afterTorn.size, "behind-the-damage")
+    val healthyFrame = encodeFrame(RawFrame(clock.now(), setOf(healthyOp.id.dot), null, listOf(format.encode(healthyOp))))
+    val healthy = segmentBytes(format, baseOffset = behindTheDamage) { write(healthyFrame) }
+    bolt.seedRawSegment(healthy.bytes, behindTheDamage, healthy.headerBytes)
+
+    return bolt
+}
+
+/** A segment's bytes: a whole header for [format] at [baseOffset], then whatever [frames] writes. */
+private fun segmentBytes(
+    format: BoltArchiveFormat<RgaId, String, RgaOp<String>>,
+    baseOffset: Long,
+    frames: Buffer.() -> Unit,
+): RawSegment {
+    val header = encodeSegmentHeader(
+        SegmentHeader(BOLT_FORMAT_VERSION, format.opFormat, format.elementType, baseOffset),
+    )
+    val bytes = Buffer().apply {
+        write(header)
+        frames()
+    }
+    return RawSegment(bytes.readByteArray(), header.size)
+}
+
+private class RawSegment(val bytes: ByteArray, val headerBytes: Int)

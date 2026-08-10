@@ -63,6 +63,23 @@ abstract class BoltConformanceSuite {
      */
     protected abstract fun newExhaustedBolt(clock: Clock): Bolt<RgaOp<String>>
 
+    /**
+     * A bolt of this backend whose archive holds exactly [intactFrames] readable frames and is then
+     * **damaged** — a crash mid-append, a pre-allocated region never written, bit-rot. Whatever a
+     * torn archive looks like for this backend, produced deterministically.
+     *
+     * Non-nullable for the same reason [newExhaustedBolt] is, and the vacuity it removes is larger:
+     * every path a *consumer* can reach on any backend writes whole frames after a whole header, so
+     * without this hook [Truncated] is never constructed by any test in the tree — the verdict, its
+     * offset, and the decision to stop the entire replay at it are all unasserted.
+     *
+     * **The damage must be followed by a HEALTHY segment** (or equivalent readable region) wherever
+     * the backend has more than one. That detail is the property's whole discriminating power: if the
+     * damaged region is last, "stop the replay" and "skip to the next region" produce identical
+     * output, and the mutation this obligation exists to catch stays green.
+     */
+    protected abstract suspend fun newTruncatedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>>
+
     private val alice = ReplicaId("alice")
     private val bob = ReplicaId("bob")
     private val epoch = Instant.fromEpochMilliseconds(1_700_000_000_000L)
@@ -418,6 +435,69 @@ abstract class BoltConformanceSuite {
         )
     }
 
+    /**
+     * The **damaged-archive** half of the verdict contract, and the one that can fail.
+     *
+     * [everyReplayEndsWithExactlyOneTerminalVerdict] drives only the [CleanTail] arm, which every
+     * backend reaches for free — so on its own it is the same vacuity property 6 had before the
+     * exhaustion hook: the branch that discriminates is never taken. This drives the other arm.
+     *
+     * Four assertions, and each pins a decision nothing else in the tree does:
+     *
+     * 1. the verdict is [Truncated], not a clean tail — replay does not paper over damage;
+     * 2. its `atOffset` is the last intact frame's `endOffset` — it is a *resume cursor*, so a
+     *    consumer can re-read from exactly there once the writer catches up;
+     * 3. **no frame follows it**, and none from a later, healthy region either — a torn segment
+     *    stops the WHOLE replay rather than skipping ahead and handing back a history with a silent
+     *    hole in it and offsets that jump;
+     * 4. every frame before the damage survives — the intact prefix is not discarded over a bad tail.
+     *
+     * **Mutation receipt:** turning `emitFrames`' stop into a `continue` to the next segment reddens
+     * (1) and (4), because the healthy region after the damage replays and the verdict becomes
+     * [CleanTail]. Zeroing `Truncated.atOffset` reddens (2).
+     */
+    @Test
+    fun aTruncatedArchiveStopsAtTheDamageAndSaysSo() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val bolt = newTruncatedBolt(FixedClock(epoch), INTACT_FRAMES)
+
+        val events = bolt.replay(ReplayScope.All).toList()
+        val frames = events.filterIsInstance<Archived<RgaOp<String>>>()
+        val verdict = events.lastOrNull()
+
+        assertAll(
+            {
+                assertIs<Truncated>(
+                    verdict,
+                    "newTruncatedBolt must hand back a DAMAGED archive — a healthy one makes this " +
+                        "obligation vacuous, so it fails here rather than passing",
+                )
+            },
+            { assertEquals(1, events.count { it !is Archived<*> }, "exactly one terminal event, never two") },
+            {
+                assertEquals(
+                    INTACT_FRAMES,
+                    frames.size,
+                    "every frame before the damage survives — and nothing from beyond it is replayed, " +
+                        "because a torn region stops the whole replay rather than leaving a silent hole",
+                )
+            },
+            {
+                assertEquals(
+                    frames.last().endOffset,
+                    assertIs<Truncated>(verdict).atOffset,
+                    "the verdict stops at the last intact frame's end — it is a resume cursor",
+                )
+            },
+            {
+                assertEquals(
+                    frames.size,
+                    events.indexOfFirst { it !is Archived<*> },
+                    "the verdict is LAST — every event before it is a frame, and none follows it",
+                )
+            },
+        )
+    }
+
     // ── fixtures ──────────────────────────────────────────────────────────────
 
     /**
@@ -485,6 +565,9 @@ abstract class BoltConformanceSuite {
     private companion object {
         const val RECORDS = 4
         const val WINDOW_DROP = 2
+
+        /** More than one, so "stopped at the damage" is distinguishable from "stopped at the start". */
+        const val INTACT_FRAMES = 3
         val STEP = 10.seconds
     }
 }
