@@ -3,6 +3,16 @@ import SpikeKit
 
 @main
 struct SpikeApp: App {
+    init() {
+        // Auto-lock suspends the app, which freezes its coroutines and stops all console output —
+        // and a suspended app is still "alive" in the process list, with no crash and no error. On
+        // a long unattended run that is indistinguishable from the wedge #1860 is about: during
+        // this probe's own bisect, a screen lock truncated a run at n≈7,000 and read exactly like
+        // the field failure it was hunting. Holding the idle timer off removes a failure mode that
+        // fakes the bug under investigation.
+        UIApplication.shared.isIdleTimerDisabled = true
+    }
+
     var body: some Scene {
         WindowGroup { ContentView() }
     }
@@ -35,6 +45,48 @@ final class Model: ObservableObject {
     @Published var prompt = ""
 
     private let suite = ConnectivitySuite()
+    private let otelProbe = OtelStallProbe()
+
+    /// #1860 measurement. Unlike the connectivity scenarios this needs no second phone and no
+    /// human — it times `Rga.insertAfter` against the whole exporter write turn and prints the
+    /// curve. Every line goes to stdout so `devicectl --console` is the whole retrieval story;
+    /// the on-screen log is a convenience for a run started by tapping.
+    /// #2193 measurement — arms D/E/F/G decomposing what #2194's batched write turn left behind.
+    /// Same retrieval story as the #1860 probe: every line goes to stdout for `devicectl --console`.
+    func startOtelResidual() {
+        guard !running else { return }
+        self.role = "otel-residual"
+        self.running = true
+        self.rows = []
+        self.report = ""
+        self.log = "starting otel residual probe…"
+        otelProbe.startResidual(onLine: { [weak self] line in
+            print("[probe] " + line)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.log = line + "\n" + self.log
+                if line.hasPrefix("===PROBE-END===") { self.running = false }
+            }
+        })
+    }
+
+    func startOtelProbe(recover: Bool = false) {
+        guard !running else { return }
+        self.role = recover ? "otel-probe-recover" : "otel-probe"
+        self.running = true
+        self.rows = []
+        self.report = ""
+        self.log = "starting otel probe (\(self.role))…"
+        let sink: (String) -> Void = { [weak self] line in
+            print("[probe] " + line)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.log = line + "\n" + self.log
+                if line.hasPrefix("===PROBE-END===") { self.running = false }
+            }
+        }
+        if recover { otelProbe.startRecover(onLine: sink) } else { otelProbe.start(onLine: sink) }
+    }
 
     func start(role: String) {
         guard !running else { return }
@@ -123,6 +175,18 @@ struct ContentView: View {
                 Button("Join · S7 go offline") { model.start(role: "join-s7") }
                     .buttonStyle(.bordered).disabled(model.running)
             }
+            // #1860 measurement — one phone, no partner, no human at a toggle.
+            HStack(spacing: 16) {
+                Button("otel probe · grow") { model.startOtelProbe() }
+                    .buttonStyle(.bordered).disabled(model.running)
+                Button("otel probe · recover") { model.startOtelProbe(recover: true) }
+                    .buttonStyle(.bordered).disabled(model.running)
+            }
+            // #2193 measurement — the post-#2194 residual, decomposed. Also one phone, no partner.
+            HStack(spacing: 16) {
+                Button("otel probe · residual") { model.startOtelResidual() }
+                    .buttonStyle(.bordered).disabled(model.running)
+            }
             if model.running {
                 HStack(spacing: 8) { ProgressView(); Text("running \(model.role)…").font(.caption) }
             }
@@ -186,7 +250,14 @@ struct ContentView: View {
             // "host-s4" must not fall through to the full battery. `-s6`/`-s7` still need a human
             // at the Airplane Mode toggle — the launch arg only starts them.
             let args = ProcessInfo.processInfo.arguments
-            if args.contains("host-s4") { model.start(role: "host-s4") }
+            // `otel-probe-recover` must be tested BEFORE `otel-probe`: `contains` is exact-match
+            // per element, but the recover launch passes both-looking args nowhere near each
+            // other only by convention, and ordering the specific case first is the same
+            // discipline the `-s4`/`-s6` variants above already needed.
+            if args.contains("otel-residual") { model.startOtelResidual() }
+            else if args.contains("otel-probe-recover") { model.startOtelProbe(recover: true) }
+            else if args.contains("otel-probe") { model.startOtelProbe() }
+            else if args.contains("host-s4") { model.start(role: "host-s4") }
             else if args.contains("join-s4") { model.start(role: "join-s4") }
             else if args.contains("host-s6") { model.start(role: "host-s6") }
             else if args.contains("join-s6") { model.start(role: "join-s6") }
