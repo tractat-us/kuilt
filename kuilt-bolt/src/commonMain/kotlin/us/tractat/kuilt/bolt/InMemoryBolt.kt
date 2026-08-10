@@ -164,7 +164,7 @@ public class InMemoryBolt<Id : Any, V, Op : Any>(
         return Segment(baseOffset = offset, header = header).also { segments += it }
     }
 
-    override fun replay(scope: ReplayScope): Flow<Archived<Op>> = flow {
+    override fun replay(scope: ReplayScope): Flow<ReplayEvent<Op>> = flow {
         // Snapshot under the lock, decode outside it: an append that lands mid-replay either writes
         // past the captured `used` index of the same array, or reallocates and leaves the captured
         // array untouched. Either way the bytes this reader reads are already published to it by
@@ -172,24 +172,42 @@ public class InMemoryBolt<Id : Any, V, Op : Any>(
         val snapshots = lock.withLock { segments.map(Segment::snapshot) }
         for (snapshot in snapshots) {
             if (skippable(snapshot, scope)) continue
-            emitFrames(snapshot, scope)
+            // A segment that stops early stops the WHOLE replay. An append-only log is ordered, so
+            // a frame that does not validate makes everything behind it untrustworthy; carrying on
+            // to the next segment would hand back a history with a silent hole and offsets that
+            // jump, which is worse than a short answer that says it is short.
+            val stopped = emitFrames(snapshot, scope)
+            if (stopped != null) {
+                emit(stopped)
+                return@flow
+            }
         }
+        emit(CleanTail)
     }
 
     /** True if [scope] cannot possibly select a frame in [snapshot] — segment-granularity pruning. */
     private fun skippable(snapshot: SegmentSnapshot, scope: ReplayScope): Boolean =
         scope is ReplayScope.FromOffset && snapshot.baseOffset + snapshot.frameBytes <= scope.offset
 
-    private suspend fun FlowCollector<Archived<Op>>.emitFrames(
+    /** Emit [snapshot]'s in-scope frames; the [Truncated] verdict if it stopped early, else `null`. */
+    private suspend fun FlowCollector<ReplayEvent<Op>>.emitFrames(
         snapshot: SegmentSnapshot,
         scope: ReplayScope,
-    ) {
+    ): Truncated? {
         val buffer = Buffer().apply { write(snapshot.bytes, 0, snapshot.used) }
-        readSegmentHeader(buffer, format.opFormat, format.elementType)
-        var offset = snapshot.baseOffset
-        while (true) {
+        // The header is the AUTHORITY on where this segment's frames start, not the in-memory
+        // bookkeeping: for a file-backed backend the bytes on disk are all there is. They agree
+        // here by construction, and `check` is what keeps that from being an assumption.
+        val header = readSegmentHeader(buffer, format.opFormat, format.elementType)
+            ?: return Truncated(snapshot.baseOffset, "segment header is unwritten or torn")
+        check(header.baseOffset == snapshot.baseOffset) {
+            "segment header says its frames start at ${header.baseOffset}, bookkeeping says ${snapshot.baseOffset}"
+        }
+        var offset = header.baseOffset
+        while (buffer.size > 0) {
             val before = buffer.size
-            val raw = readFrame(buffer) ?: break // a torn or corrupt tail: replay what is intact
+            val raw = readFrame(buffer, header.formatVersion)
+                ?: return Truncated(offset, "frame is truncated, unwritten or fails its checksum")
             val endOffset = offset + (before - buffer.size)
             val archived = Archived(
                 offset = offset,
@@ -202,6 +220,7 @@ public class InMemoryBolt<Id : Any, V, Op : Any>(
             offset = endOffset
             if (scope.selects(archived)) emit(archived)
         }
+        return null
     }
 
     private fun ReplayScope.selects(frame: Archived<Op>): Boolean = when (this) {

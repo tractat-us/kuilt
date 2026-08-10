@@ -48,6 +48,21 @@ abstract class BoltConformanceSuite {
      */
     protected abstract fun newBolt(clock: Clock): Bolt<RgaOp<String>>
 
+    /**
+     * A bolt of this backend that is **already out of room** — a full archive, a read-only volume,
+     * a runtime with no filesystem. Whatever exhaustion means for this backend, produced
+     * deterministically.
+     *
+     * Deliberately **not nullable.** An "I cannot be exhausted" opt-out would put the vacuity this
+     * obligation exists to remove one level up, where it is harder to see: the suite would go green
+     * for a backend that never exercised the exhausted path at all. Every backend can produce one —
+     * a byte budget, a tiny file cap, or (for a runtime with no storage) its ordinary state.
+     *
+     * The obligation asserts the *precondition* too, so a backend that returns a healthy bolt here
+     * fails loudly rather than passing quietly.
+     */
+    protected abstract fun newExhaustedBolt(clock: Clock): Bolt<RgaOp<String>>
+
     private val alice = ReplicaId("alice")
     private val bob = ReplicaId("bob")
     private val epoch = Instant.fromEpochMilliseconds(1_700_000_000_000L)
@@ -62,7 +77,7 @@ abstract class BoltConformanceSuite {
 
         val one = bolt.append(first)
         val two = bolt.append(second)
-        val frames = bolt.replay(ReplayScope.All).toList()
+        val frames = bolt.replay(ReplayScope.All).frames().toList()
 
         assertAll(
             { assertIs<AppendResult.Written>(one, "a content append must be written") },
@@ -116,7 +131,7 @@ abstract class BoltConformanceSuite {
 
         bolt.append(fixture.contentOps)
         val compactAppend = bolt.append(listOf(fixture.compactOp))
-        val archived = bolt.replay(ReplayScope.All).toList().flatMap { it.ops }
+        val archived = bolt.replay(ReplayScope.All).frames().toList().flatMap { it.ops }
         val stillLive = fixture.compacted.operations().toList()
 
         assertAll(
@@ -170,7 +185,7 @@ abstract class BoltConformanceSuite {
         val dropped = inserts.take(WINDOW_DROP).map { it.id }.toSet()
         val (windowed, _) = assertNotNull(live.dropWindow(alice, dropped), "dropWindow takes a non-empty set")
         val survivingIds = windowed.operations().filterIsInstance<RgaOp.Insert<String>>().map { it.id }.toSet()
-        val archivedIds = bolt.replay(ReplayScope.All).toList()
+        val archivedIds = bolt.replay(ReplayScope.All).frames().toList()
             .flatMap { it.ops }
             .filterIsInstance<RgaOp.Insert<String>>()
             .map { it.id }
@@ -194,10 +209,10 @@ abstract class BoltConformanceSuite {
         val (_, three) = r2.mintInserts("three")
         val written = listOf(one, two, three).map { assertIs<AppendResult.Written>(bolt.append(it)) }
 
-        val fromSecond = bolt.replay(ReplayScope.FromOffset(written[0].endOffset)).toList()
-        val fromThird = bolt.replay(ReplayScope.FromOffset(written[1].endOffset)).toList()
-        val fromTail = bolt.replay(ReplayScope.FromOffset(written[2].endOffset)).toList()
-        val midFrame = bolt.replay(ReplayScope.FromOffset(written[1].offset + 1)).toList()
+        val fromSecond = bolt.replay(ReplayScope.FromOffset(written[0].endOffset)).frames().toList()
+        val fromThird = bolt.replay(ReplayScope.FromOffset(written[1].endOffset)).frames().toList()
+        val fromTail = bolt.replay(ReplayScope.FromOffset(written[2].endOffset)).frames().toList()
+        val midFrame = bolt.replay(ReplayScope.FromOffset(written[1].offset + 1)).frames().toList()
 
         assertAll(
             { assertEquals(listOf(two, three), fromSecond.map { it.ops }, "resume skips consumed frames") },
@@ -226,9 +241,9 @@ abstract class BoltConformanceSuite {
         bolt.append(middle)
         clock.advanceBy(STEP)
         bolt.append(late)
-        val inWindow = bolt.replay(ReplayScope.Arrived(epoch + STEP, epoch + STEP * 2)).toList()
-        val atStart = bolt.replay(ReplayScope.Arrived(epoch, epoch + STEP)).toList()
-        val all = bolt.replay(ReplayScope.All).toList()
+        val inWindow = bolt.replay(ReplayScope.Arrived(epoch + STEP, epoch + STEP * 2)).frames().toList()
+        val atStart = bolt.replay(ReplayScope.Arrived(epoch, epoch + STEP)).frames().toList()
+        val all = bolt.replay(ReplayScope.All).frames().toList()
 
         assertAll(
             { assertEquals(listOf(middle), inWindow.map { it.ops }, "half-open: [from, untilExclusive)") },
@@ -265,9 +280,9 @@ abstract class BoltConformanceSuite {
         bolt.append(early)
         val lateFrame = assertIs<AppendResult.Written>(bolt.append(listOf(late)))
         val removeFrame = assertIs<AppendResult.Written>(bolt.append(listOf(removal)))
-        val aboveTwo = bolt.replay(ReplayScope.InsertsAbove(VersionVector.of(mapOf(alice to 2L)))).toList()
-        val aboveNothing = bolt.replay(ReplayScope.InsertsAbove(VersionVector.EMPTY)).toList()
-        val byOffset = bolt.replay(ReplayScope.FromOffset(removeFrame.offset)).toList()
+        val aboveTwo = bolt.replay(ReplayScope.InsertsAbove(VersionVector.of(mapOf(alice to 2L)))).frames().toList()
+        val aboveNothing = bolt.replay(ReplayScope.InsertsAbove(VersionVector.EMPTY)).frames().toList()
+        val byOffset = bolt.replay(ReplayScope.FromOffset(removeFrame.offset)).frames().toList()
 
         assertAll(
             { assertEquals(listOf(listOf(late)), aboveTwo.map { it.ops }, "only the frame above the floor") },
@@ -293,9 +308,9 @@ abstract class BoltConformanceSuite {
 
         val empty = bolt.append(emptyList())
         val onlyCompaction = bolt.append(listOf(fixture.compactOp))
-        val afterBoth = bolt.replay(ReplayScope.All).toList()
+        val afterBoth = bolt.replay(ReplayScope.All).frames().toList()
         val real = bolt.append(fixture.contentOps)
-        val afterReal = bolt.replay(ReplayScope.All).toList()
+        val afterReal = bolt.replay(ReplayScope.All).frames().toList()
 
         assertAll(
             { assertIs<AppendResult.Skipped>(empty, "an empty append is a no-op") },
@@ -309,9 +324,14 @@ abstract class BoltConformanceSuite {
     // ── 6. availability() is honest ───────────────────────────────────────────
 
     /**
-     * Both branches are asserted, deliberately. A test that checked only the `Available` case would
-     * pass vacuously against a backend reporting `Unavailable` on every runtime — which is precisely
-     * the backend most likely to be wrong.
+     * The **healthy-state** half of the availability contract, and on its own it is weak: a bolt
+     * built by [newBolt] is writable on every backend in the tree, so only the `Available` branch is
+     * ever taken and the assertion it makes duplicates property 1.
+     *
+     * Said plainly because the vacuity is the point: the half that discriminates is
+     * [anExhaustedBoltReportsUnavailableAndRefusesTheAppend], which drives the *other* state. Keep
+     * them together — this one alone would go green against a bolt that reported `Available` while
+     * every append failed, which is exactly the bug the pair exists to catch.
      */
     @Test
     fun availabilityAgreesWithWhetherAnAppendIsAccepted() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
@@ -331,6 +351,70 @@ abstract class BoltConformanceSuite {
                         assertTrue(result !is AppendResult.Skipped, "content was offered, so this is not a no-op")
                 }
             },
+        )
+    }
+
+    /**
+     * The half of the availability contract that can fail: a bolt with no room must **say so** and
+     * must **refuse**, reporting the identities it could not keep.
+     *
+     * This is the obligation that catches "reports `Available` while every append fails". It is a
+     * conformance property rather than a backend test because exhaustion is where the backends
+     * differ most — a byte budget in memory, a full disk under mmap, no filesystem at all on
+     * wasm — and it is the one state where a wrong answer costs records permanently: the live
+     * replica windows them away next, so a lost append is lost from both sides.
+     */
+    @Test
+    fun anExhaustedBoltReportsUnavailableAndRefusesTheAppend() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val bolt = newExhaustedBolt(FixedClock(epoch))
+        val (_, ops) = Rga.empty<String>().mintInserts("probe")
+
+        val availability = bolt.availability()
+        val result = bolt.append(ops)
+        val archived = bolt.replay(ReplayScope.All).frames().toList()
+
+        assertAll(
+            {
+                assertIs<BoltAvailability.Unavailable>(
+                    availability,
+                    "newExhaustedBolt must hand back a bolt that reports itself unusable — returning a " +
+                        "healthy one makes this obligation vacuous, so it fails here rather than passing",
+                )
+            },
+            { assertIs<AppendResult.Failed>(result, "and it must refuse the append rather than claim a write") },
+            {
+                assertEquals(
+                    ops.map { it.id.dot }.toSet(),
+                    assertIs<AppendResult.Failed>(result).insertDots,
+                    "reporting WHICH records it lost — a tally makes every recovery unimplementable",
+                )
+            },
+            { assertTrue(archived.isEmpty(), "and leaving no partial frame behind") },
+        )
+    }
+
+    /**
+     * Every replay ends with exactly one verdict, and on an intact archive it is [CleanTail].
+     *
+     * Without this, a consumer cannot tell a complete history from one that stopped at damage — and
+     * "I still hold what the live replica forgot" is the only thing a bolt sells.
+     */
+    @Test
+    fun everyReplayEndsWithExactlyOneTerminalVerdict() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val bolt = newBolt(FixedClock(epoch))
+        val (afterFirst, first) = Rga.empty<String>().mintInserts("first")
+        val (_, second) = afterFirst.mintInserts("second")
+
+        bolt.append(first)
+        bolt.append(second)
+        val events = bolt.replay(ReplayScope.All).toList()
+        val empty = newBolt(FixedClock(epoch)).replay(ReplayScope.All).toList()
+
+        assertAll(
+            { assertEquals(CleanTail, events.lastOrNull(), "an intact archive ends clean") },
+            { assertEquals(1, events.count { it !is Archived<*> }, "exactly one terminal event, never two") },
+            { assertEquals(2, events.filterIsInstance<Archived<RgaOp<String>>>().size, "and the frames precede it") },
+            { assertEquals(listOf(CleanTail), empty, "an empty archive is a clean tail, not a silent nothing") },
         )
     }
 

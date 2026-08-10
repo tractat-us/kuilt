@@ -41,7 +41,7 @@ class InMemoryBoltTest {
 
         val result = tiny.append(ops)
         val availability = tiny.availability()
-        val archived = tiny.replay(ReplayScope.All).toList()
+        val archived = tiny.replay(ReplayScope.All).frames().toList()
 
         assertAll(
             { assertIs<AppendResult.Failed>(result, "an append that does not fit must fail, not throw") },
@@ -71,7 +71,7 @@ class InMemoryBoltTest {
 
         val first = oneBytePerSegment.append(ops)
         val second = oneBytePerSegment.append(ops.take(1))
-        val frames = oneBytePerSegment.replay(ReplayScope.All).toList()
+        val frames = oneBytePerSegment.replay(ReplayScope.All).frames().toList()
 
         assertAll(
             { assertIs<AppendResult.Written>(first, "an oversized frame is still written") },
@@ -96,7 +96,7 @@ class InMemoryBoltTest {
         val archive = bolt()
         val (live, first) = mintInserts(count = 2)
         val (_, second) = mintInserts(count = 2, from = live)
-        val flow = archive.replay(ReplayScope.All)
+        val flow = archive.replay(ReplayScope.All).frames()
 
         archive.append(first)
         val afterFirst = flow.toList()

@@ -29,8 +29,20 @@ enforced by the types, not by a comment.
 ```kotlin
 val bolt = InMemoryBolt(BoltArchiveFormat.rga(serializer<String>()), clock)
 bolt.append(opsTheReplicaJustApplied)
-bolt.replay(ReplayScope.All).collect { frame -> /* … */ }
+bolt.replay(ReplayScope.All).collect { event ->
+    when (event) {
+        is Archived -> handle(event.ops)
+        CleanTail -> /* the whole archive was intact */
+        is Truncated -> /* stopped at event.atOffset — the history is SHORT */
+    }
+}
 ```
+
+A replay always ends with exactly one verdict — `CleanTail` or `Truncated`. That is deliberate: a
+replay that just stopped at damage and completed normally would hand back an incomplete history
+indistinguishable from a complete one, and "I still hold what the live replica forgot" is the only
+thing a bolt sells. Call `.frames()` to discard the verdict when you genuinely do not need it — an
+explicit opt-out, not an oversight.
 
 ## The invariant
 
@@ -62,9 +74,15 @@ holds (which canonical op serializer, which element type). A format whose ration
 future versions of the code that wrote it" must be able to say which version wrote it.
 
 Each **frame** then carries an append offset, an arrival timestamp, the dots its inserts minted, a
-reserved key slot, a length prefix and a CRC-32.
+reserved key slot, a length prefix and a CRC-32 **covering the prefix as well as the body**.
 
-Two things about that list are easy to misread:
+Covering the prefix is load-bearing, not belt-and-braces. A disk-backed segment is eagerly,
+physically pre-allocated at roll time, so every live segment ends in a zero-filled region — and a run
+of zeroes would otherwise decode as a *valid* frame (length `0`, stored checksum `0`, and CRC-32 of
+an empty body is `0`, so it matches). Folding the prefix in makes a zero run checksum to `0x2144DF1C`,
+which no zero field can equal; a minimum body length is the second, independent guard.
+
+Three things about that list are easy to misread:
 
 - **Dots are informational; the append offset is the resume cursor.** A `Remove` mints no dot — it
   reuses its target `Insert`'s id — so scoped replay by dot range is defined over **inserts only**,
@@ -72,6 +90,9 @@ Two things about that list are easy to misread:
   `ReplayScope.FromOffset`.
 - **Arrival time is not event time.** A frame is stamped when the archive was *told* about the ops,
   which for anything that arrived by merge is arbitrarily later than when it happened.
+- **Arrival timestamps are stored to millisecond resolution.** Sub-millisecond precision on the
+  appending clock is truncated — always earlier, never rounded. A property of the format, not of any
+  one backend.
 
 ## Failure posture
 

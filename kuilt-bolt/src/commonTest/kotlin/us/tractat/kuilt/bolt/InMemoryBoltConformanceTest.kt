@@ -8,6 +8,10 @@ import kotlin.time.Clock
 class InMemoryBoltConformanceTest : BoltConformanceSuite() {
     override fun newBolt(clock: Clock): Bolt<RgaOp<String>> =
         InMemoryBolt(BoltArchiveFormat.rga(serializer<String>()), clock)
+
+    /** Smaller than a single segment header, so the archive is full before the first append. */
+    override fun newExhaustedBolt(clock: Clock): Bolt<RgaOp<String>> =
+        InMemoryBolt(BoltArchiveFormat.rga(serializer<String>()), clock, capacityBytes = 8L)
 }
 
 /**
@@ -23,4 +27,7 @@ class InMemoryBoltConformanceTest : BoltConformanceSuite() {
 class TinySegmentInMemoryBoltConformanceTest : BoltConformanceSuite() {
     override fun newBolt(clock: Clock): Bolt<RgaOp<String>> =
         InMemoryBolt(BoltArchiveFormat.rga(serializer<String>()), clock, segmentFrameBytes = 1L)
+
+    override fun newExhaustedBolt(clock: Clock): Bolt<RgaOp<String>> =
+        InMemoryBolt(BoltArchiveFormat.rga(serializer<String>()), clock, segmentFrameBytes = 1L, capacityBytes = 8L)
 }

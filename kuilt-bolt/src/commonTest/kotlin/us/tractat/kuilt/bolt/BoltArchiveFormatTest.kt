@@ -68,7 +68,7 @@ class BoltArchiveFormatTest {
 
         val content = bolt.append(listOf(first, second, removal))
         val compaction = bolt.append(listOf(compactOp))
-        val archived = bolt.replay(ReplayScope.All).toList().flatMap { it.ops }
+        val archived = bolt.replay(ReplayScope.All).frames().toList().flatMap { it.ops }
 
         assertAll(
             { assertIs<AppendResult.Written>(content, "content ops are archived") },

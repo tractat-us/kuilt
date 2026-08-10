@@ -65,13 +65,19 @@ public interface Bolt<Op> {
     public suspend fun append(ops: List<Op>): AppendResult
 
     /**
-     * A cold [Flow] of the frames in [scope], in append order.
+     * A cold [Flow] of the frames in [scope], in append order, terminated by exactly one verdict on
+     * how the stream ended — [CleanTail] or [Truncated].
      *
      * Each collection re-reads the archive, so a flow collected after a later [append] sees the
-     * later frames too. The flow completes when the archive's tail is reached; it does not wait
-     * for future appends.
+     * later frames too. The flow completes when the archive's tail is reached; it does not wait for
+     * future appends.
+     *
+     * **It never throws for damaged bytes**, because an archive is best-effort and throwing would
+     * discard every intact frame ahead of the damage. But it does not stay *silent* about them
+     * either: that is what the terminal [ReplayEvent] is for. Use [frames] to opt out of the
+     * verdict, explicitly, when you do not need to know.
      */
-    public fun replay(scope: ReplayScope): Flow<Archived<Op>>
+    public fun replay(scope: ReplayScope): Flow<ReplayEvent<Op>>
 
     /**
      * Whether this bolt can be written to on this runtime.
