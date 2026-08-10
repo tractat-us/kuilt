@@ -1,22 +1,27 @@
 package us.tractat.kuilt.crdt
 
 /**
- * How the [OpLogEngine] sees one operation, independent of the concrete op-log CRDT.
+ * How one operation is classified, independent of the concrete op-log CRDT.
  *
  * Both [RgaOp] and [FugueOp] map onto these three shapes: an [Insert] mints a new
  * id (and thus one causal [Dot]); a [Remove] tombstones an existing id and mints no
  * dot (it reuses its target insert's id); a [Compact] records the ids it garbage-
  * collected so the delivered frontier survives the trim.
+ *
+ * This is what [OpLogCrdt.classify] returns, and the distinction a *write-only archive*
+ * turns on: content ops ([Insert], [Remove]) are what an archive keeps, and [Compact] —
+ * a record of forgetting, not of content — is what it discards, so an archive can outlive
+ * the forgetting of the replica that fed it.
  */
-internal sealed interface LogOp<out Id> {
+public sealed interface LogOp<out Id> {
     /** An insert that mints [id] — contributes exactly one causal [Dot]. */
-    data class Insert<Id>(val id: Id) : LogOp<Id>
+    public data class Insert<Id>(val id: Id) : LogOp<Id>
 
     /** A tombstone of [id]. Contributes no dot (it reuses the insert's id). */
-    data class Remove<Id>(val id: Id) : LogOp<Id>
+    public data class Remove<Id>(val id: Id) : LogOp<Id>
 
     /** A compaction record carrying the [compactedIds] it garbage-collected. */
-    data class Compact<Id>(val compactedIds: Set<Id>) : LogOp<Id>
+    public data class Compact<Id>(val compactedIds: Set<Id>) : LogOp<Id>
 }
 
 /**
