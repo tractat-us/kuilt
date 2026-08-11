@@ -561,17 +561,19 @@ abstract class BoltConformanceSuite {
      * |---|---|
      * | Delete the cross-segment continuity check in `InMemoryBolt.emitFrames` | 1, 3, 4, 5 |
      * | Delete it in `MappedBolt.emitSegment` | 1, 3, 4, 5 |
-     * | Delete it in `PosixMappedBolt.emitFrames` — i.e. that backend **as shipped** | 1, 3, 4, 5 |
+     * | Delete it in `PosixMappedBolt.emitFrames` | 1, 3, 4, 5 |
      * | Report the *next* segment's `baseOffset` instead of the previous segment's end | 4 only |
-     * | Report [TruncationReason.SegmentHeader] (what both backends did, knowingly) | 5 only |
+     * | Report [TruncationReason.SegmentHeader] (what both mmap backends did, knowingly) | 5 only |
      * | Emit the verdict without stopping the replay | 1, 2, 4, 5 |
      * | **Fixture:** hand back a healthy archive (skip the `loseSegment`/`delete`) | 1, 3, 4, 5 |
      *
-     * The first three rows are the finding: all three backends replay a lost segment as a [CleanTail]
-     * with the check removed, and the third row is not hypothetical — it is `PosixMappedBolt` before
-     * this branch, measured against this fixture on `macosArm64`. Rows 4 and 5 are the single-assertion
-     * receipts that stop 4 and 5 riding on 1. The last row is the vacuity guard: the precondition fails
-     * first and loudest, so a backend that quietly returns a healthy bolt cannot go green.
+     * The first three rows are the finding: with the check gone, every backend replays a lost segment
+     * as a [CleanTail] over a history with a gap in it. Two of them are not hypothetical — the first
+     * and third rows are `InMemoryBolt` and `PosixMappedBolt` exactly as they shipped, the third
+     * measured against this fixture on `macosArm64` and `iosSimulatorArm64`. The two single-assertion
+     * rows are what stop assertions 4 and 5 riding on 1. The last row is the vacuity guard: the
+     * precondition fails first and loudest, so a backend that quietly returns a healthy bolt cannot go
+     * green.
      *
      * **The green row, and what this property cannot reach** — said plainly, because an all-red table
      * invites exactly the wrong conclusion. **Assertion 6 was green under every mutation above.** It is
