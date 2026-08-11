@@ -230,6 +230,10 @@ internal fun opCountOf(segment: Rga<LogRecord>): Int = segment.opCount
  * @param segmentOps Operations per persisted segment — the ceiling on how many bytes
  *   one [export] rewrites. Pure tuning: smaller writes less per record but keeps more
  *   keys. Defaults to [DEFAULT_LOG_SEGMENT_OPS].
+ * @param appliedOps Where the operations this exporter applies are published — see
+ *   [AppliedOpSink] for the contract, including which paths publish and which
+ *   deliberately do not. Defaults to [AppliedOpSink.Discarding]. This exporter stays
+ *   ignorant of what anything does with them.
  *
  * @sample us.tractat.kuilt.otel.sampleWarpLogRecordExporter
  */
@@ -239,6 +243,7 @@ public class WarpLogRecordExporter(
     private val maxRecords: Int = DEFAULT_MAX_LOG_RECORDS,
     private val bufferPolicy: BufferPolicy = BufferPolicy.DROP_OLDEST,
     private val segmentOps: Int = DEFAULT_LOG_SEGMENT_OPS,
+    private val appliedOps: AppliedOpSink = AppliedOpSink.Discarding,
 ) {
     init {
         require(segmentOps >= 1) { "segmentOps must be at least 1; got $segmentOps" }
@@ -1017,6 +1022,7 @@ public class WarpLogRecordExporter(
     private suspend fun exportTurn(records: List<LogRecord>, from: Int): TurnOutcome {
         var consumed = 0
         var accepted = 0
+        var applied: List<RgaOp<LogRecord>> = emptyList()
         val actions = runCatchingCancellable {
             lock.withLock {
                 val admitted = ArrayList<LogRecord>()
@@ -1056,7 +1062,7 @@ public class WarpLogRecordExporter(
                     }
                 }
                 accepted = admitted.size
-                applyTurn(admitted, evictions)
+                applied = applyTurn(admitted, evictions)
                 // Before pendingWrites(), never after: a pass rewrites `activeSegment`,
                 // and the active-segment write pendingWrites() already owes is what
                 // carries the resulting floor to disk.
@@ -1082,6 +1088,10 @@ public class WarpLogRecordExporter(
             }
             return TurnOutcome(consumed = maxOf(consumed, 1), result = failure(cause))
         }
+        // BEFORE the durable write, deliberately — see [AppliedOpSink]. A refused write then
+        // leaves a sink holding a record the store does not, which for an archive is the right
+        // way round: a superset is the product, a subset is a silent hole.
+        publishApplied(applied)
         // Nothing to write, so nothing to report: an all-dedup or all-refused turn is
         // Success with no durable write and no movement on `accepted`, exactly as the
         // single-record path's two early returns were.
@@ -1156,16 +1166,22 @@ public class WarpLogRecordExporter(
      *   record whose id the same turn is about to evict finds it still present and skips
      *   it; the loop would evict first and then re-admit. Contrived, and arguably the
      *   better answer.
+     *
+     * Returns the operations it applied — the evictions' tombstones first, then the inserts, in
+     * the order they were applied — for [publishApplied] to hand to the [AppliedOpSink]. The
+     * concatenation is per *turn*, not per record, and is noise beside the CBOR encode of the
+     * active segment the same turn performs.
      */
-    private fun applyTurn(admitted: List<LogRecord>, evictions: Int) {
-        if (evictions > 0) evictLeading(evictions)
-        if (admitted.isEmpty()) return
+    private fun applyTurn(admitted: List<LogRecord>, evictions: Int): List<RgaOp<LogRecord>> {
+        val removes = if (evictions > 0) evictLeading(evictions) else emptyList()
+        if (admitted.isEmpty()) return removes
         val (newLog, inserts) = log.insertAllAfter(replica = replica, after = tail, values = admitted)
         log = newLog
         tail = inserts.last().id
         visibleCount += inserts.size
         inserts.forEach { insert -> seenIds[insert.value.recordId] = insert.id }
         appendToActiveSegment(inserts)
+        return removes + inserts
     }
 
     /**
@@ -1181,8 +1197,13 @@ public class WarpLogRecordExporter(
      *
      * The ids are read **before** the removal, off the instance whose [Rga.sequence]
      * `removeFirst` is about to walk, so the lazy is computed once for both.
+     *
+     * Returns the tombstones it minted, so [applyTurn] can publish them. A tombstone is content —
+     * a record of a record having been *removed*, which any consumer replaying the operation
+     * stream needs to see the same removal the live replica saw. It is a compaction record, which
+     * this never mints, that says something was *forgotten*.
      */
-    private fun evictLeading(count: Int) {
+    private fun evictLeading(count: Int): List<RgaOp<LogRecord>> {
         // The leading `count` VISIBLE ids, taken off `sequence` LAZILY. [Rga.entries] would
         // build two eager Θ(N) lists here and then discard all but `count` of them — ≈0.18 ms
         // per record at [DEFAULT_MAX_LOG_RECORDS], measured on an iPhone XS (#2219). `sequence`
@@ -1216,6 +1237,21 @@ public class WarpLogRecordExporter(
         // one element still standing the first and last visible elements are distinct,
         // so `tail` is untouched; at zero there is nothing left to append after.
         if (visibleCount == 0) tail = RgaId.HEAD
+        return removes
+    }
+
+    /**
+     * Hand [ops] to [appliedOps], and swallow whatever it does about it.
+     *
+     * A sink is a side channel: it must not be able to fail an export, because a caller on the
+     * logging path cannot handle one and the record really was applied. Called with neither [lock]
+     * nor a store write in flight, and **before** the turn's durable write — see [AppliedOpSink].
+     */
+    private suspend fun publishApplied(ops: List<RgaOp<LogRecord>>) {
+        if (ops.isEmpty()) return
+        runCatchingCancellable { appliedOps.published(ops) }.onFailure { cause ->
+            logger.warn(cause) { "WarpLogRecordExporter: the applied-op sink threw; the export is unaffected" }
+        }
     }
 
     /**
@@ -1276,6 +1312,10 @@ public class WarpLogRecordExporter(
      *
      * Idempotent: merging the same [Rga] twice produces the same result.
      *
+     * **[remote]'s whole operation log is published to [AppliedOpSink]** — see that type, and
+     * `publishApplied`'s call site below, for why the merge path publishes at all and why it
+     * publishes everything rather than only what was new here.
+     *
      * **Never throws**, on the same terms as [export]: a failure in the CRDT
      * join, the dedup rebuild, the encode, or the [store] is returned as
      * [ExportResult.Failure] and reflected on [health].
@@ -1308,6 +1348,18 @@ public class WarpLogRecordExporter(
             logger.error(cause) { "WarpLogRecordExporter: buffer update failed during merge" }
             return failure(cause)
         }
+        // The whole remote log, not the part of it that was new here — see [AppliedOpSink].
+        //
+        // A merge produces NO operation stream of its own: it is a state join, so there is
+        // nothing to tee. Enumerating the remote replica's operations is therefore the only way a
+        // sink ever sees history that arrived by gossip — and gossip is how another device's
+        // records reach this one. A sink fed only by [export] holds this replica's own telemetry
+        // and none of anybody else's, which would leave the one capability an archive exists for
+        // exactly as impossible as it was before.
+        //
+        // Duplicates are the consumer's to suppress. It is the side that knows what it has kept,
+        // and this exporter deliberately does not track what any sink has seen.
+        publishApplied(remote.operations().toList())
         val result = commit(actions) { cause ->
             logger.error(cause) { "WarpLogRecordExporter: durable write failed during merge" }
         }
@@ -1339,6 +1391,12 @@ public class WarpLogRecordExporter(
      *
      * Not a CRDT delete: this replica forgets, and so does any peer that merges from it
      * afterwards, but the clear does not travel to a peer that never does.
+     *
+     * **And it does not travel to an [AppliedOpSink] either.** Nothing is published here and no
+     * sink is asked to forget anything — a consumer that kept the records is *supposed* to still
+     * have them once this returns. A clear that reached through to an archive would make the
+     * archive a mirror of this buffer, which is the one thing an archive must not be: its whole
+     * value is outliving this replica's forgetting.
      *
      * **Never throws**, on the same terms as [export]. A failed durable write returns
      * [ExportResult.Failure] and moves [ExporterHealth.failed] — the store really did reject

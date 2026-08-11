@@ -31,6 +31,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | a `seenIds` set to skip already-handled messages | `GSet` / kuilt dedup | [Dedup](#dedup) |
 | a per-line flush loop in a log/telemetry exporter — or a fix for "capturing logs is slow", "the app stalls when it logs a lot" | `WarpLogRecordExporter.export(records)` + `installLogCapture` | [Telemetry & log capture](#telemetry--log-capture) |
 | deleting a telemetry store's files to reset it, or a "clear on next launch" flag so the delete lands before recovery | `WarpTelemetry.clear()` | [Telemetry & log capture](#telemetry--log-capture) |
+| a second, longer-retention copy of a replicated log — "keep a year on the server beside an hour on the phone", "gossiped records vanish when the peer forgets them", a hand-rolled tee of what a replica applied | `BoltDecorator` + `AppliedOpSink` | [Telemetry & log capture](#telemetry--log-capture) |
 | merging several mDNS/Multipeer discovery feeds into one lobby roster | `discoveryRoster` | [Discovery](#discovery) |
 | a weighted / fair-share scheduler — "give this group 3× the share", "who runs the next quantum", a hoarder-proof round-robin | `HeddlePolicy` + `HeddleNode` | [Fair share & placement](#fair-share--placement) |
 | an entitlement / quota ledger, "reserve a slot before running then charge once", a coordination-free budget that converges across peers | `EntitlementLedger` + `HeddleNode.reserve`/`complete` | [Fair share & placement](#fair-share--placement) |
@@ -1123,4 +1124,41 @@ when (val result = telemetry.clear()) {
     is ExportResult.Success -> println("store emptied; the same instance keeps exporting")
     is ExportResult.Failure -> println("clear failed: ${result.cause}; retry converges")
 }
+```
+
+**Intent:** keep a longer history than the live replica does — "a year on the server beside an hour on the phone", "the records a peer gossiped to us disappear once that peer forgets them", an archive or audit trail of a replicated log. Don't tee what a replica applied by hand, and don't try it with a second replica of a bigger size: forgetting is contagious through a merge, so the big one shrinks to the small one on first contact.
+**Primitive:** `BoltDecorator` (`:kuilt-bolt`) fed by `WarpLogRecordExporter`'s `appliedOps` (`AppliedOpSink`, `:kuilt-otel`) — or by any other `Rga`/`Fugue` owner, since neither side knows what the other is for.
+
+**Wire the merge path or the whole thing is pointless.** `WarpLogRecordExporter` already publishes on both, and the merge one is why: a merge is a state join with no operations to tee, and gossip is how another device's records arrive. An archive fed only by local exports holds this replica's own telemetry and nobody else's.
+
+Re-merging the same peer every anti-entropy round does **not** re-archive its log — `BoltDecorator` suppresses what it has already kept, in a bounded LRU window. Size `dedupWindow` to the aggregate working set you expect to be offered (every peer's live log, plus your own export stream, since one window serves them all); below that the archive grows per round. A miss costs a duplicate operation in the archive, never a lost one.
+
+**Completeness is bounded by how often you merge, not by how much the archive holds.** A peer can only hand over what it *still has*, and a peer running its own buffer cap windows its oldest records away with no marker saying so. Merge with it more slowly than its buffer turns over and the archive is exactly as complete as your gossip schedule allowed — quietly, because a replay's truncation verdict reports damage to the *archive*, not a gap at the *source*.
+
+A `clear()` empties the replica and leaves the archive alone; that asymmetry is the entire point. A refused append is reported on `BoltDecorator.health` with the **dots** of the records it could not keep, because the live replica windows those away next — so they are lost from both sides, and a count would leave nothing to act on. That surface is bounded and conflating, so a consumer that must not lose an identity calls `BoltDecorator.publish` itself and reads its `AppendResult` rather than routing through a `Unit`-returning sink.
+
+<!-- verbatim from kuilt-otel/src/commonSamples/kotlin/us/tractat/kuilt/otel/Samples.kt#sampleArchivingExporter -->
+```kotlin
+val format = BoltArchiveFormat.rga(LogRecord.serializer())
+val bolt = InMemoryBolt(format, Clock.System)
+val archive = BoltDecorator(bolt, format)
+
+// The exporter publishes the operations it applied; the decorator archives them. Neither
+// knows the other's job, so the same decorator serves any Rga/Fugue owner.
+val exporter = WarpLogRecordExporter(
+    replica = ReplicaId("server-uuid-abc123"),
+    store = InMemoryDurableStore(),
+    appliedOps = { ops -> archive.publish(ops) },
+)
+
+// Records that arrived by GOSSIP are archived too: a merge publishes the remote log, which
+// is the only reason a server's archive ever holds a phone's records. Re-merging the same
+// peer costs nothing — the decorator suppresses what it has already kept. Merge OFTEN
+// ENOUGH, though: this only ever carries what the peer has not yet windowed away.
+exporter.merge(peersLog)
+
+// And the archive keeps them after the live replica has forgotten them.
+exporter.clear()
+val kept = bolt.replay(ReplayScope.All).frames().toList().flatMap { it.ops }
+check(kept.isNotEmpty()) { "a clear empties the replica, never the archive" }
 ```
