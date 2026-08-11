@@ -42,6 +42,7 @@ import us.tractat.kuilt.crdt.RgaOp
  * @param Id the element-identity type (`RgaId` / `FugueId`).
  * @param V the element type carried by inserts.
  * @param Op the operation type (`RgaOp<V>` / `FugueOp<V>`).
+ * @sample us.tractat.kuilt.bolt.sampleBoltArchiveFormat
  */
 @OptIn(ExperimentalSerializationApi::class)
 public class BoltArchiveFormat<Id : Any, V, Op : Any>(
