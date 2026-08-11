@@ -222,6 +222,56 @@ public class WarpSpanExporter(
         }
     }
 
+    /**
+     * Drop every span this exporter holds and persist the emptied set (#2208).
+     *
+     * Removal, not [ORSet.empty]: an `ORSet` removal **retains** `causal.context`, so the
+     * retired dots stay witnessed and a peer re-merging the pre-clear adds is dominated rather
+     * than resurrecting them. An emptied-by-reset set would re-mint dots this replica has
+     * already used, and a peer whose context already holds one would treat the *new* span as
+     * seen-and-removed — swallowing it silently.
+     *
+     * The key is rewritten rather than deleted, because the retained context is what the
+     * paragraph above rests on and it lives in those bytes.
+     *
+     * One [ORSet.removeAll], not a per-element fold. Absorbing a patch is a causal join over the
+     * whole set, so removing one element at a time pays a join per element: measured here at
+     * [DEFAULT_MAX_SPANS] that fold was quadratic and cost seconds, which is why the bulk form
+     * exists (#2245). The two are otherwise indistinguishable — same elements gone, same dots
+     * retired, same retained context, same bytes.
+     *
+     * A configured [WarpCausalClock]'s **frontier** is emptied here too, and its `seq` left
+     * alone. The frontier would otherwise name dots of spans this call just removed, so the next
+     * auto-stamped span would carry predecessors that can never resolve — links pointing at
+     * deliberately forgotten spans, which is noise rather than causality.
+     *
+     * Shares [ioMutex] with [export] and [merge] so a concurrent export cannot land a stale
+     * encoded snapshot after the clear.
+     */
+    public suspend fun clear(): ExportResult = ioMutex.withLock {
+        runCatchingCancellable {
+            val encoded = lock.withLock {
+                spans = spans.piece { it.removeAll(it.elements) }
+                cbor.encodeToByteArray(spanSerializer, spans)
+            }
+            // The frontier belongs to this method, not to the facade — so a caller reaching this
+            // exporter directly, rather than through WarpTelemetry.clear(), gets it too. It names
+            // dots of spans that no longer exist, and stamping the next span with predecessors
+            // that can never resolve produces links to deliberately forgotten spans.
+            // `seq` is deliberately untouched; see WarpCausalClock.clearFrontier.
+            causalClock?.clearFrontier()
+            // Clock before spans, the same order and for the same reason as export() (#1053).
+            causalClock?.persist(store)
+            store.write(STORE_KEY, encoded)
+        }.fold(
+            onSuccess = { ExportResult.Success },
+            onFailure = { cause ->
+                logger.error(cause) { "WarpSpanExporter: durable write failed during clear" }
+                ExportResult.Failure(cause)
+            },
+        )
+    }
+
     /** Must be called with [lock] held. */
     private fun maybeEvict() {
         val current = spans.elements

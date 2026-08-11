@@ -20,6 +20,14 @@ Each line finishes the moment it is written to the device — the same as traces
 metrics — and is delivered later with no duplicates. That whole journey is on
 **[Device to dashboard](observability.md)**.
 
+## Starting over with a clean slate
+
+You can throw away everything recorded so far — logs included — while the app is still
+running, with no restart and nothing to delete by hand. Logs are forgotten in a way other
+devices respect, so one you sync with later cannot hand them back. That is on
+**[Device to dashboard](observability.md#starting-over-with-a-clean-slate)**, because the
+same call clears all three kinds of note at once.
+
 ## Logs you already write
 
 Your app almost certainly writes logs already, through a logging library. You do not

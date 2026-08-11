@@ -23,7 +23,14 @@ import kotlinx.serialization.Serializable
  *   — the **sweep ledger**.
  *
  *   There is no key-enumeration API, so a segment the index simply forgets is unreachable and
- *   unsweepable forever. Moving a number here is the **commit point** of a retirement: a crash
+ *   unsweepable forever.
+ *
+ *   That constraint is why `WarpLogRecordExporter.clear` is index-driven rather than a
+ *   directory sweep, and it still binds a **consumer**: holding a `DurableStore` is not
+ *   enough to discover the segment numbers. The exporter's own index is sufficient for the
+ *   exporter's own reset, and that is the whole of what #2208 closes.
+ *
+ *   Moving a number here is the **commit point** of a retirement: a crash
  *   between that write and the delete leaves the number named, and the next start re-attempts
  *   the delete idempotently. Numbers leave this list only on an index write that follows a
  *   confirmed delete.

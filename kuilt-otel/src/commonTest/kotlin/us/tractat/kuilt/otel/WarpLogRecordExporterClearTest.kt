@@ -20,8 +20,10 @@ class WarpLogRecordExporterClearTest {
 
     private val replicaA = ReplicaId("A")
 
+    // Little-endian over a Long: Int.shr masks its operand to 5 bits, so `id shr 32` is `id shr 0`
+    // and an Int-based version would silently mirror bytes 0-3 into 4-7 rather than encode 64 bits.
     private fun recordId(id: Int): ByteString =
-        ByteString(ByteArray(8) { i -> (id shr (8 * i)).toByte() })
+        ByteString(ByteArray(8) { i -> (id.toLong() shr (8 * i)).toByte() })
 
     private fun record(id: Int) = LogRecord(
         recordId = recordId(id),

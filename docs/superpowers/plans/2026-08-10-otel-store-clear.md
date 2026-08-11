@@ -755,7 +755,13 @@ Open the PR with `part of #2208` — **not** a closing keyword; #2208 is not sat
 
 **The frontier belongs here, not at the facade.** `WarpSpanExporter.clear()` is a public method in its own right — a caller can invoke it without going through `WarpTelemetry` — and leaving the causal frontier naming dots of spans it just removed breaks the totality `inferCausalLinks` claims. Since this exporter already holds the clock, it clears it.
 
-**Background:** `ORSet` removal **retains** `causal.context`, so the retired dots stay witnessed — a peer's re-merge of the pre-clear adds is dominated rather than resurrecting. That is the span analogue of the log floor, and it is why this writes an emptied set rather than deleting the key. `ORSet` has no bulk remove; the in-tree idiom is `spans.piece { it.remove(victim) }` (see `maybeEvict`).
+**Background:** `ORSet` removal **retains** `causal.context`, so the retired dots stay witnessed — a peer's re-merge of the pre-clear adds is dominated rather than resurrecting. That is the span analogue of the log floor, and it is why this writes an emptied set rather than deleting the key.
+
+> **Corrected during execution (#2245).** This section originally read "`ORSet` has no bulk remove;
+> the in-tree idiom is `spans.piece { it.remove(victim) }`". That is **no longer true**:
+> `ORSet.removeAll(elements)` now exists and is what a clear must use. The per-element fold this
+> plan prescribed measures **quadratic** — at `DEFAULT_MAX_SPANS` it cost **5.76 s**, against
+> **2.28 ms** for `removeAll`. See Step 6, also corrected.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -930,6 +936,21 @@ Expected: PASS.
 Run it, read the number, then **delete this test** — it asserts nothing and would be a wall-clock flake in CI.
 
 Decision rule: if 2,000 spans clear in under ~200 ms on an idle box, ship the fold. Check `uptime` first — a loaded box distorts an absolute timing by orders of magnitude. If it is slower than that, **stop and escalate**: the fix is a bulk `ORSet.removeAll(elements)` in `:kuilt-crdt`, which is outside this plan's "do not modify `:kuilt-crdt`" constraint and needs a decision, not an improvisation.
+
+> **Corrected during execution.** This step was resolved by escalation, and **two things about it
+> were wrong**, both worth carrying forward into future plans:
+>
+> 1. **It gated at the wrong scale.** `DEFAULT_MAX_SPANS` is **10,000**; measuring 2,000 tests a
+>    fifth of the load the method must survive. Because the fold is quadratic, a *passing* 2,000
+>    result of ~150 ms would still have meant ~3.7 s at the real cap — the rule **fails open**.
+>    Gate at the cap the code actually faces, not at a convenient fraction of it.
+> 2. **The harness cannot reach the cap.** 10,000 exports blow `runTest`'s wall-clock ceiling
+>    (`UncompletedCoroutinesError`), so the step as written is *structurally incapable* of
+>    measuring the size that matters. Time outside `runTest` — a `runBlocking` harness in
+>    `jvmTest`.
+>
+> Measured outcome: fold **5,756 ms** at 10,000 (quadratic: ratios 2000/1000 = 3.89,
+> 4000/2000 = 3.96) → `removeAll` **2.28 ms** at load 1.43. Ship `spans.piece { it.removeAll(it.elements) }`.
 
 - [ ] **Step 7: Commit**
 

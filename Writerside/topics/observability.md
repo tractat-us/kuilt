@@ -123,6 +123,35 @@ device with a connection can carry the room's telemetry to your dashboard.
 > adapter: `:kuilt-otel-otlp` ships a ready-made `OtlpHttpEdge` that POSTs to `/v1/traces`,
 > `/v1/logs`, and `/v1/metrics`.
 
+## Starting over with a clean slate
+
+Sometimes you want to throw away everything the app has written down and start fresh — a
+tester finished a run, someone tapped "clear my data", or you simply want the next
+recording to start empty. You can do that while the app is still running:
+
+<!-- condensed from kuilt-otel/src/commonSamples/kotlin/us/tractat/kuilt/otel/Samples.kt#sampleWarpTelemetryClear -->
+
+```kotlin
+telemetry.clear()   // everything written down so far is gone
+```
+
+No restart, and nothing to hunt down on disk. The same `telemetry` keeps working
+immediately afterwards — anything recorded from here on is kept, and a later restart
+sees only that.
+
+One honest caveat, and it only matters if this device shares its data with others.
+The two halves behave differently:
+
+- **Notes and traces are forgotten in a way other devices respect.** A device you sync
+  with later cannot hand them back to you.
+- **Counts, readings, and latency summaries can only be forgotten here.** Syncing with a
+  device that still remembers them brings the old numbers back.
+
+That second one is a property of how mergeable numbers work, not something left
+unfinished: a count that any device can raise, and that everyone has to agree on without
+coordinating, can never be lowered again. On a device that doesn't share its metrics —
+which is the ordinary case — the distinction never comes up.
+
 ## Where it runs, and the honest limits
 
 It works on every platform kuilt targets — phones (Android, iOS), desktop and servers

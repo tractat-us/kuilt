@@ -5,6 +5,8 @@ package us.tractat.kuilt.otel
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.cbor.Cbor
@@ -109,10 +111,23 @@ public class WarpMetricExporter(
         otlpScaleFor(histogramPrototype.relativeAccuracy)
     }
 
-    // The lock guards all five CRDT maps. No suspend calls are made inside the locked
-    // section — CBOR encode/decode and CRDT mutations are pure (non-suspending).
-    // An explicit reentrantLock is the repo policy; limitedParallelism(1) is banned.
+    // Two-tier locking, both explicit primitives (repo policy: correctness must hold under a real
+    // multi-threaded dispatcher; limitedParallelism(1) confinement is BANNED).
+    //
+    //  - `lock` (atomicfu reentrant) guards the five CRDT maps only. No suspend call is ever made
+    //    inside it — CBOR encode/decode and CRDT mutations are pure.
+    //  - `writeMutex` (coroutine Mutex) serializes the whole *durable-write* critical section: the
+    //    mutate-and-encode and the store write form one ordered unit. Without it a mutation could
+    //    encode the whole map, suspend, and land those stale bytes after a concurrent [clear] had
+    //    already deleted the keys — resurrecting every pre-clear series on the next recover
+    //    (#2232). The same shape was closed in WarpSpanExporter by #1053 and in
+    //    WarpLogRecordExporter by #2187; this was the third exporter, and [clear] is what made it
+    //    permanent rather than self-healing.
+    //
+    // Acquisition order is `writeMutex` then `lock`, never the reverse, and `lock` is never held
+    // across a `writeMutex` acquisition — so the two cannot deadlock.
     private val lock = reentrantLock()
+    private val writeMutex = Mutex()
 
     // LinkedHashMap preserves insertion order, which drives the DROP_OLDEST/DROP_NEWEST
     // eviction policies. The *insertion* of a new key records its age; we don't update
@@ -234,6 +249,52 @@ public class WarpMetricExporter(
         lock.withLock { recovered.forEach { (k, v) -> cardinalities[k] = v } }
     }
 
+    // ── Clearing ──────────────────────────────────────────────────────────────
+
+    /**
+     * Drop every metric series this exporter holds and delete its five persisted keys (#2208).
+     *
+     * **Local-only, and it cannot be otherwise.** [GCounter] and [HyperLogLog] are monotonic
+     * join-semilattices: a merge takes the element-wise maximum, so a peer holding the
+     * pre-clear state restores it. [LWWRegister] has no "cleared" value to write. Unlike
+     * [WarpLogRecordExporter.clear] and [WarpSpanExporter.clear], which suppress the state they
+     * drop, this one only forgets it locally. On a replica that does not gossip its metrics —
+     * the case this exists for — the distinction never arises.
+     *
+     * The keys are deleted rather than rewritten empty: there is no retained context to
+     * preserve here, so deleting reclaims the bytes and [recover] treats an absent key as empty.
+     *
+     * **Never throws.** A refused delete returns [MetricExportResult.Failure]; the in-memory
+     * maps are cleared either way, so a retry converges.
+     *
+     * Holds [writeMutex] across the whole turn, so a mutation that encoded the pre-clear map
+     * cannot land its stale bytes after the deletes. Without that fence the resurrection is
+     * **permanent**: nothing rewrites a deleted key unless that metric kind is used afresh, so a
+     * restart brings back every pre-clear series (#2232).
+     */
+    public suspend fun clear(): MetricExportResult = writeMutex.withLock {
+        lock.withLock {
+            sums.clear()
+            sumsDouble.clear()
+            gauges.clear()
+            cardinalities.clear()
+            histograms.clear()
+        }
+        runCatchingCancellable {
+            store.delete(SUM_STORE_KEY)
+            store.delete(SUM_DOUBLE_STORE_KEY)
+            store.delete(GAUGE_STORE_KEY)
+            store.delete(CARDINALITY_STORE_KEY)
+            store.delete(HISTOGRAM_STORE_KEY)
+        }.fold(
+            onSuccess = { MetricExportResult.Success },
+            onFailure = { cause ->
+                logger.error(cause) { "otel.metrics: durable delete failed during clear" }
+                MetricExportResult.Failure(cause)
+            },
+        )
+    }
+
     // ── Sum (GCounter) ─────────────────────────────────────────────────────────
 
     /**
@@ -245,15 +306,16 @@ public class WarpMetricExporter(
      * idempotent. Sequential calls to [incrementSum] each *do* add to the total, which
      * is the correct cumulative semantics.
      */
-    public suspend fun incrementSum(key: MetricKey, by: Long = 1L): MetricExportResult {
-        val encoded = lock.withLock {
-            maybeEvictForNewKey(key, sums)
-            val current = sums.getOrPut(key) { GCounter.ZERO }
-            sums[key] = current.piece(current.inc(replica, by).delta)
-            encodeSums()
+    public suspend fun incrementSum(key: MetricKey, by: Long = 1L): MetricExportResult =
+        writeMutex.withLock {
+            val encoded = lock.withLock {
+                maybeEvictForNewKey(key, sums)
+                val current = sums.getOrPut(key) { GCounter.ZERO }
+                sums[key] = current.piece(current.inc(replica, by).delta)
+                encodeSums()
+            }
+            persistSums(encoded, key)
         }
-        return persistSums(encoded, key)
-    }
 
     /**
      * Merge a remote [GCounter] snapshot into this exporter's sum for [key].
@@ -261,14 +323,15 @@ public class WarpMetricExporter(
      * Idempotent: merging the same snapshot twice produces the same result.
      * Returns [MetricExportResult.Success] after the durable write.
      */
-    public suspend fun mergeSum(key: MetricKey, remote: GCounter): MetricExportResult {
-        val encoded = lock.withLock {
-            val current = sums[key] ?: GCounter.ZERO
-            sums[key] = current.piece(remote)
-            encodeSums()
+    public suspend fun mergeSum(key: MetricKey, remote: GCounter): MetricExportResult =
+        writeMutex.withLock {
+            val encoded = lock.withLock {
+                val current = sums[key] ?: GCounter.ZERO
+                sums[key] = current.piece(remote)
+                encodeSums()
+            }
+            persistSums(encoded, key)
         }
-        return persistSums(encoded, key)
-    }
 
     /** Read the current sum value for [key], or 0 if the key has never been incremented. */
     public fun sumValue(key: MetricKey): Long = lock.withLock {
@@ -288,15 +351,16 @@ public class WarpMetricExporter(
      * routes here, keeping full precision (no truncation, no fixed-point scaling).
      * Returns [MetricExportResult.Success] after the durable write.
      */
-    public suspend fun incrementSumDouble(key: MetricKey, by: Double): MetricExportResult {
-        val encoded = lock.withLock {
-            maybeEvictForNewKey(key, sumsDouble)
-            val current = sumsDouble.getOrPut(key) { GCounterDouble.ZERO }
-            sumsDouble[key] = current.piece(current.inc(replica, by).delta)
-            encodeSumsDouble()
+    public suspend fun incrementSumDouble(key: MetricKey, by: Double): MetricExportResult =
+        writeMutex.withLock {
+            val encoded = lock.withLock {
+                maybeEvictForNewKey(key, sumsDouble)
+                val current = sumsDouble.getOrPut(key) { GCounterDouble.ZERO }
+                sumsDouble[key] = current.piece(current.inc(replica, by).delta)
+                encodeSumsDouble()
+            }
+            persistSumsDouble(encoded, key)
         }
-        return persistSumsDouble(encoded, key)
-    }
 
     /**
      * Merge a remote [GCounterDouble] snapshot into this exporter's double-sum for [key].
@@ -304,14 +368,15 @@ public class WarpMetricExporter(
      * Idempotent: merging the same snapshot twice produces the same result.
      * Returns [MetricExportResult.Success] after the durable write.
      */
-    public suspend fun mergeSumDouble(key: MetricKey, remote: GCounterDouble): MetricExportResult {
-        val encoded = lock.withLock {
-            val current = sumsDouble[key] ?: GCounterDouble.ZERO
-            sumsDouble[key] = current.piece(remote)
-            encodeSumsDouble()
+    public suspend fun mergeSumDouble(key: MetricKey, remote: GCounterDouble): MetricExportResult =
+        writeMutex.withLock {
+            val encoded = lock.withLock {
+                val current = sumsDouble[key] ?: GCounterDouble.ZERO
+                sumsDouble[key] = current.piece(remote)
+                encodeSumsDouble()
+            }
+            persistSumsDouble(encoded, key)
         }
-        return persistSumsDouble(encoded, key)
-    }
 
     /** Read the current double-sum value for [key], or 0.0 if the key has never been incremented. */
     public fun doubleSumValue(key: MetricKey): Double = lock.withLock {
@@ -337,7 +402,7 @@ public class WarpMetricExporter(
         key: MetricKey,
         value: Double,
         timestamp: Long,
-    ): MetricExportResult {
+    ): MetricExportResult = writeMutex.withLock {
         val encoded = lock.withLock {
             maybeEvictForNewKey(key, gauges)
             val current = gauges.getOrPut(key) { LWWRegister.empty<Double>() }
@@ -345,7 +410,7 @@ public class WarpMetricExporter(
             gauges[key] = current.piece(write)
             encodeGauges()
         }
-        return persistGauges(encoded, key)
+        persistGauges(encoded, key)
     }
 
     /**
@@ -356,13 +421,13 @@ public class WarpMetricExporter(
     public suspend fun mergeGauge(
         key: MetricKey,
         remote: LWWRegister<Double>,
-    ): MetricExportResult {
+    ): MetricExportResult = writeMutex.withLock {
         val encoded = lock.withLock {
             val current = gauges[key] ?: LWWRegister.empty<Double>()
             gauges[key] = current.piece(remote)
             encodeGauges()
         }
-        return persistGauges(encoded, key)
+        persistGauges(encoded, key)
     }
 
     /** Read the current gauge value for [key], or `null` if no value has been set. */
@@ -386,16 +451,17 @@ public class WarpMetricExporter(
      * hash and the same register max — the estimate is unchanged. Returns
      * [MetricExportResult.Success] after the durable write.
      */
-    public suspend fun addCardinality(key: MetricKey, element: String): MetricExportResult {
-        val encoded = lock.withLock {
-            maybeEvictForNewKey(key, cardinalities)
-            val current = cardinalities.getOrPut(key) { HyperLogLog.empty() }
-            val patch = current.add(element)
-            cardinalities[key] = current.piece(patch.delta)
-            encodeCardinalities()
+    public suspend fun addCardinality(key: MetricKey, element: String): MetricExportResult =
+        writeMutex.withLock {
+            val encoded = lock.withLock {
+                maybeEvictForNewKey(key, cardinalities)
+                val current = cardinalities.getOrPut(key) { HyperLogLog.empty() }
+                val patch = current.add(element)
+                cardinalities[key] = current.piece(patch.delta)
+                encodeCardinalities()
+            }
+            persistCardinalities(encoded, key)
         }
-        return persistCardinalities(encoded, key)
-    }
 
     /**
      * Merge a remote [HyperLogLog] snapshot into this exporter's sketch for [key].
@@ -407,13 +473,13 @@ public class WarpMetricExporter(
     public suspend fun mergeCardinality(
         key: MetricKey,
         remote: HyperLogLog,
-    ): MetricExportResult {
+    ): MetricExportResult = writeMutex.withLock {
         val encoded = lock.withLock {
             val current = cardinalities[key] ?: HyperLogLog.empty()
             cardinalities[key] = current.piece(remote)
             encodeCardinalities()
         }
-        return persistCardinalities(encoded, key)
+        persistCardinalities(encoded, key)
     }
 
     /** Return the current distinct-element estimate for [key], or 0 if no elements have been added. */
@@ -440,15 +506,16 @@ public class WarpMetricExporter(
      *
      * @throws IllegalArgumentException if [value] is NaN or infinite.
      */
-    public suspend fun recordHistogram(key: MetricKey, value: Double): MetricExportResult {
-        val encoded = lock.withLock {
-            maybeEvictForNewKey(key, histograms)
-            val current = histograms.getOrPut(key) { histogramPrototype }
-            histograms[key] = current.piece(current.add(replica, value).delta)
-            encodeHistograms()
+    public suspend fun recordHistogram(key: MetricKey, value: Double): MetricExportResult =
+        writeMutex.withLock {
+            val encoded = lock.withLock {
+                maybeEvictForNewKey(key, histograms)
+                val current = histograms.getOrPut(key) { histogramPrototype }
+                histograms[key] = current.piece(current.add(replica, value).delta)
+                encodeHistograms()
+            }
+            persistHistograms(encoded, key)
         }
-        return persistHistograms(encoded, key)
-    }
 
     /**
      * Merge a remote [DDSketch] snapshot into this exporter's histogram for [key].
@@ -461,13 +528,17 @@ public class WarpMetricExporter(
      *   with a different configuration (DDSketch configs must match exactly to merge).
      */
     public suspend fun mergeHistogram(key: MetricKey, remote: DDSketch): MetricExportResult {
+        // Validation stays outside the mutex: it throws by contract, and a throwing caller has no
+        // business holding the durable-write section.
         otlpScaleFor(remote.relativeAccuracy) // reject non-OTLP-aligned sketches up front
-        val encoded = lock.withLock {
-            val current = histograms[key]
-            histograms[key] = current?.piece(remote) ?: remote
-            encodeHistograms()
+        return writeMutex.withLock {
+            val encoded = lock.withLock {
+                val current = histograms[key]
+                histograms[key] = current?.piece(remote) ?: remote
+                encodeHistograms()
+            }
+            persistHistograms(encoded, key)
         }
-        return persistHistograms(encoded, key)
     }
 
     /**

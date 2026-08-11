@@ -120,4 +120,45 @@ public class WarpTelemetry(
         metrics.recover()
         logs.recover()
     }
+
+    /**
+     * Empty every signal's buffer and its persisted state — the supported reset (#2208).
+     *
+     * Callable on a live instance: no restart, no per-platform directory delete. The same
+     * instance keeps exporting into the cleared store afterwards.
+     *
+     * **Best-effort across signals, and not atomic.** Every signal is attempted even if an
+     * earlier one failed, and the first failure is returned — unlike [WarpOtlpBridge.drain],
+     * which tolerates a partial success, because a half-cleared store is a result the caller
+     * has to see rather than one to paper over.
+     *
+     * The three signals differ in what a clear guarantees against a peer, and the difference
+     * is structural rather than an omission:
+     *
+     * - [logs] and [spans] **suppress** what they drop, so a peer holding the pre-clear ops
+     *   cannot push them back through a merge.
+     * - [metrics] can only forget **locally** — a monotonic join has no merge-safe forget, so a
+     *   merge restores the old values. See [WarpMetricExporter.clear].
+     *
+     * The causal clock's frontier is emptied and its `seq` left alone — by
+     * [WarpSpanExporter.clear], which owns the clock, so a caller reaching that exporter
+     * directly gets the same treatment. This facade adds nothing there.
+     *
+     * @sample us.tractat.kuilt.otel.sampleWarpTelemetryClear
+     */
+    public suspend fun clear(): ExportResult {
+        val logsResult = logs.clear()
+        val spansResult = spans.clear()
+        val metricsResult = metrics.clear()
+        return listOf(logsResult, spansResult, metricsResult.asExportResult())
+            .filterIsInstance<ExportResult.Failure>()
+            .firstOrNull()
+            ?: ExportResult.Success
+    }
+
+    /** Bridge the metric exporter's own result type into the one this facade reports. */
+    private fun MetricExportResult.asExportResult(): ExportResult = when (this) {
+        is MetricExportResult.Success -> ExportResult.Success
+        is MetricExportResult.Failure -> ExportResult.Failure(cause)
+    }
 }

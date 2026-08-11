@@ -30,3 +30,10 @@ Recording is only the first step. Your spans are held safely on the device, surv
 being offline, and reach your dashboard with no duplicates — even carried off a phone
 by another device that happened to be online. That whole journey is on
 **[Device to dashboard](observability.md)**.
+
+## Starting over with a clean slate
+
+You can throw away everything recorded so far — traces included — while the app is still
+running, with no restart and nothing to delete by hand. Traces are forgotten in a way
+other devices respect, so one you sync with later cannot hand them back. That is on
+**[Device to dashboard](observability.md#starting-over-with-a-clean-slate)**.
