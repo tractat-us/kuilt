@@ -130,6 +130,16 @@ class MappedBoltTest {
      * stops at the first frame that will not parse, so leaving the remnant in place would make every
      * *subsequent* append permanently unreachable: the archive would be wedged at the crash point
      * for the rest of its life. That is a far worse trade than losing bytes nobody was promised.
+     *
+     * **This fixture cannot tell the repair from a wrong one, and its partner is where that lives.**
+     * There is nothing but padding behind the torn prefix here, so "zero the torn tail" and "zero
+     * everything to the end of the segment" emit identical events — the fixture vacuity
+     * [BoltConformanceSuite.newTruncatedBolt]'s KDoc warns about, one level down. The discriminating
+     * case is [MappedBoltDamageTest.midSegmentDamageKeepsItsIntactFramesAndItsVerdictAcrossARestart],
+     * which puts CRC-valid frames behind the damage. Do not "strengthen" this test by adding one:
+     * with a committed frame behind it, it is no longer a torn tail, the repair correctly refuses,
+     * and the subject of this test — that the archive stays appendable — inverts. Two cases, two
+     * tests.
      */
     @Test
     fun aTornTailFromACrashIsClearedAtOpenSoTheArchiveStaysAppendable() = runTest(timeout = TEST_WEDGE_BACKSTOP) {

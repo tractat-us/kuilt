@@ -63,6 +63,17 @@ import java.nio.Buffer as NioBuffer
  * than inspecting the length prefix alone — bit-rot that zeroed one length word would otherwise
  * silently shorten the archive to a [CleanTail].
  *
+ * ### Three ways an archive can be short, and each is answered differently
+ *
+ * The parse stopping is not one situation, and treating it as one loses data. A **torn tail** —
+ * non-zero bytes with nothing parseable behind them — is the ordinary crash, and [repair] clears it
+ * so the archive stays appendable. A **hole** — a frame that will not parse with committed frames
+ * behind it — is not repairable at all: zeroing would destroy acknowledged records and hand their
+ * offsets out twice, so the archive goes read-only and keeps reporting the damage. And a **gap
+ * between segments** — a segment file that is missing, or truncated to a frame boundary — presents
+ * nothing to fail a checksum, and is caught only by comparing each header's absolute `baseOffset`
+ * against where the previous segment ended (see [emitSegment]).
+ *
  * ### Durability is `force()`, and synchronous versus asynchronous is one flag
  *
  * Bytes written into a mapped buffer are not durable until `msync`. [forceOnAppend] `= true` calls
