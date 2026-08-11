@@ -39,6 +39,16 @@ class BoltDecoratorTest {
     private val bob = ReplicaId("bob")
     private val epoch = Instant.fromEpochMilliseconds(1_700_000_000_000L)
 
+    /**
+     * A doubt with distinct, non-default field values, so an assertion that it reached [health]
+     * cannot pass against a decorator that forwarded a freshly constructed [DurabilityState].
+     */
+    private val degraded = DurabilityState.Degraded(
+        fromOffset = 17L,
+        toOffset = 512L,
+        reason = "the volume refused to flush: errno=5 (Input/output error)",
+    )
+
     private fun format(): BoltArchiveFormat<RgaId, String, RgaOp<String>> =
         BoltArchiveFormat.rga(serializer<String>())
 
@@ -439,6 +449,105 @@ class BoltDecoratorTest {
             )
         }
 
+    // ── Durability: the one signal that comes from BELOW the decorator ─────────
+
+    /**
+     * A backing archive that stops meeting the durability it promised shows up on [health], and
+     * clears again when it recovers.
+     *
+     * **Why this is forwarded at all**, rather than left for a consumer to read off the bolt: the
+     * wiring this module recommends is `{ ops -> publish(ops) }` into a `Unit`-returning sink, and a
+     * consumer wired that way holds the decorator and **no reference to the bolt**. A degraded
+     * archive only the bolt could report would be invisible to precisely the consumer [ArchiveHealth]
+     * exists to inform.
+     *
+     * Four assertions:
+     *
+     * 1. a healthy backend reports [DurabilityState.AsPromised] — the arm that would go green on a
+     *    hardcoded constant, and the reason 2 and 3 are here;
+     * 2. a degraded backend's state reaches [health] **whole**, offsets and reason included, rather
+     *    than being flattened to a boolean;
+     * 3. it **clears** when the backend recovers — the only property on [ArchiveHealth] that can go
+     *    back, and the one a latched signal would get wrong;
+     * 4. a publish with nothing new to archive still refreshes it. A doubt raised by an earlier
+     *    append does not stop being true because this publish carried only duplicates, and the
+     *    counters confirm nothing was written.
+     *
+     * **Mutation receipts**, measured:
+     *
+     * | Mutation | Reds |
+     * |---|---|
+     * | Drop `durability = durability` from `record`'s `copy` | **2 and 4** |
+     * | Refresh it only on [AppendResult.Written] | **4 only** |
+     *
+     * **Assertions 1 and 3 are green under both, and the reason is the same one.** Both expect
+     * [DurabilityState.AsPromised], which is exactly what a decorator that forwards *nothing* also
+     * answers — so neither can distinguish "forwarded a healthy state" from "never forwarded
+     * anything". They earn their place differently: 1 is what a hardcoded constant would satisfy and
+     * 2 would not, and 3 is the only assertion that would catch a signal that latches once degraded.
+     * Neither is load-bearing against the mutations above, and saying so is better than a table that
+     * reads as though every row were.
+     *
+     * **What this cannot reach:** the staleness the KDoc admits — a backend degrading while nothing
+     * is published leaves [health] behind, and no assertion here observes that, because there is no
+     * publish at which to observe it. [Bolt.durability] stays the authoritative answer.
+     */
+    @Test
+    fun aBackingArchiveThatStopsMeetingItsPromiseShowsUpOnHealthAndClearsAgain() =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val backing = SettableDurability(newBolt())
+            val decorator = decorate(backing)
+            val (afterFirst, first) = Rga.empty<String>().insertAt(alice, 0, "first")
+            val (_, second) = afterFirst.insertAt(alice, 1, "second")
+
+            decorator.publish(listOf(first))
+            val healthy = decorator.health.value.durability
+            backing.state = degraded
+            decorator.publish(listOf(second))
+            val afterDegrading = decorator.health.value
+            backing.state = DurabilityState.AsPromised
+            decorator.publish(listOf(second))
+            val recovered = decorator.health.value
+
+            backing.state = degraded
+            // Nothing new: `second` is already claimed, so this publish is Skipped and writes no frame.
+            decorator.publish(listOf(second))
+            val afterASkippedPublish = decorator.health.value
+
+            assertAll(
+                { assertEquals(DurabilityState.AsPromised, healthy, "a backend meeting its promise is not a doubt") },
+                {
+                    assertEquals(
+                        degraded,
+                        afterDegrading.durability,
+                        "and one that is not reaches health WHOLE — offsets and reason, not a boolean",
+                    )
+                },
+                {
+                    assertEquals(
+                        DurabilityState.AsPromised,
+                        recovered.durability,
+                        "and it clears when the backend recovers — the one property here that can go back",
+                    )
+                },
+                {
+                    assertEquals(
+                        degraded,
+                        afterASkippedPublish.durability,
+                        "a publish carrying only duplicates still refreshes it — an earlier append's doubt " +
+                            "does not stop being true because this one had nothing to add",
+                    )
+                },
+                {
+                    assertEquals(
+                        recovered.framesWritten,
+                        afterASkippedPublish.framesWritten,
+                        "and that publish really did write nothing, or the assertion above proves nothing",
+                    )
+                },
+            )
+        }
+
     // ── fixtures ──────────────────────────────────────────────────────────────
 
     /**
@@ -493,6 +602,8 @@ class BoltDecoratorTest {
         override fun replay(scope: ReplayScope): Flow<ReplayEvent<RgaOp<String>>> = backing.replay(scope)
 
         override fun availability(): BoltAvailability = backing.availability()
+
+        override fun durability(): DurabilityState = backing.durability()
     }
 
     /**
@@ -517,6 +628,8 @@ class BoltDecoratorTest {
         override fun replay(scope: ReplayScope): Flow<ReplayEvent<RgaOp<String>>> = backing.replay(scope)
 
         override fun availability(): BoltAvailability = backing.availability()
+
+        override fun durability(): DurabilityState = backing.durability()
     }
 
     /**
@@ -547,6 +660,28 @@ class BoltDecoratorTest {
         override fun replay(scope: ReplayScope): Flow<ReplayEvent<RgaOp<String>>> = backing.replay(scope)
 
         override fun availability(): BoltAvailability = backing.availability()
+
+        override fun durability(): DurabilityState = backing.durability()
+    }
+
+    /**
+     * A [Bolt] whose [durability] answer the test sets, and which archives normally otherwise.
+     *
+     * A fake that could only ever say [DurabilityState.AsPromised] would make "does the decorator
+     * forward it?" unanswerable — the assertion would hold against a decorator that forwarded
+     * nothing. Every real backend in the tree is healthy in a test, so the only way to drive the
+     * other state through the decorator is a fake that can take it.
+     */
+    private class SettableDurability(private val backing: Bolt<RgaOp<String>>) : Bolt<RgaOp<String>> {
+        var state: DurabilityState = DurabilityState.AsPromised
+
+        override suspend fun append(ops: List<RgaOp<String>>): AppendResult = backing.append(ops)
+
+        override fun replay(scope: ReplayScope): Flow<ReplayEvent<RgaOp<String>>> = backing.replay(scope)
+
+        override fun availability(): BoltAvailability = backing.availability()
+
+        override fun durability(): DurabilityState = state
     }
 
     private class FixedClock(private val at: Instant) : Clock {

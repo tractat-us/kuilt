@@ -49,6 +49,11 @@ import kotlinx.coroutines.flow.Flow
  * those records away, so a failed append loses them from *both* sides, and a count says only *that*
  * something was lost where the identities say *what*.
  *
+ * The same rule reaches one step further than the append. A backend that promised to make each
+ * record durable before returning, and then could not, has **not** lost the record — the frame is in
+ * the archive — so it keeps saying [AppendResult.Written]. What it lost is the promise, and
+ * [durability] is where that is reported rather than swallowed.
+ *
  * @param Op the operation type being archived — `RgaOp<V>` or `FugueOp<V>`.
  */
 public interface Bolt<Op> {
@@ -97,4 +102,18 @@ public interface Bolt<Op> {
      * [InMemoryBolt] is what a browser gets; see its KDoc for what that does and does not buy you.
      */
     public fun availability(): BoltAvailability
+
+    /**
+     * Whether this bolt is meeting the durability level **it** promised.
+     *
+     * A backend that promised nothing answers [DurabilityState.AsPromised] forever — see that type's
+     * KDoc for why the relative reading is the useful one, and why this is neither a shape of
+     * [AppendResult] nor a state of [availability].
+     *
+     * **Ask it, do not infer it from an append.** A flush covers a range, so the frames a failed one
+     * puts in doubt are everything since the last good flush, not the one that triggered it. This is
+     * sticky state precisely so a consumer can poll it — after a batch, before trimming its own live
+     * replica's window, on a timer — rather than having to catch the moment.
+     */
+    public fun durability(): DurabilityState
 }

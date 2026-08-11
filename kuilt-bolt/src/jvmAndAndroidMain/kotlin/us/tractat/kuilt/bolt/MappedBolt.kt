@@ -87,8 +87,14 @@ import java.nio.Buffer as NioBuffer
  * durability upgrade, not the append, and saying otherwise costs records — [AppendResult.Failed]
  * means "the ops are lost" and invites the consumer to re-feed them, which would write a second copy
  * of a record already on disk. So a `forceOnAppend` bolt whose volume refuses to flush degrades to
- * the asynchronous guarantee rather than to a lie in either direction, and this paragraph is where
- * that is admitted. Nothing in this repo's tests reaches it — a flush fails on dying hardware.
+ * the asynchronous guarantee rather than to a lie in either direction.
+ *
+ * That degradation is **reported**, not merely admitted in prose: [durability] answers
+ * [DurabilityState.Degraded] over the offsets a failed flush left in doubt, and keeps answering it.
+ * A `forceOnAppend = false` bolt promised no more than the asynchronous guarantee, so it stays
+ * [DurabilityState.AsPromised] whatever the volume does — the signal is relative to what *this*
+ * configuration offered (#2243). A real flush failure is still unreachable in this repo's tests, so
+ * the path is driven through [rigFlushFailure]; what that does and does not prove is stated there.
  *
  * **`MappedByteBuffer.force()` reports that failure as an [UncheckedIOException]**, a
  * `RuntimeException`, where `FileChannel.force(boolean)` a few lines away declares the checked
@@ -172,6 +178,18 @@ public class MappedBolt<Id : Any, V, Op : Any>(
     /** Why this archive cannot take appends, if it cannot. Set only by [recover]. */
     private var unappendable: String? = null
 
+    /** The outstanding durability doubt — what [durability] reports. Guarded by [lock]. */
+    private val ledger = DurabilityLedger()
+
+    /**
+     * Non-null to make every subsequent flush fail with this reason. **Test-only**; see
+     * [rigFlushFailure].
+     */
+    private var riggedFlushFailure: String? = null
+
+    /** How many flushes [riggedFlushFailure] has made fail. **Test-only**; see [riggedFlushFailures]. */
+    private var riggedFlushCount: Int = 0
+
     init {
         require(segmentFrameBytes > 0) { "segmentFrameBytes must be positive, was $segmentFrameBytes" }
         require(capacityBytes > 0) { "capacityBytes must be positive, was $capacityBytes" }
@@ -205,6 +223,73 @@ public class MappedBolt<Id : Any, V, Op : Any>(
             else -> BoltAvailability.Available
         }
     }
+
+    /**
+     * [DurabilityState.AsPromised] unless a [forceOnAppend] flush has failed and no later flush has
+     * re-covered the range it left in doubt.
+     *
+     * **Relative to [forceOnAppend].** With it `true` a refused `force()` is exactly the promise
+     * broken, and [DurabilityState.Degraded] names the offsets. With it `false` this bolt promised
+     * only that the operating system would flush when it chose, so nothing it does can fall short and
+     * this stays [DurabilityState.AsPromised] on a volume that would refuse a flush.
+     *
+     * **Not because no flush happens — one does.** The append path issues none, but [roll] flushes the
+     * **retiring** segment whatever this flag says, because a retired segment is read back from its
+     * file and that roll is the only point at which flushing it is guaranteed to have happened. That
+     * flush can fail on an asynchronous bolt; it is simply not *recorded*, because it was never
+     * promised. The gate therefore lives on what [flushQuietly] records, not on what it flushes — and
+     * a reader who "simplifies" it away because this paragraph once claimed no flush occurs
+     * reintroduces the defect #2243 shipped and then fixed.
+     *
+     * `force()` syncs the **whole mapping**, so the range a failure puts in doubt is every frame in
+     * that segment, and a later successful flush of the same segment clears it. A doubt carried
+     * across a segment roll is cleared only by re-flushing the segment it started in, which by then
+     * has been retired — in practice it stands until the process does.
+     */
+    override fun durability(): DurabilityState = lock.withLock { ledger.state() }
+
+    /**
+     * Make every subsequent flush fail with [reason], or `null` to stop. **Test-only.**
+     *
+     * A `force()` fails on dying hardware. There is no unprivileged, deterministic condition that
+     * makes a healthy volume refuse one — not a read-only mount (the mapping is already established),
+     * not a deleted file, not a full disk (the blocks were claimed at pre-allocation, which is the
+     * whole point of [preallocate]). So the alternative to this hook is that
+     * [DurabilityState.Degraded] is unreachable on this backend and nothing asserts it, which is the
+     * vacuity `BoltConformanceSuite`'s other fixture hooks exist to remove.
+     *
+     * It rigs the **verdict**, not the syscall: `MappedByteBuffer.force()` takes no arguments, so
+     * unlike the Apple backend there is no input to make the kernel refuse. What that costs is stated
+     * in `BoltConformanceSuite.newBoltThatCannotFlush` — the wiring from "the flush said no" to
+     * "[durability] says so" is driven end to end; "the flush really can say no" is not, on this
+     * backend, by anything.
+     *
+     * **Scoped to the durability flush, structurally.** [repair]'s tail flush passes `null`
+     * explicitly rather than reading this field, so a rigged bolt cannot report itself unappendable
+     * over a torn archive for a reason a test invented — unreachable by construction rather than by a
+     * "call it after construction" rule a future `close()`/reopen would quietly invalidate.
+     *
+     * [riggedFlushFailures] is how a test proves the rig actually fired, which on an asynchronous bolt
+     * is the difference between an assertion and a coincidence.
+     */
+    internal fun rigFlushFailure(reason: String?): Unit = lock.withLock { riggedFlushFailure = reason }
+
+    /**
+     * How many flushes the rig has made fail. **Test-only.**
+     *
+     * A conformance arm that asserts "this bolt attempted a flush, it failed, and durability still
+     * reported [DurabilityState.AsPromised]" is only saying something while the first clause is true —
+     * and on an asynchronous bolt that clause depends entirely on the fixture choosing a segment
+     * budget that rolls. That made it an *emergent* property of a literal in a test helper: change the
+     * budget, add an append, raise this backend's minimum segment size, and the arm silently reverts
+     * to asserting nothing while its mutation table still claims the row. This is what lets the suite
+     * demand it instead of hoping for it.
+     *
+     * Counts rig firings rather than flush attempts on purpose: it is dead in production (the field is
+     * always null there), and "the rigged flush failed" is the exact clause the assertion needs, where
+     * "a flush happened" is one inference away from it.
+     */
+    internal fun riggedFlushFailures(): Int = lock.withLock { riggedFlushCount }
 
     override suspend fun append(ops: List<Op>): AppendResult {
         // Classification and op encoding are pure and expensive; they happen OUTSIDE the lock.
@@ -242,9 +327,9 @@ public class MappedBolt<Id : Any, V, Op : Any>(
                 // record already on disk. Between a consumer that believes a present frame is durable
                 // when it may not be, and a consumer that duplicates every record on a failing disk,
                 // the first is the smaller harm, and best-effort is this module's stated posture.
-                // What is genuinely lost is the DURABILITY UPGRADE `forceOnAppend` promises, which is
-                // documented on that parameter rather than smuggled into a result type meaning
-                // something else. `:kuilt-bolt`'s Apple backend answers this identically (#2214) —
+                // What is genuinely lost is the DURABILITY UPGRADE `forceOnAppend` promises, and that
+                // is reported through `durability()` rather than smuggled into a result type meaning
+                // something else. `:kuilt-bolt`'s Apple backend answers this identically (#2243) —
                 // one contract across backends, deliberately.
                 if (forceOnAppend) flushQuietly(outcome.segment)
                 AppendResult.Written(offset, nextOffset, opCount, insertDots)
@@ -299,16 +384,41 @@ public class MappedBolt<Id : Any, V, Op : Any>(
      * The write operations around them — [preallocate], and [allocate]'s channel flush — keep
      * propagating, because a segment that could not be created really does fail the append.
      *
-     * The failure is not reported anywhere, which is a gap rather than a decision: [AppendResult]
-     * has no "written but not durable" shape and [BoltAvailability] is not consulted after an append.
-     * Inventing a signal on this backend alone would split a contract two backends share, so the
-     * question is #2243 rather than a local answer.
+     * **Quiet to the caller, not to the archive.** The failure is recorded on [ledger] and surfaces
+     * through [durability], because a swallowed flush failure can be the *only* notification that
+     * ever arrives: on Linux an `EIO` from `msync` may be reported once and then cleared.
+     *
+     * The range is this segment's frames in the archive's append-offset space, because `force()`
+     * syncs the whole mapping. Every call site flushes the segment holding the append cursor, so its
+     * base is that cursor minus the frames it holds — including at a roll, where the freshly written
+     * header has no frames behind it yet and the range is correctly empty.
+     *
+     * ### The LEDGER is gated on [forceOnAppend], not the flush — and they are not the same gate
+     *
+     * Two of the three call sites are already `if (forceOnAppend)`. [roll]'s flush of the **retiring**
+     * segment is deliberately not: a retired segment is read back from its file, and that roll is the
+     * only point at which flushing it is guaranteed to have happened, so an asynchronous archive
+     * flushes there too. While the failure was swallowed that asymmetry was invisible. Recording it
+     * would make it *visible and wrong*: an asynchronous bolt promised only that the operating system
+     * would flush in its own time, so a refused flush is not a promise broken — and because the doubt
+     * would cover a segment that has just been retired, no later flush could ever re-cover it, latching
+     * [DurabilityState.Degraded] for the life of the bolt on a bolt that promised nothing.
+     *
+     * So the gate belongs here, on what is *recorded*, rather than on what is flushed. Do not "tidy"
+     * this by gating the call at [roll] instead — that would stop flushing a retiring mapping, which
+     * is a durability change wearing a refactor's clothes.
      */
     private fun flushQuietly(segment: Segment) {
+        val frameBytes = segment.writePosition - headerBytes
+        val from = nextOffset - frameBytes
+        if (riggedFlushFailure != null) riggedFlushCount++
         try {
-            segment.force()
-        } catch (_: IOException) {
-            // See the KDoc: deliberately unreported until #2243 gives both backends one answer.
+            segment.force(riggedFlushFailure)
+            if (forceOnAppend) ledger.flushSucceeded(from, nextOffset)
+        } catch (failure: IOException) {
+            if (forceOnAppend) {
+                ledger.flushFailed(from, nextOffset, "could not flush ${segment.file.name}: $failure", failure)
+            }
         }
     }
 
@@ -514,7 +624,18 @@ public class MappedBolt<Id : Any, V, Op : Any>(
         val committed = bytes.lastCommittedFrameEnd(from = writePosition)
         if (committed == null) {
             segment.zeroFrom(writePosition)
-            segment.force()
+            // Not [flushQuietly]: this flush carries no frame — it is the discarding of a tail no
+            // caller was ever told about — and a failure here really does fail the open, which is
+            // what the `catch (IOException)` around [reopen] turns into [unappendable].
+            //
+            // Explicitly UNRIGGED, and passed rather than left to the field, for the reason the Apple
+            // backend passes its rig as a parameter: the rig exists to drive the durability contract,
+            // and this flush is not part of it. Reading `riggedFlushFailure` here is dead today (this
+            // runs only from `init`, before any caller can rig anything) and would come alive the
+            // moment this backend grew a `close()`/reopen the way `PosixMappedBolt` has one. A test
+            // hook that can wedge an archive is worth making unreachable by construction rather than
+            // by call ordering.
+            segment.force(riggedFailure = null)
             return true
         }
         unappendable = "segment ${segment.file.name} is damaged at offset ${baseOffset + writePosition - headerBytes}" +
@@ -713,9 +834,14 @@ public class MappedBolt<Id : Any, V, Op : Any>(
          * which is `Throwable?`, so the property is `IOException?` here and not a platform non-null.
          * Hence the elvis: it is unreachable in practice (both `UncheckedIOException` constructors
          * null-check their cause) and it is not worth a `!!` to say so.
+         *
+         * A non-null [riggedFailure] raises an `UncheckedIOException` in place of the call, which is
+         * deliberately *inside* the `try`: the translation below is the one subtlety this call site
+         * has, so a rigged failure exercises it rather than stepping around it.
          */
-        fun force() {
+        fun force(riggedFailure: String?) {
             try {
+                if (riggedFailure != null) throw UncheckedIOException(IOException(riggedFailure))
                 mapped.force()
             } catch (failure: UncheckedIOException) {
                 throw failure.cause ?: IOException("could not flush the mapped segment", failure)

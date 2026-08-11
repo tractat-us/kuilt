@@ -111,6 +111,20 @@ public class InMemoryBolt<Id : Any, V, Op : Any>(
         }
     }
 
+    /**
+     * Always [DurabilityState.AsPromised], because this backend **promises nothing**.
+     *
+     * Not a stub, and not a gap waiting for an implementation. [Bolt.durability] is relative: it
+     * reports whether a backend is meeting the level *it* offered, and this one offers no durability
+     * at all — there is no flush to fail, no volume to refuse, and on wasmJs not even a page reload
+     * to survive. Nothing it said can be broken, so nothing here can fall short of it.
+     *
+     * The absolute reading — "these bytes are not on a platter, so report degraded" — is true and
+     * useless: it would latch on every target from construction, telling a consumer only what this
+     * class's KDoc already says out loud, and drowning the one signal that means something.
+     */
+    override fun durability(): DurabilityState = DurabilityState.AsPromised
+
     /** [headerBytes] if a frame of [frameBytes] would have to start a new segment, else `0`. */
     private fun headerIfSegmentRollNeeded(frameBytes: Long): Long {
         val active = segments.lastOrNull()

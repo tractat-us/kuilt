@@ -22,7 +22,7 @@ import kotlin.time.Instant
 /**
  * The contract every [Bolt] backend must satisfy. Subclass and implement [newBolt].
  *
- * Six properties, and the second one is the reason the module exists:
+ * Seven properties, and the second one is the reason the module exists:
  *
  * 1. **Round-trip** — appended ops replay identically, in order, at contiguous offsets.
  * 2. **The firewall** — a bolt fed a `Compact` keeps the ops that `Compact` suppresses and never
@@ -32,6 +32,8 @@ import kotlin.time.Instant
  * 4. **Scoped replay** — by offset, by arrival time, and by insert dots (inserts *only*).
  * 5. **An append with no content writes no frame.**
  * 6. **[Bolt.availability] is honest** — `Available` means an append will be accepted.
+ * 7. **[Bolt.durability] is honest** — and *relative*: a backend that promised nothing is never
+ *    degraded, and one that promised to flush every record says so when it could not.
  *
  * Fixtures are built from [Rga] because it is the op-log CRDT with the harder shape: it carries a
  * `compactedBelow` floor that `Fugue` has no equivalent of, so it can forget an op with no
@@ -117,6 +119,62 @@ abstract class BoltConformanceSuite {
      * one damaged some other way — fails loudly rather than passing quietly.
      */
     protected abstract suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>>
+
+    /**
+     * A bolt of this backend whose durability operation **cannot succeed** — its `msync`, its
+     * `force`, whatever this backend flushes with — in whichever configuration this subclass is
+     * testing, together with this backend's own statement of what that configuration *promised*.
+     *
+     * ### Why this one is not simply non-nullable, when the three above are
+     *
+     * [newExhaustedBolt], [newTruncatedBolt] and [newDiscontinuousBolt] are non-nullable because an
+     * "I cannot reach this state" opt-out moves the vacuity one level up, where it is harder to see.
+     * **That reasoning does not transfer here unmodified**, and getting it wrong in either direction
+     * is worse than the hook it would produce.
+     *
+     * [Bolt.durability] is **relative**: it reports whether a backend is meeting the level *it*
+     * promised. A backend that promised nothing — an in-memory archive; a mapped one told to let the
+     * operating system flush when it likes — is [DurabilityState.AsPromised] forever, and that is not
+     * an opt-out, it is the contract being satisfied. A non-nullable hook would demand a degraded bolt
+     * from a backend for which no such bolt can correctly exist, and it would be *right* to fail. A
+     * plain nullable hook would go the other way and hand every backend the silent skip the other
+     * three obligations exist to remove.
+     *
+     * So the subclass **declares** which of three cases it is, and every one of them carries
+     * assertions:
+     *
+     * - [DurabilityFixture.Promised] — promised per-record durability, cannot deliver it, must
+     *   report [DurabilityState.Degraded];
+     * - [DurabilityFixture.PromisedNothingButFlushes] — promised nothing, **still attempts a flush**,
+     *   which is rigged to fail; must report [DurabilityState.AsPromised], and must **prove the rig
+     *   fired**;
+     * - [DurabilityFixture.PromisedNothingAndNeverFlushes] — promised nothing and issues no flush at
+     *   any configuration, so there is nothing to rig; must report [DurabilityState.AsPromised].
+     *
+     * The declaration is a claim, not a skip: an all-red table is not what makes the last two arms
+     * strong, their own assertions are.
+     *
+     * **What this cannot detect, said plainly, and what the third arm narrows.** A backend that offers
+     * a durability upgrade and declares one of the promised-nothing arms anyway is invisible here —
+     * there is no `durabilityLevel()` on [Bolt] to check the claim against, and inventing one to make
+     * a test checkable would put a knob in the contract that no consumer asked for. What the split
+     * *does* buy is that a backend which **flushes** can no longer sit in the arm that asks nothing of
+     * it: [DurabilityFixture.PromisedNothingButFlushes] makes it prove the flush happened and failed,
+     * so "records a flush it never promised" becomes a catchable bug rather than an unasserted one.
+     * The residual is narrower, not gone.
+     *
+     * ### And the configuration must be one in which the failure can occur
+     *
+     * The trap #2240 named, one level down again: a fixture that picks the configuration where the
+     * property cannot fail passes for free. Two shapes of it live here, and this suite now catches
+     * both. A subclass handing back an asynchronous bolt under [DurabilityFixture.Promised] fails the
+     * precondition below. And a subclass claiming [DurabilityFixture.PromisedNothingButFlushes] over a
+     * segment budget at which nothing ever rolls — so the only ungated flush never happens — fails its
+     * `attemptedFlushes` assertion. **That second one was a live hole in this file**, closed by the
+     * arm rather than by choosing a better literal, because the literal was never the thing under
+     * assertion.
+     */
+    protected abstract fun newBoltThatCannotFlush(clock: Clock): DurabilityFixture
 
     private val alice = ReplicaId("alice")
     private val bob = ReplicaId("bob")
@@ -754,6 +812,267 @@ abstract class BoltConformanceSuite {
         )
     }
 
+    // ── 7. durability() is honest about the promise this backend made ─────────
+
+    /**
+     * The **healthy-state** half of the durability contract, and on its own it is weak in the same
+     * way [availabilityAgreesWithWhetherAnAppendIsAccepted] is: a bolt built by [newBolt] flushes
+     * successfully on every backend in the tree, so only the [DurabilityState.AsPromised] branch is
+     * ever taken.
+     *
+     * Weak is not empty. It is the only property in this suite that reds when a backend records a
+     * *successful* flush as a failure — an inverted `msync` return test, a `catch` around a call that
+     * did not throw — and that mistake is invisible to its discriminating sibling
+     * [aBoltThatCannotFlushReportsDegradedExactlyWhenItPromisedDurability], which only needs
+     * [DurabilityState.Degraded] to appear. Keep the pair.
+     *
+     * It asks **before** any append as well as after, because sticky state is the sort that latches
+     * at construction.
+     *
+     * **Mutation receipt.** Inverting the `msync` return test in `PosixMappedBolt.syncRange` — so a
+     * flush that worked is recorded as one that did not — reds the two post-append assertions here,
+     * and is the only mutation measured on this branch that does. The **before-any-append** assertion
+     * was green under every one of them: nothing in the current code can latch a doubt at
+     * construction, and it is kept as the guard against a future implementation that does.
+     */
+    @Test
+    fun aHealthyBoltIsMeetingTheDurabilityItPromised() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val bolt = newBolt(FixedClock(epoch))
+        val (afterFirst, first) = Rga.empty<String>().mintInserts("first")
+        val (_, second) = afterFirst.mintInserts("second")
+
+        val beforeAnyAppend = bolt.durability()
+        bolt.append(first)
+        val afterOne = bolt.durability()
+        bolt.append(second)
+        val afterTwo = bolt.durability()
+
+        assertAll(
+            {
+                assertEquals(
+                    DurabilityState.AsPromised,
+                    beforeAnyAppend,
+                    "a bolt that has flushed nothing has broken no promise — sticky state must not latch " +
+                        "at construction",
+                )
+            },
+            {
+                assertEquals(
+                    DurabilityState.AsPromised,
+                    afterOne,
+                    "a flush that succeeded, or was never promised, is not a degradation",
+                )
+            },
+            { assertEquals(DurabilityState.AsPromised, afterTwo, "and it stays that way") },
+        )
+    }
+
+    /**
+     * The half of the durability contract that can fail — and the only place in this tree where a
+     * flush failure is reached at all.
+     *
+     * **The point of the whole signal is that it is relative.** So this drives both answers from one
+     * fixture: a configuration that promised per-record durability must report
+     * [DurabilityState.Degraded] when it cannot deliver it, and a configuration that promised nothing
+     * must report [DurabilityState.AsPromised] **under the identical rigged failure**. An absolute
+     * reading of durability passes the first and fails the second, which is exactly what the second
+     * arm is for. See [newBoltThatCannotFlush] for why the fixture declares its case rather than
+     * returning `null`, and what that cannot detect.
+     *
+     * Assertions, in the order they appear below, and the numbering the receipts use. The first four
+     * are shared; 5–8 are the [DurabilityFixture.Promised] arm and 9 is the other one.
+     *
+     * 1. every append is still [AppendResult.Written] — a bolt that cannot flush has **not** failed
+     *    the append, and answering [AppendResult.Failed] would invite a consumer to re-feed a record
+     *    that is already in the archive;
+     * 2. every frame replays — the records really are there, which is the whole reason this is not a
+     *    failed append;
+     * 3. the verdict is a clean tail, so nothing about the archive's *integrity* changed;
+     * 4. `durability()` is stable across two calls — it is state, not an event, so a consumer that
+     *    polls sees the same answer twice;
+     * 5. the promised arm reports [DurabilityState.Degraded] at all (the precondition, which is also
+     *    what catches a fixture handing back an asynchronous bolt);
+     * 6. its range covers the **first** append after one append — a failed flush puts the frames in
+     *    doubt from the archive's start, not just the one that triggered it;
+     * 7. it **widens** to the third append's end rather than resetting to it — the range grows with
+     *    each failure, which is what preserves a once-and-then-cleared `EIO`;
+     * 8. its `reason` is not blank — a bare "durability degraded" makes every recovery unimplementable;
+     * 9. **the flushing-but-unpromised arm proves its rig fired**, so "it flushed and was not degraded
+     *    by it" is an assertion rather than a coincidence of the fixture's segment budget;
+     * 10. and both unpromised arms report [DurabilityState.AsPromised] after the same appends.
+     *
+     * **Mutation receipts**, measured on this branch — each mutation applied alone, the verdict read
+     * out of the results XML, then reverted and the revert grep-verified:
+     *
+     * | Mutation | Reds |
+     * |---|---|
+     * | Restore the swallow in `MappedBolt.flushQuietly` | 5, 6, 7, 8 |
+     * | Restore the swallow in `PosixMappedBolt.flushQuietly` | 5, 6, 7, 8 |
+     * | Report `AppendResult.Failed` when the flush failed | 1, 6, 7 |
+     * | Invert the `msync` return test | 5, 6, 7, 8 — **and** [aHealthyBoltIsMeetingTheDurabilityItPromised] |
+     * | Record an empty range on every failure | 6, 7 |
+     * | Record a blank `reason` | 8 only |
+     * | `DurabilityLedger.flushFailed` overwrites instead of widening | **7 only, and only on some subclasses** |
+     * | Flush regardless of the durability flag — the absolute reading | **10 only** |
+     * | Record a flush the bolt never promised (`MappedBolt`'s ungated retiring-segment flush) | **10 only** |
+     * | Move the promise gate from the ledger to [roll], so an async bolt never flushes | **9 only** |
+     * | Make `durability()` an event: reading it clears the state | **4 only** |
+     * | `DurabilityLedger.flushSucceeded` clears unconditionally | **none** |
+     * | **Fixture:** hand back an un-rigged bolt under [DurabilityFixture.Promised] | 5, 6, 7, 8 |
+     * | **Fixture:** give the flushing-but-unpromised arm a budget that never rolls | **9 only** |
+     *
+     * **Two rows are the same defect from both sides, and this property shipped green against it.**
+     * `MappedBolt` flushes the retiring segment at a roll whatever `forceOnAppend` says; recording that
+     * flush latched [DurabilityState.Degraded] on a bolt that had promised nothing — permanently, since
+     * no later flush can re-cover a retired segment. Row 6 is that bug, and the property could not see
+     * it, because the asynchronous fixture used a budget at which three small appends never roll, so
+     * the rig was never reached and the arm asserted nothing at all.
+     *
+     * **The last row is why assertion 9 exists, and it is the correction to the first fix.** Choosing a
+     * rolling budget made the arm non-vacuous *by consequence* — a literal in a test helper, one edit
+     * away from silently reverting while this table still claimed the row. Assertion 9 makes the fixture
+     * **prove** the rig fired instead. Row 3 is the sharper receipt: moving the gate to [roll] is a real
+     * durability regression that still *rolls*, so an assertion on segment count would stay green, and
+     * only "a flush was attempted and failed" catches it.
+     *
+     * **Row 7 is the sharpest one, and it is #2240's thesis recurring here.** Overwriting instead of
+     * widening reds **only** on the one-frame-per-segment subclasses. At the shipped 1 MiB budget all
+     * three appends land in one segment, whose flush covers the whole segment every time, so
+     * "widen from 0" and "reset to the newest failure" compute the *same range* and the assertion
+     * cannot tell them apart. The property is genuinely vacuous in the default configuration and is
+     * saved only by the Tiny subclasses driving the other one.
+     *
+     * **The green rows, and the green assertions — said plainly, because a near-all-red table invites
+     * exactly the wrong conclusion.** Clearing unconditionally is invisible here: the fixture's flush
+     * can never succeed, so no success is ever recorded and every mutation of `flushSucceeded` is a
+     * mutation of dead code *for this test*. `DurabilityLedgerTest` is what reds it, and each mapped
+     * backend's own `aDoubtRaisedByAFailed…` test is what proves the wiring reaches it at all.
+     * Assertions **2** and **3** were green under every mutation above: they say a durability change
+     * did not disturb the archive itself, which no mutation of the durability path produces, and they
+     * are kept as the anti-regression they are rather than as discriminators.
+     *
+     * **What this property cannot reach.** It never drives *recovery*, per the above. It never drives
+     * a **real** flush failure either: no unprivileged, deterministic condition makes a healthy volume
+     * refuse one, so both mapped backends rig it — and only `PosixMappedBolt` rigs the *syscall*
+     * (handing `msync` an address the kernel refuses, so the `ENOMEM` and its `strerror` text are
+     * real); `MappedBolt` can only rig the verdict, because `force()` takes no arguments. What is
+     * driven end to end on both is the wiring from "the flush said no" to "[Bolt.durability] says so".
+     * Also unreached: a doubt raised on one backend and read back by another over the same archive
+     * (durability is per-instance, not written down), and concurrent appends racing a `durability()`
+     * poll.
+     */
+    @Test
+    fun aBoltThatCannotFlushReportsDegradedExactlyWhenItPromisedDurability() =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val fixture = newBoltThatCannotFlush(FixedClock(epoch))
+            val bolt = fixture.bolt
+            val (r1, one) = Rga.empty<String>().mintInserts("one")
+            val (r2, two) = r1.mintInserts("two")
+            val (_, three) = r2.mintInserts("three")
+
+            val first = bolt.append(one)
+            val afterFirst = bolt.durability()
+            val second = bolt.append(two)
+            val third = bolt.append(three)
+            val afterThird = bolt.durability()
+            val polledAgain = bolt.durability()
+            val events = bolt.replay(ReplayScope.All).toList()
+            val frames = events.filterIsInstance<Archived<RgaOp<String>>>()
+
+            assertAll(
+                {
+                    listOf(first, second, third).forEach {
+                        assertIs<AppendResult.Written>(
+                            it,
+                            "a bolt that cannot flush still WRITES — the frame is in the archive, so Failed " +
+                                "would have a consumer re-feed a record already there",
+                        )
+                    }
+                },
+                {
+                    assertEquals(
+                        listOf(one, two, three),
+                        frames.map { it.ops },
+                        "and every one of those frames replays, in order — the records really are there, " +
+                            "which is the whole reason this is not a failed append",
+                    )
+                },
+                { assertEquals(CleanTail, events.lastOrNull(), "a failed flush is not damage — the archive is intact") },
+                { assertEquals(afterThird, polledAgain, "durability() is STATE: polling it twice answers the same") },
+                {
+                    when (fixture) {
+                        is DurabilityFixture.Promised -> assertAll(
+                            {
+                                assertIs<DurabilityState.Degraded>(
+                                    afterFirst,
+                                    "newBoltThatCannotFlush must hand back a bolt that really cannot flush, in a " +
+                                        "configuration that promised it would — an asynchronous one promised " +
+                                        "nothing and makes this obligation vacuous, so it fails here rather " +
+                                        "than passing",
+                                )
+                            },
+                            {
+                                assertEquals(
+                                    assertIs<AppendResult.Written>(first).endOffset,
+                                    assertIs<DurabilityState.Degraded>(afterFirst).toOffset,
+                                    "the range covers what the failed flush left in doubt",
+                                )
+                            },
+                            {
+                                assertEquals(
+                                    0L to assertIs<AppendResult.Written>(third).endOffset,
+                                    assertIs<DurabilityState.Degraded>(afterThird).let { it.fromOffset to it.toOffset },
+                                    "and it WIDENS across further failures rather than resetting to the newest — " +
+                                        "everything since the last good flush is at risk, not just the frame " +
+                                        "that triggered this one",
+                                )
+                            },
+                            {
+                                assertTrue(
+                                    assertIs<DurabilityState.Degraded>(afterThird).reason.isNotBlank(),
+                                    "carrying WHY, not just that something went wrong",
+                                )
+                            },
+                        )
+
+                        is DurabilityFixture.PromisedNothingButFlushes -> assertAll(
+                            {
+                                assertTrue(
+                                    fixture.attemptedFlushes() > 0,
+                                    "this arm claims the bolt FLUSHED and was not degraded by it, so the rig " +
+                                        "must actually have fired — a fixture whose budget never rolls asserts " +
+                                        "nothing here, and would go green against a backend that records every " +
+                                        "flush it makes, promised or not",
+                                )
+                            },
+                            {
+                                assertEquals(
+                                    DurabilityState.AsPromised,
+                                    afterThird,
+                                    "a backend that promised no durability cannot fall short of it — not even " +
+                                        "when a flush it DID make failed, which is what makes this the arm an " +
+                                        "ABSOLUTE reading of durability reddens",
+                                )
+                            },
+                        )
+
+                        is DurabilityFixture.PromisedNothingAndNeverFlushes -> assertAll(
+                            {
+                                assertEquals(
+                                    DurabilityState.AsPromised,
+                                    afterFirst,
+                                    "a backend that promised no durability cannot fall short of it — not even " +
+                                        "with the flush it would have used rigged to fail, which is what makes " +
+                                        "this the arm an ABSOLUTE reading of durability reddens",
+                                )
+                            },
+                            { assertEquals(DurabilityState.AsPromised, afterThird, "and it stays that way") },
+                        )
+                    }
+                },
+            )
+        }
+
     // ── fixtures ──────────────────────────────────────────────────────────────
 
     /**
@@ -826,4 +1145,55 @@ abstract class BoltConformanceSuite {
         const val INTACT_FRAMES = 3
         val STEP = 10.seconds
     }
+}
+
+/**
+ * A bolt whose durability operation cannot succeed, and what its backend **promised** in the
+ * configuration under test — the fixture [BoltConformanceSuite.newBoltThatCannotFlush] hands back.
+ *
+ * Sealed rather than a bolt plus a boolean, so the two cannot drift apart: a subclass makes one
+ * decision, in one place, and the suite dispatches on it. Top-level rather than nested so a fixture
+ * helper outside a suite subclass can build one.
+ */
+sealed interface DurabilityFixture {
+
+    val bolt: Bolt<RgaOp<String>>
+
+    /**
+     * This configuration promised to make each record durable before [Bolt.append] returned, and the
+     * flush that would do it cannot succeed. It must report [DurabilityState.Degraded].
+     */
+    class Promised(override val bolt: Bolt<RgaOp<String>>) : DurabilityFixture
+
+    /**
+     * This configuration promised no durability, **and still attempts a flush** — which this bolt has
+     * rigged to fail. It must report [DurabilityState.AsPromised] anyway.
+     *
+     * The strongest of the three, and the only one that can catch a backend *recording* a flush it
+     * never promised. [attemptedFlushes] is what makes it an assertion rather than a coincidence: on a
+     * backend whose only ungated flush happens at a segment roll, whether the rig fires at all depends
+     * on the fixture picking a segment budget that rolls, and that is an emergent property of a
+     * literal in a test helper. The suite **demands** it fired rather than hoping, so a later change
+     * to the budget, the append count or the backend's minimum segment size reds here instead of
+     * silently reverting the arm to asserting nothing.
+     *
+     * @property attemptedFlushes how many flushes this fixture's rig has made fail, read after the
+     *   appends. Must be positive, or the arm proved nothing.
+     */
+    class PromisedNothingButFlushes(
+        override val bolt: Bolt<RgaOp<String>>,
+        val attemptedFlushes: () -> Int,
+    ) : DurabilityFixture
+
+    /**
+     * This configuration promised no durability and **issues no flush at all**, at any configuration
+     * of this backend, so there is nothing to rig. It must report [DurabilityState.AsPromised].
+     *
+     * The honest arm for a backend with no flush to speak of — [InMemoryBolt], and a mapped backend
+     * all of whose flush sites are gated on its durability flag. It still reds an *absolute* reading
+     * of durability, which is what it is for. It cannot red a "records a flush it never promised" bug,
+     * because such a backend has no site that could commit one; [PromisedNothingButFlushes] carries
+     * that half, and a backend that *does* have an ungated flush belongs there instead.
+     */
+    class PromisedNothingAndNeverFlushes(override val bolt: Bolt<RgaOp<String>>) : DurabilityFixture
 }

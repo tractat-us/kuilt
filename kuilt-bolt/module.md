@@ -22,7 +22,7 @@ enforced by the types, not by a comment.
 
 | Type | What it is |
 |------|-----------|
-| `Bolt<Op>` | The archive. `append` puts edits in, `replay` reads them back, `availability` says whether this machine can store anything at all. |
+| `Bolt<Op>` | The archive. `append` puts edits in, `replay` reads them back, `availability` says whether this machine can store anything at all, and `durability` says whether it is still keeping the promise it made about them. |
 | `BoltArchiveFormat` | How edits are classified and turned into bytes. Build one with `BoltArchiveFormat.rga(…)` or `.fugue(…)`. |
 | `InMemoryBolt` | The reference archive — real bytes, real segments, bounded memory. Available on every platform. |
 | `PosixMappedBolt` | The archive that survives a restart, on iOS and macOS: one memory-mapped file per segment in a directory you name. **Not the default on a phone** — its own docs say why at length, and the short version is that the server is its customer. |
@@ -128,3 +128,17 @@ failed `append` returns `AppendResult.Failed` rather than throwing — but it re
 the offset range** it lost, never a bare count. The live replica will window those records away
 next, so a failed append loses them from both sides; a consumer holding the identities can defer
 windowing, re-feed, or correlate the gap, and a consumer holding a tally can do none of those.
+
+There is a second, quieter failure, and it is *not* a failed append. A disk-backed archive can be
+told to push every record all the way to the disk before it answers — and the machine can refuse.
+The record is still there: whole, checksummed, readable by anything that opens the file. What was
+lost is the *promise*, so the append still says it wrote, and `durability()` is where the shortfall
+is reported.
+
+It reports **relative to what that archive promised**, which is the only reading a consumer can act
+on. An in-memory archive promised nothing, so it is never falling short. An archive told to let the
+operating system flush in its own time promised only that, so it is never falling short either. Only
+one that promised to flush per record, and then could not, says so — and it keeps saying so, over
+the whole range of records left in doubt, until a later flush covers that range. That stickiness is
+the point: on Linux a disk error from `msync` may be reported **once and then cleared**, so an
+archive that swallowed it would destroy the only notification anyone was ever going to get.

@@ -37,6 +37,9 @@ class PosixMappedBoltConformanceTest : BoltConformanceSuite() {
     override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         discontinuousPosixMappedBolt(clock, intactFrames, synchronous = true, PRE_ALLOCATED_TAIL_BYTES)
 
+    override fun newBoltThatCannotFlush(clock: Clock): DurabilityFixture =
+        unflushablePosixMappedBolt(clock, synchronous = true)
+
     @AfterTest
     fun removeArchives(): Unit = removeBoltTestDirectories()
 }
@@ -71,6 +74,14 @@ class TinySegmentPosixMappedBoltConformanceTest : BoltConformanceSuite() {
     override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         discontinuousPosixMappedBolt(clock, intactFrames, synchronous = true, NO_PRE_ALLOCATED_TAIL)
 
+    /**
+     * One frame per segment, so a durability doubt is carried across **rolls** rather than staying
+     * inside one mapping — the configuration where widening has to compose with a retiring segment's
+     * header flush, and the default 1 MiB budget never reaches.
+     */
+    override fun newBoltThatCannotFlush(clock: Clock): DurabilityFixture =
+        unflushablePosixMappedBolt(clock, synchronous = true, segmentFrameBytes = 1L)
+
     @AfterTest
     fun removeArchives(): Unit = removeBoltTestDirectories()
 }
@@ -89,12 +100,42 @@ class AsynchronousPosixMappedBoltConformanceTest : BoltConformanceSuite() {
     override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         discontinuousPosixMappedBolt(clock, intactFrames, synchronous = false, PRE_ALLOCATED_TAIL_BYTES)
 
+    override fun newBoltThatCannotFlush(clock: Clock): DurabilityFixture =
+        unflushablePosixMappedBolt(clock, synchronous = false)
+
     @AfterTest
     fun removeArchives(): Unit = removeBoltTestDirectories()
 }
 
 internal fun rgaArchiveFormat(): BoltArchiveFormat<RgaId, String, RgaOp<String>> =
     BoltArchiveFormat.rga(serializer<String>())
+
+/**
+ * A [PosixMappedBolt] whose `msync` cannot succeed, labelled with what [synchronous] promised.
+ *
+ * The rig hands `msync` an address the kernel refuses, so the syscall really runs and the errno is
+ * real — see `PosixMappedBolt.rigFlushFailure`.
+ *
+ * **The asynchronous arm here is weaker than its JVM counterpart, and the difference is worth
+ * stating rather than leaving for a reader to assume symmetry.** `MappedBolt` flushes the *retiring*
+ * segment at a roll whatever its durability flag says, so its asynchronous fixture can be made to
+ * attempt a flush, fail it, and still answer [DurabilityState.AsPromised] — a real claim, and one
+ * that caught a real defect. `PosixMappedBolt` has no such ungated flush: both of its durability
+ * syncs are `if (synchronous)`, so an asynchronous bolt of this backend issues **none** at any
+ * segment budget, and the rig genuinely cannot be reached. The arm still reds an *absolute* reading
+ * of durability, which is what it is for; it cannot red a "records a flush it did not promise" bug,
+ * because this backend has no site that could commit one. `AsynchronousMappedBoltConformanceTest`
+ * carries that half.
+ */
+internal fun unflushablePosixMappedBolt(
+    clock: Clock,
+    synchronous: Boolean,
+    segmentFrameBytes: Long = PosixMappedBolt.DEFAULT_SEGMENT_FRAME_BYTES,
+): DurabilityFixture {
+    val bolt = PosixMappedBolt(rgaArchiveFormat(), clock, boltTestDirectory(), synchronous, segmentFrameBytes)
+    bolt.rigFlushFailure(true)
+    return if (synchronous) DurabilityFixture.Promised(bolt) else DurabilityFixture.PromisedNothingAndNeverFlushes(bolt)
+}
 
 /**
  * An on-disk archive of [intactFrames] ordinary frames, then a segment whose frame is **a byte

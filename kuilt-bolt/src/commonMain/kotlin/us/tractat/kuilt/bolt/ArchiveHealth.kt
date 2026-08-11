@@ -41,14 +41,28 @@ package us.tractat.kuilt.bolt
  * archive on the application's logging hot path, which "a full archive disk must not take down the
  * application" forbids outright.
  *
- * ### Where a "written but not durable" signal will plug in
+ * ### The "written but not durable" signal, and why it is forwarded rather than left on the bolt
  *
- * #2243 adds `Bolt.durability(): DurabilityState`, reporting a backend's deviation from the
- * durability level it *promised* — `Degraded(fromOffset, toOffset, reason, cause)` for bytes that
- * were written but whose flush was swallowed. That is sticky state on the bolt, not a per-append
- * outcome, so it lands here as an additional property read after each append rather than as a
- * fourth [AppendResult] variant. Neither this type gaining a property with a default nor
- * [AppendResult] staying exactly as it is breaks a consumer.
+ * [durability] is [Bolt.durability] read after each publish: a backend's deviation from the
+ * durability level it *promised*, sticky, and not a per-append outcome — which is why it is a
+ * property here rather than a fourth [AppendResult] variant (#2243).
+ *
+ * Forwarded, rather than "ask the underlying bolt", for the reason the section above already
+ * establishes: **the wiring this module recommends leaves a consumer holding only the decorator.**
+ * Every shipped example adapts it as `{ ops -> publish(ops) }` into a `Unit`-returning sink, and a
+ * consumer wired that way has no reference to the bolt at all. A degraded archive that only the bolt
+ * could report would be invisible to exactly the consumer this type exists to inform — the same
+ * "lost from both sides" harm [recentFailures] is shaped around.
+ *
+ * Two honest limits, because a forwarded signal is easy to over-trust:
+ *
+ * - **It refreshes on publish, and only on publish.** A bolt that degrades while nothing is being
+ *   archived leaves this value stale until the next one. [Bolt.durability] is always the
+ *   authoritative answer; this is a convenience for the consumer that cannot reach it.
+ * - **`StateFlow` conflation is harmless here, unlike for [recentFailures].** This is *sticky state*
+ *   rather than a sequence of events: the latest value is the whole truth, so a collector that
+ *   misses an intermediate one has missed nothing. The stickiness is the backend's, and it is what
+ *   preserves a `msync` error that is reported once and then cleared.
  *
  * @property framesWritten frames the archive accepted, cumulative.
  * @property opsArchived operations inside those frames, cumulative. Fewer than were published
@@ -58,6 +72,9 @@ package us.tractat.kuilt.bolt
  * @property appendsFailed appends the archive refused, cumulative — including ones where the
  *   backend threw rather than reporting a refusal. Exact, and never conflated away.
  * @property recentFailures the most recent refusals, oldest first. **Lossy — see above.**
+ * @property durability whether the backing archive is still meeting the durability level it
+ *   promised, as of the last publish. Not cumulative — a latest-value snapshot, and the only
+ *   property here that can go *back* to healthy. See above for what it does and does not promise.
  */
 public data class ArchiveHealth(
     public val framesWritten: Long = 0L,
@@ -65,4 +82,5 @@ public data class ArchiveHealth(
     public val opsDeduplicated: Long = 0L,
     public val appendsFailed: Long = 0L,
     public val recentFailures: List<AppendResult.Failed> = emptyList(),
+    public val durability: DurabilityState = DurabilityState.AsPromised,
 )
