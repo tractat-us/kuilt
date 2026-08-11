@@ -7,6 +7,8 @@ import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.RgaOp
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
+import java.io.File
+import java.io.RandomAccessFile
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -101,6 +103,87 @@ class MappedBoltDamageTest {
         )
     }
 
+    /**
+     * A segment that is gone is a **hole**, and a hole is damage — not something to step over.
+     *
+     * Every segment header carries the absolute append offset its frames start at, so a gap is
+     * arithmetic, not guesswork: the next segment simply does not begin where the previous one
+     * ended. Without that check the replay hands back a history with frames missing from the middle,
+     * offsets that jump, and a `CleanTail` claiming it is complete — which is the one failure
+     * [Bolt] cannot afford, because a replica seeded from a replay missing frames re-mints an
+     * already-used `(replica, seq)` dot mesh-wide and nothing anywhere purges it.
+     *
+     * `InMemoryBolt` has the equivalent guard and asserts on it; this backend must report it, because
+     * on a file-backed archive a missing segment is a thing that can actually happen.
+     */
+    @Test
+    fun aMissingSegmentIsAHoleTheReplayRefusesToPaperOver() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val directory = tempArchiveDirectory()
+        val written = oneFramePerSegment(directory, SEGMENTS_AROUND_THE_HOLE)
+        segmentsIn(directory)[HOLE].delete()
+
+        val reopened = mappedBolt(FixedClock(EPOCH), directory, segmentFrameBytes = 1L)
+        val events = reopened.replay(ReplayScope.All).toList()
+
+        assertAll(
+            {
+                assertEquals(
+                    HOLE,
+                    events.filterIsInstance<Archived<RgaOp<String>>>().size,
+                    "replay stops at the hole — the frames beyond it are real, but their history is not",
+                )
+            },
+            {
+                assertEquals(
+                    Truncated(written[HOLE - 1].endOffset, TruncationReason.SegmentHeader),
+                    events.last(),
+                    "and says so at the offset the missing segment should have started at",
+                )
+            },
+        )
+    }
+
+    /**
+     * The same hole reached by the other path: a segment truncated to exactly its own header parses
+     * zero frames and exits the frame loop *normally*, so nothing about it looks damaged until the
+     * next segment's `baseOffset` fails to line up.
+     *
+     * Worth its own test rather than folding into the one above: the missing-segment case never
+     * enters `emitSegment` for the gap at all, this one enters and returns a clean verdict, and only
+     * a continuity check catches both.
+     */
+    @Test
+    fun aSegmentTruncatedToItsHeaderIsAHoleTheReplayRefusesToPaperOver() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val directory = tempArchiveDirectory()
+        val written = oneFramePerSegment(directory, SEGMENTS_AROUND_THE_HOLE)
+        RandomAccessFile(segmentsIn(directory)[HOLE], "rw").use { it.setLength(segmentHeaderBytes().toLong()) }
+
+        val reopened = mappedBolt(FixedClock(EPOCH), directory, segmentFrameBytes = 1L)
+        val events = reopened.replay(ReplayScope.All).toList()
+
+        assertAll(
+            { assertEquals(HOLE, events.filterIsInstance<Archived<RgaOp<String>>>().size, "replay stops at the hole") },
+            {
+                assertEquals(
+                    Truncated(written[HOLE - 1].endOffset, TruncationReason.SegmentHeader),
+                    events.last(),
+                    "a segment that lost its frames is a gap in the offset space, however tidily it parses",
+                )
+            },
+        )
+    }
+
+    /** [frames] frames in [frames] segments — a one-byte budget puts exactly one in each file. */
+    private suspend fun oneFramePerSegment(directory: File, frames: Int): List<AppendResult.Written> {
+        val bolt = mappedBolt(FixedClock(EPOCH), directory, segmentFrameBytes = 1L)
+        var live = Rga.empty<String>()
+        return (0 until frames).map { index ->
+            val (next, op) = live.insertAt(ALICE, live.size, "record-$index")
+            live = next
+            assertIs<AppendResult.Written>(bolt.append(listOf(op)), "the fixture's frames must be written")
+        }
+    }
+
     private class FixedClock(private val at: Instant) : Clock {
         override fun now(): Instant = at
     }
@@ -119,5 +202,11 @@ class MappedBoltDamageTest {
 
         /** Past the 4-byte length prefix, so the prefix survives and the frame stays locatable. */
         const val INTO_THE_BODY = 12L
+
+        /** Enough segments that frames sit BEHIND the hole, which is what a silent skip would show. */
+        const val SEGMENTS_AROUND_THE_HOLE = 4
+
+        /** Which segment goes missing. Not the first, so there is an intact prefix to keep. */
+        const val HOLE = 1
     }
 }
