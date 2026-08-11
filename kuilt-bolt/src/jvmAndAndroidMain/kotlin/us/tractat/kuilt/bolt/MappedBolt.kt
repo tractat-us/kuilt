@@ -10,6 +10,7 @@ import us.tractat.kuilt.crdt.Dot
 import java.io.File
 import java.io.IOException
 import java.io.RandomAccessFile
+import java.io.UncheckedIOException
 import java.nio.ByteBuffer
 import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
@@ -80,6 +81,19 @@ import java.nio.Buffer as NioBuffer
  * it before [append] returns — the synchronous backend. `false` leaves the flush to the OS — the
  * asynchronous one. One type and one flag rather than two implementations, because two
  * implementations are two things to keep in agreement.
+ *
+ * If that flush fails the append still reports [AppendResult.Written], because the frame **is** in
+ * the archive: it is whole, CRC-valid and visible to every reader of the file. What failed is the
+ * durability upgrade, not the append, and saying otherwise costs records — [AppendResult.Failed]
+ * means "the ops are lost" and invites the consumer to re-feed them, which would write a second copy
+ * of a record already on disk. So a `forceOnAppend` bolt whose volume refuses to flush degrades to
+ * the asynchronous guarantee rather than to a lie in either direction, and this paragraph is where
+ * that is admitted. Nothing in this repo's tests reaches it — a flush fails on dying hardware.
+ *
+ * **`MappedByteBuffer.force()` reports that failure as an [UncheckedIOException]**, a
+ * `RuntimeException`, where `FileChannel.force(boolean)` a few lines away declares the checked
+ * `IOException`. Two flush calls, two hierarchies, and no compiler complaint about confusing them —
+ * so [Segment.force] translates once at the call, and every `catch (IOException)` here covers both.
  *
  * ### Unmapping is not portable, so nothing here depends on it
  *
@@ -220,8 +234,19 @@ public class MappedBolt<Id : Any, V, Op : Any>(
 
             is SegmentOutcome.Ready -> {
                 outcome.segment.write(frame)
-                if (forceOnAppend) outcome.segment.force()
                 nextOffset += frame.size
+                // A failed flush is NOT a failed append. The frame IS in the archive — a write into
+                // a mapped region is visible to every reader of the file immediately, and it is whole
+                // and CRC-valid — so `Failed`, whose contract is "the ops are lost from the archive"
+                // and whose remedy is to re-feed them, would have a consumer write a second copy of a
+                // record already on disk. Between a consumer that believes a present frame is durable
+                // when it may not be, and a consumer that duplicates every record on a failing disk,
+                // the first is the smaller harm, and best-effort is this module's stated posture.
+                // What is genuinely lost is the DURABILITY UPGRADE `forceOnAppend` promises, which is
+                // documented on that parameter rather than smuggled into a result type meaning
+                // something else. `:kuilt-bolt`'s Apple backend answers this identically (#2214) —
+                // one contract across backends, deliberately.
+                if (forceOnAppend) flushQuietly(outcome.segment)
                 AppendResult.Written(offset, nextOffset, opCount, insertDots)
             }
         }
@@ -261,6 +286,32 @@ public class MappedBolt<Id : Any, V, Op : Any>(
         }
     }
 
+    /**
+     * Flush [segment], swallowing an I/O failure.
+     *
+     * **Every flush on the append path is a durability operation, and none of them may fail an
+     * append.** That rule is easy to state and easy to break site by site, which is why it lives in
+     * one function: two of these calls sit lexically inside [segmentFor]'s `catch (IOException)`, so
+     * merely letting the failure propagate would have been *covered* — and covered here means turned
+     * into [AppendResult.Failed], which is exactly the answer the durability note in this class's
+     * KDoc argues against. Being caught is not the same as being handled correctly.
+     *
+     * The write operations around them — [preallocate], and [allocate]'s channel flush — keep
+     * propagating, because a segment that could not be created really does fail the append.
+     *
+     * The failure is not reported anywhere, which is a gap rather than a decision: [AppendResult]
+     * has no "written but not durable" shape and [BoltAvailability] is not consulted after an append.
+     * Inventing a signal on this backend alone would split a contract two backends share, so the
+     * question is #2243 rather than a local answer.
+     */
+    private fun flushQuietly(segment: Segment) {
+        try {
+            segment.force()
+        } catch (_: IOException) {
+            // See the KDoc: deliberately unreported until #2243 gives both backends one answer.
+        }
+    }
+
     /** Whether a [frameBytes]-byte frame has somewhere to go. Called under [lock]. */
     private fun hasRoomFor(frameBytes: Int): Boolean =
         active?.hasRoomFor(frameBytes) == true ||
@@ -273,7 +324,7 @@ public class MappedBolt<Id : Any, V, Op : Any>(
     private fun roll(offset: Long, sizeBytes: Long): Segment {
         // A retired segment is read back from its FILE, so flush it before letting go of its
         // mapping — this is the only point at which that is guaranteed to have happened.
-        active?.force()
+        active?.let(::flushQuietly)
         // A directory removed underneath a live archive is recreated rather than turned into a
         // FileNotFoundException, so that this agrees with `availability`, which does the same. If it
         // cannot be recreated the RandomAccessFile below fails, which is the answer either way.
@@ -285,7 +336,7 @@ public class MappedBolt<Id : Any, V, Op : Any>(
                 SegmentHeader(BOLT_FORMAT_VERSION, format.opFormat, format.elementType, baseOffset = offset),
             ),
         )
-        if (forceOnAppend) segment.force()
+        if (forceOnAppend) flushQuietly(segment)
         segments += file
         active = segment
         nextIndex++
@@ -647,8 +698,29 @@ public class MappedBolt<Id : Any, V, Op : Any>(
             writePosition = position
         }
 
+        /**
+         * `msync` this mapping, reporting a failure as a **checked** [IOException].
+         *
+         * `MappedByteBuffer.force()` throws [UncheckedIOException] — a `RuntimeException` — where
+         * `FileChannel.force(boolean)`, called inches away in [allocate], declares the checked
+         * `IOException`. Two flush calls, two exception hierarchies, no compiler complaint either
+         * way: every `catch (IOException)` in this file silently covered one and not the other. The
+         * translation happens here, once, at the only place the mapped call is made, so a caller
+         * cannot be written against the wrong hierarchy by reading the surrounding code.
+         *
+         * The original failure is rethrown intact rather than wrapped, so its stack trace and errno
+         * detail survive. `UncheckedIOException.getCause()` is declared to return `IOException` in
+         * Java — but Kotlin reads that covariant override through its own mapped `Throwable.cause`,
+         * which is `Throwable?`, so the property is `IOException?` here and not a platform non-null.
+         * Hence the elvis: it is unreachable in practice (both `UncheckedIOException` constructors
+         * null-check their cause) and it is not worth a `!!` to say so.
+         */
         fun force() {
-            mapped.force()
+            try {
+                mapped.force()
+            } catch (failure: UncheckedIOException) {
+                throw failure.cause ?: IOException("could not flush the mapped segment", failure)
+            }
         }
     }
 
