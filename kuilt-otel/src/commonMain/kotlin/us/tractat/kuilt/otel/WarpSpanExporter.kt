@@ -234,6 +234,12 @@ public class WarpSpanExporter(
      * The key is rewritten rather than deleted, because the retained context is what the
      * paragraph above rests on and it lives in those bytes.
      *
+     * One [ORSet.removeAll], not a per-element fold. Absorbing a patch is a causal join over the
+     * whole set, so removing one element at a time pays a join per element: measured here at
+     * [DEFAULT_MAX_SPANS] that fold was quadratic and cost seconds, which is why the bulk form
+     * exists (#2245). The two are otherwise indistinguishable — same elements gone, same dots
+     * retired, same retained context, same bytes.
+     *
      * A configured [WarpCausalClock]'s **frontier** is emptied here too, and its `seq` left
      * alone. The frontier would otherwise name dots of spans this call just removed, which
      * breaks the totality [inferCausalLinks] relies on.
@@ -244,7 +250,7 @@ public class WarpSpanExporter(
     public suspend fun clear(): ExportResult = ioMutex.withLock {
         runCatchingCancellable {
             val encoded = lock.withLock {
-                spans = spans.elements.toList().fold(spans) { set, span -> set.piece { it.remove(span) } }
+                spans = spans.piece { it.removeAll(it.elements) }
                 cbor.encodeToByteArray(spanSerializer, spans)
             }
             // The frontier belongs to this method, not to the facade. It names dots of spans
