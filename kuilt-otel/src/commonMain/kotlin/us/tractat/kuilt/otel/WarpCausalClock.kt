@@ -81,6 +81,20 @@ public class WarpCausalClock(private val replica: ReplicaId) {
     public fun frontier(): Set<Dot> = lock.withLock { frontier }
 
     /**
+     * Forget the causal frontier while leaving [seq] untouched — the clock's half of a
+     * span clear (#2208).
+     *
+     * The asymmetry is the point. [seq] must never regress: a reset one re-mints dots already
+     * used by earlier spans, which is the corruption this class's "Recovery is mandatory"
+     * section exists to prevent, and a clear is not a restart. The **frontier** must go,
+     * because after a span clear it names dots of spans no longer in the set, and
+     * [inferCausalLinks] resolves every predecessor dot against that set.
+     *
+     * The caller persists — [persist] is this class's explicit step, not an implicit one.
+     */
+    internal fun clearFrontier(): Unit = lock.withLock { frontier = emptySet() }
+
+    /**
      * Reload `(seq, frontier)` from [store]. Call once at startup before any [tick];
      * a missing or corrupt entry leaves the clock fresh (seq 0, empty frontier).
      */

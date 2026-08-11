@@ -222,6 +222,49 @@ public class WarpSpanExporter(
         }
     }
 
+    /**
+     * Drop every span this exporter holds and persist the emptied set (#2208).
+     *
+     * Removal, not [ORSet.empty]: an `ORSet` removal **retains** `causal.context`, so the
+     * retired dots stay witnessed and a peer re-merging the pre-clear adds is dominated rather
+     * than resurrecting them. An emptied-by-reset set would re-mint dots this replica has
+     * already used, and a peer whose context already holds one would treat the *new* span as
+     * seen-and-removed — swallowing it silently.
+     *
+     * The key is rewritten rather than deleted, because the retained context is what the
+     * paragraph above rests on and it lives in those bytes.
+     *
+     * A configured [WarpCausalClock]'s **frontier** is emptied here too, and its `seq` left
+     * alone. The frontier would otherwise name dots of spans this call just removed, which
+     * breaks the totality [inferCausalLinks] relies on.
+     *
+     * Shares [ioMutex] with [export] and [merge] so a concurrent export cannot land a stale
+     * encoded snapshot after the clear.
+     */
+    public suspend fun clear(): ExportResult = ioMutex.withLock {
+        runCatchingCancellable {
+            val encoded = lock.withLock {
+                spans = spans.elements.toList().fold(spans) { set, span -> set.piece { it.remove(span) } }
+                cbor.encodeToByteArray(spanSerializer, spans)
+            }
+            // The frontier belongs to this method, not to the facade. It names dots of spans
+            // that no longer exist, and `inferCausalLinks` resolves every predecessor dot
+            // against the span set — so leaving it would break that totality for anyone who
+            // calls this exporter's clear() directly rather than WarpTelemetry.clear().
+            // `seq` is deliberately untouched; see WarpCausalClock.clearFrontier.
+            causalClock?.clearFrontier()
+            // Clock before spans, the same order and for the same reason as export() (#1053).
+            causalClock?.persist(store)
+            store.write(STORE_KEY, encoded)
+        }.fold(
+            onSuccess = { ExportResult.Success },
+            onFailure = { cause ->
+                logger.error(cause) { "WarpSpanExporter: durable write failed during clear" }
+                ExportResult.Failure(cause)
+            },
+        )
+    }
+
     /** Must be called with [lock] held. */
     private fun maybeEvict() {
         val current = spans.elements
