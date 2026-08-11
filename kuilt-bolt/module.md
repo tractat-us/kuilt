@@ -29,23 +29,23 @@ enforced by the types, not by a comment.
 | `PosixMappedBolt` | The same thing on iOS and macOS. **Not the default on a phone** — its own docs say why at length, and the short version is that the server is its customer here too. |
 | `BoltDecorator` | The wiring. A replica's owner hands it the edits it applied; it archives them and suppresses the ones it has kept before. Reach for this rather than calling `append` by hand — see below. |
 
-```kotlin
-val bolt = InMemoryBolt(BoltArchiveFormat.rga(serializer<String>()), clock)
-bolt.append(opsTheReplicaJustApplied)
-bolt.replay(ReplayScope.All).collect { event ->
-    when (event) {
-        is Archived -> handle(event.ops)
-        CleanTail -> /* the whole archive was intact */
-        is Truncated -> /* stopped at event.atOffset — the history is SHORT */
-    }
-}
-```
+Three smaller types round it out, and each has a section of its own below. `AppendResult` is what one
+`append` did — written, skipped, or refused-with-identities. `BoltAvailability` answers "can this
+archive be written to right now". `DurabilityState` answers the quieter question underneath it: is
+this archive still keeping the promise *it* made about the records it already accepted.
 
-A replay always ends with exactly one verdict — `CleanTail` or `Truncated`. That is deliberate: a
-replay that just stopped at damage and completed normally would hand back an incomplete history
-indistinguishable from a complete one, and "I still hold what the live replica forgot" is the only
-thing a bolt sells. Call `.frames()` to discard the verdict when you genuinely do not need it — an
-explicit opt-out, not an oversight.
+Starting one takes two lines — the format, then the archive:
+
+<!-- verbatim from kuilt-bolt/src/commonSamples/kotlin/us/tractat/kuilt/bolt/BoltSamples.kt#sampleBoltArchiveFormat -->
+```kotlin
+// You pass the ELEMENT serializer. The op serializer comes from the CRDT's own
+// `opSerializer` and cannot be overridden — the compiler-generated one for `RgaOp`
+// writes a different wire format, and an archive exists to be read by a later build.
+val format = BoltArchiveFormat.rga(String.serializer())
+val bolt = InMemoryBolt(format, Clock.System)
+// …
+bolt.append(ops)
+```
 
 ## Feeding it: `BoltDecorator`, and the mistake to avoid
 
@@ -71,6 +71,66 @@ completeness is bounded by **how often you sync**, not by how much the archive c
 truncation verdict will not tell you: it reports damage to the archive, never a gap at the source.
 Sync more often than the peer's own buffer turns over, or accept that the history is as complete as
 the schedule allowed.
+
+## Reading it back
+
+A replay always ends with exactly one verdict — `CleanTail` or `Truncated`. That is deliberate: a
+replay that just stopped at damage and completed normally would hand back an incomplete history
+indistinguishable from a complete one, and "I still hold what the live replica forgot" is the only
+thing a bolt sells. Call `.frames()` to discard the verdict when you genuinely do not need it — an
+explicit opt-out, not an oversight.
+
+The verdict is an element of the stream rather than a separate `verify()` call for two reasons: it is
+bound to the exact bytes *this* replay read, where a second call would race a concurrent append; and
+it cannot be forgotten, because you have to name the frame case to get at frames at all. It arrives
+only on a replay collected to completion — a `take(n)` or a `first()` gets no verdict, which is the
+honest answer to having stopped reading before the archive said how it ended.
+
+<!-- verbatim from kuilt-bolt/src/commonSamples/kotlin/us/tractat/kuilt/bolt/BoltSamples.kt#sampleBoltReplayVerdict -->
+```kotlin
+var records = 0
+var complete = false
+
+// Collect to COMPLETION. The terminal verdict is what a replay sells — a history that
+// stopped at damage, and one that did not, are otherwise indistinguishable. A consumer
+// that cuts the flow short (take, first, an early return) gets no verdict, honestly.
+bolt.replay(ReplayScope.All).collect { event ->
+    when (event) {
+        is Archived -> records += event.ops.size
+        CleanTail -> complete = true
+        is Truncated -> when (event.reason) {
+            // Not readable YET — a writer mid-append, a device still locked. Resuming
+            // from atOffset later can work.
+            TruncationReason.SegmentHeader, TruncationReason.Frame -> retryFrom(event.atOffset)
+            // GONE. atOffset is the honest end of the readable history and is NOT a
+            // resume cursor: nothing will ever produce the records behind it.
+            TruncationReason.MissingRegion -> reportPermanentGap(event.atOffset)
+        }
+    }
+}
+
+if (!complete) reportPartialHistory(records)
+```
+
+**`TruncationReason` splits on the remedy, not on the layer.** `SegmentHeader` and `Frame` both mean
+the bytes at `atOffset` are not readable *yet* — a writer part-way through an append, a file a locked
+device will not open — so resuming from that offset later can work. `MissingRegion` means they are
+**gone**: a deleted segment file, a region that never reached disk. Nothing there failed a checksum,
+because a hole presents no bad bytes to fail one; it is caught by noticing that the next segment's
+header does not begin where the previous segment's frames ended. Retrying the first two is sensible.
+Retrying the third will never produce the records.
+
+### Four scopes, of which two are cursors
+
+Only a **cursor** is safe to resume from, because only a cursor is total over the frames it has not
+yet seen. The other two answer questions.
+
+| Scope | What it selects |
+|-------|-----------------|
+| `ReplayScope.All` | Every frame, oldest first. A cursor over the whole archive. |
+| `ReplayScope.FromOffset` | **The resume cursor.** Hand back `AppendResult.Written.endOffset`, or the `endOffset` of the last frame you consumed. An offset falling inside a frame yields that frame from its start, so a cursor never points at half a record. |
+| `ReplayScope.Arrived` | A query by **arrival** time — when the archive was *told*, which for anything that arrived by merge is arbitrarily later than when it happened. "Everything this machine wrote last Tuesday" is answerable; "everything that happened last Tuesday" is not. |
+| `ReplayScope.InsertsAbove` | A query over causal coverage, **inserts only**. A `Remove` mints no dot — it reuses its target `Insert`'s id — so a frame of pure removes is selected by no dot scope at all, however recent it is. Not a resume cursor: one would skip that frame and replay a removed record as live. |
 
 ## The invariant
 
@@ -143,3 +203,42 @@ one that promised to flush per record, and then could not, says so — and it ke
 the whole range of records left in doubt, until a later flush covers that range. That stickiness is
 the point: on Linux a disk error from `msync` may be reported **once and then cleared**, so an
 archive that swallowed it would destroy the only notification anyone was ever going to get.
+
+A third question is separate from both, and `availability()` answers it: can this archive be written
+to *at all* right now. `Unavailable` is a settled no — a read-only volume, a directory that could
+not be created. `Unknown` is not a hedge but a real state: an iOS file whose Data Protection class
+makes it unreadable while the device is locked is neither available nor permanently unavailable, and
+the next unlock may resolve it. A bolt reporting `Available` must accept an append.
+
+**`BoltDecorator.health` is the same news, one level up, and it is lossy.** `ArchiveHealth` carries
+the `AppendResult.Failed` values themselves — identities, not a tally — plus the forwarded
+`DurabilityState`. But it keeps only the most recent handful of failures and drops the *oldest*
+first, which under sustained failure are the identities with the least time left before the live
+replica windows them away; and it rides a `StateFlow`, which conflates. The complete channel is the
+`AppendResult` that `BoltDecorator.publish` returns. A consumer that must not lose an identity calls
+`publish` itself rather than routing through a `Unit`-returning sink, and the shipped wiring — every
+example adapts the decorator as `{ ops -> publish(ops) }` — deliberately does not.
+
+## Adding a backend
+
+Subclass `BoltConformanceSuite` and implement its five fixture hooks. It pins seven properties, and
+the second is the reason the module exists: a bolt fed a `Compact` keeps the ops that `Compact`
+suppresses and never replays the `Compact` itself.
+
+None of the first three hooks is nullable, and that is the point of them. An "I cannot reach this
+state" opt-out moves the vacuity one level up, where it is harder to see — the suite would go green
+for a backend that never exercised the path at all. Each hook asserts its own precondition, so a
+backend handing back a healthy bolt fails loudly rather than passing quietly.
+
+| Hook | What it must produce |
+|------|----------------------|
+| `newBolt(clock)` | A fresh, empty archive. The clock is a parameter because one property scopes a replay by arrival time, which a backend reaching for the wall clock could not be asked about deterministically. |
+| `newExhaustedBolt(clock)` | One that is **already out of room**, however this backend runs out. |
+| `newTruncatedBolt(clock, intactFrames)` | One damaged *within* a frame after `intactFrames` good ones — and the damage must be followed by a **healthy** region, or "stop at the damage" and "skip to the next region" emit identical events and the property stops discriminating. |
+| `newDiscontinuousBolt(clock, intactFrames)` | One missing a whole region out of the **middle**, with frames surviving behind the hole. Two disk-backed backends independently replayed a hole as a `CleanTail` before this hook existed (#2240) — the in-memory reference's segments are a list that cannot lose an element, so it satisfied the older suite's silence for free. |
+| `newBoltThatCannotFlush(clock)` | A `DurabilityFixture` declaring which of three cases this backend is: promised per-record durability and cannot deliver it; promised nothing but still flushes; or promised nothing and never flushes. Nullable would hand every backend a silent skip, and non-nullable would demand a degraded bolt from a backend for which none can correctly exist. |
+
+The general lesson `newDiscontinuousBolt` encodes is worth carrying to any new property here: **a
+conformance property is only as strong as the weakest failure the reference implementation can
+reach.** And a fixture free to choose its own configuration will, left alone, choose the one in which
+the failure cannot occur — so say in the hook's contract which configurations are legitimate.
