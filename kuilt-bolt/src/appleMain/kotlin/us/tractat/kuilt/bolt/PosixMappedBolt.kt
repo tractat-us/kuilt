@@ -231,6 +231,10 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
      * header wedges the bolt at [BoltAvailability.Unavailable], because appending past it would write
      * records no replay could ever reach.
      *
+     * A **trailing** segment with an unreadable header is removed rather than repaired, and does not
+     * set this: a header is written before any frame is, so such a file holds no record and nothing
+     * is discarded when it goes.
+     *
      * **Reading this opens the archive**, exactly as [availability] does. An archive is adopted
      * lazily — the first append, replay or probe is what reads the directory — so a property that
      * merely reported the current field would answer `null` on a freshly constructed bolt over a
@@ -644,8 +648,14 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
                 // leaves the archive appendable. Only ever true of the LAST segment for our own
                 // writer; a middle one means real corruption, and wedges.
                 if (index != indices.last()) return wedge("segment $path has an unreadable header")
+                // NOT a repaired tail, and `repaired` is deliberately left alone. Nothing was
+                // discarded: a header goes down before any frame does, so a segment whose header
+                // does not read holds no record at all. Reporting an offset here would tell a
+                // consumer the archive was CUT at that point — and reporting the 0 this line used
+                // to compute (every adopted segment still has writtenFrameBytes = 0 at this point,
+                // they are filled in below) would tell it the whole archive was thrown away, with
+                // every frame still sitting there readable.
                 NSFileManager.defaultManager.removeItemAtPath(path, error = null)
-                repaired = adopted.lastOrNull()?.let { it.baseOffset + it.writtenFrameBytes } ?: 0L
                 break
             }
             adopted += Segment(
