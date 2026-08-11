@@ -59,14 +59,15 @@ class BoltDecoratorTest {
      * replayed ops: a replay that happens to be de-duplicated says nothing about what was written.
      *
      * **Mutation receipts.**
-     * - Replacing the reservation filter with `identified` (suppress nothing) reds
-     *   `assertIs<AppendResult.Skipped>(second, …)`, `framesWritten`, and the archived-op count —
-     *   the archive doubles, which is the failure this exists to prevent.
+     * - Replacing the reservation filter with `identified.onEach { … }` (claim everything, suppress
+     *   nothing) reds three assertions: the archive doubles to two frames and six ops, and nothing
+     *   is counted as suppressed. That is the failure this exists to prevent.
      * - Making the identity `id` alone rather than the whole [us.tractat.kuilt.crdt.LogOp] — i.e.
-     *   dropping the insert-versus-remove discriminator — reds `assertEquals(ops, archived, …)`:
-     *   the `Remove` is swallowed as a duplicate of its own target `Insert`, and the archive loses
-     *   the removal entirely. That is the case the frame's dots provably cannot cover, because a
-     *   `Remove` mints none.
+     *   dropping the insert-versus-remove discriminator — reds `assertEquals(ops, archived, …)`
+     *   with the `Remove` missing: it is swallowed as a duplicate of its own target `Insert`, and
+     *   the archive loses the removal entirely. That is the case the frame's dots provably cannot
+     *   cover, because a `Remove` mints none. (It reds two of this file's other tests too, for the
+     *   same reason; this is the assertion that *names* the cause.)
      */
     @Test
     fun rePublishingTheSameOperationsWritesNothingAndDoesNotDoubleTheArchive() =
@@ -99,13 +100,18 @@ class BoltDecoratorTest {
      * A compaction record is a record of *forgetting*, so it never reaches the archive — and it is
      * never an identity either, because it names a **set** of ids rather than one.
      *
-     * The second half is the part worth a test. If a `Compact` were treated as an identity it would
-     * be suppressed on the second round like anything else, and nothing would notice; the failure
-     * only shows up in what it *drags with it*, which is why this publishes content beside it.
+     * **Mutation receipt, and a GREEN row worth naming.** Letting a `Compact` through the
+     * classification filter in `publish` reds exactly **one** assertion — the suppression count,
+     * because the compaction record becomes an identity, occupies a window slot, and is then
+     * counted as a duplicate on the second round.
      *
-     * **Mutation receipt:** letting a `Compact` through the classification filter in `publish` reds
-     * the archived-ops assertion, because `BoltArchiveFormat.contentOnly` then reports a smaller
-     * frame than the reservation claimed and the counts stop lining up.
+     * The assertion above it — "and the compaction record is not [archived]" — stays **green**
+     * under that mutation, and pretending otherwise would be worse than saying so. The property is
+     * held by *two* barriers: this filter, and `BoltArchiveFormat.contentOnly` inside
+     * [Bolt.append]. The bolt's own barrier is the load-bearing one and is mutation-checked where
+     * it lives, in `BoltConformanceSuite.aBoltDiscardsCompactionRecordsAndKeepsWhatTheySuppress`.
+     * So what this test actually pins about the decorator is the *accounting*: a record of
+     * forgetting must not consume a suppression slot or be reported as a duplicate.
      */
     @Test
     fun aCompactionRecordIsNeitherArchivedNorAnIdentity() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
@@ -147,11 +153,16 @@ class BoltDecoratorTest {
      * publishes of the same operation both write it — so the release is what keeps the optimism
      * honest.
      *
-     * **Mutation receipt:** moving the claim after a successful append (`archived.add` only in the
-     * `Written` branch) leaves this test green, which is the point of the pairing — it reds
-     * [rePublishingTheSameOperationsWritesNothingAndDoesNotDoubleTheArchive] instead, under
-     * concurrency. Deleting the release (`else -> { }`) reds this one on both surviving assertions:
-     * the retry is skipped and the archive stays empty.
+     * **Mutation receipt:** replacing the release with `trimToWindow()` — i.e. keeping the claim
+     * after a refusal — reds both of this test's remaining assertions: the retry comes back
+     * `Skipped` rather than `Written`, and the archive is still empty afterwards.
+     *
+     * **And an unproven property, stated rather than papered over.** Claiming *before* the append
+     * instead of after it is what makes two concurrent publishes of the same operation write it
+     * once — and **no test in this tree reds on that change**, because nothing here publishes
+     * concurrently. Under a single publisher the two orders are indistinguishable. So the
+     * reservation half of the protocol rests on the argument in `publish`'s KDoc, not on a
+     * receipt; only the release half is pinned.
      */
     @Test
     fun aRefusedAppendReleasesItsIdentitiesSoTheNextRoundArchivesThem() =
@@ -181,11 +192,14 @@ class BoltDecoratorTest {
      * them, correlate the gap against a backend — unimplementable, which is the whole reason this
      * type does not just count.
      *
-     * **Mutation receipt:** replacing `recentFailures` with a bare counter reds the dots assertion.
-     * Note what this canNOT reach: `AppendResult.Failed` is constructed by the *backend*, so the
-     * dots being the **right** ones is `InMemoryBolt`'s property (pinned by
-     * `BoltConformanceSuite.anExhaustedBoltReportsUnavailableAndRefusesTheAppend`), and all this
-     * pins is that the decorator carries them through rather than flattening them.
+     * **Mutation receipt:** never appending to `recentFailures` (`recentFailures =
+     * current.recentFailures`) reds this test — the failure, and with it every identity, is gone
+     * while `appendsFailed` still climbs, which is exactly the tally-instead-of-identities shape.
+     *
+     * **What this canNOT reach:** `AppendResult.Failed` is constructed by the *backend*, so the
+     * dots being the **right** ones is `InMemoryBolt`'s property, pinned by
+     * `BoltConformanceSuite.anExhaustedBoltReportsUnavailableAndRefusesTheAppend`. All this pins is
+     * that the decorator carries them through rather than flattening them.
      */
     @Test
     fun aRefusedAppendReportsTheDotsAndTheOffsetRangeItLost() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
@@ -219,8 +233,8 @@ class BoltDecoratorTest {
      * The dropped identity is the **oldest**, which is also the least likely to be re-offered: a
      * peer re-offers the log it currently holds, and its own retention bounds that.
      *
-     * **Mutation receipt:** deleting `trimToWindow`'s body reds the last two assertions — the old
-     * identity stays remembered, so the re-publish is skipped and the archive holds one frame.
+     * **Mutation receipt:** short-circuiting `trimToWindow` (`if (archived.size >= 0) return`) reds
+     * this test — the old identity stays remembered, so the re-publish is skipped.
      */
     @Test
     fun anIdentityPushedOutOfTheWindowIsArchivedAgainRatherThanLost() =

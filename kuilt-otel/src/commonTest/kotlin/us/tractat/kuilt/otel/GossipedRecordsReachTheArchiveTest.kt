@@ -172,8 +172,18 @@ class GossipedRecordsReachTheArchiveTest {
      * Stated as a property rather than left as an accident. For an archive that direction is the
      * product — a subset would be a silent hole in exactly the history somebody went looking for.
      *
-     * **Mutation receipt:** moving `publishApplied(applied)` after `commit(actions)` in
-     * `exportTurn` reds the second assertion; the archive is then empty.
+     * **Mutation receipt:** deleting `publishApplied(applied)` from `exportTurn` reds the archive
+     * assertion.
+     *
+     * **And a GREEN row that matters more than the red one.** *Moving* that call to after
+     * `commit(actions)` leaves this test **green** — measured. `commit` reports a refused write by
+     * returning `ExportResult.Failure` rather than throwing, so a publication placed after it still
+     * runs and the archive still ends up holding the record. This test therefore pins the
+     * *outcome*, not the *ordering*; the ordering is pinned only by the explicit
+     * `listOf("publish", "write")` assertion in
+     * `WarpLogRecordExporterAppliedOpsTest.publicationPrecedesTheDurableWriteSoARefusedWriteStillReachesTheSink`.
+     * The two are not redundant — this one drives the real decorator end to end, that one drives
+     * the order — but neither alone covers the pair.
      */
     @Test
     fun aRefusedDurableWriteStillReachesTheArchive() = runTest(timeout = TEST_WEDGE_BACKSTOP) {

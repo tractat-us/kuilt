@@ -204,6 +204,11 @@ class WarpLogRecordExporterAppliedOpsTest {
      *
      * `clear` is not a no-op internally — it runs a window pass that raises the compaction floor —
      * so "publishes nothing" is a real assertion, not a tautology.
+     *
+     * **The first assertion is what keeps it from being one.** "The count did not move" is
+     * trivially true against an exporter that never publishes at all, so this asserts the exporter
+     * *was* publishing beforehand. Without it the test goes green under a mutation that deletes
+     * publication outright — measured, not assumed.
      */
     @Test
     fun clearPublishesNothingAndAsksNoSinkToForget() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
@@ -215,6 +220,7 @@ class WarpLogRecordExporterAppliedOpsTest {
         val cleared = exporter.clear()
 
         assertAll(
+            { assertEquals(3, beforeClear, "the sink was live — otherwise 'nothing more' means nothing") },
             { assertEquals(ExportResult.Success, cleared) },
             { assertEquals(emptyList(), exporter.snapshot().toList(), "the live buffer really did empty") },
             { assertEquals(beforeClear, recorder.batches.size, "and the sink was told nothing about it") },
@@ -227,6 +233,10 @@ class WarpLogRecordExporterAppliedOpsTest {
      * The operations it reads back were published by whichever process first applied them.
      * Publishing here would re-offer the entire persisted log at every process start — which for a
      * consumer without its own suppression is a full duplicate archive per launch.
+     *
+     * The export *after* the recovery is what keeps "published nothing" from being vacuous: an
+     * exporter that never publishes would satisfy the silence trivially, so the sink has to be
+     * shown live on the same instance, immediately afterwards.
      */
     @Test
     fun recoverPublishesNothing() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
@@ -237,10 +247,20 @@ class WarpLogRecordExporterAppliedOpsTest {
 
         val recovered = exporter(store, sink = recorder)
         recovered.recover()
+        val afterRecovery = recorder.batches.size
+        val recoveredCount = recovered.snapshot().size
+        recovered.export(record(99))
 
         assertAll(
-            { assertEquals(3, recovered.snapshot().size, "the records really were recovered") },
-            { assertEquals(emptyList(), recorder.batches, "and none of them was re-published") },
+            { assertEquals(3, recoveredCount, "the records really were recovered") },
+            { assertEquals(0, afterRecovery, "and none of them was re-published") },
+            {
+                assertEquals(
+                    listOf("record-99"),
+                    recorder.ops.filterIsInstance<RgaOp.Insert<LogRecord>>().map { it.value.body },
+                    "while the very next export publishes normally — so the silence above was a choice",
+                )
+            },
         )
     }
 
@@ -250,16 +270,29 @@ class WarpLogRecordExporterAppliedOpsTest {
      * It is a side channel. A caller on the logging path cannot handle a thrown exception — it
      * would surface inside an application's own logging call — and the record really was applied,
      * so reporting failure would be a lie about the exporter's own contract.
+     *
+     * The sink counts its own invocations, and that assertion is load-bearing: a sink that is never
+     * called cannot throw, so "the export succeeded" would be green against an exporter that had
+     * stopped publishing altogether — which is a mutation this file's other tests are meant to
+     * catch, not one this test should quietly agree with.
      */
     @Test
     fun aThrowingSinkDoesNotFailTheExport() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
-        val exporter = exporter(InMemoryDurableStore(), sink = { error("this sink is broken") })
+        var invocations = 0
+        val exporter = exporter(
+            InMemoryDurableStore(),
+            sink = {
+                invocations++
+                error("this sink is broken")
+            },
+        )
 
         val result = exporter.export(record(1))
 
         assertAll(
             { assertEquals(ExportResult.Success, result, "the export is unaffected") },
             { assertEquals(1, exporter.snapshot().size, "and the record was taken") },
+            { assertEquals(1, invocations, "and the sink really was called — otherwise it never threw") },
         )
     }
 
