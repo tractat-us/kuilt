@@ -450,8 +450,13 @@ public class MappedBolt<Id : Any, V, Op : Any>(
      * Case 3 is not exotic. Under `forceOnAppend = false` the OS writes pages back in whatever order
      * it likes, so a hole followed by later-flushed pages is the *expected* artifact of a power loss.
      *
-     * The scan's error direction is deliberately safe: a chance CRC-32 match on misaligned bytes
-     * (~2⁻³²) reads case 2 as case 3, which refuses a repair rather than performing a wrong one.
+     * ### The scan may err, and it is built to err in one direction only
+     *
+     * **An archive may decline to repair; it may never repair wrongly.** A chance CRC-32 match on
+     * misaligned bytes (~2⁻³²) reads case 2 as case 3 — the archive refuses a repair it could have
+     * made, costing an operator a fresh directory. The opposite error costs committed records that
+     * nothing anywhere can reconstruct. So every uncertain reading resolves to "do not touch it",
+     * and any future change here has to keep that asymmetry rather than merely stay accurate.
      */
     private fun repair(segment: Segment, bytes: ByteArray, writePosition: Int, baseOffset: Long): Boolean {
         if (bytes.isZeroFrom(writePosition)) return true
@@ -543,6 +548,11 @@ public class MappedBolt<Id : Any, V, Op : Any>(
         val header = readSegmentHeader(buffer, format.opFormat, format.elementType)
             ?: return SegmentReplay(endedAt(bytes, consumed = 0, offset = stopsAt), stopsAt)
         if (resumeOffset != null && header.baseOffset != resumeOffset) {
+            // The reason is APPROXIMATE, deliberately and not by oversight: this header is intact,
+            // it simply describes the wrong place. `TruncationReason` is public and lives in
+            // commonMain, which the Apple backend is editing concurrently, so whether a gap deserves
+            // a constant of its own is settled once for both backends in #2240 — not unilaterally
+            // here, mid-flight.
             return SegmentReplay(Truncated(resumeOffset, TruncationReason.SegmentHeader), resumeOffset)
         }
         var offset = header.baseOffset

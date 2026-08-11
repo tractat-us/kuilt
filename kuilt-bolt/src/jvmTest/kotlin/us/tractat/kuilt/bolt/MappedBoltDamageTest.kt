@@ -63,9 +63,13 @@ class MappedBoltDamageTest {
 
         val beforeRestart = writer.replay(ReplayScope.All).toList()
         val reopened = mappedBolt(FixedClock(EPOCH), directory, segmentFrameBytes = ONE_SEGMENT_BYTES)
-        // Sampled HERE, before the append below. An append that resumed at a reused offset would
-        // write its own frame back over this range, so a check at the end of the test would find it
-        // non-zero and conclude the frames had survived — the very bug, papering over itself.
+        // Sampled HERE, and the trap is worth spelling out because this assertion PASSED against the
+        // broken code on its first draft, when it was sampled at the end of the test with the others.
+        // The broken repair zeroed this range and then resumed appending at the offset it had just
+        // freed — so by the end of the test the new frame had been written back OVER the range being
+        // checked, it read non-zero, and the assertion concluded the frames had survived. The bug
+        // erased the evidence and then forged it, inside the assertion written to catch it. Anything
+        // asserted about bytes the append path can reach must be sampled before that path runs.
         val behindTheDamage = segment.readBytes().copyOfRange(
             segmentHeaderBytes() + written[DAMAGED + 1].offset.toInt(),
             segmentHeaderBytes() + written.last().endOffset.toInt(),
