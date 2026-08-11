@@ -237,10 +237,11 @@ Subclass `BoltConformanceSuite` and implement its five fixture hooks. It pins se
 the second is the reason the module exists: a bolt fed a `Compact` keeps the ops that `Compact`
 suppresses and never replays the `Compact` itself.
 
-None of the first three hooks is nullable, and that is the point of them. An "I cannot reach this
-state" opt-out moves the vacuity one level up, where it is harder to see — the suite would go green
-for a backend that never exercised the path at all. Each hook asserts its own precondition, so a
-backend handing back a healthy bolt fails loudly rather than passing quietly.
+**No hook is nullable**, and for the three damage fixtures that is the point of them: an "I cannot
+reach this state" opt-out moves the vacuity one level up, where it is harder to see — the suite would
+go green for a backend that never exercised the path at all. Each asserts its own precondition too,
+so a backend handing back a healthy bolt fails loudly rather than passing quietly. The durability
+fixture could not be made non-nullable the same way, and its row says what it does instead.
 
 | Hook | What it must produce |
 |------|----------------------|

@@ -1201,7 +1201,9 @@ if (!complete) reportPartialHistory(records)
 
 <!-- verbatim from kuilt-bolt/src/commonSamples/kotlin/us/tractat/kuilt/bolt/BoltSamples.kt#sampleBoltResumeCursor -->
 ```kotlin
-// Consume what the archive holds now, remembering where each frame ended.
+// Consume what the archive holds now, remembering where each frame ended. `.frames()`
+// deliberately drops the terminal verdict — fine for a cursor walk, not for anything
+// that acts on the history being complete.
 var cursor = 0L
 bolt.replay(ReplayScope.All).frames().collect { frame ->
     ship(frame.ops)

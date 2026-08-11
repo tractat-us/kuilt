@@ -62,7 +62,9 @@ internal suspend fun sampleBoltReplayVerdict(bolt: Bolt<RgaOp<String>>) {
 
 /** @suppress — sample only */
 internal suspend fun sampleBoltResumeCursor(bolt: Bolt<RgaOp<String>>) {
-    // Consume what the archive holds now, remembering where each frame ended.
+    // Consume what the archive holds now, remembering where each frame ended. `.frames()`
+    // deliberately drops the terminal verdict — fine for a cursor walk, not for anything
+    // that acts on the history being complete.
     var cursor = 0L
     bolt.replay(ReplayScope.All).frames().collect { frame ->
         ship(frame.ops)
