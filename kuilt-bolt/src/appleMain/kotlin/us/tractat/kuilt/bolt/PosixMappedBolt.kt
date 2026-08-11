@@ -23,6 +23,7 @@ import kotlinx.io.Buffer
 import platform.Foundation.NSFileManager
 import platform.posix.EACCES
 import platform.posix.EEXIST
+import platform.posix.EFBIG
 import platform.posix.ENOENT
 import platform.posix.ENOTDIR
 import platform.posix.EPERM
@@ -112,12 +113,18 @@ import kotlin.time.Instant
  *    unlock following a boot, which covers a background writer, without asking for the weaker
  *    `…None`, which would leave a year of records readable on a lost device. The consequence is that
  *    an archive is **not** writable between boot and first unlock, and a caller that needs that must
- *    set `NSFileProtectionNone` on [directory] itself and accept what it means. When the archive
- *    directory cannot be probed with `EACCES`/`EPERM`, [availability] reports
- *    [BoltAvailability.Unknown] rather than [BoltAvailability.Unavailable] — the state is neither
- *    available nor permanently unavailable, and the next unlock may resolve it. **This path is
- *    reachable only on real hardware; nothing in this repo's test suite covers it**, and no test
- *    here should be read as evidence that it works.
+ *    set `NSFileProtectionNone` on [directory] itself and accept what it means.
+ *
+ *    Where that surfaces is worth stating exactly, because the obvious answer is wrong. In the steady
+ *    state the archive directory already exists, so `mkdir` returns `EEXIST` and the directory's own
+ *    metadata reads fine — the refusal never reaches the directory check, and appears one level
+ *    deeper, when a segment file cannot be opened. An `EACCES`/`EPERM` from **either** place is
+ *    reported as [BoltAvailability.Unknown] rather than [BoltAvailability.Unavailable]: the state is
+ *    neither available nor permanently unavailable, the next unlock may resolve it, and the bolt
+ *    retries rather than latching. `chmod 000` on a segment file reproduces the shape, which is what
+ *    `aTransientReadFailureIsRetriedRatherThanWedging` does — but **a locked device is still not
+ *    something this repo's tests can produce**, and no test here should be read as evidence that the
+ *    protection class itself behaves as described.
  *
  * ### Durability is `msync`, and it is one flag
  *
@@ -351,8 +358,14 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
         val views = opened.views ?: return@flow emit(Truncated(opened.cursor, TruncationReason.SegmentHeader))
         for (view in views) {
             if (skippable(view, scope)) continue
-            val bytes = readWholeFile(view.path)
-                ?: return@flow emit(Truncated(view.baseOffset, TruncationReason.SegmentHeader))
+            val bytes = try {
+                readFile(view.path).bytes
+            } catch (failure: PosixFailure) {
+                // A segment this replay cannot read is a replay that stopped, not an archive that is
+                // empty — and the verdict is what says so.
+                emit(Truncated(view.baseOffset, TruncationReason.SegmentHeader))
+                return@flow
+            }
             // A segment that stops early stops the WHOLE replay. An append-only log is ordered, so a
             // frame that does not validate makes everything behind it untrustworthy; carrying on to
             // the next segment would hand back a history with a silent hole and offsets that jump,
@@ -617,9 +630,14 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
      * and map the last one for appending. Called under [lock].
      *
      * A failure is **retried** on the next call, deliberately — the common cause on iOS is a Data
-     * Protection class that makes the directory unreadable while the device is locked, and the next
-     * unlock resolves it. The one exception is structural damage, which no retry fixes and which
-     * therefore [wedged] holds sticky.
+     * Protection class that makes the archive unreadable while the device is locked, and the next
+     * unlock resolves it. The one exception is **structural damage**, which no retry fixes and which
+     * therefore [wedged] holds sticky: a segment in the middle of the archive whose header will not
+     * read, where appending past it would write records no replay could ever reach.
+     *
+     * An unreadable *file* is not that, and used to be treated as though it were — which turned a
+     * condition that clears on its own into a permanent one, on the exact path this paragraph
+     * promises is retried.
      */
     private fun ensureOpen(): BoltAvailability {
         wedged?.let { return it }
@@ -657,7 +675,7 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
         if (path.isEmpty() || path == "/") return null
         if (mkdir(path, DIRECTORY_MODE.convert()) == 0) return null
         val code = errno
-        if (code == EEXIST) return if (isDirectory(path)) null else ENOTDIR
+        if (code == EEXIST) return directoryFault(path)
         if (code != ENOENT) return code
         val parent = path.substringBeforeLast('/', missingDelimiterValue = "")
         if (parent.isEmpty()) return code
@@ -665,10 +683,18 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
         return if (mkdir(path, DIRECTORY_MODE.convert()) == 0) null else errno
     }
 
-    private fun isDirectory(path: String): Boolean = memScoped {
+    /**
+     * `null` if [path] is a directory, else the errno that says why it is not usable as one.
+     *
+     * A boolean was not enough, and the gap was the one thing choosing `mkdir(2)` over Foundation was
+     * meant to prevent: "exists but is not a directory" and "`stat` itself failed" both read as
+     * `false`, so a permission problem or a symlink loop was reported as `ENOTDIR` — a fabricated
+     * cause, which is worse than none because a reader stops looking.
+     */
+    private fun directoryFault(path: String): Int? = memScoped {
         val info = alloc<stat>()
-        if (stat(path, info.ptr) != 0) return false
-        info.st_mode.toInt() and S_IFMT == S_IFDIR
+        if (stat(path, info.ptr) != 0) return errno
+        if (info.st_mode.toInt() and S_IFMT == S_IFDIR) null else ENOTDIR
     }
 
     /**
@@ -693,12 +719,44 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
             ?: return BoltAvailability.Unavailable("archive directory $directory could not be listed")
         val indices = names.mapNotNull { segmentIndexOf(it as? String ?: return@mapNotNull null) }.sorted()
         if (indices.isEmpty()) return BoltAvailability.Available
+        return try {
+            adoptSegments(indices)
+        } catch (failure: PosixFailure) {
+            // NOT the sticky wedge, and that distinction is the whole fix. A file that cannot be
+            // READ is an I/O condition — a Data-Protection-locked device, a descriptor limit, an
+            // interrupted read — and the archive behind it is intact. Wedging here made a condition
+            // that clears on its own permanently disable archiving on this instance, which is the
+            // outcome the tail repair was chosen to avoid, reached by an unrelated route.
+            //
+            // EACCES/EPERM is the locked-device shape specifically: neither available nor
+            // permanently unavailable, which is what Unknown exists to say.
+            if (failure.code == EACCES || failure.code == EPERM) {
+                BoltAvailability.Unknown(failure.reason)
+            } else {
+                BoltAvailability.Unavailable(failure.reason)
+            }
+        }
+    }
 
+    /**
+     * Adopt each segment named by [indices], newest last. Throws [PosixFailure] if a file cannot be
+     * read; returns the wedge only for damage no retry can fix.
+     *
+     * **Only the last segment is read whole.** Every other one carries its `baseOffset` in its own
+     * header, and its frame extent is simply the next segment's base minus its own — so a bounded
+     * probe of the first page tells adoption everything it needs. That matters at both ends of this
+     * backend's range: a server with a year of 1 MiB segments would otherwise read the entire archive
+     * on every open, and a phone would allocate and discard a megabyte per segment inside a class
+     * whose whole premise is bounding the resident footprint.
+     */
+    private fun adoptSegments(indices: List<Long>): BoltAvailability {
         val adopted = mutableListOf<Segment>()
+        var lastBytes: ByteArray? = null
         for (index in indices) {
             val path = directory.withTrailingSlash() + segmentName(index)
-            val bytes = readWholeFile(path)
-                ?: return wedge("segment $path could not be read")
+            val whole = index == indices.last()
+            val file = readFile(path, if (whole) Long.MAX_VALUE else HEADER_PROBE_BYTES)
+            val bytes = file.bytes
             val buffer = Buffer().apply { write(bytes) }
             val header = readSegmentHeader(buffer, format.opFormat, format.elementType)
             if (header == null) {
@@ -706,7 +764,7 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
                 // read holds no frame — deleting it loses nothing, and is the only recovery that
                 // leaves the archive appendable. Only ever true of the LAST segment for our own
                 // writer; a middle one means real corruption, and wedges.
-                if (index != indices.last()) return wedge("segment $path has an unreadable header")
+                if (!whole) return wedge("segment $path has an unreadable header")
                 // NOT a repaired tail, and `repaired` is deliberately left alone. Nothing was
                 // discarded: a header goes down before any frame does, so a segment whose header
                 // does not read holds no record at all. Reporting an offset here would tell a
@@ -723,10 +781,11 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
                 baseOffset = header.baseOffset,
                 formatVersion = header.formatVersion,
                 headerBytes = bytes.size - buffer.size.toInt(),
-                fileBytes = bytes.size.toLong(),
+                fileBytes = file.fileBytes,
                 writtenFrameBytes = 0L,
             )
-            usedBytes += bytes.size
+            usedBytes += file.fileBytes
+            if (whole) lastBytes = bytes
         }
         adopted.forEachIndexed { position, segment ->
             val next = adopted.getOrNull(position + 1)
@@ -734,12 +793,19 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
         }
         segments += adopted
         val last = adopted.lastOrNull() ?: return BoltAvailability.Available
-        return adoptLastSegment(last)
+        // `lastBytes` is null exactly when the final index was discarded for having no header, so
+        // the segment now at the end was only probed and has to be read whole after all.
+        adoptLastSegment(last, lastBytes ?: readFile(last.path).bytes)
+        return BoltAvailability.Available
     }
 
-    /** Scan [last]'s frames for the append cursor, repairing a torn tail, then map it. */
-    private fun adoptLastSegment(last: Segment): BoltAvailability {
-        val bytes = readWholeFile(last.path) ?: return wedge("segment ${last.path} could not be re-read")
+    /**
+     * Scan [bytes] for [last]'s append cursor, repair a torn tail, then map it for appending.
+     *
+     * [bytes] is passed in rather than re-read: adoption has already read this file whole, and
+     * reading it twice doubled the cost of every open for nothing.
+     */
+    private fun adoptLastSegment(last: Segment, bytes: ByteArray) {
         val scan = scanFrameExtent(bytes, last.headerBytes, last.formatVersion)
         last.writtenFrameBytes = scan.frameBytes
         nextOffset = last.baseOffset + scan.frameBytes
@@ -762,7 +828,6 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
             zeroFrom(mapping, from, last.fileBytes - from)
             if (synchronous) syncRange(mapping, from, last.fileBytes - from)
         }
-        return BoltAvailability.Available
     }
 
     /** How many frame bytes of [bytes] are intact, and whether what follows them is damage. */
@@ -904,30 +969,42 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
     }
 
     /**
-     * The whole of [path], or `null` if it could not be read.
+     * The first [limit] bytes of [path], with the file's true size alongside them.
      *
      * `read(2)` rather than a mapping: the codec copies the bytes into a `Buffer` regardless, and a
      * mapped read of a file something else truncates is a second `SIGBUS` surface where a `read` just
      * comes up short.
+     *
+     * **Failures throw [PosixFailure] rather than returning `null`.** A bare `null` conflated every
+     * reason a file might not open — a locked device, a descriptor limit, an interrupted read, real
+     * corruption — and the caller, having nothing to tell them apart by, treated all of them as
+     * permanent damage. It also discarded the errno, in a class whose whole failure-reporting rule is
+     * to name identities and state rather than report that something went wrong.
      */
-    @Suppress("ReturnCount")
-    private fun readWholeFile(path: String): ByteArray? {
+    private fun readFile(path: String, limit: Long = Long.MAX_VALUE): FileBytes {
         val fd = platform.posix.open(path, O_RDONLY)
-        if (fd < 0) return null
+        if (fd < 0) throw posixFailure("could not open segment $path")
         try {
             val size = lseek(fd, 0, SEEK_END)
-            if (size < 0 || size > Int.MAX_VALUE || lseek(fd, 0, SEEK_SET) < 0) return null
-            if (size == 0L) return ByteArray(0)
-            val out = ByteArray(size.toInt())
+            if (size < 0) throw posixFailure("could not size segment $path")
+            if (lseek(fd, 0, SEEK_SET) < 0) throw posixFailure("could not rewind segment $path")
+            val wanted = minOf(size, limit)
+            if (wanted > Int.MAX_VALUE) {
+                throw PosixFailure("segment $path is ${size}B, more than one read can carry", EFBIG)
+            }
+            val out = ByteArray(wanted.toInt())
             var filled = 0
             out.usePinned { pinned ->
                 while (filled < out.size) {
                     val n = read(fd, pinned.addressOf(filled), (out.size - filled).convert())
-                    if (n <= 0) return null
+                    if (n < 0) throw posixFailure("could not read segment $path")
+                    // A short file is not a failure here — the parse downstream decides what a
+                    // segment with too few bytes in it means.
+                    if (n == 0L) break
                     filled += n.toInt()
                 }
             }
-            return out
+            return FileBytes(if (filled == out.size) out else out.copyOf(filled), size)
         } finally {
             platform.posix.close(fd)
         }
@@ -979,6 +1056,9 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
 
     private class FrameExtent(val frameBytes: Long, val torn: Boolean)
 
+    /** What [readFile] read, and how big the file actually is — the two differ under a bounded probe. */
+    private class FileBytes(val bytes: ByteArray, val fileBytes: Long)
+
     /**
      * A failing posix call, carrying both the errno-bearing text an [AppendResult.Failed] needs and
      * the raw [code], which is what lets a caller tell a transient refusal from a permanent one.
@@ -993,6 +1073,9 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
         private const val SEGMENT_SUFFIX = ".bolt"
         private const val SEGMENT_INDEX_DIGITS = 16
         private const val PREALLOCATION_CHUNK_BYTES = 1 shl 16
+
+        /** One page: far more than any plausible segment header, and O(1) per segment at open. */
+        private const val HEADER_PROBE_BYTES = 4096L
 
         /** `rwx------`: an archive is the owning application's business and nobody else's. */
         private const val DIRECTORY_MODE = 448 // 0o700
