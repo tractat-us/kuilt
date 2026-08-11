@@ -897,7 +897,9 @@ abstract class BoltConformanceSuite {
      * 7. it **widens** to the third append's end rather than resetting to it — the range grows with
      *    each failure, which is what preserves a once-and-then-cleared `EIO`;
      * 8. its `reason` is not blank — a bare "durability degraded" makes every recovery unimplementable;
-     * 9. the unpromised arm reports [DurabilityState.AsPromised] after every one of the same appends.
+     * 9. **the flushing-but-unpromised arm proves its rig fired**, so "it flushed and was not degraded
+     *    by it" is an assertion rather than a coincidence of the fixture's segment budget;
+     * 10. and both unpromised arms report [DurabilityState.AsPromised] after the same appends.
      *
      * **Mutation receipts**, measured on this branch — each mutation applied alone, the verdict read
      * out of the results XML, then reverted and the revert grep-verified:
@@ -911,21 +913,27 @@ abstract class BoltConformanceSuite {
      * | Record an empty range on every failure | 6, 7 |
      * | Record a blank `reason` | 8 only |
      * | `DurabilityLedger.flushFailed` overwrites instead of widening | **7 only, and only on some subclasses** |
-     * | Flush regardless of the durability flag — the absolute reading | **9 only** |
-     * | Record a flush the bolt never promised (`MappedBolt`'s ungated retiring-segment flush) | **9 only** |
+     * | Flush regardless of the durability flag — the absolute reading | **10 only** |
+     * | Record a flush the bolt never promised (`MappedBolt`'s ungated retiring-segment flush) | **10 only** |
+     * | Move the promise gate from the ledger to [roll], so an async bolt never flushes | **9 only** |
      * | Make `durability()` an event: reading it clears the state | **4 only** |
      * | `DurabilityLedger.flushSucceeded` clears unconditionally | **none** |
      * | **Fixture:** hand back an un-rigged bolt under [DurabilityFixture.Promised] | 5, 6, 7, 8 |
-     * | **Fixture:** give the asynchronous arm a budget that never rolls | **nothing — it goes green** |
+     * | **Fixture:** give the flushing-but-unpromised arm a budget that never rolls | **9 only** |
      *
-     * **The last two rows are the same lesson from both sides, and the second one is a defect this
-     * property shipped with.** `MappedBolt` flushes the retiring segment at a roll whatever
-     * `forceOnAppend` says; recording that flush latched [DurabilityState.Degraded] on a bolt that had
-     * promised nothing, permanently, since no later flush can re-cover a retired segment. Row 6 is that
-     * bug — and the property was **green** against it, because the asynchronous fixture used a budget
-     * at which three small appends never roll, so the rig was never reached and assertion 9 asserted
-     * nothing. The fixture had picked the one configuration in which the property could not fail. Both
-     * halves are fixed: the ledger is now gated on the promise, and the asynchronous fixture rolls.
+     * **Two rows are the same defect from both sides, and this property shipped green against it.**
+     * `MappedBolt` flushes the retiring segment at a roll whatever `forceOnAppend` says; recording that
+     * flush latched [DurabilityState.Degraded] on a bolt that had promised nothing — permanently, since
+     * no later flush can re-cover a retired segment. Row 6 is that bug, and the property could not see
+     * it, because the asynchronous fixture used a budget at which three small appends never roll, so
+     * the rig was never reached and the arm asserted nothing at all.
+     *
+     * **The last row is why assertion 9 exists, and it is the correction to the first fix.** Choosing a
+     * rolling budget made the arm non-vacuous *by consequence* — a literal in a test helper, one edit
+     * away from silently reverting while this table still claimed the row. Assertion 9 makes the fixture
+     * **prove** the rig fired instead. Row 3 is the sharper receipt: moving the gate to [roll] is a real
+     * durability regression that still *rolls*, so an assertion on segment count would stay green, and
+     * only "a flush was attempted and failed" catches it.
      *
      * **Row 7 is the sharpest one, and it is #2240's thesis recurring here.** Overwriting instead of
      * widening reds **only** on the one-frame-per-segment subclasses. At the shipped 1 MiB budget all
