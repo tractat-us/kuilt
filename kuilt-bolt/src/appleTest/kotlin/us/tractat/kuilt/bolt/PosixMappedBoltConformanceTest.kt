@@ -1,3 +1,5 @@
+@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+
 package us.tractat.kuilt.bolt
 
 import kotlinx.io.Buffer
