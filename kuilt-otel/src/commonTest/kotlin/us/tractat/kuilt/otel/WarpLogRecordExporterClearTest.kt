@@ -161,4 +161,54 @@ class WarpLogRecordExporterClearTest {
             "a cleared exporter must not re-mint an RgaId it has already used",
         )
     }
+
+    private class WriteRefusingStore(private val backing: DurableStore) : DurableStore {
+        var refuse: Boolean = false
+        override suspend fun read(key: StoreKey): ByteArray? = backing.read(key)
+        override suspend fun write(key: StoreKey, bytes: ByteArray) {
+            if (refuse) throw IllegalStateException("store refused $key")
+            backing.write(key, bytes)
+        }
+        override suspend fun delete(key: StoreKey) = backing.delete(key)
+    }
+
+    @Test
+    fun aRefusedClearReportsFailureAndARetryConverges() = runTest {
+        val store = WriteRefusingStore(InMemoryDurableStore())
+        val exporter = exporterFor(store = store, segmentOps = 2)
+        repeat(10) { i -> exporter.export(record(i)) }
+
+        // Captured rather than hard-coded: `accepted` counts the ten successful exports above,
+        // and what this test asserts is that a clear does not MOVE it, not what it equals.
+        val acceptedBefore = exporter.health.value.accepted
+        val failedBefore = exporter.health.value.failed
+
+        store.refuse = true
+        val refused = exporter.clear()
+        val failedAfterRefusal = exporter.health.value.failed
+
+        // A failed clear leaves the buffer empty while the store still holds the records —
+        // the documented divergence. A caller must read this as "count unknown", not zero.
+        val snapshotAfterRefusal = exporter.snapshot().toList()
+
+        store.refuse = false
+        val retried = exporter.clear()
+
+        // THE assertion of this test. A retry that returns Success having written nothing
+        // passes every other line here — the live buffer was already empty from the failed
+        // attempt — while the store still holds every sealed segment and a restart brings
+        // all ten records back. Only recovering a fresh exporter can tell the two apart.
+        val recovered = exporterFor(store = store, segmentOps = 2)
+        recovered.recover()
+
+        assertAll(
+            { assertTrue(refused is ExportResult.Failure, "a refused durable write fails the clear") },
+            { assertEquals(failedBefore + 1, failedAfterRefusal, "the store rejected a write, so `failed` moves") },
+            { assertEquals(emptyList(), snapshotAfterRefusal, "the in-memory drop is not undone on failure") },
+            { assertEquals(ExportResult.Success, retried, "a retry converges") },
+            { assertEquals(emptyList(), recovered.snapshot().toList(), "the retry actually reached the store") },
+            { assertEquals(acceptedBefore, exporter.health.value.accepted, "no clear moves `accepted`") },
+            { assertEquals(emptyList(), exporter.snapshot().toList()) },
+        )
+    }
 }
