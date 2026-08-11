@@ -6,6 +6,7 @@ import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
  * Pins [WarpLogRecordExporter.clear] (#2208): a supported reset a live exporter keeps
@@ -90,6 +91,34 @@ class WarpLogRecordExporterClearTest {
             (100 until 105).map { recordId(it) },
             recovered.snapshot().toList().map { it.recordId },
             "re-initialisation: only what was exported after the clear survives a restart",
+        )
+    }
+
+    /**
+     * The reclamation half of the motivation, which the three tests above do not cover: a clear
+     * that emptied memory and the index while leaving every segment key on disk passes all of
+     * them. [RecordingStore.keys] is what reports the live key set — `InMemoryDurableStore`
+     * cannot, and it should stay that way; the absence of key enumeration on [DurableStore] is a
+     * documented consumer-facing constraint (#2208), not an oversight to close here.
+     */
+    @Test
+    fun clearDeletesTheSealedSegmentKeysAndLeavesOnlyTheIndexAndOneActiveSegment() = runTest {
+        val store = RecordingStore()
+        val exporter = exporterFor(store = store, segmentOps = 2)
+        repeat(20) { i -> exporter.export(record(i)) }
+
+        val segmentsBefore = store.keys().filter { it.startsWith(SEGMENT_KEY_PREFIX_FOR_TEST) }
+        assertTrue(
+            segmentsBefore.size >= 5,
+            "the fixture must actually roll segments or this test proves nothing; got $segmentsBefore",
+        )
+
+        assertEquals(ExportResult.Success, exporter.clear())
+
+        val segmentsAfter = store.keys().filter { it.startsWith(SEGMENT_KEY_PREFIX_FOR_TEST) }
+        assertAll(
+            { assertEquals(1, segmentsAfter.size, "exactly one active segment survives; got $segmentsAfter") },
+            { assertTrue(INDEX_KEY_FOR_TEST.name in store.keys(), "the index survives") },
         )
     }
 }
