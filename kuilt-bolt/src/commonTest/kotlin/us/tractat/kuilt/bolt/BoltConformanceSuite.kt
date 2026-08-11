@@ -574,29 +574,37 @@ abstract class BoltConformanceSuite {
      * | Delete it in `PosixMappedBolt.emitFrames` | 1, 3, 4, 5 |
      * | Report the *next* segment's `baseOffset` instead of the previous segment's end | 4 only |
      * | Report [TruncationReason.SegmentHeader] (what both mmap backends did, knowingly) | 5 only |
+     * | Treat a **derived** segment extent as evidence (`PosixMappedBolt`) | 5 only — see below |
      * | Emit the verdict without stopping the replay | 1, 2, 4, 5 |
      * | **Fixture:** hand back a healthy archive (skip the `loseSegment`/`delete`) | 1, 3, 4, 5 |
      *
      * The first three rows are the finding: with the check gone, every backend replays a lost segment
-     * as a [CleanTail] over a history with a gap in it. Two of them are not hypothetical — the first
-     * and third rows are `InMemoryBolt` and `PosixMappedBolt` exactly as they shipped, the third
-     * measured against this fixture on `macosArm64` and `iosSimulatorArm64`. The two single-assertion
-     * rows are what stop assertions 4 and 5 riding on 1. The last row is the vacuity guard: the
-     * precondition fails first and loudest, so a backend that quietly returns a healthy bolt cannot go
-     * green.
+     * as a [CleanTail] over a history with a gap in it. Two are not hypothetical — rows 1 and 3 are
+     * `InMemoryBolt` and `PosixMappedBolt` exactly as they shipped. The two single-assertion rows are
+     * what stop assertions 4 and 5 riding on 1. The last row is the vacuity guard: the precondition
+     * fails first and loudest, so a backend that quietly returns a healthy bolt cannot go green.
      *
-     * **The green row, and what this property cannot reach** — said plainly, because an all-red table
-     * invites exactly the wrong conclusion. **Assertion 6 was green under every mutation above.** It is
-     * kept because it is the only one that would catch a replay emitting its verdict and then more
-     * frames, and no mutation of the *current* code produces that shape (the verdict is a `return`);
-     * its justification is inherited from [aTruncatedArchiveStopsAtTheDamageAndSaysSo], which pins the
-     * same pair one level down. Beyond that: this drives one shape of hole — a whole segment lost out
-     * of the middle — and only on [ReplayScope.All]. It says nothing about a discontinuity under a
-     * scope that prunes segments (the first segment such a scope reads has nothing behind it to be
-     * checked against, by construction), nothing about a *backwards* jump, and nothing about a backend
-     * that reaches the hole through its own within-segment extent bookkeeping and answers
-     * [TruncationReason.Frame] — that would red here, correctly, but no fixture in the tree produces
-     * it.
+     * **Row 6 is why [newDiscontinuousBolt] mandates a realistic segment tail, and it is the sharpest
+     * lesson here.** It reddens **only** on the subclasses whose fixture leaves a pre-allocated zero
+     * tail behind the last frame, and is **green** on the one whose segments end exactly on a frame
+     * boundary — because that configuration exits the parse loop without ever consulting the extent.
+     * Every fixture in the first draft of this property was the second kind. So a real backend defect,
+     * on a shipped configuration, sat under a table that was otherwise all red. And note its shape:
+     * assertions 1–4 and 6 all still passed, only the *reason* was wrong, which is the least visible
+     * red a conformance table can produce.
+     *
+     * **The green assertion, and what this property cannot reach** — said plainly, because an all-red
+     * table invites exactly the wrong conclusion. **Assertion 6 was green under every mutation above.**
+     * It is kept because it is the only one that would catch a replay emitting its verdict and then
+     * more frames, and no mutation of the *current* code produces that shape (the verdict is a
+     * `return`); its justification is inherited from [aTruncatedArchiveStopsAtTheDamageAndSaysSo],
+     * which pins the same pair one level down. Beyond that, this drives **one shape of hole** — a
+     * whole segment lost out of the middle — and only under [ReplayScope.All];
+     * [resumingFromTheHoleReachesTheSameVerdictRatherThanACleanTail] is the sibling that drives the
+     * pruning scope, and its own KDoc lists what *it* cannot reach. Still unpinned anywhere: a
+     * **backwards** jump (a header claiming an offset *below* where the previous segment stopped), a
+     * hole spanning more than one lost segment, and a hole in an archive whose surviving segments were
+     * written by more than one format version.
      */
     @Test
     fun anArchiveMissingAMiddleRegionStopsAtTheHoleAndSaysSo() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
@@ -664,20 +672,48 @@ abstract class BoltConformanceSuite {
      * check — and then report a gapped history as complete to the one caller most likely to act on it.
      *
      * That is not hypothetical: `InMemoryBolt` did exactly this, replying `Truncated(E, MissingRegion)`
-     * to `All` and `CleanTail` to `FromOffset(E)` for the same archive in the same test. `MappedBolt`
-     * was right only because it prunes nothing at all, so before this test the three backends
-     * disagreed with each other — which is the dimension #2240 exists to close.
+     * to `All` and [CleanTail] to `FromOffset(E)` for the same archive in the same test — the
+     * **reference** backend, and so the one every other backend gets checked against. The two mmap
+     * backends escaped it, and neither on purpose: `MappedBolt` prunes nothing at all, and
+     * `PosixMappedBolt` is saved by an inflated derived extent. Three backends, three different
+     * reasons, one of them wrong — which is the dimension #2240 exists to close.
      *
-     * **Mutation receipts.** Restoring the `continue`-past-a-pruned-segment loop (dropping the cursor
-     * across a skip) reddens both assertions on `InMemoryBolt` and `PosixMappedBolt` and leaves
-     * `MappedBolt` green — the asymmetry itself, made visible. Carrying the cursor from *bookkeeping*
-     * instead of parsing (`baseOffset + writtenFrameBytes` in the skip branch) reddens neither, and is
-     * the trap this test exists to keep shut: on a file-backed archive that value is derived from the
-     * next segment's base, so the check compares a value with itself.
+     * **Mutation receipts** — three assertions: **1** the fixture really is discontinuous, **2** the
+     * resume replays no frames, **3** it reaches the same verdict.
      *
-     * **What it cannot reach:** a cursor *inside* the hole rather than at its start, and an archive
-     * whose every segment is prunable (nothing is emitted, and there is no boundary left to check —
-     * that replay is a [CleanTail] and this test does not claim otherwise).
+     * | Mutation | Reds |
+     * |---|---|
+     * | Drop the cursor across a pruned segment — `InMemoryBolt` | 2, 3 |
+     * | Drop the cursor across a pruned segment — `PosixMappedBolt` | **none** |
+     * | Drop the cursor across a pruned segment — `MappedBolt` | **none** (it prunes nothing) |
+     * | Carry the cursor from bookkeeping rather than parsing — `InMemoryBolt` | **none** |
+     * | Delete the continuity check in any backend | 1 only |
+     *
+     * **Three green rows, and they are the honest part.** Row 1 is the live bug: `InMemoryBolt`
+     * answered `Truncated(E, MissingRegion)` to [ReplayScope.All] and [CleanTail] to `FromOffset(E)`
+     * for the same archive — `E` being the offset the first replay had just told a consumer to resume
+     * from.
+     *
+     * Row 2 says the same defect is **not reachable on `PosixMappedBolt`**, and the reason is worth
+     * writing down because it is pure luck. Pruning asks whether `baseOffset + extent <= cursor`, and
+     * a middle segment's extent there is *derived* as the next segment's base minus its own — inflated
+     * by exactly the hole. So the segment before a hole is prunable only when the cursor already sits
+     * at or past the segment *after* the hole, and then the missing region lies entirely below the
+     * cursor, outside what was asked for. The bug and the thing that hides it have the same cause.
+     * The fix is applied to both backends anyway: relying on an accident of inflated bookkeeping to
+     * stay correct is how the next reader loses it, and #2236 (real pruning for `MappedBolt`) would
+     * hand `MappedBolt` the identical bug the moment it lands.
+     *
+     * Row 4 is the trap this test was expected to close and **does not**: carrying the cursor from
+     * bookkeeping is exactly right for `InMemoryBolt` (whose extents are exact) and a tautology on
+     * `PosixMappedBolt` (where the check would compare a value with itself) — but because of row 2 the
+     * tautology is never reached, so that implementation is green too. Parsing the last pruned segment
+     * is chosen on the argument, not on a red: no test in this tree distinguishes the two.
+     *
+     * **What it cannot reach:** a cursor *inside* the hole rather than at its start; an archive all of
+     * whose segments are prunable (nothing is emitted and no boundary survives to check — that replay
+     * is a [CleanTail] and this test does not claim otherwise); and a hole lying entirely below the
+     * cursor, which no scope-respecting replay is obliged to report.
      */
     @Test
     fun resumingFromTheHoleReachesTheSameVerdictRatherThanACleanTail() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
