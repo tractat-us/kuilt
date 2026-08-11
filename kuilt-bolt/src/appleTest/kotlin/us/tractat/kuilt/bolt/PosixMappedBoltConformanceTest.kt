@@ -29,8 +29,13 @@ class PosixMappedBoltConformanceTest : BoltConformanceSuite() {
     override suspend fun newTruncatedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         truncatedPosixMappedBolt(clock, intactFrames, PosixMappedBolt.DEFAULT_SEGMENT_FRAME_BYTES)
 
+    /**
+     * With a real pre-allocated tail on every segment — the shipped shape, and the one where the
+     * zero-tail/recorded-extent machinery is actually consulted. The default 1 MiB budget cannot be
+     * used as-is: it puts the whole fixture in ONE segment, leaving no middle to lose.
+     */
     override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
-        discontinuousPosixMappedBolt(clock, intactFrames, synchronous = true)
+        discontinuousPosixMappedBolt(clock, intactFrames, synchronous = true, PRE_ALLOCATED_TAIL_BYTES)
 
     @AfterTest
     fun removeArchives(): Unit = removeBoltTestDirectories()
@@ -57,8 +62,14 @@ class TinySegmentPosixMappedBoltConformanceTest : BoltConformanceSuite() {
     override suspend fun newTruncatedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         truncatedPosixMappedBolt(clock, intactFrames, segmentFrameBytes = 1L)
 
+    /**
+     * The complement of the default subclass, and the reason this class exists: **no** pre-allocated
+     * tail, so the segment before the hole runs out of bytes exactly on a frame boundary and exits
+     * the parse loop normally — never consulting the recorded extent at all. The two configurations
+     * reach the continuity check by different routes and must reach the same verdict.
+     */
     override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
-        discontinuousPosixMappedBolt(clock, intactFrames, synchronous = true)
+        discontinuousPosixMappedBolt(clock, intactFrames, synchronous = true, NO_PRE_ALLOCATED_TAIL)
 
     @AfterTest
     fun removeArchives(): Unit = removeBoltTestDirectories()
@@ -76,7 +87,7 @@ class AsynchronousPosixMappedBoltConformanceTest : BoltConformanceSuite() {
         truncatedPosixMappedBolt(clock, intactFrames, PosixMappedBolt.DEFAULT_SEGMENT_FRAME_BYTES)
 
     override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
-        discontinuousPosixMappedBolt(clock, intactFrames, synchronous = false)
+        discontinuousPosixMappedBolt(clock, intactFrames, synchronous = false, PRE_ALLOCATED_TAIL_BYTES)
 
     @AfterTest
     fun removeArchives(): Unit = removeBoltTestDirectories()
@@ -156,30 +167,55 @@ private suspend fun discontinuousPosixMappedBolt(
     clock: Clock,
     intactFrames: Int,
     synchronous: Boolean,
+    zeroTailBytes: Long,
 ): Bolt<RgaOp<String>> {
     require(intactFrames >= 1) { "the fixture stops AFTER a frame, so it needs at least one" }
     val format = rgaArchiveFormat()
-    val directory = boltTestDirectory()
-    val writer = PosixMappedBolt(format, clock, directory, synchronous, segmentFrameBytes = 1L)
     val alice = ReplicaId("alice")
-
-    var live = Rga.empty<String>()
-    repeat(intactFrames + 1 + FRAMES_BEHIND_THE_HOLE) { index ->
-        val (next, op) = live.insertAt(alice, live.size, "frame-$index")
-        live = next
-        assertIs<AppendResult.Written>(writer.append(listOf(op)), "every fixture frame must be written")
+    val ops = buildList {
+        var live = Rga.empty<String>()
+        repeat(intactFrames + 1 + FRAMES_BEHIND_THE_HOLE) { index ->
+            val (next, op) = live.insertAt(alice, live.size, "frame-$index")
+            live = next
+            add(op)
+        }
     }
+    // One frame per segment, plus whatever tail this subclass asked for. Measured from a real
+    // encoded frame rather than guessed: the budget has to be big enough for one frame and too
+    // small for two, and a fixture that silently packed two frames into a segment would have no
+    // middle to lose.
+    val frameBytes = encodeFrame(
+        RawFrame(clock.now(), setOf(ops[0].id.dot), null, listOf(format.encode(ops[0]))),
+    ).size.toLong()
+    check(zeroTailBytes < frameBytes) { "a $zeroTailBytes-byte pad would leave room for a second frame" }
+    val directory = boltTestDirectory()
+    val writer = PosixMappedBolt(format, clock, directory, synchronous, frameBytes + zeroTailBytes)
+
+    ops.forEach { assertIs<AppendResult.Written>(writer.append(listOf(it)), "every fixture frame must be written") }
     writer.close()
+    check(segmentFiles(directory).size == ops.size) {
+        "the fixture needs one frame per segment, or there is no middle segment to lose"
+    }
     val hole = segmentFiles(directory)[intactFrames]
     check(NSFileManager.defaultManager.removeItemAtPath(hole, error = null)) {
         "the fixture's hole must actually be punched — $hole is still there"
     }
 
-    return PosixMappedBolt(format, clock, directory, synchronous, segmentFrameBytes = 1L)
+    return PosixMappedBolt(format, clock, directory, synchronous, frameBytes + zeroTailBytes)
 }
 
 /** Frames behind the hole. More than one, so "stepped over it" is unmistakable rather than off-by-one. */
 private const val FRAMES_BEHIND_THE_HOLE = 2
+
+/**
+ * A pre-allocated tail on every fixture segment, so the segment before the hole ends the way this
+ * backend's ordinary segments end — the configuration in which `reachedRecordedExtent` is actually
+ * consulted. Smaller than a frame, so only one frame lands per segment.
+ */
+private const val PRE_ALLOCATED_TAIL_BYTES = 32L
+
+/** No tail: each segment is sized to the one frame that forced it, ending exactly on a frame boundary. */
+private const val NO_PRE_ALLOCATED_TAIL = 0L
 
 /** A segment's bytes: a whole header for [format] at [baseOffset], then whatever [frames] writes. */
 private fun rawSegment(

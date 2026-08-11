@@ -103,6 +103,16 @@ abstract class BoltConformanceSuite {
      * hole are also what keeps "stop at the hole" and "step over the hole" from emitting identical
      * events, exactly as [newTruncatedBolt]'s KDoc argues one level down.
      *
+     * **The segment before the hole must end the way this backend's ORDINARY segments end** —
+     * pre-allocated tail included, if this backend pre-allocates. A fixture is free to choose a
+     * segment budget, and the cheap choice (one frame per segment, sized to fit it) produces a
+     * segment with **no zero tail**, whose parse therefore runs out of bytes and exits the frame loop
+     * normally. That configuration walks straight past a backend's zero-tail/recorded-extent
+     * machinery, so a backend that answers the wrong *reason* there goes green — which is #2240's own
+     * thesis recurring one level down, the fixture picking the configuration in which the failure
+     * cannot occur. A budget of one frame plus a small pad gives a real tail; drive both if the
+     * backend distinguishes them.
+     *
      * The obligation asserts its own precondition, so a backend that returns a healthy archive — or
      * one damaged some other way — fails loudly rather than passing quietly.
      */
@@ -635,6 +645,74 @@ abstract class BoltConformanceSuite {
                     frames.size,
                     events.indexOfFirst { it !is Archived<*> },
                     "the verdict is LAST — every event before it is a frame, and none follows it",
+                )
+            },
+        )
+    }
+
+    /**
+     * A resume from the hole's own offset must reach the **same verdict**, not a [CleanTail].
+     *
+     * [anArchiveMissingAMiddleRegionStopsAtTheHoleAndSaysSo] only ever asks with [ReplayScope.All],
+     * and that is the scope under which a backend has the least excuse to miss a hole: it reads every
+     * segment, so the boundary either lines up or it does not. [ReplayScope.FromOffset] is the
+     * interesting one, and it is interesting for the worst possible reason — it is the **documented
+     * resume cursor** (`ReplayScope.FromOffset`: "hand back `Archived.endOffset` of the last frame you
+     * consumed"), so the offset a consumer hands back after the verdict above is *precisely* the
+     * offset the missing region starts at. A backend that prunes whole segments below the cursor can
+     * prune away the last segment before the hole — and with it the only boundary this scope had to
+     * check — and then report a gapped history as complete to the one caller most likely to act on it.
+     *
+     * That is not hypothetical: `InMemoryBolt` did exactly this, replying `Truncated(E, MissingRegion)`
+     * to `All` and `CleanTail` to `FromOffset(E)` for the same archive in the same test. `MappedBolt`
+     * was right only because it prunes nothing at all, so before this test the three backends
+     * disagreed with each other — which is the dimension #2240 exists to close.
+     *
+     * **Mutation receipts.** Restoring the `continue`-past-a-pruned-segment loop (dropping the cursor
+     * across a skip) reddens both assertions on `InMemoryBolt` and `PosixMappedBolt` and leaves
+     * `MappedBolt` green — the asymmetry itself, made visible. Carrying the cursor from *bookkeeping*
+     * instead of parsing (`baseOffset + writtenFrameBytes` in the skip branch) reddens neither, and is
+     * the trap this test exists to keep shut: on a file-backed archive that value is derived from the
+     * next segment's base, so the check compares a value with itself.
+     *
+     * **What it cannot reach:** a cursor *inside* the hole rather than at its start, and an archive
+     * whose every segment is prunable (nothing is emitted, and there is no boundary left to check —
+     * that replay is a [CleanTail] and this test does not claim otherwise).
+     */
+    @Test
+    fun resumingFromTheHoleReachesTheSameVerdictRatherThanACleanTail() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val bolt = newDiscontinuousBolt(FixedClock(epoch), INTACT_FRAMES)
+
+        val whole = bolt.replay(ReplayScope.All).toList()
+        val verdict = whole.lastOrNull()
+        // The cursor a consumer is told to hand back: the end of the last frame it consumed.
+        val cursor = whole.filterIsInstance<Archived<RgaOp<String>>>().last().endOffset
+        val resumed = bolt.replay(ReplayScope.FromOffset(cursor)).toList()
+        val resumedFrames = resumed.filterIsInstance<Archived<RgaOp<String>>>()
+
+        assertAll(
+            {
+                assertIs<Truncated>(
+                    verdict,
+                    "newDiscontinuousBolt must hand back an archive with a HOLE in it — a healthy one " +
+                        "makes this obligation vacuous, so it fails here rather than passing",
+                )
+            },
+            {
+                assertEquals(
+                    0,
+                    resumedFrames.size,
+                    "a resume from the hole replays NOTHING — the frames beyond it are real, but the " +
+                        "records between the cursor and them are gone, so their history is not",
+                )
+            },
+            {
+                assertEquals(
+                    verdict,
+                    resumed.lastOrNull(),
+                    "and reaches the SAME verdict: a scope that prunes whole segments must not prune " +
+                        "the one boundary that proves the archive joins up, least of all at the offset " +
+                        "the previous replay just told a consumer to resume from",
                 )
             },
         )

@@ -428,7 +428,13 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
             // directory full of frames.
             val usable = ensureOpen() is BoltAvailability.Available
             Opened(
-                views = if (usable) segments.map { SegmentView(it.path, it.baseOffset, it.writtenFrameBytes) } else null,
+                views = if (usable) {
+                    segments.map {
+                        SegmentView(it.path, it.baseOffset, it.writtenFrameBytes, it.extentIsObserved)
+                    }
+                } else {
+                    null
+                },
                 cursor = nextOffset,
             )
         }
@@ -436,14 +442,29 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
         // empty one: "I could not read it" and "it holds nothing" are different answers, and only one
         // of them is true.
         val views = opened.views ?: return@flow emit(Truncated(opened.cursor, TruncationReason.SegmentHeader))
-        // Null until the first segment has spoken. The archive's offset space starts wherever its
-        // OLDEST segment says it does rather than at 0, and `skippable` below can drop a PREFIX of
-        // segments unread — so the first segment actually read has nothing to be checked against.
-        // Skips really are a prefix: `baseOffset + writtenFrameBytes` increases across segments, so
-        // once one segment is read every later one is too.
+        // Segment-granularity pruning, MINUS ONE — and the minus one is load-bearing.
+        //
+        // `skippable` prunes a PREFIX. The segment immediately before the first survivor is read
+        // ANYWAY, with every one of its frames filtered out by the scope, because its true frame end
+        // is the offset the first emitted segment must continue from. Pruning it would leave that
+        // boundary — the only one a `FromOffset` replay has — unchecked, and an unchecked boundary
+        // is a hole reported as a [CleanTail] to the one caller most likely to act on it:
+        // [ReplayScope.FromOffset] is the documented *resume cursor*, so the offset a consumer hands
+        // back is precisely the offset a lost segment starts at.
+        //
+        // It is PARSED rather than taken from [SegmentView.writtenFrameBytes], and on this backend
+        // that is the difference between a check and a tautology: a middle segment's extent is
+        // DERIVED as the next segment's base minus its own (see [adoptSegments]), so
+        // `baseOffset + writtenFrameBytes` equals that base by construction and the continuity check
+        // would compare a value with itself — green, over a real hole. One extra `read(2)` of a
+        // segment whose frames are all filtered out cannot lie.
+        val firstUnpruned = views.indexOfFirst { !skippable(it, scope) }
+        if (firstUnpruned < 0) return@flow emit(CleanTail)
+        // Null until the first segment has spoken: the archive's offset space starts wherever its
+        // OLDEST segment says it does, not at 0.
         var resumeOffset: Long? = null
-        for (view in views) {
-            if (skippable(view, scope)) continue
+        for (index in maxOf(firstUnpruned - 1, 0) until views.size) {
+            val view = views[index]
             val bytes = try {
                 readFile(view.path).bytes
             } catch (failure: PosixFailure) {
@@ -721,8 +742,19 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
                 // `>=`, not `==`: a replay collected while an append lands legitimately reads the
                 // NEW frame too, so the cursor can sit PAST the extent this replay snapshotted.
                 // Only stopping SHORT of it is damage.
-                val reachedRecordedExtent = offset >= view.baseOffset + view.writtenFrameBytes
-                return if (isZeroFrom(bytes, cursor) && reachedRecordedExtent) {
+                //
+                // And only when the extent is EVIDENCE. A middle segment adopted from disk has its
+                // extent DERIVED as the next segment's base minus its own, so across a hole it is
+                // inflated by exactly the hole: the state this predicate would have to detect is the
+                // state that corrupts its input. Left unguarded it reports a segment that ended
+                // perfectly cleanly as a torn [TruncationReason.Frame] — the retry-forever answer,
+                // for records that are gone — where `MappedBolt` over byte-identical files says
+                // [TruncationReason.MissingRegion]. A derived extent therefore says nothing here;
+                // the cross-segment continuity check above catches the same gap, at the same offset,
+                // with the reason a consumer can act on (#2240).
+                val shortOfItsExtent =
+                    view.extentIsObserved && offset < view.baseOffset + view.writtenFrameBytes
+                return if (isZeroFrom(bytes, cursor) && !shortOfItsExtent) {
                     SegmentReplay(stopped = null, endOffset = offset)
                 } else {
                     SegmentReplay(Truncated(offset, TruncationReason.Frame), offset)
@@ -916,7 +948,9 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
         }
         adopted.forEachIndexed { position, segment ->
             val next = adopted.getOrNull(position + 1)
-            if (next != null) segment.writtenFrameBytes = next.baseOffset - segment.baseOffset
+            // DERIVED, and marked as such: this assumes the archive is continuous, which is exactly
+            // what a replay must not take on faith. See `Segment.extentIsObserved`.
+            if (next != null) segment.deriveExtent(next.baseOffset - segment.baseOffset)
         }
         segments += adopted
         val last = adopted.lastOrNull() ?: return BoltAvailability.Available
@@ -934,6 +968,10 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
      */
     private fun adoptLastSegment(last: Segment, bytes: ByteArray) {
         val scan = scanFrameExtent(bytes, last.headerBytes, last.formatVersion)
+        // A plain assignment, deliberately: this extent was walked frame by frame off the disk, so
+        // it stays OBSERVED and `emitFrames` may still conclude a short segment is damaged from it.
+        // The newest segment is the one that can afford the scan, and the only one with no
+        // successor whose header could catch a gap instead.
         last.writtenFrameBytes = scan.frameBytes
         nextOffset = last.baseOffset + scan.frameBytes
         if (scan.torn) repaired = nextOffset
@@ -1168,7 +1206,7 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
             null
         }
 
-    /** One segment file. [writtenFrameBytes] is the only mutable field, and it moves only under [lock]. */
+    /** One segment file. The mutable fields move only under [lock]. */
     private class Segment(
         val index: Long,
         val path: String,
@@ -1178,11 +1216,46 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
         val fileBytes: Long,
         var writtenFrameBytes: Long,
     ) {
+        /**
+         * Whether [writtenFrameBytes] is **evidence** — watched being appended in this process, or
+         * scanned frame by frame off the disk by [adoptLastSegment] — rather than a guess.
+         *
+         * Adoption derives every *middle* segment's extent from the next segment's `baseOffset`
+         * (see [adoptSegments]) because scanning them all would make opening a year-old archive
+         * O(the archive). That derivation assumes the thing a replay is trying to verify: across a
+         * missing segment it is inflated by exactly the missing region. So a derived extent may be
+         * used for coarse decisions that only need an upper bound — pruning, capacity — and must
+         * **never** be used to conclude that a segment stopped short. [emitFrames] is where that
+         * matters.
+         *
+         * Defaults to observed because both constructing sites genuinely are: a freshly rolled
+         * segment starts empty and every append into it is counted, and a seeded one is written
+         * whole. Only [deriveExtent] can make it false.
+         */
+        var extentIsObserved: Boolean = true
+            private set
+
         /** Frame bytes still free in this segment's pre-allocated region. */
         val remaining: Long get() = fileBytes - headerBytes - writtenFrameBytes
+
+        /**
+         * Record an extent inferred from the next segment's base rather than read off this one.
+         *
+         * Named, rather than an assignment to [writtenFrameBytes], so the weaker provenance cannot
+         * be introduced silently — that is the whole point of [extentIsObserved].
+         */
+        fun deriveExtent(frameBytes: Long) {
+            writtenFrameBytes = frameBytes
+            extentIsObserved = false
+        }
     }
 
-    private class SegmentView(val path: String, val baseOffset: Long, val writtenFrameBytes: Long)
+    private class SegmentView(
+        val path: String,
+        val baseOffset: Long,
+        val writtenFrameBytes: Long,
+        val extentIsObserved: Boolean,
+    )
 
     /** How one segment's replay ended: a verdict, or the offset the next segment resumes at. */
     private class SegmentReplay(val stopped: Truncated?, val endOffset: Long)

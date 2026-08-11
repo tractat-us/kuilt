@@ -121,6 +121,12 @@ private suspend fun truncatedInMemoryBolt(
  * so "the segment after the intact prefix" is just the segment at index [intactFrames] — no offset
  * arithmetic to get wrong. The default 1 MiB budget would put the whole archive in one segment, where
  * there is no middle to lose.
+ *
+ * The suite's obligation asks a fixture to end its pre-hole segment the way this backend's ordinary
+ * segments end, **pre-allocated tail included**. This backend has no such tail to reproduce: nothing
+ * is pre-allocated, a segment's array holds exactly the bytes written into it, and `snapshot.used`
+ * bounds every parse. So the zero-tail configuration the mmap fixtures both drive does not exist
+ * here, and one budget covers this backend completely.
  */
 private suspend fun discontinuousInMemoryBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> {
     require(intactFrames >= 1) { "the fixture stops AFTER a frame, so it needs at least one" }

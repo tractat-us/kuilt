@@ -234,20 +234,36 @@ public class InMemoryBolt<Id : Any, V, Op : Any>(
         // array untouched. Either way the bytes this reader reads are already published to it by
         // the lock's happens-before edge, and are never rewritten.
         val snapshots = lock.withLock { segments.map(Segment::snapshot) }
-        // Null until the first segment has spoken. The archive's offset space starts wherever its
-        // OLDEST segment says it does rather than at 0, and `skippable` below can drop a PREFIX of
-        // segments unread — so the first segment actually read has nothing to be checked against.
+        // Segment-granularity pruning, MINUS ONE — and the minus one is load-bearing.
+        //
+        // `skippable` prunes a PREFIX (`baseOffset + frameBytes` increases across segments, so once
+        // one segment survives every later one does). The segment immediately before the first
+        // survivor is read ANYWAY, with every one of its frames filtered out by the scope, because
+        // its true frame end is the offset the first emitted segment must continue from. Pruning it
+        // would leave that boundary — the only one a `FromOffset` replay has — unchecked, and an
+        // unchecked boundary is a hole reported as a [CleanTail] to the one caller most likely to
+        // act on it: `ReplayScope.FromOffset` is documented as the *resume cursor*, so the offset a
+        // consumer hands back is precisely the offset a lost segment starts at.
+        //
+        // It is PARSED rather than taken from bookkeeping, and that is not fastidiousness. A
+        // recorded extent is not evidence on every backend: a file-backed archive derives a middle
+        // segment's extent from the NEXT segment's base, so `baseOffset + extent` equals that base
+        // by construction and the check below would compare a value with itself — green, over a
+        // real hole. One extra segment read cannot lie.
+        val firstUnpruned = snapshots.indexOfFirst { !skippable(it, scope) }
+        if (firstUnpruned < 0) {
+            emit(CleanTail)
+            return@flow
+        }
+        // Null until the first segment has spoken: the archive's offset space starts wherever its
+        // OLDEST segment says it does, not at 0.
         var resumeOffset: Long? = null
-        for (snapshot in snapshots) {
-            // Skips are a prefix: `baseOffset + frameBytes` increases across segments, so once one
-            // segment is read every later one is too. That is why leaving `resumeOffset` null here
-            // is not a gap being waved through — there is no read segment behind a skipped one.
-            if (skippable(snapshot, scope)) continue
+        for (index in maxOf(firstUnpruned - 1, 0) until snapshots.size) {
             // A segment that stops early stops the WHOLE replay. An append-only log is ordered, so
             // a frame that does not validate makes everything behind it untrustworthy; carrying on
             // to the next segment would hand back a history with a silent hole and offsets that
             // jump, which is worse than a short answer that says it is short.
-            val outcome = emitFrames(snapshot, resumeOffset, scope)
+            val outcome = emitFrames(snapshots[index], resumeOffset, scope)
             outcome.stopped?.let {
                 emit(it)
                 return@flow
