@@ -618,6 +618,68 @@ class PosixMappedBoltTest {
         )
     }
 
+    /**
+     * A doubt raised by a failed `msync` is **cleared** by the next one that succeeds — and the
+     * failure it reports is a real errno, not a flag.
+     *
+     * The conformance property cannot reach either half. Its fixture's `msync` can never succeed, so
+     * the whole recovery side of "sticky until a later flush covers the same range" is unasserted
+     * there, and a signal that latches forever after one transient failure is a signal a consumer
+     * learns to ignore.
+     *
+     * Recovery is reachable here because `msync` is issued **page-aligned down**, so the next frame's
+     * flush re-covers everything before it in the same page — see `PosixMappedBolt.syncRange`. With
+     * the default 1 MiB budget all three frames share a page, which is the ordinary configuration.
+     *
+     * **Mutation receipts.** Deleting the `ledger.flushSucceeded(...)` branch reddens assertion 4
+     * alone; reporting the frame's own offset instead of `outcome.coveredFrom` reddens 4 alone too
+     * (the success then starts above the doubt and cannot cover it), which is the pair that stops 4
+     * from riding on 1–3. Recording the failure without its errno reddens 3. Widening
+     * `flushSucceeded` to clear unconditionally leaves all four green — `DurabilityLedgerTest` is
+     * what distinguishes "cleared because it covered" from "cleared because it was asked to".
+     */
+    @Test
+    fun aDoubtRaisedByAFailedSyncIsClearedByTheNextSuccessfulOne() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val bolt = PosixMappedBolt(rgaArchiveFormat(), FixedClock(epoch), boltTestDirectory())
+        val (afterFirst, first) = Rga.empty<String>().insertAt(alice, 0, "flushed")
+        val (afterSecond, second) = afterFirst.insertAt(alice, 1, "not-flushed")
+        val (_, third) = afterSecond.insertAt(alice, 2, "flushed-again")
+
+        assertIs<AppendResult.Written>(bolt.append(listOf(first)))
+        val healthy = bolt.durability()
+        bolt.rigFlushFailure(true)
+        val written = bolt.append(listOf(second))
+        val degraded = bolt.durability()
+        bolt.rigFlushFailure(false)
+        assertIs<AppendResult.Written>(bolt.append(listOf(third)))
+        val recovered = bolt.durability()
+
+        assertAll(
+            { assertEquals(DurabilityState.AsPromised, healthy, "a flush that worked is not a degradation") },
+            {
+                assertIs<AppendResult.Written>(
+                    written,
+                    "a failed msync does not fail the append — the frame is in the archive, whole and readable",
+                )
+            },
+            {
+                assertContains(
+                    assertIs<DurabilityState.Degraded>(degraded).reason,
+                    "errno=",
+                    message = "the errno reaches the contract signal, so a consumer can tell ENOSPC from EIO " +
+                        "without reading a backend-local breadcrumb",
+                )
+            },
+            {
+                assertEquals(
+                    DurabilityState.AsPromised,
+                    recovered,
+                    "and a later msync covering the same pages clears it — this is sticky, not permanent",
+                )
+            },
+        )
+    }
+
     @AfterTest
     fun removeArchives(): Unit = removeBoltTestDirectories()
 

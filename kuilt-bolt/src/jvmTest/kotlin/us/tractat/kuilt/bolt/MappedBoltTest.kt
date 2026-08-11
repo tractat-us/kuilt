@@ -348,6 +348,60 @@ class MappedBoltTest {
         )
     }
 
+    /**
+     * A doubt raised by a failed `force()` is **cleared** by the next one that succeeds.
+     *
+     * The conformance property cannot reach this. Its fixture's flush can never succeed, so the whole
+     * recovery half of "sticky until a later flush covers the same range" is unasserted there — and a
+     * signal that latches forever after one transient failure is a signal a consumer learns to ignore.
+     *
+     * `force()` syncs the **whole mapping**, so the covering range is this segment's frames, and the
+     * default 1 MiB budget keeps all four in one segment. That is the configuration recovery is
+     * reachable in, and it is deliberately the one under test: with a one-byte budget every append
+     * rolls, the doubt spans retired mappings, and nothing this bolt can still flush covers it. Both
+     * facts are worth having written down — see [MappedBolt.durability].
+     *
+     * **Mutation receipts.** Deleting the `ledger.flushSucceeded(...)` call reddens assertion 3 alone
+     * (the doubt never clears) and leaves 1 and 2 green — the pairing that stops 3 from riding on
+     * them. Widening `flushSucceeded` to clear unconditionally leaves all three green here, and is
+     * caught by `DurabilityLedgerTest` instead: this test cannot distinguish "cleared because it
+     * covered" from "cleared because it was asked to".
+     */
+    @Test
+    fun aDoubtRaisedByAFailedFlushIsClearedByTheNextSuccessfulOne() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val bolt = mappedBolt(FixedClock(EPOCH), tempArchiveDirectory())
+        val (afterFirst, first) = Rga.empty<String>().insertAt(ALICE, 0, "flushed")
+        val (_, second) = afterFirst.insertAt(ALICE, 1, "not-flushed")
+
+        assertIs<AppendResult.Written>(bolt.append(listOf(first)))
+        val healthy = bolt.durability()
+        bolt.rigFlushFailure(RIGGED_FLUSH_FAILURE)
+        assertIs<AppendResult.Written>(bolt.append(listOf(second)))
+        val degraded = bolt.durability()
+        bolt.rigFlushFailure(null)
+        val (_, third) = Rga.empty<String>().insertAt(ALICE, 0, "flushed-again")
+        assertIs<AppendResult.Written>(bolt.append(listOf(third)))
+        val recovered = bolt.durability()
+
+        assertAll(
+            { assertEquals(DurabilityState.AsPromised, healthy, "a flush that worked is not a degradation") },
+            {
+                assertEquals(
+                    RIGGED_FLUSH_FAILURE,
+                    assertIs<DurabilityState.Degraded>(degraded).cause?.message,
+                    "and one that did not is reported with the failure that caused it, not a bare flag",
+                )
+            },
+            {
+                assertEquals(
+                    DurabilityState.AsPromised,
+                    recovered,
+                    "a later flush covering the same range clears the doubt — this is sticky, not permanent",
+                )
+            },
+        )
+    }
+
     private class FixedClock(private val at: Instant) : Clock {
         override fun now(): Instant = at
     }

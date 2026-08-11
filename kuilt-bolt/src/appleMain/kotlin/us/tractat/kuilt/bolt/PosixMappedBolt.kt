@@ -1188,11 +1188,11 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
     private fun syncRange(mapping: Mapping, at: Long, length: Long): SyncOutcome {
         val page = getpagesize().toLong()
         val start = at / page * page
-        // Rigged: a span running off the end of the mapping, which the kernel refuses with ENOMEM.
-        // The syscall really runs and the errno really comes back — only the CAUSE is artificial.
-        // See `rigFlushFailure` for why no honest condition can stand in for it.
-        val span = if (riggedFlushFailure) mapping.bytes + page else at - start + length
-        val address = mapping.address + start
+        val span = at - start + length
+        // Rigged: a page-aligned address far outside any mapping this process holds, which the kernel
+        // refuses with ENOMEM. The syscall really runs and the errno really comes back — only the
+        // CAUSE is artificial. See `rigFlushFailure` for why no honest condition can stand in for it.
+        val address = if (riggedFlushFailure) mapping.address + UNMAPPED_ADDRESS else mapping.address + start
         val failure = if (msync(address, span.convert(), MS_SYNC) != 0) {
             posixFailure("could not flush ${span}B at $start of the active segment")
         } else {
@@ -1394,6 +1394,14 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
 
         /** `mmap` reports failure as `(void *) -1`, which is what `MAP_FAILED` expands to. */
         private const val MMAP_FAILED = -1L
+
+        /**
+         * A page-aligned distance far past anything this process has mapped — 16 TiB. **Test-only**,
+         * used by [rigFlushFailure] to make `msync` return a real `ENOMEM`. A segment mapping is at
+         * most a few MiB, so nothing this bolt owns can reach it, and the arithmetic stays well inside
+         * a 64-bit address.
+         */
+        private const val UNMAPPED_ADDRESS = 1L shl 44
     }
 }
 

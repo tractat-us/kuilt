@@ -31,6 +31,9 @@ class MappedBoltConformanceTest : BoltConformanceSuite() {
      */
     override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         discontinuousMappedBolt(clock, intactFrames, PRE_ALLOCATED_TAIL_BYTES)
+
+    override fun newBoltThatCannotFlush(clock: Clock): DurabilityFixture =
+        unflushableMappedBolt(clock, forceOnAppend = true)
 }
 
 /**
@@ -54,7 +57,67 @@ class TinySegmentMappedBoltConformanceTest : BoltConformanceSuite() {
     /** The complement of the default subclass: **no** pre-allocated tail behind the last frame. */
     override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         discontinuousMappedBolt(clock, intactFrames, NO_PRE_ALLOCATED_TAIL)
+
+    /**
+     * One frame per segment, so a durability doubt is carried across **rolls** rather than staying
+     * inside one mapping — the configuration where widening has to compose with a retiring segment's
+     * flush and a new segment's header flush, and the default budget never reaches.
+     */
+    override fun newBoltThatCannotFlush(clock: Clock): DurabilityFixture =
+        unflushableMappedBolt(clock, forceOnAppend = true, segmentFrameBytes = 1L)
 }
+
+/**
+ * The same suite with `forceOnAppend` off — asynchronous is the same mechanism without the `force`.
+ *
+ * The Apple backend has had this subclass since #2214; the JVM one did not, and #2243 is what makes
+ * the gap matter: the durability signal is **relative**, so the configuration that promised nothing is
+ * half the property rather than a variation on it. Without this class, `MappedBolt`'s
+ * [DurabilityFixture.PromisedNothing] arm would be undriven and an absolute reading of durability
+ * would go green on this backend.
+ */
+class AsynchronousMappedBoltConformanceTest : BoltConformanceSuite() {
+    override fun newBolt(clock: Clock): Bolt<RgaOp<String>> = mappedBolt(clock, forceOnAppend = false)
+
+    override fun newExhaustedBolt(clock: Clock): Bolt<RgaOp<String>> =
+        mappedBolt(clock, forceOnAppend = false, capacityBytes = 8L)
+
+    override suspend fun newTruncatedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
+        truncatedMappedBolt(clock, intactFrames)
+
+    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
+        discontinuousMappedBolt(clock, intactFrames, PRE_ALLOCATED_TAIL_BYTES)
+
+    override fun newBoltThatCannotFlush(clock: Clock): DurabilityFixture =
+        unflushableMappedBolt(clock, forceOnAppend = false)
+}
+
+/**
+ * A [MappedBolt] whose `force()` cannot succeed, labelled with what [forceOnAppend] promised.
+ *
+ * **The rig is what makes the second arm non-vacuous.** With `forceOnAppend = false` no flush is
+ * issued at all, so the rig is never consulted — and that is exactly the claim being pinned: this bolt
+ * would fail its flush if it made one, and reports [DurabilityState.AsPromised] anyway, because the
+ * asynchronous configuration promised no more than "the OS will write these pages back". An absolute
+ * reading of durability reddens here. Handing back an *un*-rigged bolt would leave that arm asserting
+ * nothing at all.
+ *
+ * A real `force()` failure is not producible — see `MappedBolt.rigFlushFailure`, which also says what
+ * rigging the verdict rather than the syscall does not prove. Rigged **after** construction, because
+ * `init` runs recovery and recovery flushes.
+ */
+internal fun unflushableMappedBolt(
+    clock: Clock,
+    forceOnAppend: Boolean,
+    segmentFrameBytes: Long = InMemoryBolt.DEFAULT_SEGMENT_FRAME_BYTES,
+): DurabilityFixture {
+    val bolt = mappedBolt(clock, forceOnAppend = forceOnAppend, segmentFrameBytes = segmentFrameBytes)
+    bolt.rigFlushFailure(RIGGED_FLUSH_FAILURE)
+    return if (forceOnAppend) DurabilityFixture.Promised(bolt) else DurabilityFixture.PromisedNothing(bolt)
+}
+
+/** What a rigged `force()` reports. Distinctive, so a `reason` assertion cannot pass on empty text. */
+internal const val RIGGED_FLUSH_FAILURE = "rigged: the volume refused to flush this mapping"
 
 /** The archive format every test in this source set uses: an `Rga` of `String`. */
 internal fun rgaStringFormat(): BoltArchiveFormat<RgaId, String, RgaOp<String>> =

@@ -24,6 +24,8 @@ class InMemoryBoltConformanceTest : BoltConformanceSuite() {
 
     override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         discontinuousInMemoryBolt(clock, intactFrames)
+
+    override fun newBoltThatCannotFlush(clock: Clock): DurabilityFixture = inMemoryPromisedNothing(clock)
 }
 
 /**
@@ -48,7 +50,27 @@ class TinySegmentInMemoryBoltConformanceTest : BoltConformanceSuite() {
 
     override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         discontinuousInMemoryBolt(clock, intactFrames)
+
+    override fun newBoltThatCannotFlush(clock: Clock): DurabilityFixture = inMemoryPromisedNothing(clock)
 }
+
+/**
+ * The one obligation in the suite this backend answers by **not being able to break it**.
+ *
+ * There is nothing to rig. [InMemoryBolt] issues no flush at all — no `msync`, no `force`, no volume
+ * to refuse one — so "a bolt whose durability operation cannot succeed" is, for this backend, an
+ * ordinary bolt. That is not a hole in the fixture, it is the contract: [Bolt.durability] reports
+ * whether a backend is meeting the level *it* promised, and this one promised nothing, so nothing can
+ * fall short of it. See `BoltConformanceSuite.newBoltThatCannotFlush` for why that had to be a
+ * *declaration* rather than a nullable opt-out.
+ *
+ * The arm is still asserted rather than skipped: this bolt must answer
+ * [DurabilityState.AsPromised] after every append, which reds an implementation that reported
+ * absolute durability instead of relative — and would have every in-memory archive on every target,
+ * browser included, latched at "not durable" forever.
+ */
+private fun inMemoryPromisedNothing(clock: Clock): DurabilityFixture =
+    DurabilityFixture.PromisedNothing(InMemoryBolt(BoltArchiveFormat.rga(serializer<String>()), clock))
 
 /**
  * An in-memory archive of [intactFrames] ordinary frames, then a segment whose frame is **a byte
