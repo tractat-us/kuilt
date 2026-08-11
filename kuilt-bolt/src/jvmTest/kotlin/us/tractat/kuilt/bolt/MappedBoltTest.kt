@@ -268,6 +268,52 @@ class MappedBoltTest {
     }
 
     /**
+     * An archive that cannot be opened for writing **reports** it. Constructing a bolt over one must
+     * not throw.
+     *
+     * A read-only mount is the classic Linux response to a disk I/O error — precisely the moment the
+     * application most needs to survive, and the module's whole failure posture is that a broken
+     * archive never takes down the process whose telemetry it archives. The tell that this was always
+     * the intent: an *empty* read-only directory already constructs fine and reports
+     * `Unavailable("… is not writable")`. It was only the branch that matters — an archive with
+     * segments already in it — that threw.
+     *
+     * The archive stays **readable**, which is the other half of the answer: replay opens its
+     * segments for reading, so an operator can still get the history off a volume that has gone
+     * read-only under them.
+     */
+    @Test
+    fun anArchiveThatCannotBeOpenedForWritingReportsUnavailableInsteadOfThrowing() =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val directory = tempArchiveDirectory()
+            val writer = mappedBolt(FixedClock(EPOCH), directory, segmentFrameBytes = 1L)
+            val (afterFirst, first) = Rga.empty<String>().insertAt(ALICE, 0, "written-while-writable")
+            assertIs<AppendResult.Written>(writer.append(listOf(first)))
+            val segment = segmentsIn(directory).single()
+            val readOnly = segment.setWritable(false) && !segment.canWrite()
+
+            val reopened = mappedBolt(FixedClock(EPOCH), directory, segmentFrameBytes = 1L)
+            val availability = reopened.availability()
+            val replayed = reopened.replay(ReplayScope.All).frames().toList()
+            val (_, second) = afterFirst.insertAt(ALICE, 1, "attempted-while-read-only")
+            val refused = reopened.append(listOf(second))
+            segment.setWritable(true)
+
+            assertAll(
+                {
+                    assertTrue(
+                        readOnly,
+                        "the fixture must actually make the segment unwritable — as root it cannot, and every " +
+                            "assertion below would then pass for the wrong reason",
+                    )
+                },
+                { assertIs<BoltAvailability.Unavailable>(availability, "an archive it cannot write must say so") },
+                { assertIs<AppendResult.Failed>(refused, "and refuse the append rather than claim a write") },
+                { assertEquals(1, replayed.size, "while still replaying every frame — a read-only archive is READABLE") },
+            )
+        }
+
+    /**
      * Opening a directory whose archive holds a different element type **throws**, rather than
      * reporting an empty archive.
      *
