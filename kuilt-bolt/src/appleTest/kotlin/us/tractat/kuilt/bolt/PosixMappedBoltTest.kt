@@ -10,10 +10,15 @@ import kotlinx.cinterop.ptr
 import kotlinx.cinterop.usePinned
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
+import kotlinx.io.Buffer
+import kotlinx.io.readByteArray
 import platform.Foundation.NSFileManager
 import platform.Foundation.NSTemporaryDirectory
+import platform.posix.O_CREAT
+import platform.posix.O_EXCL
 import platform.posix.O_RDWR
 import platform.posix.SEEK_SET
+import platform.posix.chmod
 import platform.posix.close
 import platform.posix.lseek
 import platform.posix.open
@@ -285,6 +290,267 @@ class PosixMappedBoltTest {
         )
     }
 
+    /**
+     * A roll that cannot create its segment file must not leave [PosixMappedBolt.availability]
+     * claiming `Available`.
+     *
+     * The conformance suite's `availabilityAgreesWithWhetherAnAppendIsAccepted` cannot see this: it
+     * probes a *fresh* bolt, where no roll has ever failed. But a bolt whose active segment is full
+     * and whose volume refuses new files is exactly the state where `Available` is a lie, and
+     * "Available must mean an append is accepted" is the one thing that signal exists to promise.
+     *
+     * A read-and-execute-only directory is the deterministic way there: existing segments stay
+     * readable, so the archive still opens and replays, and only `open(O_CREAT)` fails — the shape a
+     * full volume, a read-only remount and a revoked sandbox extension all produce.
+     */
+    @Test
+    fun aRollThatCannotCreateItsSegmentDoesNotLieAboutAvailability() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val directory = boltTestDirectory()
+        // Every append rolls, so the second one needs a file the sealed directory will not give it.
+        val bolt = PosixMappedBolt(rgaArchiveFormat(), FixedClock(epoch), directory, segmentFrameBytes = 1L)
+        val (afterFirst, first) = Rga.empty<String>().insertAt(alice, 0, "first")
+        val (afterSecond, second) = afterFirst.insertAt(alice, 1, "second")
+        val (_, third) = afterSecond.insertAt(alice, 2, "third")
+
+        bolt.append(listOf(first))
+        check(chmod(directory.trimEnd('/'), READ_ONLY_DIRECTORY.convert()) == 0) { "could not seal the directory" }
+        val refused = bolt.append(listOf(second))
+        val whileSealed = bolt.availability()
+        check(chmod(directory.trimEnd('/'), OWNER_ONLY_DIRECTORY.convert()) == 0) { "could not unseal" }
+        val accepted = bolt.append(listOf(third))
+        val afterUnsealing = bolt.availability()
+        val frames = bolt.replay(ReplayScope.All).toList().filterIsInstance<Archived<RgaOp<String>>>()
+
+        assertAll(
+            { assertIs<AppendResult.Failed>(refused, "a roll into a sealed directory cannot succeed") },
+            { assertContains(assertIs<AppendResult.Failed>(refused).reason, "errno=", message = "and names why") },
+            {
+                assertIs<BoltAvailability.Unavailable>(
+                    whileSealed,
+                    "a bolt whose last roll was refused must not keep reporting Available — that is " +
+                        "precisely the 'Available while every append fails' the signal rules out",
+                )
+            },
+            { assertIs<AppendResult.Written>(accepted, "and it recovers once the volume does") },
+            { assertIs<BoltAvailability.Available>(afterUnsealing, "reporting itself usable again") },
+            { assertEquals(listOf(listOf(first), listOf(third)), frames.map { it.ops }, "no phantom frame") },
+        )
+    }
+
+    /**
+     * A segment file left behind at the index the next roll wants must not disable the bolt forever.
+     *
+     * `rollSegment` creates with `O_CREAT|O_EXCL` and derives the next index from the segments it
+     * knows about — so an orphan at that index makes every subsequent roll fail `EEXIST`, on this
+     * instance, permanently, while `availability` still says `Available`.
+     *
+     * Two things leave one: a roll of ours that failed after creating the file, and a process killed
+     * between `open` and the header write. Neither can have written a frame — the header goes down
+     * before any frame does — so the orphan is discardable by construction.
+     */
+    @Test
+    fun anOrphanedSegmentFileDoesNotBlockTheNextRoll() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val directory = boltTestDirectory()
+        val bolt = PosixMappedBolt(rgaArchiveFormat(), FixedClock(epoch), directory, segmentFrameBytes = 1L)
+        val (afterFirst, first) = Rga.empty<String>().insertAt(alice, 0, "first")
+        val (_, second) = afterFirst.insertAt(alice, 1, "second")
+
+        val one = bolt.append(listOf(first))
+        // A half-built segment: pre-allocated zeroes, no header — the shape a kill between open(2)
+        // and the header write leaves behind.
+        orphanSegmentAfter(segmentFiles(directory).single(), ByteArray(ORPHAN_BYTES))
+        val two = bolt.append(listOf(second))
+        val events = bolt.replay(ReplayScope.All).toList()
+        val frames = events.filterIsInstance<Archived<RgaOp<String>>>()
+
+        assertAll(
+            { assertIs<AppendResult.Written>(one, "the first append lands") },
+            {
+                assertIs<AppendResult.Written>(
+                    two,
+                    "an orphan at the next index must not end this bolt's life — the file provably " +
+                        "holds no frame, so the roll discards it and carries on",
+                )
+            },
+            {
+                assertEquals(
+                    assertIs<AppendResult.Written>(one).endOffset,
+                    assertIs<AppendResult.Written>(two).offset,
+                    "and the offset space is unbroken across the discarded orphan",
+                )
+            },
+            { assertEquals(2, frames.size, "both frames replay") },
+            { assertEquals(CleanTail, events.lastOrNull(), "and the archive is intact") },
+        )
+    }
+
+    /**
+     * A read that fails for a **transient** reason must be retried, not treated as structural damage.
+     *
+     * `wedged` is sticky by design — it means "appending past this would write records no replay can
+     * reach". A file that cannot be *opened* is not that: an `EACCES` from a Data-Protection-locked
+     * device, an `EMFILE`, an `EINTR` all clear on their own, and the archive behind them is intact.
+     *
+     * This is also where the Data Protection story actually lands. On a locked device whose archive
+     * directory already exists — the steady state — `mkdir` returns `EEXIST` and the directory
+     * metadata reads fine, so the refusal never reaches the directory-creation check and surfaces
+     * here instead. `chmod 000` on a segment file reproduces it exactly.
+     */
+    @Test
+    fun aTransientReadFailureIsRetriedRatherThanWedging() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val directory = boltTestDirectory()
+        val format = rgaArchiveFormat()
+        val (afterFirst, first) = Rga.empty<String>().insertAt(alice, 0, "first")
+        val (_, second) = afterFirst.insertAt(alice, 1, "second")
+        val opened = PosixMappedBolt(format, FixedClock(epoch), directory)
+        opened.append(listOf(first))
+        opened.append(listOf(second))
+        opened.close()
+        val segment = segmentFiles(directory).single()
+
+        check(chmod(segment, NO_ACCESS.convert()) == 0) { "could not make the segment unreadable" }
+        val bolt = PosixMappedBolt(format, FixedClock(epoch), directory)
+        val whileUnreadable = bolt.availability()
+        check(chmod(segment, OWNER_ONLY_FILE.convert()) == 0) { "could not restore the segment" }
+        val afterRestoring = bolt.availability()
+        val frames = bolt.replay(ReplayScope.All).toList().filterIsInstance<Archived<RgaOp<String>>>()
+
+        assertAll(
+            {
+                assertIs<BoltAvailability.Unknown>(
+                    whileUnreadable,
+                    "a segment that cannot be READ is neither available nor permanently unavailable — " +
+                        "this is the Data Protection state, and Unknown is the answer it exists for",
+                )
+            },
+            {
+                assertContains(
+                    (whileUnreadable as? BoltAvailability.Unknown)?.reason.orEmpty(),
+                    "errno=",
+                    message = "naming the errno a bare null discarded",
+                )
+            },
+            {
+                assertIs<BoltAvailability.Available>(
+                    afterRestoring,
+                    "and the SAME instance recovers once the read succeeds — a transient failure must " +
+                        "not reach the sticky wedge, which nothing ever clears",
+                )
+            },
+            { assertEquals(listOf(listOf(first), listOf(second)), frames.map { it.ops }, "the archive was intact") },
+        )
+    }
+
+    /**
+     * A segment whose readable frames stop **short of its recorded extent** is damage, even though
+     * what follows them is all zeroes.
+     *
+     * The zero-tail rule alone cannot tell the two apart: a pre-allocated tail and a region that
+     * never reached disk read back identically, because pre-allocation writes real zeroes. So the
+     * predicate has to be checked against where the frames were supposed to end — bookkeeping this
+     * class already holds.
+     *
+     * Reachable in `synchronous = false`, a shipped and conformance-tested configuration: a page of
+     * segment *k* may miss writeback while segment *k+1*'s file lands, and cross-file ordering is not
+     * guaranteed. Without the extent check the replay walks straight past the hole and reports
+     * [CleanTail] over a history whose offsets jump — the exact outcome `replay`'s own comment says
+     * must never happen.
+     *
+     * The fixture zeroes a real frame's bytes after a real append, so the bookkeeping is genuine
+     * rather than asserted, and puts a healthy segment behind the hole so "stop" and "skip ahead"
+     * emit different events.
+     */
+    @Test
+    fun aSegmentShortOfItsRecordedExtentStopsTheReplay() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val directory = boltTestDirectory()
+        val format = rgaArchiveFormat()
+        val bolt = PosixMappedBolt(format, FixedClock(epoch), directory, segmentFrameBytes = SEGMENT_BYTES)
+        val (r1, first) = Rga.empty<String>().insertAt(alice, 0, "first")
+        val (r2, second) = r1.insertAt(alice, 1, "second")
+        val (r3, third) = r2.insertAt(alice, 2, "third")
+        val (_, behind) = r3.insertAt(alice, 3, "behind-the-hole")
+
+        bolt.append(listOf(first))
+        val lastReadable = assertIs<AppendResult.Written>(bolt.append(listOf(second)))
+        val unflushed = assertIs<AppendResult.Written>(bolt.append(listOf(third)))
+        // The page carrying the third frame never reached disk: it reads back as the zeroes
+        // pre-allocation put there, while the bookkeeping still counts it.
+        val hole = (unflushed.endOffset - lastReadable.endOffset).toInt()
+        scribble(segmentFiles(directory).single(), headerBytesOf(format) + lastReadable.endOffset, List(hole) { 0 })
+        val healthy = encodeFrame(RawFrame(epoch, setOf(behind.id.dot), null, listOf(format.encode(behind))))
+        bolt.seedRawSegment(
+            segmentWithHeader(format, unflushed.endOffset, healthy),
+            unflushed.endOffset,
+            headerBytesOf(format).toInt(),
+        )
+
+        val events = bolt.replay(ReplayScope.All).toList()
+        val frames = events.filterIsInstance<Archived<RgaOp<String>>>()
+
+        assertAll(
+            {
+                assertEquals(
+                    listOf(listOf(first), listOf(second)),
+                    frames.map { it.ops },
+                    "replay stops at the hole — it must not walk past it into the healthy segment and " +
+                        "hand back a history with jumping offsets",
+                )
+            },
+            {
+                assertEquals(
+                    Truncated(lastReadable.endOffset, TruncationReason.Frame),
+                    events.lastOrNull(),
+                    "and says so, at the last intact frame's end — a zero run short of the recorded " +
+                        "extent is damage, not an unwritten tail",
+                )
+            },
+            { assertEquals(1, events.count { it !is Archived<*> }, "exactly one terminal event") },
+        )
+    }
+
+    /**
+     * Removing a trailing segment that has no header is not a "repaired tail", and must not be
+     * reported as one.
+     *
+     * Such a file holds no frame — the header is written before any frame is — so nothing is
+     * discarded, and `repairedTailAt`'s contract is `null` when nothing was. Reporting an offset
+     * there tells a consumer the archive was cut at that point; reporting `0` tells it the archive
+     * was thrown away entirely, while every frame is still sitting there readable.
+     */
+    @Test
+    fun aHeaderlessTrailingSegmentIsNotReportedAsARepairedTail() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val directory = boltTestDirectory()
+        val format = rgaArchiveFormat()
+        val (r1, first) = Rga.empty<String>().insertAt(alice, 0, "first")
+        val (r2, second) = r1.insertAt(alice, 1, "second")
+        val (_, third) = r2.insertAt(alice, 2, "third")
+        val opened = PosixMappedBolt(format, FixedClock(epoch), directory)
+        opened.append(listOf(first))
+        opened.append(listOf(second))
+        val closing = assertIs<AppendResult.Written>(opened.append(listOf(third)))
+        opened.close()
+        orphanSegmentAfter(segmentFiles(directory).single(), ByteArray(ORPHAN_BYTES))
+
+        val reopened = PosixMappedBolt(format, FixedClock(epoch), directory)
+        val repaired = reopened.repairedTailAt()
+        val events = reopened.replay(ReplayScope.All).toList()
+        val frames = events.filterIsInstance<Archived<RgaOp<String>>>()
+
+        assertAll(
+            {
+                assertNull(
+                    repaired,
+                    "a headerless trailing segment holds no frame, so nothing was discarded — and a " +
+                        "consumer reading 0 here concludes the whole archive was cut at its start",
+                )
+            },
+            { assertEquals(3, frames.size, "every frame is still there") },
+            { assertEquals(CleanTail, events.lastOrNull(), "and the archive reads clean") },
+            { assertEquals(closing.endOffset, frames.last().endOffset, "with the cursor where it was left") },
+            { assertEquals(1, segmentFiles(directory).size, "the orphan is gone rather than adopted") },
+        )
+    }
+
     private class FixedClock(private val at: Instant) : Clock {
         override fun now(): Instant = at
     }
@@ -292,6 +558,18 @@ class PosixMappedBoltTest {
     private companion object {
         /** Big enough that a two-frame archive leaves an unmistakable zero tail behind it. */
         const val SEGMENT_BYTES = 1L shl 16
+
+        /** `r-x------`: existing segments stay readable, nothing new can be created. */
+        const val READ_ONLY_DIRECTORY = 320 // 0o500
+
+        const val OWNER_ONLY_DIRECTORY = 448 // 0o700
+        const val OWNER_ONLY_FILE = 384 // 0o600
+
+        /** Enough to look like a started segment; far too few to hold a header. */
+        const val ORPHAN_BYTES = 32
+
+        /** `---------`: the owner cannot read it either, which is the point. */
+        const val NO_ACCESS = 0
     }
 }
 
@@ -344,6 +622,43 @@ private fun scribble(path: String, at: Long, bytes: List<Byte>) {
         close(fd)
     }
 }
+
+/**
+ * Write [bytes] to the segment file one index past [existing] — an orphan at exactly the index the
+ * next roll will ask for.
+ *
+ * The index is parsed out of a real segment's own name rather than reconstructed from the naming
+ * convention, so this fixture cannot drift away from the writer it is aimed at.
+ */
+private fun orphanSegmentAfter(existing: String, bytes: ByteArray) {
+    val name = existing.substringAfterLast('/')
+    val digits = name.dropWhile { !it.isDigit() }.takeWhile { it.isDigit() }
+    val next = (digits.toLong() + 1).toString().padStart(digits.length, '0')
+    val path = existing.substringBeforeLast('/') + "/" + name.replace(digits, next)
+    val fd = open(path, O_RDWR or O_CREAT or O_EXCL, OWNER_ONLY)
+    check(fd >= 0) { "could not create the orphan segment $path" }
+    try {
+        bytes.usePinned { pinned ->
+            check(write(fd, pinned.addressOf(0), bytes.size.convert()) == bytes.size.toLong()) {
+                "could not write the orphan segment $path"
+            }
+        }
+    } finally {
+        close(fd)
+    }
+}
+
+/** A whole header for [format] at [baseOffset], then [frames] — a segment file's exact bytes. */
+private fun segmentWithHeader(
+    format: BoltArchiveFormat<*, *, *>,
+    baseOffset: Long,
+    frames: ByteArray,
+): ByteArray = Buffer().apply {
+    write(encodeSegmentHeader(SegmentHeader(BOLT_FORMAT_VERSION, format.opFormat, format.elementType, baseOffset)))
+    write(frames)
+}.readByteArray()
+
+private const val OWNER_ONLY = 384 // 0o600
 
 /** `st_blocks` is counted in 512-byte units on every POSIX system, Darwin included. */
 private const val STAT_BLOCK_BYTES = 512L
