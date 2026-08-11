@@ -259,7 +259,7 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
      *   is the reachable case. What the verdict cannot carry either way is the errno. This can.
      *
      * **A diagnostic breadcrumb, not a contract signal**, and the distinction is deliberate. The
-     * contract-level answer for the flush half — a "written but not durable" [AppendResult] — belongs
+     * contract-level answer for the flush half — some "written but not durable" signal — belongs
      * to both mmap backends at once and is parked on #2243; `MappedBolt.flushQuietly` is where the JVM
      * backend records the same deferral, and the two backends give the **same** answer to the contract
      * question. This only stops the errno from being destroyed in the meantime, which is this module's
