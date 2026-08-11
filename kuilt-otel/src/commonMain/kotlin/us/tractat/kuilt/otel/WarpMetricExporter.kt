@@ -234,6 +234,47 @@ public class WarpMetricExporter(
         lock.withLock { recovered.forEach { (k, v) -> cardinalities[k] = v } }
     }
 
+    // ── Clearing ──────────────────────────────────────────────────────────────
+
+    /**
+     * Drop every metric series this exporter holds and delete its five persisted keys (#2208).
+     *
+     * **Local-only, and it cannot be otherwise.** [GCounter] and [HyperLogLog] are monotonic
+     * join-semilattices: a merge takes the element-wise maximum, so a peer holding the
+     * pre-clear state restores it. [LWWRegister] has no "cleared" value to write. Unlike
+     * [WarpLogRecordExporter.clear] and [WarpSpanExporter.clear], which suppress the state they
+     * drop, this one only forgets it locally. On a replica that does not gossip its metrics —
+     * the case this exists for — the distinction never arises.
+     *
+     * The keys are deleted rather than rewritten empty: there is no retained context to
+     * preserve here, so deleting reclaims the bytes and [recover] treats an absent key as empty.
+     *
+     * **Never throws.** A refused delete returns [MetricExportResult.Failure]; the in-memory
+     * maps are cleared either way, so a retry converges.
+     */
+    public suspend fun clear(): MetricExportResult {
+        lock.withLock {
+            sums.clear()
+            sumsDouble.clear()
+            gauges.clear()
+            cardinalities.clear()
+            histograms.clear()
+        }
+        return runCatchingCancellable {
+            store.delete(SUM_STORE_KEY)
+            store.delete(SUM_DOUBLE_STORE_KEY)
+            store.delete(GAUGE_STORE_KEY)
+            store.delete(CARDINALITY_STORE_KEY)
+            store.delete(HISTOGRAM_STORE_KEY)
+        }.fold(
+            onSuccess = { MetricExportResult.Success },
+            onFailure = { cause ->
+                logger.error(cause) { "otel.metrics: durable delete failed during clear" }
+                MetricExportResult.Failure(cause)
+            },
+        )
+    }
+
     // ── Sum (GCounter) ─────────────────────────────────────────────────────────
 
     /**
