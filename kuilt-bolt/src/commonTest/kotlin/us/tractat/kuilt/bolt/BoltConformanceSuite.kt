@@ -539,38 +539,52 @@ abstract class BoltConformanceSuite {
      * not join up — so nothing checks it unless a backend compares each segment's absolute base
      * offset against where the previous one stopped. Two backends shipped without that check (#2240).
      *
-     * Five assertions, and each pins a decision the truncation property does not:
+     * Six assertions, in the order they appear below, and the numbering the receipts use:
      *
      * 1. the verdict is [Truncated], not a clean tail — a hole is damage, not something to step over;
-     * 2. its `atOffset` is the last intact frame's `endOffset`, i.e. where the hole **starts** and not
+     * 2. exactly one terminal event;
+     * 3. **nothing from beyond the hole** is replayed, however intact those frames are, and every frame
+     *    before it survives — a history with a silent gap in it is the one thing [Bolt] cannot hand
+     *    back;
+     * 4. its `atOffset` is the last intact frame's `endOffset`, i.e. where the hole **starts** and not
      *    where the next segment picks up. Those differ by exactly the missing region, and the wrong
      *    one names an offset no frame this replay emitted ever ended at;
-     * 3. its `reason` is [TruncationReason.MissingRegion] — the constant a consumer branches on to
+     * 5. its `reason` is [TruncationReason.MissingRegion] — the constant a consumer branches on to
      *    learn that `atOffset` is **not** somewhere to resume from, because the records between here
      *    and the next segment exist nowhere;
-     * 4. **nothing from beyond the hole** is replayed, however intact those frames are — a history
-     *    with a silent gap in it is the one thing [Bolt] cannot hand back;
-     * 5. every frame before the hole survives, and the verdict is last.
+     * 6. the verdict is last.
      *
-     * **Mutation receipts** (measured, see the PR for #2240):
+     * **Mutation receipts**, measured on this branch — each mutation applied alone, reverted, and the
+     * verdict read out of the results XML rather than the console:
      *
-     * - Deleting the cross-segment continuity check in a backend's replay reddens (1), (4) and (5):
-     *   the verdict becomes [CleanTail] and the frames from beyond the hole are emitted. This is the
-     *   pre-#2240 state of both mmap backends, and this test is what reds against it.
-     * - Reporting the *next* segment's `baseOffset` instead of the previous segment's end reddens
-     *   (2) alone — the shape a check that fires at the right moment and answers with the wrong
-     *   coordinate produces.
-     * - Reporting [TruncationReason.SegmentHeader] (what both backends did before #2240, knowingly)
-     *   reddens (3) alone. Nothing else notices, which is exactly why that lie survived two reviews.
+     * | Mutation | Reds |
+     * |---|---|
+     * | Delete the cross-segment continuity check in `InMemoryBolt.emitFrames` | 1, 3, 4, 5 |
+     * | Delete it in `MappedBolt.emitSegment` | 1, 3, 4, 5 |
+     * | Delete it in `PosixMappedBolt.emitFrames` — i.e. that backend **as shipped** | 1, 3, 4, 5 |
+     * | Report the *next* segment's `baseOffset` instead of the previous segment's end | 4 only |
+     * | Report [TruncationReason.SegmentHeader] (what both backends did, knowingly) | 5 only |
+     * | Emit the verdict without stopping the replay | 1, 2, 4, 5 |
+     * | **Fixture:** hand back a healthy archive (skip the `loseSegment`/`delete`) | 1, 3, 4, 5 |
      *
-     * **What this property cannot reach**, said plainly because a table of reds invites the opposite
-     * conclusion. It drives one shape of hole — a whole segment lost out of the middle — and only on
-     * [ReplayScope.All]. It says nothing about a discontinuity discovered under a scope that prunes
-     * segments (the first segment a pruning scope actually reads has nothing behind it to be checked
-     * against, by construction), nor about a *backwards* jump, nor about a backend that reaches the
-     * hole through its own within-segment extent bookkeeping instead and answers
-     * [TruncationReason.Frame] — that last one would red here, correctly, but no fixture in the tree
-     * produces it.
+     * The first three rows are the finding: all three backends replay a lost segment as a [CleanTail]
+     * with the check removed, and the third row is not hypothetical — it is `PosixMappedBolt` before
+     * this branch, measured against this fixture on `macosArm64`. Rows 4 and 5 are the single-assertion
+     * receipts that stop 4 and 5 riding on 1. The last row is the vacuity guard: the precondition fails
+     * first and loudest, so a backend that quietly returns a healthy bolt cannot go green.
+     *
+     * **The green row, and what this property cannot reach** — said plainly, because an all-red table
+     * invites exactly the wrong conclusion. **Assertion 6 was green under every mutation above.** It is
+     * kept because it is the only one that would catch a replay emitting its verdict and then more
+     * frames, and no mutation of the *current* code produces that shape (the verdict is a `return`);
+     * its justification is inherited from [aTruncatedArchiveStopsAtTheDamageAndSaysSo], which pins the
+     * same pair one level down. Beyond that: this drives one shape of hole — a whole segment lost out
+     * of the middle — and only on [ReplayScope.All]. It says nothing about a discontinuity under a
+     * scope that prunes segments (the first segment such a scope reads has nothing behind it to be
+     * checked against, by construction), nothing about a *backwards* jump, and nothing about a backend
+     * that reaches the hole through its own within-segment extent bookkeeping and answers
+     * [TruncationReason.Frame] — that would red here, correctly, but no fixture in the tree produces
+     * it.
      */
     @Test
     fun anArchiveMissingAMiddleRegionStopsAtTheHoleAndSaysSo() = runTest(timeout = TEST_WEDGE_BACKSTOP) {

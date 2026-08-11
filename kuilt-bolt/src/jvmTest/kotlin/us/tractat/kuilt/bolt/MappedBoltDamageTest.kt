@@ -117,8 +117,11 @@ class MappedBoltDamageTest {
      * [Bolt] cannot afford, because a replica seeded from a replay missing frames re-mints an
      * already-used `(replica, seq)` dot mesh-wide and nothing anywhere purges it.
      *
-     * `InMemoryBolt` has the equivalent guard and asserts on it; this backend must report it, because
-     * on a file-backed archive a missing segment is a thing that can actually happen.
+     * Every backend runs the same check and reports the same [TruncationReason.MissingRegion] — a
+     * constant of its own rather than the header layer's, because the remedy differs: a torn header
+     * may be completed by a writer that catches up, and a missing segment never will be. The property
+     * is pinned for every backend at once by `BoltConformanceSuite.newDiscontinuousBolt`; this test
+     * stays because it drives the same hole through a **restart**, which that property does not.
      */
     @Test
     fun aMissingSegmentIsAHoleTheReplayRefusesToPaperOver() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
