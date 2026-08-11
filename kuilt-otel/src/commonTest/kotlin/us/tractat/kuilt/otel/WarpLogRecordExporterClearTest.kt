@@ -6,6 +6,7 @@ import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 /**
@@ -119,6 +120,45 @@ class WarpLogRecordExporterClearTest {
         assertAll(
             { assertEquals(1, segmentsAfter.size, "exactly one active segment survives; got $segmentsAfter") },
             { assertTrue(INDEX_KEY_FOR_TEST.name in store.keys(), "the index survives") },
+        )
+    }
+
+    @Test
+    fun aPeerHoldingThePreClearOpsCannotPushThemBackThroughMerge() = runTest {
+        val store = InMemoryDurableStore()
+        val exporter = exporterFor(store = store)
+        exporter.export(record(1))
+        exporter.export(record(2))
+        // A peer that gossiped with us before the clear still holds the raw Inserts.
+        val peerCopy = exporter.snapshot()
+
+        assertEquals(ExportResult.Success, exporter.clear())
+        assertEquals(ExportResult.Success, exporter.merge(peerCopy))
+
+        assertEquals(
+            emptyList(),
+            exporter.snapshot().toList(),
+            "the floor must suppress the cleared dots, so a merge re-purges rather than resurrects",
+        )
+    }
+
+    @Test
+    fun aRecordExportedAfterAClearDoesNotReuseTheIdOfOneExportedBefore() = runTest {
+        val store = InMemoryDurableStore()
+        val exporter = exporterFor(store = store)
+        exporter.export(record(1))
+        val idBefore = exporter.snapshot().entries().single().first
+
+        exporter.clear()
+        exporter.export(record(2))
+        val idAfter = exporter.snapshot().entries().single().first
+
+        // Rga.empty() would re-mint (lamport = 1, A, seq = 1) for both, and a later merge
+        // would then resolve two different records onto one id by map-put order.
+        assertNotEquals(
+            idBefore,
+            idAfter,
+            "a cleared exporter must not re-mint an RgaId it has already used",
         )
     }
 }
