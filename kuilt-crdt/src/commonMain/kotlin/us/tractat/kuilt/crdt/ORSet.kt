@@ -72,6 +72,37 @@ public class ORSet<E> private constructor(
     public fun remove(element: E): Patch<ORSet<E>> = removePatch(element)
 
     /**
+     * Remove every element of [elements] at once — and return **the change**: the dots currently
+     * on those elements, retired, and nothing else.
+     *
+     * The bulk sibling of [remove], and **indistinguishable from calling it in a loop**: the same
+     * elements gone, the same dots retired, the same retained context, the same bytes. A receiver
+     * cannot tell which was sent, because the delta this returns is exactly the join of the deltas
+     * the loop would have produced.
+     *
+     * What differs is the cost. Absorbing a patch is a full causal join over the whole set, so
+     * `elements.fold(set) { s, e -> s.piece { it.remove(e) } }` pays one join per element — Θ(n·N),
+     * and at the buffer sizes this exists for that is minutes, not milliseconds. This pays **one**
+     * join for the whole run, and builds its context in a single pass (see
+     * `DotContext.witnessing`), so it is Θ(N + n log n).
+     *
+     * As with [remove], the context carries exactly the named elements' live dots — never the
+     * sender's full history. That is what keeps add-wins intact through a bulk removal: a
+     * concurrent add from a peer mints a dot this removal never witnessed, so it is absent from
+     * the delta's context and survives the join. A tempting "empty the store and keep the whole
+     * context" shortcut would look identical on the author's own replica and destroy exactly that
+     * — it is the shape `ORSetDeltaMutatorLawTest` keeps pinned as a negative control.
+     *
+     * Retaining the context is also the point: it is what lets a caller drop every element while
+     * remaining **dominant** over a peer that re-merges its pre-removal copy, rather than watching
+     * the whole set come back. Elements that are absent are skipped, so an [elements] naming none
+     * of them — or an empty one — yields the lattice identity and absorbing it changes nothing.
+     *
+     * @sample us.tractat.kuilt.crdt.sampleORSetBulkRemoval
+     */
+    public fun removeAll(elements: Set<E>): Patch<ORSet<E>> = removeAllPatch(elements)
+
+    /**
      * The whole set an [add] produces — the reference semantics [add]'s delta must reproduce
      * under [piece], byte for byte.
      *
@@ -94,6 +125,13 @@ public class ORSet<E> private constructor(
         return ORSet(Causal(DotMap(causal.store.entries - element), causal.context))
     }
 
+    /** The whole set a [removeAll] produces. Internal for the same reason as [addWhole]. */
+    internal fun removeAllWhole(elements: Set<E>): ORSet<E> {
+        val survivors = causal.store.entries.filterKeys { it !in elements }
+        if (survivors.size == causal.store.entries.size) return this
+        return ORSet(Causal(DotMap(survivors), causal.context))
+    }
+
     private fun addPatch(replica: ReplicaId, element: E): Patch<ORSet<E>> {
         val dot = causal.context.nextDot(replica)
         val superseded = causal.store.entries[element]?.dots ?: emptySet()
@@ -104,9 +142,11 @@ public class ORSet<E> private constructor(
     private fun removePatch(element: E): Patch<ORSet<E>> =
         Patch(ORSet(Causal(DotMap(), witnessing(causal.store.entries[element]?.dots ?: emptySet()))))
 
+    private fun removeAllPatch(elements: Set<E>): Patch<ORSet<E>> =
+        Patch(ORSet(Causal(DotMap(), witnessing(elements.flatMap { dotsOn(it) }))))
+
     /** A context witnessing exactly [dots] and nothing else — a delta's whole causal claim. */
-    private fun witnessing(dots: Set<Dot>): DotContext =
-        dots.fold(DotContext.EMPTY) { context, dot -> context.add(dot) }
+    private fun witnessing(dots: Collection<Dot>): DotContext = DotContext.witnessing(dots)
 
     /**
      * The dots currently on [element]. Internal: the dot layer is an implementation detail, but

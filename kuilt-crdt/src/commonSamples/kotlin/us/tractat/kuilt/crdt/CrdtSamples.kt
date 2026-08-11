@@ -142,6 +142,34 @@ internal fun sampleORSet() {
     check(!bravo.contains("alice"))
 }
 
+/**
+ * Empty the set in one change instead of one per element. [ORSet.removeAll] retires exactly the
+ * dots the per-element loop would, so it stays dominant over a peer that re-merges its old copy —
+ * and a concurrent add still wins.
+ */
+@Suppress("unused")
+internal fun sampleORSetBulkRemoval() {
+    val a = ReplicaId("A")
+    val b = ReplicaId("B")
+
+    var set = ORSet.empty<String>()
+    listOf("alice", "bob", "carol").forEach { name -> set = set.piece { it.add(a, name) } }
+    val snapshot = set
+
+    // One patch drops all three — the same dots the per-element loop would have retired, so one
+    // causal join does the work of three.
+    set = set.piece { it.removeAll(set.elements) }
+    check(set.elements.isEmpty())
+
+    // The retained context is the point: a peer re-merging its pre-removal copy stays empty
+    // rather than resurrecting everyone.
+    check(set.piece(snapshot).elements.isEmpty())
+
+    // Add-wins is untouched: B's add mints a dot the removal never witnessed, so it survives.
+    val concurrent = snapshot.add(b, "bob")
+    check(set.piece(concurrent).contains("bob"))
+}
+
 // ── LWWRegister ───────────────────────────────────────────────────────────────
 
 /** Higher-timestamped write wins on merge. */
