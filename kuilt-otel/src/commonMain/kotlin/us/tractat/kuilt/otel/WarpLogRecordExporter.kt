@@ -1310,6 +1310,80 @@ public class WarpLogRecordExporter(
         return if (result is ExportResult.Success) storeSucceeded() else result
     }
 
+    /**
+     * Drop every record this exporter holds and delete the segments that held them —
+     * a supported reset the same live instance keeps exporting into (#2208).
+     *
+     * The forgetting goes through [Rga.dropWindow], not [Rga.empty], and the difference is
+     * the whole design. A reset to empty re-mints `RgaId`s this replica has already used —
+     * `maxSeqByReplica` and the Lamport clock both restart — so a later [merge] with a peer
+     * holding the pre-clear ops resolves two different records onto one id by map-put order.
+     * A window pass instead raises the compaction **floor**, which carries the seq high-water
+     * forward and *suppresses* the dropped dots, so a peer holding the raw `Insert`s cannot
+     * push the records back either: [Rga.piece] merges the floor and re-purges beneath it.
+     *
+     * **The store settles to two small keys, not zero.** The index and one active segment
+     * remain, the latter carrying the floor. That floor is what buys the paragraph above;
+     * deleting it would leave a literally empty store and an open resurrection hole. The
+     * sealed segments — which is where the bytes are — are deleted through the ordinary
+     * retirement ledger, so a refused delete is retried at the next start rather than leaked.
+     *
+     * **Reclamation is total only on the export path.** A segment carrying an
+     * [RgaOp.Compact] is never retired and a [merge]-adopted segment is pinned entire, so a
+     * gossip-fed replica keeps residue after a clear. A replica fed only by [export] mints
+     * only its own dots, which fold into the floor, so every sealed segment becomes retirable.
+     *
+     * Not a CRDT delete: this replica forgets, and so does any peer that merges from it
+     * afterwards, but the clear does not travel to a peer that never does.
+     *
+     * **Never throws**, on the same terms as [export]. A failed durable write returns
+     * [ExportResult.Failure] and moves [ExporterHealth.failed] — the store really did reject
+     * a write — while a successful clear never moves [ExporterHealth.accepted], which keeps
+     * meaning "records durably taken". Retrying a failed clear re-converges: raising the floor
+     * is idempotent and a repeat delete is a no-op.
+     *
+     * **On failure, [snapshot] already reads empty while the store still holds the records.**
+     * A turn builds its actions from already-mutated state — that is how all three write paths
+     * here work — so the drop is not undone. A caller that uses the record count as a baseline
+     * must treat any non-[ExportResult.Success] as *count unknown* rather than as zero. On
+     * success the count reads zero synchronously, because the drop precedes the write.
+     */
+    public suspend fun clear(): ExportResult = writeMutex.withLock { clearTurn() }
+
+    /** [clear]'s write turn: build the actions, then apply them. Must hold [writeMutex]. */
+    private suspend fun clearTurn(): ExportResult {
+        val actions = runCatchingCancellable {
+            lock.withLock {
+                windowPass(retain = 0)
+                // Unconditional, and NOT gated on whether the pass moved anything. Gating is
+                // the obvious optimisation and it silently breaks the retry: a clear whose
+                // commit failed has already dropped everything in memory, so the retry's pass
+                // finds nothing left to drop, returns false, and a gated turn would write
+                // NOTHING and report Success while the store still holds every sealed segment.
+                //
+                // Unconditional costs one index write and one small active-segment write when
+                // clearing an already-empty exporter. That is the whole price, and it buys
+                // convergence by construction rather than by a flag tracking whether an
+                // earlier pass's covering write ever landed.
+                //
+                // retire = true is sound for the same reason it is on the other two paths: the
+                // pass has put the current suppression state into `activeSegment`, and
+                // pendingWrites queues that write ahead of the retirement it gates. On a retry
+                // the pass is a no-op but `activeSegment` still carries the floor from the
+                // first attempt, so the write is still covering and the sealed segments are
+                // still retirable against `log.compactedBelow`.
+                pendingWrites(retire = true)
+            }
+        }.getOrElse { cause ->
+            logger.error(cause) { "WarpLogRecordExporter: buffer update failed during clear" }
+            return failure(cause)
+        }
+        val result = commit(actions) { cause ->
+            logger.error(cause) { "WarpLogRecordExporter: durable write failed during clear" }
+        }
+        return if (result is ExportResult.Success) storeSucceeded() else result
+    }
+
     // ── Segmented persistence ──────────────────────────────────────────────────
 
     /**
@@ -1763,7 +1837,7 @@ public class WarpLogRecordExporter(
 
     /**
      * Record that the store accepted a write that carried **no admitted records** — the
-     * [merge] path. Clears [ExporterHealth.consecutiveFailures] without touching
+     * [merge] and [clear] paths. Clears [ExporterHealth.consecutiveFailures] without touching
      * [ExporterHealth.accepted].
      *
      * The split is what keeps `accepted` answering "is this device's own telemetry
@@ -1837,9 +1911,9 @@ public class WarpLogRecordExporter(
      * contributes nothing, so the caller follows the active-segment write with
      * [retireSupersededSegments] and the bytes leave the store as well as the log.
      */
-    private fun windowPass(): Boolean {
+    private fun windowPass(retain: Int = maxRecords): Boolean {
         evictionsSincePass = 0
-        val dropped = idsOutsideWindow() ?: return false
+        val dropped = idsOutsideWindow(retain) ?: return false
         val (newLog, delta) = log.dropWindow(replica, dropped) ?: return false
         // dropWindow returns null only for an EMPTY drop set; a set that changes nothing —
         // ids already under the floor, or never delivered here — comes back as this very
@@ -1853,21 +1927,26 @@ public class WarpLogRecordExporter(
     }
 
     /**
-     * Every id in [log] that falls outside the retained window of [maxRecords] visible records
+     * Every id in [log] that falls outside a retained window of [retain] visible records
      * — the leading prefix of [Rga.sequence], found by walking back from the end and counting
      * visible ids. `null` when nothing falls outside. Must hold [lock].
      *
      * Tombstones inside the window are retained along with it and counted against nothing;
      * tombstones in the prefix are dropped with it, which is the point — an evicted record's
      * `Insert` *and* its `Remove` both leave the log.
+     *
+     * At `retain = 0` the loop breaks on its first iteration with `cut` still at
+     * `sequence.size`, so every id comes back — which is what makes [clear] the same pass
+     * as an ordinary window pass rather than a second code path. An empty log still
+     * returns `null` (`cut == 0`), so clearing one owes no write.
      */
-    private fun idsOutsideWindow(): Set<RgaId>? {
+    private fun idsOutsideWindow(retain: Int): Set<RgaId>? {
         val sequence = log.sequence
         val tombstones = log.tombstones
         var visibleSeen = 0
         var cut = sequence.size
         for (i in sequence.indices.reversed()) {
-            if (visibleSeen == maxRecords) break
+            if (visibleSeen == retain) break
             if (sequence[i] !in tombstones) visibleSeen++
             cut = i
         }
