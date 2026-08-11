@@ -387,16 +387,53 @@ public class MappedBolt<Id : Any, V, Op : Any>(
         }
         nextOffset = header.baseOffset + frameBytes
         val writePosition = (sizeBytes - buffer.size).toInt()
-        // A crash mid-append leaves a partial frame here. It was never acknowledged by `append`, so
-        // no caller believes it landed — and leaving it would wedge the archive: replay stops at the
-        // first frame that will not parse, so every later append would be permanently unreachable.
-        // Zeroing it restores the "clean segment tail" the pre-allocation invariant assumes.
-        if (!bytes.isZeroFrom(writePosition)) {
-            segment.zeroFrom(writePosition)
-            segment.force()
-        }
+        if (!repair(segment, bytes, writePosition, header.baseOffset)) return
         segment.rewindTo(writePosition)
         active = segment
+    }
+
+    /**
+     * Make [segment] appendable again from [writePosition], or refuse to. `true` if it is now the
+     * archive's active segment; `false` if the archive is damaged past repair and [unappendable] has
+     * been set. Called under [lock].
+     *
+     * ### A torn tail and mid-segment damage look identical here, and must not be treated alike
+     *
+     * The parse stopped at [writePosition] either way, so the *only* thing that tells them apart is
+     * what lies behind. Three cases:
+     *
+     * 1. **Nothing but zeroes** — the segment simply ended. Nothing to repair.
+     * 2. **Non-zero, and nothing behind it parses** — a crash part-way through an append. That frame
+     *    was never acknowledged (its `append` never returned), so no caller believes it landed, and
+     *    leaving it would *wedge the archive*: replay stops at the first frame that will not parse, so
+     *    every later append would be permanently unreachable. Zero it and carry on.
+     * 3. **Non-zero, with a whole CRC-valid frame behind it** — a hole, not a tail. Every frame behind
+     *    it was acknowledged to a caller. Zeroing them would destroy committed records, launder the
+     *    `Truncated` into a `CleanTail` on the next restart (and a server restarts routinely), and
+     *    drop the append cursor onto offsets already handed out — after which a consumer resuming from
+     *    `ReplayScope.FromOffset` silently skips frames, because the scope selects on `endOffset >`
+     *    and the reused offsets straddle its cursor. So: repair nothing, append nothing. Replay keeps
+     *    reporting the damage, and the operator points a fresh directory at the problem.
+     *
+     * Case 3 is not exotic. Under `forceOnAppend = false` the OS writes pages back in whatever order
+     * it likes, so a hole followed by later-flushed pages is the *expected* artifact of a power loss.
+     *
+     * The scan's error direction is deliberately safe: a chance CRC-32 match on misaligned bytes
+     * (~2⁻³²) reads case 2 as case 3, which refuses a repair rather than performing a wrong one.
+     */
+    private fun repair(segment: Segment, bytes: ByteArray, writePosition: Int, baseOffset: Long): Boolean {
+        if (bytes.isZeroFrom(writePosition)) return true
+        val committed = bytes.lastCommittedFrameEnd(from = writePosition)
+        if (committed == null) {
+            segment.zeroFrom(writePosition)
+            segment.force()
+            return true
+        }
+        unappendable = "segment ${segment.file.name} is damaged at offset ${baseOffset + writePosition - headerBytes}" +
+            ", with committed frames behind the damage ending at offset ${baseOffset + committed - headerBytes}. " +
+            "Appending would reuse offsets already reported to a caller, and replay cannot reach past the " +
+            "damage in any case — archive to a fresh directory."
+        return false
     }
 
     // ── replay ────────────────────────────────────────────────────────────────
@@ -566,6 +603,12 @@ public class MappedBolt<Id : Any, V, Op : Any>(
 
         const val ZERO_BYTE: Byte = 0
 
+        const val INT_BYTES: Int = 4
+        const val BYTE_MASK: Int = 0xFF
+
+        /** A length prefix, the smallest body this codec can have written, and a CRC trailer. */
+        const val MINIMUM_FRAME_BYTES: Int = INT_BYTES + MINIMUM_BODY_BYTES + INT_BYTES
+
         fun segmentName(index: Int): String = "segment-${index.toString().padStart(INDEX_DIGITS, '0')}.bolt"
 
         fun segmentIndexOf(file: File): Int =
@@ -576,6 +619,52 @@ public class MappedBolt<Id : Any, V, Op : Any>(
                 if (this[position] != ZERO_BYTE) return false
             }
             return true
+        }
+
+        /**
+         * One past the last whole, CRC-valid frame at or after [from], or `null` if there is none.
+         *
+         * A byte-by-byte scan rather than a walk, because the byte that stopped the parse may be the
+         * length prefix itself — in which case where the *next* frame starts is exactly what is no
+         * longer known. It stays cheap: a position whose length word is impossible or overruns the
+         * array is rejected in constant time, and only a plausible one pays for a checksum.
+         *
+         * The validation is [readFrame]'s, deliberately duplicated against the array rather than
+         * reached through a `Buffer` — a `Buffer` per candidate position would allocate once per byte
+         * of the region.
+         */
+        fun ByteArray.lastCommittedFrameEnd(from: Int): Int? {
+            var found: Int? = null
+            var position = from
+            while (position + MINIMUM_FRAME_BYTES <= size) {
+                val end = frameEndAt(position)
+                if (end == null) {
+                    position++
+                } else {
+                    found = end
+                    position = end
+                }
+            }
+            return found
+        }
+
+        /** One past the frame starting at [position], if a whole CRC-valid frame starts there. */
+        private fun ByteArray.frameEndAt(position: Int): Int? {
+            val bodyLength = intAt(position)
+            if (bodyLength < MINIMUM_BODY_BYTES) return null
+            val end = position.toLong() + INT_BYTES + bodyLength + INT_BYTES
+            if (end > size) return null
+            val trailer = end.toInt() - INT_BYTES
+            return if (intAt(trailer) == crc32(this, position, trailer)) end.toInt() else null
+        }
+
+        /** The big-endian `Int` at [index] — the layout `Buffer.writeInt` produces. */
+        private fun ByteArray.intAt(index: Int): Int {
+            var value = 0
+            for (byte in index until index + INT_BYTES) {
+                value = (value shl Byte.SIZE_BITS) or (this[byte].toInt() and BYTE_MASK)
+            }
+            return value
         }
 
         fun isEntirelyZero(file: File): Boolean = RandomAccessFile(file, "r").use { handle ->
