@@ -184,24 +184,49 @@ private suspend fun discontinuousPosixMappedBolt(
     // encoded frame rather than guessed: the budget has to be big enough for one frame and too
     // small for two, and a fixture that silently packed two frames into a segment would have no
     // middle to lose.
+    //
+    // A budget of ONE byte is how "no tail at all" is expressed: a segment is allocated at
+    // `maxOf(budget, frame.size)`, so a one-byte budget sizes every segment to exactly the frame
+    // that forced it. Adding the pad to a MEASURED frame size would not do it — these frames differ
+    // in size by a few bytes as the `Rga` ids grow, so every segment but one would still get a
+    // small accidental tail, and the "ends on a frame boundary" path would go undriven.
     val frameBytes = encodeFrame(
         RawFrame(clock.now(), setOf(ops[0].id.dot), null, listOf(format.encode(ops[0]))),
     ).size.toLong()
     check(zeroTailBytes < frameBytes) { "a $zeroTailBytes-byte pad would leave room for a second frame" }
+    val budget = if (zeroTailBytes == NO_PRE_ALLOCATED_TAIL) 1L else frameBytes + zeroTailBytes
     val directory = boltTestDirectory()
-    val writer = PosixMappedBolt(format, clock, directory, synchronous, frameBytes + zeroTailBytes)
+    val writer = PosixMappedBolt(format, clock, directory, synchronous, budget)
 
     ops.forEach { assertIs<AppendResult.Written>(writer.append(listOf(it)), "every fixture frame must be written") }
     writer.close()
     check(segmentFiles(directory).size == ops.size) {
         "the fixture needs one frame per segment, or there is no middle segment to lose"
     }
+    // VERIFIED, not merely configured. Which shape the segment before the hole ends in decides
+    // which of this backend's two stop paths the replay takes, and a fixture that quietly produced
+    // the other one would leave the property blind exactly the way #2240 describes — so the tail is
+    // measured off the file rather than assumed from the budget.
+    val preHole = segmentFiles(directory)[intactFrames - 1]
+    val preHoleFrame = encodeFrame(
+        RawFrame(
+            clock.now(),
+            setOf(ops[intactFrames - 1].id.dot),
+            null,
+            listOf(format.encode(ops[intactFrames - 1])),
+        ),
+    ).size.toLong()
+    val preHoleTail = fileSize(preHole) - headerBytesOf(format) - preHoleFrame
+    check(if (zeroTailBytes == NO_PRE_ALLOCATED_TAIL) preHoleTail == 0L else preHoleTail > 0L) {
+        "the segment before the hole must end the way this subclass says it does, and its " +
+            "pre-allocated tail measured $preHoleTail bytes against a request for $zeroTailBytes"
+    }
     val hole = segmentFiles(directory)[intactFrames]
     check(NSFileManager.defaultManager.removeItemAtPath(hole, error = null)) {
         "the fixture's hole must actually be punched — $hole is still there"
     }
 
-    return PosixMappedBolt(format, clock, directory, synchronous, frameBytes + zeroTailBytes)
+    return PosixMappedBolt(format, clock, directory, synchronous, budget)
 }
 
 /** Frames behind the hole. More than one, so "stepped over it" is unmistakable rather than off-by-one. */

@@ -179,12 +179,32 @@ private suspend fun discontinuousMappedBolt(
         RawFrame(clock.now(), setOf(ops[0].id.dot), null, listOf(format.encode(ops[0]))),
     ).size.toLong()
     check(zeroTailBytes < frameBytes) { "a $zeroTailBytes-byte pad would leave room for a second frame" }
-    val budget = frameBytes + zeroTailBytes
+    // A budget of ONE byte is how "no tail at all" is expressed: a segment is allocated at
+    // `maxOf(budget, frame.size)`, so a one-byte budget sizes every segment to exactly the frame
+    // that forced it. Adding the pad to a MEASURED frame size would not do it — these frames differ
+    // in size by a few bytes as the `Rga` ids grow, so every segment but one would still get a small
+    // accidental tail, and the "ends on a frame boundary" path would go undriven.
+    val budget = if (zeroTailBytes == NO_PRE_ALLOCATED_TAIL) 1L else frameBytes + zeroTailBytes
     val bolt = MappedBolt(directory, format, clock, segmentFrameBytes = budget)
 
     ops.forEach { assertIs<AppendResult.Written>(bolt.append(listOf(it)), "every fixture frame must be written") }
     check(segmentsIn(directory).size == ops.size) {
         "the fixture needs one frame per segment, or there is no middle segment to lose"
+    }
+    // VERIFIED, not merely configured — see the Apple fixture's note. Which shape the segment before
+    // the hole ends in decides which stop path the replay takes, so it is measured off the file.
+    val preHoleFrame = encodeFrame(
+        RawFrame(
+            clock.now(),
+            setOf(ops[intactFrames - 1].id.dot),
+            null,
+            listOf(format.encode(ops[intactFrames - 1])),
+        ),
+    ).size.toLong()
+    val preHoleTail = segmentsIn(directory)[intactFrames - 1].length() - segmentHeaderBytes() - preHoleFrame
+    check(if (zeroTailBytes == NO_PRE_ALLOCATED_TAIL) preHoleTail == 0L else preHoleTail > 0L) {
+        "the segment before the hole must end the way this subclass says it does, and its " +
+            "pre-allocated tail measured $preHoleTail bytes against a request for $zeroTailBytes"
     }
     check(segmentsIn(directory)[intactFrames].delete()) { "the fixture's hole must actually be punched" }
 
