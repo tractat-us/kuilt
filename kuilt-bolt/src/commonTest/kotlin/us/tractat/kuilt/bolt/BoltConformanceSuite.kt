@@ -815,6 +815,12 @@ abstract class BoltConformanceSuite {
      *
      * It asks **before** any append as well as after, because sticky state is the sort that latches
      * at construction.
+     *
+     * **Mutation receipt.** Inverting the `msync` return test in `PosixMappedBolt.syncRange` — so a
+     * flush that worked is recorded as one that did not — reds the two post-append assertions here,
+     * and is the only mutation measured on this branch that does. The **before-any-append** assertion
+     * was green under every one of them: nothing in the current code can latch a doubt at
+     * construction, and it is kept as the guard against a future implementation that does.
      */
     @Test
     fun aHealthyBoltIsMeetingTheDurabilityItPromised() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
@@ -880,13 +886,48 @@ abstract class BoltConformanceSuite {
      * 8. its `reason` is not blank — a bare "durability degraded" makes every recovery unimplementable;
      * 9. the unpromised arm reports [DurabilityState.AsPromised] after every one of the same appends.
      *
-     * **What this property cannot reach.** It never drives *recovery* — the fixture's flush can never
-     * succeed, so `Degraded` clearing on a later covering flush is unasserted here and is pinned by
-     * `DurabilityLedgerTest` and by each backend's own test instead. It never drives a **real** flush
-     * failure either: no unprivileged, deterministic condition makes a healthy volume refuse one, so
-     * both mapped backends rig it, and only one of them (`PosixMappedBolt`, by handing `msync` an
-     * address the kernel refuses) rigs the *syscall* rather than its verdict. What is driven end to
-     * end everywhere is the wiring from "the flush said no" to "[Bolt.durability] says so".
+     * **Mutation receipts**, measured on this branch — each mutation applied alone, the verdict read
+     * out of the results XML, then reverted and the revert grep-verified:
+     *
+     * | Mutation | Reds |
+     * |---|---|
+     * | Restore the swallow in `MappedBolt.flushQuietly` | 5, 6, 7, 8 |
+     * | Restore the swallow in `PosixMappedBolt.flushQuietly` | 5, 6, 7, 8 |
+     * | Report `AppendResult.Failed` when the flush failed | 1, 6, 7 |
+     * | Invert the `msync` return test | 5, 6, 7, 8 — **and** [aHealthyBoltIsMeetingTheDurabilityItPromised] |
+     * | Record an empty range on every failure | 6, 7 |
+     * | Record a blank `reason` | 8 only |
+     * | `DurabilityLedger.flushFailed` overwrites instead of widening | **7 only, and only on some subclasses** |
+     * | Flush regardless of the durability flag — the absolute reading | **9 only** |
+     * | Make `durability()` an event: reading it clears the state | **4 only** |
+     * | `DurabilityLedger.flushSucceeded` clears unconditionally | **none** |
+     * | **Fixture:** hand back an un-rigged bolt under [DurabilityFixture.Promised] | 5, 6, 7, 8 |
+     *
+     * **Row 7 is the sharpest one, and it is #2240's thesis recurring here.** Overwriting instead of
+     * widening reds **only** on the one-frame-per-segment subclasses. At the shipped 1 MiB budget all
+     * three appends land in one segment, whose flush covers the whole segment every time, so
+     * "widen from 0" and "reset to the newest failure" compute the *same range* and the assertion
+     * cannot tell them apart. The property is genuinely vacuous in the default configuration and is
+     * saved only by the Tiny subclasses driving the other one.
+     *
+     * **The green rows, and the green assertions — said plainly, because a near-all-red table invites
+     * exactly the wrong conclusion.** Clearing unconditionally is invisible here: the fixture's flush
+     * can never succeed, so no success is ever recorded and every mutation of `flushSucceeded` is a
+     * mutation of dead code *for this test*. `DurabilityLedgerTest` is what reds it, and each mapped
+     * backend's own `aDoubtRaisedByAFailed…` test is what proves the wiring reaches it at all.
+     * Assertions **2** and **3** were green under every mutation above: they say a durability change
+     * did not disturb the archive itself, which no mutation of the durability path produces, and they
+     * are kept as the anti-regression they are rather than as discriminators.
+     *
+     * **What this property cannot reach.** It never drives *recovery*, per the above. It never drives
+     * a **real** flush failure either: no unprivileged, deterministic condition makes a healthy volume
+     * refuse one, so both mapped backends rig it — and only `PosixMappedBolt` rigs the *syscall*
+     * (handing `msync` an address the kernel refuses, so the `ENOMEM` and its `strerror` text are
+     * real); `MappedBolt` can only rig the verdict, because `force()` takes no arguments. What is
+     * driven end to end on both is the wiring from "the flush said no" to "[Bolt.durability] says so".
+     * Also unreached: a doubt raised on one backend and read back by another over the same archive
+     * (durability is per-instance, not written down), and concurrent appends racing a `durability()`
+     * poll.
      */
     @Test
     fun aBoltThatCannotFlushReportsDegradedExactlyWhenItPromisedDurability() =

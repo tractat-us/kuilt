@@ -631,12 +631,23 @@ class PosixMappedBoltTest {
      * flush re-covers everything before it in the same page — see `PosixMappedBolt.syncRange`. With
      * the default 1 MiB budget all three frames share a page, which is the ordinary configuration.
      *
-     * **Mutation receipts.** Deleting the `ledger.flushSucceeded(...)` branch reddens assertion 4
-     * alone; reporting the frame's own offset instead of `outcome.coveredFrom` reddens 4 alone too
-     * (the success then starts above the doubt and cannot cover it), which is the pair that stops 4
-     * from riding on 1–3. Recording the failure without its errno reddens 3. Widening
-     * `flushSucceeded` to clear unconditionally leaves all four green — `DurabilityLedgerTest` is
-     * what distinguishes "cleared because it covered" from "cleared because it was asked to".
+     * **Mutation receipts**, measured on this branch:
+     *
+     * | Mutation | Reds |
+     * |---|---|
+     * | Delete the `ledger.flushSucceeded(...)` branch in `flushQuietly` | **4 only** |
+     * | Report the frame's own offset instead of `outcome.coveredFrom` | **4 only** |
+     * | Record the failure with a bare reason instead of the errno | **3 only** |
+     * | Report `AppendResult.Failed` when the flush failed | **2 only** |
+     * | Restore the swallow in `flushQuietly` | **3 only** |
+     * | Make `flushSucceeded` clear unconditionally | **none** |
+     *
+     * Row 2 is the one worth reading twice: it is a *correct-looking* accounting change — report the
+     * offsets you asked to flush — and it silently makes recovery unreachable, because the success
+     * then starts above the doubt and can never cover it. Nothing but this assertion sees it.
+     *
+     * The last row is honest: this test cannot tell "cleared because the flush covered the doubt" from
+     * "cleared because it was asked to". That distinction is `DurabilityLedgerTest`'s alone.
      */
     @Test
     fun aDoubtRaisedByAFailedSyncIsClearedByTheNextSuccessfulOne() = runTest(timeout = TEST_WEDGE_BACKSTOP) {

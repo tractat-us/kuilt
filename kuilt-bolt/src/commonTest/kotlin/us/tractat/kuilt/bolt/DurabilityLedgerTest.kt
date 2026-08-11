@@ -33,9 +33,11 @@ class DurabilityLedgerTest {
      * an event: a flush covers a range, so the frames at risk after two failures are **everything**
      * since the last good flush, not the newest one's.
      *
-     * **Mutation receipt:** making `flushFailed` overwrite instead of taking `min`/`max` reddens the
-     * first two assertions (the range becomes `[100, 300)`), and leaves the third green — which is
-     * why the reason is checked separately rather than folded in.
+     * **Mutation receipt**, measured: making `flushFailed` overwrite instead of taking `min`/`max`
+     * reds the **first** assertion only — the range becomes `[100, 300)`, whose end happens to be
+     * right. So the `fromOffset` check is the one carrying this property, and `toOffset` is pinned by
+     * [aFailureBelowTheOpenRangeWidensDownwards] instead, where the second failure is the *lower* one.
+     * Neither test pins widening on its own; the pair does.
      */
     @Test
     fun successiveFailuresWidenTheRangeAndKeepTheNewestReason() {
@@ -80,10 +82,11 @@ class DurabilityLedgerTest {
      * back, and clearing on it would launder exactly the once-and-then-cleared `EIO` this whole signal
      * exists to preserve.
      *
-     * **Mutation receipts.** Dropping the covering test from `flushSucceeded` (clear unconditionally)
-     * reddens assertions 1 and 2. Inverting it to `>=`/`<=` the wrong way round reddens 4. Making it
-     * clear nothing at all — an early `return` — reddens 4 alone, which is the pairing that stops 4
-     * from riding on 1–3.
+     * **Mutation receipts**, measured: dropping the covering test from `flushSucceeded` (clear
+     * unconditionally) reds assertions **1 and 2**; making it clear nothing at all reds **3 and 4**.
+     * The two mutations are opposites and red disjoint halves, which is what says this test pins the
+     * *predicate* rather than either of its constant answers — a table where one mutation redded
+     * everything would not.
      */
     @Test
     fun aSuccessClearsTheDoubtOnlyWhenItCoversAllOfIt() {
@@ -133,6 +136,11 @@ class DurabilityLedgerTest {
      * empty would lose the only notification of it. Both mapped backends record exactly this at a
      * roll, and both resolve it with the first frame's flush, which starts in the same page or the
      * same mapping.
+     *
+     * **Mutation receipt**, measured: making `flushSucceeded` clear nothing reds the second assertion.
+     * The first is green under every mutation measured on this branch — an empty range survives
+     * `min`/`max` widening unchanged, so nothing in the current code can drop it, and it is kept
+     * against a future `flushFailed` that decides an empty range is not worth recording.
      */
     @Test
     fun anEmptyRangeIsStillADoubtAndIsStillClearable() {

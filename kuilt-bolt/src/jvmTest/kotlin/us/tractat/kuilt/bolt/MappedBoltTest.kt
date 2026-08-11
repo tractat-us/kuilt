@@ -361,11 +361,19 @@ class MappedBoltTest {
      * rolls, the doubt spans retired mappings, and nothing this bolt can still flush covers it. Both
      * facts are worth having written down — see [MappedBolt.durability].
      *
-     * **Mutation receipts.** Deleting the `ledger.flushSucceeded(...)` call reddens assertion 3 alone
-     * (the doubt never clears) and leaves 1 and 2 green — the pairing that stops 3 from riding on
-     * them. Widening `flushSucceeded` to clear unconditionally leaves all three green here, and is
-     * caught by `DurabilityLedgerTest` instead: this test cannot distinguish "cleared because it
-     * covered" from "cleared because it was asked to".
+     * **Mutation receipts**, measured on this branch:
+     *
+     * | Mutation | Reds |
+     * |---|---|
+     * | Delete the `ledger.flushSucceeded(...)` call in `flushQuietly` | **3 only** |
+     * | Make `DurabilityLedger.flushSucceeded` a no-op | **3 only** |
+     * | Restore the swallow in `flushQuietly` | **2 only** |
+     * | Make `flushSucceeded` clear unconditionally | **none** |
+     *
+     * The first three are the pairing that stops any one assertion riding on the others. The last one
+     * is honest: this test cannot tell "cleared because the flush covered the doubt" from "cleared
+     * because it was asked to" — its successful flush covers the range either way. That distinction is
+     * `DurabilityLedgerTest`'s, and it is the only place it is made.
      */
     @Test
     fun aDoubtRaisedByAFailedFlushIsClearedByTheNextSuccessfulOne() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
