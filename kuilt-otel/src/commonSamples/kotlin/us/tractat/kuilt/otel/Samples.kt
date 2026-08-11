@@ -1,7 +1,15 @@
 package us.tractat.kuilt.otel
 
+import kotlinx.coroutines.flow.toList
 import kotlinx.io.bytestring.ByteString
+import us.tractat.kuilt.bolt.BoltArchiveFormat
+import us.tractat.kuilt.bolt.BoltDecorator
+import us.tractat.kuilt.bolt.InMemoryBolt
+import us.tractat.kuilt.bolt.ReplayScope
+import us.tractat.kuilt.bolt.frames
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.Rga
+import kotlin.time.Clock
 
 /** @suppress — sample only */
 internal suspend fun sampleWarpLogRecordExporter() {
@@ -223,6 +231,31 @@ internal suspend fun sampleWarpSpanExporter() {
     val secondResult = exporter.export(span)
     check(secondResult == ExportResult.Success)
     check(exporter.snapshot().elements.size == 1) { "duplicate was stored" }
+}
+
+/** @suppress — sample only */
+internal suspend fun sampleArchivingExporter(peersLog: Rga<LogRecord>) {
+    val format = BoltArchiveFormat.rga(LogRecord.serializer())
+    val bolt = InMemoryBolt(format, Clock.System)
+    val archive = BoltDecorator(bolt, format)
+
+    // The exporter publishes the operations it applied; the decorator archives them. Neither
+    // knows the other's job, so the same decorator serves any Rga/Fugue owner.
+    val exporter = WarpLogRecordExporter(
+        replica = ReplicaId("server-uuid-abc123"),
+        store = InMemoryDurableStore(),
+        appliedOps = { ops -> archive.publish(ops) },
+    )
+
+    // Records that arrived by GOSSIP are archived too: a merge publishes the remote log, which
+    // is the only reason a server's archive ever holds a phone's records. Re-merging the same
+    // peer costs nothing — the decorator suppresses what it has already kept.
+    exporter.merge(peersLog)
+
+    // And the archive keeps them after the live replica has forgotten them.
+    exporter.clear()
+    val kept = bolt.replay(ReplayScope.All).frames().toList().flatMap { it.ops }
+    check(kept.isNotEmpty()) { "a clear empties the replica, never the archive" }
 }
 
 /** @suppress — sample only */

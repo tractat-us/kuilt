@@ -50,6 +50,8 @@ import us.tractat.kuilt.crdt.RgaOp
  *   log at every process start.
  * - **Compaction records minted by the exporter's own windowing.** They are records of forgetting,
  *   and this exporter's whole reason for having a sink is to let something else *not* forget.
+ *
+ * @sample us.tractat.kuilt.otel.sampleArchivingExporter
  */
 public fun interface AppliedOpSink {
 
