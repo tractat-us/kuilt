@@ -87,8 +87,11 @@ public class WarpCausalClock(private val replica: ReplicaId) {
      * The asymmetry is the point. [seq] must never regress: a reset one re-mints dots already
      * used by earlier spans, which is the corruption this class's "Recovery is mandatory"
      * section exists to prevent, and a clear is not a restart. The **frontier** must go,
-     * because after a span clear it names dots of spans no longer in the set, and
-     * [inferCausalLinks] resolves every predecessor dot against that set.
+     * because it names dots of spans the clear just dropped — so the next [tick] would stamp a
+     * post-clear span with predecessors that can never resolve. [inferCausalLinks] tolerates
+     * that (an unresolved dot is skipped and logged at debug, never thrown), so this is not a
+     * correctness repair: it is that a link pointing at a deliberately forgotten span is noise,
+     * not causality.
      *
      * The caller persists — [persist] is this class's explicit step, not an implicit one.
      */

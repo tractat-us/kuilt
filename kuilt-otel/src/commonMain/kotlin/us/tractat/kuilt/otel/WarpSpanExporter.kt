@@ -241,8 +241,9 @@ public class WarpSpanExporter(
      * retired, same retained context, same bytes.
      *
      * A configured [WarpCausalClock]'s **frontier** is emptied here too, and its `seq` left
-     * alone. The frontier would otherwise name dots of spans this call just removed, which
-     * breaks the totality [inferCausalLinks] relies on.
+     * alone. The frontier would otherwise name dots of spans this call just removed, so the next
+     * auto-stamped span would carry predecessors that can never resolve — links pointing at
+     * deliberately forgotten spans, which is noise rather than causality.
      *
      * Shares [ioMutex] with [export] and [merge] so a concurrent export cannot land a stale
      * encoded snapshot after the clear.
@@ -253,10 +254,10 @@ public class WarpSpanExporter(
                 spans = spans.piece { it.removeAll(it.elements) }
                 cbor.encodeToByteArray(spanSerializer, spans)
             }
-            // The frontier belongs to this method, not to the facade. It names dots of spans
-            // that no longer exist, and `inferCausalLinks` resolves every predecessor dot
-            // against the span set — so leaving it would break that totality for anyone who
-            // calls this exporter's clear() directly rather than WarpTelemetry.clear().
+            // The frontier belongs to this method, not to the facade — so a caller reaching this
+            // exporter directly, rather than through WarpTelemetry.clear(), gets it too. It names
+            // dots of spans that no longer exist, and stamping the next span with predecessors
+            // that can never resolve produces links to deliberately forgotten spans.
             // `seq` is deliberately untouched; see WarpCausalClock.clearFrontier.
             causalClock?.clearFrontier()
             // Clock before spans, the same order and for the same reason as export() (#1053).
