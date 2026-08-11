@@ -443,7 +443,10 @@ public class MappedBolt<Id : Any, V, Op : Any>(
         // mapping while the lock is held, so a concurrent append can never be observed half-written;
         // every earlier segment is immutable and was forced before its mapping was let go.
         val reads = lock.withLock { snapshot() }
-        var resumeOffset = 0L
+        // Null until the first segment has spoken. The archive's offset space starts wherever its
+        // OLDEST segment header says it does, not at 0 — so a future prune that drops read segments
+        // (#2236) cannot make the continuity check below false-report the survivors as a hole.
+        var resumeOffset: Long? = null
         for (read in reads) {
             // A segment that stops early stops the WHOLE replay. An append-only log is ordered, so a
             // frame that does not validate makes everything behind it untrustworthy; carrying on to
@@ -466,22 +469,50 @@ public class MappedBolt<Id : Any, V, Op : Any>(
         }
     }
 
-    /** Emit [read]'s in-scope frames, and say how the segment ended. */
+    /**
+     * Emit [read]'s in-scope frames, and say how the segment ended.
+     *
+     * [resumeOffset] is where the previous segment's frames ended, or `null` if this is the first
+     * segment to be read. It is both the offset a verdict about *this* segment reports and — for
+     * every segment after the first — the offset this segment's header must claim to start at.
+     *
+     * ### The continuity check is not tidiness, it is the only thing that sees a missing segment
+     *
+     * Frames are validated one at a time, so damage *within* a segment is caught by its own checksum.
+     * A segment that is **gone**, or one truncated to exactly a frame boundary, presents nothing to
+     * fail a checksum: the reader simply moves to the next file, whose frames are perfectly intact
+     * and start 133 bytes further along than the archive's own history says. Without this check that
+     * is a `CleanTail` over a history with a hole punched in it — and the [Bolt] KDoc spells out what
+     * a consumer does next, which is re-mint an already-used `(replica, seq)` dot mesh-wide.
+     *
+     * Every segment header carries an *absolute* `baseOffset`, so the gap is arithmetic rather than
+     * guesswork. `InMemoryBolt` holds the same invariant as a `check`, because there it can only be
+     * broken by a bookkeeping bug; on a file-backed archive a missing file is a thing that happens,
+     * so here it is a verdict.
+     *
+     * It is reported as [TruncationReason.SegmentHeader] rather than a reason of its own: the fault
+     * is at the segment-header layer, and the alternative — a third enum constant — would change a
+     * public API shared with every other backend for a distinction no consumer has asked to make.
+     */
     private suspend fun FlowCollector<ReplayEvent<Op>>.emitSegment(
         read: SegmentRead,
-        resumeOffset: Long,
+        resumeOffset: Long?,
         scope: ReplayScope,
     ): SegmentReplay {
+        val stopsAt = resumeOffset ?: 0L
         val bytes = try {
             read.bytes()
         } catch (_: IOException) {
             // A segment we cannot read at all is indistinguishable, to a consumer, from one whose
             // header will not read — and throwing would discard every intact frame ahead of it.
-            return SegmentReplay(Truncated(resumeOffset, TruncationReason.SegmentHeader), resumeOffset)
+            return SegmentReplay(Truncated(stopsAt, TruncationReason.SegmentHeader), stopsAt)
         }
         val buffer = Buffer().apply { write(bytes) }
         val header = readSegmentHeader(buffer, format.opFormat, format.elementType)
-            ?: return SegmentReplay(endedAt(bytes, consumed = 0, offset = resumeOffset), resumeOffset)
+            ?: return SegmentReplay(endedAt(bytes, consumed = 0, offset = stopsAt), stopsAt)
+        if (resumeOffset != null && header.baseOffset != resumeOffset) {
+            return SegmentReplay(Truncated(resumeOffset, TruncationReason.SegmentHeader), resumeOffset)
+        }
         var offset = header.baseOffset
         while (buffer.size > 0) {
             val before = buffer.size
