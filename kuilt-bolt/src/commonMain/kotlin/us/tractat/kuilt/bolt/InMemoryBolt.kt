@@ -189,6 +189,32 @@ public class InMemoryBolt<Id : Any, V, Op : Any>(
         nextOffset += bytes.size - headerBytes
     }
 
+    /**
+     * Drop the segment at [index] out of the middle of this archive, leaving the append cursor and
+     * every other segment exactly where they were — which is precisely what a **deleted segment
+     * file** is on a disk-backed backend.
+     *
+     * **Only a damaged archive needs this, and only a test wants one.** [segments] is an in-process
+     * list, so it cannot lose an element by accident, and that is the trap this hook exists to
+     * remove rather than a reassurance: a reference implementation that cannot reach a failure is a
+     * reference implementation whose conformance suite quietly stops testing for it, and every
+     * disk-backed backend then has to invent the same guard alone. Two out of two did not (#2240).
+     *
+     * A hole, not a truncation. The bytes of the surviving segments are untouched and every one of
+     * their headers still reads perfectly — what is gone is a region of the *offset space*, and the
+     * only thing that can see it is the cross-segment continuity check in [emitFrames].
+     *
+     * [seedRawSegment] deliberately cannot express this. Its `baseOffset == nextOffset` requirement
+     * is what *checks* a fixture's idea of where its bytes land, and relaxing it to let a segment be
+     * seeded past the cursor would trade a real guard for one this hook gives for free.
+     */
+    internal fun loseSegment(index: Int): Unit = lock.withLock {
+        require(index in segments.indices) { "no segment at $index — this archive has ${segments.size}" }
+        // `nextOffset` is deliberately untouched: deleting a file frees its bytes, it does not move
+        // the append cursor, which a disk-backed backend re-derives from the NEWEST header.
+        usedBytes -= segments.removeAt(index).byteSize
+    }
+
     /** Start a new segment whose first frame sits at [offset]. Called under [lock]. */
     private fun rollSegment(offset: Long): Segment {
         val header = encodeSegmentHeader(
@@ -208,17 +234,41 @@ public class InMemoryBolt<Id : Any, V, Op : Any>(
         // array untouched. Either way the bytes this reader reads are already published to it by
         // the lock's happens-before edge, and are never rewritten.
         val snapshots = lock.withLock { segments.map(Segment::snapshot) }
-        for (snapshot in snapshots) {
-            if (skippable(snapshot, scope)) continue
+        // Segment-granularity pruning, MINUS ONE — and the minus one is load-bearing.
+        //
+        // `skippable` prunes a PREFIX (`baseOffset + frameBytes` increases across segments, so once
+        // one segment survives every later one does). The segment immediately before the first
+        // survivor is read ANYWAY, with every one of its frames filtered out by the scope, because
+        // its true frame end is the offset the first emitted segment must continue from. Pruning it
+        // would leave that boundary — the only one a `FromOffset` replay has — unchecked, and an
+        // unchecked boundary is a hole reported as a [CleanTail] to the one caller most likely to
+        // act on it: `ReplayScope.FromOffset` is documented as the *resume cursor*, so the offset a
+        // consumer hands back is precisely the offset a lost segment starts at.
+        //
+        // It is PARSED rather than taken from bookkeeping, and that is not fastidiousness. A
+        // recorded extent is not evidence on every backend: a file-backed archive derives a middle
+        // segment's extent from the NEXT segment's base, so `baseOffset + extent` equals that base
+        // by construction and the check below would compare a value with itself — green, over a
+        // real hole. One extra segment read cannot lie.
+        val firstUnpruned = snapshots.indexOfFirst { !skippable(it, scope) }
+        if (firstUnpruned < 0) {
+            emit(CleanTail)
+            return@flow
+        }
+        // Null until the first segment has spoken: the archive's offset space starts wherever its
+        // OLDEST segment says it does, not at 0.
+        var resumeOffset: Long? = null
+        for (index in maxOf(firstUnpruned - 1, 0) until snapshots.size) {
             // A segment that stops early stops the WHOLE replay. An append-only log is ordered, so
             // a frame that does not validate makes everything behind it untrustworthy; carrying on
             // to the next segment would hand back a history with a silent hole and offsets that
             // jump, which is worse than a short answer that says it is short.
-            val stopped = emitFrames(snapshot, scope)
-            if (stopped != null) {
-                emit(stopped)
+            val outcome = emitFrames(snapshots[index], resumeOffset, scope)
+            outcome.stopped?.let {
+                emit(it)
                 return@flow
             }
+            resumeOffset = outcome.endOffset
         }
         emit(CleanTail)
     }
@@ -227,11 +277,33 @@ public class InMemoryBolt<Id : Any, V, Op : Any>(
     private fun skippable(snapshot: SegmentSnapshot, scope: ReplayScope): Boolean =
         scope is ReplayScope.FromOffset && snapshot.baseOffset + snapshot.frameBytes <= scope.offset
 
-    /** Emit [snapshot]'s in-scope frames; the [Truncated] verdict if it stopped early, else `null`. */
+    /**
+     * Emit [snapshot]'s in-scope frames, and say how the segment ended.
+     *
+     * [resumeOffset] is where the previous segment's frames ended, or `null` if this is the first
+     * segment read. For every segment after that one it is also the offset this segment's header
+     * must claim to start at.
+     *
+     * ### The continuity check is the only thing that sees a segment go missing
+     *
+     * Frames are validated one at a time, so damage *within* a segment is caught by its own
+     * checksum. A segment that is **gone** presents nothing to fail a checksum: the reader moves to
+     * the next one, whose frames are perfectly intact and start further along than the archive's own
+     * history says. Without this check that is a [CleanTail] over a history with a hole punched in
+     * it — and the [Bolt] KDoc spells out what a consumer does next, which is re-mint an already-used
+     * `(replica, seq)` dot mesh-wide.
+     *
+     * An in-process list cannot drop an element by accident, so on this backend the hole is a
+     * *fixture* state rather than a field one (see [loseSegment]). It is a verdict here anyway, and
+     * not a `check`, because the contract every backend is held to is written in this class's
+     * behaviour: a reference implementation that asserted where a disk-backed one must report would
+     * leave the property untested for the backends that can actually reach it.
+     */
     private suspend fun FlowCollector<ReplayEvent<Op>>.emitFrames(
         snapshot: SegmentSnapshot,
+        resumeOffset: Long?,
         scope: ReplayScope,
-    ): Truncated? {
+    ): SegmentReplay {
         val buffer = Buffer().apply { write(snapshot.bytes, 0, snapshot.used) }
         // The header is the AUTHORITY on where this segment's frames start, not the in-memory
         // bookkeeping: for a file-backed backend the bytes on disk are all there is. `check`, not a
@@ -239,15 +311,21 @@ public class InMemoryBolt<Id : Any, V, Op : Any>(
         // trailer rejects it as torn first — so a disagreement at this point is a bookkeeping bug in
         // this class, which is exactly what an assertion is for.
         val header = readSegmentHeader(buffer, format.opFormat, format.elementType)
-            ?: return Truncated(snapshot.baseOffset, TruncationReason.SegmentHeader)
+            ?: return SegmentReplay(
+                Truncated(resumeOffset ?: snapshot.baseOffset, TruncationReason.SegmentHeader),
+                snapshot.baseOffset,
+            )
         check(header.baseOffset == snapshot.baseOffset) {
             "segment header says its frames start at ${header.baseOffset}, bookkeeping says ${snapshot.baseOffset}"
+        }
+        if (resumeOffset != null && header.baseOffset != resumeOffset) {
+            return SegmentReplay(Truncated(resumeOffset, TruncationReason.MissingRegion), resumeOffset)
         }
         var offset = header.baseOffset
         while (buffer.size > 0) {
             val before = buffer.size
             val raw = readFrame(buffer, header.formatVersion)
-                ?: return Truncated(offset, TruncationReason.Frame)
+                ?: return SegmentReplay(Truncated(offset, TruncationReason.Frame), offset)
             val endOffset = offset + (before - buffer.size)
             val archived = Archived(
                 offset = offset,
@@ -260,8 +338,11 @@ public class InMemoryBolt<Id : Any, V, Op : Any>(
             offset = endOffset
             if (scope.selects(archived)) emit(archived)
         }
-        return null
+        return SegmentReplay(stopped = null, endOffset = offset)
     }
+
+    /** How one segment's replay ended: a verdict, or the offset the next segment resumes at. */
+    private class SegmentReplay(val stopped: Truncated?, val endOffset: Long)
 
     private fun ReplayScope.selects(frame: Archived<Op>): Boolean = when (this) {
         ReplayScope.All -> true
@@ -283,6 +364,9 @@ public class InMemoryBolt<Id : Any, V, Op : Any>(
 
         /** How many FRAME bytes this segment holds — the header does not count. */
         val frameBytes: Long get() = (used - headerBytes).toLong()
+
+        /** Everything this segment occupies, header included — what `usedBytes` counts it as. */
+        val byteSize: Long get() = used.toLong()
 
         fun write(frame: ByteArray) {
             if (used + frame.size > bytes.size) {

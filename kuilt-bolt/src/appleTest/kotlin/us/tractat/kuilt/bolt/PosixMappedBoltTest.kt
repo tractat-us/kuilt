@@ -672,17 +672,17 @@ internal fun removeBoltTestDirectories() {
 private val createdBoltTestDirectories = mutableListOf<String>()
 
 /** The segment files in [directory], in append order. */
-private fun segmentFiles(directory: String): List<String> {
+internal fun segmentFiles(directory: String): List<String> {
     val base = directory.trimEnd('/')
     val names = NSFileManager.defaultManager.contentsOfDirectoryAtPath(base, error = null) ?: emptyList<Any?>()
     return names.mapNotNull { it as? String }.sorted().map { "$base/$it" }
 }
 
-private fun headerBytesOf(format: BoltArchiveFormat<*, *, *>): Long = encodeSegmentHeader(
+internal fun headerBytesOf(format: BoltArchiveFormat<*, *, *>): Long = encodeSegmentHeader(
     SegmentHeader(BOLT_FORMAT_VERSION, format.opFormat, format.elementType, baseOffset = 0L),
 ).size.toLong()
 
-private fun fileSize(path: String): Long = memScoped {
+internal fun fileSize(path: String): Long = memScoped {
     val info = alloc<stat>()
     check(stat(path, info.ptr) == 0) { "could not stat $path" }
     info.st_size

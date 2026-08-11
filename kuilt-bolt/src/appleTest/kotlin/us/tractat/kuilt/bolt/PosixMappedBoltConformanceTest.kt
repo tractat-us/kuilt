@@ -1,8 +1,11 @@
+@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+
 package us.tractat.kuilt.bolt
 
 import kotlinx.io.Buffer
 import kotlinx.io.readByteArray
 import kotlinx.serialization.serializer
+import platform.Foundation.NSFileManager
 import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.RgaId
@@ -25,6 +28,15 @@ class PosixMappedBoltConformanceTest : BoltConformanceSuite() {
 
     override suspend fun newTruncatedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         truncatedPosixMappedBolt(clock, intactFrames, PosixMappedBolt.DEFAULT_SEGMENT_FRAME_BYTES)
+
+    /**
+     * With a real pre-allocated tail on every segment — the shipped shape, and the one where the
+     * zero-tail/recorded-extent machinery is actually consulted. The default 1 MiB budget cannot be
+     * used as-is: it puts the whole fixture in ONE segment, leaving no middle to lose.
+     */
+    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
+        discontinuousPosixMappedBolt(clock, intactFrames, synchronous = true, PRE_ALLOCATED_TAIL_BYTES)
+
     @AfterTest
     fun removeArchives(): Unit = removeBoltTestDirectories()
 }
@@ -49,6 +61,16 @@ class TinySegmentPosixMappedBoltConformanceTest : BoltConformanceSuite() {
 
     override suspend fun newTruncatedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         truncatedPosixMappedBolt(clock, intactFrames, segmentFrameBytes = 1L)
+
+    /**
+     * The complement of the default subclass, and the reason this class exists: **no** pre-allocated
+     * tail, so the segment before the hole runs out of bytes exactly on a frame boundary and exits
+     * the parse loop normally — never consulting the recorded extent at all. The two configurations
+     * reach the continuity check by different routes and must reach the same verdict.
+     */
+    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
+        discontinuousPosixMappedBolt(clock, intactFrames, synchronous = true, NO_PRE_ALLOCATED_TAIL)
+
     @AfterTest
     fun removeArchives(): Unit = removeBoltTestDirectories()
 }
@@ -63,6 +85,10 @@ class AsynchronousPosixMappedBoltConformanceTest : BoltConformanceSuite() {
 
     override suspend fun newTruncatedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         truncatedPosixMappedBolt(clock, intactFrames, PosixMappedBolt.DEFAULT_SEGMENT_FRAME_BYTES)
+
+    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
+        discontinuousPosixMappedBolt(clock, intactFrames, synchronous = false, PRE_ALLOCATED_TAIL_BYTES)
+
     @AfterTest
     fun removeArchives(): Unit = removeBoltTestDirectories()
 }
@@ -119,6 +145,102 @@ private suspend fun truncatedPosixMappedBolt(
 
     return bolt
 }
+
+/**
+ * An on-disk archive of [intactFrames] ordinary frames, then a **deleted segment file**, then two
+ * healthy frames behind the hole.
+ *
+ * Every frame is written through [Bolt.append] and then one whole file is removed — nothing is
+ * rewritten, nothing is corrupted. That is the point: the surviving files are byte-for-byte intact
+ * and every one of their headers reads perfectly, so no checksum anywhere can notice, and the archive
+ * is discontinuous only in the sense that one header's absolute `baseOffset` no longer follows the
+ * previous segment's last frame. Neither of this backend's other defences sees it — a zero tail is
+ * what a healthy pre-allocated segment ends in, and the recorded-extent check is derived across the
+ * hole and so is corrupted by exactly the state it would have to detect.
+ *
+ * A one-byte segment budget puts exactly one frame in each file regardless of which subclass asks, so
+ * "the segment after the intact prefix" is just the file at index [intactFrames]. The writer is
+ * closed before its file is deleted, and the archive is re-opened afterwards, so the replay adopts
+ * what is actually on disk rather than a segment list that predates the hole.
+ */
+private suspend fun discontinuousPosixMappedBolt(
+    clock: Clock,
+    intactFrames: Int,
+    synchronous: Boolean,
+    zeroTailBytes: Long,
+): Bolt<RgaOp<String>> {
+    require(intactFrames >= 1) { "the fixture stops AFTER a frame, so it needs at least one" }
+    val format = rgaArchiveFormat()
+    val alice = ReplicaId("alice")
+    val ops = buildList {
+        var live = Rga.empty<String>()
+        repeat(intactFrames + 1 + FRAMES_BEHIND_THE_HOLE) { index ->
+            val (next, op) = live.insertAt(alice, live.size, "frame-$index")
+            live = next
+            add(op)
+        }
+    }
+    // One frame per segment, plus whatever tail this subclass asked for. Measured from a real
+    // encoded frame rather than guessed: the budget has to be big enough for one frame and too
+    // small for two, and a fixture that silently packed two frames into a segment would have no
+    // middle to lose.
+    //
+    // A budget of ONE byte is how "no tail at all" is expressed: a segment is allocated at
+    // `maxOf(budget, frame.size)`, so a one-byte budget sizes every segment to exactly the frame
+    // that forced it. Adding the pad to a MEASURED frame size would not do it — these frames differ
+    // in size by a few bytes as the `Rga` ids grow, so every segment but one would still get a
+    // small accidental tail, and the "ends on a frame boundary" path would go undriven.
+    val frameBytes = encodeFrame(
+        RawFrame(clock.now(), setOf(ops[0].id.dot), null, listOf(format.encode(ops[0]))),
+    ).size.toLong()
+    check(zeroTailBytes < frameBytes) { "a $zeroTailBytes-byte pad would leave room for a second frame" }
+    val budget = if (zeroTailBytes == NO_PRE_ALLOCATED_TAIL) 1L else frameBytes + zeroTailBytes
+    val directory = boltTestDirectory()
+    val writer = PosixMappedBolt(format, clock, directory, synchronous, budget)
+
+    ops.forEach { assertIs<AppendResult.Written>(writer.append(listOf(it)), "every fixture frame must be written") }
+    writer.close()
+    check(segmentFiles(directory).size == ops.size) {
+        "the fixture needs one frame per segment, or there is no middle segment to lose"
+    }
+    // VERIFIED, not merely configured. Which shape the segment before the hole ends in decides
+    // which of this backend's two stop paths the replay takes, and a fixture that quietly produced
+    // the other one would leave the property blind exactly the way #2240 describes — so the tail is
+    // measured off the file rather than assumed from the budget.
+    val preHole = segmentFiles(directory)[intactFrames - 1]
+    val preHoleFrame = encodeFrame(
+        RawFrame(
+            clock.now(),
+            setOf(ops[intactFrames - 1].id.dot),
+            null,
+            listOf(format.encode(ops[intactFrames - 1])),
+        ),
+    ).size.toLong()
+    val preHoleTail = fileSize(preHole) - headerBytesOf(format) - preHoleFrame
+    check(if (zeroTailBytes == NO_PRE_ALLOCATED_TAIL) preHoleTail == 0L else preHoleTail > 0L) {
+        "the segment before the hole must end the way this subclass says it does, and its " +
+            "pre-allocated tail measured $preHoleTail bytes against a request for $zeroTailBytes"
+    }
+    val hole = segmentFiles(directory)[intactFrames]
+    check(NSFileManager.defaultManager.removeItemAtPath(hole, error = null)) {
+        "the fixture's hole must actually be punched — $hole is still there"
+    }
+
+    return PosixMappedBolt(format, clock, directory, synchronous, budget)
+}
+
+/** Frames behind the hole. More than one, so "stepped over it" is unmistakable rather than off-by-one. */
+private const val FRAMES_BEHIND_THE_HOLE = 2
+
+/**
+ * A pre-allocated tail on every fixture segment, so the segment before the hole ends the way this
+ * backend's ordinary segments end — the configuration in which `reachedRecordedExtent` is actually
+ * consulted. Smaller than a frame, so only one frame lands per segment.
+ */
+private const val PRE_ALLOCATED_TAIL_BYTES = 32L
+
+/** No tail: each segment is sized to the one frame that forced it, ending exactly on a frame boundary. */
+private const val NO_PRE_ALLOCATED_TAIL = 0L
 
 /** A segment's bytes: a whole header for [format] at [baseOffset], then whatever [frames] writes. */
 private fun rawSegment(

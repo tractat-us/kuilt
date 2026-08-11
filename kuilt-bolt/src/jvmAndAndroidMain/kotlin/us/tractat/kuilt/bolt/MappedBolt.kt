@@ -574,13 +574,13 @@ public class MappedBolt<Id : Any, V, Op : Any>(
      * a consumer does next, which is re-mint an already-used `(replica, seq)` dot mesh-wide.
      *
      * Every segment header carries an *absolute* `baseOffset`, so the gap is arithmetic rather than
-     * guesswork. `InMemoryBolt` holds the same invariant as a `check`, because there it can only be
-     * broken by a bookkeeping bug; on a file-backed archive a missing file is a thing that happens,
-     * so here it is a verdict.
+     * guesswork. `InMemoryBolt` runs the same check and reports the same verdict — its segments are an
+     * in-process list that can only lose one to a test hook, but the contract every backend is held to
+     * is written in the reference backend's behaviour, so it reports rather than asserts (#2240).
      *
-     * It is reported as [TruncationReason.SegmentHeader] rather than a reason of its own: the fault
-     * is at the segment-header layer, and the alternative — a third enum constant — would change a
-     * public API shared with every other backend for a distinction no consumer has asked to make.
+     * It is reported as [TruncationReason.MissingRegion], which is a reason of its own rather than
+     * the segment-header layer's, because the *remedy* differs: a torn header may be completed by a
+     * writer that catches up, and a missing segment never will be. See that constant's KDoc.
      */
     private suspend fun FlowCollector<ReplayEvent<Op>>.emitSegment(
         read: SegmentRead,
@@ -599,12 +599,11 @@ public class MappedBolt<Id : Any, V, Op : Any>(
         val header = readSegmentHeader(buffer, format.opFormat, format.elementType)
             ?: return SegmentReplay(endedAt(bytes, consumed = 0, offset = stopsAt), stopsAt)
         if (resumeOffset != null && header.baseOffset != resumeOffset) {
-            // The reason is APPROXIMATE, deliberately and not by oversight: this header is intact,
-            // it simply describes the wrong place. `TruncationReason` is public and lives in
-            // commonMain, which the Apple backend is editing concurrently, so whether a gap deserves
-            // a constant of its own is settled once for both backends in #2240 — not unilaterally
-            // here, mid-flight.
-            return SegmentReplay(Truncated(resumeOffset, TruncationReason.SegmentHeader), resumeOffset)
+            // This header is intact — it simply describes the wrong place — so the fault is neither
+            // the header layer's nor a frame's. `MissingRegion` says the thing a consumer branches
+            // on: the offsets between here and there exist nowhere, so unlike a torn tail this is
+            // not somewhere to resume from later.
+            return SegmentReplay(Truncated(resumeOffset, TruncationReason.MissingRegion), resumeOffset)
         }
         var offset = header.baseOffset
         while (buffer.size > 0) {

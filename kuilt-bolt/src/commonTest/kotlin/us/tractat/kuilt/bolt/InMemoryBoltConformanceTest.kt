@@ -21,6 +21,9 @@ class InMemoryBoltConformanceTest : BoltConformanceSuite() {
 
     override suspend fun newTruncatedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         truncatedInMemoryBolt(clock, intactFrames, InMemoryBolt.DEFAULT_SEGMENT_FRAME_BYTES)
+
+    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
+        discontinuousInMemoryBolt(clock, intactFrames)
 }
 
 /**
@@ -42,6 +45,9 @@ class TinySegmentInMemoryBoltConformanceTest : BoltConformanceSuite() {
 
     override suspend fun newTruncatedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         truncatedInMemoryBolt(clock, intactFrames, segmentFrameBytes = 1L)
+
+    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
+        discontinuousInMemoryBolt(clock, intactFrames)
 }
 
 /**
@@ -98,6 +104,49 @@ private suspend fun truncatedInMemoryBolt(
 
     return bolt
 }
+
+/**
+ * An in-memory archive of [intactFrames] ordinary frames, then a **lost segment**, then two healthy
+ * frames behind the hole.
+ *
+ * Every frame here is written through [Bolt.append], so the archive is the real thing rather than
+ * bytes this fixture believes are right — the only damage is that one whole segment is dropped out of
+ * the middle afterwards, leaving the append cursor and every surviving segment untouched. That is
+ * exactly what a deleted segment file is on a disk-backed backend, and it is the one archive shape
+ * `seedRawSegment` deliberately cannot express: its `baseOffset == nextOffset` requirement is what
+ * *checks* a fixture's idea of where its bytes land, and relaxing it would trade a real guard for
+ * something [InMemoryBolt.loseSegment] gives for free.
+ *
+ * A one-byte segment budget puts exactly one frame in each segment regardless of which subclass asks,
+ * so "the segment after the intact prefix" is just the segment at index [intactFrames] — no offset
+ * arithmetic to get wrong. The default 1 MiB budget would put the whole archive in one segment, where
+ * there is no middle to lose.
+ *
+ * The suite's obligation asks a fixture to end its pre-hole segment the way this backend's ordinary
+ * segments end, **pre-allocated tail included**. This backend has no such tail to reproduce: nothing
+ * is pre-allocated, a segment's array holds exactly the bytes written into it, and `snapshot.used`
+ * bounds every parse. So the zero-tail configuration the mmap fixtures both drive does not exist
+ * here, and one budget covers this backend completely.
+ */
+private suspend fun discontinuousInMemoryBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> {
+    require(intactFrames >= 1) { "the fixture stops AFTER a frame, so it needs at least one" }
+    val format: BoltArchiveFormat<RgaId, String, RgaOp<String>> = BoltArchiveFormat.rga(serializer<String>())
+    val bolt = InMemoryBolt(format, clock, segmentFrameBytes = 1L)
+    val alice = ReplicaId("alice")
+
+    var live = Rga.empty<String>()
+    repeat(intactFrames + 1 + FRAMES_BEHIND_THE_HOLE) { index ->
+        val (next, op) = live.insertAt(alice, live.size, "frame-$index")
+        live = next
+        assertIs<AppendResult.Written>(bolt.append(listOf(op)), "every fixture frame must be written")
+    }
+    bolt.loseSegment(intactFrames)
+
+    return bolt
+}
+
+/** Frames behind the hole. More than one, so "stepped over it" is unmistakable rather than off-by-one. */
+private const val FRAMES_BEHIND_THE_HOLE = 2
 
 /** A segment's bytes: a whole header for [format] at [baseOffset], then whatever [frames] writes. */
 private fun segmentBytes(
