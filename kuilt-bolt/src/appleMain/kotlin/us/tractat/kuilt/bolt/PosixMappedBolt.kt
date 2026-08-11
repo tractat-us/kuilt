@@ -139,8 +139,18 @@ import kotlin.time.Instant
  * durability upgrade, not the append, and saying otherwise costs records — [AppendResult.Failed] means
  * "the ops are lost" and invites the consumer to re-feed them, which would write a second copy of a
  * record already on disk. So a `synchronous` bolt whose volume refuses to flush degrades to the
- * asynchronous guarantee rather than to a lie in either direction, and this paragraph is where that
- * is admitted. Nothing in this repo's tests reaches it — `msync` fails on dying hardware.
+ * asynchronous guarantee rather than to a lie in either direction.
+ *
+ * **The JVM/Android backend answers this identically** — see `MappedBolt.flushQuietly`, which reaches
+ * the same conclusion for `FileChannel.force` in the same words, deliberately: a consumer comparing
+ * the two backends must find one answer, not two. Both also agree that [AppendResult] having no
+ * "written but not durable" shape is a **gap rather than a decision**, and both park it on #2243
+ * rather than inventing a contract on one backend alone.
+ *
+ * Where the two differ is only in diagnostics: this backend keeps the errno on
+ * [lastUnreportedFailure] so it is not destroyed while #2243 is open. That is a breadcrumb, not a
+ * contract. Nothing in this repo's tests reaches the flush branch itself — `msync` fails on dying
+ * hardware — so it rides on the same field as the replay case, which is testable and tested.
  *
  * ### Fixed-size segments, not one remapped growing file
  *
