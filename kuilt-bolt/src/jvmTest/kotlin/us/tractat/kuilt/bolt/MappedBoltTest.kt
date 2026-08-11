@@ -68,14 +68,14 @@ class MappedBoltTest {
             { assertEquals(2, segments.size, "the oversize frame rolled a second segment") },
             {
                 assertEquals(
-                    headerBytes() + SEGMENT_BUDGET_BYTES,
+                    segmentHeaderBytes() + SEGMENT_BUDGET_BYTES,
                     padded.size.toLong(),
                     "a segment is pre-allocated to its whole budget up front, not grown per append",
                 )
             },
             {
                 assertTrue(
-                    padded.drop(headerBytes().toInt() + first.endOffset.toInt()).all { it == ZERO },
+                    padded.drop(segmentHeaderBytes() + first.endOffset.toInt()).all { it == ZERO },
                     "everything past the written frame is the untouched pre-allocated region",
                 )
             },
@@ -141,7 +141,7 @@ class MappedBoltTest {
         val complete = assertIs<AppendResult.Written>(writer.append(listOf(second)))
 
         // The bytes a crash halfway through the third append would have left behind.
-        writeRaw(segmentsIn(directory).single(), at = headerBytes() + complete.endOffset, bytes = TORN_PREFIX)
+        writeRaw(segmentsIn(directory).single(), at = segmentHeaderBytes() + complete.endOffset, bytes = TORN_PREFIX)
         val reopened = mappedBolt(FixedClock(EPOCH), directory, segmentFrameBytes = SEGMENT_BUDGET_BYTES)
         val events = reopened.replay(ReplayScope.All).toList()
         val (_, third) = afterSecond.insertAt(ALICE, 2, "third")
@@ -311,14 +311,6 @@ class MappedBoltTest {
 
         /** Non-zero, and too short to be a frame — what a crash mid-write leaves. */
         val TORN_PREFIX = byteArrayOf(0, 0, 0, 42, 7)
-
-        /** The fixed size of this format's segment header, computed the way the backend computes it. */
-        fun headerBytes(): Long {
-            val format = rgaStringFormat()
-            return encodeSegmentHeader(
-                SegmentHeader(BOLT_FORMAT_VERSION, format.opFormat, format.elementType, baseOffset = 0L),
-            ).size.toLong()
-        }
 
         fun writeRaw(file: File, at: Long, bytes: ByteArray) {
             RandomAccessFile(file, "rw").use { handle ->

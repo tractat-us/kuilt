@@ -65,6 +65,29 @@ internal fun mappedBolt(
 internal fun segmentsIn(directory: File): List<File> =
     directory.listFiles().orEmpty().sortedBy { it.name }
 
+/** The fixed size of this format's segment header, computed the way the backend computes it. */
+internal fun segmentHeaderBytes(): Int {
+    val format = rgaStringFormat()
+    return encodeSegmentHeader(
+        SegmentHeader(BOLT_FORMAT_VERSION, format.opFormat, format.elementType, baseOffset = 0L),
+    ).size
+}
+
+/**
+ * Flip every bit of the byte at [index].
+ *
+ * A frame damaged this way stays exactly as long as it was, so every later segment's `baseOffset`
+ * still describes where its frames really are: integrity is destroyed without moving anything.
+ */
+internal fun flipByteAt(file: File, index: Long) {
+    RandomAccessFile(file, "rw").use { handle ->
+        handle.seek(index)
+        val original = handle.readByte().toInt()
+        handle.seek(index)
+        handle.writeByte(original xor BYTE_MASK)
+    }
+}
+
 /**
  * An archive of [intactFrames] ordinary frames, then a segment whose only frame has had a byte
  * flipped, then a **healthy** segment behind the damage.
@@ -93,7 +116,9 @@ private suspend fun truncatedMappedBolt(clock: Clock, intactFrames: Int): Bolt<R
         live = next
         assertIs<AppendResult.Written>(bolt.append(listOf(op)), "every fixture frame must be written")
     }
-    corruptLastByte(segmentsIn(directory)[intactFrames])
+    // With a one-byte segment budget that byte is the last of the frame's CRC-32 trailer.
+    val damaged = segmentsIn(directory)[intactFrames]
+    flipByteAt(damaged, damaged.length() - 1)
 
     // Reopen so the replay reads the corrupted bytes back off the disk rather than out of a mapping
     // this process wrote. Recovery only ever scans the NEWEST segment, which is the healthy one, so
@@ -101,25 +126,7 @@ private suspend fun truncatedMappedBolt(clock: Clock, intactFrames: Int): Bolt<R
     return MappedBolt(directory, format, clock, segmentFrameBytes = 1L)
 }
 
-/**
- * Flip every bit of [file]'s last byte.
- *
- * With a one-byte segment budget that byte is the last of the frame's CRC-32 trailer, so the frame
- * fails its checksum while staying exactly as long as it was — every later segment's `baseOffset`
- * still describes where its frames really are, and the fixture damages integrity without moving
- * anything.
- */
-private fun corruptLastByte(file: File) {
-    RandomAccessFile(file, "rw").use { handle ->
-        val last = handle.length() - 1
-        handle.seek(last)
-        val original = handle.readByte().toInt()
-        handle.seek(last)
-        handle.writeByte(original xor BYTE_MASK)
-    }
-}
-
 /** The frame that gets damaged, and the healthy one behind it. */
 private const val FRAMES_BEHIND_THE_PREFIX = 2
-private const val BYTE_MASK = 0xFF
+internal const val BYTE_MASK = 0xFF
 private val FIXTURE_REPLICA = ReplicaId("alice")
