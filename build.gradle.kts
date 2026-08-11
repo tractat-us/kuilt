@@ -344,6 +344,78 @@ object KotlinCodeScanner {
     }
 }
 
+// The INVERSE projection of `KotlinCodeScanner.stripNonCode`, for the one guard that has to read
+// PROSE rather than code: `verifySampleLinks` (#2259), whose subject — a `@sample` tag — lives only
+// inside KDoc. Everything OUTSIDE a `/** … */` block is blanked to spaces with newlines preserved,
+// so line N of the result is line N of the source carrying just its KDoc text.
+//
+// Plain `//` and non-doc `/* */` comments are blanked too, and that is a rule rather than an
+// oversight: Dokka reads KDoc only, so a `@sample` written in an ordinary comment is inert, and
+// reporting it would be a false alarm on a line that documents nothing.
+//
+// String and char literals are tracked for the same reason the sibling scanner tracks them — a
+// `"/**"` inside a literal must not open a comment — and an escape at end-of-line consumes only the
+// backslash, so a line number can never be swallowed. `object` for the same configuration-cache
+// reason as its sibling; see that scanner's note.
+object KdocScanner {
+    fun kdocOnly(text: String): String {
+        val out = StringBuilder(text.length)
+        var i = 0
+        var depth = 0 // block-comment nesting depth; 0 = not inside one
+        var isKdoc = false // the outermost open block comment began with `/**`
+        var inRaw = false
+        var inStr = false
+        var inChar = false
+        fun blank(n: Int) { repeat(n) { out.append(' ') } }
+        // An escape sequence: blank the backslash, then its escapee unless that is the newline
+        // (which must reach the output, or every later line number shifts by one).
+        fun escape() {
+            blank(1)
+            i++
+            if (i < text.length && text[i] != '\n') { blank(1); i++ }
+        }
+        while (i < text.length) {
+            val c = text[i]
+            val next = if (i + 1 < text.length) text[i + 1] else ' '
+            if (c == '\n') {
+                out.append('\n')
+                inStr = false // a malformed single-line string; recover, don't run away
+                inChar = false
+                i++
+                continue
+            }
+            when {
+                inRaw ->
+                    if (text.startsWith("\"\"\"", i)) { inRaw = false; blank(3); i += 3 } else { blank(1); i++ }
+                inStr -> if (c == '\\') escape() else { if (c == '"') inStr = false; blank(1); i++ }
+                inChar -> if (c == '\\') escape() else { if (c == '\'') inChar = false; blank(1); i++ }
+                depth > 0 -> when {
+                    c == '/' && next == '*' -> { depth++; if (isKdoc) out.append("/*") else blank(2); i += 2 }
+                    c == '*' && next == '/' -> {
+                        depth--
+                        if (isKdoc) out.append("*/") else blank(2)
+                        if (depth == 0) isKdoc = false
+                        i += 2
+                    }
+                    else -> { if (isKdoc) out.append(c) else blank(1); i++ }
+                }
+                // `/**` opens KDoc — but `/**/` is merely an empty block comment, not a doc one.
+                c == '/' && next == '*' -> {
+                    depth = 1
+                    isKdoc = text.getOrNull(i + 2) == '*' && text.getOrNull(i + 3) != '/'
+                    if (isKdoc) { out.append("/**"); i += 3 } else { blank(2); i += 2 }
+                }
+                c == '/' && next == '/' -> while (i < text.length && text[i] != '\n') { blank(1); i++ }
+                text.startsWith("\"\"\"", i) -> { inRaw = true; blank(3); i += 3 }
+                c == '"' -> { inStr = true; blank(1); i++ }
+                c == '\'' -> { inChar = true; blank(1); i++ }
+                else -> { blank(1); i++ }
+            }
+        }
+        return out.toString()
+    }
+}
+
 // Locates `runTest(…)` calls whose `timeout =` argument is a BARE DURATION LITERAL, for
 // `forbidTightRunTestTimeout` below. Same `object` rationale as `KotlinCodeScanner`: the caller
 // invokes it from inside `doLast`, where a script-level function reference would capture the
@@ -1344,6 +1416,322 @@ val verifyDocCitations by tasks.registering {
     }
 }
 
+// Guard: every `@sample` KDoc tag must name a sample Dokka can actually resolve (#2259).
+//
+// A sample's BODY cannot rot — `src/commonSamples/kotlin` is compiled into `commonTest`, so a broken
+// sample breaks the build. The one part that could rot silently was the LINK: nothing read the tag.
+// Rename the sample, move it to another module, or typo the package, and Dokka emits a warning that
+// `failOnWarning` (unset repo-wide) drops on the floor, while the API page renders the raw FQN text
+// where the example should be. Green build, broken docs, and the only way to notice was to open
+// `build/dokka/html/` by hand.
+//
+// ── The resolution rule, established by PROBING Dokka rather than assuming ──────────────────────
+// Each claim below was tested by planting the spelling in `:kuilt-heddle` and reading both the
+// generator's warnings and the emitted HTML. Absence of a warning proves nothing on its own — an
+// unparsed tag is silent too — so every probe was confirmed against whether the page rendered code.
+// `@sample X` resolves if and only if:
+//
+//   1. the tag STARTS a KDoc line (after the optional leading `*`). Mid-line — `/** Blah. @sample
+//      pkg.f */` — Dokka does not parse it as a tag AT ALL: no warning, no sample, nothing;
+//   2. `X` is FULLY QUALIFIED. A bare `sampleFoo`, or a tail like `heddle.sampleFoo`, does NOT
+//      resolve even when the sample sits in the citing file's own package. Surrounding KDoc-link
+//      brackets (`@sample [pkg.f]`) are accepted and stripped;
+//   3. `X` names a FUNCTION. A class or object is refused outright ("Only function links allowed");
+//   4. that function is declared at top level OR as a member of a type (`pkg.Holder.sampleFoo`
+//      resolves — `:kuilt-cluster` relies on it). A LOCAL function nested in another function's body
+//      does not;
+//   5. of ANY visibility — `private` resolves. Dokka's own message says "top-level" for both this
+//      and (4); the message is wrong, and matching the message rather than the behaviour would have
+//      false-red two shipped modules;
+//   6. it lives under the CITING MODULE's `src/commonSamples/kotlin`. That is the second, quieter
+//      edge of this bug: `samples.from(samplesDir)` in `kuilt.kmp-library` registers one samples root
+//      per module, so a tag naming a real function in a SIBLING module's samples compiles, reads
+//      correctly to a human, and still renders nothing. A plain `commonTest` function does not
+//      resolve either — being on the compile path is not the same as being in the samples root.
+//
+// An extension receiver is absent from the FQN (`fun CoroutineScope.sampleX` ⇒ `pkg.sampleX`), which
+// is why the name this guard indexes is the trailing identifier before the parameter list rather
+// than anything parsed out of a receiver.
+//
+// ── Why it cannot be quietly bypassed ───────────────────────────────────────────────────────────
+// Rule 6 is a MODEL of a wiring that lives somewhere else, and `verifyDocCitations` already learned
+// what happens when a guard's model can drift from the thing it models: it goes green over exactly
+// the case it exists to catch. So the model is asserted, not assumed. This task fails loudly if the
+// `samples.from(samplesDir)` wiring is no longer in `kuilt.kmp-library`, and if any module's own
+// build script registers a samples root of its own — either would mean a resolvable link this guard
+// calls dangling (loud but wrong) or, far worse, a dangling one it calls fine.
+//
+// ── Known limits, all of which fail LOUD ────────────────────────────────────────────────────────
+// The declaration scan is lexical, over `KotlinCodeScanner.stripNonCode` so prose and literals are
+// invisible. It reads a function's name as the trailing identifier between `fun` and the first `(`
+// after it, which a receiver that is itself a function type (`fun ((Int) -> Unit).f()`) would defeat;
+// none exists in tree. A missed declaration makes a good link read as dangling — a false RED, which
+// someone sees, rather than a false green, which nobody does. That asymmetry is the design.
+val verifySampleLinks by tasks.registering {
+    group = "verification"
+    description = "Fails if an @sample KDoc tag names a sample Dokka cannot resolve (#2259)."
+    // Longest-path-first, so mapping a file to its module is a first-match on a path prefix even if
+    // a module is ever nested inside another.
+    val moduleDirs = subprojects
+        .map { it.name to it.projectDir }
+        .filter { it.second.resolve("src").isDirectory }
+        .sortedByDescending { it.second.invariantSeparatorsPath.length }
+    // One tree covers both halves of the question: the tags (KDoc anywhere under `src/`) and the
+    // samples they name (`src/commonSamples/kotlin`). Declared as the same lazily-resolved set that
+    // `doLast` walks, per "Guard plumbing" above, so the two cannot drift.
+    val sources = kotlinSourcesIn(moduleDirs.map { it.second.resolve("src") })
+    inputs.files(sources).withPropertyName("kotlinSources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // `module.md` carries `@sample` tags too, and a module.md-only PR is docs-only — which is why
+    // this task is also run by CI's `doc-citations` job, exactly as its sibling is.
+    val moduleDocs = fileTree(rootDir) { include("*/module.md") }
+    inputs.files(moduleDocs).withPropertyName("moduleDocs")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // The two files that define the wiring this guard models; see the bypass note above.
+    val samplesWiring = rootDir.resolve("build-logic/src/main/kotlin/kuilt.kmp-library.gradle.kts")
+    inputs.file(samplesWiring).withPropertyName("samplesWiring")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    val buildScripts = fileTree(rootDir) { include("*/build.gradle.kts") }
+    inputs.files(buildScripts).withPropertyName("moduleBuildScripts")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // See "Guard plumbing" above: the stamp is what makes UP-TO-DATE possible (#1827). The verdict
+    // is a pure function of the scanned files' contents, which a RELATIVE fingerprint captures.
+    val stamp = layout.buildDirectory.file("verification/verify-sample-links.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    val rootPath = rootDir
+    doLast {
+        val funToken = Regex("""(?<![A-Za-z0-9_])fun(?![A-Za-z0-9_])""")
+        val typeDecl = Regex("""(?<![A-Za-z0-9_])(?:class|interface|object)\s+([A-Za-z_]\w*)""")
+        val companionDecl = Regex("""(?<![A-Za-z0-9_])companion\s+object(?:\s+([A-Za-z_]\w*))?""")
+        val packageDecl = Regex("""(?m)^\s*package\s+([\w.]+)""")
+        val namedDecl = Regex(
+            """(?<![A-Za-z0-9_])(?:class|interface|object|fun|val|var)\s+""" +
+                """(?:<[^>]*>\s*)?(?:[\w.<>?, ]*\.)?(`[^`]+`|[A-Za-z_]\w*)""",
+        )
+        // A `@sample` written somewhere it will never be read. Requires a DOTTED argument so that
+        // ordinary prose about the tag ("the @sample tag is…") is never mistaken for one; every
+        // in-tree prose mention writes it in backticks and is invisible here regardless.
+        val strayTag = Regex("""@sample\s+\[?[A-Za-z_]\w*(?:\.\w+)+""")
+
+        // ── The model check. A guard whose model of the world can silently go stale has stopped
+        // being a guard; `verifyDocCitations` carries the same check for the same reason. ──
+        val wiring = samplesWiring.readText()
+        if (!wiring.contains("samples.from(samplesDir)") || !wiring.contains("src/commonSamples/kotlin")) {
+            error(
+                "verifySampleLinks resolves every @sample against `<module>/src/commonSamples/kotlin`, " +
+                    "because that is the ONLY samples root `kuilt.kmp-library` hands Dokka. That wiring " +
+                    "is no longer there, so this guard's model of what Dokka can see is stale and its " +
+                    "verdicts cannot be trusted in either direction.\n  " +
+                    samplesWiring.relativeTo(rootPath).invariantSeparatorsPath + "\n" +
+                    "Update this task alongside the wiring (build.gradle.kts, #2259).",
+            )
+        }
+        val strayRoots = buildScripts.files.sortedBy { it.invariantSeparatorsPath }
+            .filter { it.readText().contains("samples.from(") }
+            .map { it.relativeTo(rootPath).invariantSeparatorsPath }
+        if (strayRoots.isNotEmpty()) {
+            error(
+                "A module registers a Dokka samples root of its own, so `<module>/src/commonSamples/" +
+                    "kotlin` is no longer the whole story and this guard would call a RESOLVABLE " +
+                    "@sample dangling — or miss a dangling one:\n  " + strayRoots.joinToString("\n  ") +
+                    "\nTeach verifySampleLinks about the extra root before adding it (#2259).",
+            )
+        }
+
+        fun moduleOf(f: java.io.File): String? =
+            moduleDirs.firstOrNull { (_, dir) -> f.startsWith(dir) }?.first
+
+        // A function's own name: the trailing identifier of the text between `fun` and its parameter
+        // list. Reading it from the END is what makes a type-parameter list and an extension receiver
+        // both irrelevant — `fun <T> CoroutineScope.sampleX(` is just `sampleX`, which is exactly the
+        // name Dokka resolves.
+        fun trailingName(between: String): String? {
+            var e = between.length
+            while (e > 0 && between[e - 1].isWhitespace()) e--
+            if (e == 0) return null
+            if (between[e - 1] == '`') {
+                val s = between.lastIndexOf('`', e - 2)
+                return if (s < 0) null else between.substring(s + 1, e - 1)
+            }
+            var s = e
+            while (s > 0 && (between[s - 1].isLetterOrDigit() || between[s - 1] == '_')) s--
+            return if (s == e) null else between.substring(s, e)
+        }
+
+        // ── Index every function (and type, for the diagnosis) each module's samples root declares.
+        val sampleFuns = mutableMapOf<String, MutableSet<String>>()
+        val sampleTypes = mutableMapOf<String, MutableSet<String>>()
+
+        fun indexSamples(module: String, code: String) {
+            val pkg = packageDecl.find(code)?.groupValues?.get(1).orEmpty()
+            val funs = sampleFuns.getOrPut(module) { mutableSetOf() }
+            val types = sampleTypes.getOrPut(module) { mutableSetOf() }
+            fun qualify(chain: List<String>, name: String): String =
+                (listOfNotNull(pkg.takeIf(String::isNotEmpty)) + chain + name).joinToString(".")
+            // One frame per `{`. A type body contributes its name to the qualification chain;
+            // anything else — a function body, an `init`, a lambda, a `when` — contributes null, and
+            // a null anywhere on the stack means nothing declared below it is addressable by FQN.
+            val stack = mutableListOf<String?>()
+            val funEnds = funToken.findAll(code).map { it.range.last + 1 }.toList()
+            var nextFun = 0
+            var headerStart = 0
+            var i = 0
+            while (i < code.length) {
+                if (nextFun < funEnds.size && funEnds[nextFun] == i) {
+                    if (stack.all { it != null }) {
+                        val paren = code.indexOf('(', i)
+                        if (paren > i) {
+                            trailingName(code.substring(i, paren))
+                                ?.let { funs += qualify(stack.filterNotNull(), it) }
+                        }
+                    }
+                    nextFun++
+                }
+                when (code[i]) {
+                    '{' -> {
+                        val header = code.substring(headerStart, i)
+                        val decl = listOfNotNull(
+                            companionDecl.findAll(header).lastOrNull(),
+                            typeDecl.findAll(header).lastOrNull(),
+                        ).maxByOrNull { it.range.first }
+                        // A `fun` after the type keyword means the brace belongs to the function, not
+                        // to a body-less `class A` further up the unreset header.
+                        val name = decl
+                            ?.takeIf { funToken.find(header, it.range.last) == null }
+                            ?.let { it.groupValues[1].ifEmpty { "Companion" } }
+                        val chain = stack.filterNotNull()
+                        val addressable = name != null && chain.size == stack.size
+                        if (name != null && addressable) types += qualify(chain, name)
+                        stack.add(if (addressable) name else null)
+                        headerStart = i + 1
+                    }
+                    '}' -> {
+                        if (stack.isNotEmpty()) stack.removeAt(stack.size - 1)
+                        headerStart = i + 1
+                    }
+                    ';' -> headerStart = i + 1
+                }
+                i++
+            }
+        }
+
+        val kotlinFiles = sources.files.sortedBy { it.invariantSeparatorsPath }
+        val samplesMarker = "/src/commonSamples/kotlin/"
+        kotlinFiles.filter { it.invariantSeparatorsPath.contains(samplesMarker) }.forEach { f ->
+            moduleOf(f)?.let { indexSamples(it, KotlinCodeScanner.stripNonCode(f.readText())) }
+        }
+        val bySimpleName = sampleFuns.asSequence()
+            .flatMap { (module, fqns) -> fqns.asSequence().map { it.substringAfterLast('.') to (module to it) } }
+            .groupBy({ it.first }, { it.second })
+
+        // ── Collect and check every tag. ────────────────────────────────────────────────────────
+        // The KDoc line stripped of its frame: leading `/**`, the per-line `*`, and a trailing `*/`.
+        fun kdocContent(line: String): String {
+            var s = line.trim()
+            if (s.startsWith("/**")) s = s.removePrefix("/**").trimStart()
+            if (s.startsWith("*") && !s.startsWith("*/")) s = s.removePrefix("*").trimStart()
+            if (s.endsWith("*/")) s = s.dropLast(2).trimEnd()
+            return s
+        }
+
+        val failures = mutableListOf<String>()
+        var checked = 0
+
+        // Name the samples that DO exist under a near-miss name. A dangling link is nearly always a
+        // rename, so the fix is usually sitting in this list.
+        fun List<Pair<String, String>>.hint(prefix: String): String =
+            if (isEmpty()) "" else joinToString(", ", prefix, ".") { (m, fqn) -> "`$fqn` (in $m)" }
+
+        fun verify(where: String, module: String, declaredIn: String, raw: String) {
+            checked++
+            val target = raw.trim().removeSurrounding("[", "]").trim()
+            val head = "$where\n      $declaredIn\n      @sample $raw\n      "
+            val funs = sampleFuns[module].orEmpty()
+            if (target in funs) return
+            val samplesRoot = "$module/src/commonSamples/kotlin"
+            val elsewhere = sampleFuns.filterKeys { it != module }.filterValues { target in it }.keys
+            val alike = bySimpleName[target.substringAfterLast('.')].orEmpty()
+                .filterNot { it.second == target }
+            failures += head + when {
+                target.isEmpty() ->
+                    "the tag names nothing. Give it the fully-qualified name of a sample function, " +
+                        "or delete the tag."
+                target in sampleTypes[module].orEmpty() ->
+                    "that names a class or object. Dokka accepts only a FUNCTION here (\"Only " +
+                        "function links allowed\") — name the function inside it, " +
+                        "`$target.<function>`."
+                elsewhere.isNotEmpty() ->
+                    "that function exists, but in ${elsewhere.joinToString(", ")} — not in " +
+                        "$samplesRoot.\n      `kuilt.kmp-library` gives each module ONLY its own " +
+                        "samples root, so a sibling module's sample renders nothing here. Copy the " +
+                        "sample into $samplesRoot, or point the tag at one that already lives there."
+                !target.contains('.') ->
+                    "@sample resolves by FULLY-QUALIFIED name only — a bare name never resolves, " +
+                        "even when the sample is in this file's own package." +
+                        alike.hint("      Did you mean ")
+                else ->
+                    "no function with that fully-qualified name is declared in $samplesRoot.\n" +
+                        "      Renamed, deleted, or never written? Point the tag at the sample's " +
+                        "current name, or add the sample." + alike.hint("\n      Nearest match: ")
+            }
+        }
+
+        kotlinFiles.forEach { file ->
+            val module = moduleOf(file) ?: return@forEach
+            val text = file.readText()
+            val doc = KdocScanner.kdocOnly(text).lines()
+            if (doc.none { it.contains("@sample") }) return@forEach
+            val code = KotlinCodeScanner.stripNonCode(text).lines()
+            val rel = file.relativeTo(rootPath).invariantSeparatorsPath
+            // The declaration a tag documents: the first named one at or below the KDoc's close.
+            fun declaredAt(line: Int): String {
+                var i = line
+                while (i < doc.size && !doc[i].contains("*/")) i++
+                while (++i < code.size) {
+                    namedDecl.find(code[i])?.let { return "in `${it.groupValues[1].trim('`')}`" }
+                }
+                return "at top of file"
+            }
+            doc.forEachIndexed { i, line ->
+                val content = kdocContent(line)
+                if (content == "@sample" || content.startsWith("@sample ") || content.startsWith("@sample\t")) {
+                    verify("$rel:${i + 1}", module, declaredAt(i), content.removePrefix("@sample").trim())
+                } else if (strayTag.containsMatchIn(line)) {
+                    checked++
+                    failures += "$rel:${i + 1}\n      ${declaredAt(i)}\n      ${line.trim()}\n      " +
+                        "a `@sample` is a KDoc BLOCK TAG and must START its line. Written mid-line it " +
+                        "is not parsed as a tag at all — Dokka renders no sample and warns about " +
+                        "nothing.\n      Move it onto its own line."
+                }
+            }
+        }
+
+        moduleDocs.files.sortedBy { it.invariantSeparatorsPath }.forEach { md ->
+            val module = moduleOf(md) ?: return@forEach
+            val rel = md.relativeTo(rootPath).invariantSeparatorsPath
+            md.readLines().forEachIndexed { i, line ->
+                val content = kdocContent(line)
+                if (content.startsWith("@sample")) {
+                    verify("$rel:${i + 1}", module, "in the module doc", content.removePrefix("@sample").trim())
+                }
+            }
+        }
+
+        if (failures.isNotEmpty()) {
+            error(
+                "Dangling @sample link(s) (#2259). A sample's body is compiled, but its LINK is not " +
+                    "— a tag Dokka cannot resolve renders the raw name where the example should be, " +
+                    "and warns into a build nobody fails:\n\n" + failures.joinToString("\n\n") + "\n",
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText("ok — $checked @sample links across ${sampleFuns.size} modules\n")
+        logger.info("verifySampleLinks: $checked @sample links across ${sampleFuns.size} modules")
+    }
+}
+
 // Guard: forbid `runCatchingCancellable` lexically inside a `withContext(NonCancellable)` block (#1803).
 //
 // `runCatchingCancellable` rethrows every `CancellationException`, which is right almost everywhere — it
@@ -2089,6 +2477,7 @@ allprojects {
         dependsOn(rootProject.tasks.named("forbidSourcelessKmpTarget"))
         dependsOn(rootProject.tasks.named("forbidPortProbeRebind"))
         dependsOn(rootProject.tasks.named("verifyDocCitations"))
+        dependsOn(rootProject.tasks.named("verifySampleLinks"))
         dependsOn(rootProject.tasks.named("forbidRunCatchingCancellableUnderNonCancellable"))
         dependsOn(rootProject.tasks.named("forbidBareRunCatching"))
         dependsOn(rootProject.tasks.named("forbidKotlinAssert"))
