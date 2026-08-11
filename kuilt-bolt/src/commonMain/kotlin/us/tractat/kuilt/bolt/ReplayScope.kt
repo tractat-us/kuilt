@@ -23,6 +23,8 @@ public sealed interface ReplayScope {
      * consumed, to continue exactly where you stopped. An [offset] that falls inside a frame
      * rather than on its boundary yields that frame from its start, so a cursor can never be left
      * pointing at half a record.
+     *
+     * @sample us.tractat.kuilt.bolt.sampleBoltResumeCursor
      */
     public data class FromOffset(public val offset: Long) : ReplayScope
 
@@ -50,6 +52,8 @@ public sealed interface ReplayScope {
      * removed record as live — or claim nothing, which is what this format chose. So a frame with
      * no inserts is **never** selected by this scope, however recent it is. Resume with
      * [FromOffset]; use this to ask which frames cover a causal range.
+     *
+     * @sample us.tractat.kuilt.bolt.sampleBoltInsertsAbove
      */
     public data class InsertsAbove(public val floor: VersionVector) : ReplayScope
 }

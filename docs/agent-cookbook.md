@@ -32,6 +32,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | a per-line flush loop in a log/telemetry exporter — or a fix for "capturing logs is slow", "the app stalls when it logs a lot" | `WarpLogRecordExporter.export(records)` + `installLogCapture` | [Telemetry & log capture](#telemetry--log-capture) |
 | deleting a telemetry store's files to reset it, or a "clear on next launch" flag so the delete lands before recovery | `WarpTelemetry.clear()` | [Telemetry & log capture](#telemetry--log-capture) |
 | a second, longer-retention copy of a replicated log — "keep a year on the server beside an hour on the phone", "gossiped records vanish when the peer forgets them", a hand-rolled tee of what a replica applied | `BoltDecorator` + `AppliedOpSink` | [Telemetry & log capture](#telemetry--log-capture) |
+| reading that archive back — "replay what the phone compacted away", "did I get the whole history or did it stop somewhere?", a resume cursor over an append-only log, a hand-rolled "is my archive intact" check | `Bolt.replay` + `ReplayScope` + the terminal verdict | [Telemetry & log capture](#telemetry--log-capture) |
 | merging several mDNS/Multipeer discovery feeds into one lobby roster | `discoveryRoster` | [Discovery](#discovery) |
 | a weighted / fair-share scheduler — "give this group 3× the share", "who runs the next quantum", a hoarder-proof round-robin | `HeddlePolicy` + `HeddleNode` | [Fair share & placement](#fair-share--placement) |
 | an entitlement / quota ledger, "reserve a slot before running then charge once", a coordination-free budget that converges across peers | `EntitlementLedger` + `HeddleNode.reserve`/`complete` | [Fair share & placement](#fair-share--placement) |
@@ -1162,3 +1163,61 @@ exporter.clear()
 val kept = bolt.replay(ReplayScope.All).frames().toList().flatMap { it.ops }
 check(kept.isNotEmpty()) { "a clear empties the replica, never the archive" }
 ```
+
+**Intent:** read that archive back — "replay what the phone compacted away", "give me everything this machine wrote last Tuesday", resuming where the last pass stopped. Don't hand-roll an "is my archive intact" check, and don't decide the history is complete because the replay finished.
+**Primitive:** `Bolt.replay(scope)` (`:kuilt-bolt`), returning a cold flow of `Archived` frames terminated by exactly one verdict — `CleanTail` or `Truncated`.
+
+**The verdict is the product; collect to completion or you don't get one.** A replay that stopped at damage and one that read everything both just *end*, so a stream without a verdict hands back an incomplete history indistinguishable from a complete one — and "I still hold what the live replica forgot" is the only thing an archive sells. `take(n)`/`first()` get no verdict, honestly: they stopped reading before the archive said how it ended. `.frames()` discards it deliberately — fine for a diagnostic dump, not for anything acting on the archive being whole.
+
+`TruncationReason` splits on the **remedy**, not the layer. `SegmentHeader` and `Frame` mean "not readable *yet*" — a writer mid-append, a device still locked — so a later resume from `atOffset` can work. `MissingRegion` means the bytes are **gone**, and `atOffset` is the honest end of the readable history rather than a cursor. Retrying it will never produce those records.
+
+<!-- verbatim from kuilt-bolt/src/commonSamples/kotlin/us/tractat/kuilt/bolt/BoltSamples.kt#sampleBoltReplayVerdict -->
+```kotlin
+var records = 0
+var complete = false
+
+// Collect to COMPLETION. The terminal verdict is what a replay sells — a history that
+// stopped at damage, and one that did not, are otherwise indistinguishable. A consumer
+// that cuts the flow short (take, first, an early return) gets no verdict, honestly.
+bolt.replay(ReplayScope.All).collect { event ->
+    when (event) {
+        is Archived -> records += event.ops.size
+        CleanTail -> complete = true
+        is Truncated -> when (event.reason) {
+            // Not readable YET — a writer mid-append, a device still locked. Resuming
+            // from atOffset later can work.
+            TruncationReason.SegmentHeader, TruncationReason.Frame -> retryFrom(event.atOffset)
+            // GONE. atOffset is the honest end of the readable history and is NOT a
+            // resume cursor: nothing will ever produce the records behind it.
+            TruncationReason.MissingRegion -> reportPermanentGap(event.atOffset)
+        }
+    }
+}
+
+if (!complete) reportPartialHistory(records)
+```
+
+**Two of the four scopes are cursors and two are queries; resume only from a cursor.** `All` and `FromOffset` are total over the frames they have not yet seen. `Arrived` filters by **arrival** time — when the archive was *told*, arbitrarily later than when it happened for anything that came by merge — and `InsertsAbove` filters by causal coverage over **inserts only**, because a `Remove` mints no dot of its own. So a frame of pure removes is selected by no dot scope at all, however recent: resuming from a dot frontier would skip it and replay a removed record as live.
+
+<!-- verbatim from kuilt-bolt/src/commonSamples/kotlin/us/tractat/kuilt/bolt/BoltSamples.kt#sampleBoltResumeCursor -->
+```kotlin
+// Consume what the archive holds now, remembering where each frame ended. `.frames()`
+// deliberately drops the terminal verdict — fine for a cursor walk, not for anything
+// that acts on the history being complete.
+var cursor = 0L
+bolt.replay(ReplayScope.All).frames().collect { frame ->
+    ship(frame.ops)
+    cursor = frame.endOffset
+}
+
+// Later — after more appends — pick up exactly there. An offset that falls inside a frame
+// yields that frame from its start, so a cursor can never point at half a record.
+bolt.replay(ReplayScope.FromOffset(cursor)).frames().collect { frame ->
+    ship(frame.ops)
+    cursor = frame.endOffset
+}
+```
+
+**A replay may be READ. It must never be AUTHORED FROM.** Folding one into a fresh replica produces a structurally valid state, so nothing stops you — the damage lands one step later and is permanent. A replica seeded from a replay missing frames at its tail re-mints an already-used `(replica, seq)` dot carrying different content, breaking the dense per-author delivery counter every causal-stability version vector depends on, mesh-wide, with nothing to purge it.
+
+Before trimming the live replica's own window on the strength of "the archive has it", ask `Bolt.durability()` (or read it off `BoltDecorator.health`). A flush covers a **range**, so a failed one puts every frame since the last good flush in doubt — not the append that triggered it, whose result is already in your past. It is sticky and widening precisely so it can be polled.

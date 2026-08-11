@@ -7,6 +7,8 @@ import us.tractat.kuilt.crdt.Dot
  *
  * An append is **best-effort**: it reports failure rather than throwing, so a full archive disk
  * cannot take down the application whose telemetry it is archiving.
+ *
+ * @sample us.tractat.kuilt.bolt.sampleBoltAppendResult
  */
 public sealed interface AppendResult {
 

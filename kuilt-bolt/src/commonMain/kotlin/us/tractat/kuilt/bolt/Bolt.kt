@@ -85,6 +85,8 @@ public interface Bolt<Op> {
      * discard every intact frame ahead of the damage. But it does not stay *silent* about them
      * either: that is what the terminal [ReplayEvent] is for. Use [frames] to opt out of the
      * verdict, explicitly, when you do not need to know.
+     *
+     * @sample us.tractat.kuilt.bolt.sampleBoltReplayVerdict
      */
     public fun replay(scope: ReplayScope): Flow<ReplayEvent<Op>>
 
@@ -114,6 +116,8 @@ public interface Bolt<Op> {
      * puts in doubt are everything since the last good flush, not the one that triggered it. This is
      * sticky state precisely so a consumer can poll it — after a batch, before trimming its own live
      * replica's window, on a timer — rather than having to catch the moment.
+     *
+     * @sample us.tractat.kuilt.bolt.sampleBoltDurability
      */
     public fun durability(): DurabilityState
 }
