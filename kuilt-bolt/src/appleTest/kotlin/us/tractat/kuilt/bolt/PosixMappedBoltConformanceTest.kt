@@ -113,16 +113,19 @@ internal fun rgaArchiveFormat(): BoltArchiveFormat<RgaId, String, RgaOp<String>>
 /**
  * A [PosixMappedBolt] whose `msync` cannot succeed, labelled with what [synchronous] promised.
  *
- * **The rig is what makes the second arm non-vacuous.** With `synchronous = false` no `msync` is
- * issued, so the rig is never consulted — and that is exactly the claim being pinned: this bolt would
- * fail its flush if it made one, and reports [DurabilityState.AsPromised] anyway, because the
- * asynchronous configuration promised no more than "the OS will write these pages back". An absolute
- * reading of durability reddens here. An *un*-rigged bolt would leave that arm asserting nothing.
- *
  * The rig hands `msync` an address the kernel refuses, so the syscall really runs and the errno is
- * real — see `PosixMappedBolt.rigFlushFailure`, which also says why the directory must be a fresh
- * one: this backend adopts lazily, so rigging "after construction" does not put the rig after
- * adoption, and an archive with a torn tail would fail its repair flush too.
+ * real — see `PosixMappedBolt.rigFlushFailure`.
+ *
+ * **The asynchronous arm here is weaker than its JVM counterpart, and the difference is worth
+ * stating rather than leaving for a reader to assume symmetry.** `MappedBolt` flushes the *retiring*
+ * segment at a roll whatever its durability flag says, so its asynchronous fixture can be made to
+ * attempt a flush, fail it, and still answer [DurabilityState.AsPromised] — a real claim, and one
+ * that caught a real defect. `PosixMappedBolt` has no such ungated flush: both of its durability
+ * syncs are `if (synchronous)`, so an asynchronous bolt of this backend issues **none** at any
+ * segment budget, and the rig genuinely cannot be reached. The arm still reds an *absolute* reading
+ * of durability, which is what it is for; it cannot red a "records a flush it did not promise" bug,
+ * because this backend has no site that could commit one. `AsynchronousMappedBoltConformanceTest`
+ * carries that half.
  */
 internal fun unflushablePosixMappedBolt(
     clock: Clock,

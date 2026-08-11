@@ -317,12 +317,14 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
      * shipped path. Only the *cause* is artificial. (`MappedBolt` cannot do this — `force()` takes no
      * arguments — and says so.)
      *
-     * **Rig only a bolt over a fresh directory**, and note that "after construction" is not enough
-     * here the way it is on `MappedBolt`: that backend recovers eagerly in `init`, this one adopts
-     * **lazily**, on the first [append], [availability] or [replay]. So a rigged bolt pointed at an
-     * archive with a torn tail would fail the repair flush in [adoptLastSegment] too, and record a
-     * failure a test invented. Every fixture that uses this starts from an empty directory, where
-     * adoption returns before it can happen.
+     * **Scoped to the durability flush, structurally.** "Call it after construction" — the rule that
+     * works on `MappedBolt`, which recovers eagerly in `init` — would be *false* here: this backend
+     * adopts **lazily**, on the first [append], [availability] or [replay], so a rig set right after
+     * construction is still in force during adoption. Rather than write that hazard down and hope,
+     * [syncRange] takes the rig as a **parameter** and [adoptLastSegment]'s repair sync leaves it at
+     * `false`. A rigged bolt over an archive with a torn tail therefore cannot fabricate a repair-axis
+     * errno on [lastUnreportedFailure] — the signal this issue deliberately keeps separate from the
+     * durability ledger.
      */
     internal fun rigFlushFailure(rigged: Boolean): Unit = lock.withLock { riggedFlushFailure = rigged }
 
@@ -1189,14 +1191,21 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
      * before it in the same page. Reporting only the frame's own range would be conservative in the
      * safe direction but would make [DurabilityState.Degraded] effectively permanent.
      */
-    private fun syncRange(mapping: Mapping, at: Long, length: Long): SyncOutcome {
+    private fun syncRange(mapping: Mapping, at: Long, length: Long, rigged: Boolean = false): SyncOutcome {
         val page = getpagesize().toLong()
         val start = at / page * page
         val span = at - start + length
         // Rigged: a page-aligned address far outside any mapping this process holds, which the kernel
         // refuses with ENOMEM. The syscall really runs and the errno really comes back — only the
         // CAUSE is artificial. See `rigFlushFailure` for why no honest condition can stand in for it.
-        val address = if (riggedFlushFailure) mapping.address + UNMAPPED_ADDRESS else mapping.address + start
+        //
+        // A PARAMETER rather than the field, so the rig cannot reach the one caller that is not a
+        // durability flush: `adoptLastSegment`'s repair sync, which defaults to `false`. Reading the
+        // field here instead would let a rig set on a freshly constructed bolt fire during adoption —
+        // this backend opens LAZILY, so "rigged after construction" is not "rigged after adoption" —
+        // and fabricate a repair-axis errno on `lastUnreportedFailure`, the one signal #2243
+        // deliberately keeps separate from the durability ledger.
+        val address = if (rigged) mapping.address + UNMAPPED_ADDRESS else mapping.address + start
         val failure = if (msync(address, span.convert(), MS_SYNC) != 0) {
             posixFailure("could not flush ${span}B at $start of the active segment")
         } else {
@@ -1220,7 +1229,7 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
      * below the header covers no earlier frame than the segment's own first, hence the clamp.
      */
     private fun flushQuietly(mapping: Mapping, at: Long, length: Long, baseOffset: Long, headerBytes: Int) {
-        val outcome = syncRange(mapping, at, length)
+        val outcome = syncRange(mapping, at, length, rigged = riggedFlushFailure)
         val from = baseOffset + maxOf(0L, outcome.coveredFrom - headerBytes)
         val to = baseOffset + maxOf(0L, outcome.coveredTo - headerBytes)
         val failure = outcome.failure

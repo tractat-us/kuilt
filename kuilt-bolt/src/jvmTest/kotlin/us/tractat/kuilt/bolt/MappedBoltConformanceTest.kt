@@ -88,19 +88,38 @@ class AsynchronousMappedBoltConformanceTest : BoltConformanceSuite() {
     override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         discontinuousMappedBolt(clock, intactFrames, PRE_ALLOCATED_TAIL_BYTES)
 
+    /**
+     * **One frame per segment, and the budget is the whole point of this fixture.**
+     *
+     * An asynchronous bolt issues no flush on the append path at all, so at any budget that does not
+     * roll, the rig is never reached and this arm asserts nothing — the vacuity
+     * [BoltConformanceSuite.newBoltThatCannotFlush] warns about, in the fixture that exists to prevent
+     * it. The one flush an asynchronous `MappedBolt` does make is of the **retiring** segment at a
+     * roll, which is deliberately *not* gated on `forceOnAppend` (a segment is read back from its file
+     * after its mapping is let go). So a rolling budget is what makes this arm say something real: this
+     * bolt attempted a flush, the flush failed, and it reports [DurabilityState.AsPromised] anyway
+     * because it never promised one.
+     */
     override fun newBoltThatCannotFlush(clock: Clock): DurabilityFixture =
-        unflushableMappedBolt(clock, forceOnAppend = false)
+        unflushableMappedBolt(clock, forceOnAppend = false, segmentFrameBytes = 1L)
 }
 
 /**
  * A [MappedBolt] whose `force()` cannot succeed, labelled with what [forceOnAppend] promised.
  *
- * **The rig is what makes the second arm non-vacuous.** With `forceOnAppend = false` no flush is
- * issued at all, so the rig is never consulted — and that is exactly the claim being pinned: this bolt
- * would fail its flush if it made one, and reports [DurabilityState.AsPromised] anyway, because the
- * asynchronous configuration promised no more than "the OS will write these pages back". An absolute
- * reading of durability reddens here. Handing back an *un*-rigged bolt would leave that arm asserting
- * nothing at all.
+ * **The rig is what makes the second arm non-vacuous, and with `forceOnAppend = false` it really is
+ * reached** — provided the fixture rolls. An asynchronous bolt issues no flush on the *append* path,
+ * but [MappedBolt] flushes the **retiring** segment at a roll whatever the flag says, because a
+ * retired segment is read back from its file. So the asynchronous arm pins a real claim: this bolt
+ * attempted a flush, the flush failed, and it answers [DurabilityState.AsPromised] anyway, because it
+ * never promised one. An absolute reading of durability reds there, and so did the shipped code until
+ * #2243 — recording that ungated flush latched `Degraded` on a bolt that promised nothing.
+ *
+ * The earlier version of this comment claimed "with `forceOnAppend = false` no flush is issued at
+ * all, so the rig is never consulted". That was false, and the fixture's default segment budget hid
+ * it: three tiny frames never roll, so the rig was never reached and the arm asserted nothing. Which
+ * configuration a fixture picks is the whole game — see
+ * [BoltConformanceSuite.newBoltThatCannotFlush].
  *
  * A real `force()` failure is not producible — see `MappedBolt.rigFlushFailure`, which also says what
  * rigging the verdict rather than the syscall does not prove. Rigged **after** construction, because

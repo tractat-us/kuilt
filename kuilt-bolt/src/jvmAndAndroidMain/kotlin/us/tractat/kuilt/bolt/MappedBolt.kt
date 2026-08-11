@@ -360,15 +360,32 @@ public class MappedBolt<Id : Any, V, Op : Any>(
      * syncs the whole mapping. Every call site flushes the segment holding the append cursor, so its
      * base is that cursor minus the frames it holds — including at a roll, where the freshly written
      * header has no frames behind it yet and the range is correctly empty.
+     *
+     * ### The LEDGER is gated on [forceOnAppend], not the flush — and they are not the same gate
+     *
+     * Two of the three call sites are already `if (forceOnAppend)`. [roll]'s flush of the **retiring**
+     * segment is deliberately not: a retired segment is read back from its file, and that roll is the
+     * only point at which flushing it is guaranteed to have happened, so an asynchronous archive
+     * flushes there too. While the failure was swallowed that asymmetry was invisible. Recording it
+     * would make it *visible and wrong*: an asynchronous bolt promised only that the operating system
+     * would flush in its own time, so a refused flush is not a promise broken — and because the doubt
+     * would cover a segment that has just been retired, no later flush could ever re-cover it, latching
+     * [DurabilityState.Degraded] for the life of the bolt on a bolt that promised nothing.
+     *
+     * So the gate belongs here, on what is *recorded*, rather than on what is flushed. Do not "tidy"
+     * this by gating the call at [roll] instead — that would stop flushing a retiring mapping, which
+     * is a durability change wearing a refactor's clothes.
      */
     private fun flushQuietly(segment: Segment) {
         val frameBytes = segment.writePosition - headerBytes
         val from = nextOffset - frameBytes
         try {
             segment.force(riggedFlushFailure)
-            ledger.flushSucceeded(from, nextOffset)
+            if (forceOnAppend) ledger.flushSucceeded(from, nextOffset)
         } catch (failure: IOException) {
-            ledger.flushFailed(from, nextOffset, "could not flush ${segment.file.name}: $failure", failure)
+            if (forceOnAppend) {
+                ledger.flushFailed(from, nextOffset, "could not flush ${segment.file.name}: $failure", failure)
+            }
         }
     }
 

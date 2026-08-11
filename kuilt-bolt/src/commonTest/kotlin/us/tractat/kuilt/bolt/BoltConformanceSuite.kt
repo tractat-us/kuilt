@@ -899,9 +899,20 @@ abstract class BoltConformanceSuite {
      * | Record a blank `reason` | 8 only |
      * | `DurabilityLedger.flushFailed` overwrites instead of widening | **7 only, and only on some subclasses** |
      * | Flush regardless of the durability flag — the absolute reading | **9 only** |
+     * | Record a flush the bolt never promised (`MappedBolt`'s ungated retiring-segment flush) | **9 only** |
      * | Make `durability()` an event: reading it clears the state | **4 only** |
      * | `DurabilityLedger.flushSucceeded` clears unconditionally | **none** |
      * | **Fixture:** hand back an un-rigged bolt under [DurabilityFixture.Promised] | 5, 6, 7, 8 |
+     * | **Fixture:** give the asynchronous arm a budget that never rolls | **nothing — it goes green** |
+     *
+     * **The last two rows are the same lesson from both sides, and the second one is a defect this
+     * property shipped with.** `MappedBolt` flushes the retiring segment at a roll whatever
+     * `forceOnAppend` says; recording that flush latched [DurabilityState.Degraded] on a bolt that had
+     * promised nothing, permanently, since no later flush can re-cover a retired segment. Row 6 is that
+     * bug — and the property was **green** against it, because the asynchronous fixture used a budget
+     * at which three small appends never roll, so the rig was never reached and assertion 9 asserted
+     * nothing. The fixture had picked the one configuration in which the property could not fail. Both
+     * halves are fixed: the ledger is now gated on the promise, and the asynchronous fixture rolls.
      *
      * **Row 7 is the sharpest one, and it is #2240's thesis recurring here.** Overwriting instead of
      * widening reds **only** on the one-frame-per-segment subclasses. At the shipped 1 MiB budget all
