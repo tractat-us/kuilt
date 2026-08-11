@@ -234,6 +234,36 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
 
     private var repaired: Long? = null
 
+    private var unreportedFailure: String? = null
+
+    /**
+     * The most recent posix failure that **no return value could carry**, or `null` if there has been
+     * none.
+     *
+     * Two things reach here, and neither has anywhere else to go:
+     *
+     * - a failed `msync`. [append] still answers [AppendResult.Written], because the frame is in the
+     *   archive and saying otherwise would have a consumer re-feed a record already on disk — see the
+     *   durability note in this class's KDoc. What is lost is the *durability upgrade*, and without
+     *   this a `synchronous = true` bolt could degrade to the asynchronous guarantee with nothing
+     *   anywhere recording it.
+     * - a segment that could not be **read** during [replay]. That surfaces as
+     *   [TruncationReason.SegmentHeader], which says "torn or unwritten" when the truth is "the file
+     *   would not open" — a locked device between [availability] and the read is the reachable case.
+     *   The verdict cannot carry the errno; this can.
+     *
+     * **A diagnostic breadcrumb, not a contract signal**, and the distinction is deliberate. The
+     * contract-level answer — a "written but not durable" [AppendResult], a truncation reason for
+     * *unreadable* — belongs to both mmap backends at once and is parked on #2243 and #2240
+     * respectively; `MappedBolt.flushQuietly` is where the JVM backend records the same deferral, and
+     * the two backends give the **same** answer to the contract question. This only stops the errno
+     * from being destroyed in the meantime, which is this module's standing rule: report identities
+     * and state, never that something went wrong.
+     *
+     * Holds the **most recent** one. Two failures of different kinds do not accumulate.
+     */
+    public fun lastUnreportedFailure(): String? = lock.withLock { unreportedFailure }
+
     /**
      * The append offset a torn tail was discarded at when this archive was re-opened, or `null` if
      * nothing was discarded.

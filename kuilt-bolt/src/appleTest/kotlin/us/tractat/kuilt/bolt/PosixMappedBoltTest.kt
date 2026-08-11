@@ -257,7 +257,14 @@ class PosixMappedBoltTest {
      */
     @Test
     fun anUnusableDirectoryNamesItsErrnoAndRefusesTheAppend() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
-        val blocker = NSTemporaryDirectory() + "kuilt-bolt-blocker-${Random.nextLong()}"
+        // Inside a tracked directory rather than loose in NSTemporaryDirectory(), so the @AfterTest
+        // sweep reaches it. Loose, it accumulated one zero-byte file per run forever — the same
+        // unbounded growth the archive cleanup fixed, on the one path that cleanup did not cover.
+        val enclosing = boltTestDirectory()
+        NSFileManager.defaultManager.createDirectoryAtPath(
+            enclosing.trimEnd('/'), withIntermediateDirectories = true, attributes = null, error = null,
+        )
+        val blocker = enclosing + "blocker"
         NSFileManager.defaultManager.createFileAtPath(blocker, contents = null, attributes = null)
         val bolt = PosixMappedBolt(rgaArchiveFormat(), FixedClock(epoch), "$blocker/nested/")
         val (_, op) = Rga.empty<String>().insertAt(alice, 0, "lost")
@@ -318,22 +325,36 @@ class PosixMappedBoltTest {
         val refused = bolt.append(listOf(second))
         val whileSealed = bolt.availability()
         check(chmod(directory.trimEnd('/'), OWNER_ONLY_DIRECTORY.convert()) == 0) { "could not unseal" }
-        val accepted = bolt.append(listOf(third))
+        // Asked BEFORE anything appends again, which is the whole point: the consumer this signal
+        // exists for is the one that asks INSTEAD of writing. If recovery needs an append first, that
+        // consumer waits forever — it will not append because availability says no, and availability
+        // will not recover because nothing appended.
         val afterUnsealing = bolt.availability()
+        val accepted = bolt.append(listOf(third))
         val frames = bolt.replay(ReplayScope.All).toList().filterIsInstance<Archived<RgaOp<String>>>()
 
         assertAll(
             { assertIs<AppendResult.Failed>(refused, "a roll into a sealed directory cannot succeed") },
             { assertContains(assertIs<AppendResult.Failed>(refused).reason, "errno=", message = "and names why") },
             {
-                assertIs<BoltAvailability.Unavailable>(
+                // Unknown rather than Unavailable, and consistently so: EACCES is precisely the errno a
+                // Data-Protection-locked device answers with, and this class already reads that as
+                // "cannot tell right now" at the directory level. A genuinely read-only volume says
+                // EROFS and does land on Unavailable, so the errno really does discriminate.
+                assertIs<BoltAvailability.Unknown>(
                     whileSealed,
-                    "a bolt whose last roll was refused must not keep reporting Available — that is " +
-                        "precisely the 'Available while every append fails' the signal rules out",
+                    "a bolt that cannot create a segment must not report Available — that is precisely " +
+                        "the 'Available while every append fails' this signal rules out",
                 )
             },
-            { assertIs<AppendResult.Written>(accepted, "and it recovers once the volume does") },
-            { assertIs<BoltAvailability.Available>(afterUnsealing, "reporting itself usable again") },
+            {
+                assertIs<BoltAvailability.Available>(
+                    afterUnsealing,
+                    "and it must recover WITHOUT an append first — a remembered refusal that only a " +
+                        "successful append can clear deadlocks the consumer that asks rather than writes",
+                )
+            },
+            { assertIs<AppendResult.Written>(accepted, "and the append then lands") },
             { assertEquals(listOf(listOf(first), listOf(third)), frames.map { it.ops }, "no phantom frame") },
         )
     }
@@ -549,6 +570,51 @@ class PosixMappedBoltTest {
             { assertEquals(CleanTail, events.lastOrNull(), "and the archive reads clean") },
             { assertEquals(closing.endOffset, frames.last().endOffset, "with the cursor where it was left") },
             { assertEquals(1, segmentFiles(directory).size, "the orphan is gone rather than adopted") },
+        )
+    }
+
+    /**
+     * A segment that cannot be **read** during a replay must not have its errno destroyed.
+     *
+     * The verdict says [TruncationReason.SegmentHeader], documented as "unwritten, torn, or fails its
+     * checksum" — none of which is true here: the file simply would not open. That is the same
+     * conflation of a transient condition with structural damage that the adoption path was fixed for,
+     * left standing one level up, and it is reachable exactly where this backend lives: a device
+     * locking between a successful [PosixMappedBolt.availability] and a later segment read, at which
+     * point availability has already said `Available` and nothing else holds the cause.
+     *
+     * A truncation reason for *unreadable* would be better and is parked on #2240, because
+     * `TruncationReason` is shared with every other backend. Until then the errno survives on
+     * [PosixMappedBolt.lastUnreportedFailure].
+     */
+    @Test
+    fun aSegmentUnreadableMidReplayKeepsItsErrno() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val directory = boltTestDirectory()
+        // One segment per append, so the second frame lives in a file of its own to make unreadable.
+        val bolt = PosixMappedBolt(rgaArchiveFormat(), FixedClock(epoch), directory, segmentFrameBytes = 1L)
+        val (afterFirst, first) = Rga.empty<String>().insertAt(alice, 0, "first")
+        val (_, second) = afterFirst.insertAt(alice, 1, "second")
+        bolt.append(listOf(first))
+        bolt.append(listOf(second))
+
+        check(chmod(segmentFiles(directory).last(), NO_ACCESS.convert()) == 0) { "could not seal the segment" }
+        val events = bolt.replay(ReplayScope.All).toList()
+        val frames = events.filterIsInstance<Archived<RgaOp<String>>>()
+        val recorded = bolt.lastUnreportedFailure()
+        check(chmod(segmentFiles(directory).last(), OWNER_ONLY_FILE.convert()) == 0) { "could not restore" }
+
+        assertAll(
+            { assertEquals(listOf(listOf(first)), frames.map { it.ops }, "the readable prefix still replays") },
+            { assertIs<Truncated>(events.lastOrNull(), "and the replay says it stopped") },
+            {
+                assertContains(
+                    recorded.orEmpty(),
+                    "errno=",
+                    message = "the errno survives somewhere — the verdict cannot carry it, and a " +
+                        "'torn or unwritten' reason over a file that would not OPEN is a fabricated cause",
+                )
+            },
+            { assertFalse(recorded.orEmpty().contains("(unknown)"), "and it resolved to readable text") },
         )
     }
 
