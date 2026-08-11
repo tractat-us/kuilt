@@ -35,3 +35,14 @@ telemetry.metrics.addCardinality(users, "user-abc") // ignored — already count
 Recording is only the first step. Your metrics are held safely on the device, survive
 being offline, and reach your dashboard with no duplicates. That whole journey is on
 **[Device to dashboard](observability.md)**.
+
+## Starting over with a clean slate
+
+You can throw away everything recorded so far while the app is still running — see
+**[Device to dashboard](observability.md#starting-over-with-a-clean-slate)**.
+
+Metrics carry the one caveat worth reading before you rely on it. Counts, readings, and
+latency summaries can only be forgotten on *this* device: sync with a device that still
+remembers them and the old numbers come back. A number that any device can raise, and
+that everyone must agree on without coordinating, can never be lowered again. If this
+device doesn't share its metrics — the ordinary case — the distinction never comes up.
