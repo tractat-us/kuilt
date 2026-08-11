@@ -270,8 +270,16 @@ public class BoltDecorator<Id : Any, V, Op : Any>(
     }
 
     private fun record(result: AppendResult, suppressed: Int) {
+        // Read ONCE, before the update, and deliberately not inside the lambda: `update` re-runs its
+        // block on a losing compare-and-set, and this call takes the backend's own lock. It is also
+        // read on every outcome including `Skipped` — a doubt raised by an earlier append does not
+        // stop being true because this one carried nothing new.
+        val durability = bolt.durability()
         healthState.update { current ->
-            val withSuppression = current.copy(opsDeduplicated = current.opsDeduplicated + suppressed)
+            val withSuppression = current.copy(
+                opsDeduplicated = current.opsDeduplicated + suppressed,
+                durability = durability,
+            )
             when (result) {
                 is AppendResult.Written -> withSuppression.copy(
                     framesWritten = current.framesWritten + 1,
