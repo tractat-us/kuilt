@@ -221,17 +221,6 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
     /** A structural problem no retry can fix. Sticky, deliberately — see [openArchive]. */
     private var wedged: BoltAvailability.Unavailable? = null
 
-    /**
-     * Why the most recent segment roll was refused, or `null` if none was.
-     *
-     * [availability] consults it because the byte budget is not the authority on whether a segment
-     * can be allocated — the volume is. A full disk, a read-only remount or a revoked sandbox
-     * extension all leave `capacityBytes - usedBytes` looking roomy while every roll fails, and
-     * "Available means an append will be accepted" is the whole content of that signal. Cleared by
-     * the next roll that succeeds, so recovery needs no intervention.
-     */
-    private var lastRollFailure: String? = null
-
     private var repaired: Long? = null
 
     private var unreportedFailure: String? = null
@@ -322,8 +311,8 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
 
     /**
      * [BoltAvailability.Available] exactly while the archive has room for the **smallest possible**
-     * frame — in the active segment's remaining capacity, or in a segment it still has the budget to
-     * allocate.
+     * frame — in the active segment's remaining capacity, or in a segment the budget allows and the
+     * volume will actually give us.
      *
      * Not "usedBytes < capacityBytes": an archive with four bytes free would report itself writable
      * while every append failed, and a bolt whose `Available` does not imply "an append will be
@@ -331,8 +320,8 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
      * remaining room still fails, and reports the dots it lost, because no per-append size is knowable
      * before the append arrives.
      *
-     * Probes the filesystem, so it is not free — and it can report [BoltAvailability.Unknown] when the
-     * probe fails in the way a Data-Protection-locked device fails.
+     * Probes the filesystem, so it is not free — see [probeSegmentCreation] for what that probe can
+     * and cannot prove, and why the answer is asked for rather than remembered.
      */
     override fun availability(): BoltAvailability = lock.withLock {
         val open = ensureOpen()
@@ -341,17 +330,57 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
             open !is BoltAvailability.Available -> open
             current != null && active != null && current.remaining >= minimumFrameBytes ->
                 BoltAvailability.Available
-            // The next frame needs a NEW segment, and the last attempt to allocate one was refused.
-            // The budget says there is room; the volume said otherwise, and the volume decides.
-            lastRollFailure != null -> BoltAvailability.Unavailable(checkNotNull(lastRollFailure))
             // A roll for the smallest possible frame still allocates a whole segment, and a segment
-            // must be big enough to hold that frame — so the budget is a floor, not the answer.
-            capacityBytes - usedBytes >= headerBytes + maxOf(segmentFrameBytes, minimumFrameBytes) ->
-                BoltAvailability.Available
-            else -> BoltAvailability.Unavailable(
-                "archive at $directory is full ($usedBytes/$capacityBytes bytes allocated)",
-            )
+            // must be big enough to hold that frame — so the budget is a floor, not the answer. It is
+            // also only an UPPER bound, which is why a pass here is not the answer either.
+            capacityBytes - usedBytes < headerBytes + maxOf(segmentFrameBytes, minimumFrameBytes) ->
+                BoltAvailability.Unavailable(
+                    "archive at $directory is full ($usedBytes/$capacityBytes bytes allocated)",
+                )
+            else -> probeSegmentCreation()
         }
+    }
+
+    /**
+     * Ask the volume whether it will still give us a segment file: create one, then remove it.
+     *
+     * **Asked, not remembered, and that is the whole design.** The obvious alternative — cache the
+     * reason the last roll was refused and report it until a roll succeeds — deadlocks precisely the
+     * consumer this signal exists for. A consumer that asks *instead of* writing never appends while
+     * the answer is negative, so a cached refusal that only a successful append can clear never
+     * clears: one transient `ENOSPC` or one read-only remount stops archiving on that instance
+     * forever. A remembered failure answers a question about the past; [availability] is asked about
+     * the present.
+     *
+     * **What a green probe does and does not prove.** It proves the *creation* half of a roll works,
+     * which is the half a sealed directory, a revoked sandbox extension and a read-only remount all
+     * fail at. It does **not** prove the other half — a full volume refuses at [preallocate], where
+     * the blocks are actually claimed — and nothing short of doing the allocation could, which is why
+     * [append] still reports [AppendResult.Failed] with the errno and why `Available` is a
+     * best-effort statement rather than a promise. The probe is cheap and strictly better than
+     * assuming; it is not a guarantee.
+     *
+     * The file is created at the index the next roll would use and unlinked immediately. If the
+     * unlink fails, [createSegmentFile] discards the leftover on the next roll by the same argument
+     * it already makes, so the two compose rather than fight.
+     */
+    private fun probeSegmentCreation(): BoltAvailability {
+        val path = directory.withTrailingSlash() + segmentName((segments.lastOrNull()?.index ?: -1L) + 1L)
+        val fd = platform.posix.open(path, O_RDWR or O_CREAT or O_EXCL, S_IRUSR or S_IWUSR)
+        if (fd < 0) {
+            val failure = posixFailure("could not create a segment under $directory")
+            // Same reading as everywhere else in this class: EACCES/EPERM is the locked-device shape,
+            // which the next unlock may resolve, so it is Unknown rather than a permanent verdict. A
+            // genuinely read-only volume answers EROFS and does land on Unavailable.
+            return if (failure.code == EACCES || failure.code == EPERM) {
+                BoltAvailability.Unknown(failure.reason)
+            } else {
+                BoltAvailability.Unavailable(failure.reason)
+            }
+        }
+        platform.posix.close(fd)
+        unlink(path)
+        return BoltAvailability.Available
     }
 
     override suspend fun append(ops: List<Op>): AppendResult {
@@ -366,9 +395,14 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
 
     override fun replay(scope: ReplayScope): Flow<ReplayEvent<Op>> = flow {
         // Snapshot the segment LIST under the lock and read the FILES outside it. The files are the
-        // authority on their own bytes, and MAP_SHARED writes are coherent with read(2), so a
-        // concurrent append is either wholly visible to this reader or wholly invisible to it —
-        // never half of a frame, because a frame's CRC covers its own length prefix.
+        // authority on their own bytes, and MAP_SHARED writes are coherent with read(2).
+        //
+        // That coherence does NOT make the read atomic, and the earlier claim here that a frame's CRC
+        // made a half-written frame impossible to observe was wrong about the mechanism: the CRC makes
+        // a partially visible frame UNPARSEABLE, not unreadable. A memcpy racing this read therefore
+        // leaves non-zero bytes at the cursor and yields `Truncated` — which is what its own KDoc
+        // already covers, "damaged, or was still being written". Correct behaviour, for a different
+        // reason than was written down.
         // Nothing is EMITTED under the lock — `emit` suspends for as long as the collector takes, and
         // holding a mutex across that would stall every append behind a slow reader. So the locked
         // section only decides, and the emitting happens after it.
@@ -392,7 +426,11 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
                 readFile(view.path).bytes
             } catch (failure: PosixFailure) {
                 // A segment this replay cannot read is a replay that stopped, not an archive that is
-                // empty — and the verdict is what says so.
+                // empty — and the verdict is what says so. But `SegmentHeader` reads as "torn or
+                // unwritten" when the truth is that the file would not OPEN, so the errno is kept
+                // where a caller can still reach it; a reason for *unreadable* is #2240's to add,
+                // because `TruncationReason` belongs to every backend at once.
+                lock.withLock { recordUnreported(failure) }
                 emit(Truncated(view.baseOffset, TruncationReason.SegmentHeader))
                 return@flow
             }
@@ -424,7 +462,6 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
         unmapActive()
         opened = false
         wedged = null
-        lastRollFailure = null
     }
 
     // ── the append path ───────────────────────────────────────────────────────
@@ -461,9 +498,8 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
             try {
                 rollSegment(offset, allocation)
             } catch (failure: PosixFailure) {
-                // Remembered so `availability` stops claiming Available on the strength of a byte
-                // budget the volume does not honour.
-                lastRollFailure = failure.reason
+                // Nothing is remembered here on purpose: `availability` re-asks the volume rather than
+                // replaying this answer, so a refusal cannot outlive the condition that caused it.
                 return AppendResult.Failed(failure.reason, insertDots, offset, cause = failure)
             }
         }
@@ -501,7 +537,7 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
         // What is genuinely lost is the DURABILITY upgrade [synchronous] promises, and that is
         // documented on the parameter rather than smuggled into a result type that means something
         // else. `msync` fails on a dying volume, so no test here reaches this branch.
-        if (synchronous) syncRange(mapping, at, frame.size.toLong())
+        if (synchronous) syncRange(mapping, at, frame.size.toLong())?.let { recordUnreported(it) }
         return AppendResult.Written(offset, nextOffset, opCount, insertDots)
     }
 
@@ -531,7 +567,12 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
                 SegmentHeader(BOLT_FORMAT_VERSION, format.opFormat, format.elementType, baseOffset = offset),
             )
             copyInto(mapped, 0L, header)
-            if (synchronous) syncRange(mapped, 0L, header.size.toLong())?.let { throw it }
+            // Recorded, NOT thrown — the same answer `commit` gives for the same syscall, for the same
+            // reason. Throwing here reached the catch below, which unlinks a fully created, physically
+            // pre-allocated segment and surfaces as a lost append; the header is memcpy'd into the
+            // same kind of mapping and is equally visible to the `read(2)` that replay and adoption
+            // both use, so a failed flush of it loses durability, not the segment.
+            if (synchronous) syncRange(mapped, 0L, header.size.toLong())?.let { recordUnreported(it) }
         } catch (failure: PosixFailure) {
             // Everything is undone before the failure escapes. The OLD active segment stays mapped
             // and appendable, so a refused roll is survivable rather than the end of this bolt's
@@ -548,7 +589,6 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
         unmapActive()
         active = live
         usedBytes += allocation
-        lastRollFailure = null
         return Segment(index, path, offset, BOLT_FORMAT_VERSION, headerBytes, allocation, writtenFrameBytes = 0L)
             .also { segments += it }
     }
@@ -856,7 +896,10 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
             // AppendResult.Written was ever returned for them. See `repairedTailAt`.
             val from = last.headerBytes + scan.frameBytes
             zeroFrom(mapping, from, last.fileBytes - from)
-            if (synchronous) syncRange(mapping, from, last.fileBytes - from)
+            // Worse in kind than the append path if it fails: the zeroes may never reach disk, so the
+            // next open re-detects the same torn tail and repairs it again, indefinitely. Recorded so
+            // that loop is at least visible from somewhere.
+            if (synchronous) syncRange(mapping, from, last.fileBytes - from)?.let { recordUnreported(it) }
         }
     }
 
@@ -1046,6 +1089,11 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
      * `errno` is read once, first: building the message calls `strerror_r`, and reading `errno`
      * afterwards would report whatever that left there rather than what actually failed.
      */
+    /** Keep [failure] where [lastUnreportedFailure] can find it. Called under [lock]. */
+    private fun recordUnreported(failure: PosixFailure) {
+        unreportedFailure = failure.reason
+    }
+
     private fun posixFailure(what: String): PosixFailure {
         val code = errno
         return PosixFailure("$what: errno=$code (${errnoText(code)})", code)
