@@ -86,9 +86,15 @@ public interface Bolt<Op> {
     /**
      * Whether this bolt can be written to on this runtime.
      *
-     * Mirrors `Loom.availability()`: a consumer learns that (say) a browser has no filesystem by
-     * asking, rather than by crashing. A bolt reporting [BoltAvailability.Available] must accept
-     * an [append].
+     * Mirrors `Loom.availability()`: a consumer learns that a volume is read-only, or a directory
+     * could not be created, by asking rather than by crashing. A bolt reporting
+     * [BoltAvailability.Available] must accept an [append].
+     *
+     * **This answers "can this bolt write *now*", not "does this runtime have a bolt".** A backend
+     * with no home on a target is simply not compiled there — reaching for it is a compile error,
+     * which is a better answer than a runtime one, and it is why there is no wasmJs backend
+     * reporting [BoltAvailability.Unavailable] for the browser's missing filesystem.
+     * [InMemoryBolt] is what a browser gets; see its KDoc for what that does and does not buy you.
      */
     public fun availability(): BoltAvailability
 }

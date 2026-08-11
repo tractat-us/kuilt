@@ -25,6 +25,19 @@ import kotlin.time.Instant
  * [BoltAvailability.Unavailable]. An in-memory archive that grew without limit would be a
  * memory leak wearing an archive's clothes.
  *
+ * ### On wasmJs this is the only bolt there is, and that is a real limitation
+ *
+ * A browser has no filesystem, so neither memory-mapped backend compiles for wasmJs and this one is
+ * what runs there. It passes the whole conformance suite on that target — but **it does not survive
+ * a page reload**, which is a strange thing for an *archive* to be. A bolt exists so a server can
+ * hold a year of history beside a phone holding an hour; an in-memory one on a browser tab holds
+ * history for exactly as long as the tab does.
+ *
+ * So on wasmJs, treat this as a working implementation of the *contract* rather than as durable
+ * retention. Durable retention there needs a different backend — see #2233. It is more tractable
+ * than "the browser has no filesystem" suggests: a browser lacks a *filesystem*, not durable
+ * storage, and this repo already ships a tested IndexedDB-backed store elsewhere.
+ *
  * @param format how ops are classified and encoded — see [BoltArchiveFormat].
  * @param clock stamps each frame's arrival time. **Required**: time is a dependency here, and a
  *   bolt that reached for `Clock.System` itself could not be tested deterministically.
