@@ -30,6 +30,7 @@ class CrdtSamplesRunTest {
             "sampleGSet" to ::sampleGSet,
             "sampleTwoPhaseSet" to ::sampleTwoPhaseSet,
             "sampleORSet" to ::sampleORSet,
+            "sampleORSetBulkRemoval" to ::sampleORSetBulkRemoval,
             "sampleLWWRegister" to ::sampleLWWRegister,
             "sampleMVRegister" to ::sampleMVRegister,
             "sampleLWWMap" to ::sampleLWWMap,

@@ -18,8 +18,9 @@ import kotlin.test.assertTrue
  * ```
  *
  * for every state `X` and every mutator `m` — [ORSet.add]'s delta against [ORSet.addWhole],
- * [ORSet.remove]'s against [ORSet.removeWhole]. The reference side is deliberately the internal
- * whole-state form: comparing the delta path against itself would prove nothing.
+ * [ORSet.remove]'s against [ORSet.removeWhole], [ORSet.removeAll]'s against [ORSet.removeAllWhole].
+ * The reference side is deliberately the internal whole-state form: comparing the delta path
+ * against itself would prove nothing.
  *
  * **Why bytes and not just `equals`.** Two states can compare equal and still encode two ways. The
  * anti-entropy gate hashes the state *as it appears on the wire*, so a delta path that left two
@@ -89,6 +90,29 @@ class ORSetDeltaMutatorLawTest {
         }
 
         assertNonVacuous(concurrentDotTrials, "remove")
+    }
+
+    @Test
+    fun removeAllDeltaSatisfiesTheMutatorLawOnBytes() {
+        val random = Random(11)
+        var concurrentDotTrials = 0
+
+        repeat(LAW_TRIALS) { trial ->
+            val state = randomState(random)
+            val victims = ELEMENTS.filter { random.nextBoolean() }.toSet()
+            if (victims.any { state.dotsOn(it).size > 1 }) concurrentDotTrials++
+
+            val viaFull = state.removeAllWhole(victims)
+            val viaDelta = state.piece(state.removeAll(victims))
+
+            assertEquals(viaFull, viaDelta, "trial $trial: removeAll law by equality, victims=$victims")
+            assertTrue(
+                bytes(viaFull).contentEquals(bytes(viaDelta)),
+                "trial $trial: removeAll law by bytes, victims=$victims — states are equal but encode differently",
+            )
+        }
+
+        assertNonVacuous(concurrentDotTrials, "removeAll")
     }
 
     @Test
@@ -400,7 +424,9 @@ class ORSetDeltaMutatorLawTest {
 
         /**
          * The floor the generator must clear for a law test to mean anything. **Measured: 113 of
-         * 400** on seed 11. Set at roughly half of that, so an incidental generator tweak does not
+         * 400** on seed 11 for the single-element arms, and 204 of 400 for [ORSet.removeAll],
+         * which draws a random subset and so hits a multi-dot element more often. Set at roughly
+         * half of the smaller of those, so an incidental generator tweak does not
          * red-light the suite, but a generator that stopped producing concurrent dots — and with it
          * every case in which [ORSet.add]'s superseded-dots term does any work — fails loudly
          * instead of passing vacuously.
