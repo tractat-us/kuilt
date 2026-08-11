@@ -153,9 +153,25 @@ class WarpLogRecordExporterAppliedOpsTest {
      * it is a stated property. The refused-write arm is the one that shows it: the export fails,
      * the store holds nothing, and the sink holds the record anyway.
      *
-     * **Mutation receipt:** moving `publishApplied(applied)` to after `commit(actions)` reds the
-     * first assertion (the sink is empty when the write threw) and the ordering assertion, since
-     * `"write"` then precedes `"publish"`.
+     * **Mutation receipt — and this file said something false about it in its first round.** Moving
+     * `publishApplied(applied)` to after `commit(actions)` reds **exactly one** assertion, the
+     * ordering one:
+     *
+     * ```
+     * - published BEFORE the write was attempted expected:<[publish, write]> but was:<[write, publish]>
+     * ```
+     *
+     * It was previously claimed to also red "the sink holds the record anyway". It does not, and
+     * the reason is worth keeping: `commit` reports a refused write by **returning**
+     * `ExportResult.Failure` rather than throwing, and nothing returns early between it and the end
+     * of `exportTurn`, so a publication placed after it still runs. Every other assertion here —
+     * and `GossipedRecordsReachTheArchiveTest.aRefusedDurableWriteStillReachesTheArchive`, which
+     * drives the same property through a real archive — stays green under that move.
+     *
+     * So `order` is the **only** thing in this tree pinning the ordering, which is why it is
+     * asserted as a sequence rather than inferred from an outcome. (It is not a call-recording
+     * artifact: `"publish"` is appended by the sink and `"write"` by the store, two genuinely
+     * distinct observable events on two different collaborators.)
      */
     @Test
     fun publicationPrecedesTheDurableWriteSoARefusedWriteStillReachesTheSink() =

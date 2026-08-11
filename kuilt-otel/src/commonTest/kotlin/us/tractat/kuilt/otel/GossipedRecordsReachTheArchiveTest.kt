@@ -17,6 +17,7 @@ import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Instant
@@ -202,6 +203,71 @@ class GossipedRecordsReachTheArchiveTest {
     }
 
     /**
+     * **The precondition on the headline, driven rather than described.** A merge can only hand
+     * over what the peer *still holds*, so records the phone windowed away before the server's next
+     * round never reach the archive at all — and nothing anywhere reports the gap.
+     *
+     * This is the sharp edge of "a year on the server beside an hour on the phone": the archive's
+     * completeness is bounded by **gossip frequency**, not by how much the archive can hold. Merge
+     * more slowly than the peer's buffer turns over and the archive is exactly as complete as the
+     * schedule allowed, silently. `Bolt.replay`'s truncation verdict cannot help — it reports damage
+     * to the *archive*, not a gap at the *source*.
+     *
+     * **The second assertion is mandatory, not decoration.** "The archive lacks the early records"
+     * is trivially true of an archive that was never fed anything, so the test first proves the
+     * *phone* really did lose them from the log it offers. Without it the whole test goes vacuous
+     * the moment the fixture stops windowing — a `maxRecords` bump, a `windowPassDue` change — and
+     * it would go on passing while asserting nothing.
+     *
+     * The fourth assertion is the other half of the same guard: the records the phone *kept* do
+     * reach the archive, so this is a *gap*, not a merge that failed outright.
+     */
+    @Test
+    fun recordsThePhoneWindowedAwayBeforeTheNextRoundNeverReachTheArchive() =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            // A tiny cap so a window pass fires deterministically within the test's record count:
+            // `windowPassDue` triggers at `evictionsSincePass >= maxRecords`.
+            val phoneSide = WarpLogRecordExporter(
+                replica = phone,
+                store = InMemoryDurableStore(),
+                maxRecords = WINDOWED_CAP,
+            )
+            val bolt = newBolt()
+            val (serverSide, _) = archivingExporter(server, InMemoryDurableStore(), bolt)
+            repeat(WINDOWED_RECORDS) { i -> phoneSide.export(record(i)) }
+
+            // The server's FIRST merge happens only now — after the phone has already forgotten.
+            serverSide.merge(phoneSide.snapshot())
+
+            val stillOffered = phoneSide.snapshot().operations()
+                .filterIsInstance<RgaOp.Insert<LogRecord>>()
+                .map { it.value.body }
+                .toSet()
+            val archived = bolt.archivedBodies().toSet()
+            val earliest = "record-0"
+            val newest = "record-${WINDOWED_RECORDS - 1}"
+
+            assertAll(
+                {
+                    assertFalse(
+                        earliest in stillOffered,
+                        "the phone must really have windowed the earliest record out of the log it OFFERS — " +
+                            "without this the assertion below is true of any archive, including an empty one",
+                    )
+                },
+                { assertFalse(earliest in archived, "so the archive never hears about it, and never can") },
+                {
+                    assertEquals(
+                        stillOffered,
+                        archived,
+                        "the archive holds exactly what the phone still had to give — no more, no less",
+                    )
+                },
+                { assertTrue(newest in archived, "and the merge did work; this is a gap, not a failure") },
+            )
+        }
+
+    /**
      * A full archive must not take down the exporter, and must say **which** records it lost.
      *
      * The identities are the point: the live replica windows those records away next, so a refused
@@ -251,5 +317,9 @@ class GossipedRecordsReachTheArchiveTest {
     private companion object {
         const val RECORDS = 4
         const val ROUNDS = 3
+
+        /** Small enough that a window pass fires within [WINDOWED_RECORDS] exports. */
+        const val WINDOWED_CAP = 2
+        const val WINDOWED_RECORDS = 8
     }
 }

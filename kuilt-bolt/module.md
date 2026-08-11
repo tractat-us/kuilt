@@ -63,6 +63,14 @@ Publication happens *before* the owner's own durable write, so the archive is a 
 live replica rather than a subset — the right direction for something whose product is "I still hold
 what you forgot". And forgetting does not travel: emptying the live replica leaves the archive alone.
 
+**One qualification on "a year here beside an hour there", and it is not small.** A peer can only
+hand over what it *still holds*. A peer that forgets its oldest records before you next sync with it
+has already dropped them from the log it offers, with nothing marking the gap — so the archive's
+completeness is bounded by **how often you sync**, not by how much the archive can keep. A replay's
+truncation verdict will not tell you: it reports damage to the archive, never a gap at the source.
+Sync more often than the peer's own buffer turns over, or accept that the history is as complete as
+the schedule allowed.
+
 ## The invariant
 
 > **A bolt consumes operations, never states, and never joins the lattice.**

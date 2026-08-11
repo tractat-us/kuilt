@@ -249,7 +249,8 @@ internal suspend fun sampleArchivingExporter(peersLog: Rga<LogRecord>) {
 
     // Records that arrived by GOSSIP are archived too: a merge publishes the remote log, which
     // is the only reason a server's archive ever holds a phone's records. Re-merging the same
-    // peer costs nothing — the decorator suppresses what it has already kept.
+    // peer costs nothing — the decorator suppresses what it has already kept. Merge OFTEN
+    // ENOUGH, though: this only ever carries what the peer has not yet windowed away.
     exporter.merge(peersLog)
 
     // And the archive keeps them after the live replica has forgotten them.

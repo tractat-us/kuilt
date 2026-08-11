@@ -1131,9 +1131,11 @@ when (val result = telemetry.clear()) {
 
 **Wire the merge path or the whole thing is pointless.** `WarpLogRecordExporter` already publishes on both, and the merge one is why: a merge is a state join with no operations to tee, and gossip is how another device's records arrive. An archive fed only by local exports holds this replica's own telemetry and nobody else's.
 
-Re-merging the same peer every anti-entropy round does **not** re-archive its log — `BoltDecorator` suppresses what it has already kept, within a bounded window. A miss past that window costs a duplicate operation in the archive, never a lost one.
+Re-merging the same peer every anti-entropy round does **not** re-archive its log — `BoltDecorator` suppresses what it has already kept, in a bounded LRU window. Size `dedupWindow` to the aggregate working set you expect to be offered (every peer's live log, plus your own export stream, since one window serves them all); below that the archive grows per round. A miss costs a duplicate operation in the archive, never a lost one.
 
-A `clear()` empties the replica and leaves the archive alone; that asymmetry is the entire point. A refused append is reported on `BoltDecorator.health` with the **dots** of the records it could not keep, because the live replica windows those away next — so they are lost from both sides, and a count would leave nothing to act on.
+**Completeness is bounded by how often you merge, not by how much the archive holds.** A peer can only hand over what it *still has*, and a peer running its own buffer cap windows its oldest records away with no marker saying so. Merge with it more slowly than its buffer turns over and the archive is exactly as complete as your gossip schedule allowed — quietly, because a replay's truncation verdict reports damage to the *archive*, not a gap at the *source*.
+
+A `clear()` empties the replica and leaves the archive alone; that asymmetry is the entire point. A refused append is reported on `BoltDecorator.health` with the **dots** of the records it could not keep, because the live replica windows those away next — so they are lost from both sides, and a count would leave nothing to act on. That surface is bounded and conflating, so a consumer that must not lose an identity calls `BoltDecorator.publish` itself and reads its `AppendResult` rather than routing through a `Unit`-returning sink.
 
 <!-- verbatim from kuilt-otel/src/commonSamples/kotlin/us/tractat/kuilt/otel/Samples.kt#sampleArchivingExporter -->
 ```kotlin
@@ -1148,7 +1150,13 @@ val exporter = WarpLogRecordExporter(
     store = InMemoryDurableStore(),
     appliedOps = { ops -> archive.publish(ops) },
 )
-// …
+
+// Records that arrived by GOSSIP are archived too: a merge publishes the remote log, which
+// is the only reason a server's archive ever holds a phone's records. Re-merging the same
+// peer costs nothing — the decorator suppresses what it has already kept. Merge OFTEN
+// ENOUGH, though: this only ever carries what the peer has not yet windowed away.
+exporter.merge(peersLog)
+
 // And the archive keeps them after the live replica has forgotten them.
 exporter.clear()
 val kept = bolt.replay(ReplayScope.All).frames().toList().flatMap { it.ops }

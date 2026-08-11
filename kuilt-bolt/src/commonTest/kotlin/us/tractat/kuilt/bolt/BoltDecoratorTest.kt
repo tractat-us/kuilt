@@ -162,12 +162,9 @@ class BoltDecoratorTest {
      * after a refusal — reds both of this test's remaining assertions: the retry comes back
      * `Skipped` rather than `Written`, and the archive is still empty afterwards.
      *
-     * **And an unproven property, stated rather than papered over.** Claiming *before* the append
-     * instead of after it is what makes two concurrent publishes of the same operation write it
-     * once — and **no test in this tree reds on that change**, because nothing here publishes
-     * concurrently. Under a single publisher the two orders are indistinguishable. So the
-     * reservation half of the protocol rests on the argument in `publish`'s KDoc, not on a
-     * receipt; only the release half is pinned.
+     * The *other* half of the protocol — claiming **before** the append rather than after it — is
+     * indistinguishable from this test's single publisher, and is pinned separately and
+     * deterministically by [twoOverlappingPublishesOfTheSameOperationsArchiveItOnce].
      */
     @Test
     fun aRefusedAppendReleasesItsIdentitiesSoTheNextRoundArchivesThem() =
@@ -286,9 +283,15 @@ class BoltDecoratorTest {
      * The sequence: claim A, claim B, **re-offer A** (a hit, which must refresh it), claim C — the
      * eviction. LRU evicts B; FIFO evicts A.
      *
-     * **Mutation receipt:** deleting the `remove`/`add` refresh from `BoltDecorator.claim` reds
-     * both of the last two assertions and flips them exactly: A is archived a second time and B is
-     * skipped. Nothing else in this file moves, which is the point of the boundary.
+     * **Mutation receipt:** replacing `BoltDecorator.claim`'s body with a bare
+     * `return archived.add(identity)` — i.e. FIFO — reds the **A** assertion and nothing else in
+     * this file. Claiming after the append rather than before it reds it too.
+     *
+     * **The B assertion does not discriminate the two orders, and is not there to.** Under FIFO the
+     * eviction takes A, so B is `Written` either way. It is the *vacuity guard*: without it, a
+     * `trimToWindow` that evicted nothing at all would leave A `Skipped` and pass the A assertion
+     * for entirely the wrong reason. B being `Written` is what proves an eviction happened, which
+     * is the precondition the A assertion's meaning rests on.
      */
     @Test
     fun aReOfferedIdentitySurvivesEvictionWhileAnIdleOneDoesNot() =
