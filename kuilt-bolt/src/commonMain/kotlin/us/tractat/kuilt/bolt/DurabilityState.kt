@@ -49,7 +49,11 @@ public sealed interface DurabilityState {
      * range covers the whole of `[fromOffset, toOffset)` succeeds; while failures continue the range
      * grows to cover them all. That is what preserves a once-and-then-cleared `EIO`.
      *
-     * @property fromOffset the first append offset whose durability is in doubt.
+     * @property fromOffset the first append offset whose durability is in doubt. A backend that
+     *   flushes at page granularity reports the start of the *page range* it covered, which need not
+     *   land on a frame boundary — so this may point **inside** an earlier frame. It over-claims the
+     *   doubt rather than under-claiming it, which is the only direction that is safe here, and a
+     *   consumer treating it as "everything from at least here" is reading it correctly.
      * @property toOffset one past the last such offset. **May equal [fromOffset]**: a flush that
      *   carried no frame of its own — a segment header — still leaves the archive's durability in
      *   doubt from that offset, and reporting no range at all would lose the fact entirely.

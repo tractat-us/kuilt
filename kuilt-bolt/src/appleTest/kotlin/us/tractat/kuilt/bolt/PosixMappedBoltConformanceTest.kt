@@ -134,7 +134,7 @@ internal fun unflushablePosixMappedBolt(
 ): DurabilityFixture {
     val bolt = PosixMappedBolt(rgaArchiveFormat(), clock, boltTestDirectory(), synchronous, segmentFrameBytes)
     bolt.rigFlushFailure(true)
-    return if (synchronous) DurabilityFixture.Promised(bolt) else DurabilityFixture.PromisedNothing(bolt)
+    return if (synchronous) DurabilityFixture.Promised(bolt) else DurabilityFixture.PromisedNothingAndNeverFlushes(bolt)
 }
 
 /**

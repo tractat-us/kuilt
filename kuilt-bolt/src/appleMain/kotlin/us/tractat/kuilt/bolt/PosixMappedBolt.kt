@@ -561,10 +561,17 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
      * Not on the [Bolt] interface: an in-memory or wasm bolt has nothing to release, and putting a
      * `close` there would make every consumer of every backend carry a lifecycle it does not have.
      * Frames already written are durable independently of this call — it frees a mapping, it does not
-     * flush one. Idempotent; the bolt re-opens on the next [append], and that re-open is a full
-     * reset: every remembered failure, [wedged] included, is re-derived from what is on disk rather
-     * than carried across. A closed-and-reopened bolt and a freshly constructed one over the same
-     * directory must reach the same verdict, and before this they did not.
+     * flush one. Idempotent; the bolt re-opens on the next [append], and that re-open re-derives every
+     * remembered *archive* verdict — [wedged] included — from what is on disk rather than carrying it
+     * across. A closed-and-reopened bolt and a freshly constructed one over the same directory must
+     * reach the same verdict about the archive, and before this they did not.
+     *
+     * **The durability ledger is the deliberate exception, and it must be.** [durability] survives a
+     * close, because closing a mapping does not make its unflushed bytes durable — re-deriving that
+     * doubt from disk is impossible (the bytes look identical either way, which is the whole reason
+     * [DurabilityState] is state on the instance rather than something read back). A freshly
+     * constructed bolt over the same directory reports [DurabilityState.AsPromised] and is right to:
+     * it made no promise about anything written before it existed.
      */
     public fun close(): Unit = lock.withLock {
         unmapActive()

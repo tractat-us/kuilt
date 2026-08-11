@@ -73,7 +73,7 @@ class TinySegmentMappedBoltConformanceTest : BoltConformanceSuite() {
  * The Apple backend has had this subclass since #2214; the JVM one did not, and #2243 is what makes
  * the gap matter: the durability signal is **relative**, so the configuration that promised nothing is
  * half the property rather than a variation on it. Without this class, `MappedBolt`'s
- * [DurabilityFixture.PromisedNothing] arm would be undriven and an absolute reading of durability
+ * [DurabilityFixture.PromisedNothingButFlushes] arm would be undriven and an absolute reading of durability
  * would go green on this backend.
  */
 class AsynchronousMappedBoltConformanceTest : BoltConformanceSuite() {
@@ -89,16 +89,17 @@ class AsynchronousMappedBoltConformanceTest : BoltConformanceSuite() {
         discontinuousMappedBolt(clock, intactFrames, PRE_ALLOCATED_TAIL_BYTES)
 
     /**
-     * **One frame per segment, and the budget is the whole point of this fixture.**
+     * **One frame per segment**, so the one flush an asynchronous bolt makes actually happens.
      *
-     * An asynchronous bolt issues no flush on the append path at all, so at any budget that does not
-     * roll, the rig is never reached and this arm asserts nothing — the vacuity
-     * [BoltConformanceSuite.newBoltThatCannotFlush] warns about, in the fixture that exists to prevent
-     * it. The one flush an asynchronous `MappedBolt` does make is of the **retiring** segment at a
-     * roll, which is deliberately *not* gated on `forceOnAppend` (a segment is read back from its file
-     * after its mapping is let go). So a rolling budget is what makes this arm say something real: this
-     * bolt attempted a flush, the flush failed, and it reports [DurabilityState.AsPromised] anyway
-     * because it never promised one.
+     * An asynchronous bolt issues no flush on the append path; the only one it makes is of the
+     * **retiring** segment at a roll, which is deliberately not gated on `forceOnAppend` because a
+     * retired segment is read back from its file. So a budget that never rolls leaves the rig
+     * unreached and this arm saying nothing.
+     *
+     * The budget is chosen deliberately, and **the arm no longer depends on that choice being right**:
+     * [DurabilityFixture.PromisedNothingButFlushes] asserts the rig fired. Change this literal and the
+     * suite reds, rather than quietly reverting to a green that proves nothing — which is the state
+     * this file was in when it first shipped.
      */
     override fun newBoltThatCannotFlush(clock: Clock): DurabilityFixture =
         unflushableMappedBolt(clock, forceOnAppend = false, segmentFrameBytes = 1L)
@@ -118,12 +119,12 @@ class AsynchronousMappedBoltConformanceTest : BoltConformanceSuite() {
  * The earlier version of this comment claimed "with `forceOnAppend = false` no flush is issued at
  * all, so the rig is never consulted". That was false, and the fixture's default segment budget hid
  * it: three tiny frames never roll, so the rig was never reached and the arm asserted nothing. Which
- * configuration a fixture picks is the whole game — see
- * [BoltConformanceSuite.newBoltThatCannotFlush].
+ * configuration a fixture picks is the whole game — and the arm now *checks* the choice rather than
+ * inheriting it, via [DurabilityFixture.PromisedNothingButFlushes]'s `attemptedFlushes`.
  *
  * A real `force()` failure is not producible — see `MappedBolt.rigFlushFailure`, which also says what
- * rigging the verdict rather than the syscall does not prove. Rigged **after** construction, because
- * `init` runs recovery and recovery flushes.
+ * rigging the verdict rather than the syscall does not prove, and why the rig cannot reach the
+ * repair flush whatever order this function calls things in.
  */
 internal fun unflushableMappedBolt(
     clock: Clock,
@@ -132,7 +133,14 @@ internal fun unflushableMappedBolt(
 ): DurabilityFixture {
     val bolt = mappedBolt(clock, forceOnAppend = forceOnAppend, segmentFrameBytes = segmentFrameBytes)
     bolt.rigFlushFailure(RIGGED_FLUSH_FAILURE)
-    return if (forceOnAppend) DurabilityFixture.Promised(bolt) else DurabilityFixture.PromisedNothing(bolt)
+    return if (forceOnAppend) {
+        DurabilityFixture.Promised(bolt)
+    } else {
+        // PromisedNothingBUTFlushes: this backend's roll flushes the retiring segment whatever the
+        // flag says, so an asynchronous bolt really does attempt one — and the arm proves the rig
+        // fired rather than trusting the caller's segment budget to have made it happen.
+        DurabilityFixture.PromisedNothingButFlushes(bolt, bolt::riggedFlushFailures)
+    }
 }
 
 /** What a rigged `force()` reports. Distinctive, so a `reason` assertion cannot pass on empty text. */

@@ -140,26 +140,39 @@ abstract class BoltConformanceSuite {
      * plain nullable hook would go the other way and hand every backend the silent skip the other
      * three obligations exist to remove.
      *
-     * So the subclass **declares** which case it is, and both cases carry assertions:
-     * [DurabilityFixture.Promised] must degrade, [DurabilityFixture.PromisedNothing] must **not**,
-     * under the same appends and — where the backend has a flush at all — the same rigged failure.
-     * The declaration is a claim, not a skip: an all-red table is not what makes the second arm
-     * strong, its own assertions are.
+     * So the subclass **declares** which of three cases it is, and every one of them carries
+     * assertions:
      *
-     * **What this cannot detect, said plainly:** a backend that offers a durability upgrade and
-     * declares [DurabilityFixture.PromisedNothing] anyway. Nothing in this suite can see that — there
-     * is no `durabilityLevel()` on [Bolt] to check the claim against, and inventing one to make a test
-     * checkable would put a knob in the contract that no consumer asked for. The mitigation is that
-     * the claim is *written down* at the fixture rather than inferred from a `null`, and that every
-     * backend in this tree drives **both** arms from configurations of itself.
+     * - [DurabilityFixture.Promised] — promised per-record durability, cannot deliver it, must
+     *   report [DurabilityState.Degraded];
+     * - [DurabilityFixture.PromisedNothingButFlushes] — promised nothing, **still attempts a flush**,
+     *   which is rigged to fail; must report [DurabilityState.AsPromised], and must **prove the rig
+     *   fired**;
+     * - [DurabilityFixture.PromisedNothingAndNeverFlushes] — promised nothing and issues no flush at
+     *   any configuration, so there is nothing to rig; must report [DurabilityState.AsPromised].
+     *
+     * The declaration is a claim, not a skip: an all-red table is not what makes the last two arms
+     * strong, their own assertions are.
+     *
+     * **What this cannot detect, said plainly, and what the third arm narrows.** A backend that offers
+     * a durability upgrade and declares one of the promised-nothing arms anyway is invisible here —
+     * there is no `durabilityLevel()` on [Bolt] to check the claim against, and inventing one to make
+     * a test checkable would put a knob in the contract that no consumer asked for. What the split
+     * *does* buy is that a backend which **flushes** can no longer sit in the arm that asks nothing of
+     * it: [DurabilityFixture.PromisedNothingButFlushes] makes it prove the flush happened and failed,
+     * so "records a flush it never promised" becomes a catchable bug rather than an unasserted one.
+     * The residual is narrower, not gone.
      *
      * ### And the configuration must be one in which the failure can occur
      *
      * The trap #2240 named, one level down again: a fixture that picks the configuration where the
-     * property cannot fail passes for free. Here that configuration has a name — the asynchronous one,
-     * which issues no flush — and a subclass that hands it back under [DurabilityFixture.Promised]
-     * fails the precondition below rather than passing quietly. Drive both; every backend with the
-     * flag has a subclass for each.
+     * property cannot fail passes for free. Two shapes of it live here, and this suite now catches
+     * both. A subclass handing back an asynchronous bolt under [DurabilityFixture.Promised] fails the
+     * precondition below. And a subclass claiming [DurabilityFixture.PromisedNothingButFlushes] over a
+     * segment budget at which nothing ever rolls — so the only ungated flush never happens — fails its
+     * `attemptedFlushes` assertion. **That second one was a live hole in this file**, closed by the
+     * arm rather than by choosing a better literal, because the literal was never the thing under
+     * assertion.
      */
     protected abstract fun newBoltThatCannotFlush(clock: Clock): DurabilityFixture
 
@@ -1014,7 +1027,28 @@ abstract class BoltConformanceSuite {
                             },
                         )
 
-                        is DurabilityFixture.PromisedNothing -> assertAll(
+                        is DurabilityFixture.PromisedNothingButFlushes -> assertAll(
+                            {
+                                assertTrue(
+                                    fixture.attemptedFlushes() > 0,
+                                    "this arm claims the bolt FLUSHED and was not degraded by it, so the rig " +
+                                        "must actually have fired — a fixture whose budget never rolls asserts " +
+                                        "nothing here, and would go green against a backend that records every " +
+                                        "flush it makes, promised or not",
+                                )
+                            },
+                            {
+                                assertEquals(
+                                    DurabilityState.AsPromised,
+                                    afterThird,
+                                    "a backend that promised no durability cannot fall short of it — not even " +
+                                        "when a flush it DID make failed, which is what makes this the arm an " +
+                                        "ABSOLUTE reading of durability reddens",
+                                )
+                            },
+                        )
+
+                        is DurabilityFixture.PromisedNothingAndNeverFlushes -> assertAll(
                             {
                                 assertEquals(
                                     DurabilityState.AsPromised,
@@ -1124,9 +1158,34 @@ sealed interface DurabilityFixture {
     class Promised(override val bolt: Bolt<RgaOp<String>>) : DurabilityFixture
 
     /**
-     * This configuration promised no durability at all, so nothing can fall short of it. It must
-     * report [DurabilityState.AsPromised] — including, where the backend has a flush to rig, with that
-     * flush rigged to fail. That is the arm an *absolute* reading of durability reddens.
+     * This configuration promised no durability, **and still attempts a flush** — which this bolt has
+     * rigged to fail. It must report [DurabilityState.AsPromised] anyway.
+     *
+     * The strongest of the three, and the only one that can catch a backend *recording* a flush it
+     * never promised. [attemptedFlushes] is what makes it an assertion rather than a coincidence: on a
+     * backend whose only ungated flush happens at a segment roll, whether the rig fires at all depends
+     * on the fixture picking a segment budget that rolls, and that is an emergent property of a
+     * literal in a test helper. The suite **demands** it fired rather than hoping, so a later change
+     * to the budget, the append count or the backend's minimum segment size reds here instead of
+     * silently reverting the arm to asserting nothing.
+     *
+     * @property attemptedFlushes how many flushes this fixture's rig has made fail, read after the
+     *   appends. Must be positive, or the arm proved nothing.
      */
-    class PromisedNothing(override val bolt: Bolt<RgaOp<String>>) : DurabilityFixture
+    class PromisedNothingButFlushes(
+        override val bolt: Bolt<RgaOp<String>>,
+        val attemptedFlushes: () -> Int,
+    ) : DurabilityFixture
+
+    /**
+     * This configuration promised no durability and **issues no flush at all**, at any configuration
+     * of this backend, so there is nothing to rig. It must report [DurabilityState.AsPromised].
+     *
+     * The honest arm for a backend with no flush to speak of — [InMemoryBolt], and a mapped backend
+     * all of whose flush sites are gated on its durability flag. It still reds an *absolute* reading
+     * of durability, which is what it is for. It cannot red a "records a flush it never promised" bug,
+     * because such a backend has no site that could commit one; [PromisedNothingButFlushes] carries
+     * that half, and a backend that *does* have an ungated flush belongs there instead.
+     */
+    class PromisedNothingAndNeverFlushes(override val bolt: Bolt<RgaOp<String>>) : DurabilityFixture
 }

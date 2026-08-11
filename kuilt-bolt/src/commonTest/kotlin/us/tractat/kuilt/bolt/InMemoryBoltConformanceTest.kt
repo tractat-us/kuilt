@@ -70,7 +70,7 @@ class TinySegmentInMemoryBoltConformanceTest : BoltConformanceSuite() {
  * browser included, latched at "not durable" forever.
  */
 private fun inMemoryPromisedNothing(clock: Clock): DurabilityFixture =
-    DurabilityFixture.PromisedNothing(InMemoryBolt(BoltArchiveFormat.rga(serializer<String>()), clock))
+    DurabilityFixture.PromisedNothingAndNeverFlushes(InMemoryBolt(BoltArchiveFormat.rga(serializer<String>()), clock))
 
 /**
  * An in-memory archive of [intactFrames] ordinary frames, then a segment whose frame is **a byte
