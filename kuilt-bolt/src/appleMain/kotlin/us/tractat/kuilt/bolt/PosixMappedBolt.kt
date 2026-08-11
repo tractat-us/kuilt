@@ -317,8 +317,12 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
      * shipped path. Only the *cause* is artificial. (`MappedBolt` cannot do this — `force()` takes no
      * arguments — and says so.)
      *
-     * Call it **after** construction, for the reason `MappedBolt.rigFlushFailure` gives: adoption
-     * flushes a repaired tail, and a bolt rigged before that would record a failure a test invented.
+     * **Rig only a bolt over a fresh directory**, and note that "after construction" is not enough
+     * here the way it is on `MappedBolt`: that backend recovers eagerly in `init`, this one adopts
+     * **lazily**, on the first [append], [availability] or [replay]. So a rigged bolt pointed at an
+     * archive with a torn tail would fail the repair flush in [adoptLastSegment] too, and record a
+     * failure a test invented. Every fixture that uses this starts from an empty directory, where
+     * adoption returns before it can happen.
      */
     internal fun rigFlushFailure(rigged: Boolean): Unit = lock.withLock { riggedFlushFailure = rigged }
 

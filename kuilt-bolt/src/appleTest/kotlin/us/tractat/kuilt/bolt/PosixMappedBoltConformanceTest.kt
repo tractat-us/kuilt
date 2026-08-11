@@ -120,8 +120,9 @@ internal fun rgaArchiveFormat(): BoltArchiveFormat<RgaId, String, RgaOp<String>>
  * reading of durability reddens here. An *un*-rigged bolt would leave that arm asserting nothing.
  *
  * The rig hands `msync` an address the kernel refuses, so the syscall really runs and the errno is
- * real — see `PosixMappedBolt.rigFlushFailure`. Rigged **after** construction, because adoption
- * flushes a repaired tail.
+ * real — see `PosixMappedBolt.rigFlushFailure`, which also says why the directory must be a fresh
+ * one: this backend adopts lazily, so rigging "after construction" does not put the rig after
+ * adoption, and an archive with a torn tail would fail its repair flush too.
  */
 internal fun unflushablePosixMappedBolt(
     clock: Clock,
