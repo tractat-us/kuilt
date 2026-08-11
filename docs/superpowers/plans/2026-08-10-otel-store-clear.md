@@ -317,11 +317,26 @@ Expected: PASS. If `WarpLogRecordExporterWindowingTest` or `WarpLogRecordExporte
 
 - [ ] **Step 7: Revert the implementation and confirm the tests redden**
 
+**Do not use `git stash` for this — `refs/stash` is repo-global.** It is a single ref shared by every
+linked worktree of this clone (`.claude/worktrees/agent-*`, `kuilt-worktrees/*`), so `stash@{0}` is
+whoever pushed last, not necessarily you, and a concurrent worker's `pop`/`drop` can silently take
+your entry — or you can take theirs. Long-lived stashes from other sessions routinely sit on that
+stack. Copy the file instead:
+
 ```bash
-git stash push -- kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpLogRecordExporter.kt
+cp kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpLogRecordExporter.kt /tmp/wlre.bak
+git checkout HEAD -- kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpLogRecordExporter.kt
 ./gradlew :kuilt-otel:jvmTest --tests "*WarpLogRecordExporterClearTest*"   # expect: compile failure
-git stash pop
+cp /tmp/wlre.bak kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpLogRecordExporter.kt
+grep -q 'suspend fun clear()' kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpLogRecordExporter.kt
 ```
+
+The `cp` to `/tmp` is what makes this reversible, and it is **not optional**: Task 1's work is still
+uncommitted at this point (Step 8 is the commit), so `git checkout HEAD -- <path>` throws it away —
+which is precisely the revert you want, but only if you saved a copy first. And never
+`git checkout -- <path>` without `HEAD`: that restores from the *index*, which is a different and
+much easier way to lose the same work. The trailing `grep -q` is not ceremony — prove the restore
+actually landed before trusting any green that follows it.
 
 - [ ] **Step 8: Commit**
 
