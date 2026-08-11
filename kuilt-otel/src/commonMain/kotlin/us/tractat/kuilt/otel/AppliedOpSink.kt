@@ -29,6 +29,19 @@ import us.tractat.kuilt.crdt.RgaOp
  * It is a `List` rather than a lazy view because the same merge already encodes that whole remote
  * log to CBOR to persist it, so materialising it costs nothing measurable beside that.
  *
+ * ### "Every one it holds" is the whole promise, and it has a precondition
+ *
+ * A merge can only publish what the remote replica **still has**. A peer running its own buffer cap
+ * windows its oldest records away, and once it has, they are gone from the log it offers — with no
+ * marker saying so, because windowing raises a compaction floor rather than recording what it
+ * dropped. A sink is then simply never told about them, and it cannot find out: `Bolt.replay`'s
+ * truncation verdict reports damage to *the archive*, not a gap at *the source*.
+ *
+ * So **completeness is bounded by how often you merge, not by how much the archive can hold.** A
+ * consumer that wants a peer's whole history must merge with it more often than that peer's buffer
+ * turns over — at `DEFAULT_MAX_LOG_RECORDS` and a busy logger that is minutes, not hours. Merge
+ * more slowly and the archive is exactly as complete as the gossip schedule allowed, quietly.
+ *
  * ### Two contract points a consumer must be able to rely on
  *
  * - **Publication precedes the durable write.** The exporter publishes as soon as it has applied
@@ -38,6 +51,19 @@ import us.tractat.kuilt.crdt.RgaOp
  * - **Throwing does not fail the export.** A sink that throws is logged and otherwise ignored. It
  *   is a side channel; the exporter's contract to its caller does not change because a listener
  *   had a bad day.
+ *
+ * ### This signature returns `Unit`, and that discards something
+ *
+ * A sink cannot report back. `us.tractat.kuilt.bolt.BoltDecorator.publish` returns an
+ * `AppendResult` naming exactly which records it could not archive, and adapting it as
+ * `{ ops -> decorator.publish(ops) }` — which is what every example here does — **drops that
+ * value**. What survives is the decorator's own health surface, which is bounded and conflating,
+ * so under sustained archive failure some identities are lost.
+ *
+ * Deliberate: a return type the exporter could act on would mean the export path waiting on the
+ * archive, and a full archive disk must not slow down, let alone take down, the application's
+ * logging. A consumer that must not lose an identity calls the decorator directly and handles its
+ * result, rather than routing through a sink.
  *
  * ### What is NOT published
  *

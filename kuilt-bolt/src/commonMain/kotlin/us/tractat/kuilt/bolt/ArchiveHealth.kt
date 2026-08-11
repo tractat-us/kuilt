@@ -15,13 +15,31 @@ package us.tractat.kuilt.bolt
  * number — how much work anti-entropy was spared — and [appendsFailed] is a rate, useful for an
  * alarm and useless for a recovery. Read [recentFailures] when you want to act.
  *
- * ### [recentFailures] is bounded, and here is what that costs
+ * ### [recentFailures] is LOSSY, and the shipped wiring makes it the only channel
  *
- * A permanently full archive fails **every** append, forever, so an unbounded list would be a leak
- * on exactly the path that is already going wrong. It keeps the most recent
- * [BoltDecorator.RETAINED_FAILURES] and drops the oldest identities first. A consumer that needs
- * every identity must read the [AppendResult] that [BoltDecorator.publish] returns, or collect this
- * flow rather than polling it — polling can miss a failure entirely, and the bound can drop one.
+ * Say the whole of it plainly, because half of it is comfortable and the other half is not.
+ *
+ * The **complete** channel is the [AppendResult] that [BoltDecorator.publish] returns: every
+ * refusal, with every identity, exactly once. The **incomplete** one is this type, and it is
+ * incomplete twice over:
+ *
+ * - [recentFailures] keeps only the most recent [BoltDecorator.RETAINED_FAILURES] and drops the
+ *   **oldest** first — which under sustained failure are the identities with the least time left
+ *   before the live replica windows them away, i.e. the ones worth the most; and
+ * - it is carried on a `StateFlow`, which **conflates**. A collector is not promised every
+ *   intermediate value, so collecting rather than polling narrows the gap and does not close it.
+ *
+ * And the wiring this module recommends **discards the complete channel**. Every shipped example
+ * adapts the decorator as `{ ops -> publish(ops) }` into a sink whose signature returns `Unit`
+ * (`AppliedOpSink` in `:kuilt-otel`), so a consumer wired that way has this type and nothing else.
+ * The counters below stay exact — [appendsFailed] never conflates away — so "how badly is this
+ * going" is always answerable; "which records, all of them" is not.
+ *
+ * **A consumer that must not lose an identity calls [BoltDecorator.publish] itself** and handles
+ * the returned [AppendResult.Failed], instead of routing through a `Unit`-returning sink. That is
+ * the deliberate trade: back-pressuring the owner until every identity is consumed would put the
+ * archive on the application's logging hot path, which "a full archive disk must not take down the
+ * application" forbids outright.
  *
  * ### Where a "written but not durable" signal will plug in
  *
@@ -37,8 +55,9 @@ package us.tractat.kuilt.bolt
  *   whenever compaction records were discarded or duplicates were suppressed.
  * @property opsDeduplicated operations recognised as already archived and not written again,
  *   cumulative. The anti-entropy saving, not a loss.
- * @property appendsFailed appends the archive refused, cumulative.
- * @property recentFailures the most recent refusals, oldest first — see above.
+ * @property appendsFailed appends the archive refused, cumulative — including ones where the
+ *   backend threw rather than reporting a refusal. Exact, and never conflated away.
+ * @property recentFailures the most recent refusals, oldest first. **Lossy — see above.**
  */
 public data class ArchiveHealth(
     public val framesWritten: Long = 0L,

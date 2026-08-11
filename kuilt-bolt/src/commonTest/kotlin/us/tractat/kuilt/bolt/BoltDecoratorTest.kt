@@ -1,7 +1,11 @@
 package us.tractat.kuilt.bolt
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.serializer
 import us.tractat.kuilt.crdt.Rga
@@ -13,6 +17,7 @@ import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.time.Clock
@@ -230,8 +235,9 @@ class BoltDecoratorTest {
      * miss costs bytes, never correctness, because folding an op-log CRDT's operation twice is
      * idempotent.
      *
-     * The dropped identity is the **oldest**, which is also the least likely to be re-offered: a
-     * peer re-offers the log it currently holds, and its own retention bounds that.
+     * The dropped identity is the **least recently offered** — see
+     * [aReOfferedIdentitySurvivesEvictionWhileAnIdleOneDoesNot] for why that qualifier is the whole
+     * property and not a synonym for "oldest".
      *
      * **Mutation receipt:** short-circuiting `trimToWindow` (`if (archived.size >= 0) return`) reds
      * this test — the old identity stays remembered, so the re-publish is skipped.
@@ -260,6 +266,173 @@ class BoltDecoratorTest {
                         "and nothing was suppressed — the window held one identity, and it was not this one",
                     )
                 },
+            )
+        }
+
+    /**
+     * **The window is LRU, not FIFO** — a re-offered identity is refreshed and survives; an idle
+     * one is evicted in its place.
+     *
+     * This is the property the whole suppression design rests on, and it is invisible at any window
+     * size big enough to hold the fixture: FIFO and LRU agree until something is actually evicted,
+     * which is why this runs at `dedupWindow = 2` and steps one identity over the edge on purpose.
+     *
+     * Under FIFO the archive grows by a full copy of every peer's log every `dedupWindow / rate`
+     * rounds — `LinkedHashSet.add` on a present element returns `false` and does **not** reorder
+     * it, so a peer's identities march toward the head on a clock set by *everybody else's* traffic
+     * and are evicted while that peer is still re-offering every one of them on every round. That
+     * is "growth proportional to time spent gossiping", the exact failure #2216 names.
+     *
+     * The sequence: claim A, claim B, **re-offer A** (a hit, which must refresh it), claim C — the
+     * eviction. LRU evicts B; FIFO evicts A.
+     *
+     * **Mutation receipt:** deleting the `remove`/`add` refresh from `BoltDecorator.claim` reds
+     * both of the last two assertions and flips them exactly: A is archived a second time and B is
+     * skipped. Nothing else in this file moves, which is the point of the boundary.
+     */
+    @Test
+    fun aReOfferedIdentitySurvivesEvictionWhileAnIdleOneDoesNot() =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val bolt = newBolt()
+            val decorator = decorate(bolt, dedupWindow = 2)
+            val (r1, a) = Rga.empty<String>().insertAt(alice, 0, "a")
+            val (r2, b) = r1.insertAt(alice, 1, "b")
+            val (_, c) = r2.insertAt(alice, 2, "c")
+
+            decorator.publish(listOf(a))
+            decorator.publish(listOf(b))
+            // The hit that must refresh A. Under FIFO this changes nothing at all.
+            val reOfferA = decorator.publish(listOf(a))
+            // The eviction: three identities claimed, room for two.
+            decorator.publish(listOf(c))
+            val aAgain = decorator.publish(listOf(a))
+            val bAgain = decorator.publish(listOf(b))
+
+            assertAll(
+                { assertIs<AppendResult.Skipped>(reOfferA, "the re-offer is suppressed, and refreshes A") },
+                { assertIs<AppendResult.Skipped>(aAgain, "A was re-offered, so it survived the eviction") },
+                { assertIs<AppendResult.Written>(bAgain, "B was idle, so it is the one that went") },
+            )
+        }
+
+    // ── A backend that throws is a backend that wrote nothing ─────────────────
+
+    /**
+     * A [Bolt] that **throws** rather than returning [AppendResult.Failed] must not take the claim
+     * with it, and must not vanish from the failure surface.
+     *
+     * `Bolt.append`'s contract is "never throws *for an I/O failure*", which is narrower than never
+     * throws — and `Bolt` is public and pluggable, so a backend over a network or a database can
+     * raise anything. Before the conversion, such a throw exited `publish` with the identities
+     * still claimed and without reaching `record`: on the export path each operation is published
+     * exactly once and never re-offered, so those records were permanently absent from the archive
+     * **and** absent from `health`. Lost from both sides, silently — the one outcome this module's
+     * failure surface exists to make impossible.
+     *
+     * **Mutation receipt:** deleting the `catch (failure: Throwable)` arm in
+     * `BoltDecorator.appendOrConvert` (letting the throw propagate) reds this test at the `publish`
+     * call itself, before any assertion runs.
+     */
+    @Test
+    fun aBackendThatThrowsIsConvertedToAFailureCarryingItsIdentities() =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val backing = newBolt()
+            val decorator = decorate(ThrowingOnce(backing) { IllegalStateException("the disk is on fire") })
+            val ops = insertsWithARemoval()
+            val expectedDots = ops.filterIsInstance<RgaOp.Insert<String>>().map { it.id.dot }.toSet()
+
+            val converted = decorator.publish(ops)
+            val retried = decorator.publish(ops)
+            val archived = backing.archivedOps()
+
+            assertAll(
+                { assertIs<AppendResult.Failed>(converted, "a throw becomes a refusal, not an escape") },
+                { assertEquals(expectedDots, assertIs<AppendResult.Failed>(converted).insertDots, "with its dots") },
+                { assertEquals(1L, decorator.health.value.appendsFailed, "and it reaches the failure surface") },
+                { assertEquals(1, decorator.health.value.recentFailures.size, "identities and all") },
+                { assertIs<AppendResult.Written>(retried, "the claim was released, so a retry is not skipped") },
+                { assertEquals(ops, archived, "and the operations really do land on the retry") },
+            )
+        }
+
+    /**
+     * Cancellation still propagates — and releases the claim on its way out.
+     *
+     * The conversion above must not swallow a structured-concurrency cancel: that would turn a
+     * cancelled scope into a silent no-op, which is the failure `runCatchingCancellable` exists to
+     * prevent everywhere else in this repo. But a cancelled append wrote nothing, so leaving the
+     * identities claimed would silently drop them from a later round.
+     *
+     * **Mutation receipt:** removing the `catch (cancellation: CancellationException)` arm — so the
+     * generic arm converts it to `Failed` — reds the first assertion (nothing is thrown). Removing
+     * only its `lock.withLock { release(reserved) }` line reds the last one (the retry is skipped).
+     */
+    @Test
+    fun cancellationPropagatesAndStillReleasesTheClaim() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val backing = newBolt()
+        val decorator = decorate(ThrowingOnce(backing) { CancellationException("the scope went away") })
+        val ops = insertsWithARemoval()
+
+        // Thrown by the fake backend, not by a cancelled scope — so catching it here cancels
+        // nothing, and the assertion is about propagation rather than about the test's own job.
+        assertFailsWith<CancellationException> { decorator.publish(ops) }
+        val retried = decorator.publish(ops)
+
+        assertAll(
+            { assertEquals(0L, decorator.health.value.appendsFailed, "a cancel is not reported as a refusal") },
+            { assertEquals(emptyList(), decorator.health.value.recentFailures, "nor as a lost identity") },
+            { assertIs<AppendResult.Written>(retried, "and the claim it never honoured was given back") },
+        )
+    }
+
+    /**
+     * Two publishes of the same operations, genuinely overlapping, archive it **once**.
+     *
+     * This is the arm that was reported as unproven in the first round of this file: claiming an
+     * identity *before* the append rather than after is indistinguishable under a single publisher,
+     * so nothing reded on it. It is not dead code — `BoltDecorator` is public and documented for any
+     * op-log owner, and two owners sharing one decorator overlap immediately. (Through
+     * `WarpLogRecordExporter` alone they cannot: every path holds its `writeMutex`.)
+     *
+     * The overlap is deterministic rather than raced: the fake bolt parks its first append on a
+     * `CompletableDeferred`, both publishes are launched, and the gate is opened only once both
+     * have reached it. So the second publish provably runs while the first is mid-append — the
+     * exact window a claim-after-append protocol leaves open.
+     *
+     * **Mutation receipt:** moving the claim into the success branch (claim after the append) reds
+     * the frame count and the archived-ops assertion — both publishes see the identities as free
+     * and both write.
+     */
+    @Test
+    fun twoOverlappingPublishesOfTheSameOperationsArchiveItOnce() =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val backing = newBolt()
+            val gate = GatedBolt(backing)
+            val decorator = decorate(gate)
+            val ops = insertsWithARemoval()
+
+            backgroundScope.launch(StandardTestDispatcher(testScheduler)) { decorator.publish(ops) }
+            backgroundScope.launch(StandardTestDispatcher(testScheduler)) { decorator.publish(ops) }
+            // Bounded, never `advanceUntilIdle()`: nothing here re-arms, and `runCurrent` is enough
+            // to let both publishes reach the gate. The first parks inside `append`; the second
+            // runs while it is parked, which is exactly the window under test.
+            testScheduler.runCurrent()
+            val bothReachedTheGate = gate.appends
+            gate.open()
+            testScheduler.runCurrent()
+            val archived = backing.archivedOps()
+
+            assertAll(
+                {
+                    assertEquals(
+                        1,
+                        bothReachedTheGate,
+                        "only one publish reached the archive — the other found the identities claimed " +
+                            "WHILE the first was parked mid-append, which is the window under test",
+                    )
+                },
+                { assertEquals(1L, decorator.health.value.framesWritten, "so only one frame was written") },
+                { assertEquals(ops, archived, "and each operation is archived exactly once") },
             )
         }
 
@@ -312,6 +485,60 @@ class BoltDecoratorTest {
             if (refused) return backing.append(ops)
             refused = true
             return AppendResult.Failed(reason = "refused once, on purpose", insertDots = emptySet(), offset = 0L)
+        }
+
+        override fun replay(scope: ReplayScope): Flow<ReplayEvent<RgaOp<String>>> = backing.replay(scope)
+
+        override fun availability(): BoltAvailability = backing.availability()
+    }
+
+    /**
+     * A [Bolt] that **throws** [failure] from its first append and then behaves.
+     *
+     * A throw rather than an [AppendResult.Failed], because that is the case `Bolt.append`'s
+     * contract leaves open — it promises not to throw *for an I/O failure*, and a pluggable backend
+     * over a network or a database has failures that are neither.
+     */
+    private class ThrowingOnce(
+        private val backing: Bolt<RgaOp<String>>,
+        private val failure: () -> Throwable,
+    ) : Bolt<RgaOp<String>> {
+        private var thrown = false
+
+        override suspend fun append(ops: List<RgaOp<String>>): AppendResult {
+            if (thrown) return backing.append(ops)
+            thrown = true
+            throw failure()
+        }
+
+        override fun replay(scope: ReplayScope): Flow<ReplayEvent<RgaOp<String>>> = backing.replay(scope)
+
+        override fun availability(): BoltAvailability = backing.availability()
+    }
+
+    /**
+     * A [Bolt] whose appends **park** until [open] is called, and which counts how many reached it.
+     *
+     * The count is what makes the overlap deterministic rather than raced: a second publish that
+     * ran while the first was parked either reached this append or was suppressed before it, and
+     * those are different numbers. `appends++` is unguarded on purpose — this runs on a single test
+     * dispatcher, where there is no parallelism to guard against, and a lock here would hide the
+     * very interleaving the test exists to create.
+     */
+    private class GatedBolt(private val backing: Bolt<RgaOp<String>>) : Bolt<RgaOp<String>> {
+        private val gate = CompletableDeferred<Unit>()
+
+        var appends: Int = 0
+            private set
+
+        override suspend fun append(ops: List<RgaOp<String>>): AppendResult {
+            appends++
+            gate.await()
+            return backing.append(ops)
+        }
+
+        fun open() {
+            gate.complete(Unit)
         }
 
         override fun replay(scope: ReplayScope): Flow<ReplayEvent<RgaOp<String>>> = backing.replay(scope)
