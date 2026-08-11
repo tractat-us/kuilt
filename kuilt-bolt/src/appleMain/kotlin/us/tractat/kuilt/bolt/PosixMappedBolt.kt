@@ -147,16 +147,21 @@ import kotlin.time.Instant
  * record already on disk. So a `synchronous` bolt whose volume refuses to flush degrades to the
  * asynchronous guarantee rather than to a lie in either direction.
  *
+ * That degradation is **reported**, not merely admitted in prose: [durability] answers
+ * [DurabilityState.Degraded] over the offsets a failed `msync` left in doubt, carrying the errno, and
+ * keeps answering it until a later flush re-covers the range. A `synchronous = false` bolt promised no
+ * more than the asynchronous guarantee, so it stays [DurabilityState.AsPromised] whatever the volume
+ * does — the signal is relative to what *this* configuration offered (#2243).
+ *
  * **The JVM/Android backend answers this identically** — see `MappedBolt.flushQuietly`, which reaches
  * the same conclusion for `FileChannel.force` in the same words, deliberately: a consumer comparing
- * the two backends must find one answer, not two. Both also agree that [AppendResult] having no
- * "written but not durable" shape is a **gap rather than a decision**, and both park it on #2243
- * rather than inventing a contract on one backend alone.
+ * the two backends must find one answer, not two. Both leave [AppendResult] alone, because an append
+ * that wrote a whole CRC-valid frame did not fail.
  *
- * Where the two differ is only in diagnostics: this backend keeps the errno on
- * [lastUnreportedFailure] so it is not destroyed while #2243 is open. That is a breadcrumb, not a
- * contract. Nothing in this repo's tests reaches the flush branch itself — `msync` fails on dying
- * hardware — so it rides on the same field as the replay case, which is testable and tested.
+ * Where the two differ is only in diagnostics: this backend keeps a *replay*-side and a *repair*-side
+ * errno on [lastUnreportedFailure], neither of which the durability contract covers. That is a
+ * breadcrumb, not a contract. Nothing in this repo's tests reaches a real flush failure — `msync`
+ * fails on dying hardware — so [rigFlushFailure] drives the path, and says what that does not prove.
  *
  * ### Fixed-size segments, not one remapped growing file
  *
@@ -241,33 +246,81 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
 
     private var unreportedFailure: String? = null
 
+    /** The outstanding durability doubt — what [durability] reports. Guarded by [lock]. */
+    private val ledger = DurabilityLedger()
+
+    /** `true` to make every subsequent `msync` fail. **Test-only**; see [rigFlushFailure]. */
+    private var riggedFlushFailure: Boolean = false
+
     /**
      * The most recent posix failure that **no return value could carry**, or `null` if there has been
      * none.
      *
      * Two things reach here, and neither has anywhere else to go:
      *
-     * - a failed `msync`. [append] still answers [AppendResult.Written], because the frame is in the
-     *   archive and saying otherwise would have a consumer re-feed a record already on disk — see the
-     *   durability note in this class's KDoc. What is lost is the *durability upgrade*, and without
-     *   this a `synchronous = true` bolt could degrade to the asynchronous guarantee with nothing
-     *   anywhere recording it.
      * - a segment that could not be **read** during [replay]. That surfaces as
      *   [TruncationReason.SegmentHeader] — settled in #2240 as the right constant rather than a
      *   placeholder, because a file that would not open and a header that is not written yet have the
      *   same remedy, which is to try again later; a locked device between [availability] and the read
      *   is the reachable case. What the verdict cannot carry either way is the errno. This can.
+     * - a failed `msync` of the **zeroes a torn tail was repaired with**, at open. That one is worse
+     *   in kind than an append-path flush and is not the same axis: if the zeroes never reach disk the
+     *   next open re-detects the same torn tail and repairs it again, indefinitely. It puts no *frame*
+     *   in doubt — the bytes it flushes are not records and lie past the append cursor — so reporting
+     *   it as [DurabilityState.Degraded] over a range containing no frames would say the wrong thing.
      *
-     * **A diagnostic breadcrumb, not a contract signal**, and the distinction is deliberate. The
-     * contract-level answer for the flush half — some "written but not durable" signal — belongs
-     * to both mmap backends at once and is parked on #2243; `MappedBolt.flushQuietly` is where the JVM
-     * backend records the same deferral, and the two backends give the **same** answer to the contract
-     * question. This only stops the errno from being destroyed in the meantime, which is this module's
-     * standing rule: report identities and state, never that something went wrong.
+     * **A diagnostic breadcrumb, not a contract signal**, and the distinction is what #2243 settled.
+     * The contract-level answer for a failed append-path flush is [durability], on the [Bolt]
+     * interface, identical on both mmap backends — this is deliberately **not** mirrored onto
+     * `MappedBolt`, because what it still carries is a *replay*-side errno and a repair-side one,
+     * which are a different axis from the durability contract. It stops those from being destroyed,
+     * which is this module's standing rule: report identities and state, never that something went
+     * wrong.
      *
      * Holds the **most recent** one. Two failures of different kinds do not accumulate.
      */
     public fun lastUnreportedFailure(): String? = lock.withLock { unreportedFailure }
+
+    /**
+     * [DurabilityState.AsPromised] unless a [synchronous] `msync` has failed and no later one has
+     * re-covered the range it left in doubt.
+     *
+     * **Relative to [synchronous].** With it `false` this bolt promised only that the operating
+     * system would flush when it chose, no `msync` is issued, and nothing can fall short — so this
+     * stays [DurabilityState.AsPromised] on a volume that would refuse one. With it `true` a refused
+     * `msync` is exactly the promise broken, and [DurabilityState.Degraded] names the offsets and the
+     * errno.
+     *
+     * Recovery is reachable here in a way it is not on `MappedBolt`: `msync` is issued over the
+     * frame's **page** range, page-aligned down, so a later frame's successful flush routinely
+     * re-covers earlier frames in the same pages — and the ledger clears on a success that covers the
+     * whole outstanding range.
+     *
+     * Does **not** open the archive, unlike [availability] and [repairedTailAt]. It reports what this
+     * instance's own flushes did, and a freshly constructed bolt has issued none.
+     */
+    override fun durability(): DurabilityState = lock.withLock { ledger.state() }
+
+    /**
+     * Make every subsequent `msync` fail, or stop. **Test-only.**
+     *
+     * An `msync` fails on a dying volume. There is no unprivileged, deterministic condition that
+     * makes a healthy one refuse — not a read-only remount (the mapping is already established), not
+     * an unlinked file, not a full disk (the blocks were claimed at [preallocate], which is the whole
+     * point of it). So the alternative to this hook is that [DurabilityState.Degraded] is unreachable
+     * on this backend and nothing asserts it, which is the vacuity `BoltConformanceSuite`'s other
+     * fixture hooks exist to remove.
+     *
+     * It rigs the syscall's **input**, not its verdict: the flush is issued over a span running off
+     * the end of the mapping, which the kernel refuses. So the `msync` really runs, the errno is real
+     * and so is its `strerror` text, and everything from the failing call to [durability] is the
+     * shipped path. Only the *cause* is artificial. (`MappedBolt` cannot do this — `force()` takes no
+     * arguments — and says so.)
+     *
+     * Call it **after** construction, for the reason `MappedBolt.rigFlushFailure` gives: adoption
+     * flushes a repaired tail, and a bolt rigged before that would record a failure a test invented.
+     */
+    internal fun rigFlushFailure(rigged: Boolean): Unit = lock.withLock { riggedFlushFailure = rigged }
 
     /**
      * The append offset a torn tail was discarded at when this archive was re-opened, or `null` if
@@ -584,9 +637,10 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
         // stated posture anyway.
         //
         // What is genuinely lost is the DURABILITY upgrade [synchronous] promises, and that is
-        // documented on the parameter rather than smuggled into a result type that means something
-        // else. `msync` fails on a dying volume, so no test here reaches this branch.
-        if (synchronous) syncRange(mapping, at, frame.size.toLong())?.let { recordUnreported(it) }
+        // reported by `durability()` rather than smuggled into a result type that means something
+        // else. `msync` fails on a dying volume, so the only thing that drives this branch here is
+        // `rigFlushFailure`.
+        if (synchronous) flushQuietly(mapping, at, frame.size.toLong(), segment.baseOffset, segment.headerBytes)
         return AppendResult.Written(offset, nextOffset, opCount, insertDots)
     }
 
@@ -621,7 +675,11 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
             // pre-allocated segment and surfaces as a lost append; the header is memcpy'd into the
             // same kind of mapping and is equally visible to the `read(2)` that replay and adoption
             // both use, so a failed flush of it loses durability, not the segment.
-            if (synchronous) syncRange(mapped, 0L, header.size.toLong())?.let { recordUnreported(it) }
+            //
+            // The recorded range is empty — a header carries no frame — and that is the honest shape:
+            // nothing is at risk YET, but this segment's durability is already in doubt from `offset`.
+            // The first frame's own flush starts at the same page and so resolves it either way.
+            if (synchronous) flushQuietly(mapped, 0L, header.size.toLong(), offset, headerBytes)
         } catch (failure: PosixFailure) {
             // Everything is undone before the failure escapes. The OLD active segment stays mapped
             // and appendable, so a refused roll is survivable rather than the end of this bolt's
@@ -994,7 +1052,12 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
             // Worse in kind than the append path if it fails: the zeroes may never reach disk, so the
             // next open re-detects the same torn tail and repairs it again, indefinitely. Recorded so
             // that loop is at least visible from somewhere.
-            if (synchronous) syncRange(mapping, from, last.fileBytes - from)?.let { recordUnreported(it) }
+            //
+            // NOT on the durability ledger, deliberately: these bytes are not records and lie past
+            // the append cursor, so `Degraded` over them would name a range holding no frame. It is a
+            // different axis, which is why `lastUnreportedFailure` survives #2243 rather than being
+            // subsumed by it.
+            if (synchronous) syncRange(mapping, from, last.fileBytes - from).failure?.let { recordUnreported(it) }
         }
     }
 
@@ -1116,17 +1179,48 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
      * Page-aligned down because `msync` requires it, and bounded to the frame's own pages rather than
      * the whole mapping because flushing a megabyte per record would make the synchronous mode
      * unusable.
+     *
+     * [SyncOutcome.coveredFrom] is what that alignment buys the caller: the flush really did cover
+     * every byte from the start of the page down, so a frame's flush routinely re-confirms the frames
+     * before it in the same page. Reporting only the frame's own range would be conservative in the
+     * safe direction but would make [DurabilityState.Degraded] effectively permanent.
      */
-    private fun syncRange(mapping: Mapping, at: Long, length: Long): PosixFailure? {
+    private fun syncRange(mapping: Mapping, at: Long, length: Long): SyncOutcome {
         val page = getpagesize().toLong()
         val start = at / page * page
-        val span = at - start + length
+        // Rigged: a span running off the end of the mapping, which the kernel refuses with ENOMEM.
+        // The syscall really runs and the errno really comes back — only the CAUSE is artificial.
+        // See `rigFlushFailure` for why no honest condition can stand in for it.
+        val span = if (riggedFlushFailure) mapping.bytes + page else at - start + length
         val address = mapping.address + start
-        return if (msync(address, span.convert(), MS_SYNC) != 0) {
+        val failure = if (msync(address, span.convert(), MS_SYNC) != 0) {
             posixFailure("could not flush ${span}B at $start of the active segment")
         } else {
             null
         }
+        return SyncOutcome(start, at + length, failure)
+    }
+
+    /**
+     * Flush the pages covering `[at, at + length)` of a segment based at [baseOffset], and record
+     * what that did to this archive's durability.
+     *
+     * **Quiet to the caller, not to the archive.** A failed flush never fails the append — the frame
+     * is in the archive, whole and CRC-valid, and [AppendResult.Failed] would have a consumer re-feed
+     * a record already on disk. But it is *recorded*, because a swallowed flush failure can be the
+     * only notification that ever arrives: on Linux an `EIO` from `msync` may be reported once and
+     * then cleared (#2243).
+     *
+     * The offsets handed to the ledger are the archive's **append offsets**, not this file's: a
+     * segment's byte `f` is append offset `baseOffset + f - headerBytes`, and a flush that reaches
+     * below the header covers no earlier frame than the segment's own first, hence the clamp.
+     */
+    private fun flushQuietly(mapping: Mapping, at: Long, length: Long, baseOffset: Long, headerBytes: Int) {
+        val outcome = syncRange(mapping, at, length)
+        val from = baseOffset + maxOf(0L, outcome.coveredFrom - headerBytes)
+        val to = baseOffset + maxOf(0L, outcome.coveredTo - headerBytes)
+        val failure = outcome.failure
+        if (failure == null) ledger.flushSucceeded(from, to) else ledger.flushFailed(from, to, failure.reason, failure)
     }
 
     private fun unmapActive() {
@@ -1259,6 +1353,13 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
 
     /** How one segment's replay ended: a verdict, or the offset the next segment resumes at. */
     private class SegmentReplay(val stopped: Truncated?, val endOffset: Long)
+
+    /**
+     * What one `msync` did: the **file** byte range it actually covered, and why it failed if it did.
+     *
+     * [coveredFrom] is page-aligned down from what was asked for, so it is at or below it.
+     */
+    private class SyncOutcome(val coveredFrom: Long, val coveredTo: Long, val failure: PosixFailure?)
 
     /** What one locked look at the archive tells [replay]: the segments to read, or why there are none. */
     private class Opened(val views: List<SegmentView>?, val cursor: Long)
