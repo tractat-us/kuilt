@@ -24,6 +24,11 @@ kotlin {
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
             implementation(libs.kotlinx.coroutines.test)
+            // TEST ONLY, and the direction is deliberate. `:kuilt-bolt` must stay ignorant of
+            // telemetry — that is what lets one archiving decorator serve every op-log owner — so
+            // the end-to-end test of an exporter feeding an archive lives on this side of the
+            // edge, where the consumer is. Nothing in `:kuilt-otel`'s main sources depends on it.
+            implementation(project(":kuilt-bolt"))
         }
 
         // jvmAndAndroidMain: FileChannelDurableStore uses java.io / java.nio.channels,
