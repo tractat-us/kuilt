@@ -338,7 +338,10 @@ public class MappedBolt<Id : Any, V, Op : Any>(
      *
      * Throws [BoltFormatException] if the newest segment is an archive of a different op or element
      * type, or of a format version this build cannot read. That is a reader mistake — the wrong
-     * directory — and reporting it as an empty archive would be worse than failing to open.
+     * directory — and reporting it as an empty archive would be worse than failing to open. An
+     * [IOException] is the opposite case and gets the opposite treatment: the directory is the right
+     * one, the volume is simply not co-operating, so it becomes [unappendable] and the archive stays
+     * readable rather than taking the caller down with it.
      */
     private fun recover() {
         directory.mkdirs()
@@ -350,13 +353,31 @@ public class MappedBolt<Id : Any, V, Op : Any>(
         // header. It can hold no frame — frames are only ever written after the header — so deleting
         // it returns the space and restores a clean append point, losing nothing readable.
         val kept = found.toMutableList()
-        while (kept.isNotEmpty() && isEntirelyZero(kept.last())) {
-            kept.removeAt(kept.lastIndex).delete()
+        try {
+            while (kept.isNotEmpty() && isEntirelyZero(kept.last())) {
+                kept.removeAt(kept.lastIndex).delete()
+            }
+        } catch (failure: IOException) {
+            unappendable = "the newest segment under $directory could not be read: $failure"
         }
+        // Recorded BEFORE any refusal below, so an archive this instance cannot append to is still
+        // one it can replay: `segments` is what the read path walks.
         segments += kept
         usedBytes = kept.sumOf { it.length() }
         nextIndex = kept.lastOrNull()?.let { segmentIndexOf(it) + 1 } ?: 0
-        kept.lastOrNull()?.let { reopen(it) }
+        if (unappendable != null) return
+        kept.lastOrNull()?.let { newest ->
+            try {
+                reopen(newest)
+            } catch (failure: IOException) {
+                // A read-only mount is the classic response to a disk I/O error, and it is exactly
+                // when the application must survive. Reporting it through `availability` rather than
+                // throwing out of `init` is the same posture `append` takes for a full disk — and an
+                // EMPTY read-only directory already reported it that way, so this is the branch that
+                // was missing rather than a new decision.
+                unappendable = "the newest segment ${newest.name} could not be opened for appending: $failure"
+            }
+        }
     }
 
     /** Make [file] the active segment, with its cursor after its last intact frame. Under [lock]. */
