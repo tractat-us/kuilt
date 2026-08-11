@@ -52,6 +52,7 @@ import platform.posix.munmap
 import platform.posix.read
 import platform.posix.stat
 import platform.posix.strerror_r
+import platform.posix.unlink
 import platform.posix.write
 import us.tractat.kuilt.crdt.Dot
 import kotlin.time.Clock
@@ -126,10 +127,13 @@ import kotlin.time.Instant
  * `false` lets the OS flush when it likes. One type, one flag — two implementations would be two
  * things to keep in agreement.
  *
- * If that `msync` fails the frame is still in the archive (it is in the file, visible to readers), so
- * the append cursor advances — but [append] returns [AppendResult.Failed] carrying the errno, the
- * dots and the byte range, because a *synchronous* bolt that silently downgraded to asynchronous
- * would be lying about the only thing the flag promises.
+ * If that `msync` fails the append still reports [AppendResult.Written], because the frame **is** in
+ * the archive: it is whole, CRC-valid and visible to every reader of the file. What failed is the
+ * durability upgrade, not the append, and saying otherwise costs records — [AppendResult.Failed] means
+ * "the ops are lost" and invites the consumer to re-feed them, which would write a second copy of a
+ * record already on disk. So a `synchronous` bolt whose volume refuses to flush degrades to the
+ * asynchronous guarantee rather than to a lie in either direction, and this paragraph is where that
+ * is admitted. Nothing in this repo's tests reaches it — `msync` fails on dying hardware.
  *
  * ### Fixed-size segments, not one remapped growing file
  *
@@ -210,6 +214,17 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
     /** A structural problem no retry can fix. Sticky, deliberately — see [openArchive]. */
     private var wedged: BoltAvailability.Unavailable? = null
 
+    /**
+     * Why the most recent segment roll was refused, or `null` if none was.
+     *
+     * [availability] consults it because the byte budget is not the authority on whether a segment
+     * can be allocated — the volume is. A full disk, a read-only remount or a revoked sandbox
+     * extension all leave `capacityBytes - usedBytes` looking roomy while every roll fails, and
+     * "Available means an append will be accepted" is the whole content of that signal. Cleared by
+     * the next roll that succeeds, so recovery needs no intervention.
+     */
+    private var lastRollFailure: String? = null
+
     private var repaired: Long? = null
 
     /**
@@ -284,12 +299,19 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
      */
     override fun availability(): BoltAvailability = lock.withLock {
         val open = ensureOpen()
-        if (open !is BoltAvailability.Available) {
-            open
-        } else if (roomForMinimumFrame()) {
-            BoltAvailability.Available
-        } else {
-            BoltAvailability.Unavailable(
+        val current = segments.lastOrNull()
+        when {
+            open !is BoltAvailability.Available -> open
+            current != null && active != null && current.remaining >= minimumFrameBytes ->
+                BoltAvailability.Available
+            // The next frame needs a NEW segment, and the last attempt to allocate one was refused.
+            // The budget says there is room; the volume said otherwise, and the volume decides.
+            lastRollFailure != null -> BoltAvailability.Unavailable(checkNotNull(lastRollFailure))
+            // A roll for the smallest possible frame still allocates a whole segment, and a segment
+            // must be big enough to hold that frame — so the budget is a floor, not the answer.
+            capacityBytes - usedBytes >= headerBytes + maxOf(segmentFrameBytes, minimumFrameBytes) ->
+                BoltAvailability.Available
+            else -> BoltAvailability.Unavailable(
                 "archive at $directory is full ($usedBytes/$capacityBytes bytes allocated)",
             )
         }
@@ -350,11 +372,16 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
      * Not on the [Bolt] interface: an in-memory or wasm bolt has nothing to release, and putting a
      * `close` there would make every consumer of every backend carry a lifecycle it does not have.
      * Frames already written are durable independently of this call — it frees a mapping, it does not
-     * flush one. Idempotent; the bolt re-opens on the next [append].
+     * flush one. Idempotent; the bolt re-opens on the next [append], and that re-open is a full
+     * reset: every remembered failure, [wedged] included, is re-derived from what is on disk rather
+     * than carried across. A closed-and-reopened bolt and a freshly constructed one over the same
+     * directory must reach the same verdict, and before this they did not.
      */
     public fun close(): Unit = lock.withLock {
         unmapActive()
         opened = false
+        wedged = null
+        lastRollFailure = null
     }
 
     // ── the append path ───────────────────────────────────────────────────────
@@ -391,13 +418,21 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
             try {
                 rollSegment(offset, allocation)
             } catch (failure: PosixFailure) {
+                // Remembered so `availability` stops claiming Available on the strength of a byte
+                // budget the volume does not honour.
+                lastRollFailure = failure.reason
                 return AppendResult.Failed(failure.reason, insertDots, offset, cause = failure)
             }
         }
         return commit(segment, frame, offset, opCount, insertDots)
     }
 
-    /** `memcpy` [frame] into the active mapping, flush it if [synchronous], and advance the cursor. */
+    /**
+     * `memcpy` [frame] into the active mapping, flush it if [synchronous], and advance the cursor.
+     *
+     * Always [AppendResult.Written] once the copy lands: see the note below on why a failed flush is
+     * not a failed append.
+     */
     private fun commit(
         segment: Segment,
         frame: ByteArray,
@@ -410,15 +445,21 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
         copyInto(mapping, at, frame)
         segment.writtenFrameBytes += frame.size
         nextOffset += frame.size
-        val syncFailure = if (synchronous) syncRange(mapping, at, frame.size.toLong()) else null
-        // The frame IS in the archive whether or not the flush landed — a memcpy into a MAP_SHARED
-        // mapping is visible to every reader of the file immediately — so the cursor advances either
-        // way, and the failure reports the byte range rather than pretending nothing was written.
-        return if (syncFailure == null) {
-            AppendResult.Written(offset, nextOffset, opCount, insertDots)
-        } else {
-            AppendResult.Failed(syncFailure, insertDots, offset, endOffset = nextOffset)
-        }
+        // A failed flush does NOT make this a failed append, and the earlier version that returned
+        // `AppendResult.Failed` here was wrong in a way that costs records. The frame is in the
+        // archive — a memcpy into a MAP_SHARED mapping is visible to every reader of the file
+        // immediately, and it is whole and CRC-valid — so `Failed`, whose contract is "the ops are
+        // lost from the archive" and whose remedy is to re-feed them, would have a consumer write a
+        // second copy of a record that is already there. Between a consumer that believes a present
+        // frame is durable when it may not be, and a consumer that duplicates every record on a
+        // failing disk, the first is strictly the smaller harm — and best-effort is this module's
+        // stated posture anyway.
+        //
+        // What is genuinely lost is the DURABILITY upgrade [synchronous] promises, and that is
+        // documented on the parameter rather than smuggled into a result type that means something
+        // else. `msync` fails on a dying volume, so no test here reaches this branch.
+        if (synchronous) syncRange(mapping, at, frame.size.toLong())
+        return AppendResult.Written(offset, nextOffset, opCount, insertDots)
     }
 
     /**
@@ -433,14 +474,13 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
     private fun rollSegment(offset: Long, allocation: Long): Segment {
         val index = (segments.lastOrNull()?.index ?: -1L) + 1L
         val path = directory.withTrailingSlash() + segmentName(index)
-        val fd = platform.posix.open(path, O_RDWR or O_CREAT or O_EXCL, S_IRUSR or S_IWUSR)
-        if (fd < 0) throw PosixFailure(posixFailure("could not create segment $path"))
+        val fd = createSegmentFile(path)
         var mapping: Mapping? = null
         try {
             preallocate(fd, allocation, path)
             val address = mmap(null, allocation.convert(), PROT_READ or PROT_WRITE, MAP_SHARED, fd, 0)
             if (address == null || address.rawValue.toLong() == MMAP_FAILED) {
-                throw PosixFailure(posixFailure("could not map segment $path"))
+                throw posixFailure("could not map segment $path")
             }
             val mapped = Mapping(fd, address.reinterpret(), allocation)
             mapping = mapped
@@ -448,31 +488,50 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
                 SegmentHeader(BOLT_FORMAT_VERSION, format.opFormat, format.elementType, baseOffset = offset),
             )
             copyInto(mapped, 0L, header)
-            if (synchronous) syncRange(mapped, 0L, header.size.toLong())?.let { throw PosixFailure(it) }
+            if (synchronous) syncRange(mapped, 0L, header.size.toLong())?.let { throw it }
         } catch (failure: PosixFailure) {
-            // Everything above is undone before the failure escapes: the OLD active segment is still
-            // mapped and still appendable, which is what makes a refused roll survivable rather than
-            // the end of this bolt's life. The half-built file is left on disk for the next open to
-            // adopt or discard — it holds no frame, so it can lose nothing.
+            // Everything is undone before the failure escapes. The OLD active segment stays mapped
+            // and appendable, so a refused roll is survivable rather than the end of this bolt's
+            // life — and the half-built file is UNLINKED rather than left behind. Leaving it was a
+            // permanent wedge: the next roll recomputes the same index, `O_EXCL` fails EEXIST, and
+            // since this instance never re-opens, every subsequent append fails forever. The file
+            // holds no frame, so unlinking it can lose nothing.
             mapping?.let { munmap(it.address, it.bytes.convert()) }
             platform.posix.close(fd)
+            unlink(path)
             throw failure
         }
         val live = checkNotNull(mapping) { "a segment rolled without failing must have a mapping" }
         unmapActive()
         active = live
         usedBytes += allocation
+        lastRollFailure = null
         return Segment(index, path, offset, BOLT_FORMAT_VERSION, headerBytes, allocation, writtenFrameBytes = 0L)
             .also { segments += it }
     }
 
-    /** True while the archive has room for the smallest frame there can be. Called under [lock]. */
-    private fun roomForMinimumFrame(): Boolean {
-        val current = segments.lastOrNull()
-        if (current != null && active != null && current.remaining >= minimumFrameBytes) return true
-        // A roll for the smallest possible frame still allocates a whole segment, and a segment must
-        // be big enough to hold that frame — which is why the budget is a floor, not the answer.
-        return capacityBytes - usedBytes >= headerBytes + maxOf(segmentFrameBytes, minimumFrameBytes)
+    /**
+     * `open(O_CREAT|O_EXCL)` [path], discarding an orphan already sitting there.
+     *
+     * `O_EXCL` is deliberate — a segment file is never silently overwritten. But an orphan at the
+     * index the next roll wants is a *guaranteed* dead end otherwise, and it is reachable two ways:
+     * a roll of ours that failed after creating the file (which the caller now unlinks, but whose
+     * unlink can itself fail), and a process killed between this `open` and the header write.
+     *
+     * Discarding it is safe by construction rather than by hope. The index asked for here is one
+     * past every segment this bolt knows about, and adoption knows about every index carrying a
+     * readable header — so a file at this index has no readable header, and a header is written
+     * before any frame is. It therefore holds no record.
+     */
+    private fun createSegmentFile(path: String): Int {
+        val fd = platform.posix.open(path, O_RDWR or O_CREAT or O_EXCL, S_IRUSR or S_IWUSR)
+        if (fd >= 0) return fd
+        val failure = posixFailure("could not create segment $path")
+        if (failure.code != EEXIST) throw failure
+        unlink(path)
+        val replaced = platform.posix.open(path, O_RDWR or O_CREAT or O_EXCL, S_IRUSR or S_IWUSR)
+        if (replaced < 0) throw posixFailure("could not replace the orphaned segment $path")
+        return replaced
     }
 
     // ── the replay path ───────────────────────────────────────────────────────
@@ -686,12 +745,12 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
         nextOffset = last.baseOffset + scan.frameBytes
         if (scan.torn) repaired = nextOffset
         val fd = platform.posix.open(last.path, O_RDWR)
-        if (fd < 0) return BoltAvailability.Unavailable(posixFailure("could not open segment ${last.path}"))
+        if (fd < 0) throw posixFailure("could not open segment ${last.path}")
         val address = mmap(null, last.fileBytes.convert(), PROT_READ or PROT_WRITE, MAP_SHARED, fd, 0)
         if (address == null || address.rawValue.toLong() == MMAP_FAILED) {
-            val reason = posixFailure("could not map segment ${last.path}")
+            val failure = posixFailure("could not map segment ${last.path}")
             platform.posix.close(fd)
-            return BoltAvailability.Unavailable(reason)
+            throw failure
         }
         val mapping = Mapping(fd, address.reinterpret(), last.fileBytes)
         active = mapping
@@ -750,7 +809,7 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
         val index = (segments.lastOrNull()?.index ?: -1L) + 1L
         val path = directory.withTrailingSlash() + segmentName(index)
         val fd = platform.posix.open(path, O_RDWR or O_CREAT or O_EXCL, S_IRUSR or S_IWUSR)
-        check(fd >= 0) { posixFailure("could not create seeded segment $path") }
+        check(fd >= 0) { posixFailure("could not create seeded segment $path").reason }
         try {
             writeAll(fd, bytes, path)
         } finally {
@@ -787,9 +846,7 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
             while (remaining > 0) {
                 val span = minOf(remaining, chunk.size.toLong())
                 val written = write(fd, pinned.addressOf(0), span.convert())
-                if (written <= 0) {
-                    throw PosixFailure(posixFailure("could not pre-allocate ${bytes}B for segment $path"))
-                }
+                if (written <= 0) throw posixFailure("could not pre-allocate ${bytes}B for segment $path")
                 remaining -= written
             }
         }
@@ -801,7 +858,7 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
         bytes.usePinned { pinned ->
             while (filled < bytes.size) {
                 val written = write(fd, pinned.addressOf(filled), (bytes.size - filled).convert())
-                check(written > 0) { posixFailure("could not write ${bytes.size}B to $path") }
+                check(written > 0) { posixFailure("could not write ${bytes.size}B to $path").reason }
                 filled += written.toInt()
             }
         }
@@ -827,7 +884,7 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
      * the whole mapping because flushing a megabyte per record would make the synchronous mode
      * unusable.
      */
-    private fun syncRange(mapping: Mapping, at: Long, length: Long): String? {
+    private fun syncRange(mapping: Mapping, at: Long, length: Long): PosixFailure? {
         val page = getpagesize().toLong()
         val start = at / page * page
         val span = at - start + length
@@ -876,9 +933,15 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
         }
     }
 
-    private fun posixFailure(what: String): String {
+    /**
+     * The failure the *most recent* posix call left behind.
+     *
+     * `errno` is read once, first: building the message calls `strerror_r`, and reading `errno`
+     * afterwards would report whatever that left there rather than what actually failed.
+     */
+    private fun posixFailure(what: String): PosixFailure {
         val code = errno
-        return "$what: errno=$code (${errnoText(code)})"
+        return PosixFailure("$what: errno=$code (${errnoText(code)})", code)
     }
 
     // ── plumbing ──────────────────────────────────────────────────────────────
@@ -916,8 +979,11 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
 
     private class FrameExtent(val frameBytes: Long, val torn: Boolean)
 
-    /** A failing posix call, carrying the errno-bearing text an [AppendResult.Failed] needs. */
-    private class PosixFailure(val reason: String) : Exception(reason)
+    /**
+     * A failing posix call, carrying both the errno-bearing text an [AppendResult.Failed] needs and
+     * the raw [code], which is what lets a caller tell a transient refusal from a permanent one.
+     */
+    private class PosixFailure(val reason: String, val code: Int) : Exception(reason)
 
     public companion object {
         /** 1 MiB of frames per segment — small enough to bound a mapping, large enough that rolls are rare. */
