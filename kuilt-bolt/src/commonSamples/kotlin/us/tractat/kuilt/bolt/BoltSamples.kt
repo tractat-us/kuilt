@@ -2,23 +2,20 @@ package us.tractat.kuilt.bolt
 
 import kotlinx.serialization.builtins.serializer
 import us.tractat.kuilt.crdt.Dot
+import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.RgaOp
-import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.VersionVector
 import kotlin.time.Clock
 
-/**
- * Samples for `:kuilt-bolt`, referenced by `@sample` KDoc tags.
- *
- * Every function here is compiled as part of `commonTest`, so an API change breaks the build
- * rather than silently producing stale documentation.
- */
-
-private val server = ReplicaId("server-uuid-abc123")
+// Samples for `:kuilt-bolt`, referenced by `@sample` KDoc tags. Every function here is compiled
+// as part of `commonTest`, so an API change breaks the build rather than silently producing
+// stale documentation.
 
 /** @suppress — sample only */
 internal suspend fun sampleBoltArchiveFormat() {
+    val server = ReplicaId("server-uuid-abc123")
+
     // You pass the ELEMENT serializer. The op serializer comes from the CRDT's own
     // `opSerializer` and cannot be overridden — the compiler-generated one for `RgaOp`
     // writes a different wire format, and an archive exists to be read by a later build.
@@ -84,7 +81,7 @@ internal suspend fun sampleBoltResumeCursor(bolt: Bolt<RgaOp<String>>) {
 internal suspend fun sampleBoltInsertsAbove(bolt: Bolt<RgaOp<String>>) {
     // A QUERY over the archive's causal coverage — "which frames cover anything above this
     // frontier?" — and not a resume cursor.
-    val floor = VersionVector.of(mapOf(server to 12L))
+    val floor = VersionVector.of(mapOf(ReplicaId("server-uuid-abc123") to 12L))
     bolt.replay(ReplayScope.InsertsAbove(floor)).frames().collect { frame ->
         ship(frame.ops)
     }

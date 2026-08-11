@@ -29,21 +29,33 @@ enforced by the types, not by a comment.
 | `PosixMappedBolt` | The same thing on iOS and macOS. **Not the default on a phone** — its own docs say why at length, and the short version is that the server is its customer here too. |
 | `BoltDecorator` | The wiring. A replica's owner hands it the edits it applied; it archives them and suppresses the ones it has kept before. Reach for this rather than calling `append` by hand — see below. |
 
-Three smaller types round it out, and each has a section of its own below. `AppendResult` is what one
-`append` did — written, skipped, or refused-with-identities. `BoltAvailability` answers "can this
-archive be written to right now". `DurabilityState` answers the quieter question underneath it: is
-this archive still keeping the promise *it* made about the records it already accepted.
+Three smaller types round it out, all three covered under **Failure posture** below. `AppendResult`
+is what one `append` did — written, skipped, or refused-with-identities. `BoltAvailability` answers
+"can this archive be written to right now". `DurabilityState` answers the quieter question
+underneath it: is this archive still keeping the promise *it* made about the records it accepted.
 
-Starting one takes two lines — the format, then the archive:
+Starting one takes a format and an archive. What you then hand it is **operations** — the edits a
+replica applied — never a state:
 
 <!-- verbatim from kuilt-bolt/src/commonSamples/kotlin/us/tractat/kuilt/bolt/BoltSamples.kt#sampleBoltArchiveFormat -->
 ```kotlin
+val server = ReplicaId("server-uuid-abc123")
+
 // You pass the ELEMENT serializer. The op serializer comes from the CRDT's own
 // `opSerializer` and cannot be overridden — the compiler-generated one for `RgaOp`
 // writes a different wire format, and an archive exists to be read by a later build.
 val format = BoltArchiveFormat.rga(String.serializer())
 val bolt = InMemoryBolt(format, Clock.System)
-// …
+
+// Feed it the OPERATIONS a replica applied, never a state fragment. A `Compact` among
+// them is dropped and the ops it suppresses are kept — which is what lets this archive
+// outlive the replica that fed it.
+var live = Rga.empty<String>()
+val ops = List(3) { index ->
+    val (next, op) = live.insertAt(server, live.size, "record-$index")
+    live = next
+    op
+}
 bolt.append(ops)
 ```
 
