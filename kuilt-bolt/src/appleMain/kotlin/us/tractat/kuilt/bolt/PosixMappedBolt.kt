@@ -93,8 +93,11 @@ import kotlin.time.Instant
  *    pins the pair.
  *
  *    Because a zero tail is *expected* rather than damage, replay treats it as the end of a segment's
- *    written frames and moves on — see [emitFrames]. A frame that fails to read with **non-zero**
- *    bytes behind it is damage, and stops the whole replay.
+ *    written frames and moves on — but **only where the bookkeeping says the frames end**. That
+ *    second half is load-bearing and not obvious: an un-flushed region and a pre-allocated one read
+ *    back identically, so the byte predicate alone cannot tell "nothing was ever written here" from
+ *    "this never reached disk", and without the extent check a replay walks past a hole and reports
+ *    a clean history whose offsets jump. See [emitFrames].
  *
  * 3. **Jetsam.** Mapped dirty pages count against an iOS app's memory footprint, so a growing mapped
  *    archive is a way to get the app killed. Only the **active** segment is ever mapped here — a roll
@@ -506,7 +509,21 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
             val raw = readFrame(buffer, header.formatVersion)
             if (raw == null) {
                 val cursor = bytes.size - buffer.size.toInt()
-                return if (isZeroFrom(bytes, cursor)) null else Truncated(offset, TruncationReason.Frame)
+                // A zero run is an unwritten PRE-ALLOCATED tail only if it begins where this
+                // segment's frames were recorded to end. Short of that, identical bytes mean a
+                // region that never reached disk — pre-allocation writes real zeroes, so the two
+                // are indistinguishable by inspection — and continuing would hand back a history
+                // with a hole in it and offsets that jump.
+                //
+                // `>=`, not `==`: a replay collected while an append lands legitimately reads the
+                // NEW frame too, so the cursor can sit PAST the extent this replay snapshotted.
+                // Only stopping SHORT of it is damage.
+                val reachedRecordedExtent = offset >= view.baseOffset + view.writtenFrameBytes
+                return if (isZeroFrom(bytes, cursor) && reachedRecordedExtent) {
+                    null
+                } else {
+                    Truncated(offset, TruncationReason.Frame)
+                }
             }
             val endOffset = offset + (before - buffer.size)
             val archived = Archived(
