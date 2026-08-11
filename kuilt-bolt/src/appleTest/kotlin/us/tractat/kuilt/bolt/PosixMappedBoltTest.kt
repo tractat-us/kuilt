@@ -30,6 +30,7 @@ import us.tractat.kuilt.crdt.RgaOp
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
+import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -551,6 +552,9 @@ class PosixMappedBoltTest {
         )
     }
 
+    @AfterTest
+    fun removeArchives(): Unit = removeBoltTestDirectories()
+
     private class FixedClock(private val at: Instant) : Clock {
         override fun now(): Instant = at
     }
@@ -573,9 +577,33 @@ class PosixMappedBoltTest {
     }
 }
 
-/** A fresh, empty directory under `NSTemporaryDirectory()`, so no test shares an archive with another. */
-internal fun boltTestDirectory(): String =
-    NSTemporaryDirectory() + "kuilt-bolt-test-${Random.nextLong()}/"
+/**
+ * A fresh, empty directory under `NSTemporaryDirectory()`, so no test shares an archive with another.
+ *
+ * Every path handed out is remembered so [removeBoltTestDirectories] can delete exactly those and
+ * nothing else. A mapped archive pre-allocates its segments eagerly, so a suite that leaves them
+ * behind is not leaving a few files — six runs of this module left 407 directories and 222 MB, and a
+ * simulator keeps its temporary directory across runs.
+ */
+internal fun boltTestDirectory(): String {
+    val directory = NSTemporaryDirectory() + "kuilt-bolt-test-${Random.nextLong()}/"
+    createdBoltTestDirectories += directory
+    return directory
+}
+
+/**
+ * Delete the directories [boltTestDirectory] handed out, and forget them.
+ *
+ * **Only those paths — never a pattern sweep of the shared temporary directory.** Concurrent
+ * sessions run against this repo, and a glob over `NSTemporaryDirectory()` cannot tell this run's
+ * archives from a sibling worker's live ones.
+ */
+internal fun removeBoltTestDirectories() {
+    createdBoltTestDirectories.forEach { NSFileManager.defaultManager.removeItemAtPath(it, error = null) }
+    createdBoltTestDirectories.clear()
+}
+
+private val createdBoltTestDirectories = mutableListOf<String>()
 
 /** The segment files in [directory], in append order. */
 private fun segmentFiles(directory: String): List<String> {

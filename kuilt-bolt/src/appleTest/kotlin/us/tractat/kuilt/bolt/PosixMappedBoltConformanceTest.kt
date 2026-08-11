@@ -7,6 +7,7 @@ import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.RgaId
 import us.tractat.kuilt.crdt.RgaOp
+import kotlin.test.AfterTest
 import kotlin.test.assertIs
 import kotlin.time.Clock
 
@@ -24,6 +25,8 @@ class PosixMappedBoltConformanceTest : BoltConformanceSuite() {
 
     override suspend fun newTruncatedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         truncatedPosixMappedBolt(clock, intactFrames, PosixMappedBolt.DEFAULT_SEGMENT_FRAME_BYTES)
+    @AfterTest
+    fun removeArchives(): Unit = removeBoltTestDirectories()
 }
 
 /**
@@ -46,6 +49,8 @@ class TinySegmentPosixMappedBoltConformanceTest : BoltConformanceSuite() {
 
     override suspend fun newTruncatedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         truncatedPosixMappedBolt(clock, intactFrames, segmentFrameBytes = 1L)
+    @AfterTest
+    fun removeArchives(): Unit = removeBoltTestDirectories()
 }
 
 /** The same suite with the durability flag off — asynchronous is the same mechanism without `msync`. */
@@ -58,6 +63,8 @@ class AsynchronousPosixMappedBoltConformanceTest : BoltConformanceSuite() {
 
     override suspend fun newTruncatedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         truncatedPosixMappedBolt(clock, intactFrames, PosixMappedBolt.DEFAULT_SEGMENT_FRAME_BYTES)
+    @AfterTest
+    fun removeArchives(): Unit = removeBoltTestDirectories()
 }
 
 internal fun rgaArchiveFormat(): BoltArchiveFormat<RgaId, String, RgaOp<String>> =
