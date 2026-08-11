@@ -3,6 +3,7 @@ package us.tractat.kuilt.bolt
 import kotlinx.io.Buffer
 import kotlinx.io.readByteArray
 import kotlinx.serialization.serializer
+import platform.Foundation.NSFileManager
 import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.RgaId
@@ -25,6 +26,10 @@ class PosixMappedBoltConformanceTest : BoltConformanceSuite() {
 
     override suspend fun newTruncatedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         truncatedPosixMappedBolt(clock, intactFrames, PosixMappedBolt.DEFAULT_SEGMENT_FRAME_BYTES)
+
+    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
+        discontinuousPosixMappedBolt(clock, intactFrames, synchronous = true)
+
     @AfterTest
     fun removeArchives(): Unit = removeBoltTestDirectories()
 }
@@ -49,6 +54,10 @@ class TinySegmentPosixMappedBoltConformanceTest : BoltConformanceSuite() {
 
     override suspend fun newTruncatedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         truncatedPosixMappedBolt(clock, intactFrames, segmentFrameBytes = 1L)
+
+    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
+        discontinuousPosixMappedBolt(clock, intactFrames, synchronous = true)
+
     @AfterTest
     fun removeArchives(): Unit = removeBoltTestDirectories()
 }
@@ -63,6 +72,10 @@ class AsynchronousPosixMappedBoltConformanceTest : BoltConformanceSuite() {
 
     override suspend fun newTruncatedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         truncatedPosixMappedBolt(clock, intactFrames, PosixMappedBolt.DEFAULT_SEGMENT_FRAME_BYTES)
+
+    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
+        discontinuousPosixMappedBolt(clock, intactFrames, synchronous = false)
+
     @AfterTest
     fun removeArchives(): Unit = removeBoltTestDirectories()
 }
@@ -119,6 +132,52 @@ private suspend fun truncatedPosixMappedBolt(
 
     return bolt
 }
+
+/**
+ * An on-disk archive of [intactFrames] ordinary frames, then a **deleted segment file**, then two
+ * healthy frames behind the hole.
+ *
+ * Every frame is written through [Bolt.append] and then one whole file is removed — nothing is
+ * rewritten, nothing is corrupted. That is the point: the surviving files are byte-for-byte intact
+ * and every one of their headers reads perfectly, so no checksum anywhere can notice, and the archive
+ * is discontinuous only in the sense that one header's absolute `baseOffset` no longer follows the
+ * previous segment's last frame. Neither of this backend's other defences sees it — a zero tail is
+ * what a healthy pre-allocated segment ends in, and the recorded-extent check is derived across the
+ * hole and so is corrupted by exactly the state it would have to detect.
+ *
+ * A one-byte segment budget puts exactly one frame in each file regardless of which subclass asks, so
+ * "the segment after the intact prefix" is just the file at index [intactFrames]. The writer is
+ * closed before its file is deleted, and the archive is re-opened afterwards, so the replay adopts
+ * what is actually on disk rather than a segment list that predates the hole.
+ */
+private suspend fun discontinuousPosixMappedBolt(
+    clock: Clock,
+    intactFrames: Int,
+    synchronous: Boolean,
+): Bolt<RgaOp<String>> {
+    require(intactFrames >= 1) { "the fixture stops AFTER a frame, so it needs at least one" }
+    val format = rgaArchiveFormat()
+    val directory = boltTestDirectory()
+    val writer = PosixMappedBolt(format, clock, directory, synchronous, segmentFrameBytes = 1L)
+    val alice = ReplicaId("alice")
+
+    var live = Rga.empty<String>()
+    repeat(intactFrames + 1 + FRAMES_BEHIND_THE_HOLE) { index ->
+        val (next, op) = live.insertAt(alice, live.size, "frame-$index")
+        live = next
+        assertIs<AppendResult.Written>(writer.append(listOf(op)), "every fixture frame must be written")
+    }
+    writer.close()
+    val hole = segmentFiles(directory)[intactFrames]
+    check(NSFileManager.defaultManager.removeItemAtPath(hole, error = null)) {
+        "the fixture's hole must actually be punched — $hole is still there"
+    }
+
+    return PosixMappedBolt(format, clock, directory, synchronous, segmentFrameBytes = 1L)
+}
+
+/** Frames behind the hole. More than one, so "stepped over it" is unmistakable rather than off-by-one. */
+private const val FRAMES_BEHIND_THE_HOLE = 2
 
 /** A segment's bytes: a whole header for [format] at [baseOffset], then whatever [frames] writes. */
 private fun rawSegment(

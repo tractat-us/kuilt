@@ -139,7 +139,7 @@ class MappedBoltDamageTest {
             },
             {
                 assertEquals(
-                    Truncated(written[HOLE - 1].endOffset, TruncationReason.SegmentHeader),
+                    Truncated(written[HOLE - 1].endOffset, TruncationReason.MissingRegion),
                     events.last(),
                     "and says so at the offset the missing segment should have started at",
                 )
@@ -169,7 +169,7 @@ class MappedBoltDamageTest {
             { assertEquals(HOLE, events.filterIsInstance<Archived<RgaOp<String>>>().size, "replay stops at the hole") },
             {
                 assertEquals(
-                    Truncated(written[HOLE - 1].endOffset, TruncationReason.SegmentHeader),
+                    Truncated(written[HOLE - 1].endOffset, TruncationReason.MissingRegion),
                     events.last(),
                     "a segment that lost its frames is a gap in the offset space, however tidily it parses",
                 )

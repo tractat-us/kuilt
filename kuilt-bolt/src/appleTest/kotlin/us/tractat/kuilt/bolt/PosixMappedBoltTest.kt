@@ -672,7 +672,7 @@ internal fun removeBoltTestDirectories() {
 private val createdBoltTestDirectories = mutableListOf<String>()
 
 /** The segment files in [directory], in append order. */
-private fun segmentFiles(directory: String): List<String> {
+internal fun segmentFiles(directory: String): List<String> {
     val base = directory.trimEnd('/')
     val names = NSFileManager.defaultManager.contentsOfDirectoryAtPath(base, error = null) ?: emptyList<Any?>()
     return names.mapNotNull { it as? String }.sorted().map { "$base/$it" }

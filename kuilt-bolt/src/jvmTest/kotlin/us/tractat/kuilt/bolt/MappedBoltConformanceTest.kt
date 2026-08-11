@@ -24,6 +24,9 @@ class MappedBoltConformanceTest : BoltConformanceSuite() {
 
     override suspend fun newTruncatedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         truncatedMappedBolt(clock, intactFrames)
+
+    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
+        discontinuousMappedBolt(clock, intactFrames)
 }
 
 /**
@@ -43,6 +46,9 @@ class TinySegmentMappedBoltConformanceTest : BoltConformanceSuite() {
 
     override suspend fun newTruncatedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         truncatedMappedBolt(clock, intactFrames)
+
+    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
+        discontinuousMappedBolt(clock, intactFrames)
 }
 
 /** The archive format every test in this source set uses: an `Rga` of `String`. */
@@ -126,7 +132,45 @@ private suspend fun truncatedMappedBolt(clock: Clock, intactFrames: Int): Bolt<R
     return MappedBolt(directory, format, clock, segmentFrameBytes = 1L)
 }
 
+/**
+ * An archive of [intactFrames] ordinary frames, then a **deleted segment file**, then two healthy
+ * frames behind the hole.
+ *
+ * Every frame is written through [Bolt.append] and then one whole file is removed — nothing is
+ * rewritten, nothing is corrupted. That is the point: the surviving segments are byte-for-byte intact
+ * and every one of their headers reads perfectly, so no checksum anywhere can notice, and the archive
+ * is discontinuous only in the sense that one header's absolute `baseOffset` no longer follows the
+ * previous segment's last frame. A backend without that comparison replays this as a [CleanTail] over
+ * a history with a gap in it, which is what shipped (#2240).
+ *
+ * A one-byte segment budget puts exactly one frame in each file regardless of which subclass asks, so
+ * "the segment after the intact prefix" is just the file at index [intactFrames].
+ *
+ * Reopened afterwards so the replay reads the surviving files from disk rather than out of a mapping
+ * this process wrote, exactly as it would after a restart. Recovery only ever scans the newest
+ * segment, which is healthy, so the hole is discovered by the replay.
+ */
+private suspend fun discontinuousMappedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> {
+    require(intactFrames >= 1) { "the fixture stops AFTER a frame, so it needs at least one" }
+    val directory = tempArchiveDirectory()
+    val format = rgaStringFormat()
+    val bolt = MappedBolt(directory, format, clock, segmentFrameBytes = 1L)
+
+    var live = Rga.empty<String>()
+    repeat(intactFrames + 1 + FRAMES_BEHIND_THE_HOLE) { index ->
+        val (next, op) = live.insertAt(FIXTURE_REPLICA, live.size, "frame-$index")
+        live = next
+        assertIs<AppendResult.Written>(bolt.append(listOf(op)), "every fixture frame must be written")
+    }
+    check(segmentsIn(directory)[intactFrames].delete()) { "the fixture's hole must actually be punched" }
+
+    return MappedBolt(directory, format, clock, segmentFrameBytes = 1L)
+}
+
 /** The frame that gets damaged, and the healthy one behind it. */
 private const val FRAMES_BEHIND_THE_PREFIX = 2
+
+/** Frames behind the hole. More than one, so "stepped over it" is unmistakable rather than off-by-one. */
+private const val FRAMES_BEHIND_THE_HOLE = 2
 internal const val BYTE_MASK = 0xFF
 private val FIXTURE_REPLICA = ReplicaId("alice")

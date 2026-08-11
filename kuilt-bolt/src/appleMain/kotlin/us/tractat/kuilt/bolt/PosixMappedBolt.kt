@@ -101,6 +101,12 @@ import kotlin.time.Instant
  *    "this never reached disk", and without the extent check a replay walks past a hole and reports
  *    a clean history whose offsets jump. See [emitFrames].
  *
+ *    A hole one level up — a segment **file** that is gone, or truncated to a frame boundary — is not
+ *    caught by either of those, because it presents no bad bytes to fail a checksum and no short
+ *    extent to notice. It is caught by comparing each segment header's absolute `baseOffset` against
+ *    where the previous segment actually stopped, and reported as [TruncationReason.MissingRegion].
+ *    Also [emitFrames], which says why the two checks do not subsume one another.
+ *
  * 3. **Jetsam.** Mapped dirty pages count against an iOS app's memory footprint, so a growing mapped
  *    archive is a way to get the app killed. Only the **active** segment is ever mapped here — a roll
  *    `munmap`s its predecessor — so the resident dirty set is bounded by one segment rather than by
@@ -247,17 +253,17 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
      *   this a `synchronous = true` bolt could degrade to the asynchronous guarantee with nothing
      *   anywhere recording it.
      * - a segment that could not be **read** during [replay]. That surfaces as
-     *   [TruncationReason.SegmentHeader], which says "torn or unwritten" when the truth is "the file
-     *   would not open" — a locked device between [availability] and the read is the reachable case.
-     *   The verdict cannot carry the errno; this can.
+     *   [TruncationReason.SegmentHeader] — settled in #2240 as the right constant rather than a
+     *   placeholder, because a file that would not open and a header that is not written yet have the
+     *   same remedy, which is to try again later; a locked device between [availability] and the read
+     *   is the reachable case. What the verdict cannot carry either way is the errno. This can.
      *
      * **A diagnostic breadcrumb, not a contract signal**, and the distinction is deliberate. The
-     * contract-level answer — a "written but not durable" [AppendResult], a truncation reason for
-     * *unreadable* — belongs to both mmap backends at once and is parked on #2243 and #2240
-     * respectively; `MappedBolt.flushQuietly` is where the JVM backend records the same deferral, and
-     * the two backends give the **same** answer to the contract question. This only stops the errno
-     * from being destroyed in the meantime, which is this module's standing rule: report identities
-     * and state, never that something went wrong.
+     * contract-level answer for the flush half — a "written but not durable" [AppendResult] — belongs
+     * to both mmap backends at once and is parked on #2243; `MappedBolt.flushQuietly` is where the JVM
+     * backend records the same deferral, and the two backends give the **same** answer to the contract
+     * question. This only stops the errno from being destroyed in the meantime, which is this module's
+     * standing rule: report identities and state, never that something went wrong.
      *
      * Holds the **most recent** one. Two failures of different kinds do not accumulate.
      */
@@ -430,29 +436,41 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
         // empty one: "I could not read it" and "it holds nothing" are different answers, and only one
         // of them is true.
         val views = opened.views ?: return@flow emit(Truncated(opened.cursor, TruncationReason.SegmentHeader))
+        // Null until the first segment has spoken. The archive's offset space starts wherever its
+        // OLDEST segment says it does rather than at 0, and `skippable` below can drop a PREFIX of
+        // segments unread — so the first segment actually read has nothing to be checked against.
+        // Skips really are a prefix: `baseOffset + writtenFrameBytes` increases across segments, so
+        // once one segment is read every later one is too.
+        var resumeOffset: Long? = null
         for (view in views) {
             if (skippable(view, scope)) continue
             val bytes = try {
                 readFile(view.path).bytes
             } catch (failure: PosixFailure) {
                 // A segment this replay cannot read is a replay that stopped, not an archive that is
-                // empty — and the verdict is what says so. But `SegmentHeader` reads as "torn or
-                // unwritten" when the truth is that the file would not OPEN, so the errno is kept
-                // where a caller can still reach it; a reason for *unreadable* is #2240's to add,
-                // because `TruncationReason` belongs to every backend at once.
+                // empty — and the verdict is what says so. `SegmentHeader` is the right constant even
+                // though the file would not OPEN rather than failing a checksum: the remedy is the
+                // same retry-later (a Data-Protection-locked device unlocks), which is what
+                // `TruncationReason` splits on. What it cannot carry is the errno, so that is kept
+                // where a caller can still reach it.
+                //
+                // The offset is where the last EMITTED frame ended, not this segment's base: those
+                // differ exactly when a hole precedes the unreadable segment, and reporting the base
+                // would claim records across the hole had been replayed.
                 lock.withLock { recordUnreported(failure) }
-                emit(Truncated(view.baseOffset, TruncationReason.SegmentHeader))
+                emit(Truncated(resumeOffset ?: view.baseOffset, TruncationReason.SegmentHeader))
                 return@flow
             }
             // A segment that stops early stops the WHOLE replay. An append-only log is ordered, so a
             // frame that does not validate makes everything behind it untrustworthy; carrying on to
             // the next segment would hand back a history with a silent hole and offsets that jump,
             // which is worse than a short answer that says it is short.
-            val stopped = emitFrames(bytes, view, scope)
-            if (stopped != null) {
-                emit(stopped)
+            val outcome = emitFrames(bytes, view, resumeOffset, scope)
+            outcome.stopped?.let {
+                emit(it)
                 return@flow
             }
+            resumeOffset = outcome.endOffset
         }
         emit(CleanTail)
     }
@@ -634,30 +652,59 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
         scope is ReplayScope.FromOffset && view.baseOffset + view.writtenFrameBytes <= scope.offset
 
     /**
-     * Emit the in-scope frames of one segment's [bytes]; the [Truncated] verdict if it stopped early,
-     * else `null`.
+     * Emit the in-scope frames of one segment's [bytes], and say how the segment ended.
      *
      * **A zero-filled remainder is not damage.** Every live segment ends in one, because segments are
      * eagerly pre-allocated, and a segment rolled early for an oversized frame keeps one forever. So a
      * frame that fails to read is checked against what follows it: all zeroes means this segment's
      * written frames are done and replay moves to the next; anything else is a partial write or
      * corruption, and stops the whole replay.
+     *
+     * ### The continuity check is the only thing that sees a segment go MISSING
+     *
+     * [resumeOffset] is where the previous segment's frames ended, or `null` if this is the first
+     * segment read. For every segment after that one it is also the offset this segment's header must
+     * claim to start at, and checking it is not tidiness — it is the only mechanism that catches a
+     * hole. Frames are validated one at a time, so damage *within* a segment fails its own checksum;
+     * a segment file that is **gone**, or one truncated to a frame boundary, presents no bad bytes to
+     * fail one. The reader simply opens the next file, whose frames are perfectly intact and start
+     * further along than the archive's own history says.
+     *
+     * The zero-tail rule above cannot stand in for it, and the tempting reading that it can is what
+     * shipped this defect (#2240). It is consulted only when a frame *fails to read* — a segment whose
+     * bytes run out exactly on a frame boundary, which is every segment rolled to fit one oversized
+     * frame, exits the loop normally and never reaches it. And the extent it checks against is derived
+     * for a middle segment as the next segment's base minus its own, so across a hole that bookkeeping
+     * is inflated by the hole itself: the very state it would have to detect is the state that
+     * corrupts it. Every segment header carries an *absolute* `baseOffset`, so the gap is arithmetic
+     * instead.
      */
     private suspend fun FlowCollector<ReplayEvent<Op>>.emitFrames(
         bytes: ByteArray,
         view: SegmentView,
+        resumeOffset: Long?,
         scope: ReplayScope,
-    ): Truncated? {
+    ): SegmentReplay {
         val buffer = Buffer().apply { write(bytes) }
         // The header on disk is the AUTHORITY on where this segment's frames start, not the in-memory
         // bookkeeping. `check`, not a Truncated, because DAMAGE to that field can no longer reach
         // here — the header's CRC trailer rejects it as torn first — so a disagreement at this point
         // is a bookkeeping bug in this class, which is exactly what an assertion is for.
         val header = readSegmentHeader(buffer, format.opFormat, format.elementType)
-            ?: return Truncated(view.baseOffset, TruncationReason.SegmentHeader)
+            ?: return SegmentReplay(
+                Truncated(resumeOffset ?: view.baseOffset, TruncationReason.SegmentHeader),
+                view.baseOffset,
+            )
         check(header.baseOffset == view.baseOffset) {
             "segment ${view.path} says its frames start at ${header.baseOffset}, " +
                 "bookkeeping says ${view.baseOffset}"
+        }
+        if (resumeOffset != null && header.baseOffset != resumeOffset) {
+            // This header is intact — it simply describes the wrong place — so the fault is neither
+            // the header layer's nor a frame's. `MissingRegion` says the thing a consumer branches
+            // on: the offsets between here and there exist nowhere, so unlike a torn tail this is
+            // not somewhere to resume from later.
+            return SegmentReplay(Truncated(resumeOffset, TruncationReason.MissingRegion), resumeOffset)
         }
         var offset = header.baseOffset
         while (buffer.size > 0) {
@@ -676,9 +723,9 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
                 // Only stopping SHORT of it is damage.
                 val reachedRecordedExtent = offset >= view.baseOffset + view.writtenFrameBytes
                 return if (isZeroFrom(bytes, cursor) && reachedRecordedExtent) {
-                    null
+                    SegmentReplay(stopped = null, endOffset = offset)
                 } else {
-                    Truncated(offset, TruncationReason.Frame)
+                    SegmentReplay(Truncated(offset, TruncationReason.Frame), offset)
                 }
             }
             val endOffset = offset + (before - buffer.size)
@@ -693,7 +740,7 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
             offset = endOffset
             if (scope.selects(archived)) emit(archived)
         }
-        return null
+        return SegmentReplay(stopped = null, endOffset = offset)
     }
 
     private fun ReplayScope.selects(frame: Archived<Op>): Boolean = when (this) {
@@ -1136,6 +1183,9 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
     }
 
     private class SegmentView(val path: String, val baseOffset: Long, val writtenFrameBytes: Long)
+
+    /** How one segment's replay ended: a verdict, or the offset the next segment resumes at. */
+    private class SegmentReplay(val stopped: Truncated?, val endOffset: Long)
 
     /** What one locked look at the archive tells [replay]: the segments to read, or why there are none. */
     private class Opened(val views: List<SegmentView>?, val cursor: Long)

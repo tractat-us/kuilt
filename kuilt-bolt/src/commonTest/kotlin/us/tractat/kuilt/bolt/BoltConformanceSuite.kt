@@ -81,6 +81,33 @@ abstract class BoltConformanceSuite {
      */
     protected abstract suspend fun newTruncatedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>>
 
+    /**
+     * A bolt of this backend whose archive is missing a whole region out of the **middle** of its
+     * offset space, with exactly [intactFrames] readable frames ahead of the hole — a deleted segment
+     * file, a segment that never reached disk, a region pre-allocated and never written. Whatever
+     * losing a middle looks like for this backend, produced deterministically.
+     *
+     * Non-nullable for the same reason [newExhaustedBolt] and [newTruncatedBolt] are, and the vacuity
+     * it removes is the one that shipped this defect twice. [newTruncatedBolt]'s damage is always
+     * *within* a frame, so nothing in this suite ever produced an archive whose **segment sequence
+     * itself** is discontinuous — and the reference backend's segments are an in-process list that
+     * cannot lose an element, so it satisfied that silence for free. Two disk-backed backends were
+     * then written independently against this suite and **both** replayed a hole as a [CleanTail]
+     * (#2240). The general form is worth stating: *a conformance property is only as strong as the
+     * weakest failure the reference implementation can reach.*
+     *
+     * **Frames must survive BEHIND the hole**, and here that is structural rather than merely
+     * discriminating. A hole is seen by comparing a segment header's absolute base offset against
+     * where the previous segment stopped, so an archive that simply ends early has no header left to
+     * disagree with anything and is not discontinuous at all — it is just shorter. Frames behind the
+     * hole are also what keeps "stop at the hole" and "step over the hole" from emitting identical
+     * events, exactly as [newTruncatedBolt]'s KDoc argues one level down.
+     *
+     * The obligation asserts its own precondition, so a backend that returns a healthy archive — or
+     * one damaged some other way — fails loudly rather than passing quietly.
+     */
+    protected abstract suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>>
+
     private val alice = ReplicaId("alice")
     private val bob = ReplicaId("bob")
     private val epoch = Instant.fromEpochMilliseconds(1_700_000_000_000L)
@@ -490,6 +517,101 @@ abstract class BoltConformanceSuite {
                     frames.last().endOffset,
                     assertIs<Truncated>(verdict).atOffset,
                     "the verdict stops at the last intact frame's end — it is a resume cursor",
+                )
+            },
+            {
+                assertEquals(
+                    frames.size,
+                    events.indexOfFirst { it !is Archived<*> },
+                    "the verdict is LAST — every event before it is a frame, and none follows it",
+                )
+            },
+        )
+    }
+
+    /**
+     * The **discontinuous-archive** arm of the verdict contract, and the one no backend reached for
+     * free.
+     *
+     * [aTruncatedArchiveStopsAtTheDamageAndSaysSo] drives damage *inside* a frame, which every layer
+     * of the format is built to catch: a bad frame fails its own checksum. A hole between segments
+     * presents **no bad bytes at all** — the surviving segments are perfectly intact, they simply do
+     * not join up — so nothing checks it unless a backend compares each segment's absolute base
+     * offset against where the previous one stopped. Two backends shipped without that check (#2240).
+     *
+     * Five assertions, and each pins a decision the truncation property does not:
+     *
+     * 1. the verdict is [Truncated], not a clean tail — a hole is damage, not something to step over;
+     * 2. its `atOffset` is the last intact frame's `endOffset`, i.e. where the hole **starts** and not
+     *    where the next segment picks up. Those differ by exactly the missing region, and the wrong
+     *    one names an offset no frame this replay emitted ever ended at;
+     * 3. its `reason` is [TruncationReason.MissingRegion] — the constant a consumer branches on to
+     *    learn that `atOffset` is **not** somewhere to resume from, because the records between here
+     *    and the next segment exist nowhere;
+     * 4. **nothing from beyond the hole** is replayed, however intact those frames are — a history
+     *    with a silent gap in it is the one thing [Bolt] cannot hand back;
+     * 5. every frame before the hole survives, and the verdict is last.
+     *
+     * **Mutation receipts** (measured, see the PR for #2240):
+     *
+     * - Deleting the cross-segment continuity check in a backend's replay reddens (1), (4) and (5):
+     *   the verdict becomes [CleanTail] and the frames from beyond the hole are emitted. This is the
+     *   pre-#2240 state of both mmap backends, and this test is what reds against it.
+     * - Reporting the *next* segment's `baseOffset` instead of the previous segment's end reddens
+     *   (2) alone — the shape a check that fires at the right moment and answers with the wrong
+     *   coordinate produces.
+     * - Reporting [TruncationReason.SegmentHeader] (what both backends did before #2240, knowingly)
+     *   reddens (3) alone. Nothing else notices, which is exactly why that lie survived two reviews.
+     *
+     * **What this property cannot reach**, said plainly because a table of reds invites the opposite
+     * conclusion. It drives one shape of hole — a whole segment lost out of the middle — and only on
+     * [ReplayScope.All]. It says nothing about a discontinuity discovered under a scope that prunes
+     * segments (the first segment a pruning scope actually reads has nothing behind it to be checked
+     * against, by construction), nor about a *backwards* jump, nor about a backend that reaches the
+     * hole through its own within-segment extent bookkeeping instead and answers
+     * [TruncationReason.Frame] — that last one would red here, correctly, but no fixture in the tree
+     * produces it.
+     */
+    @Test
+    fun anArchiveMissingAMiddleRegionStopsAtTheHoleAndSaysSo() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val bolt = newDiscontinuousBolt(FixedClock(epoch), INTACT_FRAMES)
+
+        val events = bolt.replay(ReplayScope.All).toList()
+        val frames = events.filterIsInstance<Archived<RgaOp<String>>>()
+        val verdict = events.lastOrNull()
+
+        assertAll(
+            {
+                assertIs<Truncated>(
+                    verdict,
+                    "newDiscontinuousBolt must hand back an archive with a HOLE in it — a healthy one " +
+                        "makes this obligation vacuous, so it fails here rather than passing",
+                )
+            },
+            { assertEquals(1, events.count { it !is Archived<*> }, "exactly one terminal event, never two") },
+            {
+                assertEquals(
+                    INTACT_FRAMES,
+                    frames.size,
+                    "every frame before the hole survives — and nothing from beyond it is replayed, " +
+                        "however intact those frames are, because a history with a silent gap in it and " +
+                        "offsets that jump is worse than a short answer that says it is short",
+                )
+            },
+            {
+                assertEquals<Long?>(
+                    frames.lastOrNull()?.endOffset,
+                    assertIs<Truncated>(verdict).atOffset,
+                    "the verdict stops where the hole STARTS — the last intact frame's end, not where " +
+                        "the next segment picks up",
+                )
+            },
+            {
+                assertEquals(
+                    TruncationReason.MissingRegion,
+                    assertIs<Truncated>(verdict).reason,
+                    "a region that is GONE is not a torn tail: the two have opposite remedies, and this " +
+                        "is the one a consumer must not resume from",
                 )
             },
             {

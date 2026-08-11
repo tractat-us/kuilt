@@ -59,19 +59,51 @@ public data class Archived<Op>(
 public data object CleanTail : ReplayEvent<Nothing>
 
 /**
- * Which layer of the format refused to read, in a [Truncated] verdict.
+ * Why a replay stopped early, in a [Truncated] verdict.
  *
  * An enum rather than a message string, and that is the whole point of it: "do not parse this" is a
  * comment on a `String` and a *structure* on an enum. A consumer that wants to branch on the cause —
  * log it, retry the segment, resume from [Truncated.atOffset] — can, without an `assertEquals`
  * against prose that a later reword silently breaks.
+ *
+ * **The split that matters is the REMEDY, not the layer.** [SegmentHeader] and [Frame] both mean
+ * "the bytes at [Truncated.atOffset] are not readable *yet*" — a writer part-way through an append,
+ * a file a locked device will not open — so resuming from that offset later can work. [MissingRegion]
+ * means the bytes are **gone**, and no later resume will ever produce them. Reporting the third as
+ * either of the first two is the kind of lie a consumer acts on.
  */
 public enum class TruncationReason {
-    /** A segment's header is unwritten, torn, or fails its checksum. */
+    /**
+     * A segment's header is unwritten, torn, fails its checksum — or the segment could not be read
+     * at all.
+     *
+     * "Could not be read" belongs here rather than in a constant of its own because the *remedy* is
+     * identical: a file a backend cannot open (an Apple device still locked under Data Protection, a
+     * descriptor limit, an interrupted read) may open perfectly on the next attempt, exactly as a
+     * torn header may be completed by a writer that catches up. Where a backend has an errno to
+     * report, it reports it out of band rather than by splitting this constant.
+     */
     SegmentHeader,
 
     /** A frame is truncated, unwritten, or fails its checksum. */
     Frame,
+
+    /**
+     * A whole region of the archive's offset space is **missing**: the next segment's header is
+     * intact and reads perfectly, it simply does not begin where the previous segment's frames
+     * ended.
+     *
+     * A deleted segment file, a segment truncated to a frame boundary, a region pre-allocated and
+     * never written. Nothing here failed a checksum — a hole presents no bad bytes to fail one — so
+     * it is caught by comparing each segment header's absolute `baseOffset` against where the
+     * previous segment actually stopped.
+     *
+     * **Distinct from the other two because the answer to it is:** [Truncated.atOffset] is where the
+     * hole *starts*, so it is still the honest end of the readable history — but it is not a resume
+     * cursor, because the records between it and the next segment do not exist anywhere. A consumer
+     * that retries [SegmentHeader] and [Frame] must not retry this one.
+     */
+    MissingRegion,
 }
 
 /**
@@ -83,8 +115,11 @@ public enum class TruncationReason {
  * with a silent hole in it.
  *
  * @property atOffset the append offset replay stopped at. For a torn tail this is where the next
- *   append will land, so it is also the point to resume from once the writer catches up.
- * @property reason which layer refused to read.
+ *   append will land, so it is also the point to resume from once the writer catches up — but see
+ *   [TruncationReason.MissingRegion], where it is the end of the readable history and **not** a
+ *   resume cursor.
+ * @property reason why the replay stopped, and — the part a consumer acts on — whether resuming
+ *   from [atOffset] later could ever help.
  */
 public data class Truncated(
     public val atOffset: Long,
