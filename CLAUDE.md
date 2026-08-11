@@ -160,6 +160,38 @@ still compiles but self-skips at runtime, so `./gradlew build` doesn't run it.
   the behavior reviews had passed — a snapshot log-wipe, a §5.4.1 election-safety hole, a §5.3
   fast-backup livelock, a joint-consensus wedge, and more (epics #1218 / #1228 / #1244). Findings
   become their own TDD-fix track, separate from the refactor PRs.
+- **A conformance property is only as strong as the weakest failure the REFERENCE implementation can
+  reach.** When the in-memory reference makes a failure structurally impossible, nobody writes the
+  property for it, the suite goes green, and every real backend has to invent the guard alone. In the
+  `:kuilt-bolt` epic (#2240) two workers who never saw each other's code shipped the **identical**
+  cross-segment defect, because `InMemoryBolt`'s segments are an in-process list that cannot lose an
+  element — and the reference **carried that bug too**, so don't stop at "it can't reach the failure",
+  ask whether it would even *detect* it. The remedy is copyable from `BoltConformanceSuite`: a
+  **non-nullable** abstract fixture hook per unreachable failure, each KDoc'd with *why* non-nullable
+  (an "I cannot reach this state" opt-out moves the vacuity one level up, where it is harder to see),
+  and a property that asserts its own **precondition**, so a backend handing back a healthy fixture
+  fails loudly instead of passing quietly. Where a state is unreachable for a *correct* reason — an
+  in-memory bolt promises no durability, so it can never degrade — use a **two-armed sealed fixture**
+  rather than a nullable hook, and state in KDoc what the arms cannot detect. Sweeping every suite in
+  the repo for this is #2247.
+- **A fixture's CONFIGURATION is a prescription too, and it drifts toward the setting where the
+  property cannot fail.** Five instances in that one epic, and **twice the vacuous fixture was written
+  by the very PR whose subject was fixture vacuity**: `segmentFrameBytes = 1L` (the one budget at which
+  a segment has no pre-allocated zero tail, so the defect under test could not occur); 3 ops against a
+  65,536-entry window (cannot distinguish "bounded" from "deferred by `N/M` rounds"); an async budget
+  at which nothing ever rolls, so the rigged failure was never reached. Three habits catch it:
+  enumerate the fixture's numeric knobs and ask what each one switches **off**; make every arm
+  **assert its rig fired** — an unreached rig is green by absence, so count the rig's firings rather
+  than inferring them from a side effect ("a roll happened" stays true when the bug under test is
+  reintroduced); and read a red's **shape**, not just its presence, since #2244's mutation reddened
+  one assertion of six and a reader scanning for "did it red" would have ticked it off. Where a suite
+  already pairs subclasses over complementary configurations, **thread the budget through a new hook
+  the way the existing hooks do** — hardcoding it collapses every subclass onto one configuration.
+- **After fixing anything, ask what the fix itself is now unpinned on.** The same defect recurs one
+  level up, and on the `:kuilt-bolt` epic it landed *inside* the fix for the previous instance twice.
+  Make it the explicit closing step of every fix and every review: name the property the fix now rests
+  on, and whether anything reds when that property breaks. Carrying the question is what caught a fix
+  whose obvious implementation would have re-vacuated the very property it repaired.
 - Test methods: no `test` prefix (the `@Test` annotation suffices); multi-assert
   tests use `assertAll()`.
 - **Coroutine test determinism:** types that own a `CoroutineScope` take an
