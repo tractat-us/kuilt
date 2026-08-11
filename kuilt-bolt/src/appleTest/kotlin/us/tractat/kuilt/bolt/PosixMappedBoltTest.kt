@@ -158,7 +158,7 @@ class PosixMappedBoltTest {
         val frames = events.filterIsInstance<Archived<RgaOp<String>>>()
 
         assertAll(
-            { assertNull(reopened.repairedTailAt, "an intact archive is adopted without repair") },
+            { assertNull(reopened.repairedTailAt(), "an intact archive is adopted without repair") },
             { assertEquals(3, frames.size, "every frame the first instance wrote, plus the new one") },
             {
                 assertEquals(
@@ -210,7 +210,7 @@ class PosixMappedBoltTest {
         scribble(segmentFiles(directory).single(), headerBytesOf(format) + lastIntact.endOffset, torn.dropLast(1))
 
         val reopened = PosixMappedBolt(format, FixedClock(epoch), directory)
-        val repaired = reopened.repairedTailAt
+        val repaired = reopened.repairedTailAt()
         val resumed = reopened.append(listOf(third))
         val events = reopened.replay(ReplayScope.All).toList()
         val frames = events.filterIsInstance<Archived<RgaOp<String>>>()

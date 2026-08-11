@@ -40,7 +40,6 @@ import platform.posix.S_IFDIR
 import platform.posix.S_IFMT
 import platform.posix.S_IRUSR
 import platform.posix.S_IWUSR
-import platform.posix.close
 import platform.posix.errno
 import platform.posix.getpagesize
 import platform.posix.lseek
@@ -50,7 +49,6 @@ import platform.posix.mkdir
 import platform.posix.mmap
 import platform.posix.msync
 import platform.posix.munmap
-import platform.posix.open
 import platform.posix.read
 import platform.posix.stat
 import platform.posix.strerror_r
@@ -234,8 +232,12 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
      * lazily — the first append, replay or probe is what reads the directory — so a property that
      * merely reported the current field would answer `null` on a freshly constructed bolt over a
      * damaged archive, which is the one moment a consumer actually asks.
+     *
+     * A function rather than a `val` **because** of that: this takes a lock, creates directories,
+     * maps a file, mutates six fields and can throw [BoltFormatException]. A property that reads like
+     * a field but does all of that is a trap at every call site.
      */
-    public val repairedTailAt: Long? get() = lock.withLock {
+    public fun repairedTailAt(): Long? = lock.withLock {
         ensureOpen()
         repaired
     }
@@ -722,8 +724,11 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
         val path = directory.withTrailingSlash() + segmentName(index)
         val fd = platform.posix.open(path, O_RDWR or O_CREAT or O_EXCL, S_IRUSR or S_IWUSR)
         check(fd >= 0) { posixFailure("could not create seeded segment $path") }
-        writeAll(fd, bytes, path)
-        platform.posix.close(fd)
+        try {
+            writeAll(fd, bytes, path)
+        } finally {
+            platform.posix.close(fd)
+        }
         unmapActive()
         segments += Segment(
             index = index,
