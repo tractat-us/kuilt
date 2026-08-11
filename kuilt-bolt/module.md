@@ -18,7 +18,7 @@ You can ask a bolt what it holds — "everything this machine wrote last Tuesday
 merge it back into the live system. That restriction is the whole reason the design works, and it is
 enforced by the types, not by a comment.
 
-## The three moving parts
+## The moving parts
 
 | Type | What it is |
 |------|-----------|
@@ -26,6 +26,7 @@ enforced by the types, not by a comment.
 | `BoltArchiveFormat` | How edits are classified and turned into bytes. Build one with `BoltArchiveFormat.rga(…)` or `.fugue(…)`. |
 | `InMemoryBolt` | The reference archive — real bytes, real segments, bounded memory. Available on every platform. |
 | `PosixMappedBolt` | The archive that survives a restart, on iOS and macOS: one memory-mapped file per segment in a directory you name. **Not the default on a phone** — its own docs say why at length, and the short version is that the server is its customer. |
+| `BoltDecorator` | The wiring. A replica's owner hands it the edits it applied; it archives them and suppresses the ones it has kept before. Reach for this rather than calling `append` by hand — see below. |
 
 ```kotlin
 val bolt = InMemoryBolt(BoltArchiveFormat.rga(serializer<String>()), clock)
@@ -44,6 +45,23 @@ replay that just stopped at damage and completed normally would hand back an inc
 indistinguishable from a complete one, and "I still hold what the live replica forgot" is the only
 thing a bolt sells. Call `.frames()` to discard the verdict when you genuinely do not need it — an
 explicit opt-out, not an oversight.
+
+## Feeding it: `BoltDecorator`, and the mistake to avoid
+
+`append` is the raw surface. In practice a replica's owner hands its edits to a `BoltDecorator`,
+which archives them and remembers — within a bounded window — what it has already kept, so a peer
+re-offering the same log every anti-entropy round does not write a fresh copy each time.
+
+**Feed it the merges as well as the local edits, or the archive is nearly empty.** Merging a peer's
+replica is a *state* join: it produces no edits to hand over. Since syncing with a peer is exactly
+how another device's history arrives, an archive fed only by local edits holds this machine's own
+history and nobody else's — which is the thing this module exists to fix. So the owner enumerates
+the remote replica's operations (`OpLogCrdt.operations()`) and publishes those too;
+`WarpLogRecordExporter` in `:kuilt-otel` does it on both paths and is the worked example.
+
+Publication happens *before* the owner's own durable write, so the archive is a **superset** of the
+live replica rather than a subset — the right direction for something whose product is "I still hold
+what you forgot". And forgetting does not travel: emptying the live replica leaves the archive alone.
 
 ## The invariant
 
