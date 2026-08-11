@@ -29,6 +29,20 @@ An add's delta names the dot it mints **and the dots that add supersedes**. That
 an optimisation detail — leave it out and a later remove retires only the dot the remover knew
 about, and the element comes back from the dead on every other device.
 
+## Clearing a lot of items at once
+
+Emptying a big set is the one case where one-at-a-time hurts. Absorbing a change costs a merge
+across the whole set, so removing ten thousand items one by one pays ten thousand merges — seconds
+of work, not milliseconds. `removeAll` takes the whole batch and pays one.
+
+It is otherwise the same operation: exactly the items you named go, everything else stays, and a
+device that reconnects with an old copy of the list does **not** bring the deleted items back. A
+change someone else made at the same time still wins, just as it does with `remove`.
+
+```kotlin
+set = set.piece { it.removeAll(set.elements) }
+```
+
 ## Code example
 
 <!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleORSet -->

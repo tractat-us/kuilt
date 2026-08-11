@@ -250,6 +250,26 @@ val concurrent = alpha.add(b, "alice")
 check(alpha.piece(alpha.remove("alice")).piece(concurrent).contains("alice"))
 ```
 
+**Intent:** drop many elements — or empty the set entirely — without paying a causal merge per element.
+**Primitive:** `ORSet.removeAll` (`us.tractat.kuilt.crdt`).
+
+Absorbing a patch is a join over the whole set, so `elements.fold(set) { s, e -> s.piece { it.remove(e) } }`
+is Θ(n·N) — measured at ~3.5 s over a 10,000-element set. `removeAll` pays one join for the batch
+(~4 ms) and is otherwise indistinguishable: same dots retired, same retained context, same bytes. The
+retained context is what keeps the emptied set **dominant** over a peer that re-merges its old copy.
+
+<!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleORSetBulkRemoval -->
+```kotlin
+// One patch drops all three — the same dots the per-element loop would have retired, so one
+// causal join does the work of three.
+set = set.piece { it.removeAll(set.elements) }
+check(set.elements.isEmpty())
+
+// The retained context is the point: a peer re-merging its pre-removal copy stays empty
+// rather than resurrecting everyone.
+check(set.piece(snapshot).elements.isEmpty())
+```
+
 **Intent:** a shared **map** whose keys peers add and remove concurrently, each key holding a value that merges in its own right — a roster, a task board, a nested document.
 **Primitive:** `ORMap` (`us.tractat.kuilt.crdt`).
 

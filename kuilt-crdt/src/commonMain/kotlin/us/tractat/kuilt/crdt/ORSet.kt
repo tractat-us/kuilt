@@ -17,6 +17,9 @@ import kotlinx.serialization.Serializable
  * [piece] is the causal merge — it absorbs a patch, and it is also how a caller who wants the
  * resulting whole set gets one: `set.piece(set.add(replica, element))`.
  *
+ * Absorbing a patch is a join over the whole set, so dropping many elements one at a time pays a
+ * join per element. [removeAll] is the bulk sibling of [remove] that pays one for the batch.
+ *
  * @sample us.tractat.kuilt.crdt.sampleORSet
  */
 @Serializable
