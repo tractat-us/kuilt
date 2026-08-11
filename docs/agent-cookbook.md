@@ -30,6 +30,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | splitting a big blob into frames — picking a chunk size, or chasing a `FrameTooLargeException` that only appears once a peer drops | `Room.maxPayloadBytes` / `Seam.maxPayloadBytes` | [Payload limits](#payload-limits) |
 | a `seenIds` set to skip already-handled messages | `GSet` / kuilt dedup | [Dedup](#dedup) |
 | a per-line flush loop in a log/telemetry exporter — or a fix for "capturing logs is slow", "the app stalls when it logs a lot" | `WarpLogRecordExporter.export(records)` + `installLogCapture` | [Telemetry & log capture](#telemetry--log-capture) |
+| deleting a telemetry store's files to reset it, or a "clear on next launch" flag so the delete lands before recovery | `WarpTelemetry.clear()` | [Telemetry & log capture](#telemetry--log-capture) |
 | merging several mDNS/Multipeer discovery feeds into one lobby roster | `discoveryRoster` | [Discovery](#discovery) |
 | a weighted / fair-share scheduler — "give this group 3× the share", "who runs the next quantum", a hoarder-proof round-robin | `HeddlePolicy` + `HeddleNode` | [Fair share & placement](#fair-share--placement) |
 | an entitlement / quota ledger, "reserve a slot before running then charge once", a coordination-free budget that converges across peers | `EntitlementLedger` + `HeddleNode.reserve`/`complete` | [Fair share & placement](#fair-share--placement) |
@@ -1106,5 +1107,20 @@ when (val result = exporter.export(pending)) {
         // "none of it landed".
         println("export failed: ${result.cause}")
     }
+}
+```
+
+**Intent:** empty a telemetry store — "reset the logs", "clear my data", "start the next run clean". Don't delete the store's files per platform, and don't set a "clear on next launch" flag so the delete lands before recovery.
+**Primitive:** `WarpTelemetry.clear()` (`:kuilt-otel`), or a single signal's own `clear()` on `WarpLogRecordExporter` / `WarpSpanExporter` / `WarpMetricExporter`.
+
+It runs on a **live** instance — no restart — and the same instance keeps exporting straight afterwards; a later restart sees only what was written after the clear. That is the point: a `DurableStore` has no key-enumeration API, so a consumer holding one cannot discover the segment keys to delete them, which is what forced the per-platform directory delete this replaces (#2208).
+
+Logs and spans **suppress** what they drop rather than merely forgetting it, so a peer still holding the pre-clear ops cannot push them back through a merge. Metrics can only forget **locally** — a monotonic join has no merge-safe forget, so merging with a peer that still holds the old totals restores them. On a replica that does not gossip its metrics, that distinction never arises.
+
+<!-- verbatim from kuilt-otel/src/commonSamples/kotlin/us/tractat/kuilt/otel/Samples.kt#sampleWarpTelemetryClear -->
+```kotlin
+when (val result = telemetry.clear()) {
+    is ExportResult.Success -> println("store emptied; the same instance keeps exporting")
+    is ExportResult.Failure -> println("clear failed: ${result.cause}; retry converges")
 }
 ```

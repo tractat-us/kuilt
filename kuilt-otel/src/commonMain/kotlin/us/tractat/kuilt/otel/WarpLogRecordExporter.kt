@@ -186,6 +186,10 @@ internal fun opCountOf(segment: Rga<LogRecord>): Int = segment.opCount
  * the number of keys recovery opens flat instead of growing with the records ever exported — the
  * gossip path's key count is not bound this way; see below.
  *
+ * [clear] is the second driver, and the only one that retires the whole sealed set at once:
+ * it is a pass that retains nothing, so every sealed segment a replica fed by [export] holds
+ * becomes superseded in one step.
+ *
  * It is not simply "delete a key", and two rules make it safe:
  *
  * - **A segment carrying an [RgaOp.Compact] is never retired.** A `Compact` is the only

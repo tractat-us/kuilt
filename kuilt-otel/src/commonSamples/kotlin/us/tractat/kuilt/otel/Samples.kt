@@ -95,6 +95,24 @@ internal suspend fun sampleWarpTelemetry() {
     check(logResult == ExportResult.Success) { "log export failed: $logResult" }
 }
 
+/**
+ * Emptying a telemetry store from a running app — no restart, no directory delete.
+ *
+ * @suppress — sample only
+ */
+internal suspend fun sampleWarpTelemetryClear() {
+    val telemetry = WarpTelemetry(
+        replica = ReplicaId("device-uuid-here"),
+        store = InMemoryDurableStore(),
+    )
+    telemetry.recover()
+
+    when (val result = telemetry.clear()) {
+        is ExportResult.Success -> println("store emptied; the same instance keeps exporting")
+        is ExportResult.Failure -> println("clear failed: ${result.cause}; retry converges")
+    }
+}
+
 /** @suppress — sample only */
 internal suspend fun sampleWarpOtlpBridge() {
     val telemetry = WarpTelemetry(
