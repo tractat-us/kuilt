@@ -24,8 +24,9 @@ enforced by the types, not by a comment.
 |------|-----------|
 | `Bolt<Op>` | The archive. `append` puts edits in, `replay` reads them back, `availability` says whether this machine can store anything at all, and `durability` says whether it is still keeping the promise it made about them. |
 | `BoltArchiveFormat` | How edits are classified and turned into bytes. Build one with `BoltArchiveFormat.rga(…)` or `.fugue(…)`. |
-| `InMemoryBolt` | The reference archive — real bytes, real segments, bounded memory. Available on every platform. |
-| `PosixMappedBolt` | The archive that survives a restart, on iOS and macOS: one memory-mapped file per segment in a directory you name. **Not the default on a phone** — its own docs say why at length, and the short version is that the server is its customer. |
+| `InMemoryBolt` | The reference archive — real bytes, real segments, bounded memory. Available on every platform, and on wasmJs it is the only one there is, which its own docs are blunt about. |
+| `MappedBolt` | The archive that survives a restart, on JVM and Android: one memory-mapped file per segment in a directory you name. **This is the server's backend** — the machine that keeps a year while the phone keeps an hour. |
+| `PosixMappedBolt` | The same thing on iOS and macOS. **Not the default on a phone** — its own docs say why at length, and the short version is that the server is its customer here too. |
 | `BoltDecorator` | The wiring. A replica's owner hands it the edits it applied; it archives them and suppresses the ones it has kept before. Reach for this rather than calling `append` by hand — see below. |
 
 ```kotlin
