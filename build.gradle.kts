@@ -1470,10 +1470,12 @@ val verifyDocCitations by tasks.registering {
 val verifySampleLinks by tasks.registering {
     group = "verification"
     description = "Fails if an @sample KDoc tag names a sample Dokka cannot resolve (#2259)."
-    // Longest-path-first, so mapping a file to its module is a first-match on a path prefix even if
-    // a module is ever nested inside another.
+    // A module is keyed by its directory RELATIVE TO THE ROOT, not by its Gradle name, so every path
+    // this task prints is one a reader can paste (`:demo-web` lives at `demo/web`). Longest-path
+    // first, so mapping a file to its module is a first-match on a prefix even when one module's
+    // directory sits inside another's.
     val moduleDirs = subprojects
-        .map { it.name to it.projectDir }
+        .map { it.projectDir.relativeTo(rootDir).invariantSeparatorsPath to it.projectDir }
         .filter { it.second.resolve("src").isDirectory }
         .sortedByDescending { it.second.invariantSeparatorsPath.length }
     // One tree covers both halves of the question: the tags (KDoc anywhere under `src/`) and the
@@ -1509,15 +1511,22 @@ val verifySampleLinks by tasks.registering {
             """(?<![A-Za-z0-9_])(?:class|interface|object|fun|val|var)\s+""" +
                 """(?:<[^>]*>\s*)?(?:[\w.<>?, ]*\.)?(`[^`]+`|[A-Za-z_]\w*)""",
         )
-        // A `@sample` written somewhere it will never be read. Requires a DOTTED argument so that
-        // ordinary prose about the tag ("the @sample tag is…") is never mistaken for one; every
-        // in-tree prose mention writes it in backticks and is invisible here regardless.
-        val strayTag = Regex("""@sample\s+\[?[A-Za-z_]\w*(?:\.\w+)+""")
+        // A `@sample` written somewhere it will never be read. Two narrowings keep it off prose,
+        // because this is the one check whose subject is text a doc author may legitimately write:
+        // the argument must be DOTTED (so "the @sample tag is…" is not a candidate), and a leading
+        // backtick disqualifies it (so KDoc *about* a tag — `@sample pkg.f` — is quoting, not
+        // tagging). Both forms occur in tree; neither is a defect.
+        val strayTag = Regex("""(?<!`)@sample\s+\[?[A-Za-z_]\w*(?:\.\w+)+""")
 
         // ── The model check. A guard whose model of the world can silently go stale has stopped
         // being a guard; `verifyDocCitations` carries the same check for the same reason. ──
-        val wiring = samplesWiring.readText()
-        if (!wiring.contains("samples.from(samplesDir)") || !wiring.contains("src/commonSamples/kotlin")) {
+        // The call is read from CODE, so wiring that has been commented out registers as gone. The
+        // PATH is a string literal, which `stripNonCode` necessarily blanks, so it is read from the
+        // raw text — the one place here where prose and code cannot be told apart, and the reason
+        // both halves are required rather than either alone.
+        val wiringRaw = samplesWiring.readText()
+        val wiringCode = KotlinCodeScanner.stripNonCode(wiringRaw)
+        if (!wiringCode.contains("samples.from(samplesDir)") || !wiringRaw.contains("src/commonSamples/kotlin")) {
             error(
                 "verifySampleLinks resolves every @sample against `<module>/src/commonSamples/kotlin`, " +
                     "because that is the ONLY samples root `kuilt.kmp-library` hands Dokka. That wiring " +
@@ -1528,7 +1537,7 @@ val verifySampleLinks by tasks.registering {
             )
         }
         val strayRoots = buildScripts.files.sortedBy { it.invariantSeparatorsPath }
-            .filter { it.readText().contains("samples.from(") }
+            .filter { KotlinCodeScanner.stripNonCode(it.readText()).contains("samples.from(") }
             .map { it.relativeTo(rootPath).invariantSeparatorsPath }
         if (strayRoots.isNotEmpty()) {
             error(
@@ -1635,6 +1644,11 @@ val verifySampleLinks by tasks.registering {
             return s
         }
 
+        // A block tag, not merely a line that starts with those seven characters: `@sampleFoo` is a
+        // different tag (or a typo), never this one.
+        fun isSampleTag(content: String): Boolean =
+            content == "@sample" || content.startsWith("@sample ") || content.startsWith("@sample\t")
+
         val failures = mutableListOf<String>()
         var checked = 0
 
@@ -1657,6 +1671,12 @@ val verifySampleLinks by tasks.registering {
                 target.isEmpty() ->
                     "the tag names nothing. Give it the fully-qualified name of a sample function, " +
                         "or delete the tag."
+                // Deliberately strict: the whole remainder of the line is the name. Guessing that
+                // Dokka takes only the first token would make this guard pass a tag it might well
+                // reject, and a guard is worth having only in the direction that fails LOUD.
+                target.any(Char::isWhitespace) ->
+                    "a @sample takes one fully-qualified name and nothing else — the rest of the " +
+                        "line is read as part of the name. Move any commentary to its own line."
                 target in sampleTypes[module].orEmpty() ->
                     "that names a class or object. Dokka accepts only a FUNCTION here (\"Only " +
                         "function links allowed\") — name the function inside it, " +
@@ -1695,7 +1715,7 @@ val verifySampleLinks by tasks.registering {
             }
             doc.forEachIndexed { i, line ->
                 val content = kdocContent(line)
-                if (content == "@sample" || content.startsWith("@sample ") || content.startsWith("@sample\t")) {
+                if (isSampleTag(content)) {
                     verify("$rel:${i + 1}", module, declaredAt(i), content.removePrefix("@sample").trim())
                 } else if (strayTag.containsMatchIn(line)) {
                     checked++
@@ -1712,7 +1732,7 @@ val verifySampleLinks by tasks.registering {
             val rel = md.relativeTo(rootPath).invariantSeparatorsPath
             md.readLines().forEachIndexed { i, line ->
                 val content = kdocContent(line)
-                if (content.startsWith("@sample")) {
+                if (isSampleTag(content)) {
                     verify("$rel:${i + 1}", module, "in the module doc", content.removePrefix("@sample").trim())
                 }
             }
