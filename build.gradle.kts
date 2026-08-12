@@ -561,6 +561,101 @@ object RunTestTimeoutScanner {
 //   (b) NAME — a parameter called `timeout` in a `runTest`-calling declaration, which catches the
 //       POSITIONAL forward (`runTest(dispatcher, timeout)`) that (a) cannot see because there is no
 //       `timeout =` argument to read.
+// Locates a cancellation RETHROW placed directly around a `withTimeout` bound, for
+// `forbidCancellationRethrowAroundBound` below (#2292). Same `object` rationale as the sibling
+// scanners: it is invoked from inside `doLast`, where a script-level function reference would
+// capture the unserializable `Build_gradle` instance.
+//
+// THE DEFECT. `TimeoutCancellationException` **is a** `CancellationException`. So a
+// `catch (e: CancellationException) { throw e }` sitting above a `withTimeout` intercepts the bound's
+// OWN expiry — the one condition the handler beneath it was written for — and the handler becomes
+// dead code. `runCatchingCancellable { withTimeout(…) }` is the same defect spelled with the helper:
+// it rethrows on exactly the outcome its `getOrElse`/`onFailure` names. Both shapes shipped here.
+//
+// TWO RULES, and what CLEARS each.
+//   A. A `try` whose block contains a bare `withTimeout(`, followed by a `catch` naming
+//      `CancellationException` whose body throws. Cleared by exactly one thing: an EARLIER `catch`
+//      naming `TimeoutCancellationException`, which handles the bound's own expiry by type, so the
+//      later rethrow can only ever see a real cancel (`:kuilt-test`'s `MidHandshakeCollapse` is the
+//      in-tree example, and disabling this clause makes it the guard's one false positive — that is
+//      the receipt that the clause is load-bearing rather than decorative).
+//      An `ensureActive()` in the catch body is deliberately NOT a clearance, though the tempting
+//      symmetry with the sibling guard says it should be: `catch (e: CancellationException) {
+//      ensureActive(); throw e }` is still the whole defect — when the exception is the minted
+//      timeout, `ensureActive` falls through and the `throw e` rethrows it anyway. Honouring it
+//      would clear a defective shape silently. The cost is the converse: a correct
+//      `ensureActive(); throw Converted(e)` is flagged. Zero in-tree sites have it, and a false
+//      positive here is loud and cleared in one line by writing `catch (e: Throwable)` — the
+//      trade `forbidBareRunCatching` makes for the same reason.
+//   B. `runCatchingCancellable {` whose block contains a bare `withTimeout(`. Nothing clears it —
+//      the helper rethrows unconditionally. Convert to `withTimeoutOrNull` plus an explicit throw.
+// `withTimeoutOrNull` is not matched by either rule and needs no exemption: `\bwithTimeout\s*[({]`
+// requires a `(` or `{` immediately after the name, which `withTimeoutOrNull(` does not supply.
+// That is load-bearing — a sweep that treated the two alike would false-positive on ~all of them.
+object CancellationRethrowAroundBoundScanner {
+    private val tryBlock = Regex("""(?<![A-Za-z0-9_])try\s*\{""")
+    private val helper = Regex("""(?<![A-Za-z0-9_])runCatchingCancellable\s*\{""")
+    private val clause = Regex("""^\s*(catch\s*\([^)]*\)\s*\{|finally\s*\{)""")
+    private val bound = Regex("""(?<![A-Za-z0-9_])withTimeout\s*[({]""")
+
+    /** One offending site: where the guard is written, and which rule it broke. */
+    data class Violation(val line: Int, val rule: String, val detail: String)
+
+    /** In source order, over already-stripped [code]. */
+    fun violations(code: String): List<Violation> {
+        val out = mutableListOf<Violation>()
+        for (m in tryBlock.findAll(code)) {
+            val open = code.indexOf('{', m.range.first)
+            val end = closingBrace(code, open) ?: continue
+            if (!bound.containsMatchIn(code.substring(open, end))) continue
+            var pos = end
+            var timeoutHandled = false
+            while (true) {
+                val next = clause.find(code.substring(pos)) ?: break
+                val start = pos + next.range.first
+                val brace = code.indexOf('{', start)
+                val close = closingBrace(code, brace) ?: break
+                val header = code.substring(start, brace)
+                val body = code.substring(brace, close)
+                when {
+                    header.contains("TimeoutCancellationException") -> timeoutHandled = true
+                    header.contains("CancellationException") && !timeoutHandled &&
+                        body.contains("throw") ->
+                        out += Violation(
+                            lineOf(code, start),
+                            "A",
+                            "catch (…: CancellationException) { throw } directly over a `withTimeout`",
+                        )
+                }
+                pos = close
+            }
+        }
+        for (m in helper.findAll(code)) {
+            val open = code.indexOf('{', m.range.first)
+            val end = closingBrace(code, open) ?: continue
+            if (bound.containsMatchIn(code.substring(open, end))) {
+                out += Violation(lineOf(code, m.range.first), "B", "runCatchingCancellable { … withTimeout(…) … }")
+            }
+        }
+        return out.sortedBy { it.line }
+    }
+
+    /** Index just PAST the `}` matching the `{` at [open], or null if unbalanced. */
+    private fun closingBrace(code: String, open: Int): Int? {
+        if (open < 0 || open >= code.length || code[open] != '{') return null
+        var depth = 0
+        var i = open
+        while (i < code.length) {
+            if (code[i] == '{') depth++ else if (code[i] == '}') depth--
+            if (depth == 0) return i + 1
+            i++
+        }
+        return null
+    }
+
+    private fun lineOf(code: String, index: Int): Int = code.take(index).count { it == '\n' } + 1
+}
+
 object RunTestWrapperTimeoutScanner {
     private val call = Regex("""(?<![A-Za-z0-9_])runTest\s*\(""")
     private val funKeyword = Regex("""(?<![A-Za-z0-9_])fun(?![A-Za-z0-9_])""")
@@ -2278,6 +2373,89 @@ val forbidRunCatchingCancellableUnderNonCancellable by tasks.registering {
     }
 }
 
+// Guard: forbid a cancellation RETHROW placed directly around a `withTimeout` bound (#2292).
+//
+// The sibling above bans `runCatchingCancellable` inside a `NonCancellable` shield. This one bans
+// the unshielded dual, and it is the more common shape: a bound is written *because* the caller has
+// something to do when it expires, and then a rethrow above the handler makes that handler dead for
+// exactly the expiry it was written for. Three sites shipped this way — `ServerCluster.admitLearner`
+// (the room was never left, so the accepted connection leaked), `MultipeerCrossProcessProbe`'s two
+// probe bounds (the probe died on an escaping cancellation instead of reporting `passed = false`),
+// and `:spike`'s scenario harness (a timing-out scenario stopped the whole suite with no report).
+// All three were silent, because the escaping throwable IS a cancellation: the coroutine is
+// **cancelled rather than failed**, so no handler runs and no stack trace is printed.
+//
+// The predicate, and what clears each rule, is documented on `CancellationRethrowAroundBoundScanner`
+// above. `withTimeoutOrNull` is not matched and needs no exemption.
+//
+// SCOPE is production `*Main` source sets, matching the sibling. Every one of the three real
+// instances was in a `*Main` set, and confining it there is what lets the guard have NO allowlist:
+// the one remaining in-tree occurrence of the shape is `RunCatchingCancellableTest`, which exhibits
+// it deliberately to pin the trap on the primitive. An exemption for that would be an exemption
+// nobody could see expiring — the failure mode this build script names elsewhere.
+//
+// KNOWN BLIND SPOTS, stated rather than implied. **A lexical scan is a backstop, not a proof.**
+//   * A rethrow reached through a HELPER is invisible in both directions — a `withTimeout` inside a
+//     function called from the `try`, or a `try` in a caller of a function that bounds itself. That
+//     is not hypothetical: `:spike`'s `runSuite` guard sits two hops above the `withTimeout` that
+//     defeated it, and nothing here would have flagged it. The scanner sees ONE lexical block.
+//   * A `withTimeout` inside a nested `launch {}`/`async {}` within the `try` does not propagate to
+//     that `try` at all, so flagging it would be a false positive. Zero in-tree sites have the shape;
+//     if one appears, narrow the rule rather than exempting the file.
+//   * `catch (e: Exception)` / `catch (e: Throwable)` with a hand-written
+//     `if (e is CancellationException) throw e` is the same defect and is NOT matched — rule A keys
+//     on the catch HEADER. The token is greppable; this paragraph is the guard on it.
+//   * `:spike` is a subproject only under `-PincludeSpike`, so its sources are not in `subprojects`
+//     on the required gate — same limit the sibling guards carry. The `:spike` fix in #2292 is
+//     therefore held by review, not by this task.
+val forbidCancellationRethrowAroundBound by tasks.registering {
+    group = "verification"
+    description = "Fails if a CancellationException rethrow wraps a withTimeout, making the handler under it dead code (#2292)."
+    val sources = kotlinSourcesIn(subprojects.map { it.projectDir.resolve("src") }, "*Main/**/*.kt")
+    inputs.files(sources).withPropertyName("productionSources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    val rootPath = rootDir
+    // See "Guard plumbing" above: the stamp is what makes UP-TO-DATE possible (#1827).
+    val stamp = layout.buildDirectory.file("verification/forbid-cancellation-rethrow-around-bound.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    doLast {
+        val offenders = sources.files.sortedBy { it.invariantSeparatorsPath }.flatMap { file ->
+            val raw = file.readText()
+            if ("withTimeout" !in raw) return@flatMap emptyList<String>()
+            val rawLines = raw.lines()
+            CancellationRethrowAroundBoundScanner.violations(KotlinCodeScanner.stripNonCode(raw)).map {
+                "${file.relativeTo(rootPath).invariantSeparatorsPath}:${it.line}  [${it.rule}] ${it.detail}\n" +
+                    "      ${rawLines.getOrElse(it.line - 1) { "" }.trim()}"
+            }
+        }
+        if (offenders.isNotEmpty()) {
+            error(
+                "A cancellation rethrow wraps a `withTimeout` (#2292). `TimeoutCancellationException` IS a " +
+                    "`CancellationException`, so the bound's OWN expiry — the one case the handler beneath " +
+                    "was written for — is rethrown instead, and that handler is dead code. Worse, the " +
+                    "escaping throwable is a cancellation, so the coroutine reads as CANCELLED rather than " +
+                    "FAILED: no handler, no stack trace.\n" +
+                    "  Rule A (try/catch): open a single `catch (e: Throwable)` with " +
+                    "`currentCoroutineContext().ensureActive()` as its first statement — it rethrows only " +
+                    "when THIS job is genuinely cancelled and lets a callee-minted timeout fall through " +
+                    "(`ServerCluster.admitLearner` is the pattern). Handling the timeout by type in an " +
+                    "EARLIER `catch (…: TimeoutCancellationException)` also clears it " +
+                    "(`NwLoom.weave`, `MidHandshakeCollapse`).\n" +
+                    "  Rule B (runCatchingCancellable): the helper rethrows unconditionally, so nothing " +
+                    "clears it — use `withTimeoutOrNull` plus an explicit non-cancellation throw " +
+                    "(`MultipeerCrossProcessProbe` is the pattern).\n" +
+                    "  A lexical scan cannot see either construct through a HELPER, so this is a backstop, " +
+                    "not a proof:\n  " +
+                    offenders.joinToString("\n  "),
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText("ok\n")
+    }
+}
+
 // Guard: forbid bare `kotlin.runCatching` anywhere in the tree (#1329).
 //
 // WHAT IS BANNED. `runCatching` catches `Throwable`, and `CancellationException` is a `Throwable`.
@@ -3224,6 +3402,7 @@ allprojects {
         dependsOn(rootProject.tasks.named("verifySamplesAreRun"))
         dependsOn(rootProject.tasks.named("verifyModuleTable"))
         dependsOn(rootProject.tasks.named("forbidRunCatchingCancellableUnderNonCancellable"))
+        dependsOn(rootProject.tasks.named("forbidCancellationRethrowAroundBound"))
         dependsOn(rootProject.tasks.named("forbidBareRunCatching"))
         dependsOn(rootProject.tasks.named("forbidKotlinAssert"))
         dependsOn(rootProject.tasks.named("forbidProductionDispatcherInTests"))
