@@ -249,10 +249,13 @@ public interface Room {
      *   is admitted. Collect it (or read it after the roster becomes non-empty) rather than
      *   sampling it right after [RoomFactory.join] returns.
      *
-     * **This is the id a [ResumeToken] is validated against.** A joiner's token carries this value;
-     * the host refuses a token naming any other room. So a host that wants outstanding tokens to
-     * survive its own restart must supply the *same* [RoomId] to [RoomFactory.host] on the way back
-     * up — see the `roomId` parameter there.
+     * **This is the id a [ResumeToken] is validated against**, within one live host: a joiner's
+     * token carries this value and the host refuses a token naming any other room.
+     *
+     * That does **not** extend across a host restart, and reusing an id will not make it. A
+     * restarted host has no memory of the peer — an empty roster and an empty reconnect-window
+     * registry — so a resume it accepts on identity grounds still cannot complete. Cold-start
+     * rejoin is tracked separately by #1593 and needs more than a stable id.
      *
      * Deliberately has **no** interface default. A default would let an implementation — a test
      * double above all — silently answer "this room has no identity" for a room that plainly has
@@ -367,11 +370,13 @@ public interface RoomFactory {
      * factory **mints a fresh one** — a new room every time, which is what makes [Room.roomId] a
      * per-session key rather than a per-device one (#1594).
      *
-     * Supply it to keep **one room identity across a host restart**. Outstanding [ResumeToken]s
-     * name the room they were issued for and the host refuses a token naming any other, so a host
-     * that comes back up under a freshly minted id invalidates every token its members are holding
-     * — each rejoin fails as a session mismatch, even though the members, the fabric and the seats
-     * are all still there. Persist the id, pass it back in here, and the tokens still validate.
+     * Supply it when the identity is **decided outside kuilt** and the room must adopt it rather
+     * than invent its own: a lobby code or invite link the players already hold, a game id a
+     * matchmaking service assigned, or an id a durable record was keyed on before the room could be
+     * woven. Every member then reads that exact value off [Room.roomId].
+     *
+     * It does **not** make a host restart resumable — see [Room.roomId]; that is #1593's problem,
+     * and reusing an id does not solve it.
      */
     public suspend fun host(pattern: Pattern, memberName: String? = null, roomId: RoomId? = null): Room
 

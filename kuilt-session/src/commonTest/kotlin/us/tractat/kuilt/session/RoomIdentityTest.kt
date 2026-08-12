@@ -14,9 +14,12 @@ import us.tractat.kuilt.test.FakeSeam
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
@@ -115,23 +118,85 @@ class RoomIdentityTest {
         }
 
     /**
-     * The restart story the override exists for: a host that comes back up under the *same* id
-     * still validates the tokens its joiners are holding, because
-     * [us.tractat.kuilt.session.partition.ResumeToken] validation is an equality check on the
-     * [RoomId].
+     * The reason the override exists: an identity decided *outside* kuilt — a lobby code, an invite
+     * link, a matchmaker-assigned game id — is adopted by every room told to use it, so two rooms
+     * naming one logical game agree rather than each inventing an id.
+     *
+     * Deliberately **not** framed as host-restart resume. Reusing an id does not make a restarted
+     * host accept a `ResumeToken`: it has an empty roster, so `handleReconnectResumed` bails at
+     * `updateMemberLiveness(...) ?: return` and never sends `ResumeAck`. That is #1593's problem.
      */
     @Test
-    fun `a host restarting under the supplied id keeps the same room identity`() =
+    fun `two rooms told to use one id adopt it rather than minting`() =
         runTest {
-            val stable = RoomId("table-7")
+            val lobbyCode = RoomId("table-7")
             val f = factory(FakeLoom(), backgroundScope)
 
-            val before = f.host(Pattern(DEVICE), roomId = stable)
-            val after = f.host(Pattern(DEVICE), roomId = stable)
+            val first = f.host(Pattern(DEVICE), roomId = lobbyCode)
+            val second = f.host(Pattern(DEVICE), roomId = lobbyCode)
 
             assertAll(
-                { assertEquals(stable, before.roomId.value) },
-                { assertEquals(stable, after.roomId.value) },
+                { assertEquals(lobbyCode, first.roomId.value) },
+                { assertEquals(lobbyCode, second.roomId.value) },
+            )
+        }
+
+    @Test
+    fun `adopt rejects a room id supplied for a joiner`() =
+        runTest {
+            val f = factory(FakeLoom(), backgroundScope)
+
+            val failure = assertFailsWith<IllegalArgumentException> {
+                f.adopt(FakeSeam(selfId = PeerId(DEVICE)), SessionRole.Joiner, roomId = RoomId("table-7"))
+            }
+
+            // Silently ignoring it is the worse failure: a caller supplying an id would get a
+            // DIFFERENT identity than it asked for and fork its durable records with no signal.
+            assertTrue(
+                failure.message.orEmpty().contains("roomId applies to a host adopt"),
+                "expected the host-only contract in the message, got: ${failure.message}",
+            )
+        }
+
+    // ── The mint's own parts ──────────────────────────────────────────────────
+
+    /**
+     * Pins the **clock** segment, which nothing else here can see: every other test freezes the
+     * clock, so replacing `clock().toEpochMilliseconds()` with a constant leaves them all green and
+     * the counter silently carries every assertion. [FROZEN] is deliberately a non-zero instant for
+     * the same reason — against `FROZEN = 0` the obvious `0` mutation would be invisible too.
+     */
+    @Test
+    fun `a minted room id carries the clock's instant`() =
+        runTest {
+            val room = factory(FakeLoom(), backgroundScope).host(Pattern(DEVICE))
+
+            val id = assertNotNull(room.roomId.value).value
+            assertTrue(
+                id.startsWith("$DEVICE-room-${FROZEN.toEpochMilliseconds()}-"),
+                "expected the injected clock's instant in the minted id, got: $id",
+            )
+        }
+
+    /** And it *moves* with the clock — a constant in that position would pass the test above. */
+    @Test
+    fun `rooms minted at different instants carry different timestamps`() =
+        runTest {
+            var now = FROZEN
+            val f = SeamRoomFactory(FakeLoom(), backgroundScope, clock = { now })
+
+            val first = assertNotNull(f.host(Pattern(DEVICE)).roomId.value).value
+            now = FROZEN + 5.seconds
+            val second = assertNotNull(f.host(Pattern(DEVICE)).roomId.value).value
+
+            assertAll(
+                { assertTrue(first.startsWith("$DEVICE-room-${FROZEN.toEpochMilliseconds()}-"), first) },
+                {
+                    assertTrue(
+                        second.startsWith("$DEVICE-room-${(FROZEN + 5.seconds).toEpochMilliseconds()}-"),
+                        second,
+                    )
+                },
             )
         }
 
@@ -198,7 +263,13 @@ class RoomIdentityTest {
         /** A session name for the real-handshake tests over [InMemoryLoom]. */
         const val SESSION = "s"
 
-        /** Both rooms are minted at the same instant, so only the counter can separate them. */
-        val FROZEN: Instant = Instant.fromEpochMilliseconds(0L)
+        /**
+         * Both rooms are minted at the same instant, so only the counter can separate them.
+         *
+         * **Non-zero on purpose.** At epoch 0 the timestamp segment renders as `"0"`, so replacing
+         * `clock().toEpochMilliseconds()` with a literal `0` would be undetectable — the fixture
+         * would have picked the one value at which the clock cannot be told from a constant.
+         */
+        val FROZEN: Instant = Instant.fromEpochMilliseconds(1_762_000_000_000L)
     }
 }

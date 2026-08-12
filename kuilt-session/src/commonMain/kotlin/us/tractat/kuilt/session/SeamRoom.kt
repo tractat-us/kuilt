@@ -211,14 +211,16 @@ public class SeamRoomFactory(
      * [ResumeToken]) instead of going straight to terminal. See the [SeamRoom] `reweave` KDoc for the
      * same-instance-heal contract this must satisfy.
      *
-     * [roomId] is this room's identity ([Room.roomId]), and applies to a **host** adopt only — a
-     * joiner learns the room's id from the host's `Welcome`, so a value passed with
-     * [SessionRole.Joiner] is ignored rather than rejected (the election lobby adopts with a role
-     * decided at runtime, so a caller cannot know its side in advance). Null — the default — mints a
-     * fresh one per adopt, which is what stops two rooms one device adopts in a row from colliding
-     * (#1594). Supply it to keep **one identity across a host restart**: a host that returns under a
-     * freshly minted id invalidates every outstanding [ResumeToken], since the host refuses a token
-     * naming any other room.
+     * [roomId] is this room's identity ([Room.roomId]) and applies to a **host** adopt only — a
+     * joiner learns the room's id from the host's `Welcome`. Null — the default — mints a fresh one
+     * per adopt, which is what stops two rooms one device adopts in a row from colliding (#1594).
+     * Supply it when the identity is decided outside kuilt (a lobby code, an invite link, a
+     * matchmaker-assigned game id) and the room must adopt it. It does **not** make a host restart
+     * resumable — see [Room.roomId] and #1593.
+     *
+     * @throws IllegalArgumentException if [roomId] is non-null and [role] is [SessionRole.Joiner].
+     *   A joiner cannot choose the room's identity, and silently overriding the caller's value with
+     *   a different one would fork its durable records with no signal.
      */
     public suspend fun adopt(
         seam: Seam,
@@ -228,10 +230,16 @@ public class SeamRoomFactory(
         reweave: (suspend () -> Seam)? = null,
         roomId: RoomId? = null,
     ): Room {
-        // A joiner is never given one — it learns the room's identity from the host's Welcome, so a
-        // supplied id here would be a claim this peer is not entitled to make. Ignored, not
-        // rejected: the election lobby adopts with a role decided at runtime, so a caller that wants
-        // a stable id cannot know in advance which side it will end up on.
+        // Rejected, not ignored. A joiner learns the room's identity from the host's Welcome, so a
+        // supplied id here is a claim this peer is not entitled to make — and silently dropping it
+        // is the worse failure: a caller following the supply-your-own-id pattern would land on the
+        // joiner branch, get a DIFFERENT identity than it asked for, and fork its durable records
+        // with no signal at all. Fail fast instead. (The hypothetical decide-role-at-runtime caller
+        // does not exist today: SeamElectionLobby.adoptRoom passes no roomId. If one appears, that
+        // is the moment to relax this — with a test.)
+        require(roomId == null || role == SessionRole.Host) {
+            "roomId applies to a host adopt; a joiner learns it from the host's Welcome"
+        }
         val resolvedRoomId = if (role == SessionRole.Host) roomId ?: mintRoomId(seam) else null
         return SeamRoom(
             seam = seam,
@@ -281,9 +289,11 @@ public class SeamRoomFactory(
      *   (#1594) — `selfId` is stable per device (a durable `DeviceIdStore` value in the field), so it
      *   identifies the host, never the room.
      * - **the clock** — the factory's already-injected [clock], so the id is deterministic under a
-     *   virtual test clock and survives a process restart without a durable counter. Deliberately
-     *   *not* a [kotlin.random.Random]: a required parameter would be a ~96-call-site mechanical
-     *   diff, and a defaulted `Random.Default` would be un-injected randomness, which this repo bans.
+     *   virtual test clock, and so the sequence needs no durable storage: it restarts at `0` after a
+     *   process restart, but the timestamp has moved, so a fresh run cannot re-mint an id an earlier
+     *   run used. (That is a statement about *collisions*, not about resume: see [Room.roomId].)
+     *   Deliberately *not* a [kotlin.random.Random] — a required parameter would be a ~96-call-site
+     *   mechanical diff, and a defaulted `Random.Default` would be un-injected randomness, banned here.
      * - **the sequence** — the part that actually carries uniqueness when the clock cannot. Two rooms
      *   minted in the same millisecond, or under a frozen test clock, differ only here. It is
      *   **process-wide** rather than per-factory because two factories sharing one clock and one
@@ -1518,10 +1528,16 @@ internal class SeamRoom(
 
             // Learn the room's identity from the same frame that mints the resume token, so
             // [Room.roomId] and [ResumeToken.roomId] can never name different rooms (#1594). Placed
-            // above the self-admission branch to cover BOTH Welcome shapes a joiner accepts, exactly
-            // as the two mintTokenIfAbsent calls below do. Only the self-admission Welcome actually
-            // carries a roomId today — bootstrap and host-intro Welcomes send null — so this is
-            // idempotent on the rest rather than dependent on which arrives first.
+            // above the self-admission branch to cover every Welcome shape a joiner accepts, exactly
+            // as the two mintTokenIfAbsent calls below do.
+            //
+            // TWO shapes carry a roomId, not one: `admitPeer` builds a single `welcome` with
+            // `roomId = _roomId.value?.value` and both sends it to the joiner itself (the
+            // self-admission Welcome) AND hands that same object to `fanOutToOtherMembers`, which
+            // re-encodes it unchanged to every other admitted member (the roster-sync Welcome). Both
+            // therefore name the room. The bootstrap and host-intro Welcomes send null. Which shape
+            // lands first does not matter: they agree on the value, and the write-once guard in
+            // [adoptRoomIdIfAbsent] makes every one after the first a no-op.
             adoptRoomIdIfAbsent(welcome.roomId)
 
             // Self-admission welcome: mint the resume token (once) from the roomId carried here.

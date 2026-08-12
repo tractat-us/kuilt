@@ -83,21 +83,20 @@ public suspend fun perSessionIdSample(room: Room) {
 }
 ```
 
-**Intent:** the *host* restarts and you want its members' saved `ResumeToken`s to still work.
-**Primitive:** `RoomFactory.host(pattern, roomId = …)` — host again under the id you persisted. A token names the room it was issued for and the host refuses any other, so a host that returns under a freshly minted id strands every outstanding token.
+**Intent:** the room's identity is decided *outside* kuilt — a lobby code, an invite link, a matchmaker-assigned game id — and every member must read back that exact value.
+**Primitive:** `RoomFactory.host(pattern, roomId = …)`. Note what this is **not**: supplying an id does not make a *host restart* resumable. A restarted host has no roster and no reconnect-window registry, so a `ResumeToken` it accepts on identity grounds still cannot complete — cold-start rejoin is [#1593](https://github.com/tractat-us/kuilt/issues/1593), and reusing an id does not solve it.
 
-<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#stableRoomIdAcrossHostRestartSample -->
+<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#callerSuppliedRoomIdSample -->
 ```kotlin
-public suspend fun stableRoomIdAcrossHostRestartSample(
+public suspend fun callerSuppliedRoomIdSample(
     factory: RoomFactory,
     pattern: Pattern,
-    load: () -> String?,
-    save: (String) -> Unit,
-): Room {
-    // Null on a cold first run — then the factory mints, and you persist what it chose.
-    val room = factory.host(pattern, roomId = load()?.let(::RoomId))
-    save(room.roomId.value?.value ?: error("a host room knows its id at construction"))
-    return room
+    lobbyCode: String,
+): RoomId {
+    val room = factory.host(pattern, roomId = RoomId(lobbyCode))
+    // Read back off the room, not off the variable you passed in: the room is the thing joiners
+    // agree with, and on a joiner this same property is how you learn the value at all.
+    return room.roomId.value ?: error("a host room knows its id at construction")
 }
 ```
 

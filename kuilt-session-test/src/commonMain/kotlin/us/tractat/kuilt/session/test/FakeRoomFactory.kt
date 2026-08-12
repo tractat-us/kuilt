@@ -1,6 +1,5 @@
 package us.tractat.kuilt.session.test
 
-import kotlinx.atomicfu.atomic
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Tag
@@ -37,7 +36,7 @@ public class FakeRoomFactory : RoomFactory {
         FakeRoom(
             selfId = PeerId(pattern.sessionName),
             initialRole = SessionRole.Host,
-            initialRoomId = roomId ?: RoomId("${pattern.sessionName}-room-${fakeRoomSequence.getAndIncrement()}"),
+            initialRoomId = roomId ?: mintFakeRoomId(PeerId(pattern.sessionName)),
         )
 
     /** A joiner has no room id until it is admitted; drive that with [FakeRoom.setRoomId]. */
@@ -48,13 +47,6 @@ public class FakeRoomFactory : RoomFactory {
             initialRoomId = null,
         )
 }
-
-/**
- * Process-wide room counter behind [FakeRoomFactory.host]'s mint. Atomic because a fake is not
- * exempt from the multi-threaded-dispatcher rule, and process-wide (not per-factory) because two
- * factories in one test are the ordinary case.
- */
-private val fakeRoomSequence = atomic(0L)
 
 /**
  * Build a wired pair of [FakeRoom]s whose [FakeRoom.broadcast] calls cross-deliver

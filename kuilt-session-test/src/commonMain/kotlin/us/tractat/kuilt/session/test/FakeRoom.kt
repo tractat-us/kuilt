@@ -1,5 +1,6 @@
 package us.tractat.kuilt.session.test
 
+import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -32,6 +33,21 @@ import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
+
+/**
+ * The process-wide room counter shared by [FakeRoom]'s host default and [FakeRoomFactory.host].
+ *
+ * Atomic because a fake is not exempt from the multi-threaded-dispatcher rule, and process-wide (not
+ * per-instance) because the collision this prevents is precisely *between* instances.
+ */
+private val fakeRoomSequence = atomic(0L)
+
+/**
+ * Mint a distinct [RoomId] for a host-shaped fake room — readable (it leads with [selfId]) but never
+ * repeated, so no two fakes hand out one identity. See [FakeRoom]'s `initialRoomId` for why the
+ * obvious `"<selfId>-room"` is the wrong default.
+ */
+internal fun mintFakeRoomId(selfId: PeerId): RoomId = RoomId("${selfId.value}-room-${fakeRoomSequence.getAndIncrement()}")
 
 /**
  * A test double for [Room] with test-driver helpers for roster manipulation,
@@ -81,8 +97,14 @@ public class FakeRoom(
      * [setRoomId] — whenever the test asserts on the id itself. It is **not** a constant: a fake
      * that could not express "no room id yet", or "this specific room id", would make every test
      * written against it pass without checking anything.
+     *
+     * The host default is **minted**, not derived from [selfId] alone. `"${'$'}{selfId.value}-room"`
+     * is character-for-character the expression #1594 removed from production, and it collides on
+     * exactly the same axis: two `FakeRoom(selfId = PeerId("host"))` — or two [fakeRoomPair] calls,
+     * which default to that very id — would share one [RoomId] and quietly reproduce the bug inside
+     * the double built to test around it.
      */
-    initialRoomId: RoomId? = if (initialRole == SessionRole.Host) RoomId("${selfId.value}-room") else null,
+    initialRoomId: RoomId? = if (initialRole == SessionRole.Host) mintFakeRoomId(selfId) else null,
 ) : Room {
     private val _role = MutableStateFlow(initialRole)
     override val role: StateFlow<SessionRole> = _role.asStateFlow()

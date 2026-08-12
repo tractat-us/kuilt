@@ -20,6 +20,7 @@ import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.Member
 import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.ReconnectReason
+import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.RoomFactory
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
@@ -125,6 +126,70 @@ public abstract class RoomConformanceSuite {
             val joiner = h.joinerFactory.join(InMemoryTag("Bob"))
             assertEquals(SessionRole.Joiner, joiner.role.value, "join() must produce SessionRole.Joiner")
             joiner.leave()
+        }
+
+    // ── (2a) Room.roomId: the session identity both roles agree on (#1594) ───
+
+    /**
+     * A host knows which room it is **at construction** — [Room.roomId] is non-null the moment
+     * [RoomFactory.host] returns, with no round trip and nothing to wait for.
+     *
+     * And it names the *room*, not the *host*: a second room from the same factory (hence the same
+     * `selfId`) gets a different id. That is the whole of #1594 — a fabric whose `selfId` happens to
+     * be fresh per weave would make the first assertion pass and this one vacuous, so both are here.
+     */
+    @Test
+    public fun hostRoomKnowsItsRoomIdAtConstruction(): TestResult =
+        runTest {
+            val h = newHarness(backgroundScope)
+            val first = h.hostFactory.host(Pattern("Alice"))
+            val firstId = first.roomId.value
+            assertTrue(firstId != null, "a host room must know its RoomId at construction")
+            first.leave()
+
+            val second = h.hostFactory.host(Pattern("Alice"))
+            assertTrue(
+                second.roomId.value != firstId,
+                "a RoomId must name one room, not the host: two rooms shared $firstId",
+            )
+            second.leave()
+        }
+
+    /**
+     * A joiner has **no** identity until it is admitted, then reads the host's — one transition, to
+     * the value the host already held.
+     *
+     * Sampled before the wait, not after, so this cannot be satisfied by a fabric that admits so
+     * fast the null phase is never observable; and the post-condition is keyed to the roster rather
+     * than to a `roomId` collect, so a fabric that never delivers the id **fails** rather than
+     * hanging on a flow that never emits.
+     */
+    @Test
+    public fun joinerLearnsHostRoomIdOnAdmission(): TestResult =
+        runTest {
+            val h = newHarness(backgroundScope)
+            val host = h.hostFactory.host(Pattern("Alice"))
+            val joiner = h.joinerFactory.join(InMemoryTag("Alice"))
+            val beforeAdmission = joiner.roomId.value
+
+            joiner.roster.first { it.isNotEmpty() }
+
+            assertAll(
+                { assertEquals(null, beforeAdmission, "a joiner must not claim a RoomId before admission") },
+                {
+                    assertEquals(
+                        host.roomId.value,
+                        joiner.roomId.value,
+                        "an admitted joiner must read the host's RoomId",
+                    )
+                },
+                // The token is validated against exactly this id, so a room whose two surfaces
+                // disagreed would refuse its own members' resumes.
+                { assertEquals(host.roomId.value, joiner.resumeToken?.roomId) },
+            )
+
+            joiner.leave()
+            host.leave()
         }
 
     // ── (2b) a member's roster identity is its own member name, never the ──

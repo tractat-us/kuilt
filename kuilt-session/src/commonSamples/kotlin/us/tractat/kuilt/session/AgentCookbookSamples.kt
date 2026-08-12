@@ -65,23 +65,23 @@ public suspend fun perSessionIdSample(room: Room) {
 }
 
 /**
- * Survive a **host** restart with the joiners' [ResumeToken]s still valid, by hosting again under
- * the id you persisted rather than letting the factory mint a new one.
+ * Host under an id **decided outside kuilt** — a lobby code, an invite link, a matchmaker-assigned
+ * game id — instead of letting the factory mint one, so every member reads back the value your
+ * other systems already key on.
  *
- * A token names the room it was issued for and the host refuses any other, so a host that returns
- * under a fresh id strands every outstanding token as a session mismatch — members, fabric and
- * seats all still there, every rejoin refused.
+ * Supplying an id does **not** make a host restart resumable: a restarted host has no roster and no
+ * reconnect-window registry, so a `ResumeToken` it accepts on identity grounds still cannot
+ * complete. Cold-start rejoin is #1593.
  */
-public suspend fun stableRoomIdAcrossHostRestartSample(
+public suspend fun callerSuppliedRoomIdSample(
     factory: RoomFactory,
     pattern: Pattern,
-    load: () -> String?,
-    save: (String) -> Unit,
-): Room {
-    // Null on a cold first run — then the factory mints, and you persist what it chose.
-    val room = factory.host(pattern, roomId = load()?.let(::RoomId))
-    save(room.roomId.value?.value ?: error("a host room knows its id at construction"))
-    return room
+    lobbyCode: String,
+): RoomId {
+    val room = factory.host(pattern, roomId = RoomId(lobbyCode))
+    // Read back off the room, not off the variable you passed in: the room is the thing joiners
+    // agree with, and on a joiner this same property is how you learn the value at all.
+    return room.roomId.value ?: error("a host room knows its id at construction")
 }
 
 /**
