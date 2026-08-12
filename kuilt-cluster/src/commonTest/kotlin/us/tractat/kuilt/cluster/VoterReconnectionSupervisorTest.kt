@@ -3,6 +3,7 @@
 package us.tractat.kuilt.cluster
 
 import kotlinx.atomicfu.atomic
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -21,6 +22,7 @@ import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.fabric.Connection
 import us.tractat.kuilt.core.fabric.Mesh
 import us.tractat.kuilt.core.util.ExponentialBackoff
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -151,6 +153,52 @@ class VoterReconnectionSupervisorTest {
     }
 
     @Test
+    fun aDialedConnWhoseCloseMintsACancellationMustNotKillTheRedialLoop() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            // #2286 / #1834. A failed admit closes the dialed conn best-effort so a rejected redial does
+            // not leak a live WebSocket session. If that close mints its own CancellationException — a
+            // `withTimeout` inside the conn's own `close` — `runCatchingCancellable` re-throws it, and
+            // because the escaping throwable IS a CancellationException this peer's redial coroutine is
+            // *cancelled rather than failed*: silently, with `delay(backoff)` and every later redial
+            // skipped. The peer never returns, so `mesh.peers` never emits again and nothing restarts the
+            // loop — the drop is permanent. Eight lines above this guard the same function already uses
+            // withTimeoutOrNull "so the timeout is a value, not a cancellation runCatchingCancellable
+            // would re-throw"; the close guard reintroduced precisely that hazard.
+            val mesh = FakeMesh(self, initialPeers = setOf(p), republishOnAddLink = false, addLinkFails = true)
+            val dials = atomic(0)
+            val closes = atomic(0)
+            val job = superviseVoterReconnection(
+                mesh = mesh,
+                dialTargets = setOf(p),
+                dial = { peer ->
+                    dials.incrementAndGet()
+                    FakeConnection(peer) {
+                        closes.incrementAndGet()
+                        throw CancellationException("close timed out inside the conn")
+                    }
+                },
+                backoff = backoff(),
+                dialTimeout = 10.seconds,
+            )
+            runCurrent()
+
+            mesh.drop(p)
+            advanceTimeBy(2.seconds)
+            runCurrent()
+            val firstBatch = dials.value
+            assertTrue(firstBatch >= 2, "the loop must redial past a conn that refuses to close, was $firstBatch")
+
+            advanceTimeBy(5.seconds)
+            runCurrent()
+            assertAll(
+                { assertTrue(dials.value > firstBatch, "retries must keep growing: $firstBatch -> ${dials.value}") },
+                { assertEquals(dials.value, closes.value, "every failed admit must still close its dialed conn") },
+            )
+
+            job.cancel()
+        }
+
+    @Test
     fun neverDialsAPeerNotInDialTargets() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         // Dial target is p (present the whole test); we drop a DIFFERENT peer q the supervisor ignores.
         val mesh = FakeMesh(self, initialPeers = setOf(p, q))
@@ -172,11 +220,17 @@ class VoterReconnectionSupervisorTest {
     }
 }
 
-/** A [Connection] that carries the [PeerId] it dials, so [FakeMesh.addLink] knows whom to republish. */
-private class FakeConnection(val peer: PeerId) : Connection {
+/**
+ * A [Connection] that carries the [PeerId] it dials, so [FakeMesh.addLink] knows whom to republish.
+ * [onClose] lets a test make the close itself misbehave (default: a clean close).
+ */
+private class FakeConnection(
+    val peer: PeerId,
+    private val onClose: suspend () -> Unit = {},
+) : Connection {
     override suspend fun send(frame: ByteArray) = Unit
     override val incoming: Flow<ByteArray> = emptyFlow()
-    override suspend fun close() = Unit
+    override suspend fun close() = onClose()
 }
 
 /**
@@ -190,6 +244,7 @@ private class FakeMesh(
     override val selfId: PeerId,
     initialPeers: Set<PeerId>,
     private val republishOnAddLink: Boolean = true,
+    private val addLinkFails: Boolean = false,
 ) : Mesh {
     private val _peers = MutableStateFlow(initialPeers + selfId)
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
@@ -206,6 +261,7 @@ private class FakeMesh(
 
     override suspend fun addLink(conn: Connection) {
         _addLinkCount.incrementAndGet()
+        if (addLinkFails) throw IllegalStateException("admit rejected")
         if (republishOnAddLink) {
             val peer = (conn as FakeConnection).peer
             _peers.update { it + peer }

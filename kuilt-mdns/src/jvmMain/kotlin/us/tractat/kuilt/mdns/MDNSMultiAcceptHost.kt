@@ -146,17 +146,7 @@ public class MDNSMultiAcceptHost(
      * `peers` to `{selfPeerId}`. This method silently drops (closes) any such
      * self-connection and keeps waiting for a genuine joiner — self is never surfaced.
      */
-    public suspend fun nextSeam(): Seam {
-        while (true) {
-            val seam = server.nextLink()
-            if ((seam.peers.value - seam.selfId).isEmpty()) {
-                // Remote resolved to self (or presented no distinct identity): a self-dial. Drop it.
-                runCatchingCancellable { seam.close(CloseReason.Normal) }
-                continue
-            }
-            return seam
-        }
-    }
+    public suspend fun nextSeam(): Seam = acceptNonSelfSeam { server.nextLink() }
 
     /**
      * A cold stream of accepted seams — repeatedly calls [nextSeam], emitting one
@@ -169,4 +159,24 @@ public class MDNSMultiAcceptHost(
      * the caller owns both.
      */
     public fun close(): Unit = advertiser.unregister()
+}
+
+/**
+ * The self-dial-drop accept loop behind [MDNSMultiAcceptHost.nextSeam]: pull links from [nextLink]
+ * until one carries a remote distinct from `selfId`, closing (and skipping) every self-dial on the way.
+ *
+ * Split out from [MDNSMultiAcceptHost] so the drop path is drivable without a socket — the loop's
+ * only interesting behaviour is what it does when a dropped seam refuses to close, and a real
+ * `KtorServerLoom` seam cannot be made to refuse.
+ */
+internal suspend fun acceptNonSelfSeam(nextLink: suspend () -> Seam): Seam {
+    while (true) {
+        val seam = nextLink()
+        if ((seam.peers.value - seam.selfId).isEmpty()) {
+            // Remote resolved to self (or presented no distinct identity): a self-dial. Drop it.
+            runCatchingCancellable { seam.close(CloseReason.Normal) }
+            continue
+        }
+        return seam
+    }
 }
