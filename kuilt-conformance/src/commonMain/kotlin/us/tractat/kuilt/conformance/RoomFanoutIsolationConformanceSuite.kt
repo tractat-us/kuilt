@@ -7,13 +7,14 @@ import kotlinx.coroutines.flow.produceIn
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.NamedMux
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.RoomAuthorizer
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.coroutines.ContinuationInterceptor
@@ -22,6 +23,7 @@ import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -46,12 +48,31 @@ import kotlin.time.Duration.Companion.seconds
  *  - **(c) Auth-reject exclusion** — a connection the [RoomAuthorizer] rejects is structurally
  *    absent from the room ([rejectedConnectionIsStructurallyExcluded]).
  *
- * **Virtual time convention:** every test runs under [StandardTestDispatcher] with a tight 5 s
- * timeout, and awaits registration on observable state (`peers.first { … }`) rather than polling
- * after `advanceUntilIdle`, so the data path is driven deterministically.
+ * **Virtual time convention:** every test runs under [StandardTestDispatcher] with the
+ * [TEST_WEDGE_BACKSTOP] wedge ceiling, and awaits registration on observable state ([awaitPeers])
+ * rather than polling after `advanceUntilIdle`, so the data path is driven deterministically.
+ *
+ * **Every wait is bounded, and names what it saw.** Registration and delivery waits go through
+ * [awaitPeers] / [awaitFrame], bounded by [awaitBudget] in **virtual** time, and fail with an
+ * [AssertionError] quoting the peer set actually observed — a fanout [Loom] that never registers a
+ * client is the normal state of one under development, and an unbounded `peers.first { … }` turns
+ * that into a silent wall-clock burn ending in `UncompletedCoroutinesError` (#2284).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 public abstract class RoomFanoutIsolationConformanceSuite {
+
+    /**
+     * How long [awaitPeers] / [awaitFrame] wait before failing with the state they observed —
+     * **virtual** time, `null` to wait unbounded.
+     *
+     * Virtual is safe here by contract: [newHarness] is handed the test `dispatcher` precisely so
+     * server- and client-side seams share the virtual clock, so nothing under this suite advances
+     * real time and the trajectory is identical on every run. A harness that nonetheless does real
+     * I/O must override this to `null` — virtual time would fast-forward the whole budget while the
+     * frame is still on the wire, the way it red-lit a working `TcpConformanceTest` in #2069/#2115 —
+     * and take `runTest`'s own [TEST_WEDGE_BACKSTOP] as its backstop.
+     */
+    public open val awaitBudget: Duration? = 2.seconds
 
     /**
      * Binds a server-fanout [Loom] under test to a way of connecting client [Seam]s to it.
@@ -116,8 +137,10 @@ public abstract class RoomFanoutIsolationConformanceSuite {
             // Await registration on observable state: A and B into table-7, C into table-9.
             // Wait on member containment, not set size — [Seam.peers] also carries the hub's own
             // selfId (contract; #1506), so the roster is never just the remote spokes.
-            serverRoom7.peers.first { it.containsAll(setOf(PeerId("client-a"), PeerId("client-b"))) }
-            serverRoom9.peers.first { it.contains(PeerId("client-c")) }
+            serverRoom7.awaitPeers("table-7 registers client-a and client-b") {
+                it.containsAll(setOf(PeerId("client-a"), PeerId("client-b")))
+            }
+            serverRoom9.awaitPeers("table-9 registers client-c") { it.contains(PeerId("client-c")) }
 
             // C starts collecting on table-7 BEFORE the broadcast (so it can't merely miss frames).
             val cTable7Inbox = muxC.channel("table-7").incoming.produceIn(backgroundScope)
@@ -125,12 +148,12 @@ public abstract class RoomFanoutIsolationConformanceSuite {
             val payload = byteArrayOf(1, 2, 3)
             serverRoom7.broadcast(payload)
 
-            val bFrame = withTimeout(1.seconds) { muxB.channel("table-7").incoming.first() }
+            val bFrame = muxB.channel("table-7").awaitFrame("B's copy of the table-7 broadcast")
 
             // table-9 still works: C receives its own room's broadcast.
             val cPayload = byteArrayOf(9, 8, 7)
             serverRoom9.broadcast(cPayload)
-            val cFrame = withTimeout(1.seconds) { muxC.channel("table-9").incoming.first() }
+            val cFrame = muxC.channel("table-9").awaitFrame("C's copy of the table-9 broadcast")
 
             assertAll(
                 { assertTrue(bFrame.toByteArray().contentEquals(payload), "B must receive the table-7 broadcast") },
@@ -163,8 +186,10 @@ public abstract class RoomFanoutIsolationConformanceSuite {
             muxB.channel("table-7").broadcast(byteArrayOf())
             muxC.channel("table-9").broadcast(byteArrayOf())
 
-            val room7Peers = serverRoom7.peers.first { it.containsAll(setOf(PeerId("client-a"), PeerId("client-b"))) }
-            val room9Peers = serverRoom9.peers.first { it.contains(PeerId("client-c")) }
+            val room7Peers = serverRoom7.awaitPeers("table-7 registers client-a and client-b") {
+                it.containsAll(setOf(PeerId("client-a"), PeerId("client-b")))
+            }
+            val room9Peers = serverRoom9.awaitPeers("table-9 registers client-c") { it.contains(PeerId("client-c")) }
 
             assertAll(
                 {
@@ -205,7 +230,7 @@ public abstract class RoomFanoutIsolationConformanceSuite {
 
             // Await C's registration in table-9 deterministically (wait on membership, not size —
             // the roster also carries the hub's own selfId, #1506).
-            serverRoom9.peers.first { it.contains(PeerId("client-c")) }
+            serverRoom9.awaitPeers("table-9 registers client-c") { it.contains(PeerId("client-c")) }
 
             // Close table-7 — table-9 must remain usable.
             serverRoom7.close()
@@ -213,7 +238,7 @@ public abstract class RoomFanoutIsolationConformanceSuite {
             val cPayload = byteArrayOf(42, 43)
             serverRoom9.broadcast(cPayload)
 
-            val cFrame = withTimeout(1.seconds) { muxC.channel("table-9").incoming.first() }
+            val cFrame = muxC.channel("table-9").awaitFrame("C's copy of the table-9 broadcast")
             assertTrue(cFrame.toByteArray().contentEquals(cPayload), "table-9 must work after table-7 is closed")
         }
 
@@ -246,7 +271,7 @@ public abstract class RoomFanoutIsolationConformanceSuite {
             noMux.channel("table-7").broadcast(byteArrayOf())
 
             // Await the admitted peer's registration; the rejected one must never register.
-            serverRoom7.peers.first { it.contains(okPeer) }
+            serverRoom7.awaitPeers("table-7 registers the admitted client") { it.contains(okPeer) }
 
             // Rejected client begins collecting BEFORE the broadcast so it cannot merely miss a frame.
             val rejectedInbox = noMux.channel("table-7").incoming.produceIn(backgroundScope)
@@ -254,7 +279,7 @@ public abstract class RoomFanoutIsolationConformanceSuite {
             val payload = byteArrayOf(7, 7, 7)
             serverRoom7.broadcast(payload)
 
-            val okFrame = withTimeout(1.seconds) { okMux.channel("table-7").incoming.first() }
+            val okFrame = okMux.channel("table-7").awaitFrame("the admitted client's copy of the broadcast")
 
             assertAll(
                 { assertTrue(okFrame.toByteArray().contentEquals(payload), "admitted client must receive the broadcast") },
@@ -262,4 +287,47 @@ public abstract class RoomFanoutIsolationConformanceSuite {
                 { assertEquals(setOf(serverRoom7.selfId, okPeer), serverRoom7.peers.value, "only the hub selfId and the admitted peer are in table-7; the rejected peer never registers") },
             )
         }
+
+    // ── Bounded waits ─────────────────────────────────────────────────────────
+
+    /**
+     * Suspend until [predicate] holds over this seam's [Seam.peers] and return that set; on expiry
+     * of [awaitBudget] fail with an [AssertionError] quoting the peers actually observed.
+     *
+     * [expected] states the predicate in words, because the predicate is a lambda and cannot print
+     * itself.
+     */
+    private suspend fun Seam.awaitPeers(
+        expected: String,
+        predicate: (Set<PeerId>) -> Boolean,
+    ): Set<PeerId> {
+        val budget = awaitBudget ?: return peers.first(predicate)
+        return withTimeoutOrNull(budget) { peers.first(predicate) }
+            ?: fail("peers never satisfied: $expected", budget)
+    }
+
+    /** Suspend until this seam delivers a frame; on expiry name the room and the peers it had. */
+    private suspend fun Seam.awaitFrame(expected: String): Swatch {
+        val budget = awaitBudget ?: return incoming.first()
+        return withTimeoutOrNull(budget) { incoming.first() }
+            ?: fail("no frame arrived: $expected", budget)
+    }
+
+    private fun Seam.fail(headline: String, budget: Duration): Nothing =
+        throw AssertionError(
+            buildString {
+                appendLine("RoomFanoutIsolationConformanceSuite: $headline")
+                appendLine("  waited $budget of VIRTUAL time (RoomFanoutIsolationConformanceSuite.awaitBudget)")
+                appendLine("  seam: selfId=${selfId.value}")
+                appendLine(
+                    "  peers (${peers.value.size}): " +
+                        peers.value.joinToString(prefix = "[", postfix = "]") { it.value },
+                )
+                append(
+                    "  A room's peer set carries the hub's own selfId plus its registered members " +
+                        "(#1506), so a set holding only the hub means the client's first frame on " +
+                        "that channel never reached the server's per-room accept path.",
+                )
+            },
+        )
 }

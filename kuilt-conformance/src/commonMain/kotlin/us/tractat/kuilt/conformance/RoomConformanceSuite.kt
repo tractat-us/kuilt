@@ -3,12 +3,14 @@ package us.tractat.kuilt.conformance
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
-import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.test.Direction
 import us.tractat.kuilt.test.FaultProfile
 import us.tractat.kuilt.test.FaultyLoom
@@ -22,17 +24,21 @@ import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.ReconnectReason
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.RoomFactory
+import us.tractat.kuilt.session.RoomFrame
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.ResumeResult
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
@@ -56,6 +62,14 @@ import kotlin.time.Instant
  * **Fault injection:** tests that require partition behaviour check
  * [RoomHarness.faultyLoom] — when null the test is skipped so subclasses backed
  * by fabrics that do not support fault injection still pass the suite.
+ *
+ * **Every wait is bounded, and names what it saw.** The population running this suite is by
+ * definition implementors whose fabric does *not* work yet, so no obligation here may be guarded by
+ * a suspending wait that simply never returns. Waits go through [awaitRoster] / [awaitEvent] /
+ * [awaitFrame], each bounded by [awaitBudget] in **virtual** time and each failing with an
+ * [AssertionError] that prints the roster (or the events) actually observed — see #2284, where a
+ * fabric that never admitted burned the whole `runTest` ceiling and then reported
+ * `UncompletedCoroutinesError`, naming neither the room nor its roster.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 public abstract class RoomConformanceSuite {
@@ -70,6 +84,35 @@ public abstract class RoomConformanceSuite {
         timeout = 200.milliseconds,
         reconnectWindow = 500.milliseconds,
     )
+
+    /**
+     * How long [awaitRoster] / [awaitEvent] / [awaitFrame] wait before failing with the state they
+     * observed — **virtual** time, `null` to wait unbounded.
+     *
+     * Virtual, not wall-clock, is the whole point: this suite's harness runs on the test scheduler
+     * ([newHarness] takes the test's scope, and the partition tests drive `advanceTimeBy` +
+     * [RoomHarness.advanceClock] in lockstep), so the trajectory is identical on every run and a
+     * bound over it is deterministic. A wall-clock bound would assert "this host retires N units of
+     * work in T seconds", which is false exactly when the box is busy — the defect
+     * `forbidTightRunTestTimeout` exists to stop (#1739 / #1891).
+     *
+     * Generous relative to this suite's own timescale rather than tight: [fastHeartbeatConfig] ticks
+     * every 100 ms and the longest deliberate advancement in the suite is ~1 s, so this leaves ~5×
+     * headroom. It is a **wedge** bound, not a latency assertion — nothing here asserts a fabric
+     * admits *quickly*, only that it admits. Expiry costs no wall-clock time worth measuring: the
+     * scheduler fast-forwards through the intervening virtual ticks.
+     *
+     * ## Override to `null` if your harness does real I/O
+     *
+     * A fabric whose delivery does **not** run on the test scheduler — a real socket, a real radio —
+     * does not advance the virtual clock, so `runTest` fast-forwards the entire budget while the
+     * frame is still on the wire and a working fabric fails. That is not hypothetical: it is
+     * kuilt #2069 / #2115, where a `withTimeout(30.seconds)` added to a [SeamConformanceSuite]
+     * obligation red-lit `TcpConformanceTest` on a 16 MiB frame that was crossing loopback fine.
+     * Such a harness sets this to `null` and takes `runTest`'s own [TEST_WEDGE_BACKSTOP] ceiling as
+     * its backstop — losing the named failure, which is the honest trade for a real-I/O fabric.
+     */
+    public open val awaitBudget: Duration? = 5.seconds
 
     /**
      * A harness that bundles host and joiner [RoomFactory]s plus optional
@@ -108,7 +151,7 @@ public abstract class RoomConformanceSuite {
 
     @Test
     public fun hostFactoryAssignsHostRole(): TestResult =
-        runTest {
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
             val room = h.hostFactory.host(Pattern("Alice"))
             assertEquals(SessionRole.Host, room.role.value, "host() must produce SessionRole.Host")
@@ -120,7 +163,7 @@ public abstract class RoomConformanceSuite {
 
     @Test
     public fun joinFactoryAssignsJoinerRole(): TestResult =
-        runTest {
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
             h.hostFactory.host(Pattern("Alice"))
             val joiner = h.joinerFactory.join(InMemoryTag("Bob"))
@@ -140,7 +183,7 @@ public abstract class RoomConformanceSuite {
      */
     @Test
     public fun hostRoomKnowsItsRoomIdAtConstruction(): TestResult =
-        runTest {
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
             val first = h.hostFactory.host(Pattern("Alice"))
             val firstId = first.roomId.value
@@ -166,13 +209,15 @@ public abstract class RoomConformanceSuite {
      */
     @Test
     public fun joinerLearnsHostRoomIdOnAdmission(): TestResult =
-        runTest {
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
             val host = h.hostFactory.host(Pattern("Alice"))
             val joiner = h.joinerFactory.join(InMemoryTag("Alice"))
             val beforeAdmission = joiner.roomId.value
 
-            joiner.roster.first { it.isNotEmpty() }
+            joiner.awaitRoster("roster.isNotEmpty() — the joiner is admitted and sees the host") {
+                it.isNotEmpty()
+            }
 
             assertAll(
                 { assertEquals(null, beforeAdmission, "a joiner must not claim a RoomId before admission") },
@@ -197,13 +242,13 @@ public abstract class RoomConformanceSuite {
 
     @Test
     public fun membersAppearUnderTheirOwnMemberName(): TestResult =
-        runTest {
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
             val host = h.hostFactory.host(Pattern("Alice's game"), memberName = "Alice")
             val joiner = h.joinerFactory.join(InMemoryTag("Alice's game"), memberName = "Bob")
 
-            val hostRoster = host.roster.first { it.size == 1 }
-            val joinerRoster = joiner.roster.first { it.isNotEmpty() }
+            val hostRoster = host.awaitRoster("roster.size == 1 — Bob is admitted") { it.size == 1 }
+            val joinerRoster = joiner.awaitRoster("roster.isNotEmpty() — Alice is visible") { it.isNotEmpty() }
             // List-shaped, not `roster.single().identity`: `single()` throws a non-AssertionError
             // on a roster that is not exactly one member, and `assertAll` lets that abort the
             // whole block — masking the sibling and printing "Collection has more than one
@@ -222,7 +267,7 @@ public abstract class RoomConformanceSuite {
 
     @Test
     public fun rosterIsEmptyBeforeAnyHandshake(): TestResult =
-        runTest {
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
             val hostRoom = h.hostFactory.host(Pattern("Alice"))
             assertEquals(
@@ -237,16 +282,16 @@ public abstract class RoomConformanceSuite {
 
     @Test
     public fun broadcastDeliversRoomFrameTaggedWithSender(): TestResult =
-        runTest {
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
             val hostRoom = h.hostFactory.host(Pattern("Alice"))
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
 
-            hostRoom.roster.first { it.size == 1 }
-            joinerRoom.roster.first { it.isNotEmpty() }
+            hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }
+            joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
 
             val payload = byteArrayOf(1, 2, 3)
-            val frameDeferred = async { joinerRoom.incoming.first() }
+            val frameDeferred = async { joinerRoom.awaitFrame("the host's broadcast") }
             hostRoom.broadcast(payload)
 
             val frame = frameDeferred.await()
@@ -261,15 +306,15 @@ public abstract class RoomConformanceSuite {
 
     @Test
     public fun leaveNormalFiresLeftEventAndShrinksRoster(): TestResult =
-        runTest {
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
             val hostRoom = h.hostFactory.host(Pattern("Alice"))
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
 
-            hostRoom.roster.first { it.size == 1 }
+            hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }
 
             val leftDeferred = async {
-                hostRoom.events.filterIsInstance<MembershipEvent.Left>().first()
+                hostRoom.awaitEvent("MembershipEvent.Left") { it as? MembershipEvent.Left }
             }
 
             joinerRoom.leave(LeaveReason.Normal)
@@ -285,17 +330,18 @@ public abstract class RoomConformanceSuite {
 
     @Test
     public fun rejoinAfterLeaveWorks(): TestResult =
-        runTest {
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
             val hostRoom = h.hostFactory.host(Pattern("Alice"))
 
             val firstJoiner = h.joinerFactory.join(InMemoryTag("Bob"), memberName = "Bob")
-            hostRoom.roster.first { it.size == 1 }
+            hostRoom.awaitRoster("roster.size == 1 — Bob's first join is admitted") { it.size == 1 }
             firstJoiner.leave()
-            hostRoom.roster.first { it.isEmpty() }
+            hostRoom.awaitRoster("roster.isEmpty() — Bob's leave is observed") { it.isEmpty() }
 
             val secondJoiner = h.joinerFactory.join(InMemoryTag("Bob"), memberName = "Bob")
-            val rosterAfterRejoin = hostRoom.roster.first { it.size == 1 }
+            val rosterAfterRejoin =
+                hostRoom.awaitRoster("roster.size == 1 — Bob's rejoin is admitted") { it.size == 1 }
 
             assertEquals(1, rosterAfterRejoin.size, "roster must contain the rejoiner")
             assertEquals("Bob", rosterAfterRejoin.first().identity.displayName, "rejoiner display name must match")
@@ -328,19 +374,19 @@ public abstract class RoomConformanceSuite {
      */
     @Test
     public fun partitionedAndRecoveredFireOnLivenessTransitions(): TestResult =
-        runTest {
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
             val faultyLoom = h.faultyLoom ?: return@runTest
 
             val hostRoom = h.hostFactory.host(Pattern("Alice"))
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
-            hostRoom.roster.first { it.size == 1 }
+            hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }
 
             // After host() and join(), links[0] = host's seam, links[1] = joiner's seam.
             val hostSeam = faultyLoom.links[0]
 
             val partitionedDeferred = async {
-                hostRoom.events.filterIsInstance<MembershipEvent.Partitioned>().first()
+                hostRoom.awaitEvent("MembershipEvent.Partitioned") { it as? MembershipEvent.Partitioned }
             }
             // Fault only the host's seam (both directions) — joiner seam stays Healthy.
             hostSeam.setFaultProfile(FaultProfile.DropAll(Direction.Both))
@@ -359,7 +405,7 @@ public abstract class RoomConformanceSuite {
             // Start the recovered collector AFTER one pong exchange but BEFORE the next
             // poll cycle where PeerRecovered fires — mirrors PartitionRoleTest exactly.
             val recoveredDeferred = async {
-                hostRoom.events.filterIsInstance<MembershipEvent.Recovered>().first()
+                hostRoom.awaitEvent("MembershipEvent.Recovered") { it as? MembershipEvent.Recovered }
             }
             repeat(5) { h.advanceClock(100L); advanceTimeBy(100L) }
 
@@ -375,23 +421,27 @@ public abstract class RoomConformanceSuite {
 
     @Test
     public fun resumeWithinWindowFiresResumed(): TestResult =
-        runTest {
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
             val faultyLoom = h.faultyLoom ?: return@runTest
 
             val hostRoom = h.hostFactory.host(Pattern("Alice"))
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
 
-            hostRoom.roster.first { it.size == 1 }
-            joinerRoom.roster.first { it.isNotEmpty() }
+            hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }
+            joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
 
             val token = joinerRoom.resumeToken ?: return@runTest
 
             faultyLoom.setFaultProfileOnAll(FaultProfile.DropAll(Direction.Both))
             repeat(4) { h.advanceClock(100L); advanceTimeBy(100L) }
 
-            val hostResumed = async { hostRoom.events.filterIsInstance<MembershipEvent.Resumed>().first() }
-            val joinerResumed = async { joinerRoom.events.filterIsInstance<MembershipEvent.Resumed>().first() }
+            val hostResumed = async {
+                hostRoom.awaitEvent("MembershipEvent.Resumed") { it as? MembershipEvent.Resumed }
+            }
+            val joinerResumed = async {
+                joinerRoom.awaitEvent("MembershipEvent.Resumed") { it as? MembershipEvent.Resumed }
+            }
 
             faultyLoom.setFaultProfileOnAll(FaultProfile.Healthy)
             advanceTimeBy(50L)
@@ -409,16 +459,16 @@ public abstract class RoomConformanceSuite {
 
     @Test
     public fun hostLostIsTerminalBroadcastIsNoOp(): TestResult =
-        runTest {
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
             val faultyLoom = h.faultyLoom ?: return@runTest
 
             h.hostFactory.host(Pattern("Alice"))
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
-            joinerRoom.roster.first { it.isNotEmpty() }
+            joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
 
             val hostLostDeferred = async {
-                joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first()
+                joinerRoom.awaitEvent("MembershipEvent.HostLost") { it as? MembershipEvent.HostLost }
             }
             faultyLoom.setFaultProfileOnAll(FaultProfile.DropAll(Direction.Both))
             repeat(9) { h.advanceClock(100L); advanceTimeBy(100L) }
@@ -432,16 +482,16 @@ public abstract class RoomConformanceSuite {
 
     @Test
     public fun memberThatLeftNoLongerReceivesFrames(): TestResult =
-        runTest {
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
             val hostRoom = h.hostFactory.host(Pattern("Alice"))
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
 
-            hostRoom.roster.first { it.size == 1 }
-            joinerRoom.roster.first { it.isNotEmpty() }
+            hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }
+            joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
 
             joinerRoom.leave(LeaveReason.Normal)
-            hostRoom.roster.first { it.isEmpty() }
+            hostRoom.awaitRoster("roster.isEmpty() — the joiner's leave is observed") { it.isEmpty() }
 
             var received = false
             val collectJob = launch { joinerRoom.incoming.collect { received = true } }
@@ -454,6 +504,94 @@ public abstract class RoomConformanceSuite {
 
             hostRoom.leave()
         }
+
+    // ── Bounded waits ─────────────────────────────────────────────────────────
+    //
+    // Build every obligation on these — never on a raw `roster.first { … }` or
+    // `events.filterIsInstance<…>().first()`. An unsatisfiable predicate on a StateFlow suspends
+    // forever, and "forever" in a `runTest` body means the wall-clock ceiling fires and reports
+    // `UncompletedCoroutinesError` — a message that names neither the room, nor the roster it saw,
+    // nor the assertion that was about to run (#2284).
+
+    /**
+     * Suspend until [predicate] holds over this room's [Room.roster] and return that roster; on
+     * expiry of [awaitBudget] fail with an [AssertionError] quoting the roster actually observed.
+     *
+     * [expected] states the predicate in the suite's own words ("roster.size == 1 — the joiner is
+     * admitted"), because the predicate itself is a lambda and cannot print itself.
+     */
+    private suspend fun Room.awaitRoster(
+        expected: String,
+        predicate: (Set<Member>) -> Boolean,
+    ): Set<Member> {
+        val budget = awaitBudget ?: return roster.first(predicate)
+        return withTimeoutOrNull(budget) { roster.first(predicate) }
+            ?: fail("roster never satisfied: $expected", budget)
+    }
+
+    /**
+     * Suspend until this room emits a [MembershipEvent] that [select] accepts and return it; on
+     * expiry of [awaitBudget] fail with an [AssertionError] quoting **every event that did arrive**
+     * plus the roster, so "the wrong event fired" and "nothing fired at all" are different messages.
+     *
+     * Collection starts where the call is made, so the `async { … }`-before-the-trigger placement
+     * the partition tests rely on is unchanged.
+     */
+    private suspend fun <E : MembershipEvent> Room.awaitEvent(
+        expected: String,
+        select: (MembershipEvent) -> E?,
+    ): E {
+        val observed = mutableListOf<MembershipEvent>()
+        val budget = awaitBudget ?: return events.mapNotNull(select).first()
+        return withTimeoutOrNull(budget) {
+            events.onEach { observed += it }.mapNotNull(select).first()
+        } ?: fail(
+            "no $expected event arrived",
+            budget,
+            "events observed while waiting (${observed.size}): " +
+                if (observed.isEmpty()) "none" else observed.joinToString(prefix = "[", postfix = "]"),
+        )
+    }
+
+    /**
+     * Suspend until this room delivers a [RoomFrame] and return it; on expiry of [awaitBudget] fail
+     * with an [AssertionError] quoting the roster, since a frame that never arrives is usually a
+     * membership problem rather than a transport one.
+     */
+    private suspend fun Room.awaitFrame(expected: String): RoomFrame {
+        val budget = awaitBudget ?: return incoming.first()
+        return withTimeoutOrNull(budget) { incoming.first() }
+            ?: fail("no frame arrived: $expected", budget)
+    }
+
+    /**
+     * The one failure renderer the three helpers share — the actual deliverable of #2284.
+     *
+     * Names the room (role / selfId / roomId), prints the roster it observed member by member with
+     * liveness, and states the bound as virtual so nobody reads the expiry as a slow machine.
+     */
+    private fun Room.fail(headline: String, budget: Duration, vararg extra: String): Nothing {
+        val members = roster.value
+        throw AssertionError(
+            buildString {
+                appendLine("RoomConformanceSuite: $headline")
+                appendLine("  waited $budget of VIRTUAL time (RoomConformanceSuite.awaitBudget)")
+                appendLine("  room: role=${role.value} selfId=${selfId.value} roomId=${roomId.value}")
+                appendLine(
+                    "  roster (${members.size} member(s)): " +
+                        members.joinToString(prefix = "[", postfix = "]") {
+                            "${it.identity.displayName}/${it.id.value} liveness=${it.liveness}"
+                        },
+                )
+                extra.forEach { appendLine("  $it") }
+                append(
+                    "  An empty roster here is a fabric whose admit/identify handshake never " +
+                        "completed: check that the joiner's Hello reaches the host and the host's " +
+                        "admit reaches back.",
+                )
+            },
+        )
+    }
 
     // ── Default harness ───────────────────────────────────────────────────────
 

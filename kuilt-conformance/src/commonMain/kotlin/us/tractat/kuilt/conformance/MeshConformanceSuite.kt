@@ -33,6 +33,23 @@ import kotlin.time.Duration.Companion.seconds
  * peer. The harness must not return until all inter-peer connections are
  * established (i.e. every returned seam has already completed its handshakes
  * with every other peer).
+ *
+ * ## Why the delivery awaits here are deliberately UNBOUNDED
+ *
+ * [RoomConformanceSuite] and [RoomFanoutIsolationConformanceSuite] bound every wait in **virtual**
+ * time so a fabric that never delivers fails fast and names what it saw (#2284). This suite
+ * deliberately does not, and the difference is its harness contract: [newMeshOfSize] is a plain
+ * `suspend fun` — it is handed neither the test scope nor the test dispatcher, so nothing here
+ * requires the mesh to run on the test scheduler, and a real-socket mesh is a first-class harness.
+ * A `withTimeout` in a `runTest` body is measured in *virtual* time, which a real socket does not
+ * advance: `runTest` fast-forwards the whole bound while the frame is still on the wire and a
+ * working fabric fails. That is exactly what a `withTimeout` added to a [SeamConformanceSuite]
+ * obligation did to `TcpConformanceTest` on a 16 MiB loopback frame (#2069 / #2115).
+ *
+ * So the awaits below match [SeamConformanceSuite]'s: a bare `await()` / `first()`, with `runTest`'s
+ * own ceiling as the wedge backstop. Do not "fix" them into bounded ones without first giving this
+ * suite a way to know its harness is virtual-time-only — the two Room suites have that in a
+ * `awaitBudget` an implementor can null out; this one does not.
  */
 public abstract class MeshConformanceSuite {
 
