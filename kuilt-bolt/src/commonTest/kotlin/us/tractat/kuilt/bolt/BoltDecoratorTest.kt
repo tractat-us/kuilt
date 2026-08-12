@@ -259,13 +259,34 @@ class BoltDecoratorTest {
      *
      * **And the memory bound is in the fixture, not just the prose.** `frontierWindow` is set to
      * exactly [PEERS] — one run per author and not one entry to spare — so the decorator's entire
-     * insert memory while suppressing [OPS_PER_PEER] operations per peer is *six runs*. Widening it
-     * would weaken the test; the tightness is the claim.
+     * insert memory while suppressing the whole working set is **[PEERS] runs holding
+     * `PEERS × OPS_PER_PEER` archived inserts**. Widening `frontierWindow` would weaken the test;
+     * the tightness is the claim. The **precondition** that tightness rests on is *one `publish`
+     * per peer per round* — splitting a peer's log across two publishes fragments its run and would
+     * redden this legitimately. Repair such a red by restoring the single publish, never by
+     * widening the window.
+     *
+     * **No replay, on purpose.** An earlier draft ended by replaying the archive and counting the
+     * decoded operations, which cost more than the property it was checking. It also added nothing:
+     * `AppendResult.Written` is the *only* thing that puts bytes in an archive, so `framesWritten`
+     * staying at [PEERS] across [ROUNDS] rounds already says no byte was added after the first. The
+     * op count comes from the **bolt's** own `AppendResult.Written.opCount`, not from anything the
+     * decorator invented. Byte-level round-tripping is pinned where it is cheap — at three
+     * operations, in [rePublishingTheSameOperationsWritesNothingAndDoesNotDoubleTheArchive], and in
+     * `BoltConformanceSuite`.
      *
      * Inserts only, deliberately: removes are the stated residual and are bounded by
      * `removalWindow`, so including more than [ISOLATING_REMOVAL_WINDOW] of them would make the
      * archive grow for a reason this test is not about. [insertsAreSuppressedWithNoRemovalWindowAtAll]
      * pins that boundary from the other side.
+     *
+     * **Cost, because this is the class's most expensive test and a CPU-bound one — so unlike the
+     * virtual-time tests `TEST_WEDGE_BACKSTOP` was written for, its ceiling really is wall-clock.**
+     * Measured with `uptime` sampled alongside (load 9–13, so these are upper bounds): jvm 0.24 s,
+     * macosArm64 1.52 s, iosSimulatorArm64 1.51 s — against a 30 s backstop, so roughly 20×
+     * headroom on the slowest target. The three things that keep it there are [gossipingPeers]
+     * minting one log rather than [PEERS], the absent replay above, and nothing else in the fixture
+     * scaling with [ROUNDS]. Re-measure if any of them changes.
      *
      * **Mutation receipt, measured:** routing inserts back through the identity window (give
      * `archiveKeyOf`'s `LogOp.Insert` arm `ArchiveKey.Identity(classified)`) reds the archive-size,
@@ -285,12 +306,13 @@ class BoltDecoratorTest {
                 // Exactly one run per author, and not one to spare.
                 frontierWindow = PEERS,
             )
-            val peers = List(PEERS) { peer -> liveLogOf(ReplicaId("peer-$peer"), OPS_PER_PEER) }
+            val peers = gossipingPeers()
             val offeredPerRound = peers.sumOf { it.size }
 
+            // One publish per peer, per round. That is the fixture's precondition, not an
+            // incidental shape — see this test's KDoc.
             repeat(ROUNDS) { peers.forEach { decorator.publish(it) } }
             val health = decorator.health.value
-            val archived = bolt.archivedOps().size
 
             assertAll(
                 {
@@ -304,16 +326,18 @@ class BoltDecoratorTest {
                 },
                 {
                     assertEquals(
-                        offeredPerRound,
-                        archived,
-                        "each operation archived exactly once, across $ROUNDS rounds",
+                        offeredPerRound.toLong(),
+                        health.opsArchived,
+                        "each operation archived exactly once, across $ROUNDS rounds — the count the " +
+                            "BOLT reported accepting, not one the decorator kept for itself",
                     )
                 },
                 {
                     assertEquals(
                         PEERS.toLong(),
                         health.framesWritten,
-                        "one frame per peer, in the FIRST round only — later rounds wrote nothing at all",
+                        "one frame per peer, in the FIRST round only — later rounds wrote nothing at all, " +
+                            "and a round that writes no frame cannot have added a byte",
                     )
                 },
                 {
@@ -325,6 +349,29 @@ class BoltDecoratorTest {
                 },
             )
         }
+
+    /**
+     * **The acceptance fixture's peers really are what those peers would have minted.**
+     *
+     * [gossipingPeers] re-keys one real log rather than minting [PEERS] of them, which is a fixture
+     * optimisation standing on a claim about `Rga`: that an insert's `lamport` and `seq` are
+     * derived from the minting replica's own counters and never from its [ReplicaId]. If that ever
+     * stops being true the acceptance fixture silently stops being a fleet of real peers, and every
+     * number it produces stops meaning what its KDoc says. So the claim is asserted here rather
+     * than argued in a comment.
+     *
+     * Eight operations, not [OPS_PER_PEER]: the claim is per-operation, so length adds cost and no
+     * coverage.
+     */
+    @Test
+    fun everyPeersLogIsWhatThatPeerWouldReallyHaveMinted() {
+        val author = ReplicaId("peer-7")
+
+        val minted = liveLogOf(author, count = 8)
+        val derived = reKeyed(liveLogOf(ReplicaId("peer-0"), count = 8), author)
+
+        assertEquals(minted, derived, "re-keying peer 0's log must reproduce peer 7's exactly")
+    }
 
     /**
      * Inserts offered **out of order** are archived once and suppressed thereafter — the frontier
@@ -776,6 +823,38 @@ class BoltDecoratorTest {
     }
 
     /**
+     * The acceptance fixture's fleet: [PEERS] peers, each holding [OPS_PER_PEER] inserts of its own.
+     *
+     * Peer 0's log is minted for real; every other peer's is that log **re-keyed** to its own
+     * [ReplicaId]. That is not a shortcut around real operations — it is *exactly* what each peer
+     * would mint. `Rga.mintInsert` derives an insert's `lamport` from the replica's own local
+     * counter (`lamport + 1`) and its `seq` from its own per-author counter, neither of which reads
+     * the `ReplicaId`. So [PEERS] replicas that each appended [OPS_PER_PEER] records without ever
+     * merging — the state a mesh is in immediately before its first anti-entropy round — produce
+     * byte-identical operations up to the id. [everyPeersLogIsWhatThatPeerWouldReallyHaveMinted]
+     * asserts that rather than asking anyone to believe it.
+     *
+     * What it buys is time: minting is O(n²) in the *source* `Rga` (each mint copies its op-set), so
+     * doing it [PEERS] times over rather than once is the fixture's dominant cost for no added
+     * fidelity.
+     */
+    private fun gossipingPeers(): List<List<RgaOp<String>>> {
+        val base = liveLogOf(ReplicaId("peer-0"), OPS_PER_PEER)
+        return List(PEERS) { peer -> if (peer == 0) base else reKeyed(base, ReplicaId("peer-$peer")) }
+    }
+
+    /** [log] as [author] would have minted it — every id, and every `after` link, re-pointed. */
+    private fun reKeyed(log: List<RgaOp<String>>, author: ReplicaId): List<RgaOp<String>> =
+        log.map { op ->
+            val insert = assertIs<RgaOp.Insert<String>>(op, "the acceptance fixture is inserts only")
+            insert.copy(
+                id = insert.id.copy(replicaId = author),
+                // HEAD is the shared sentinel, not anybody's dot, so it must NOT be re-keyed.
+                after = if (insert.after == RgaId.HEAD) RgaId.HEAD else insert.after.copy(replicaId = author),
+            )
+        }
+
+    /**
      * [count] distinct removals by one author — the residual's fixture.
      *
      * Each tombstones a different element, so the [us.tractat.kuilt.crdt.LogOp.Remove] identities
@@ -942,16 +1021,13 @@ class BoltDecoratorTest {
          * Also the `frontierWindow` it runs at — one run per author, not one entry spare. Raising
          * one without the other loosens the rig rather than strengthening it.
          *
-         * **Many short logs rather than a few long ones, and the reason is the fixture's cost, not
-         * the property's shape.** A realistic fleet is a handful of phones with ten-thousand-operation
-         * logs; building one costs O(n²) in the *source* `Rga` (each mint copies its op-set), so a
-         * realistic shape would spend minutes before the decorator saw anything. The decorator only
-         * ever sees the **aggregate** — which is precisely the quantity a shared window bounds, and
-         * the quantity #2254 is about — so `PEERS × OPS_PER_PEER` is the number that has to be big,
-         * and how it factorises is the fixture's business. That one entry can cover a *long* run is
-         * pinned where it is cheap: [DotFrontierTest.aDenseRunOfSeqsCostsOneEntryHoweverManyDotsItCovers].
+         * The decorator only ever sees the **aggregate** — precisely the quantity a shared window
+         * bounds, and the quantity #2254 is about — so `PEERS × OPS_PER_PEER` is the number that has
+         * to be big, and how it factorises is the fixture's business. That a single entry can cover
+         * a *long* run is pinned where it is cheap:
+         * [DotFrontierTest.aDenseRunOfSeqsCostsOneEntryHoweverManyDotsItCovers], at ten thousand dots.
          */
-        const val PEERS = 400
+        const val PEERS = 80
 
         /**
          * How many inserts each peer re-offers every round.
@@ -961,9 +1037,18 @@ class BoltDecoratorTest {
          * make the acceptance test vacuous, which is why the test asserts that threshold out loud
          * before asserting anything else.
          */
-        const val OPS_PER_PEER = 200
+        const val OPS_PER_PEER = 1_000
 
-        /** How many anti-entropy rounds re-offer the whole working set. Two would do; three is a margin. */
+        /**
+         * How many anti-entropy rounds re-offer the whole working set.
+         *
+         * **Three, not two, and the third one is not margin.** Two rounds prove an operation is
+         * suppressed *once*; they cannot distinguish that from a frontier that suppresses a round
+         * and then forgets — round two would be `Skipped` either way and the loss would only show
+         * in round three. The rounds after the first are also structurally the cheapest part of
+         * this test: every publish is `Skipped`, so they classify and look up and encode nothing.
+         * There is no runtime to buy by dropping one.
+         */
         const val ROUNDS = 3
 
         /**
