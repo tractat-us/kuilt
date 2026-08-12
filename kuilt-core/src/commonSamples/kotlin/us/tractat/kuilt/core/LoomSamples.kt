@@ -83,7 +83,7 @@ internal fun sampleMuxSeamChannels() = runTest {
     val loom = InMemoryLoom()
     val seam = loom.host(Pattern("mux-demo"))
 
-    val mux = MuxSeam(seam, this)
+    val mux = MuxSeam(seam, backgroundScope)
 
     // Each channel gets a typed Seam view that strips the tag on reads and
     // prepends it on writes — the rest of your code sees a plain Seam.
