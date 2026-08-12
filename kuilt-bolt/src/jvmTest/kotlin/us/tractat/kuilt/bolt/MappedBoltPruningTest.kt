@@ -185,11 +185,13 @@ class MappedBoltPruningTest {
      * [ReplayScope.All] arm is the control — it establishes what "read the archive" costs on this
      * fixture, exactly, so a saving cannot be an artefact of a small denominator.
      *
+     * Measured on this fixture: the resume reads **7,431 bytes** where [ReplayScope.All] reads
+     * **24,607**, and the prefix it skipped holds **17,896** on its own.
+     *
      * **Mutation receipt:** returning `0` from `MappedBolt.firstSegmentToRead` — the shipped
-     * behaviour before #2236 — reds assertions 3 and 4: the resume goes from well under the pruned
-     * prefix's 17,896 bytes to **25,327**, which is every byte [ReplayScope.All] reads plus the
-     * header probes. Assertions 1 and 2 are the fixture's own preconditions and stay green, which is
-     * what they are for.
+     * behaviour before #2236 — reds assertions 3 and 4: the resume goes from 7,431 bytes to
+     * **25,327**, which is every byte [ReplayScope.All] reads plus the header probes. Assertions 1
+     * and 2 are the fixture's own preconditions and stay green, which is what they are for.
      */
     @Test
     fun aResumeReadsFarLessThanThePrefixItPrunes() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
@@ -261,9 +263,11 @@ class MappedBoltPruningTest {
      * dots live in its *body*, so no segment header can rule a segment out, and a backend that let
      * the `FromOffset` predicate leak into them would silently drop frames those scopes select.
      *
-     * **Mutation receipt:** dropping the `scope !is ReplayScope.FromOffset` guard does not compile
-     * (there is no `offset` to read), so the reachable mutation is comparing against a constant
-     * cursor — which reds every arm here at once.
+     * **Mutation receipt:** dropping the `scope !is ReplayScope.FromOffset` guard does not compile —
+     * there is no `offset` to read — so the reachable mutation is letting every other scope prune
+     * against `Long.MAX_VALUE`. Measured, it reds all four arms at once: the three unscoped replays
+     * drop from 24,607 bytes to 2,957, and [ReplayScope.Arrived] hands back 2 of 12 frames. That last
+     * number is the point — an over-eager prune is not a cheaper answer, it is a wrong one.
      */
     @Test
     fun everyScopeWithoutAnOffsetStillReadsTheWholeArchive() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
