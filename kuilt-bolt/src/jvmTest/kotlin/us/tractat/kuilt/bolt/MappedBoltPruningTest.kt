@@ -483,10 +483,16 @@ class MappedBoltPruningTest {
          * Five frames: one pruned segment, then the boundary segment, then the hole, then **two**
          * frames behind it.
          *
-         * The two behind the hole are why it is five rather than four. At four there is exactly one
-         * frame past the hole, so "stepped over the hole" and "off by one" produce the same event
-         * count and assertions 3 and 4 stop discriminating between them — which is the reason
-         * `BoltConformanceSuite.newDiscontinuousBolt` mandates the same thing.
+         * **An argument, not a measurement, and the difference is the point.** The obvious rationale
+         * — "at four, 'stepped over the hole' and 'off by one' produce the same count" — is
+         * `BoltConformanceSuite.newDiscontinuousBolt`'s, where the surviving frames are compared
+         * against `INTACT_FRAMES` and an off-by-one really is invisible. It does **not** transfer
+         * here: assertion 3 compares against `0`, so any leak at all reds. Measured at
+         * `HOLE_FIXTURE_FRAMES = 4`, mutation 1 still reds both 3 and 4 (`expected:<0> but was:<1>`).
+         *
+         * What five actually buys is a sharper red — two leaked frames rather than one — and the same
+         * shape the shared suite's fixture has, so the two can be read against each other. Lowering it
+         * to four would not make this test vacuous.
          */
         const val HOLE_FIXTURE_FRAMES = 5
 
@@ -494,11 +500,17 @@ class MappedBoltPruningTest {
          * The segment whose file is deleted, and the knob that decides whether anything is pruned
          * at all.
          *
-         * Pruning here needs a segment whose **successor** starts at or below the cursor, and the
-         * cursor is the base of the segment after the hole. At `LOST_SEGMENT = 1` the only candidate
-         * is the archive's first segment, whose successor *is* the boundary segment, so nothing is
-         * pruned: the test would drive the unpruned path while assertion 5 still claimed the row.
-         * At 2 the oldest segment is genuinely skipped, which is what assertion 5 measures.
+         * Pruning needs a segment whose **successor** starts at or below the cursor, and the cursor is
+         * the base of the segment after the hole. At `LOST_SEGMENT = 1` the only candidate is the
+         * archive's first segment, whose successor *is* the boundary segment — so nothing is pruned,
+         * segment 0 is read, and assertion 5's corruption lands in a segment this replay looks at.
+         *
+         * **Measured, because the interesting question is which way it fails:** at `1` the test is
+         * **red on unmutated production code** —
+         * `expected:<[Truncated(atOffset=139, reason=MissingRegion)]> but was:<[Truncated(atOffset=0, reason=Frame)]>`
+         * — not silently vacuous. This constant is load-bearing and **self-guarding**, which is the
+         * opposite of this epic's recurring fixture hazard and worth writing down as such: lowering it
+         * cannot quietly turn assertion 5 into a row that claims a receipt it no longer has.
          */
         const val LOST_SEGMENT = 2
 

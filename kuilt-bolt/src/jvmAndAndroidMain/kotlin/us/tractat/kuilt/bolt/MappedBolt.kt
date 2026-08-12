@@ -758,13 +758,21 @@ public class MappedBolt<Id : Any, V, Op : Any>(
      * green over real damage. A non-last segment's recorded extent is an inference *from* continuity,
      * so it is never evidence *about* it. One extra segment read cannot lie.
      *
-     * ### What this backend's predicate does and does not inherit from #2240
+     * ### This backend DOES inherit #2240 — through a different sub-case than the one predicted
      *
-     * Stated exactly, because the tempting summary is wrong in both directions. `InMemoryBolt`'s
-     * exact extent lets it prune a segment while the hole *behind* that segment still straddles the
-     * cursor — that is the defect #2244 fixed. The successor-base predicate here cannot reach that
-     * state: pruning segment `k` requires `base(k+1) <= cursor`, so the missing region
-     * `[end(k), base(k+1))` lies wholly at or below the cursor and no emitted frame depends on it.
+     * Say it plainly, because the near-miss reading of this paragraph is what would delete the line
+     * above. Dropping the minus-one here answers [CleanTail] to a [ReplayScope.FromOffset] resume
+     * over an archive with a hole in it — #2240's symptom, on this backend, measured (see the
+     * mutation table on `MappedBoltPruningTest.aResumeFromBeyondAHoleStillReportsIt`). The carry is
+     * load-bearing and this function is why.
+     *
+     * What differs is only *which* sub-case reaches it. `InMemoryBolt`'s exact extent lets it prune a
+     * segment while the hole behind that segment still **straddles** the cursor, and that is the case
+     * #2244 was written against. The successor-base predicate cannot reach that one: pruning segment
+     * `k` requires `base(k+1) <= cursor`, so the missing region `[end(k), base(k+1))` lies wholly at
+     * or below the cursor. The case that remains is a consumer resuming from **past** the hole, which
+     * is the ordinary retention shape and just as real. #2240 was never defined by the straddling
+     * sub-case, so ruling that one out rules out nothing that matters here.
      *
      * The minus-one read is kept anyway, and not out of caution alone. It is what makes this backend
      * answer a *lost middle* the same way the other two do when a consumer resumes from the far side
