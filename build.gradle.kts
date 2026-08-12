@@ -246,7 +246,10 @@ class TimeoutShapedFailureReporter(private val resultsDir: Provider<String>) : T
 // `.kt`, so it declares its doc and source roots as whole DIRECTORIES (`inputs.dir` per root,
 // which over-declares — more re-runs, never fewer). What keeps that honest is not the input
 // declaration but its in-task `inputRoots` check, which fails loudly on a citation pointing
-// outside every declared root rather than letting it be silently exempt from invalidation.
+// outside every declared root rather than letting it be silently exempt from invalidation. Its
+// third scanned surface — every `<module>/module.md` — is declared as FILES, via the shared
+// `moduleDocFiles()` provider below, and does follow the helper discipline: declared input and
+// walked set are the same object.
 //
 // One more thing the cache key depends on that is easy to move by accident: the ALLOWLISTS in
 // `forbidPortProbeRebind` / `forbidUnboundedSwatchDelivery` are covered only because they are
@@ -256,6 +259,32 @@ class TimeoutShapedFailureReporter(private val resultsDir: Provider<String>) : T
 // class these stamps were made safe against — if you externalise one, declare it as an input too.
 fun kotlinSourcesIn(roots: List<java.io.File>, pattern: String = "**/*.kt"): FileTree =
     files(roots).asFileTree.matching { include(pattern) }
+
+// Every subproject's `module.md`: the Dokka per-module doc surface, and a doc root in its own right.
+//
+// It is the FIRST page a reader meets a module through, it carries both of the things this build
+// script checks in prose — `<!-- verbatim from … -->` citations and `@sample` tags — and it lives
+// under neither `docs/` nor `Writerside/`. `verifySampleLinks` (#2259) had to reach for it on day
+// one; `verifyDocCitations` did not, and so spent its whole life unable to see a citation written
+// there (#2256). One provider, two guards: the set of files they cover is now the same object, and
+// a reader can see at a glance that it is.
+//
+// A lazily-resolved `fileTree` rather than a `listOf(File)` filtered by `isFile`, deliberately. The
+// tree is resolved at EXECUTION time, so a `module.md` added to an existing module invalidates both
+// guards and gets scanned. A list filtered at configuration time would be frozen into the
+// configuration cache, and the new file would be checked by nobody — which is the exact silent pass
+// #2256 was.
+//
+// The patterns are derived from the subproject list rather than globbed as `*/module.md`, so a
+// module nested a level down (`demo/web` is `:demo-web`) is covered the moment it grows one.
+// Adding a module edits `settings.gradle.kts`, which re-runs configuration, so the derivation
+// cannot go stale either.
+fun moduleDocFiles(): FileTree {
+    val patterns = subprojects.map {
+        "${it.projectDir.relativeTo(rootDir).invariantSeparatorsPath}/module.md"
+    }
+    return fileTree(rootDir) { include(patterns) }
+}
 
 // Shared lexical scanner for the guards that must distinguish CODE from prose.
 //
@@ -866,8 +895,8 @@ val forbidSourcelessKmpTarget by tasks.registering {
 
 // Guard: keep `<!-- verbatim from <path>#<symbol> -->` doc citations true (#1792).
 //
-// Every fenced code block in `docs/` and `Writerside/` that claims to be copied out of a
-// compiled source carries an HTML citation comment naming that source. Dokka `@sample`
+// Every fenced code block in `docs/`, `Writerside/` and any `<module>/module.md` that claims to be
+// copied out of a compiled source carries an HTML citation comment naming that source. Dokka `@sample`
 // blocks cannot rot — `src/commonSamples/` is compiled as part of `commonTest` — but a
 // block that *quotes* a sample can, and did: an audit of the first 23 found 3 drifted
 // (#1791, #1792). The failure is quiet and asymmetric: a block that says "verbatim" and
@@ -925,11 +954,19 @@ val verifyDocCitations by tasks.registering {
     val docRoots = listOf(rootDir.resolve("docs"), rootDir.resolve("Writerside"))
         .filter(java.io.File::isDirectory)
     val srcRoots = subprojects.mapNotNull { it.projectDir.resolve("src").takeIf(java.io.File::isDirectory) }
-    // Every root whose contents invalidate this task. A citation pointing outside these is
-    // rejected at execution time (see the check in doLast) rather than being silently exempt
-    // from re-running — so this list and the enforcement can never drift apart.
+    // Every root a CITED SOURCE may live in. A citation pointing outside these is rejected at
+    // execution time (see the check in doLast) rather than being silently exempt from re-running —
+    // so this list and the enforcement can never drift apart.
     val inputRoots = docRoots + srcRoots
     inputRoots.forEach { inputs.dir(it).withPathSensitivity(PathSensitivity.RELATIVE) }
+    // The third scanned surface, and the one that is a citING file only — nothing cites a `.md`, so
+    // it is an input without being an `inputRoots` entry. Declared as the same lazily-resolved set
+    // `doLast` walks, per "Guard plumbing" above: without this the stamp would hold a `module.md`
+    // citation UP-TO-DATE green after it had drifted, which is the half of #2256 that scanning
+    // alone does not fix.
+    val moduleDocs = moduleDocFiles()
+    inputs.files(moduleDocs).withPropertyName("moduleDocs")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
     val rootPath = rootDir
     // A stamp file so the task can be UP-TO-DATE: with inputs but no outputs Gradle has to
     // re-run it on every build, which is how a verification task earns a reputation for
@@ -1201,12 +1238,14 @@ val verifyDocCitations by tasks.registering {
             return showDiff(bestWindow, block, bestLine)
         }
 
-        val mdFiles = docRoots.flatMap { root ->
-            root.walkTopDown().filter { f ->
-                f.isFile && f.extension == "md" &&
-                    !f.relativeTo(rootPath).invariantSeparatorsPath.startsWith("docs/superpowers/")
-            }
-        }.sortedBy { it.invariantSeparatorsPath }
+        val mdFiles = (
+            docRoots.flatMap { root ->
+                root.walkTopDown().filter { f ->
+                    f.isFile && f.extension == "md" &&
+                        !f.relativeTo(rootPath).invariantSeparatorsPath.startsWith("docs/superpowers/")
+                }
+            } + moduleDocs.files
+            ).sortedBy { it.invariantSeparatorsPath }
 
         // Cited source files, parsed once each — several citations share one file.
         val codeCache = mutableMapOf<java.io.File, Pair<List<String>, List<String>>>()
@@ -1485,8 +1524,9 @@ val verifySampleLinks by tasks.registering {
     inputs.files(sources).withPropertyName("kotlinSources")
         .withPathSensitivity(PathSensitivity.RELATIVE)
     // `module.md` carries `@sample` tags too, and a module.md-only PR is docs-only — which is why
-    // this task is also run by CI's `doc-citations` job, exactly as its sibling is.
-    val moduleDocs = fileTree(rootDir) { include("*/module.md") }
+    // this task is also run by CI's `doc-citations` job, exactly as its sibling is. Shared with
+    // `verifyDocCitations`, which reads the same files for citations (#2256).
+    val moduleDocs = moduleDocFiles()
     inputs.files(moduleDocs).withPropertyName("moduleDocs")
         .withPathSensitivity(PathSensitivity.RELATIVE)
     // The two files that define the wiring this guard models; see the bypass note above.
