@@ -269,16 +269,22 @@ fun kotlinSourcesIn(roots: List<java.io.File>, pattern: String = "**/*.kt"): Fil
 // there (#2256). One provider, two guards: the set of files they cover is now the same object, and
 // a reader can see at a glance that it is.
 //
-// A lazily-resolved `fileTree` rather than a `listOf(File)` filtered by `isFile`, deliberately. The
-// tree is resolved at EXECUTION time, so a `module.md` added to an existing module invalidates both
-// guards and gets scanned. A list filtered at configuration time would be frozen into the
-// configuration cache, and the new file would be checked by nobody — which is the exact silent pass
-// #2256 was.
+// A lazily-resolved `fileTree` rather than a `listOf(File)` filtered by `isFile`, and the reason is
+// COST, not correctness — the tempting correctness argument is false and was checked before being
+// written here. Gradle 9.4.1 records a configuration-time `isFile` probe as a configuration-cache
+// filesystem input, so the filtered-list version does NOT go stale: creating a `module.md` prints
+// `configuration cache cannot be reused because the file system entry '…/module.md' has been
+// created`, reconfigures, and catches the citation. What it costs to get there is a full task-graph
+// recalculation for the whole build; this version touches no filesystem at configuration time, so
+// the same edit is an ordinary input change — `Configuration cache entry reused`, one task re-runs.
 //
 // The patterns are derived from the subproject list rather than globbed as `*/module.md`, so a
 // module nested a level down (`demo/web` is `:demo-web`) is covered the moment it grows one.
 // Adding a module edits `settings.gradle.kts`, which re-runs configuration, so the derivation
-// cannot go stale either.
+// cannot go stale either. One consequence to know about: `:spike` is a subproject only under
+// `-PincludeSpike`, which CI does not pass, so a `spike/module.md` would not be in this set on the
+// required gate. `verifyDocCitations`' unscanned-citation check is what keeps that from being a
+// silent hole — it fails loudly on a citation in any `.md` this set does not reach.
 fun moduleDocFiles(): FileTree {
     val patterns = subprojects.map {
         "${it.projectDir.relativeTo(rootDir).invariantSeparatorsPath}/module.md"
@@ -946,8 +952,11 @@ val forbidSourcelessKmpTarget by tasks.registering {
 // elision there can still cross member boundaries — bounded by, and attributed to, the
 // declaration actually being cited, which is what the citation claims to be showing.
 //
-// `docs/superpowers/` is excluded. Those are frozen, dated planning artifacts whose
-// citations are deliberately unresolved templates (`<!-- verbatim from <cited path>#… -->`).
+// `docs/superpowers/` is exempt (`citationExempt` below). Those are frozen, dated planning
+// artifacts whose citations are deliberately unresolved templates
+// (`<!-- verbatim from <cited path>#… -->`). It is the one exemption, and it is enforced rather
+// than implied: every OTHER markdown file in the tree must either be scanned or carry no citation
+// at all, which is what stops #2256 from recurring one filename over.
 val verifyDocCitations by tasks.registering {
     group = "verification"
     description = "Fails if a <!-- verbatim from … --> doc citation has drifted from, or dangles off, its source (#1792)."
@@ -967,6 +976,24 @@ val verifyDocCitations by tasks.registering {
     val moduleDocs = moduleDocFiles()
     inputs.files(moduleDocs).withPropertyName("moduleDocs")
         .withPathSensitivity(PathSensitivity.RELATIVE)
+    // EVERY markdown file in the tree — not to check it, but to prove nothing was missed. See the
+    // unscanned-citation check in doLast: the three surfaces above are a *choice*, and a citation
+    // written outside them is read by nobody. `**/build/**` is excluded because other tasks emit
+    // `.md` there (119 of them), which would both be meaningless to check and make this task's
+    // input overlap another's output; `.claude/worktrees/**` because ephemeral agent worktrees are
+    // whole copies of the repo, `docs/` and all.
+    val allMarkdown = fileTree(rootDir) {
+        include("**/*.md")
+        exclude("**/build/**", "**/.git/**", "**/.gradle/**", "**/node_modules/**", "**/.claude/worktrees/**")
+    }
+    inputs.files(allMarkdown).withPropertyName("allMarkdown")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // Prefixes whose markdown may carry citation-shaped lines while being scanned by nobody. This is
+    // the ONLY legitimate way to be unscanned and hold a citation, and it is deliberately one entry:
+    // `docs/superpowers/` holds frozen, dated planning artifacts whose citations are unresolved
+    // templates (`<!-- verbatim from <cited path>#… -->`). Consumed by BOTH the scan filter and the
+    // unscanned-citation check, so "not scanned" and "allowed to be unscanned" cannot drift apart.
+    val citationExempt = listOf("docs/superpowers/")
     val rootPath = rootDir
     // A stamp file so the task can be UP-TO-DATE: with inputs but no outputs Gradle has to
     // re-run it on every build, which is how a verification task earns a reputation for
@@ -1238,14 +1265,52 @@ val verifyDocCitations by tasks.registering {
             return showDiff(bestWindow, block, bestLine)
         }
 
+        fun exempt(f: java.io.File): Boolean {
+            val rel = f.relativeTo(rootPath).invariantSeparatorsPath
+            return citationExempt.any(rel::startsWith)
+        }
+
         val mdFiles = (
             docRoots.flatMap { root ->
-                root.walkTopDown().filter { f ->
-                    f.isFile && f.extension == "md" &&
-                        !f.relativeTo(rootPath).invariantSeparatorsPath.startsWith("docs/superpowers/")
-                }
+                root.walkTopDown().filter { f -> f.isFile && f.extension == "md" && !exempt(f) }
             } + moduleDocs.files
             ).sortedBy { it.invariantSeparatorsPath }
+
+        // ── The citING side of the `inputRoots` check below ─────────────────────────────────────
+        // That check refuses a citation whose cited SOURCE no declared input reaches, on the grounds
+        // that a gate nothing invalidates goes green over drift. This is its twin, and it guards the
+        // strictly worse case: a citation in a markdown file that is not in `mdFiles` is never read
+        // at all. That was #2256 — and fixing it for `module.md` alone would have left the identical
+        // failure one filename over, since `kuilt-test/README.md`, `examples/README.md` and
+        // `.claude/skills/kuilt-primitives/SKILL.md` are no more scanned than a `module.md` was.
+        //
+        // The check is deliberately cheap and structural: it does not verify these blocks, it
+        // refuses to let one exist unverified. The remedy is to move the block onto a scanned
+        // surface or widen the scan — exemption is the last resort, and named as such.
+        val scannedPaths = mdFiles.mapTo(mutableSetOf()) { it.invariantSeparatorsPath }
+        val stowaways = allMarkdown.files
+            .asSequence()
+            .filterNot { it.invariantSeparatorsPath in scannedPaths || exempt(it) }
+            .sortedBy { it.invariantSeparatorsPath }
+            .mapNotNull { md ->
+                md.readLines().asSequence().withIndex()
+                    .firstOrNull { (_, line) -> cite.matchEntire(line.trim()) != null }
+                    ?.let { (n, line) ->
+                        "${md.relativeTo(rootPath).invariantSeparatorsPath}:${n + 1}\n      ${line.trim()}"
+                    }
+            }
+            .toList()
+        if (stowaways.isNotEmpty()) {
+            error(
+                "Doc citation(s) in markdown this task does not scan (#2256). An unscanned citation " +
+                    "is not a weaker check — it is no check at all, and it passes by never being " +
+                    "looked at:\n\n" + stowaways.joinToString("\n\n") + "\n\n" +
+                    "Scanned: docs/, Writerside/, and every <subproject>/module.md. Move the block " +
+                    "onto one of those surfaces, or widen the scanned set in build.gradle.kts. Add " +
+                    "the file to `citationExempt` there ONLY if the line is a deliberately " +
+                    "unresolved template — that exempts it from checking for good.\n",
+            )
+        }
 
         // Cited source files, parsed once each — several citations share one file.
         val codeCache = mutableMapOf<java.io.File, Pair<List<String>, List<String>>>()
@@ -1300,8 +1365,10 @@ val verifyDocCitations by tasks.registering {
                 // time but never invalidate the task — leaving a REQUIRED gate green over a
                 // drifted citation. That silent pass is the worst failure this task could have,
                 // so it is a loud failure instead. `build-logic/` is the live example: an
-                // included build, not a subproject, so its sources are not an input.
-                if (inputRoots.none { srcFile.startsWith(it) }) {
+                // included build, not a subproject, so its sources are not an input. The markdown
+                // inputs count too, or this message would state something false about a cited
+                // `module.md` — which IS an input, just not via a root.
+                if (inputRoots.none { srcFile.startsWith(it) } && srcFile !in allMarkdown.files) {
                     failures += "$where\n      $label\n      cited file is outside every declared task " +
                         "input root, so editing it would NOT re-run this check — a drifted citation " +
                         "would stay green: $path\n      Add its root to verifyDocCitations' inputs " +
