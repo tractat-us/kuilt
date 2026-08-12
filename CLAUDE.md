@@ -112,6 +112,17 @@ libraries — e.g. `:kuilt-mdns` → `:kuilt-websocket`, `:kuilt-deal` →
 `:kuilt-crdt`). The dependency arrow never points back into `:kuilt-core` — it
 must stay free of fabric-specific imports.
 
+**These tables are enforced — `verifyModuleTable` (in the root `build.gradle.kts`, wired into
+`check`, and run in the `doc-citations` CI job so a docs-only edit is covered too) fails the build
+when a `:kuilt-*` module in `settings.gradle.kts` has no row above, or when a row names a module that
+is no longer in the build (#2257).** There is no allowlist — adding a module means adding its row in
+the same PR. Two things it leans on that are easy to move by accident: the `## Module structure &
+dependency direction` heading, which bounds the scan (renaming it fails the build, deliberately), and
+the row shape — a line beginning with the module path in backticks, in a real table rather than a
+fenced example, since fenced blocks are skipped. It checks **presence and identity only, never a
+row's content**: the prose, the targets and every type name in a row are unpinned, and two invented
+type names reached review this way. Grep a symbol before you put it in a row.
+
 ## The contract (one-paragraph orientation)
 
 `Loom` is a factory: `weave(Rendezvous): Seam` is the single abstract method —

@@ -2595,6 +2595,138 @@ val forbidBoltRejoiningTheLattice by tasks.registering {
     }
 }
 
+// Guard: every `:kuilt-*` module has a row in CLAUDE.md's module table (#2257).
+//
+// CLAUDE.md's "Module structure & dependency direction" section is the first thing an agent reads
+// in this repo, so a module missing from it is invisible to exactly the reader it exists for — an
+// agent asked to keep a longer history than the live replica will not find the module that does it.
+// That is not hypothetical: `:kuilt-bolt` shipped seven PRs before anyone noticed it had no row,
+// and the sweep that found it found twenty-one more (the whole `:kuilt-otel` and `:kuilt-warp`
+// families, plus `:kuilt-heddle`, `:kuilt-nw`, `:kuilt-gossip-test`, `:kuilt-scale`). A
+// hand-maintained inventory beside a machine-maintained one drifts in one direction and does so in
+// silence. `:kuilt-bom` does not drift, because it derives its constraints from the `kuilt.publish`
+// marker (#1044) rather than from a list somebody must remember to edit; this is the same idea one
+// level down, for the list that cannot be derived.
+//
+// There is deliberately NO allowlist. The table was brought to complete (#2261) BEFORE this guard
+// landed, so the baseline is empty — and an allowlist over an empty baseline is nothing but a place
+// to put the next omission.
+//
+// ── Why CLAUDE.md and not README.md ─────────────────────────────────────────────────────────────
+// README's module list is a CURATED consumer surface, not an inventory. It omits internal plumbing
+// (`:kuilt-liveness`, `:kuilt-quilter`, `:kuilt-cluster`, `:kuilt-stream`, `:kuilt-tcp`,
+// `:kuilt-bom`), omits every `*-test` module, and presents the otel and warp families as one
+// umbrella row apiece pointing at a guide. Every one of those absences is a choice. Enforcing
+// one-row-per-module there would need an allowlist naming most of the repo — and an allowlist that
+// large IS the escape hatch, so the guard would encode nothing and rot at it.
+//
+// ── The model, asserted rather than assumed ─────────────────────────────────────────────────────
+// The scan is scoped to the section under `## Module structure & dependency direction`, ending at
+// the next `## ` heading, because a row only helps where a reader looking for the module map will
+// find it — a mention in some later paragraph is prose, not an entry. That scoping is this guard's
+// model of the document, so a missing heading fails LOUDLY rather than silently narrowing the
+// search to nothing and passing.
+//
+// A row is a line beginning ``| `:kuilt-x` |``, and FENCED BLOCKS ARE SKIPPED. The fence tracking is
+// not incidental tidiness: without it a ```` ```markdown ```` block illustrating the row format
+// satisfied the guard, so deleting a real row and leaving an illustrative one built SUCCESSFULLY
+// while the rendered table had no entry. `verifyDocCitations` tracks fences for the same reason, and
+// `KotlinCodeScanner`/`KdocScanner` exist to stop exactly this — illustrative text read as content.
+// (An HTML-commented row is the same mechanism and is NOT handled; a `<!-- | `:kuilt-x` | -->` line
+// does not begin with `|`, so it is already invisible, but a multi-line HTML comment wrapping real
+// rows would still satisfy this guard. Nothing in tree does that.)
+//
+// Reformatting the table the OTHER way — changing the row syntax so nothing matches — fails in the
+// safe direction: every module reads as missing, which is a red somebody sees. That half of the
+// asymmetry does hold; the fenced case above is why it cannot be claimed for the check as a whole,
+// and a stated asymmetry with a live counterexample is worse than no statement, because it tells the
+// next reader not to look.
+//
+// The stale direction is checked too, for the same reason `forbidUnlintedModule` checks its own
+// allowlist: a row for a module that has since been renamed or deleted describes a repo that no
+// longer exists, and nothing else in the build would ever notice.
+val verifyModuleTable by tasks.registering {
+    group = "verification"
+    description = "Fails if a :kuilt-* module has no row in CLAUDE.md's module table (#2257)."
+    val claudeMd = rootDir.resolve("CLAUDE.md")
+    inputs.file(claudeMd).withPropertyName("claudeMd")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // The other half of the verdict is the module SET, which lives in `settings.gradle.kts` and is
+    // not a file this task reads. Declared as a property for the same reason `forbidUnlintedModule`
+    // declares its `detektRegistration` map: without it, adding a module would land on a cached
+    // green (see "Guard plumbing" above — a stamp is only safe if the inputs are honest).
+    //
+    // RECEIPT ORDERING, for whoever re-proves that: adding a module to `settings.gradle.kts` does
+    // NOT reach this task first. `kuilt-bom/build.gradle.kts`'s `deliberatelyUnpublished` check runs
+    // at CONFIGURATION time and fails the build before any task executes, so the naive receipt
+    // ("add a module, watch it go red") records a red from the wrong guard. Either allowlist the
+    // probe module in the BOM as well, or prove the property from the other side — remove an
+    // `include` and watch the row become a phantom, which reaches this task unimpeded.
+    val modulePaths = subprojects.map { it.path }.filter { it.startsWith(":kuilt-") }.sorted()
+    inputs.property("modulePaths", modulePaths)
+    val stamp = layout.buildDirectory.file("verification/verify-module-table.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    doLast {
+        val heading = "## Module structure & dependency direction"
+        val lines = claudeMd.readLines()
+        val start = lines.indexOfFirst { it.trimEnd() == heading }
+        if (start < 0) {
+            error(
+                "CLAUDE.md has no \"$heading\" section, so this guard cannot tell a listed module " +
+                    "from an unlisted one and every verdict it could give would be meaningless " +
+                    "(#2257). If the section was renamed, rename it here too; if the module map " +
+                    "moved elsewhere, point this task at its new home.",
+            )
+        }
+        val relativeEnd = lines.subList(start + 1, lines.size).indexOfFirst { it.startsWith("## ") }
+        val end = if (relativeEnd < 0) lines.size else start + 1 + relativeEnd
+        val rowName = Regex("""^\|\s*`(:kuilt-[a-z0-9-]+)`\s*\|""")
+        val section = lines.subList(start, end)
+        // Fenced blocks are illustration, not table. See the fence note above for the false green
+        // this closes.
+        var fenced = false
+        val listed = section.mapNotNull { line ->
+            when {
+                line.trimStart().startsWith("```") -> { fenced = !fenced; null }
+                fenced -> null
+                else -> rowName.find(line)?.groupValues?.get(1)
+            }
+        }.toSet()
+
+        val phantom = (listed - modulePaths.toSet()).sorted()
+        if (phantom.isNotEmpty()) {
+            error(
+                "CLAUDE.md's module table has a row for module(s) that are not in this build — a " +
+                    "row describing a repo that no longer exists is worse than no row, because a " +
+                    "reader trusts it (#2257):\n  " + phantom.joinToString("\n  ") +
+                    "\n  Delete the row, or fix the name if the module was renamed.",
+            )
+        }
+        val missing = modulePaths.filterNot { it in listed }
+        if (missing.isNotEmpty()) {
+            // The subsection names are READ from the slice, never listed here. A hand-maintained
+            // inventory beside a machine-maintained one is the exact defect this guard exists to
+            // end, and a hardcoded copy inside the guard is the same defect one level in — the
+            // first version of this message had already lost "Contract & core".
+            val sections = section.mapNotNull { Regex("""^\*\*(.+?)\*\*""").find(it)?.groupValues?.get(1) }
+            error(
+                "Module(s) are in `settings.gradle.kts` but have no row in CLAUDE.md's \"$heading\" " +
+                    "table. That table is the first thing an agent reads here, so an unlisted " +
+                    "module is invisible to exactly the reader it exists for (#2257):\n  " +
+                    missing.joinToString("\n  ") +
+                    "\n  THE FIX is one table row, in the subsection the module belongs to (" +
+                    sections.joinToString(" / ") + "), following the shape of its neighbours: " +
+                    "targets, what it does, what it depends on. There is no allowlist here, " +
+                    "deliberately — the table was complete when this guard landed.",
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText("ok — ${modulePaths.size} module(s) checked against CLAUDE.md's table\n")
+    }
+}
+
 // Run the guards as part of `check` (hence `build`, hence CI) in every module.
 allprojects {
     tasks.matching { it.name == "check" }.configureEach {
@@ -2605,6 +2737,7 @@ allprojects {
         dependsOn(rootProject.tasks.named("forbidPortProbeRebind"))
         dependsOn(rootProject.tasks.named("verifyDocCitations"))
         dependsOn(rootProject.tasks.named("verifySampleLinks"))
+        dependsOn(rootProject.tasks.named("verifyModuleTable"))
         dependsOn(rootProject.tasks.named("forbidRunCatchingCancellableUnderNonCancellable"))
         dependsOn(rootProject.tasks.named("forbidBareRunCatching"))
         dependsOn(rootProject.tasks.named("forbidKotlinAssert"))
