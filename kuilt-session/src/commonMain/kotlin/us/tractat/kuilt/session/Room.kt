@@ -10,6 +10,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
+import us.tractat.kuilt.session.partition.RoomId
 
 /**
  * A membership-aware session room built over a [us.tractat.kuilt.core.Seam].
@@ -232,6 +233,34 @@ public interface Room {
     public suspend fun sendTo(peer: PeerId, bytes: ByteArray)
 
     /**
+     * **Which room this is** — the identity every member of one session agrees on, or null while
+     * this peer does not know it yet.
+     *
+     * One value per *room instance*, not per device: two rooms the same peer hosts in a row have
+     * two different ids, and so do the rooms either side of an app restart. That is what makes it
+     * usable as a per-session key — a durable `(roomId, deviceId) → seat` record, a per-game log
+     * scope, a lobby identifier — rather than merely as a label for the host.
+     *
+     * Both roles read the same value, but they learn it at different moments:
+     * - **Host** — non-null from construction. [RoomFactory.host] mints it (or uses the one the
+     *   caller supplied) before the room exists, so it is readable immediately.
+     * - **Joiner** — **null until admitted.** The host sends its id in the admit `Welcome`, so
+     *   this stays null through the handshake and flips once, to the host's value, when the joiner
+     *   is admitted. Collect it (or read it after the roster becomes non-empty) rather than
+     *   sampling it right after [RoomFactory.join] returns.
+     *
+     * **This is the id a [ResumeToken] is validated against.** A joiner's token carries this value;
+     * the host refuses a token naming any other room. So a host that wants outstanding tokens to
+     * survive its own restart must supply the *same* [RoomId] to [RoomFactory.host] on the way back
+     * up — see the `roomId` parameter there.
+     *
+     * Deliberately has **no** interface default. A default would let an implementation — a test
+     * double above all — silently answer "this room has no identity" for a room that plainly has
+     * one, and a test written against that answer would pass while asserting nothing.
+     */
+    public val roomId: StateFlow<RoomId?>
+
+    /**
      * The joiner's reconnect credential, available after the admit handshake completes.
      *
      * Non-null on a [SessionRole.Joiner] room once the host has sent its [RoomId] via
@@ -333,8 +362,18 @@ public interface RoomFactory {
      * It defaults to null, in which case the peer's own id ([Room.selfId]) is used. It is
      * deliberately *not* derived from [Pattern.sessionName]: the session name names the
      * session, not this member (#1177).
+     *
+     * [roomId] is this room's identity ([Room.roomId]). It defaults to null, in which case the
+     * factory **mints a fresh one** — a new room every time, which is what makes [Room.roomId] a
+     * per-session key rather than a per-device one (#1594).
+     *
+     * Supply it to keep **one room identity across a host restart**. Outstanding [ResumeToken]s
+     * name the room they were issued for and the host refuses a token naming any other, so a host
+     * that comes back up under a freshly minted id invalidates every token its members are holding
+     * — each rejoin fails as a session mismatch, even though the members, the fabric and the seats
+     * are all still there. Persist the id, pass it back in here, and the tokens still validate.
      */
-    public suspend fun host(pattern: Pattern, memberName: String? = null): Room
+    public suspend fun host(pattern: Pattern, memberName: String? = null, roomId: RoomId? = null): Room
 
     /**
      * Join an existing room. The caller's peer becomes a [SessionRole.Joiner].

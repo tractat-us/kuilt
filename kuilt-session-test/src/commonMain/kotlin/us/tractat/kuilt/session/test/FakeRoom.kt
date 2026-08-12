@@ -29,6 +29,7 @@ import us.tractat.kuilt.session.RoomFrame
 import us.tractat.kuilt.session.SessionRole
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
+import us.tractat.kuilt.session.partition.RoomId
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
 
@@ -71,6 +72,17 @@ public class FakeRoom(
     initialRoster: Set<Member> = emptySet(),
     initialResumeToken: ResumeToken? = null,
     public val channelPolicy: DeliveryPolicy = DeliveryPolicy.Reliable,
+    /**
+     * The [RoomId] this room reports, mirroring the shape a real room has: a host is born knowing
+     * its room, a joiner is null until the host's `Welcome` admits it (#1594).
+     *
+     * Defaulted from [initialRole] so `FakeRoom()` and `FakeRoom(initialRole = Joiner)` both start
+     * in the state their role really starts in. Pass an explicit value — or move it later with
+     * [setRoomId] — whenever the test asserts on the id itself. It is **not** a constant: a fake
+     * that could not express "no room id yet", or "this specific room id", would make every test
+     * written against it pass without checking anything.
+     */
+    initialRoomId: RoomId? = if (initialRole == SessionRole.Host) RoomId("${selfId.value}-room") else null,
 ) : Room {
     private val _role = MutableStateFlow(initialRole)
     override val role: StateFlow<SessionRole> = _role.asStateFlow()
@@ -117,6 +129,19 @@ public class FakeRoom(
         onBufferOverflow = BufferOverflow.SUSPEND,
     )
     override val incoming: Flow<RoomFrame> = incomingChannel.receiveAsFlow()
+
+    private val _roomId = MutableStateFlow(initialRoomId)
+    override val roomId: StateFlow<RoomId?> = _roomId.asStateFlow()
+
+    /**
+     * Test hook: set (or clear) the [RoomId] this room reports.
+     *
+     * The driver for the one transition a real room makes — a joiner learning the host's room id on
+     * admission. `null` puts it back in the not-yet-admitted state.
+     */
+    public fun setRoomId(roomId: RoomId?) {
+        _roomId.value = roomId
+    }
 
     private var _resumeToken: ResumeToken? = initialResumeToken
     override val resumeToken: ResumeToken? get() = _resumeToken

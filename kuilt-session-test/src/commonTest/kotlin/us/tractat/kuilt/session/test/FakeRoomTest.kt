@@ -60,6 +60,38 @@ class FakeRoomTest {
         assertNull(room.resumeToken)
     }
 
+    // ── Room identity (#1594) ────────────────────────────────────────────────
+
+    /**
+     * A joiner-shaped fake must be able to express "not admitted yet" — the state a real joiner is
+     * in until the host's `Welcome` arrives. A fake that could not would make every test of
+     * "what does the UI show before admission?" vacuously green.
+     */
+    @Test
+    fun `a joiner-shaped fake starts with no room id`() = runTest {
+        val room = FakeRoom(initialRole = SessionRole.Joiner)
+        assertNull(room.roomId.value)
+    }
+
+    /** A host-shaped fake knows its room at construction, exactly as a real host room does. */
+    @Test
+    fun `a host-shaped fake reports a room id`() = runTest {
+        val room = FakeRoom(selfId = PeerId("alice"), initialRole = SessionRole.Host)
+        assertEquals(RoomId("alice-room"), room.roomId.value)
+    }
+
+    /** The test author decides the value — a hardcoded one would pin every consumer test to it. */
+    @Test
+    fun `initialRoomId is respected and setRoomId moves it`() = runTest {
+        val room = FakeRoom(initialRole = SessionRole.Joiner, initialRoomId = RoomId("table-7"))
+        val before = room.roomId.value
+        room.setRoomId(RoomId("table-9"))
+        assertAll(
+            { assertEquals(RoomId("table-7"), before) },
+            { assertEquals(RoomId("table-9"), room.roomId.value) },
+        )
+    }
+
     @Test
     fun `custom constructor args are respected`() = runTest {
         val token = ResumeToken(PeerId("p"), RoomId("r"), issuedAt = 0L)

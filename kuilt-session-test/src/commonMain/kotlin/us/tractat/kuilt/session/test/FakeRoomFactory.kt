@@ -1,5 +1,6 @@
 package us.tractat.kuilt.session.test
 
+import kotlinx.atomicfu.atomic
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Tag
@@ -10,6 +11,7 @@ import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.RoomFactory
 import us.tractat.kuilt.session.RoomFrame
 import us.tractat.kuilt.session.SessionRole
+import us.tractat.kuilt.session.partition.RoomId
 
 /**
  * A test double for [RoomFactory] that returns [FakeRoom] instances.
@@ -26,24 +28,41 @@ import us.tractat.kuilt.session.SessionRole
  * ```
  */
 public class FakeRoomFactory : RoomFactory {
-    override suspend fun host(pattern: Pattern, memberName: String?): Room =
+    /**
+     * [roomId] is honoured verbatim when supplied; otherwise a fresh one is minted per call, so two
+     * rooms hosted under the same session name never share an identity — the same contract the real
+     * factory keeps (#1594).
+     */
+    override suspend fun host(pattern: Pattern, memberName: String?, roomId: RoomId?): Room =
         FakeRoom(
             selfId = PeerId(pattern.sessionName),
             initialRole = SessionRole.Host,
+            initialRoomId = roomId ?: RoomId("${pattern.sessionName}-room-${fakeRoomSequence.getAndIncrement()}"),
         )
 
+    /** A joiner has no room id until it is admitted; drive that with [FakeRoom.setRoomId]. */
     override suspend fun join(tag: Tag, memberName: String?): Room =
         FakeRoom(
             selfId = PeerId(tag.sessionName),
             initialRole = SessionRole.Joiner,
+            initialRoomId = null,
         )
 }
+
+/**
+ * Process-wide room counter behind [FakeRoomFactory.host]'s mint. Atomic because a fake is not
+ * exempt from the multi-threaded-dispatcher rule, and process-wide (not per-factory) because two
+ * factories in one test are the ordinary case.
+ */
+private val fakeRoomSequence = atomic(0L)
 
 /**
  * Build a wired pair of [FakeRoom]s whose [FakeRoom.broadcast] calls cross-deliver
  * into the other room's [Room.incoming], matching the behaviour of a real two-peer room.
  *
  * - Each side's roster is seeded with the other as a [Liveness.Connected] [Member].
+ * - Both sides report the **same** [Room.roomId] — the pair models a completed handshake, and a
+ *   real joiner has learned the host's id by that point.
  * - A [FakeRoom.broadcast] on one side delivers a [RoomFrame] into the other's [Room.incoming].
  * - The broadcast is also recorded in the sender's [FakeRoom.broadcasts] list.
  * - Delivery is synchronous — no separate coroutine substrate required.
@@ -60,6 +79,7 @@ public suspend fun fakeRoomPair(
 ): Pair<FakeRoom, FakeRoom> {
     val host = FakeRoom(selfId = hostId, initialRole = SessionRole.Host)
     val joiner = FakeRoom(selfId = joinerId, initialRole = SessionRole.Joiner)
+    joiner.setRoomId(host.roomId.value)
     seedRoster(room = host, peerId = joinerId, displayName = joinerId.value)
     seedRoster(room = joiner, peerId = hostId, displayName = hostId.value)
     wireDelivery(sender = host, receiver = joiner)

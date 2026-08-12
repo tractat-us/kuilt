@@ -10,11 +10,15 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.SessionRole
+import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 
 class FakeRoomFactoryTest {
     // ── FakeRoomFactory ───────────────────────────────────────────────────────
@@ -40,7 +44,51 @@ class FakeRoomFactoryTest {
         )
     }
 
+    // ── Room identity (#1594) ─────────────────────────────────────────────────
+
+    /**
+     * The fake factory obeys the same rule as the real one: a fresh room every call. A fake that
+     * handed out one id per session name would reproduce the bug this contract exists to rule out,
+     * inside the very double used to test around it.
+     */
+    @Test
+    fun `host mints a different room id per call`() = runTest {
+        val factory = FakeRoomFactory()
+        val first = factory.host(Pattern("alice"))
+        val second = factory.host(Pattern("alice"))
+        assertNotEquals(first.roomId.value, second.roomId.value)
+    }
+
+    @Test
+    fun `host uses the caller-supplied room id verbatim`() = runTest {
+        val supplied = RoomId("table-7")
+        val room = FakeRoomFactory().host(Pattern("alice"), roomId = supplied)
+        assertEquals(supplied, room.roomId.value)
+    }
+
+    @Test
+    fun `join has no room id until the test sets one`() = runTest {
+        val room = FakeRoomFactory().join(simpleTag("bob")) as FakeRoom
+        val before = room.roomId.value
+        room.setRoomId(RoomId("table-7"))
+        assertAll(
+            { assertNull(before) },
+            { assertEquals(RoomId("table-7"), room.roomId.value) },
+        )
+    }
+
     // ── fakeRoomPair ──────────────────────────────────────────────────────────
+
+    /** A wired pair models a completed handshake, so both sides read one agreed room identity. */
+    @Test
+    fun `fakeRoomPair gives both sides the same room id`() = runTest {
+        val (host, joiner) = fakeRoomPair(PeerId("host"), PeerId("joiner"))
+        assertAll(
+            { assertNotNull(host.roomId.value) },
+            { assertEquals(host.roomId.value, joiner.roomId.value) },
+        )
+    }
+
 
     @Test
     fun `fakeRoomPair seeds each side with the other as a Connected member`() = runTest {
