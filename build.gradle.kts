@@ -762,7 +762,6 @@ val forbidPortProbeRebind by tasks.registering {
     // Known #1590 sites not yet converted. Shrinks to empty as they land; never grows.
     val allowlist = setOf(
         // Held out of the sweep to avoid a merge collision with in-flight conformance work.
-        "TcpConformanceTest.kt",
         "WebSocketConformanceTest.kt",
         "MDNSConformanceTest.kt",
         // mDNS: the port is an *input* to the advertisement built inside the embeddedServer module
@@ -772,11 +771,6 @@ val forbidPortProbeRebind by tasks.registering {
         "MDNSRoomKeySourcingTest.kt",
         "MDNSSelfDiscoveryFilterTest.kt",
         "MDNSSelfDiscoveryMulticastTest.kt",
-        // TcpLoom sites: bind the Ktor ServerSocket to 0 and read localAddress instead.
-        "TcpClusterExampleTest.kt",
-        "TcpLoomCapabilityTest.kt",
-        "TcpRoundTripTest.kt",
-        "TcpMeshBuilder.kt",
     )
     doLast {
         // Matches the aliased import too (`JvmServerSocket(0)` contains `ServerSocket(0)`).

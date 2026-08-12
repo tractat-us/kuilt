@@ -360,7 +360,7 @@ idempotency, availability).
 `:kuilt-tcp`'s conformance test is the copy-paste template:
 
 ```kotlin
-// kuilt-tcp/src/jvmTest/kotlin/us/tractat/kuilt/tcp/TcpConformanceTest.kt:32-58
+// kuilt-tcp/src/jvmTest/kotlin/us/tractat/kuilt/tcp/TcpConformanceTest.kt:34-64
 class TcpConformanceTest : SeamConformanceSuite() {
 
     @Suppress("ForbiddenMethodCall")
@@ -370,8 +370,8 @@ class TcpConformanceTest : SeamConformanceSuite() {
 
     @BeforeTest
     fun setUp() = runBlocking {
-        port = JvmServerSocket(0).use { it.localPort }
-        serverSocket = aSocket(selector).tcp().bind("127.0.0.1", port)
+        serverSocket = aSocket(selector).tcp().bind("127.0.0.1", 0)
+        port = (serverSocket.localAddress as InetSocketAddress).port
     }
 
     @AfterTest
@@ -392,6 +392,16 @@ class TcpConformanceTest : SeamConformanceSuite() {
 
 Key points:
 
+- **Bind port 0; never probe one.** `bind("127.0.0.1", 0)` lets the kernel pick, and
+  the port is then read back off the socket you already hold. The tempting
+  alternative — probe a free port with a throwaway `ServerSocket(0).use { it.localPort }`
+  and re-bind that number — is a TOCTOU: the probe is closed before the real bind, so
+  on a loaded box another process can take the port in that window and the fabric's
+  `@BeforeTest` dies with `BindException: Address already in use` on a PR that cannot
+  have caused it (#1590, #1750). The root build's `forbidPortProbeRebind` check
+  **rejects** the probe form, so a test written that way will not merge. For a Ktor
+  `embeddedServer` the equivalent read-back is
+  `server.engine.resolvedConnectors().first().port` after `start(wait = false)`.
 - **Real IO, real dispatchers.** A real-network fabric cannot use virtual time —
   `runTest` and `StandardTestDispatcher` are off the table. The suite runs over a
   real loopback socket with `runBlocking`. This matches `:kuilt-websocket`'s

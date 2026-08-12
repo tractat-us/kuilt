@@ -3,6 +3,7 @@
 package us.tractat.kuilt.tcp
 
 import io.ktor.network.selector.SelectorManager
+import io.ktor.network.sockets.InetSocketAddress
 import io.ktor.network.sockets.Socket
 import io.ktor.network.sockets.aSocket
 import kotlinx.coroutines.Dispatchers
@@ -14,7 +15,6 @@ import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.fabric.Connection
 import us.tractat.kuilt.core.fabric.hubMesh
-import java.net.ServerSocket as JvmServerSocket
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -95,8 +95,11 @@ class TcpClusterExampleTest {
      * `:kuilt-stream` via [tcpConnection]). The accepting end is `.first`, the dialing end `.second`.
      */
     private suspend fun tcpConnectionPair(): Pair<Connection, Connection> = coroutineScope {
-        val port = JvmServerSocket(0).use { it.localPort }
-        val server = aSocket(selector).tcp().bind("127.0.0.1", port)
+        // Bind 0 and read the port back off the bound socket — probing a free port and re-binding
+        // the number is a TOCTOU: the probe closes before the real bind, so another process can
+        // take the port in that window (#1590). Binding 0 has no window.
+        val server = aSocket(selector).tcp().bind("127.0.0.1", 0)
+        val port = (server.localAddress as InetSocketAddress).port
         val acceptedDeferred = async { server.accept() }
         val client: Socket = aSocket(selector).tcp().connect("127.0.0.1", port)
         val accepted = acceptedDeferred.await()

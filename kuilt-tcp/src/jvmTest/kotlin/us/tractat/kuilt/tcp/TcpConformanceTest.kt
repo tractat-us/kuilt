@@ -3,6 +3,7 @@
 package us.tractat.kuilt.tcp
 
 import io.ktor.network.selector.SelectorManager
+import io.ktor.network.sockets.InetSocketAddress
 import io.ktor.network.sockets.ServerSocket
 import io.ktor.network.sockets.aSocket
 import kotlinx.coroutines.Dispatchers
@@ -13,7 +14,6 @@ import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Tag
-import java.net.ServerSocket as JvmServerSocket
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 
@@ -40,8 +40,13 @@ class TcpConformanceTest : SeamConformanceSuite() {
 
     @BeforeTest
     fun setUp() = runBlocking {
-        port = JvmServerSocket(0).use { it.localPort }
-        serverSocket = aSocket(selector).tcp().bind("127.0.0.1", port)
+        // Bind 0 and read the port back off the socket we actually hold. Probing a free port with a
+        // throwaway `ServerSocket(0).use { it.localPort }` and re-binding the number is a TOCTOU:
+        // the probe closes before the real bind, so on a loaded box another process can take the
+        // port in that window (`BindException: Address already in use` — #1590, twice observed on
+        // this very line in #1750). Binding 0 has no window.
+        serverSocket = aSocket(selector).tcp().bind("127.0.0.1", 0)
+        port = (serverSocket.localAddress as InetSocketAddress).port
     }
 
     @AfterTest
