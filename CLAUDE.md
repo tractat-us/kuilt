@@ -45,6 +45,7 @@ and `docs/usage.md` for how to consume it.
 | `:kuilt-game` | all | Turn-based game facade over `:kuilt-raft`. Bootstrap entry points return a `GameSession`: `gameNode(seam, voterIds)` (roster-given — Raft elects symmetrically) and `gameHost`/`gameJoin` (appoint-the-host — one host admits joiners to quorum, `DuplicateHostException` on lobby-presence conflict). On top: `TurnSequencer` (propose/commit typed actions) + `IndexedAction` (committed action carrier) + `SpeculativeSequencer` (optimistic apply with deterministic rollback/replay), plus app-data channels over `NamedMux` (`GameSession.appChannel`). |
 | `:kuilt-raft` | all | Raft consensus over a `Seam` — leader election + PreVote, log replication, log compaction + chunked `InstallSnapshot`, dynamic membership, linearizable reads (`readIndex()`, §3.6/§3.7) and graceful leadership transfer (`transferLeadership()` via TimeoutNow, §3.10). |
 | `:kuilt-cluster` | all (server side JVM/Android) | Server-cluster facade over `:kuilt-raft`: the two-tier overlay topology — a complete-graph voter core plus a sparse learner periphery — packaged as `ServerCluster` (server, JVM/Android via `KtorRoomHost`) and `ClusterClient`/`clusterClient` (client, all targets). Learner→leader propose forwarding with cross-crash exactly-once (`requestId` dedup), multi-relay star topology and cross-relay failover. Depends on `:kuilt-core` + `:kuilt-raft` + `:kuilt-session` (+ `:kuilt-websocket` on JVM/Android). |
+| `:kuilt-heddle` | all | Fair-share scheduling of one pooled resource across peers with no central referee: a tamper-evident, mergeable ledger of who was granted what, who delegated it onward, and who spent it, so each group gets the slice it was promised and an idle group's share is lent to a busy one — and it keeps working while the network is partitioned. Depends on `:kuilt-core` + `:kuilt-crdt` + `:kuilt-raft`; see `kuilt-heddle/module.md`. |
 | `:kuilt-liveness` | all | Peer-liveness detection over a `Seam`: `PartitionDetector` / `HeartbeatPartitionDetector` / `PartitionEvent` / `HeartbeatConfig`. Depends only on `:kuilt-core`; shared by `:kuilt-session` and (via #594) `:kuilt-game`. |
 | `:kuilt-session` | all | Membership-aware `Room` over a `Loom` (`SeamRoom`): admit/identify handshake, roster, reconnect tokens, partition detection. Depends on `:kuilt-liveness`. |
 | `:kuilt-stream` | all | Byte-stream → message-link adapter: `framed()` wraps a kotlinx-io `Source`/`Sink` as a `Connection` with 4-byte length-prefix framing + oversize protection (`FrameTooLargeException`). The bridge a *stream* transport crosses to become a fabric; consumed by `:kuilt-tcp`. |
@@ -56,6 +57,7 @@ and `docs/usage.md` for how to consume it.
 | `:kuilt-websocket` | all | Ktor WebSocket fabric — the "Far"/relay topology. `KtorClientLoom` everywhere; `KtorServerLoom` + `KtorRoomHost` on JVM/Android only. |
 | `:kuilt-tcp` | JVM, Android | Raw TCP fabric (the pluggable-fabric-kit headline). `TcpLoom.host`/`join` adapt a Ktor socket via `:kuilt-stream`'s `framed()` + `handshaking()` into a 2-peer `Seam`; real-IO only (guards against virtual-time construction). |
 | `:kuilt-multipeer` | iOS, macOS | Apple Multipeer Connectivity fabric — the "Near"/peer-to-peer topology. Provides `MultipeerRoomHost`. |
+| `:kuilt-nw` | all (Apple impl) | Apple Network.framework full-mesh peer-to-peer fabric — every peer advertises, browses and dials, and the redundant double-dial is deduplicated into one link; TLS-PSK derived from `Pattern.roomKey`, which is a required bearer secret (an open session is refused). The replacement for `:kuilt-multipeer`, whose AWDL teardown regressed on iOS 26. Native on iOS/macOS, plus a **macOS-only** desktop-JVM bridge over `libkuilt.dylib` (probe `NwNativeLib.jvmAvailability` first). See `kuilt-nw/module.md`. |
 | `:kuilt-nearby` | all (Android impl) | Google Nearby Connections fabric — Android implementation behind `play-services-nearby`. |
 | `:kuilt-webrtc` | all (browser/wasmJs) | WebRTC data-channel fabric. |
 | `:kuilt-mdns` | JVM, Android, iOS | Bonjour/mDNS discovery. On JVM it depends on `:kuilt-websocket` (discovery feeds a WebSocket connection — discovery is orthogonal to topology). |
@@ -69,6 +71,35 @@ and `docs/usage.md` for how to consume it.
 | `:kuilt-session-test` | all | Session test support (`FakeRoomFactory`, …). |
 | `:kuilt-raft-test` | all | Raft test harness (`FakeRaftNode`, …). |
 | `:kuilt-deal-test` | all | Commutative-scheme TCK — `CommutativeSchemeConformanceSuite` verifies any `CommutativeScheme` impl (round-trip recovery, commutativity, strip-order independence, key distinctness). Shipped in `commonMain` for subclassing. |
+| `:kuilt-gossip-test` | all | Gossip test support — `StarHarness`, a started in-memory star of `GossipSeam`s (a hub plus n clients) with an accept handle for admitting a fresh client mid-test. |
+| `:kuilt-warp-test` | all | Warp's published test infrastructure: the sandboxed-WASM conformance TCK plus `MultiNodeWarpSim` / `warpSimTest` — the deterministic virtual-time multi-node harness (warp's analogue of `RaftSimulation`; use it, don't hand-roll one). |
+| `:kuilt-otel-tap-test` | all | Log-tap test/CI support over `:kuilt-otel-tap` — `awaitLog` / `awaitLogBodyContaining` for live-tailing a tapped device from a test or simulator harness. |
+| `:kuilt-scale` | JVM | Scaling/bench harness: `MeteredSeam` + `SeamMetrics`/`ClusterMetrics` message-complexity counters, `ConvergenceTracker`, and `buildInMemoryMesh(n, topology)` (complete graph / ring / star). **Not published** — plain `kotlinJvm`, no `kuilt.publish`, excluded from the BOM. Real-TCP layer is opt-in via `-Pscale.tcp.tests=true`. |
+
+**Observability**
+
+| Module | Targets | Role |
+|--------|---------|------|
+| `:kuilt-otel` | all | Offline-first OpenTelemetry: record traces, metrics and logs on any target and have them reconcile across devices when connectivity returns, with no duplicates and no data loss (`WarpTelemetry`, `WarpOtlpBridge`, `WarpLogRecordExporter`). CRDT-backed, so re-merging a snapshot is idempotent. Depends on `:kuilt-crdt` + `:kuilt-core`. |
+| `:kuilt-otel-tap` | all | Pull the logs off a device by **joining it as a peer** — a test or CI process connects to a running app over a fabric and reads the offline-first buffer it already keeps (`LogTapClient`). |
+| `:kuilt-otel-logging` | all | The uniform capture edge: `installLogCapture` routes an app's existing `kotlin-logging` output into the durable telemetry buffer, through one call on every platform. |
+| `:kuilt-otel-logback` | JVM, Android | Catches what *other* libraries log through Logback (frameworks, transitive deps) into the same buffer. |
+| `:kuilt-otel-log4j2` | JVM, Android | The same for Log4j2. |
+| `:kuilt-otel-sdk` | JVM, Android | Bridges an app's *existing* OpenTelemetry SDK setup into the offline-first buffer — trace-context propagation and export, both additive and optional. |
+| `:kuilt-otel-otlp` | all | Forwards the buffered spans/logs/metrics to any OTLP/HTTP collector when the network returns, sending only what the endpoint has not already received. |
+
+**Warp** — the coordination-free distributed scheduler. Pre-1.0 playground: outside the stability surface, API may change.
+
+| Module | Targets | Role |
+|--------|---------|------|
+| `:kuilt-warp` | all | Spread a pile of work across whoever is connected, with no central boss and no peer doing the same job twice (`WarpNode`). See `docs/warp-vision.md`. |
+| `:kuilt-warp-runtime` | all | The sandbox that *runs* code another peer sent you: a walled-off WASM engine with no files, no network, no clock, and no way to run forever. |
+| `:kuilt-warp-compiler` | JVM, Android | The real optimizer a **compiler node** runs — implements `:kuilt-warp`'s `WasmOptimizer` seam by exec'ing a bundled `wasm-opt` (Binaryen). JVM/Android only: Apple bans externally-delivered machine code and a browser peer cannot fork a process. |
+| `:kuilt-warp-ksp` | JVM (build-time) | The `@WarpOp` symbol processor. Deliberately not a KMP module — a KSP processor always runs on the JVM inside the build, and the code it generates is plain `commonMain`. In-repo modules apply the `kuilt.warp-ops` convention plugin instead of wiring it by hand. |
+| `:kuilt-warp-planning` | all | The G4 coordination-cost model and planner over a `Draft` pipeline: `coordinationCost` scores what a monotonicity-aware executor would pay, and `WarpPlanner` rewrites the draft to a fixpoint to minimise it. |
+| `:kuilt-warp-ml` | all | Learn one shared model from everybody's data without anybody handing over their data — federated aggregation over the mesh instead of collection on a server. |
+| `:kuilt-warp-otel` | all | Records `WarpNode` execution metrics (executions / duplicates / failovers) into a `WarpMetricExporter`. Idempotent under retry: the node's counters and the exporter's SUM series are the same `GCounter`. |
+| `:kuilt-warp-heddle` | all | Fair share *for* warp: layers `:kuilt-heddle`'s ledger over warp so "interactive work gets three times the grid batch work does" is expressible, without changing how warp picks who runs what. |
 
 **Packaging**
 

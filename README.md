@@ -118,6 +118,7 @@ Replace `0.7.2` with the [latest release](https://central.sonatype.com/artifact/
 | `kuilt-game` | all | Turn-based game facade over `kuilt-raft`: `TurnSequencer` + `IndexedAction` + `SpeculativeSequencer` (optimistic apply + rollback). |
 | `kuilt-raft` | all | Raft consensus — leader election, log replication, snapshots, dynamic membership, linearizable reads, leadership transfer. |
 | `kuilt-session` | all | Membership-aware `Room` (`SeamRoom`): handshake, roster, reconnect tokens, partition detection. |
+| `kuilt-heddle` | all | Fair-share scheduling of a pooled resource across peers, with no central referee: each group gets the slice it was promised, an idle group lends its share to a busy one, and it survives a partition. |
 
 **Fabrics**
 
@@ -126,6 +127,7 @@ Replace `0.7.2` with the [latest release](https://central.sonatype.com/artifact/
 | `kuilt-websocket` | all | Ktor WebSocket fabric. `KtorClientLoom` everywhere; `KtorServerLoom` on JVM/Android. |
 | `kuilt-mdns` | JVM, Android, iOS | Bonjour/mDNS discovery feeding a WebSocket connection. |
 | `kuilt-multipeer` | iOS, macOS | Apple Multipeer Connectivity fabric. |
+| `kuilt-nw` | iOS, macOS | Apple Network.framework full-mesh peer-to-peer fabric — nearby devices find each other and connect directly, no server and no shared Wi-Fi. The successor to `kuilt-multipeer`. |
 | `kuilt-nearby` | Android | Google Nearby Connections fabric. |
 | `kuilt-webrtc` | wasmJs | WebRTC data-channel fabric. |
 
