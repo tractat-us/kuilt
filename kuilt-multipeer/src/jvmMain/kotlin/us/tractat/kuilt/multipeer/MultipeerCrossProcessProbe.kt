@@ -6,6 +6,7 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.runCatchingCancellable
 
@@ -130,8 +131,16 @@ public object MultipeerCrossProcessProbe {
                             }
                         }
                     }
+                // `withTimeoutOrNull` + an explicit throw, NOT `withTimeout` (#2292): a
+                // `TimeoutCancellationException` is a `CancellationException`, so
+                // `runCatchingCancellable` would RETHROW the very timeout this `getOrElse` handles
+                // — the probe would die on an escaping cancellation instead of reporting a clean
+                // `passed = false`, which is the one outcome it exists to produce.
                 val ad =
-                    runCatchingCancellable { withTimeout(discoveryTimeoutMs) { firstAd.await() } }
+                    runCatchingCancellable {
+                        withTimeoutOrNull(discoveryTimeoutMs) { firstAd.await() }
+                            ?: error("no advertisement matching '$targetPrefix' within ${discoveryTimeoutMs}ms")
+                    }
                         .getOrElse { e ->
                             log("[joiner] discovery timeout: ${e::class.simpleName}: ${e.message}")
                             browseJob.cancel()
@@ -143,8 +152,13 @@ public object MultipeerCrossProcessProbe {
 
                 log("[joiner] invoking factory.join (timeout ${joinTimeoutMs}ms)")
                 val tInvite = nowMs()
+                // Same as the discovery bound above (#2292) — a bare `withTimeout` here would make
+                // this `getOrElse` dead for the join timeout it names.
                 val link =
-                    runCatchingCancellable { withTimeout(joinTimeoutMs) { factory.join(ad) } }
+                    runCatchingCancellable {
+                        withTimeoutOrNull(joinTimeoutMs) { factory.join(ad) }
+                            ?: error("factory.join did not complete within ${joinTimeoutMs}ms")
+                    }
                         .getOrElse { e ->
                             log("[joiner] factory.join failed: ${e::class.simpleName}: ${e.message}")
                             browseJob.cancel()

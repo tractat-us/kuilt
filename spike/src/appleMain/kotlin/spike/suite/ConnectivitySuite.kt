@@ -13,7 +13,9 @@ import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -236,9 +238,15 @@ public class ConnectivitySuite {
         return try {
             val (verdict, detail) = block(hop)
             ScenarioResult(id, name, verdict, mark.elapsedNow().inWholeMilliseconds, detail, hops.toList())
-        } catch (e: CancellationException) {
-            throw e
         } catch (e: Throwable) {
+            // Whose cancellation is this? A scenario body may bound itself with `withTimeout`
+            // (scenario 3 bounds both the lobby wait and the election), and that mints a
+            // `TimeoutCancellationException` — a `CancellationException` — without cancelling us.
+            // A `catch (CancellationException) { throw e }` here matched it first and made the FAIL
+            // result below dead for a timing-out scenario: the throwable escaped `runSuite` as a
+            // cancellation, so the whole suite stopped with no report and no crash log, which on
+            // device is indistinguishable from the app being suspended (#2292).
+            currentCoroutineContext().ensureActive()
             hop("EX ${e::class.simpleName}: ${e.message}")
             ScenarioResult(id, name, Verdict.FAIL, mark.elapsedNow().inWholeMilliseconds, e.message ?: "exception", hops.toList())
         }
