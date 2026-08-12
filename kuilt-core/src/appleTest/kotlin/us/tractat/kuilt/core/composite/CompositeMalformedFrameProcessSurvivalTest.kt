@@ -3,7 +3,7 @@
 package us.tractat.kuilt.core.composite
 
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: deliberate real-threading harness: see the class KDoc — a real dispatcher is the whole point, because a test dispatcher cannot observe a process abort.
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.CloseReason

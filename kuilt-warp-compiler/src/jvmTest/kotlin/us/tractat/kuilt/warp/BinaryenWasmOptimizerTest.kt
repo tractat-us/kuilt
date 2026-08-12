@@ -2,7 +2,7 @@
 
 package us.tractat.kuilt.warp
 
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-subprocess test: wasm-opt is genuine wall-clock work (the sanctioned real-threading exception), so the optimizer is given Dispatchers.IO — runTest has no delays to drive.
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.warp.test.WasmKernelFixtures
@@ -32,7 +32,6 @@ import kotlin.test.assertTrue
 class BinaryenWasmOptimizerTest {
 
     // Real subprocess I/O — the sanctioned real-threading exception; no virtual clock to drive.
-    @Suppress("ForbiddenMethodCall")
     private val optimizer = BinaryenWasmOptimizer(Dispatchers.IO)
 
     private val source = WasmKernelFixtures.REVERSE

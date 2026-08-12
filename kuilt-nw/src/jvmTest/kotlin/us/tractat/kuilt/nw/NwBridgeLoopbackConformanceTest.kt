@@ -1,9 +1,9 @@
-@file:Suppress("ForbiddenImport", "ForbiddenMethodCall") // real-network loopback conformance harness — a real Network.framework socket driven through the dylib needs a real IO dispatcher; there is no virtual-time option here
+@file:Suppress("ForbiddenImport") // real-network loopback conformance harness — a real Network.framework socket driven through the dylib needs a real IO dispatcher; there is no virtual-time option here
 
 package us.tractat.kuilt.nw
 
 import com.sun.jna.Pointer
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-network loopback conformance harness — a real Network.framework socket driven through the dylib needs a real IO dispatcher; there is no virtual-time option here
 import kotlinx.coroutines.withContext
 import org.junit.AssumptionViolatedException
 import us.tractat.kuilt.conformance.CapabilityGaps

@@ -17,7 +17,7 @@
 
 package us.tractat.kuilt.warp
 
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: the deliberate real-IO op models the real Dispatchers.IO wasm guest
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest

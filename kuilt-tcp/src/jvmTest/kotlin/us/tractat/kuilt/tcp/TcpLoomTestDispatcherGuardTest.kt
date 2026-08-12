@@ -4,7 +4,7 @@
 package us.tractat.kuilt.tcp
 
 import io.ktor.network.selector.SelectorManager
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: this test verifies the TcpLoom guard that REJECTS a TestDispatcher, so it must construct the seam with a real one
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
@@ -24,7 +24,7 @@ import kotlin.test.assertTrue
  */
 class TcpLoomTestDispatcherGuardTest {
 
-    @Suppress("ForbiddenMethodCall") // selector needs a real dispatcher; never used — the guard fires first
+    // The selector needs a real dispatcher, and is never used — the guard fires first.
     private val selector = SelectorManager(Dispatchers.Unconfined)
 
     @AfterTest

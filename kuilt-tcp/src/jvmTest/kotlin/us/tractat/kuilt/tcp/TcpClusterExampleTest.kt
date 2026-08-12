@@ -6,7 +6,7 @@ import io.ktor.network.selector.SelectorManager
 import io.ktor.network.sockets.InetSocketAddress
 import io.ktor.network.sockets.Socket
 import io.ktor.network.sockets.aSocket
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-network loopback cluster example — TCP sockets need a real IO dispatcher
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
@@ -34,7 +34,6 @@ import kotlin.time.Duration.Companion.seconds
  */
 class TcpClusterExampleTest {
 
-    @Suppress("ForbiddenMethodCall") // real-network loopback cluster example — sockets need a real IO dispatcher
     private val selector = SelectorManager(Dispatchers.IO)
 
     @AfterTest

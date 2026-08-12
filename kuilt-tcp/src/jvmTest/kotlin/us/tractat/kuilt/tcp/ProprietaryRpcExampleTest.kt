@@ -2,7 +2,7 @@
 
 package us.tractat.kuilt.tcp
 
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-socket example — blocking reads need a real IO dispatcher
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
@@ -37,7 +37,6 @@ import kotlin.time.Duration.Companion.seconds
  * This test is the artifact the "extend with your own fabric" tutorial cites: it
  * proves the kit generalises beyond Ktor to any `InputStream`/`OutputStream`.
  */
-@Suppress("ForbiddenMethodCall") // real-socket example — blocking reads need a real IO dispatcher
 class ProprietaryRpcExampleTest {
 
     /**

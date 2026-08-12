@@ -6,7 +6,7 @@
 
 package us.tractat.kuilt.nw
 
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: the JNA callback is a FOREIGN OS thread the dylib invokes synchronously, and the property under test is what happens when it outruns the JVM-side drain — under `runTest` producer and drain are one thread, so the bug is unreachable.
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking

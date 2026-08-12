@@ -3,7 +3,7 @@
 package us.tractat.kuilt.deal.test
 
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: timing benchmark under runBlocking (not runTest) — Dispatchers.Unconfined needed for a zero-overhead scope around real crypto operations
 import kotlinx.coroutines.runBlocking
 import org.junit.Assume
 import org.junit.Before

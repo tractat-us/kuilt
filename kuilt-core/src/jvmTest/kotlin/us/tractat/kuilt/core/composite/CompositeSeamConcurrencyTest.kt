@@ -4,7 +4,7 @@
 package us.tractat.kuilt.core.composite
 
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real OS-thread concurrency stress harness — CompositeSeam's data races on `idMap`/`live`/`_plies`/the inbound gate only manifest under genuine cross-thread access.
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope

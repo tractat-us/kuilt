@@ -3,7 +3,7 @@
 package us.tractat.kuilt.core
 
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: the guard's NEGATIVE case — `checkNotUnderTestDispatcher` must not fire when the scope is not a TestDispatcher, so the scope handed to it has to be a real one. It is a structural argument only: nothing is launched in it, so there is no virtual-clock decoupling.
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test

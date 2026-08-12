@@ -3,7 +3,7 @@
 
 package us.tractat.kuilt.core
 
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-OS-thread harness — see the concurrency probes that use it.
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.debug.CoroutineInfo
 import kotlinx.coroutines.debug.DebugProbes

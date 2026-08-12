@@ -3,7 +3,7 @@
 package us.tractat.kuilt.core.composite
 
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: this probe exists to run on real OS threads with real preemption — a virtual/single-threaded dispatcher serialises the pumps and the writer and hides the race entirely.
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope

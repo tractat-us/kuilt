@@ -10,7 +10,7 @@ import io.ktor.network.sockets.openReadChannel
 import io.ktor.network.sockets.openWriteChannel
 import io.ktor.utils.io.jvm.javaio.toInputStream
 import io.ktor.utils.io.jvm.javaio.toOutputStream
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-network TCP mesh — sockets need a real IO dispatcher
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -37,7 +37,6 @@ import us.tractat.kuilt.stream.framed
  *
  * @param selector Ktor [SelectorManager] for socket operations (must be on a real IO dispatcher).
  */
-@Suppress("ForbiddenMethodCall") // real-network — sockets need real IO dispatcher
 internal suspend fun buildTcpMesh(
     n: Int,
     selector: SelectorManager,
@@ -56,7 +55,6 @@ internal suspend fun buildTcpMesh(
 
     val rawSeams: List<Seam> = (0 until n).map { i ->
         async {
-            @Suppress("ForbiddenMethodCall") // real dispatcher for TCP IO
             hubMesh(
                 selfId = peerIds[i],
                 connections = connsByPeer[i],
@@ -69,7 +67,6 @@ internal suspend fun buildTcpMesh(
 }
 
 /** Open one loopback TCP socket pair, returning both ends as [Connection]s. */
-@Suppress("ForbiddenMethodCall") // real-network loopback pair — needs real IO
 private suspend fun tcpConnectionPair(selector: SelectorManager): Pair<Connection, Connection> =
     coroutineScope {
         // Bind 0 and read the port back off the bound socket — probing a free port and re-binding
@@ -85,7 +82,6 @@ private suspend fun tcpConnectionPair(selector: SelectorManager): Pair<Connectio
         toConnection(accepted) to toConnection(client)
     }
 
-@Suppress("ForbiddenMethodCall") // real-network — blocking IO adapters need real IO dispatcher
 private fun toConnection(socket: Socket): Connection {
     val source = socket.openReadChannel().toInputStream().asSource().buffered()
     val sink = socket.openWriteChannel(autoFlush = true).toOutputStream().asSink().buffered()

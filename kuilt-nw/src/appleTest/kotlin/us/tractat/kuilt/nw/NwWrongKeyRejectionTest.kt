@@ -1,9 +1,9 @@
-@file:Suppress("ForbiddenImport", "ForbiddenMethodCall") // real-network loopback harness — a real Network.framework socket needs a real IO dispatcher; there is no virtual-time option here
+@file:Suppress("ForbiddenImport") // real-network loopback harness — a real Network.framework socket needs a real IO dispatcher; there is no virtual-time option here
 
 package us.tractat.kuilt.nw
 
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-network loopback harness — a real Network.framework socket needs a real IO dispatcher; there is no virtual-time option here
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch

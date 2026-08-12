@@ -4,7 +4,7 @@ package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real OS-thread construct/cancel race — the #1077 field-init-order NPE only manifests when the actor teardown runs on a different thread than the still-in-flight constructor.
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import us.tractat.kuilt.raft.internal.RaftEngine

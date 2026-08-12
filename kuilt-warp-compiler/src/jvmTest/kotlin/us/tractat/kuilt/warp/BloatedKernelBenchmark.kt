@@ -2,7 +2,7 @@
 
 package us.tractat.kuilt.warp
 
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: local-only wall-clock benchmark: it measures REAL elapsed time (System.nanoTime) of the interpreter, so Dispatchers.IO + runBlocking, never a virtual-time dispatcher.
 import kotlinx.coroutines.runBlocking
 import kotlin.time.Duration.Companion.seconds
 
@@ -44,7 +44,8 @@ public object BloatedKernelBenchmark {
     // raw (slow) variant never trips the sandbox timeout. This benchmark isn't testing the guard.
     private val BENCH_CONFIG = WasmSandboxConfig(executionTimeout = 120.seconds)
 
-    @Suppress("ForbiddenMethodCall") // deliberate: real interpreter CPU work; Dispatchers.IO waits on the guest thread (see ChicoryWasmRuntime's real-IO note).
+    // Real interpreter CPU work; Dispatchers.IO waits on the guest thread (see
+    // ChicoryWasmRuntime's real-IO note).
     public fun run(iterations: Int): Unit = runBlocking(Dispatchers.IO) {
         val optimizer = BinaryenWasmOptimizer(Dispatchers.IO)
         val input = littleEndian(iterations)

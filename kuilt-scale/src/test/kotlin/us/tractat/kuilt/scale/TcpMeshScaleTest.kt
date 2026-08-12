@@ -3,7 +3,7 @@
 package us.tractat.kuilt.scale
 
 import io.ktor.network.selector.SelectorManager
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-network TCP scaling test — the Ktor SelectorManager needs a real IO dispatcher
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.take
@@ -28,7 +28,6 @@ import kotlin.time.Duration.Companion.seconds
  */
 class TcpMeshScaleTest {
 
-    @Suppress("ForbiddenMethodCall")
     private val selector = SelectorManager(Dispatchers.IO)
 
     @BeforeTest
