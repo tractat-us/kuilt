@@ -1037,6 +1037,14 @@ public class MappedBolt<Id : Any, V, Op : Any>(
      * bound — "can this scope select anything at all?" — never to conclude that a segment stopped
      * short. `PosixMappedBolt`'s `extentIsObserved` draws the same line in the same words.
      *
+     * **What makes it safe rather than merely careful: this can suppress a verdict, never a frame.**
+     * [appendCursor] is at or above every frame's `endOffset` — appends advance it by exactly the
+     * bytes they write, and a hole only ever *inflates* it, because the newest header's `baseOffset`
+     * already counts the missing region — while [ReplayScope.FromOffset] selects on
+     * `endOffset > offset`. So `offset >= appendCursor` implies no frame is selectable, and the
+     * short-circuit can only ever discard an empty result. The one thing it *can* cost is the
+     * [Truncated] a fuller read would have reported, which is what the flag below is about.
+     *
      * ### And the flag, because a damaged archive's cursor is not observed at all
      *
      * [recover] gives up part-way on an archive it cannot read — a newest segment with a torn header,

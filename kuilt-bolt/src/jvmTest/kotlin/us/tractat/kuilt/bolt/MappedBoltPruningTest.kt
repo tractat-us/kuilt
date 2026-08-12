@@ -541,8 +541,10 @@ class MappedBoltPruningTest {
          *
          * At two or three every segment is within the last two and the sweep cannot tell
          * position-independence from "the newest few are always read" — the very confusion this test
-         * exists to rule out. Six leaves three depths (0, 1, 2) that no small `k` reaches and two
-         * (3, 4) that a `k` of 2 does.
+         * exists to rule out. Six over the swept positions (`0 until 5`) leaves four depths a `k` of
+         * 2 never reaches and exactly **one** — position 4 — that it does; position 3 would need a
+         * `k` of 3. That single reachable depth is what the receipt above measures, and it is why the
+         * red is one changed entry rather than a wholesale flip.
          */
         const val TAIL_FIXTURE_FRAMES = 6
 
