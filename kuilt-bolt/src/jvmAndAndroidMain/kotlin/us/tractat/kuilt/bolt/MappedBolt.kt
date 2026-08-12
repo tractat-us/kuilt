@@ -1053,6 +1053,12 @@ public class MappedBolt<Id : Any, V, Op : Any>(
      * frames, which is the one failure this module exists to prevent. So the short-circuit is taken
      * only while the archive is appendable, and a damaged one falls through to reading its segments
      * and reporting what it finds — the conservative direction, deliberately.
+     *
+     * `MappedBoltDamageTest.aDamagedNewestHeaderStillReplaysTheFramesBehindIt` is the pin, and it is
+     * named here because this term is the one line in this file whose failure mode is **silent data
+     * loss** rather than a wrong verdict: without it, five recoverable frames replay as an empty
+     * `CleanTail` while [availability] goes on reporting the damage correctly. It went unpinned
+     * through a whole round of review, which is precisely how #2240 shipped twice.
      */
     private class ArchiveSnapshot(
         val reads: List<SegmentRead>,

@@ -197,10 +197,13 @@ class MappedBoltDamageTest {
      * which is the reachable shape (a crash part-way through writing a header) rather than a reader
      * pointed at the wrong directory, and the latter throws instead of replaying.
      *
-     * **Mutation receipt:** deleting `appendCursorIsObserved &&` reds assertions 2, 3 and 4 — every
-     * cursor answers `CleanTail` with **zero** frames over an archive holding five recoverable ones.
-     * Assertion 1 stays green, which is the point of stating it: [Bolt.availability] reports the
-     * damage correctly the whole time, so nothing but a replay assertion can see this.
+     * **Mutation receipt**, measured on this fixture with the results directory deleted first and the
+     * compile confirmed: deleting `appendCursorIsObserved &&` reds assertions 2, 3 and 4 —
+     * `expected:<5> but was:<0>` frames, and `CleanTail` where
+     * `Truncated(atOffset=673, reason=SegmentHeader)` is expected, at **both** cursors. Total silent
+     * data loss reported as a clean archive. Assertion 1 stays green, which is the point of stating
+     * it: [Bolt.availability] reports the damage correctly throughout, so nothing but a replay
+     * assertion can see this.
      */
     @Test
     fun aDamagedNewestHeaderStillReplaysTheFramesBehindIt() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
