@@ -68,6 +68,39 @@ check(roster.value.map { it.peerKey }.toSet() == setOf("bob"))
 
 ## Rejoin & reconnect
 
+**Intent:** a per-game / per-session id both peers agree on — to key a durable `(session, device) → seat` record, scope a log, or name a table.
+**Primitive:** `Room.roomId` (`us.tractat.kuilt.session`). Agreed in the admit handshake at zero extra traffic — don't mint your own and replicate it over a side channel, and don't use the host's peer id, which names the *device* and repeats across every room it hosts.
+
+<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#perSessionIdSample -->
+```kotlin
+public suspend fun perSessionIdSample(room: Room) {
+    // Null means "this joiner is not admitted yet", not "this room has no id" — so wait for the
+    // value rather than sampling it. A host is non-null immediately and this returns at once.
+    val id: RoomId = room.roomId.filterNotNull().first()
+    // Safe as a durable key — a fresh room means a fresh id, including two games in a row from one
+    // device and the games either side of an app kill.
+    println("seat record key: ${id.value}/${room.selfId.value}")
+}
+```
+
+**Intent:** the *host* restarts and you want its members' saved `ResumeToken`s to still work.
+**Primitive:** `RoomFactory.host(pattern, roomId = …)` — host again under the id you persisted. A token names the room it was issued for and the host refuses any other, so a host that returns under a freshly minted id strands every outstanding token.
+
+<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#stableRoomIdAcrossHostRestartSample -->
+```kotlin
+public suspend fun stableRoomIdAcrossHostRestartSample(
+    factory: RoomFactory,
+    pattern: Pattern,
+    load: () -> String?,
+    save: (String) -> Unit,
+): Room {
+    // Null on a cold first run — then the factory mints, and you persist what it chose.
+    val room = factory.host(pattern, roomId = load()?.let(::RoomId))
+    save(room.roomId.value?.value ?: error("a host room knows its id at construction"))
+    return room
+}
+```
+
 **Intent:** rejoin / reconnect after a dropped connection; "hold the slot open" for a grace window.
 **Primitive:** `ResumeToken` + the `SeamRoom` resume flow (`us.tractat.kuilt.session.partition`). Don't re-track the grace window yourself.
 

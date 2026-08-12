@@ -1,7 +1,10 @@
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import us.tractat.kuilt.core.FabricAvailability
+import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.util.ExponentialBackoff
 import us.tractat.kuilt.session.admit.RejectCode
@@ -9,6 +12,7 @@ import us.tractat.kuilt.session.partition.JoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectEvent
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
+import us.tractat.kuilt.session.partition.RoomId
 import kotlin.random.Random
 import kotlin.time.Duration.Companion.seconds
 
@@ -43,6 +47,42 @@ public suspend fun chunkToTheRoomsBudgetSample(room: Room, peer: PeerId, blob: B
 
 /** A chunk size for a fabric that publishes no ceiling of its own. Small enough for any transport. */
 private const val DEFAULT_CHUNK_BYTES: Int = 16 * 1024
+
+/**
+ * Read the per-session id both peers already agreed on, instead of minting one and replicating it.
+ *
+ * [Room.roomId] is settled in the admit handshake at zero extra traffic. Don't agree your own over
+ * a side channel — and don't reach for the host's peer id either, which names the *device* and so
+ * repeats across every room that device hosts.
+ */
+public suspend fun perSessionIdSample(room: Room) {
+    // Null means "this joiner is not admitted yet", not "this room has no id" — so wait for the
+    // value rather than sampling it. A host is non-null immediately and this returns at once.
+    val id: RoomId = room.roomId.filterNotNull().first()
+    // Safe as a durable key — a fresh room means a fresh id, including two games in a row from one
+    // device and the games either side of an app kill.
+    println("seat record key: ${id.value}/${room.selfId.value}")
+}
+
+/**
+ * Survive a **host** restart with the joiners' [ResumeToken]s still valid, by hosting again under
+ * the id you persisted rather than letting the factory mint a new one.
+ *
+ * A token names the room it was issued for and the host refuses any other, so a host that returns
+ * under a fresh id strands every outstanding token as a session mismatch — members, fabric and
+ * seats all still there, every rejoin refused.
+ */
+public suspend fun stableRoomIdAcrossHostRestartSample(
+    factory: RoomFactory,
+    pattern: Pattern,
+    load: () -> String?,
+    save: (String) -> Unit,
+): Room {
+    // Null on a cold first run — then the factory mints, and you persist what it chose.
+    val room = factory.host(pattern, roomId = load()?.let(::RoomId))
+    save(room.roomId.value?.value ?: error("a host room knows its id at construction"))
+    return room
+}
 
 /**
  * Reconnect after a transport drop by presenting the saved [ResumeToken], instead of
