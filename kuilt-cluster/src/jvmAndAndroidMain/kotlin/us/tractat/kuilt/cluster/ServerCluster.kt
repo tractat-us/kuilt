@@ -6,6 +6,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -149,9 +151,15 @@ public class ServerCluster internal constructor(
     private suspend fun admitLearner(room: Room) {
         val admittedSet = try {
             withTimeout(10.seconds) { room.roster.first { it.isNotEmpty() } }
-        } catch (e: CancellationException) {
-            throw e
         } catch (e: Throwable) {
+            // Whose cancellation is this? The `withTimeout` above MINTS a
+            // `TimeoutCancellationException` and throws it at us without cancelling this job — and
+            // that timeout is the one case this `try` exists for. A `catch (CancellationException)
+            // { throw e }` here would match it first and make everything below dead code, so the
+            // room would never be left and one learner's silence would read as the relay being
+            // cancelled (#2292). `ensureActive()` is the discriminator: it throws only when THIS
+            // job is genuinely cancelled, and falls through on the minted one.
+            currentCoroutineContext().ensureActive()
             log.warn(e) { "server-cluster: roster wait failed" }
             runCatchingCancellable { room.leave(LeaveReason.Normal) }
             return
