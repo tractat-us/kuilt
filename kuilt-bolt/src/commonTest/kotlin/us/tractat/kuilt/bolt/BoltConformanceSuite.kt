@@ -743,7 +743,7 @@ abstract class BoltConformanceSuite {
      * |---|---|
      * | Drop the cursor across a pruned segment — `InMemoryBolt` | 2, 3 |
      * | Drop the cursor across a pruned segment — `PosixMappedBolt` | **none** |
-     * | Drop the cursor across a pruned segment — `MappedBolt` | **none** (it prunes nothing) |
+     * | Drop the cursor across a pruned segment — `MappedBolt` | **none** — see the note under row 2 |
      * | Carry the cursor from bookkeeping rather than parsing — `InMemoryBolt` | **none** |
      * | Delete the continuity check in any backend | 1 only |
      *
@@ -759,8 +759,17 @@ abstract class BoltConformanceSuite {
      * at or past the segment *after* the hole, and then the missing region lies entirely below the
      * cursor, outside what was asked for. The bug and the thing that hides it have the same cause.
      * The fix is applied to both backends anyway: relying on an accident of inflated bookkeeping to
-     * stay correct is how the next reader loses it, and #2236 (real pruning for `MappedBolt`) would
-     * hand `MappedBolt` the identical bug the moment it lands.
+     * stay correct is how the next reader loses it.
+     *
+     * **Row 3 was measured when `MappedBolt` pruned nothing, and #2236 has since given it a
+     * `skippable` — the row is still green, and that is the finding rather than a leftover.** Its
+     * predicate is the *successor's* `baseOffset`, which is row 2's derived extent by another route,
+     * so this fixture's cursor — the **start** of the hole — leaves the segment before the hole
+     * unprunable and its boundary read either way. Dropping that backend's continuity carry is a real
+     * defect and **this property does not see it**: the sub-case that reaches it is a consumer
+     * resuming from *past* the hole, which this fixture cannot express because it derives its cursor
+     * from the [ReplayScope.All] replay, and that replay stops **at** the hole. `MappedBoltPruningTest`
+     * carries the pin meanwhile; #2268 is the fixture hook that would let it live here.
      *
      * Row 4 is the trap this test was expected to close and **does not**: carrying the cursor from
      * bookkeeping is exactly right for `InMemoryBolt` (whose extents are exact) and a tautology on

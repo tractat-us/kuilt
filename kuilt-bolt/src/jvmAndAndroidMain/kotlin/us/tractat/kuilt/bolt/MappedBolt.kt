@@ -1,5 +1,6 @@
 package us.tractat.kuilt.bolt
 
+import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.flow.Flow
@@ -118,9 +119,10 @@ import java.nio.Buffer as NioBuffer
  * [replay] copies the **active** segment's written prefix while holding the lock — that is what makes
  * a concurrent append unobservable half-written — so a replay stalls appends for the length of one
  * `memcpy` of at most [segmentFrameBytes]. Every older segment is read from its file, outside the
- * lock. A replay is a whole-archive read either way: v1 does no segment-level pruning, so a
- * [ReplayScope.FromOffset] resume costs the same as [ReplayScope.All] even though the segment
- * headers carry the `baseOffset` a prune would need (#2236).
+ * lock. A [ReplayScope.FromOffset] resume does **not** read the whole archive: each segment header
+ * carries an absolute `baseOffset` and is a fixed size, so a header-sized probe per segment prunes
+ * a whole prefix of files without touching their frames — see [firstSegmentToRead] for the
+ * predicate, and for the one segment it deliberately declines to prune (#2236).
  *
  * @param directory holds this archive's segment files. Created if absent.
  * @param format how ops are classified and encoded — see [BoltArchiveFormat].
@@ -189,6 +191,14 @@ public class MappedBolt<Id : Any, V, Op : Any>(
 
     /** How many flushes [riggedFlushFailure] has made fail. **Test-only**; see [riggedFlushFailures]. */
     private var riggedFlushCount: Int = 0
+
+    /**
+     * Bytes read back off segment **files**, ever, by any replay on this instance.
+     *
+     * Deliberately **not** guarded by [lock]: a replay reads its files outside the lock, which is the
+     * whole reason a slow reader does not stall appends. See [segmentFileBytesRead].
+     */
+    private val fileBytesRead = atomic(0L)
 
     init {
         require(segmentFrameBytes > 0) { "segmentFrameBytes must be positive, was $segmentFrameBytes" }
@@ -290,6 +300,27 @@ public class MappedBolt<Id : Any, V, Op : Any>(
      * "a flush happened" is one inference away from it.
      */
     internal fun riggedFlushFailures(): Int = lock.withLock { riggedFlushCount }
+
+    /**
+     * How many bytes this bolt has read back off its segment **files**, across every replay so far.
+     * **Test-only.**
+     *
+     * The quantity #2236 is about, and the only one that can settle it. What [firstSegmentToRead]
+     * claims is an **I/O** saving, and every cheaper observable is one inference away from it: a
+     * pruned segment's frames never being *emitted* is already true of the scope filter, and its
+     * bytes never being *parsed* would still be true of an implementation that read every file whole
+     * and looked only at the header — which is precisely the cost this pruning exists to remove. A
+     * wall-clock assertion would say the same thing far less reliably, and on a contended box would
+     * say it wrongly.
+     *
+     * Counts the active segment as free, because it is: its bytes are copied out of the live mapping
+     * under [lock], not read from disk.
+     *
+     * Monotonic across the life of the instance, so a test measures a **difference** across one
+     * replay rather than trusting an absolute — which also makes it immune to a fixture that happens
+     * to replay twice.
+     */
+    internal fun segmentFileBytesRead(): Long = fileBytesRead.value
 
     override suspend fun append(ops: List<Op>): AppendResult {
         // Classification and op encoding are pure and expensive; they happen OUTSIDE the lock.
@@ -651,16 +682,34 @@ public class MappedBolt<Id : Any, V, Op : Any>(
         // Snapshot under the lock, decode outside it. The active segment is copied out of its
         // mapping while the lock is held, so a concurrent append can never be observed half-written;
         // every earlier segment is immutable and was forced before its mapping was let go.
-        val reads = lock.withLock { snapshot() }
-        // Null until the first segment has spoken. The archive's offset space starts wherever its
-        // OLDEST segment header says it does, not at 0 — so a future prune that drops read segments
-        // (#2236) cannot make the continuity check below false-report the survivors as a hole.
+        val archive = lock.withLock { ArchiveSnapshot(snapshot(), nextOffset, unappendable == null) }
+        // A CAUGHT-UP resume reads NOTHING — and it is the commonest `FromOffset` call there is, a
+        // poll from a consumer that already has everything.
+        //
+        // It is also what keeps the pruning contract from depending on the archive's LENGTH.
+        // [firstSegmentToRead] walks a prefix and stops one short of the first survivor, and the
+        // newest segment is never prunable — so without this, a cursor at the archive's end always
+        // read the last TWO segments, and damage below the cursor was reported or not according to
+        // how far from the tail it sat. A consumer polling an unchanged, unrepaired archive would get
+        // [Truncated] today and [CleanTail] after two more segment rolls, over bytes that never
+        // moved. Every other cursor is stable as the archive grows — a segment's `baseOffset` does
+        // not change when a later one rolls — so the end cursor was the whole of the hazard, and
+        // `InMemoryBolt` and `PosixMappedBolt` both answer it by pruning everything and reading none.
+        if (archive.isCaughtUp(scope)) {
+            emit(CleanTail)
+            return@flow
+        }
+        val reads = archive.reads
+        val from = firstSegmentToRead(reads, scope)
+        // Null until the first segment has spoken. The archive's offset space starts wherever the
+        // OLDEST segment this replay reads says it does, not at 0 — and after a prune that is not
+        // the archive's oldest segment, which is why this cannot be seeded with a literal.
         var resumeOffset: Long? = null
-        for (read in reads) {
+        for (index in from until reads.size) {
             // A segment that stops early stops the WHOLE replay. An append-only log is ordered, so a
             // frame that does not validate makes everything behind it untrustworthy; carrying on to
             // the next segment would hand back a history with a silent hole and offsets that jump.
-            val outcome = emitSegment(read, resumeOffset, scope)
+            val outcome = emitSegment(reads[index], resumeOffset, scope)
             outcome.stopped?.let {
                 emit(it)
                 return@flow
@@ -677,6 +726,128 @@ public class MappedBolt<Id : Any, V, Op : Any>(
             SegmentRead(file, if (file == current?.file) current.snapshot() else null)
         }
     }
+
+    /**
+     * The oldest segment [scope] obliges this replay to **read**: segment-granularity pruning, minus
+     * one, and the minus one is load-bearing.
+     *
+     * ### The predicate, and why it is the SUCCESSOR's base offset
+     *
+     * `InMemoryBolt` prunes on `baseOffset + frameBytes <= cursor` because it holds every segment's
+     * exact frame extent in memory. This backend deliberately does not: [recover] scans only the
+     * newest segment, so an older segment's extent is on disk and nowhere else, and reading it back
+     * is the whole cost this pruning exists to avoid. What *is* cheap is each segment's absolute
+     * `baseOffset`, because a header is fixed-size for a given [BoltArchiveFormat] — so a segment is
+     * prunable exactly when its **successor** starts at or below the cursor, which bounds its own
+     * frames from above without reading one of them.
+     *
+     * **The newest segment therefore has no successor and is never pruned.** That is correct rather
+     * than a limitation: nothing in a header says where the archive's last frame ends.
+     *
+     * ### Minus one: the segment before the first survivor is READ, with every frame filtered out
+     *
+     * Its true frame end is the offset the first emitted segment's header must continue from, and
+     * that boundary is the only one a [ReplayScope.FromOffset] replay has. Pruning it leaves the
+     * boundary unchecked, and an unchecked boundary is a hole reported as a [CleanTail] to the one
+     * caller most likely to act on it — `FromOffset` is the documented resume cursor, so the offset a
+     * consumer hands back is precisely the offset a lost segment starts at (#2240, #2244).
+     *
+     * It is **parsed**, never taken from a segment's recorded extent. On this backend a non-last
+     * segment's extent could only be *derived* as the successor's base minus its own, which across a
+     * hole is inflated by exactly the hole — the check would compare a value with itself and stay
+     * green over real damage. A non-last segment's recorded extent is an inference *from* continuity,
+     * so it is never evidence *about* it. One extra segment read cannot lie.
+     *
+     * ### This backend DOES inherit #2240 — through a different sub-case than the one predicted
+     *
+     * Say it plainly, because the near-miss reading of this paragraph is what would delete the line
+     * above. Dropping the minus-one here answers [CleanTail] to a [ReplayScope.FromOffset] resume
+     * over an archive with a hole in it — #2240's symptom, on this backend, measured (see the
+     * mutation table on `MappedBoltPruningTest.aResumeFromBeyondAHoleStillReportsIt`). The carry is
+     * load-bearing and this function is why.
+     *
+     * What differs is only *which* sub-case reaches it. `InMemoryBolt`'s exact extent lets it prune a
+     * segment while the hole behind that segment still **straddles** the cursor, and that is the case
+     * #2244 was written against. The successor-base predicate cannot reach that one: pruning segment
+     * `k` requires `base(k+1) <= cursor`, so the missing region `[end(k), base(k+1))` lies wholly at
+     * or below the cursor. The case that remains is a consumer resuming from **past** the hole, which
+     * is the ordinary retention shape and just as real. #2240 was never defined by the straddling
+     * sub-case, so ruling that one out rules out nothing that matters here.
+     *
+     * The minus-one read is kept anyway, and not out of caution alone. It is what makes this backend
+     * answer a *lost middle* the same way the other two do when a consumer resumes from the far side
+     * of the hole — `MappedBoltPruningTest.aResumeFromBeyondAHoleStillReportsIt` pins that agreement,
+     * and it is the only test in the tree that reds when this line is dropped. Resting a correctness
+     * property on an accident of which bookkeeping happens to be inflated is how the next reader
+     * loses it.
+     *
+     * `PosixMappedBolt` reaches the same conclusion, and after a reopen by the same algebra: adoption
+     * derives every non-last extent as `next.baseOffset - baseOffset`, so its `baseOffset + extent`
+     * reduces to this predicate exactly. **Within the writing process it does not** — a segment
+     * retired by that same instance carries an *observed* extent, which is `InMemoryBolt`'s stronger
+     * predicate. Immaterial to a hole, which needs an out-of-process deletion and therefore a reopen
+     * to be seen at all, but the two backends are only identical on the reopened path.
+     *
+     * ### What a pruning replay stops reporting, said out loud
+     *
+     * Damage lying **wholly below the cursor** — a torn frame, an unreadable file — is no longer seen
+     * by a [ReplayScope.FromOffset] resume, where before this backend read every segment and stopped
+     * at it. Those bytes are behind what the caller asked for, and [ReplayScope.All] still reports
+     * them. It is written down because "the resume went quiet about damage the whole-archive replay
+     * shouts about" is otherwise a bug report waiting to be filed.
+     *
+     * **The boundary of that silence is a property of the cursor, never of the archive's length**,
+     * and that distinction is the whole of it. Which segments a given cursor prunes is fixed by the
+     * surviving segments' `baseOffset`s, and rolling a new segment does not move an existing one — so
+     * a fixed cursor keeps its answer as the archive grows. The one cursor that does *not* hold still
+     * is the archive's own end, which is why [replay] short-circuits it rather than letting this
+     * function's unprunable-newest-segment rule read the last two files forever. See [ArchiveSnapshot].
+     */
+    private fun firstSegmentToRead(reads: List<SegmentRead>, scope: ReplayScope): Int {
+        // Scope-gated: for `All` the header pass is pure overhead, and no offset predicate applies
+        // to `Arrived` or `InsertsAbove` at all — a frame's arrival time and dots are in its body.
+        if (scope !is ReplayScope.FromOffset) return 0
+        var firstUnpruned = 0
+        while (firstUnpruned < reads.lastIndex) {
+            // A header that will not read leaves this boundary undecidable, so the scan stops and
+            // the segment is read whole — which is where the damage gets classified and reported.
+            val successorBase = baseOffsetOf(reads[firstUnpruned + 1]) ?: break
+            if (successorBase > scope.offset) break
+            firstUnpruned++
+        }
+        return maxOf(firstUnpruned - 1, 0)
+    }
+
+    /**
+     * Where [read]'s frames start, from its header alone, or `null` if that header will not read.
+     *
+     * The active segment's bytes are already in hand, so it costs nothing; every other segment costs
+     * one bounded [headerBytes] read rather than the whole file. A [BoltFormatException] — a foreign
+     * archive, a version from the future — propagates exactly as it does from [emitSegment]: the
+     * caller opened the wrong directory, and reporting that as "unprunable" would hide it until the
+     * body read raised the same thing one step later.
+     */
+    private fun baseOffsetOf(read: SegmentRead): Long? {
+        val bytes = read.inMemory ?: try {
+            readHeaderOf(read.file)
+        } catch (_: IOException) {
+            return null
+        }
+        val buffer = Buffer().apply { write(bytes, 0, minOf(bytes.size, headerBytes)) }
+        return readSegmentHeader(buffer, format.opFormat, format.elementType)?.baseOffset
+    }
+
+    /** Exactly [headerBytes] off the front of [file]; a shorter file raises an [IOException]. */
+    private fun readHeaderOf(file: File): ByteArray {
+        val probe = ByteArray(headerBytes)
+        RandomAccessFile(file, "r").use { handle -> handle.readFully(probe) }
+        fileBytesRead += headerBytes.toLong()
+        return probe
+    }
+
+    /** [read]'s bytes: the active segment's snapshot, or the file, counted against [fileBytesRead]. */
+    private fun bytesOf(read: SegmentRead): ByteArray =
+        read.inMemory ?: read.file.readBytes().also { fileBytesRead += it.size.toLong() }
 
     /**
      * Emit [read]'s in-scope frames, and say how the segment ended.
@@ -710,7 +881,7 @@ public class MappedBolt<Id : Any, V, Op : Any>(
     ): SegmentReplay {
         val stopsAt = resumeOffset ?: 0L
         val bytes = try {
-            read.bytes()
+            bytesOf(read)
         } catch (_: IOException) {
             // A segment we cannot read at all is indistinguishable, to a consumer, from one whose
             // header will not read — and throwing would discard every intact frame ahead of it.
@@ -850,8 +1021,53 @@ public class MappedBolt<Id : Any, V, Op : Any>(
     }
 
     /** A segment to replay: the active one's bytes in hand, or a file to read them from. */
-    private class SegmentRead(val file: File, private val inMemory: ByteArray?) {
-        fun bytes(): ByteArray = inMemory ?: file.readBytes()
+    private class SegmentRead(val file: File, val inMemory: ByteArray?)
+
+    /**
+     * What one locked look at the archive tells [replay]: the segments to read, where this archive's
+     * frames end, and whether that end is worth anything.
+     *
+     * ### The append cursor is used as a PRUNING bound, and only because it is observed
+     *
+     * `#2240`'s rule is that a segment's recorded extent must never be evidence *about* continuity —
+     * a non-last segment's is derived from its successor's base, so the check would compare a value
+     * with itself. [appendCursor] is a different quantity in two ways that matter. It is **observed**:
+     * [recover] walks the newest segment frame by frame to compute it, and [append] increments it by
+     * bytes actually written. And it is used for a **coarse** decision that needs only an upper
+     * bound — "can this scope select anything at all?" — never to conclude that a segment stopped
+     * short. `PosixMappedBolt`'s `extentIsObserved` draws the same line in the same words.
+     *
+     * **What makes it safe rather than merely careful: this can suppress a verdict, never a frame.**
+     * [appendCursor] is at or above every frame's `endOffset` — appends advance it by exactly the
+     * bytes they write, and a hole only ever *inflates* it, because the newest header's `baseOffset`
+     * already counts the missing region — while [ReplayScope.FromOffset] selects on
+     * `endOffset > offset`. So `offset >= appendCursor` implies no frame is selectable, and the
+     * short-circuit can only ever discard an empty result. The one thing it *can* cost is the
+     * [Truncated] a fuller read would have reported, which is what the flag below is about.
+     *
+     * ### And the flag, because a damaged archive's cursor is not observed at all
+     *
+     * [recover] gives up part-way on an archive it cannot read — a newest segment with a torn header,
+     * a volume that refuses the open — and returns with [unappendable] set and `nextOffset` still
+     * `0`. Short-circuiting on that would answer [CleanTail] to every resume over an archive full of
+     * frames, which is the one failure this module exists to prevent. So the short-circuit is taken
+     * only while the archive is appendable, and a damaged one falls through to reading its segments
+     * and reporting what it finds — the conservative direction, deliberately.
+     *
+     * `MappedBoltDamageTest.aDamagedNewestHeaderStillReplaysTheFramesBehindIt` is the pin, and it is
+     * named here because this term is the one line in this file whose failure mode is **silent data
+     * loss** rather than a wrong verdict: without it, five recoverable frames replay as an empty
+     * `CleanTail` while [availability] goes on reporting the damage correctly. It went unpinned
+     * through a whole round of review, which is precisely how #2240 shipped twice.
+     */
+    private class ArchiveSnapshot(
+        val reads: List<SegmentRead>,
+        private val appendCursor: Long,
+        private val appendCursorIsObserved: Boolean,
+    ) {
+        /** Whether [scope] is asking for offsets this archive has not reached, so nothing can match. */
+        fun isCaughtUp(scope: ReplayScope): Boolean =
+            appendCursorIsObserved && scope is ReplayScope.FromOffset && scope.offset >= appendCursor
     }
 
     /** How one segment's replay ended: a verdict, or the offset the next segment resumes at. */

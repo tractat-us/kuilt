@@ -180,6 +180,79 @@ class MappedBoltDamageTest {
         )
     }
 
+    /**
+     * An archive whose **newest** segment header will not read still replays every frame behind it —
+     * and never launders that into a [CleanTail].
+     *
+     * This is the case `MappedBolt`'s caught-up short-circuit has to decline. That short-circuit
+     * answers `CleanTail` to any [ReplayScope.FromOffset] at or past the archive's append cursor,
+     * which is the right answer for a healthy archive and a catastrophe here: `recover` gives up on a
+     * newest segment it cannot read and returns with the cursor still at **0**, so *every* cursor is
+     * "past the end" and the whole archive vanishes behind one clean verdict. The guard is the
+     * `appendCursorIsObserved` term in `MappedBolt.ArchiveSnapshot.isCaughtUp`; this test is what
+     * makes it more than a comment.
+     *
+     * The magic word is left intact and the **version** word flipped, so this is a damaged bolt
+     * archive rather than "not a bolt archive at all" — the header's CRC trailer is what rejects it,
+     * which is the reachable shape (a crash part-way through writing a header) rather than a reader
+     * pointed at the wrong directory, and the latter throws instead of replaying.
+     *
+     * **Mutation receipt**, measured on this fixture with the results directory deleted first and the
+     * compile confirmed: deleting `appendCursorIsObserved &&` reds assertions 2, 3 and 4 —
+     * `expected:<5> but was:<0>` frames, and `CleanTail` where
+     * `Truncated(atOffset=673, reason=SegmentHeader)` is expected, at **both** cursors. Total silent
+     * data loss reported as a clean archive. Assertion 1 stays green, which is the point of stating
+     * it: [Bolt.availability] reports the damage correctly throughout, so nothing but a replay
+     * assertion can see this.
+     */
+    @Test
+    fun aDamagedNewestHeaderStillReplaysTheFramesBehindIt() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val directory = tempArchiveDirectory()
+        val written = oneFramePerSegment(directory, SEGMENTS_BEHIND_THE_DAMAGED_HEADER)
+        flipByteAt(segmentsIn(directory).last(), VERSION_WORD)
+        val intact = SEGMENTS_BEHIND_THE_DAMAGED_HEADER - 1
+
+        val reopened = mappedBolt(FixedClock(EPOCH), directory, segmentFrameBytes = 1L)
+        val availability = reopened.availability()
+        val fromTheStart = reopened.replay(ReplayScope.FromOffset(0L)).toList()
+        // The cursor a caught-up consumer hands back — and the one the short-circuit is FOR.
+        val caughtUp = reopened.replay(ReplayScope.FromOffset(written.last().endOffset)).toList()
+        val verdict = Truncated(written[intact - 1].endOffset, TruncationReason.SegmentHeader)
+
+        assertAll(
+            {
+                assertIs<BoltAvailability.Unavailable>(
+                    availability,
+                    "the fixture must really have damaged the newest header — an archive that still " +
+                        "opens makes every assertion below vacuous",
+                )
+            },
+            {
+                assertEquals(
+                    intact,
+                    fromTheStart.filterIsInstance<Archived<RgaOp<String>>>().size,
+                    "every frame behind the damaged header is committed data and replays — an archive " +
+                        "whose newest segment is unreadable is not an archive that holds nothing",
+                )
+            },
+            {
+                assertEquals(
+                    verdict,
+                    fromTheStart.last(),
+                    "and the replay says where it stopped, rather than claiming a clean history",
+                )
+            },
+            {
+                assertEquals(
+                    verdict,
+                    caughtUp.last(),
+                    "including at a cursor past the append point — which on this archive is EVERY " +
+                        "cursor, because a damaged newest segment leaves that point at 0",
+                )
+            },
+        )
+    }
+
     /** [frames] frames in [frames] segments — a one-byte budget puts exactly one in each file. */
     private suspend fun oneFramePerSegment(directory: File, frames: Int): List<AppendResult.Written> {
         val bolt = mappedBolt(FixedClock(EPOCH), directory, segmentFrameBytes = 1L)
@@ -215,5 +288,23 @@ class MappedBoltDamageTest {
 
         /** Which segment goes missing. Not the first, so there is an intact prefix to keep. */
         const val HOLE = 1
+
+        /**
+         * Segments in the damaged-newest-header archive. Five of them survive the damage, and five is
+         * chosen to be unmistakable: the failure being pinned reports **zero** frames, so a fixture
+         * with one or two survivors would make "lost everything" and "off by one" the same shape.
+         */
+        const val SEGMENTS_BEHIND_THE_DAMAGED_HEADER = 6
+
+        /**
+         * The header's **version** word, immediately after the magic.
+         *
+         * Deliberately not the magic itself: a broken magic is read as "not a bolt archive" and
+         * **throws** `BoltFormatException`, which is a different contract (a reader pointed at the
+         * wrong directory) and would never reach a replay verdict at all. Flipping the version leaves
+         * the magic intact and a value that is not *above* the readable range, so the header falls
+         * through to its CRC trailer and is correctly rejected as damage.
+         */
+        const val VERSION_WORD = 4L
     }
 }
