@@ -42,18 +42,24 @@ import us.tractat.kuilt.crdt.LogOp
  *
  * - **Inserts are suppressed from a [DotFrontier]**, which holds contiguous runs of archived `seq`
  *   per author. One peer's entire live log is *one entry*, however many operations it holds. There
- *   is no working set to exceed and no cliff to fall off: an insert this decorator has archived is
- *   suppressed for the life of the process, at O(1) memory. Inserts are the bulk of any log.
+ *   is no working set to exceed and no cliff to fall off: an insert this decorator has archived
+ *   stays suppressed however long gossip runs, and the only thing that can take that back is
+ *   [frontierWindow] evicting the whole author's run.
  * - **Removes are suppressed from a bounded LRU set of [LogOp] identities**, because there is no
  *   dot to key them on. This is the residual, and it is bounded by [removalWindow].
+ *
+ * The split pays because a *live* log is mostly inserts. Every record the source still retains is an
+ * insert; a tombstone lives only from the removal that minted it until the source's own compaction
+ * collects it. Over all time the two counts converge — every record is eventually removed — but what
+ * a peer *offers* each round is the live log, and that is the quantity a window has to hold.
  *
  * **The residual, stated with its bound.** Suppression of *removes* is total only while the
  * aggregate offered working set of removes — every peer's live tombstones, plus this replica's own
  * export stream, since one window serves them all — fits in [removalWindow]. Past that the window
  * thrashes and the archive grows by roughly `Σ(offered removes) − removalWindow` operations per
- * round. Removes are the minority of any log, and are themselves collected by the source's own
- * compaction, so this is a materially smaller residual than one sized by every operation — but it
- * is a residual, and raising [removalWindow] moves that cliff rather than removing it.
+ * round. Live tombstones are the minority of an offered log, per the split above, so this is a
+ * materially smaller residual than one sized by every operation — but it is a residual, and raising
+ * [removalWindow] moves that cliff rather than removing it.
  *
  * The frontier has a bound too, in [frontierWindow], but it counts *runs* rather than operations:
  * one per author, plus one for each hole that has not filled. Past it the shortest run is evicted
@@ -375,9 +381,9 @@ public class BoltDecorator<Id : Any, V, Op : Any>(
          * A miss costs one duplicated operation in the archive, so the number is a space/bytes
          * trade with no correctness edge to fall off.
          *
-         * **It is still a default, not a bound that scales.** Removes are the minority of a log and
-         * the source's own compaction collects them, so a fleet has to be large before this is the
-         * binding constraint — but it is bounded by operations, and inserts are not. Raise it
+         * **It is still a default, not a bound that scales.** Live tombstones are the minority of an
+         * offered log, so a fleet has to be large before this is the binding constraint — but it is
+         * bounded by *operations*, and the frontier is not. Raise it
          * deliberately against the sizing rule on [removalWindow] rather than assuming it covers a
          * fleet.
          */
