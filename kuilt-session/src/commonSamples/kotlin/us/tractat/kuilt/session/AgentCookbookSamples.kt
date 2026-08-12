@@ -1,7 +1,10 @@
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import us.tractat.kuilt.core.FabricAvailability
+import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.util.ExponentialBackoff
 import us.tractat.kuilt.session.admit.RejectCode
@@ -9,6 +12,7 @@ import us.tractat.kuilt.session.partition.JoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectEvent
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
+import us.tractat.kuilt.session.partition.RoomId
 import kotlin.random.Random
 import kotlin.time.Duration.Companion.seconds
 
@@ -43,6 +47,42 @@ public suspend fun chunkToTheRoomsBudgetSample(room: Room, peer: PeerId, blob: B
 
 /** A chunk size for a fabric that publishes no ceiling of its own. Small enough for any transport. */
 private const val DEFAULT_CHUNK_BYTES: Int = 16 * 1024
+
+/**
+ * Read the per-session id both peers already agreed on, instead of minting one and replicating it.
+ *
+ * [Room.roomId] is settled in the admit handshake at zero extra traffic. Don't agree your own over
+ * a side channel — and don't reach for the host's peer id either, which names the *device* and so
+ * repeats across every room that device hosts.
+ */
+public suspend fun perSessionIdSample(room: Room) {
+    // Null means "this joiner is not admitted yet", not "this room has no id" — so wait for the
+    // value rather than sampling it. A host is non-null immediately and this returns at once.
+    val id: RoomId = room.roomId.filterNotNull().first()
+    // Safe as a durable key — a fresh room means a fresh id, including two games in a row from one
+    // device and the games either side of an app kill.
+    println("seat record key: ${id.value}/${room.selfId.value}")
+}
+
+/**
+ * Host under an id **decided outside kuilt** — a lobby code, an invite link, a matchmaker-assigned
+ * game id — instead of letting the factory mint one, so every member reads back the value your
+ * other systems already key on.
+ *
+ * Supplying an id does **not** make a host restart resumable: a restarted host has no roster and no
+ * reconnect-window registry, so a `ResumeToken` it accepts on identity grounds still cannot
+ * complete. Cold-start rejoin is #1593.
+ */
+public suspend fun callerSuppliedRoomIdSample(
+    factory: RoomFactory,
+    pattern: Pattern,
+    lobbyCode: String,
+): RoomId {
+    val room = factory.host(pattern, roomId = RoomId(lobbyCode))
+    // Read back off the room, not off the variable you passed in: the room is the thing joiners
+    // agree with, and on a joiner this same property is how you learn the value at all.
+    return room.roomId.value ?: error("a host room knows its id at construction")
+}
 
 /**
  * Reconnect after a transport drop by presenting the saved [ResumeToken], instead of

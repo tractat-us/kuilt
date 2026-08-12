@@ -68,6 +68,38 @@ check(roster.value.map { it.peerKey }.toSet() == setOf("bob"))
 
 ## Rejoin & reconnect
 
+**Intent:** a per-game / per-session id both peers agree on — to key a durable `(session, device) → seat` record, scope a log, or name a table.
+**Primitive:** `Room.roomId` (`us.tractat.kuilt.session`). Agreed in the admit handshake at zero extra traffic — don't mint your own and replicate it over a side channel, and don't use the host's peer id, which names the *device* and repeats across every room it hosts.
+
+<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#perSessionIdSample -->
+```kotlin
+public suspend fun perSessionIdSample(room: Room) {
+    // Null means "this joiner is not admitted yet", not "this room has no id" — so wait for the
+    // value rather than sampling it. A host is non-null immediately and this returns at once.
+    val id: RoomId = room.roomId.filterNotNull().first()
+    // Safe as a durable key — a fresh room means a fresh id, including two games in a row from one
+    // device and the games either side of an app kill.
+    println("seat record key: ${id.value}/${room.selfId.value}")
+}
+```
+
+**Intent:** the room's identity is decided *outside* kuilt — a lobby code, an invite link, a matchmaker-assigned game id — and every member must read back that exact value.
+**Primitive:** `RoomFactory.host(pattern, roomId = …)`. Note what this is **not**: supplying an id does not make a *host restart* resumable. A restarted host has no roster and no reconnect-window registry, so a `ResumeToken` it accepts on identity grounds still cannot complete — cold-start rejoin is [#1593](https://github.com/tractat-us/kuilt/issues/1593), and reusing an id does not solve it.
+
+<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#callerSuppliedRoomIdSample -->
+```kotlin
+public suspend fun callerSuppliedRoomIdSample(
+    factory: RoomFactory,
+    pattern: Pattern,
+    lobbyCode: String,
+): RoomId {
+    val room = factory.host(pattern, roomId = RoomId(lobbyCode))
+    // Read back off the room, not off the variable you passed in: the room is the thing joiners
+    // agree with, and on a joiner this same property is how you learn the value at all.
+    return room.roomId.value ?: error("a host room knows its id at construction")
+}
+```
+
 **Intent:** rejoin / reconnect after a dropped connection; "hold the slot open" for a grace window.
 **Primitive:** `ResumeToken` + the `SeamRoom` resume flow (`us.tractat.kuilt.session.partition`). Don't re-track the grace window yourself.
 

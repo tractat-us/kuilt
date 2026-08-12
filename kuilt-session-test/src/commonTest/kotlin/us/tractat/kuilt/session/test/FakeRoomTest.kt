@@ -25,6 +25,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.minutes
@@ -58,6 +60,60 @@ class FakeRoomTest {
     fun `default resumeToken is null`() = runTest {
         val room = FakeRoom()
         assertNull(room.resumeToken)
+    }
+
+    // ── Room identity (#1594) ────────────────────────────────────────────────
+
+    /**
+     * A joiner-shaped fake must be able to express "not admitted yet" — the state a real joiner is
+     * in until the host's `Welcome` arrives. A fake that could not would make every test of
+     * "what does the UI show before admission?" vacuously green.
+     */
+    @Test
+    fun `a joiner-shaped fake starts with no room id`() = runTest {
+        val room = FakeRoom(initialRole = SessionRole.Joiner)
+        assertNull(room.roomId.value)
+    }
+
+    /** A host-shaped fake knows its room at construction, exactly as a real host room does. */
+    @Test
+    fun `a host-shaped fake reports a room id`() = runTest {
+        val room = FakeRoom(selfId = PeerId("alice"), initialRole = SessionRole.Host)
+        val id = assertNotNull(room.roomId.value)
+        // A prefix, never the whole value: the id is minted, and pinning the literal here would
+        // force the mint back to the one-per-device shape #1594 removed.
+        assertTrue(id.value.startsWith("alice-room-"), "expected an alice-derived room id, got ${id.value}")
+    }
+
+    /**
+     * The default must not reproduce #1594 inside the double. `"<selfId>-room"` is exactly the
+     * expression this PR deleted from production, and two fakes built from one `selfId` — the
+     * shape [fakeRoomPair] defaults to — would collide on the same axis.
+     */
+    @Test
+    fun `two host-shaped fakes with one selfId get different room ids`() = runTest {
+        val first = FakeRoom(selfId = PeerId("host"), initialRole = SessionRole.Host)
+        val second = FakeRoom(selfId = PeerId("host"), initialRole = SessionRole.Host)
+        assertNotEquals(first.roomId.value, second.roomId.value)
+    }
+
+    @Test
+    fun `two fakeRoomPairs get different room ids`() = runTest {
+        val (firstHost, _) = fakeRoomPair()
+        val (secondHost, _) = fakeRoomPair()
+        assertNotEquals(firstHost.roomId.value, secondHost.roomId.value)
+    }
+
+    /** The test author decides the value — a hardcoded one would pin every consumer test to it. */
+    @Test
+    fun `initialRoomId is respected and setRoomId moves it`() = runTest {
+        val room = FakeRoom(initialRole = SessionRole.Joiner, initialRoomId = RoomId("table-7"))
+        val before = room.roomId.value
+        room.setRoomId(RoomId("table-9"))
+        assertAll(
+            { assertEquals(RoomId("table-7"), before) },
+            { assertEquals(RoomId("table-9"), room.roomId.value) },
+        )
     }
 
     @Test

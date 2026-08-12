@@ -10,6 +10,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
+import us.tractat.kuilt.session.partition.RoomId
 
 /**
  * A membership-aware session room built over a [us.tractat.kuilt.core.Seam].
@@ -232,6 +233,37 @@ public interface Room {
     public suspend fun sendTo(peer: PeerId, bytes: ByteArray)
 
     /**
+     * **Which room this is** — the identity every member of one session agrees on, or null while
+     * this peer does not know it yet.
+     *
+     * One value per *room instance*, not per device: two rooms the same peer hosts in a row have
+     * two different ids, and so do the rooms either side of an app restart. That is what makes it
+     * usable as a per-session key — a durable `(roomId, deviceId) → seat` record, a per-game log
+     * scope, a lobby identifier — rather than merely as a label for the host.
+     *
+     * Both roles read the same value, but they learn it at different moments:
+     * - **Host** — non-null from construction. [RoomFactory.host] mints it (or uses the one the
+     *   caller supplied) before the room exists, so it is readable immediately.
+     * - **Joiner** — **null until admitted.** The host sends its id in the admit `Welcome`, so
+     *   this stays null through the handshake and flips once, to the host's value, when the joiner
+     *   is admitted. Collect it (or read it after the roster becomes non-empty) rather than
+     *   sampling it right after [RoomFactory.join] returns.
+     *
+     * **This is the id a [ResumeToken] is validated against**, within one live host: a joiner's
+     * token carries this value and the host refuses a token naming any other room.
+     *
+     * That does **not** extend across a host restart, and reusing an id will not make it. A
+     * restarted host has no memory of the peer — an empty roster and an empty reconnect-window
+     * registry — so a resume it accepts on identity grounds still cannot complete. Cold-start
+     * rejoin is tracked separately by #1593 and needs more than a stable id.
+     *
+     * Deliberately has **no** interface default. A default would let an implementation — a test
+     * double above all — silently answer "this room has no identity" for a room that plainly has
+     * one, and a test written against that answer would pass while asserting nothing.
+     */
+    public val roomId: StateFlow<RoomId?>
+
+    /**
      * The joiner's reconnect credential, available after the admit handshake completes.
      *
      * Non-null on a [SessionRole.Joiner] room once the host has sent its [RoomId] via
@@ -333,8 +365,20 @@ public interface RoomFactory {
      * It defaults to null, in which case the peer's own id ([Room.selfId]) is used. It is
      * deliberately *not* derived from [Pattern.sessionName]: the session name names the
      * session, not this member (#1177).
+     *
+     * [roomId] is this room's identity ([Room.roomId]). It defaults to null, in which case the
+     * factory **mints a fresh one** — a new room every time, which is what makes [Room.roomId] a
+     * per-session key rather than a per-device one (#1594).
+     *
+     * Supply it when the identity is **decided outside kuilt** and the room must adopt it rather
+     * than invent its own: a lobby code or invite link the players already hold, a game id a
+     * matchmaking service assigned, or an id a durable record was keyed on before the room could be
+     * woven. Every member then reads that exact value off [Room.roomId].
+     *
+     * It does **not** make a host restart resumable — see [Room.roomId]; that is #1593's problem,
+     * and reusing an id does not solve it.
      */
-    public suspend fun host(pattern: Pattern, memberName: String? = null): Room
+    public suspend fun host(pattern: Pattern, memberName: String? = null, roomId: RoomId? = null): Room
 
     /**
      * Join an existing room. The caller's peer becomes a [SessionRole.Joiner].
