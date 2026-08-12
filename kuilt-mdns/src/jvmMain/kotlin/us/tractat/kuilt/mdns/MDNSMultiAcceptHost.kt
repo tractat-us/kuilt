@@ -3,6 +3,8 @@ package us.tractat.kuilt.mdns
 import io.ktor.server.application.Application
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
@@ -10,7 +12,6 @@ import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
-import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.websocket.KtorServerLoom
 import java.util.UUID
 import javax.jmdns.JmDNS
@@ -168,13 +169,31 @@ public class MDNSMultiAcceptHost(
  * Split out from [MDNSMultiAcceptHost] so the drop path is drivable without a socket — the loop's
  * only interesting behaviour is what it does when a dropped seam refuses to close, and a real
  * `KtorServerLoom` seam cannot be made to refuse.
+ *
+ * **The dropped seam's failure to close must not cancel the accept that follows** (#1834/#2286). Not
+ * `runCatchingCancellable`: that helper discriminates on TYPE, and type cannot tell "my job was
+ * cancelled" from "the seam minted one" — most often a `close` wrapped in `withTimeout`, which throws
+ * `TimeoutCancellationException` *to its caller* without cancelling that caller. Re-throwing it here
+ * escapes `nextSeam()` **and** the `seams()` flow, and because the escaping throwable is a
+ * `CancellationException` the host is *cancelled rather than failed* — no handler, no stack trace, and
+ * it silently stops accepting joiners for the rest of its life. There is no shield here, so our own
+ * cancellation is real and must still propagate: [ensureActive] is exactly that discriminator. See
+ * `MeshSeam.closeBestEffort` for the full rationale — the trigger is not "a loop", it is whether
+ * anything we still owe follows the close.
  */
 internal suspend fun acceptNonSelfSeam(nextLink: suspend () -> Seam): Seam {
     while (true) {
         val seam = nextLink()
         if ((seam.peers.value - seam.selfId).isEmpty()) {
             // Remote resolved to self (or presented no distinct identity): a self-dial. Drop it.
-            runCatchingCancellable { seam.close(CloseReason.Normal) }
+            try {
+                seam.close(CloseReason.Normal)
+            } catch (_: Throwable) {
+                // Genuinely our own cancellation → re-throw. Anything else — including a
+                // CancellationException the seam minted itself — is this seam's failure alone;
+                // the next accept still happens.
+                currentCoroutineContext().ensureActive()
+            }
             continue
         }
         return seam
