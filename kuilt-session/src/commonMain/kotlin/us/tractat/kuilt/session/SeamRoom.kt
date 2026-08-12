@@ -68,10 +68,19 @@ import kotlin.time.Instant
 private val logger = KotlinLogging.logger("us.tractat.kuilt.session.SeamRoom")
 
 /**
+ * The process-wide room counter behind [SeamRoomFactory.mintRoomId] — see its KDoc for why the mint
+ * needs one at all, and why it is not per-factory.
+ *
+ * Atomic because rooms are woven from arbitrary coroutines on arbitrary dispatchers; a plain `var`
+ * would lose increments and hand two rooms one id, which is the very bug the counter exists to fix.
+ */
+private val roomSequence = atomic(0L)
+
+/**
  * Factory for a **host-side** [JoinerReconnectController], invoked once when a host room starts
  * with the room-owned [roomId], [scope], and clock — the three inputs a controller needs but that
- * only exist after the seam is woven (the `roomId` is derived from the host's woven `selfId`), so a
- * caller cannot pre-build the instance and must supply this lambda instead.
+ * only exist after the seam is woven (the `roomId` is minted against the host's woven `selfId`), so
+ * a caller cannot pre-build the instance and must supply this lambda instead.
  *
  * Supply it to [SeamRoomFactory] to replace the default fixed-window hold with a custom policy —
  * for example a **predicate or unbounded hold** that keeps a disconnected joiner's seat open for as
@@ -135,9 +144,7 @@ public class SeamRoomFactory(
 ) : RoomFactory {
     override suspend fun host(pattern: Pattern, memberName: String?, roomId: RoomId?): Room {
         val seam = loom.host(pattern)
-        // STUB (#1594): the caller-supplied [roomId] is ignored and the id is still DERIVED from
-        // selfId, so every room this host ever creates shares one. Replaced by the fix commit.
-        val resolvedRoomId = RoomId(seam.selfId.value + "-room")
+        val resolvedRoomId = roomId ?: mintRoomId(seam)
         return SeamRoom(
             seam = seam,
             role = SessionRole.Host,
@@ -203,6 +210,15 @@ public class SeamRoomFactory(
      * so a transient blip runs the [JoinerResumeMachine] resume path (wait for `Woven`, re-present the
      * [ResumeToken]) instead of going straight to terminal. See the [SeamRoom] `reweave` KDoc for the
      * same-instance-heal contract this must satisfy.
+     *
+     * [roomId] is this room's identity ([Room.roomId]), and applies to a **host** adopt only — a
+     * joiner learns the room's id from the host's `Welcome`, so a value passed with
+     * [SessionRole.Joiner] is ignored rather than rejected (the election lobby adopts with a role
+     * decided at runtime, so a caller cannot know its side in advance). Null — the default — mints a
+     * fresh one per adopt, which is what stops two rooms one device adopts in a row from colliding
+     * (#1594). Supply it to keep **one identity across a host restart**: a host that returns under a
+     * freshly minted id invalidates every outstanding [ResumeToken], since the host refuses a token
+     * naming any other room.
      */
     public suspend fun adopt(
         seam: Seam,
@@ -212,9 +228,11 @@ public class SeamRoomFactory(
         reweave: (suspend () -> Seam)? = null,
         roomId: RoomId? = null,
     ): Room {
-        // STUB (#1594): the caller-supplied [roomId] is ignored and the id is still DERIVED from
-        // selfId, so every room this host ever adopts shares one. Replaced by the fix commit.
-        val resolvedRoomId = if (role == SessionRole.Host) RoomId(seam.selfId.value + "-room") else null
+        // A joiner is never given one — it learns the room's identity from the host's Welcome, so a
+        // supplied id here would be a claim this peer is not entitled to make. Ignored, not
+        // rejected: the election lobby adopts with a role decided at runtime, so a caller that wants
+        // a stable id cannot know in advance which side it will end up on.
+        val resolvedRoomId = if (role == SessionRole.Host) roomId ?: mintRoomId(seam) else null
         return SeamRoom(
             seam = seam,
             role = role,
@@ -253,6 +271,31 @@ public class SeamRoomFactory(
             roomKey = pattern.roomKey,
         )
     }
+
+    /**
+     * Mints a fresh [RoomId] for a room this factory is about to create — `"<selfId>-room-<ms>-<n>"`.
+     *
+     * Three parts, each earning its place:
+     * - **`selfId`** keeps a log line readable: at a glance, whose room this is. It is also the part
+     *   that was *all* there used to be, which is exactly why every room one device hosted collided
+     *   (#1594) — `selfId` is stable per device (a durable `DeviceIdStore` value in the field), so it
+     *   identifies the host, never the room.
+     * - **the clock** — the factory's already-injected [clock], so the id is deterministic under a
+     *   virtual test clock and survives a process restart without a durable counter. Deliberately
+     *   *not* a [kotlin.random.Random]: a required parameter would be a ~96-call-site mechanical
+     *   diff, and a defaulted `Random.Default` would be un-injected randomness, which this repo bans.
+     * - **the sequence** — the part that actually carries uniqueness when the clock cannot. Two rooms
+     *   minted in the same millisecond, or under a frozen test clock, differ only here. It is
+     *   **process-wide** rather than per-factory because two factories sharing one clock and one
+     *   `selfId` — an ordinary test shape, and reachable in production wherever a peer builds a
+     *   second factory over the same device identity — would otherwise both mint at `0`.
+     *
+     * Not a security boundary and not globally unique: it is unique among the rooms *this process*
+     * mints, which is what [Room.roomId] promises. A caller that needs an identity to outlive the
+     * process supplies its own via [host]/[adopt].
+     */
+    private fun mintRoomId(seam: Seam): RoomId =
+        RoomId("${seam.selfId.value}-room-${clock().toEpochMilliseconds()}-${roomSequence.getAndIncrement()}")
 
     public companion object {
         /**
@@ -1473,6 +1516,14 @@ internal class SeamRoom(
             // joiner has exactly one edge, so it is unreachable there.
             if (establishedHost == null) hostPeerId = sender
 
+            // Learn the room's identity from the same frame that mints the resume token, so
+            // [Room.roomId] and [ResumeToken.roomId] can never name different rooms (#1594). Placed
+            // above the self-admission branch to cover BOTH Welcome shapes a joiner accepts, exactly
+            // as the two mintTokenIfAbsent calls below do. Only the self-admission Welcome actually
+            // carries a roomId today — bootstrap and host-intro Welcomes send null — so this is
+            // idempotent on the rest rather than dependent on which arrives first.
+            adoptRoomIdIfAbsent(welcome.roomId)
+
             // Self-admission welcome: mint the resume token (once) from the roomId carried here.
             if (assignedId == selfId) {
                 resumeMachine?.mintTokenIfAbsent(welcome.roomId)
@@ -1493,6 +1544,19 @@ internal class SeamRoom(
             val member = Member(id = assignedId, identity = identity, liveness = Liveness.Connected)
             addToRoster(member)
         }
+    }
+
+    /**
+     * **Joiner only.** Record the host's [RoomId] the first time a `Welcome` carries one.
+     *
+     * Write-once, mirroring [JoinerResumeMachine.mintTokenIfAbsent]: the id is the room's identity
+     * for its whole life, so a later frame must not be able to move it. A host never reaches here —
+     * its level is non-null from construction, so the `== null` guard is already false.
+     *
+     * Callers hold [lock]; the write itself is to a [MutableStateFlow] and needs no further guard.
+     */
+    private fun adoptRoomIdIfAbsent(value: String?) {
+        if (value != null && _roomId.value == null) _roomId.value = RoomId(value)
     }
 
     /**
