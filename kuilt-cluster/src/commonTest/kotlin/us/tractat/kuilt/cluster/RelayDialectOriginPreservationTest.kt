@@ -79,10 +79,12 @@ class RelayDialectOriginPreservationTest {
             assertAll(
                 { assertEquals(1, voterReceived.size, "the up leg reaches exactly the addressed voter") },
                 { assertEquals(listOf(clientId), voterReceived.map { it.from }, "up leg: from = the true client, not the relay") },
-                { assertEquals(listOf("propose"), voterReceived.map { it.bytes.decodeToString() }) },
+                // `List<Byte>`, not `decodeToString()`: keeps the byte comparison
+                // `assertContentEquals` gave (ByteArray has no structural equals, List<Byte> does).
+                { assertEquals(listOf("propose".encodeToByteArray().toList()), voterReceived.map { it.bytes.toList() }) },
                 { assertEquals(1, clientReceived.size, "the down leg reaches the client") },
                 { assertEquals(listOf(voterA), clientReceived.map { it.from }, "down leg: from = the true voter, not the relay id") },
-                { assertEquals(listOf("reply"), clientReceived.map { it.bytes.decodeToString() }) },
+                { assertEquals(listOf("reply".encodeToByteArray().toList()), clientReceived.map { it.bytes.toList() }) },
             )
         }
 

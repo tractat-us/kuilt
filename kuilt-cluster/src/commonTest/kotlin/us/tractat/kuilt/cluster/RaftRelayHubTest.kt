@@ -60,7 +60,9 @@ class RaftRelayHubTest {
             assertAll(
                 { assertEquals(1, at1.size, "the named voter's inbound must receive exactly one frame") },
                 { assertEquals(listOf(learnerId), at1.map { it.from }, "true origin preserved as RaftEnvelope.from") },
-                { assertEquals(listOf("for-v1"), at1.map { it.bytes.decodeToString() }) },
+                // `List<Byte>`, not `decodeToString()`: keeps the byte comparison
+                // `assertContentEquals` gave (ByteArray has no structural equals, List<Byte> does).
+                { assertEquals(listOf("for-v1".encodeToByteArray().toList()), at1.map { it.bytes.toList() }) },
                 { assertTrue(at2.isEmpty(), "no other voter may receive the frame — dest-routed, never fanned") },
             )
         }
