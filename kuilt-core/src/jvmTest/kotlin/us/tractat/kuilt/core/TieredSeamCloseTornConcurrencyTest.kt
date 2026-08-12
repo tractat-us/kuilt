@@ -5,7 +5,7 @@ package us.tractat.kuilt.core
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: TieredSeam's lost-terminal-Torn race (#1363) only manifests under a real multi-threaded dispatcher — the state-pump's `if (!latched) _state = …` and close()'s publish race only on genuinely parallel threads.
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async

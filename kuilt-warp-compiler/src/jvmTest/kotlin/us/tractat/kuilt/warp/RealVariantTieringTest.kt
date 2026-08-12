@@ -3,7 +3,7 @@
 
 package us.tractat.kuilt.warp
 
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: BinaryenWasmOptimizer needs a real dispatcher for its wasm-opt subprocess — the sanctioned real-threading exception; the sim's gossip still runs on StandardTestDispatcher.
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
@@ -64,7 +64,8 @@ private fun TestScope.bridgeRealIo(describe: String, predicate: () -> Boolean) {
         check(!deadline.hasPassedNow()) {
             "real-IO work ($describe) did not converge within $REAL_IO_BUDGET"
         }
-        @Suppress("ForbiddenMethodCall") // deliberate: real-time bridge — give the real wasm-opt/Chicory threads a moment to finish and post continuations to the test dispatcher, then pump virtual time again.
+        // Real-time bridge: give the real wasm-opt/Chicory threads a moment to finish and post
+        // continuations to the test dispatcher, then pump virtual time again.
         Thread.sleep(REAL_IO_POLL_MS)
     }
 }
@@ -93,7 +94,6 @@ private const val REAL_IO_POLL_MS = 20L
 class RealVariantTieringTest {
 
     // Real subprocess I/O — the sanctioned real-threading exception; no virtual clock to drive it.
-    @Suppress("ForbiddenMethodCall")
     private val optimizer = BinaryenWasmOptimizer(Dispatchers.IO)
 
     @Test

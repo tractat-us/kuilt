@@ -3,7 +3,7 @@
 package us.tractat.kuilt.multipeer
 
 import com.sun.jna.Pointer
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: GCD-thread/flowOn regression test — Dispatchers.Unconfined required to reproduce the callback-thread inline-resume scenario
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking

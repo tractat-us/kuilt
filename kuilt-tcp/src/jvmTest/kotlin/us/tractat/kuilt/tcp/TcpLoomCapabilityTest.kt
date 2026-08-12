@@ -5,7 +5,7 @@ package us.tractat.kuilt.tcp
 import io.ktor.network.selector.SelectorManager
 import io.ktor.network.sockets.ServerSocket
 import io.ktor.network.sockets.aSocket
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-network loopback socket needs a real IO dispatcher
 import kotlinx.coroutines.runBlocking
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.TransportRole
@@ -20,7 +20,6 @@ import kotlin.test.assertEquals
  */
 class TcpLoomCapabilityTest {
 
-    @Suppress("ForbiddenMethodCall") // real-network loopback socket needs a real IO dispatcher
     private val selector = SelectorManager(Dispatchers.IO)
     private lateinit var serverSocket: ServerSocket
 

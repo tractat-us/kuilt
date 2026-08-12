@@ -1,8 +1,8 @@
-@file:Suppress("ForbiddenImport", "ForbiddenMethodCall") // real-network loopback drain proof — a real Network.framework socket needs a real IO dispatcher; there is no virtual-time option here
+@file:Suppress("ForbiddenImport") // real-network loopback drain proof — a real Network.framework socket needs a real IO dispatcher; there is no virtual-time option here
 
 package us.tractat.kuilt.nw
 
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-network loopback drain proof — a real Network.framework socket needs a real IO dispatcher; there is no virtual-time option here
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope

@@ -9,7 +9,7 @@ package us.tractat.kuilt.mdns
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.toKString
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-time mDNS flow integration test on iOS — Dispatchers.Default needed because NSNetServiceBrowser requires the main run-loop (not virtual time)
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch

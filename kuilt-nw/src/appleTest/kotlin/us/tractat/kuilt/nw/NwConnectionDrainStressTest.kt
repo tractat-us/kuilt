@@ -1,7 +1,6 @@
 @file:OptIn(ExperimentalForeignApi::class)
 @file:Suppress(
     "ForbiddenImport",
-    "ForbiddenMethodCall",
 ) // opt-in real-network multi-threaded stress probe — hundreds of real Network.framework loopback links need a real IO dispatcher; there is no virtual-time option here
 
 package us.tractat.kuilt.nw
@@ -9,7 +8,7 @@ package us.tractat.kuilt.nw
 import kotlinx.atomicfu.atomic
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.toKString
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: opt-in real-network multi-threaded stress probe — hundreds of real Network.framework loopback links need a real IO dispatcher; there is no virtual-time option here
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope

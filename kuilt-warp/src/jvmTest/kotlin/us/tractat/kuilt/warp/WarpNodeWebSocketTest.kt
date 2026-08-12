@@ -17,7 +17,7 @@ import io.ktor.server.netty.NettyApplicationEngine
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-IO test over Netty/OkHttp — Dispatchers.Default is required; virtual-time dispatchers cannot drive real sockets
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel

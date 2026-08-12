@@ -4,7 +4,7 @@
 package us.tractat.kuilt.core
 
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: the latch invariant (no update() may survive a tear()) only manifests under a real multi-threaded dispatcher — a virtual/single-threaded one serialises update()/tear() and hides the race the gate exists to close.
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope

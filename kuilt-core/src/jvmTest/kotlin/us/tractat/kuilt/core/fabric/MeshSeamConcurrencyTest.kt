@@ -4,7 +4,7 @@
 package us.tractat.kuilt.core.fabric
 
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real OS-thread concurrency stress harness — MeshSeam's data races on `links`/`closed`/`seq` only manifest under genuine cross-thread access.
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.Channel

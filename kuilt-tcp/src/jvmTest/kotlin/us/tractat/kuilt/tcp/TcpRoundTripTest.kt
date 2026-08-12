@@ -6,7 +6,7 @@ import io.ktor.network.selector.SelectorManager
 import io.ktor.network.sockets.InetSocketAddress
 import io.ktor.network.sockets.ServerSocket
 import io.ktor.network.sockets.aSocket
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-network loopback test — a TCP socket needs a real IO dispatcher
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
@@ -27,7 +27,6 @@ import kotlin.time.Duration.Companion.seconds
  */
 class TcpRoundTripTest {
 
-    @Suppress("ForbiddenMethodCall") // real-network loopback test — a TCP socket needs a real IO dispatcher
     private val selector = SelectorManager(Dispatchers.IO)
     private lateinit var serverSocket: ServerSocket
     private var port: Int = 0

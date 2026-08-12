@@ -4,7 +4,7 @@
 package us.tractat.kuilt.core.fabric
 
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real OS-thread concurrency stress harness — LinkSeam's data race only manifests under genuine cross-thread access, so this probe needs a real dispatcher, not a virtual one.
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.Channel

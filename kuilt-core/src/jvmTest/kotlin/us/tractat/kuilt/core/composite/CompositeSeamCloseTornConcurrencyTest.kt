@@ -4,7 +4,7 @@
 package us.tractat.kuilt.core.composite
 
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: the lost-terminal-Torn race only manifests under a real multi-threaded dispatcher — scope.cancel() is asynchronous, so a rollup collector can write a non-terminal state AFTER close()'s Torn only on genuinely parallel threads.
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
