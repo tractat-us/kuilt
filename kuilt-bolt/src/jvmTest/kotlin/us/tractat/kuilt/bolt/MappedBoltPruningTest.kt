@@ -173,6 +173,80 @@ class MappedBoltPruningTest {
     }
 
     /**
+     * A **caught-up** resume — `FromOffset(archive end)`, the commonest `FromOffset` call there is —
+     * reads nothing at all, and answers the same way wherever the damage below it sits.
+     *
+     * Two claims, and the second is the one that cost a review round. It is easy to say "damage below
+     * the cursor is invisible to a resume" and easy to *implement* something that means "…except in
+     * the newest few segments": pruning walks a prefix, so a formulation that always reads the last
+     * `k` segments makes the answer a function of **how many segments have rolled since**, not of the
+     * archive's contents. A consumer polling an unchanged, unrepaired archive would then get
+     * `Truncated` today and [CleanTail] after two more rolls — and [Bolt]'s KDoc has consumers branch
+     * hard on exactly that verdict. Position-independence is the property; the byte count is how it is
+     * kept honest.
+     *
+     * The [ReplayScope.All] arm is the control: it must see every one of these, or the fixture is
+     * asserting that undamaged archives replay cleanly.
+     *
+     * **Not covered, deliberately:** damage in the **newest** segment. That is not damage *below* an
+     * archive-end cursor at all — a torn newest segment moves the append cursor down to its last
+     * intact frame, so the damage sits at or above it — and re-opening classifies it as a torn tail
+     * or an unappendable archive before any replay runs.
+     *
+     * **Mutation receipt:** deleting the caught-up short-circuit in [replay] reds both of the first
+     * two assertions and is exactly the state this PR was reviewed in: damage in segment 4 of 6
+     * reported `Truncated(atOffset=535, reason=Frame)` while the same damage in segments 0, 1 and 3
+     * reported [CleanTail].
+     */
+    @Test
+    fun aCaughtUpResumeAnswersTheSameWhereverTheDamageIs() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val clock = FixedClock(EPOCH)
+        // One archive per damage position: the corrupted byte has to be the only difference between
+        // them, so a shared archive re-damaged in place would not do.
+        val damagePositions = 0 until TAIL_FIXTURE_FRAMES - 1
+        val outcomes = damagePositions.map { damaged ->
+            val archive = oneFramePerSegmentArchive(
+                clock,
+                TAIL_FIXTURE_FRAMES,
+                PIN_PAYLOAD_CHARS,
+                PRE_ALLOCATED_TAIL_BYTES,
+            )
+            flipByteAt(segmentsIn(archive.directory)[damaged], segmentHeaderBytes() + FIRST_BODY_BYTE)
+            val bolt = archive.reopened(clock)
+            val caughtUp = bolt.measuredReplay(ReplayScope.FromOffset(archive.written.last().endOffset))
+            DamageOutcome(damaged, caughtUp, bolt.measuredReplay(ReplayScope.All))
+        }
+
+        assertAll(
+            {
+                assertEquals(
+                    damagePositions.map { CleanTail },
+                    outcomes.map { it.caughtUp.events.lastOrNull() },
+                    "a caught-up resume answers CleanTail whatever the damage below it is and WHEREVER " +
+                        "it sits — an answer that changes with the damage's distance from the tail " +
+                        "changes as the archive grows, over bytes that never moved",
+                )
+            },
+            {
+                assertEquals(
+                    damagePositions.map { 0L },
+                    outcomes.map { it.caughtUp.fileBytesRead },
+                    "and reads nothing at all: a consumer that is caught up is the commonest FromOffset " +
+                        "caller there is, and the archive already knows where its frames end",
+                )
+            },
+            {
+                assertEquals(
+                    damagePositions.toList(),
+                    outcomes.filter { it.whole.events.lastOrNull() is Truncated }.map { it.damagedSegment },
+                    "the control: an unscoped replay sees every one of those, so each fixture really " +
+                        "is damaged and the silence above is pruning rather than a corruption that missed",
+                )
+            },
+        )
+    }
+
+    /**
      * A resume reads **fewer bytes than the prefix it pruned holds** — the claim #2236 is actually
      * about.
      *
@@ -373,6 +447,9 @@ class MappedBoltPruningTest {
             mappedBolt(clock, directory, segmentFrameBytes = budget)
     }
 
+    /** One damage position, and what the two scopes made of it. */
+    private class DamageOutcome(val damagedSegment: Int, val caughtUp: MeasuredReplay, val whole: MeasuredReplay)
+
     /** One replay's events, and the segment-file bytes it cost. */
     private class MeasuredReplay(val events: List<ReplayEvent<RgaOp<String>>>, val fileBytesRead: Long) {
         val frames: List<Archived<RgaOp<String>>> get() = events.filterIsInstance<Archived<RgaOp<String>>>()
@@ -443,6 +520,17 @@ class MappedBoltPruningTest {
 
         /** The pin does not care how big a frame is — only where the segment boundaries fall. */
         const val PIN_PAYLOAD_CHARS = 8
+
+        /**
+         * Six segments, so the damage sweep reaches depths a "read the last `k`" formulation would
+         * treat differently.
+         *
+         * At two or three every segment is within the last two and the sweep cannot tell
+         * position-independence from "the newest few are always read" — the very confusion this test
+         * exists to rule out. Six leaves three depths (0, 1, 2) that no small `k` reaches and two
+         * (3, 4) that a `k` of 2 does.
+         */
+        const val TAIL_FIXTURE_FRAMES = 6
 
         /** A real pre-allocated tail on every segment. Smaller than a frame, so one frame lands per file. */
         const val PRE_ALLOCATED_TAIL_BYTES = 32L
