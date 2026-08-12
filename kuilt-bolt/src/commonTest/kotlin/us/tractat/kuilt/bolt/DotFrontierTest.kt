@@ -137,8 +137,10 @@ class DotFrontierTest {
      * suppress those inserts forever. Hence the last assertion: the survivors are the two long runs,
      * and nothing has grown to cover the gap the evicted one left.
      *
-     * **Mutation receipt:** sorting ascending by length rather than descending (evict the longest)
-     * reds the first two assertions — the 4-dot run survives and both long runs go.
+     * **Mutation receipt, measured:** sorting ascending by length rather than descending — evict the
+     * *longest* — reds the third and fifth assertions: `alice`'s 4-dot run survives and `bob`'s
+     * 20-dot run is the one that goes. The run-count assertions stay green under it, which is the
+     * point of having both: a count alone cannot tell you *which* run was evicted.
      */
     @Test
     fun trimEvictsTheShortestRunAndTheDotsItCoveredAreNoLongerHeld() {

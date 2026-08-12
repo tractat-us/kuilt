@@ -267,10 +267,13 @@ class BoltDecoratorTest {
      * archive grow for a reason this test is not about. [insertsAreSuppressedWithNoRemovalWindowAtAll]
      * pins that boundary from the other side.
      *
-     * **Mutation receipt:** routing inserts back through the identity window (give `archiveKeyOf`'s
-     * `LogOp.Insert` arm `ArchiveKey.Identity(classified)`) reds the archive-size, frame-count and
-     * dedup-count assertions together — the archive grows by ~79,984 operations per round, which is
-     * the failure this exists to prevent.
+     * **Mutation receipt, measured:** routing inserts back through the identity window (give
+     * `archiveKeyOf`'s `LogOp.Insert` arm `ArchiveKey.Identity(classified)`) reds the archive-size,
+     * frame-count and dedup-count assertions together — 80,000 archived operations become 240,000,
+     * 400 frames become 1,200, and `opsDeduplicated` falls from 160,000 to **zero**. Not "grows by
+     * `offered − window`" but by the *whole* working set: each peer's 200 identities are evicted by
+     * the next peer's before the round comes round again, so a thrashing window suppresses nothing
+     * at all. That is the failure this exists to prevent, at full strength.
      */
     @Test
     fun anOfferedWorkingSetFarLargerThanTheIdentityWindowStopsGrowingTheArchive() =

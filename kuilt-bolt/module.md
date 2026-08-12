@@ -62,8 +62,17 @@ bolt.append(ops)
 ## Feeding it: `BoltDecorator`, and the mistake to avoid
 
 `append` is the raw surface. In practice a replica's owner hands its edits to a `BoltDecorator`,
-which archives them and remembers — within a bounded window — what it has already kept, so a peer
-re-offering the same log every anti-entropy round does not write a fresh copy each time.
+which archives them and remembers what it has already kept, so a peer re-offering the same log every
+anti-entropy round does not write a fresh copy each time.
+
+Remembering costs almost nothing, because an *addition* to a replicated list carries a unique name of
+its own: the decorator keeps a **frontier** of the names it has archived — one entry per peer, not
+one per edit — so a peer's whole log is suppressed forever at a fixed price. A *deletion* carries no
+name of its own (it points at the addition it undoes), so those are remembered one at a time, in a
+bounded window sized by `removalWindow`. Deletions are the minority of any log, and the source's own
+housekeeping collects them, so that window is a small residual rather than the main cost. Both bounds
+err the same way: forgetting something means it is archived twice, which is bytes — never a record
+lost.
 
 **Feed it the merges as well as the local edits, or the archive is nearly empty.** Merging a peer's
 replica is a *state* join: it produces no edits to hand over. Since syncing with a peer is exactly
