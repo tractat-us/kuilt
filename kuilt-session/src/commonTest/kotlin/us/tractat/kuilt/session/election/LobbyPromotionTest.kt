@@ -55,7 +55,7 @@ class LobbyPromotionTest {
     // ── 1. Promotion ──────────────────────────────────────────────────────────
 
     @Test
-    fun `a member promoted to host mid-election yields BecameHost, not Torn`() =
+    fun `a member promoted to host mid-election yields BecameHost rather than Torn`() =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             // 3-peer lobby: peer-a is the elected host; self (peer-m) and peer-z are members.
             val self = PeerId("peer-m")
@@ -81,7 +81,53 @@ class LobbyPromotionTest {
             )
         }
 
+    @Test
+    fun `the host leaving BEFORE awaitRoom is called still yields BecameHost`() =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            // The check-then-call window: the app reads host.value, sees a real host, and calls
+            // awaitRoom a moment later — by which time that host has gone. A latch derived only from
+            // what THIS call observes never arms (self is already the lowest id at entry), so the
+            // call would report nothing and strand peer-z waiting for a Freeze from a peer that
+            // still thinks it is a member. The history is LOBBY-scoped precisely to cover this.
+            val self = PeerId("peer-m")
+            val hostId = PeerId("peer-a")
+            val other = PeerId("peer-z")
+            val seam = FakeSeam(selfId = self, initialPeers = setOf(self, hostId, other))
+            val l = lobby(seam, InMemoryLoom(), backgroundScope)
+            assertEquals(hostId, l.host.first())
+            runCurrent() // the lobby observes a roster that contains the real host
+
+            seam.removePeer(hostId) // ...and only THEN does the app get around to calling awaitRoom
+            runCurrent()
+
+            assertIs<ElectionOutcome.BecameHost>(awaitRoomIn(l, "Member").await())
+        }
+
     // ── 2. Genuine collapse ───────────────────────────────────────────────────
+
+    @Test
+    fun `a peer that was always the lowest id still reports Torn when the roster drains`() =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            // self has never seen another peer as the elected host, so the PROMOTION latch never
+            // arms — and must not, or the weave-in transient fires. The drain latch is a SEPARATE
+            // bit, and it is the only thing between this member and an unbounded suspend when its
+            // one co-elector walks out (#1466). Collapsing the two latches into one regresses that.
+            val self = PeerId("peer-m")
+            val other = PeerId("peer-z") // higher id: self is the elected host throughout
+            val seam = FakeSeam(selfId = self, initialPeers = setOf(self, other))
+            val l = lobby(seam, InMemoryLoom(), backgroundScope)
+            assertEquals(self, l.host.first())
+
+            val outcome = awaitRoomIn(l, "Member")
+            runCurrent()
+            seam.removePeer(other)
+
+            val result = outcome.await()
+            assertAll(
+                { assertIs<ElectionOutcome.Torn>(result) },
+                { assertEquals(CloseReason.Unreachable, (result as ElectionOutcome.Torn).reason) },
+            )
+        }
 
     @Test
     fun `a membership drain to self alone still yields Torn`() =
@@ -175,7 +221,7 @@ class LobbyPromotionTest {
     // ── 4. The recovery ───────────────────────────────────────────────────────
 
     @Test
-    fun `start on the same lobby is the recovery, and the parked co-member acks it`() =
+    fun `start on the same lobby is the recovery and the parked co-member acks it`() =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val s1 = loom.weave(Rendezvous.New(Pattern("g")))

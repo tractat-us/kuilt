@@ -92,8 +92,9 @@ public interface ElectionLobby {
 ```
 
 Both peers call `electLobby(pattern)`; the app shows a Start button only to the peer whose `host ==
-selfId`. Every peer calls `awaitRoom(...)` and gets its `Room` when the session begins; the host
-additionally calls `start()` on the Start tap.
+selfId`. That peer calls `start()` on the Start tap; **every other** peer calls `awaitRoom(...)` and
+handles the `ElectionOutcome` it returns. Keep the `host == selfId` check reactive — it is a live
+value, and a peer that calls `awaitRoom` while it *is* the elected host simply waits (see step 4).
 
 ## The one hard part: freezing safely (2PC-lite, host-initiated, abort-on-change)
 

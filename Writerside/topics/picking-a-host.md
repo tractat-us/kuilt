@@ -31,7 +31,7 @@ the game starting:
 |---|---|---|
 | `Adopted(room)` | The host started the session. | Play. |
 | `BecameHost` | The host left. **You** are the host now. | Call `start()` on the **same** lobby. |
-| `Torn(reason)` | Everyone else is gone. | Go back to `electLobby(...)`. |
+| `Torn(reason)` | The connection collapsed — everyone else left, or the link itself dropped. | Go back to `electLobby(...)`. |
 
 The important one is the middle row, and the important word in it is **same**.
 The other phones are still waiting on the connection you already have, so

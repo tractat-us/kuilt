@@ -11,6 +11,7 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -18,6 +19,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -76,8 +78,23 @@ internal class SeamElectionLobby(
     // Seam.peers already includes selfId (documented invariant) — no ∪ {self} needed.
     override val peers: StateFlow<Set<PeerId>> = seam.peers
 
+    // Lobby-scoped history, not per-call: recorded from lobby construction, which is strictly before
+    // the app reads `host.value` and picks start() vs awaitRoom(). A host that leaves inside that
+    // window is therefore still counted, and awaitRoom can still report BecameHost.
+    private val everHadCoMembers = MutableStateFlow(false)
+    private val everSawAnotherHost = MutableStateFlow(false)
+
+    /** Latch the two history bits [hostLeftSignal] needs. Monotone; safe to call from any emission. */
+    private fun recordLobbyHistory(roster: Set<PeerId>) {
+        if (roster.size > 1) everHadCoMembers.value = true
+        if (electHost(roster) != selfId) everSawAnotherHost.value = true
+    }
+
     override val host: StateFlow<PeerId> =
         seam.peers
+            // Piggyback on the eager collector `stateIn` already runs for the lobby's whole life,
+            // rather than adding a second one with its own teardown.
+            .onEach { recordLobbyHistory(it) }
             .map { electHost(it) }
             .stateIn(scope, SharingStarted.Eagerly, electHost(seam.peers.value))
 
@@ -125,14 +142,20 @@ internal class SeamElectionLobby(
 
     /** Run the host freeze round until it commits (broadcasting `Commit`); adoption is the caller's job. */
     private suspend fun runHostElection() {
-        if (host.value != selfId) {
-            throw NotElectedHostException("not the elected host: host=${host.value}, self=$selfId")
+        // Read electHost(peers.value) rather than `host.value`: `host` is a stateIn-derived view of
+        // the same roster and is at least one collector hop behind it, so a peer that has just been
+        // told it was promoted (hostLeftSignal decides from `peers`) would otherwise race its own
+        // documented BecameHost recovery and get NotElectedHostException.
+        if (electHost(peers.value) != selfId) {
+            throw NotElectedHostException("not the elected host: host=${electHost(peers.value)}, self=$selfId")
         }
         var everHadMembers = false
         while (true) {
             // Re-check role each attempt: a lower-id peer may have appeared between retries.
-            if (host.value != selfId) {
-                throw NotElectedHostException("lost host election mid-start: host=${host.value}, self=$selfId")
+            if (electHost(peers.value) != selfId) {
+                throw NotElectedHostException(
+                    "lost host election mid-start: host=${electHost(peers.value)}, self=$selfId",
+                )
             }
             val roster = peers.value
             val members = roster - selfId
@@ -253,20 +276,41 @@ internal class SeamElectionLobby(
      *
      * A roster-size test cannot separate the two: `{self, higher-peer}` is a non-trivial roster in
      * both. What separates them is **history**, the same shape the host path's `everHadMembers` latch
-     * uses: a promotion means some *other* peer was the elected host and then left. So the signal
-     * latches on having observed `electHost(roster) != selfId` at least once, and only then treats
-     * `host == self` as terminal. A peer that has never seen another host has not been promoted — it
-     * keeps waiting, and a lower peer weaving in later just moves `host` away again.
+     * uses: a promotion means some *other* peer was the elected host and then left. So the promotion
+     * arm gates on [everSawAnotherHost], and only then treats `host == self` as terminal. A peer that
+     * has never seen another host has not been promoted — it keeps waiting, and a lower peer weaving
+     * in later just moves `host` away again.
      *
-     * The latch is per-call (a fresh `awaitRoom` re-derives it), and its first observation is the
-     * roster at entry, which a [StateFlow] always replays — so a member that entered with a real host
-     * has the latch set before anything can change.
+     * ## Two latches, and why history is lobby-scoped
+     *
+     * [everSawAnotherHost] arms the **promotion** arm; [everHadCoMembers] arms the **drain** arm
+     * independently. They are not the same bit, and collapsing them regresses #1466: a peer that was
+     * *always* the lowest id it could see (roster `{self, higher-peer}`) has never seen another host,
+     * so a single latch would leave it with no abort at all — it would suspend forever when that peer
+     * then left, where the pre-#1483 code at least terminated. [everHadCoMembers] is what ends that
+     * wait, as [ElectionOutcome.Torn].
+     *
+     * Both are recorded from **lobby construction**, not from the [awaitRoom] call. The app reads
+     * `host.value` and *then* decides between [start] and [awaitRoom]; a host that leaves inside that
+     * window is invisible to a per-call latch, which would report neither outcome and strand the
+     * co-member waiting on this peer. The lobby saw that host, so the lobby remembers it.
+     *
+     * What remains undecidable from local state: a lobby **constructed after** the host had already
+     * gone looks exactly like weave-in, and waits. That is the caller's `host == selfId` check to
+     * make, reactively — see [ElectionLobby.host].
      */
     private fun hostLeftSignal(): suspend () -> Throwable = {
-        var sawAnotherHost = false
         val roster = peers.first { current ->
-            if (electHost(current) != selfId) sawAnotherHost = true
-            electHost(current) == selfId && sawAnotherHost
+            recordLobbyHistory(current)
+            when {
+                // Membership drain (#1466): the roster held co-electors and now holds none. Gated on
+                // the history latch so a lobby nobody has joined YET keeps waiting rather than
+                // aborting — an empty lobby is a lobby doing its job.
+                (current - selfId).isEmpty() -> everHadCoMembers.value
+                // Promotion (#1483): some other peer was the elected host, and now this peer is.
+                electHost(current) == selfId -> everSawAnotherHost.value
+                else -> false
+            }
         }
         if ((roster - selfId).isEmpty()) {
             logger.info { "lobby.awaitRoom.collapse-signal self=${selfId.value} roster drained to {self} → Torn" }
