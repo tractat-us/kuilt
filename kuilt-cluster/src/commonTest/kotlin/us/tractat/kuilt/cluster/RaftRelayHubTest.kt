@@ -54,10 +54,15 @@ class RaftRelayHubTest {
             learnerSide.broadcast(RaftRelay.encode(RaftRelay(learnerId, v1, "for-v1".encodeToByteArray())))
             testScheduler.advanceUntilIdle()
 
+            // List-shaped, not `at1.single()`: an undelivered frame leaves `at1` empty, and
+            // `single()`'s NoSuchElementException aborts the whole assertAll — taking the
+            // dest-routing assertion below AND the size failure already collected (#1823).
             assertAll(
                 { assertEquals(1, at1.size, "the named voter's inbound must receive exactly one frame") },
-                { assertEquals(learnerId, at1.single().from, "true origin preserved as RaftEnvelope.from") },
-                { assertContentEquals("for-v1".encodeToByteArray(), at1.single().bytes) },
+                { assertEquals(listOf(learnerId), at1.map { it.from }, "true origin preserved as RaftEnvelope.from") },
+                // `List<Byte>`, not `decodeToString()`: keeps the byte comparison
+                // `assertContentEquals` gave (ByteArray has no structural equals, List<Byte> does).
+                { assertEquals(listOf("for-v1".encodeToByteArray().toList()), at1.map { it.bytes.toList() }) },
                 { assertTrue(at2.isEmpty(), "no other voter may receive the frame — dest-routed, never fanned") },
             )
         }

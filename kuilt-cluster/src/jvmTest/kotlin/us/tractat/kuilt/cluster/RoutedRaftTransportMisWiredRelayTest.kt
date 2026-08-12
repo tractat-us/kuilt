@@ -64,12 +64,22 @@ class RoutedRaftTransportMisWiredRelayTest {
                 testScheduler.advanceUntilIdle()
                 val warnsAfterSecond = appender.warnMessages()
 
+                // List-shaped, not `warnsAfterFirst.single()`: a WARN that never fires leaves the
+                // list empty, and `single()`'s NoSuchElementException aborts the whole assertAll —
+                // taking the one-time-WARN assertion below, which is the actual subject of this
+                // test, and discarding the size failure already collected above (#1823).
                 assertAll(
                     { assertTrue(relay.directed.isEmpty(), "a mis-wired player relay must drop every relayed send — nothing forwarded") },
                     { assertTrue(relay.broadcasts.isEmpty(), "the relay decorator must never broadcast") },
                     { assertEquals(1, warnsAfterFirst.size, "exactly one WARN on the first mis-wired send, got: $warnsAfterFirst") },
-                    { assertTrue(warnsAfterFirst.single().contains("mis-wired"), "the WARN names the defect") },
-                    { assertTrue(warnsAfterFirst.single().contains(s1.value) && warnsAfterFirst.single().contains(s2.value), "the WARN names the offending peers") },
+                    { assertEquals(listOf(true), warnsAfterFirst.map { it.contains("mis-wired") }, "the WARN names the defect, got: $warnsAfterFirst") },
+                    {
+                        assertEquals(
+                            listOf(true),
+                            warnsAfterFirst.map { it.contains(s1.value) && it.contains(s2.value) },
+                            "the WARN names the offending peers, got: $warnsAfterFirst",
+                        )
+                    },
                     { assertEquals(1, warnsAfterSecond.size, "the mis-wired WARN is one-time — a second send must not re-warn, got: $warnsAfterSecond") },
                 )
             } finally {

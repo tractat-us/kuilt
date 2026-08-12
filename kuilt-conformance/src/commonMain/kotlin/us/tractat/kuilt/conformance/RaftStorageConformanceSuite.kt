@@ -157,11 +157,13 @@ public abstract class RaftStorageConformanceSuite {
         )
         storage.appendEntries(toAppend)
         val retrieved = storage.entries()
+        // List-shaped, not `retrieved[0]`/`[1]`/`[2]`: a storage that drops an entry makes those
+        // throw IndexOutOfBoundsException, which `assertAll` lets abort the block — so an
+        // implementor is shown that instead of the named count and content failures (#1823).
         assertAll(
             { assertEquals(3, retrieved.size, "should have 3 entries") },
-            { assertEquals(toAppend[0], retrieved[0], "entry at index 1") },
-            { assertEquals(toAppend[1], retrieved[1], "entry at index 2") },
-            { assertEquals(toAppend[2], retrieved[2], "entry at index 3") },
+            { assertEquals(listOf(1L, 2L, 3L), retrieved.map { it.index }, "every appended index, in order") },
+            { assertEquals(toAppend, retrieved, "every appended entry round-trips whole, in order") },
         )
     }
 
@@ -178,8 +180,7 @@ public abstract class RaftStorageConformanceSuite {
         val fromTwo = storage.entries(fromIndex = 2L)
         assertAll(
             { assertEquals(2, fromTwo.size, "entries from index 2 should have 2 items") },
-            { assertEquals(2L, fromTwo[0].index, "first item index") },
-            { assertEquals(3L, fromTwo[1].index, "second item index") },
+            { assertEquals(listOf(2L, 3L), fromTwo.map { it.index }, "entries(fromIndex = 2) yields indices 2 and 3, in order") },
         )
     }
 
@@ -197,7 +198,7 @@ public abstract class RaftStorageConformanceSuite {
         val remaining = storage.entries()
         assertAll(
             { assertEquals(1, remaining.size, "only index 1 should remain") },
-            { assertEquals(1L, remaining[0].index, "remaining entry index") },
+            { assertEquals(listOf(1L), remaining.map { it.index }, "the surviving entry is index 1") },
         )
     }
 
@@ -231,8 +232,8 @@ public abstract class RaftStorageConformanceSuite {
         val entries = storage.entries()
         assertAll(
             { assertEquals(2, entries.size, "should have 2 entries after re-append") },
-            { assertEquals(1L, entries[0].index, "first entry index unchanged") },
-            { assertEquals(replacement, entries[1], "replacement entry at index 2") },
+            { assertEquals(listOf(1L, 2L), entries.map { it.index }, "the head survives and the tail is re-appended") },
+            { assertEquals(listOf(replacement), entries.drop(1), "the replacement entry sits at index 2") },
         )
     }
 
