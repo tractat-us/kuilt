@@ -294,9 +294,13 @@ still compiles but self-skips at runtime, so `./gradlew build` doesn't run it.
     virtual clock; a `backgroundScope` (lazy `StandardTestDispatcher`) silently breaks
     tests that assume eager delivery. Both bit us; required injection makes the caller choose.
   - **Production dispatchers are banned in test sources** (`Dispatchers.{Unconfined,Default,IO,Main}`,
-    `GlobalScope`). The rare deliberate real-threading harness (a true-parallelism stress test,
-    a callback-thread regression test, a `runBlocking` benchmark) carries an inline
-    `@Suppress` with a one-line reason.
+    `GlobalScope`), enforced by `forbidProductionDispatcherInTests` in the root build (#1934). The
+    rare deliberate real-threading harness (a true-parallelism stress test, a callback-thread
+    regression test, a `runBlocking` benchmark) declares itself with a line-tight
+    `// ALLOW-realDispatcher: <reason>` on its `import kotlinx.coroutines.Dispatchers`, and the
+    reason is mandatory. **`@Suppress("ForbiddenMethodCall")` is not a mechanism** — that detekt
+    rule is configured nowhere and never fires (#1329); 21 such annotations had accumulated before
+    #1934 swept them.
   - **Thread-safety of scope-owning types — use real primitives, never single-thread confinement.**
     kuilt is a genuinely multi-threaded library: a scope-owning type (`Seam`/`Loom`/`Room` impl) MUST be
     correct under a **multi-threaded** dispatcher. Guard shared mutable state (`var`s, mutable collections)
