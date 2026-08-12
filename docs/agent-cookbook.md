@@ -15,6 +15,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | a fixed-list or exponential retry/back-off loop | `ExponentialBackoff` | [Rejoin & reconnect](#rejoin--reconnect) |
 | a reconnect banner / "why did we drop" classifier — transient vs. unrecoverable buckets | `MembershipEvent.Partitioned.reason` + `HostLost.reason` (`ReconnectReason`/`FailureReason`), plus their `localFabric` tag | [Rejoin & reconnect](#rejoin--reconnect) |
 | a propose→authoritative/rejected turn/session facade, host election with a term | `GameSession` + `TurnSequencer` | [Consensus & turns](#consensus--turns) |
+| a `host == selfId` check plus a re-election when the peer that was hosting walks out mid-lobby | `ElectionLobby.awaitRoom` → `ElectionOutcome.BecameHost` → `start()` on the **same** lobby | [Host election & the lobby](#host-election--the-lobby) |
 | a heartbeat, an idle reaper, "is this peer still alive", "evict stale session" | `HeartbeatPartitionDetector` | [Liveness & presence](#liveness--presence) |
 | "close a room nobody joined", "reap an abandoned table/lobby", "nobody ever showed up" | `SoloDeadlineDetector` | [Liveness & presence](#liveness--presence) |
 | a "hold the seat open" / reconnect grace window on the host, a `pendingSeats` or `disconnectedAt` map | `JoinerReconnectController` | [Liveness & presence](#liveness--presence) |
@@ -795,6 +796,30 @@ Four things to know before you bind this to a UI:
   and the level can legitimately be *ahead* of the edge you are handling during a rapid flap. On a
   bonded `CompositeSeam` the **tag** is best-effort when every transport drops inside one dispatch
   window (#1778): re-read `Room.localFabric` at handling time if a decision must be certain.
+
+## Host election & the lobby
+
+**Intent:** several peers are connected and one of them has to host — and then that one walks out before the session starts.
+**Primitive:** `SeamRoomFactory.electLobby(pattern)` → `ElectionLobby` (`:kuilt-session`). Every peer computes the same `electHost(peers)`; the elected one calls `start()`, the rest call `awaitRoom()`.
+
+`awaitRoom()` returns a sealed **`ElectionOutcome`**, not a bare `Room`, and the case that catches people is `BecameHost`: the peer that was hosting left the roster, so this peer is now the elected host — the seam is healthy and the other members are still parked on it. **The recovery is `start()` on the SAME lobby.** Re-running `electLobby(...)` weaves a *fresh* seam and strands them; `leave()` first closes the shared seam and collapses them (#1483).
+
+<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#handleEveryElectionOutcomeSample -->
+```kotlin
+public suspend fun handleEveryElectionOutcomeSample(lobby: ElectionLobby): Room? =
+    when (val outcome = lobby.awaitRoom(memberName = "Player 2")) {
+        is ElectionOutcome.Adopted -> outcome.room
+        // The hosting peer left and this peer is now the elected host, with the co-members still
+        // parked in their own awaitRoom on the SAME seam — so they ack this freeze round at once.
+        // Re-running electLobby(...) would weave a FRESH seam and strand them; calling leave() first
+        // would close the shared seam and collapse them.
+        ElectionOutcome.BecameHost -> lobby.start(memberName = "Player 2")
+        // A genuine mid-2PC collapse: the co-electors are gone. Retryable — re-run electLobby(...).
+        is ElectionOutcome.Torn -> null
+    }
+```
+
+`awaitRoom` suspends indefinitely while the lobby is simply empty or still weaving in — that is a lobby doing its job, not a collapse, and it is why `host == selfId` on its own does **not** mean you were promoted (during weave-in you are momentarily the lowest id you can see). Cancel the call to stop waiting.
 
 ## Consensus & turns
 

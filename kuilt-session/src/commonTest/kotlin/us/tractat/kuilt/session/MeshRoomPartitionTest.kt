@@ -13,6 +13,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.election.ElectionOutcome
 import us.tractat.kuilt.session.election.SeamElectionLobby
 import us.tractat.kuilt.session.election.electHost
 import us.tractat.kuilt.test.Direction
@@ -85,7 +86,7 @@ class MeshRoomPartitionTest {
 
             val memberRooms = memberLobbies.map { async { it.awaitRoom(memberName = it.selfId.value) } }
             val hostRoom = hostLobby.start(memberName = "Host")
-            memberRooms.map { it.await() }
+            memberRooms.map { assertIs<ElectionOutcome.Adopted>(it.await()).room }
 
             // Host admitted both members → detectors are running for each.
             hostRoom.roster.first { it.size == 2 }

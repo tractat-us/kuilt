@@ -42,6 +42,7 @@ import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
 import us.tractat.kuilt.session.admit.RejectCode
+import us.tractat.kuilt.session.election.ElectionOutcome
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -298,7 +299,16 @@ public class ConnectivitySuite {
             val amHost = lobby.host.value == lobby.selfId
             hop("peers=2 host=${lobby.host.value.value.take(8)} self=${lobby.selfId.value.take(8)} amHost=$amHost")
             val room = withTimeout(ELECTION_TIMEOUT) {
-                if (amHost) lobby.start(memberName = role) else lobby.awaitRoom(memberName = role)
+                if (amHost) {
+                    lobby.start(memberName = role)
+                } else {
+                    when (val outcome = lobby.awaitRoom(memberName = role)) {
+                        is ElectionOutcome.Adopted -> outcome.room
+                        // The elected host walked out mid-election: start() on this SAME lobby (#1483).
+                        ElectionOutcome.BecameHost -> lobby.start(memberName = role)
+                        is ElectionOutcome.Torn -> error("lobby collapsed mid-election: ${outcome.reason}")
+                    }
+                }
             }
             hop("adopted Room as ${if (amHost) "Host" else "Joiner"} roster=${room.roster.value.size}")
             room.leave()
