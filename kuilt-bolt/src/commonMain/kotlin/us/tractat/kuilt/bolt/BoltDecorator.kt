@@ -55,9 +55,14 @@ import us.tractat.kuilt.crdt.LogOp
  *
  * **The residual, stated with its bound.** Suppression of *removes* is total only while the
  * aggregate offered working set of removes — every peer's live tombstones, plus this replica's own
- * export stream, since one window serves them all — fits in [removalWindow]. Past that the window
- * thrashes and the archive grows by roughly `Σ(offered removes) − removalWindow` operations per
- * round. Live tombstones are the minority of an offered log, per the split above, so this is a
+ * export stream, since one window serves them all — fits in [removalWindow]. Past that it is a
+ * **step, not a ramp**: the window thrashes, suppression collapses, and the archive grows by roughly
+ * the *whole* `Σ(offered removes)` per round — **not** by `Σ − removalWindow`. Each peer's
+ * identities are evicted by the next peer's before the round comes round again, so nothing is
+ * suppressed at all; measured at exactly zero suppressions against an offered set 5,000× the window.
+ * The two formulas nearly agree once Σ is far past the window and disagree precisely at the sizing
+ * boundary, which is where this sentence gets read. Live tombstones are the minority of an offered
+ * log, per the split above, so this is a
  * materially smaller residual than one sized by every operation — but it is a residual, and raising
  * [removalWindow] moves that cliff rather than removing it.
  *
@@ -393,10 +398,24 @@ public class BoltDecorator<Id : Any, V, Op : Any>(
          * How many contiguous runs of archived insert dots are remembered by default.
          *
          * Counted in *runs*, not operations: an author whose dots arrive densely costs one entry
-         * however long its log is, and one more for each hole that has not filled. So this is
-         * really "how many peers, plus how much delivery fragmentation" — and 4,096 is a fleet far
-         * larger than any archive built on this module is expected to gossip with, at a few hundred
-         * kilobytes.
+         * however long its log is, and one more for each hole that has not filled. **Size it in
+         * runs, not in peers.** Those are the same number only while every peer's dots arrive
+         * densely, and what breaks that is neither rare nor second-order:
+         *
+         * `Rga.compact` collects a **scattered** set of tombstoned, causally-stable ids — not a
+         * prefix — and purges each one's operations from the log. `Rga.dropWindow` folds only the
+         * dropping replica's *own* contiguous seqs into its floor, recording every foreign author's
+         * dropped dots as an explicit compaction record instead. So a decorator opened against a
+         * mesh that has already been running meets one author's live seqs with holes scattered
+         * *through* them, and every hole is a run: **a single author can exhaust this on its own,
+         * with no fleet at all.** An archive attached to an established mesh is the case to size
+         * against. One present from the mesh's first operation never sees those holes, because it
+         * archived the operations before anything collected them.
+         *
+         * 4,096 is comfortable for the ordinary shape, and costs a few hundred kilobytes when the
+         * runs are concentrated in a handful of authors. It costs nearer a megabyte when they are
+         * 4,096 *distinct* authors, each bringing a map entry, a `ReplicaId` and a list of its own —
+         * worth knowing before raising it an order of magnitude.
          *
          * Past it the shortest run is evicted and the inserts it covered are archived a second
          * time, which costs bytes and never correctness.

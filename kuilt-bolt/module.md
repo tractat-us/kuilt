@@ -67,12 +67,14 @@ anti-entropy round does not write a fresh copy each time.
 
 Remembering costs almost nothing, because an *addition* to a replicated list carries a unique name of
 its own: the decorator keeps a **frontier** of the names it has archived — one entry per peer, not
-one per edit — so a peer's whole log is suppressed forever at a fixed price. A *deletion* carries no
-name of its own (it points at the addition it undoes), so those are remembered one at a time, in a
-bounded window sized by `removalWindow`. Deletions are the minority of any log, and the source's own
-housekeeping collects them, so that window is a small residual rather than the main cost. Both bounds
-err the same way: forgetting something means it is archived twice, which is bytes — never a record
-lost.
+one per edit — so a peer's whole log is suppressed at a fixed price however long it grows. A
+*deletion* carries no name of its own (it points at the addition it undoes), so those are remembered
+one at a time. Deletions are the minority of what a peer is holding at any moment, and the source's
+own housekeeping collects them, so they are a small residual rather than the main cost.
+
+Both halves have a ceiling — `frontierWindow` counts *entries* in the frontier, `removalWindow`
+counts remembered deletions — and both err the same way when you hit one: something is forgotten and
+then archived twice. That is bytes. Neither can lose a record.
 
 **Feed it the merges as well as the local edits, or the archive is nearly empty.** Merging a peer's
 replica is a *state* join: it produces no edits to hand over. Since syncing with a peer is exactly
