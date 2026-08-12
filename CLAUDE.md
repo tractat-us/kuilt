@@ -367,12 +367,17 @@ still compiles but self-skips at runtime, so `./gradlew build` doesn't run it.
 
   If a cancellable bound (`withTimeout`/`withTimeoutOrNull`) intervenes *inside* the shield, its
   premise is false at that position — hoist the `try`/`catch` outside the bound rather than
-  swallowing within it. **On all of this the prose is the enforcement.** The root build's
-  `forbidRunCatchingCancellableUnderNonCancellable` (wired into `check`) scans production `*Main`
-  sources for the `runCatchingCancellable` **token** lexically inside a shield: it cannot see the
-  hand-written rethrow, sees neither form when reached through a helper called from the shield, and
-  cannot see the unshielded case at all — there is no shield to scan under, and without one the two
-  cancellations really are ambiguous.
+  swallowing within it. **On most of this the prose is the enforcement.** Two `check`-wired root
+  guards scan production `*Main` sources lexically, and both are backstops rather than proofs.
+  `forbidRunCatchingCancellableUnderNonCancellable` looks for the `runCatchingCancellable` **token**
+  inside a shield: it cannot see the hand-written rethrow, and sees neither form when reached
+  through a helper called from the shield. `forbidCancellationRethrowAroundBound` (#2292) takes the
+  one **unshielded** case where the ambiguity is decidable — a rethrow written *directly around a
+  `withTimeout`*, where the cancellation reaching it can only be the bound's own — in both its
+  `try`/`catch` and its `runCatchingCancellable` spellings, and clears the site if an earlier
+  `catch (…: TimeoutCancellationException)` already handles the expiry by type. Everywhere else
+  unshielded the two cancellations really are lexically ambiguous, and one helper hop defeats both
+  guards. `ensureActive()` remains the only thing that decides it at runtime.
 
 - **Debugging bugs a local suite can't see** (hardware/network/contention-only) follows the
   process rules in [`docs/debugging-process.md`](docs/debugging-process.md): don't `closes #N` a
