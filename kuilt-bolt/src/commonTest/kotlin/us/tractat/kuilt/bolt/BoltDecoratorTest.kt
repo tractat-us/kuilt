@@ -289,12 +289,12 @@ class BoltDecoratorTest {
      * scaling with [ROUNDS]. Re-measure if any of them changes.
      *
      * **Mutation receipt, measured:** routing inserts back through the identity window (give
-     * `archiveKeyOf`'s `LogOp.Insert` arm `ArchiveKey.Identity(classified)`) reds the archive-size,
+     * `archiveKeyOf`'s `LogOp.Insert` arm `ArchiveKey.Identity(classified)`) reds the op-count,
      * frame-count and dedup-count assertions together — 80,000 archived operations become 240,000,
-     * 400 frames become 1,200, and `opsDeduplicated` falls from 160,000 to **zero**. Not "grows by
-     * `offered − window`" but by the *whole* working set: each peer's 200 identities are evicted by
-     * the next peer's before the round comes round again, so a thrashing window suppresses nothing
-     * at all. That is the failure this exists to prevent, at full strength.
+     * 80 frames become 240, and `opsDeduplicated` falls from 160,000 to **zero**. Not "grows by
+     * `offered − window`" but by the *whole* working set: each peer's [OPS_PER_PEER] identities are
+     * evicted by the next peer's before the round comes round again, so a thrashing window
+     * suppresses nothing at all. That is the failure this exists to prevent, at full strength.
      */
     @Test
     fun anOfferedWorkingSetFarLargerThanTheIdentityWindowStopsGrowingTheArchive() =
