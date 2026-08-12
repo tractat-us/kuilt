@@ -67,7 +67,15 @@ class MappedBoltPruningTest {
      *    offset 0, so the damage in 5 is real rather than a corruption that missed.
      *
      * **Mutation receipts**, each applied alone to `MappedBolt.firstSegmentToRead`, reverted, the
-     * revert grep-verified, and the verdict read out of the results XML rather than the console:
+     * revert grep-verified, and the verdict read out of the results XML rather than the console.
+     *
+     * **Two of these rows produce byte-identical output, which is also the signature of a false
+     * receipt**, so the protocol matters: `build/test-results/jvmTest` is **deleted** before each run
+     * and the log checked for `compileKotlinJvm`/`compileTestKotlinJvm FAILED` and `e: file`. A
+     * mutation that does not compile leaves Gradle serving the *previous* run's XML, and the verdict
+     * it fabricates is a plausible copy of the row before it. Rows 1 and 2 below were re-measured
+     * under that protocol precisely because they match each other; they do so because both destroy
+     * the same thing.
      *
      * | Mutation | Reds here | Reds in `BoltConformanceSuite` |
      * |---|---|---|
