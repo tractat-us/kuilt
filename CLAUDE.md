@@ -377,6 +377,8 @@ re-read it top-to-bottom and confirm the descent still survives.
 
 **`@sample` functions are compiled as part of `commonTest`** (wired by the `kuilt.kmp-library` convention plugin — any `src/commonSamples/kotlin/` directory is added to `commonTest` source roots). A typo or API change that breaks a sample breaks the build. Treat sample functions as load-bearing.
 
+**The `@sample` *link* is enforced too — `verifySampleLinks` (in the root `build.gradle.kts`, wired into `check`, and run in the `doc-citations` CI job so a docs-only `module.md` edit is covered) fails the build on a tag Dokka cannot resolve (#2259).** A tag resolves only when it **starts its KDoc line** (written mid-line Dokka does not parse it as a tag at all — no sample, no warning), is **fully qualified** (a bare name never resolves, even in the sample's own package), names a **function**, and lives in the **citing module's own** `src/commonSamples/kotlin`. That last one is the quiet trap: the convention plugin gives each module only its own samples root, so a tag naming a real sample in a *sibling* module compiles, reads correctly, and renders nothing.
+
 When you change public API:
 - Update the KDoc on the changed declaration.
 - Update (or add) the matching `@sample` function in `src/commonSamples/kotlin/`.

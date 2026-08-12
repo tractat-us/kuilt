@@ -591,15 +591,18 @@ jobs:
         run: ./gradlew dokkaGenerateModuleHtml --max-workers=2
 
   # ── doc-citations ───────────────────────────────────────────────────────────
-  # Verifies every `<!-- verbatim from <path>#<symbol> -->` doc citation still matches the
-  # source it names, and that no citation dangles off a renamed/deleted symbol (#1792).
+  # The two docs-integrity guards, which are both pure file-reading Gradle tasks:
+  #   - verifyDocCitations — every `<!-- verbatim from <path>#<symbol> -->` still matches the
+  #     source it names, and no citation dangles off a renamed/deleted symbol (#1792);
+  #   - verifySampleLinks  — every `@sample` KDoc tag still names a sample Dokka can resolve
+  #     (#2259). Tags live in KDoc AND in `module.md`, and a module.md-only PR is docs-only.
   #
   # ORTHOGONAL to docs-only, for exactly the reason the Dokka gate is: the likeliest way to
-  # drift a citation is a docs-only PR editing the quoted block, and that path skips
-  # build-jvm/build-native entirely. `verifyDocCitations` is wired into `check` (so
-  # `./gradlew build` covers it on any code change), but `check`-wiring ALONE would never
-  # fire on the very class of change most likely to break it. Cheap enough to always run:
-  # no compilation and no Kotlin/Native toolchain, just a file-reading verification task.
+  # drift a citation — or to break the `@sample` in a module.md — is a docs-only PR, and that
+  # path skips build-jvm/build-native entirely. Both tasks are wired into `check` (so
+  # `./gradlew build` covers them on any code change), but `check`-wiring ALONE would never
+  # fire on the very class of change most likely to break them. Cheap enough to always run:
+  # no compilation and no Kotlin/Native toolchain, just file-reading verification tasks.
   doc-citations:
     needs: detect
     runs-on: ubuntu-latest
@@ -625,8 +628,8 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: Verify doc citations match their cited sources
-        run: ./gradlew verifyDocCitations
+      - name: Verify doc citations and @sample links resolve
+        run: ./gradlew verifyDocCitations verifySampleLinks
 
   # ── capability-probes ───────────────────────────────────────────────────────
   # The GATING half of the probe split (#1768's option 2). Runs only the
