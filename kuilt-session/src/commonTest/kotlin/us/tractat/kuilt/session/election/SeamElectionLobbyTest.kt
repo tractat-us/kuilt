@@ -27,6 +27,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
@@ -94,7 +95,7 @@ class SeamElectionLobbyTest {
 
             val memberRoomDeferred = async { memberLobby.awaitRoom(memberName = "Member") }
             val hostRoom = hostLobby.start(memberName = "Host")
-            val memberRoom = memberRoomDeferred.await()
+            val memberRoom = assertIs<ElectionOutcome.Adopted>(memberRoomDeferred.await()).room
 
             // Both rooms complete their admit handshake: one member each.
             hostRoom.roster.first { it.size == 1 }
@@ -127,7 +128,7 @@ class SeamElectionLobbyTest {
             // BOTH members (the multi-member path the single-member test cannot exercise).
             val memberRooms = memberLobbies.map { async { it.awaitRoom(memberName = it.selfId.value) } }
             val hostRoom = hostLobby.start(memberName = "Host")
-            val rooms = memberRooms.map { it.await() }
+            val rooms = memberRooms.map { assertIs<ElectionOutcome.Adopted>(it.await()).room }
 
             // Host admits both members; each member sees host + the other member.
             hostRoom.roster.first { it.size == 2 }
@@ -159,7 +160,7 @@ class SeamElectionLobbyTest {
         }
 
     @Test
-    fun `member awaitRoom throws LobbyTornException when the seam tears mid-2PC`() =
+    fun `member awaitRoom reports Torn when the seam tears mid-2PC`() =
         runTest {
             // self is the member (higher id); "peer-a" is the elected host (lower id).
             val self = PeerId("peer-b")
@@ -169,15 +170,15 @@ class SeamElectionLobbyTest {
             assertEquals(hostId, l.host.first()) // self is a member, so awaitRoom is the right call
 
             // Capture awaitRoom's outcome via a caught launch so a thrown exception is delivered
-            // through [room] rather than propagating to (and cancelling) the test scope.
-            val room = CompletableDeferred<Room>()
+            // through [outcome] rather than propagating to (and cancelling) the test scope.
+            val outcome = CompletableDeferred<ElectionOutcome>()
             val driver = launch {
                 try {
-                    room.complete(l.awaitRoom(memberName = "Member"))
+                    outcome.complete(l.awaitRoom(memberName = "Member"))
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Throwable) {
-                    room.completeExceptionally(e)
+                    outcome.completeExceptionally(e)
                 }
             }
             runCurrent() // let awaitRoom subscribe to lobbyMessages before we deliver the Freeze
@@ -191,7 +192,7 @@ class SeamElectionLobbyTest {
             seam.removePeer(hostId)
             seam.tear(CloseReason.Unreachable)
 
-            assertFailsWith<LobbyTornException> { withTimeout(5.seconds) { room.await() } }
+            assertIs<ElectionOutcome.Torn>(withTimeout(5.seconds) { outcome.await() })
             driver.cancel()
         }
 
@@ -243,8 +244,12 @@ class SeamElectionLobbyTest {
             val l = lobby(seam, InMemoryLoom(), backgroundScope)
             assertEquals(hostId, l.host.first()) // self is a member, so awaitRoom is the right call
 
+            // awaitRoom RETURNS the collapse (ElectionOutcome.Torn) rather than throwing it (#1483),
+            // so re-express it as the throw the shared invariant asserts. The property under test is
+            // unchanged: it must resolve within the bound, never suspend forever.
             assertAbortsOnMidHandshakeCollapse<LobbyTornException>(seam, drainedPeer = hostId) {
-                l.awaitRoom(memberName = "Member")
+                val outcome = l.awaitRoom(memberName = "Member")
+                if (outcome is ElectionOutcome.Torn) throw LobbyTornException(outcome.reason)
             }
         }
 
@@ -288,23 +293,23 @@ class SeamElectionLobbyTest {
             )
             assertEquals(hostId, l.host.first()) // self is a member → awaitRoom is the right call
 
-            // Capture awaitRoom's outcome via a caught launch so the thrown exception is delivered
-            // through [room] rather than cancelling the test scope.
-            val room = CompletableDeferred<Room>()
+            // Capture awaitRoom's outcome via a caught launch so a thrown exception is delivered
+            // through [outcome] rather than cancelling the test scope.
+            val outcome = CompletableDeferred<ElectionOutcome>()
             val driver = launch {
                 try {
-                    room.complete(l.awaitRoom(memberName = "Member"))
+                    outcome.complete(l.awaitRoom(memberName = "Member"))
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Throwable) {
-                    room.completeExceptionally(e)
+                    outcome.completeExceptionally(e)
                 }
             }
 
             // Never deliver a Freeze and never answer a heartbeat ping — the host is present-but-silent.
             // peers stays {self, host}; state stays Woven. The detector accumulates silence and fires
-            // PeerLost, mapped onto the existing LobbyTornException abort.
-            assertFailsWith<LobbyTornException> { room.await() }
+            // PeerLost, mapped onto the existing collapse abort.
+            assertIs<ElectionOutcome.Torn>(outcome.await())
             assertTrue(
                 testScheduler.currentTime in 3_000..9_999,
                 "heartbeat abort must land past a transient blip and inside the 10s freeze/commit " +

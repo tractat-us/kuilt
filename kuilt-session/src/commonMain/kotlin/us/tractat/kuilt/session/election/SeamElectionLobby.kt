@@ -45,6 +45,15 @@ import kotlin.time.Instant
 private val logger = KotlinLogging.logger("us.tractat.kuilt.session.election.SeamElectionLobby")
 
 /**
+ * Internal abort signal for the member path: the peer that was hosting left, and [roster] (the peer
+ * set at that instant) still holds co-members, so this is a **promotion**, not a collapse. Never
+ * escapes [SeamElectionLobby.awaitRoom] — it is converted to [ElectionOutcome.BecameHost] there. It
+ * exists only because [SeamElectionLobby.guardElection] aborts its body by completing exceptionally.
+ */
+private class PromotedToHostSignal(val roster: Set<PeerId>) :
+    Exception("promoted to host mid-election: roster=${roster.map { it.value }}")
+
+/**
  * [Seam]-backed [ElectionLobby]. Owns the woven mesh [seam] until a [Room] adopts it.
  *
  * A single collector drains [Seam.incoming], decoding [LobbyMessage]s and republishing them on
@@ -196,20 +205,11 @@ internal class SeamElectionLobby(
             result
         }
 
-    override suspend fun awaitRoom(memberName: String?): Room {
+    override suspend fun awaitRoom(memberName: String?): ElectionOutcome {
         return try {
             guardElection(
-                // Membership-drain abort (#1466 member path, the hardware failure): the elected host left
-                // the peer set, so [host] recomputed to self — this member can never receive a Freeze from a
-                // host that is now itself. Mirror of startElection's role re-check, but as a racing watcher
-                // because awaitRoomElection is suspended in `lobbyMessages.first { … }` and never re-evaluates
-                // `host` without an emission. Fires even when the seam stays Woven (no Torn).
                 collapseSignals = listOf(
-                    {
-                        host.first { it == selfId }
-                        logger.info { "lobby.awaitRoom.collapse-signal self=${selfId.value} host→self (elected host left) → LobbyTornException" }
-                        LobbyTornException(collapseReason())
-                    },
+                    hostLeftSignal(),
                     // Silent-but-present collapse (#1480/#1478): the elected host stops answering
                     // heartbeat pings while `seam.peers` still lists it and `state` stays Woven — the
                     // host→self signal above never fires. The lobby heartbeat is the only detector.
@@ -220,10 +220,59 @@ internal class SeamElectionLobby(
             }
             // Adoption OUTSIDE guardElection (finding #1): once the Commit is received the race is over,
             // so the became-host/tear collapse signals can no longer cancel adoptRoom mid-commit.
-            adoptAfterCommit(SessionRole.Joiner, memberName)
+            ElectionOutcome.Adopted(adoptAfterCommit(SessionRole.Joiner, memberName))
+        } catch (e: PromotedToHostSignal) {
+            logger.info { "lobby.awaitRoom.promoted self=${selfId.value} roster=${e.roster.map { it.value }} → BecameHost (recovery: start() on this lobby)" }
+            ElectionOutcome.BecameHost
+        } catch (e: LobbyTornException) {
+            logger.debug { "lobby.awaitRoom.exit self=${selfId.value} collapsed: ${e.reason}" }
+            ElectionOutcome.Torn(e.reason)
         } catch (e: Throwable) {
             logger.debug { "lobby.awaitRoom.exit self=${selfId.value} threw=${e::class.simpleName}: ${e.message}" }
             throw e
+        }
+    }
+
+    /**
+     * The member-path abort for "the peer that was hosting is gone" (#1466), split by what is *left*
+     * (#1483). Either way this member can never receive a `Freeze` from a host that is now itself, so
+     * the wait must end — but the two endings are not the same event:
+     *
+     * - **co-members still present** → [PromotedToHostSignal] → [ElectionOutcome.BecameHost]. Nothing
+     *   collapsed; this peer simply inherited the host role and should call [start] on this lobby.
+     * - **roster drained to `{self}`** → [LobbyTornException] → [ElectionOutcome.Torn]. The #1466
+     *   membership drain: there is nobody left to host for.
+     *
+     * ## The weave-in discriminator
+     *
+     * `host` is `electHost(peers)`, and `peers` **grows** as the mesh weaves in — so `host == self` is
+     * *also* the state of a peer that is merely the lowest id it has seen **so far**. A bare
+     * `host.first { it == selfId }` (what shipped before #1483) fires on that transient, at the very
+     * first emission, before any lower peer has propagated. Every member that entered `awaitRoom`
+     * while transiently lowest was told the lobby had collapsed.
+     *
+     * A roster-size test cannot separate the two: `{self, higher-peer}` is a non-trivial roster in
+     * both. What separates them is **history**, the same shape the host path's `everHadMembers` latch
+     * uses: a promotion means some *other* peer was the elected host and then left. So the signal
+     * latches on having observed `electHost(roster) != selfId` at least once, and only then treats
+     * `host == self` as terminal. A peer that has never seen another host has not been promoted — it
+     * keeps waiting, and a lower peer weaving in later just moves `host` away again.
+     *
+     * The latch is per-call (a fresh `awaitRoom` re-derives it), and its first observation is the
+     * roster at entry, which a [StateFlow] always replays — so a member that entered with a real host
+     * has the latch set before anything can change.
+     */
+    private fun hostLeftSignal(): suspend () -> Throwable = {
+        var sawAnotherHost = false
+        val roster = peers.first { current ->
+            if (electHost(current) != selfId) sawAnotherHost = true
+            electHost(current) == selfId && sawAnotherHost
+        }
+        if ((roster - selfId).isEmpty()) {
+            logger.info { "lobby.awaitRoom.collapse-signal self=${selfId.value} roster drained to {self} → Torn" }
+            LobbyTornException(collapseReason())
+        } else {
+            PromotedToHostSignal(roster)
         }
     }
 
@@ -293,11 +342,13 @@ internal class SeamElectionLobby(
      * [lobbyMessages] is a standalone flow that never completes when [Seam.incoming] does, so nothing
      * else wakes the waiter. The retryable throw lets the caller re-run `electLobby` to rejoin / re-elect.
      *
-     * @param collapseSignals each suspends until its collapse condition holds, then returns the
-     *   [LobbyTornException] to abort with. Role-specific (member: became-host; host: lost all members).
+     * @param collapseSignals each suspends until its abort condition holds, then returns the [Throwable]
+     *   to abort with — [LobbyTornException] for a genuine collapse, or (member path only)
+     *   [PromotedToHostSignal] when the host merely handed the role over by leaving. Role-specific
+     *   (member: [hostLeftSignal]; host: lost all members).
      */
     private suspend fun <T> guardElection(
-        collapseSignals: List<suspend () -> LobbyTornException>,
+        collapseSignals: List<suspend () -> Throwable>,
         body: suspend () -> T,
     ): T =
         try {
@@ -310,7 +361,7 @@ internal class SeamElectionLobby(
 
     /** Race [body] against the lobby's role-specific [collapseSignals]; the first to resolve wins. */
     private suspend fun <T> raceCollapseSignals(
-        collapseSignals: List<suspend () -> LobbyTornException>,
+        collapseSignals: List<suspend () -> Throwable>,
         body: suspend () -> T,
     ): T =
         coroutineScope {
