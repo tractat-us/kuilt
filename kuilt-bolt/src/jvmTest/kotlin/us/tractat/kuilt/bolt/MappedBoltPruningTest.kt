@@ -193,10 +193,12 @@ class MappedBoltPruningTest {
      * intact frame, so the damage sits at or above it — and re-opening classifies it as a torn tail
      * or an unappendable archive before any replay runs.
      *
-     * **Mutation receipt:** deleting the caught-up short-circuit in [replay] reds both of the first
-     * two assertions and is exactly the state this PR was reviewed in: damage in segment 4 of 6
-     * reported `Truncated(atOffset=535, reason=Frame)` while the same damage in segments 0, 1 and 3
-     * reported [CleanTail].
+     * **Mutation receipt**, measured on *this* fixture: deleting the caught-up short-circuit in
+     * [replay] reds the first two assertions. The five verdicts become four [CleanTail]s and a
+     * `Truncated(atOffset=547, reason=Frame)` — only the **deepest** damage position changes its
+     * answer — and every resume reads `531` bytes where it should read `0`. That single differing
+     * entry is the whole shape this test exists to rule out: the same bytes read two ways according
+     * to where the tail happens to be.
      */
     @Test
     fun aCaughtUpResumeAnswersTheSameWhereverTheDamageIs() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
