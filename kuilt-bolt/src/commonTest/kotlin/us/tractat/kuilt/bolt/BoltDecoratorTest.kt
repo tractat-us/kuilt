@@ -20,6 +20,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Instant
 
@@ -57,8 +58,9 @@ class BoltDecoratorTest {
 
     private fun decorate(
         bolt: Bolt<RgaOp<String>>,
-        dedupWindow: Int = BoltDecorator.DEFAULT_DEDUP_WINDOW,
-    ) = BoltDecorator(bolt, format(), dedupWindow)
+        removalWindow: Int = BoltDecorator.DEFAULT_REMOVAL_WINDOW,
+        frontierWindow: Int = BoltDecorator.DEFAULT_FRONTIER_WINDOW,
+    ) = BoltDecorator(bolt, format(), removalWindow, frontierWindow)
 
     private suspend fun Bolt<RgaOp<String>>.archivedOps(): List<RgaOp<String>> =
         replay(ReplayScope.All).frames().toList().flatMap { it.ops }
@@ -232,9 +234,256 @@ class BoltDecoratorTest {
         )
     }
 
+    // ── Inserts: the frontier, which has no working set to exceed ─────────────
+
     /**
-     * The suppression set is **bounded**, and an identity pushed out of it is archived a second
-     * time rather than silently dropped.
+     * **The acceptance property.** An aggregate offered working set *far larger* than the bounded
+     * identity window is suppressed completely, round after round, and the archive does not grow.
+     *
+     * This is the case the bounded window provably cannot reach. Under a window of
+     * [ISOLATING_REMOVAL_WINDOW] identities, an offered set of [PEERS] × [OPS_PER_PEER] thrashes it
+     * completely: every round would archive another near-full copy of every peer's log, which is
+     * "growth proportional to time spent gossiping" at full strength. The frontier has no working
+     * set at all — an insert it has archived is suppressed for the life of the process.
+     *
+     * **The rig asserts itself.** "The archive did not grow" is satisfied for free by a fixture that
+     * never offered anything twice, and by one too small to strain any bound, so three assertions
+     * exist to make those impossible:
+     *
+     * - the offered set is more than a hundred times the identity window, so nothing that window
+     *   does can explain the result;
+     * - `opsDeduplicated` equals the full offered set once per repeat round, so the operations
+     *   really were re-offered and really were suppressed;
+     * - `framesWritten` equals [PEERS], so rounds two and three wrote **nothing**, rather than
+     *   writing something that replayed as a duplicate.
+     *
+     * **And the memory bound is in the fixture, not just the prose.** `frontierWindow` is set to
+     * exactly [PEERS] — one run per author and not one entry to spare — so the decorator's entire
+     * insert memory while suppressing the whole working set is **[PEERS] runs holding
+     * `PEERS × OPS_PER_PEER` archived inserts**. Widening `frontierWindow` would weaken the test;
+     * the tightness is the claim. The **precondition** that tightness rests on is *one `publish`
+     * per peer per round* — splitting a peer's log across two publishes fragments its run and would
+     * redden this legitimately. Repair such a red by restoring the single publish, never by
+     * widening the window.
+     *
+     * **No replay, on purpose.** An earlier draft ended by replaying the archive and counting the
+     * decoded operations, which cost more than the property it was checking. It also added nothing:
+     * `AppendResult.Written` is the *only* thing that puts bytes in an archive, so `framesWritten`
+     * staying at [PEERS] across [ROUNDS] rounds already says no byte was added after the first. The
+     * op count comes from the **bolt's** own `AppendResult.Written.opCount`, not from anything the
+     * decorator invented. Byte-level round-tripping is pinned where it is cheap — at three
+     * operations, in [rePublishingTheSameOperationsWritesNothingAndDoesNotDoubleTheArchive], and in
+     * `BoltConformanceSuite`.
+     *
+     * Inserts only, deliberately: removes are the stated residual and are bounded by
+     * `removalWindow`, so including more than [ISOLATING_REMOVAL_WINDOW] of them would make the
+     * archive grow for a reason this test is not about. [insertsAreSuppressedWithNoRemovalWindowAtAll]
+     * pins that boundary from the other side.
+     *
+     * **Cost, because this is the class's most expensive test and a CPU-bound one — so unlike the
+     * virtual-time tests `TEST_WEDGE_BACKSTOP` was written for, its ceiling really is wall-clock.**
+     * Measured with `uptime` sampled alongside (load 9–13, so these are upper bounds): jvm 0.24 s,
+     * macosArm64 1.52 s, iosSimulatorArm64 1.51 s — against a 30 s backstop, so roughly 20×
+     * headroom on the slowest target. The three things that keep it there are [gossipingPeers]
+     * minting one log rather than [PEERS], the absent replay above, and nothing else in the fixture
+     * scaling with [ROUNDS]. Re-measure if any of them changes.
+     *
+     * **Mutation receipt, measured:** routing inserts back through the identity window (give
+     * `archiveKeyOf`'s `LogOp.Insert` arm `ArchiveKey.Identity(classified)`) reds the op-count,
+     * frame-count and dedup-count assertions together — 80,000 archived operations become 240,000,
+     * 80 frames become 240, and `opsDeduplicated` falls from 160,000 to **zero**. Not "grows by
+     * `offered − window`" but by the *whole* working set: each peer's [OPS_PER_PEER] identities are
+     * evicted by the next peer's before the round comes round again, so a thrashing window
+     * suppresses nothing at all. That is the failure this exists to prevent, at full strength.
+     */
+    @Test
+    fun anOfferedWorkingSetFarLargerThanTheIdentityWindowStopsGrowingTheArchive() =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val bolt = newBolt()
+            val decorator = decorate(
+                bolt,
+                removalWindow = ISOLATING_REMOVAL_WINDOW,
+                // Exactly one run per author, and not one to spare.
+                frontierWindow = PEERS,
+            )
+            val peers = gossipingPeers()
+            val offeredPerRound = peers.sumOf { it.size }
+
+            // One publish per peer, per round. That is the fixture's precondition, not an
+            // incidental shape — see this test's KDoc.
+            repeat(ROUNDS) { peers.forEach { decorator.publish(it) } }
+            val health = decorator.health.value
+
+            assertAll(
+                {
+                    assertTrue(
+                        offeredPerRound > BoltDecorator.DEFAULT_REMOVAL_WINDOW,
+                        "the rig: $offeredPerRound operations offered per round exceeds even the SHIPPED default " +
+                            "window of ${BoltDecorator.DEFAULT_REMOVAL_WINDOW}, let alone the " +
+                            "$ISOLATING_REMOVAL_WINDOW this runs at — shrink the fixture and the test below " +
+                            "proves nothing",
+                    )
+                },
+                {
+                    assertEquals(
+                        offeredPerRound.toLong(),
+                        health.opsArchived,
+                        "each operation archived exactly once, across $ROUNDS rounds — the count the " +
+                            "BOLT reported accepting, not one the decorator kept for itself",
+                    )
+                },
+                {
+                    assertEquals(
+                        PEERS.toLong(),
+                        health.framesWritten,
+                        "one frame per peer, in the FIRST round only — later rounds wrote nothing at all, " +
+                            "and a round that writes no frame cannot have added a byte",
+                    )
+                },
+                {
+                    assertEquals(
+                        (offeredPerRound * (ROUNDS - 1)).toLong(),
+                        health.opsDeduplicated,
+                        "and the whole working set really was re-offered and suppressed on every later round",
+                    )
+                },
+            )
+        }
+
+    /**
+     * **The acceptance fixture's peers really are what those peers would have minted.**
+     *
+     * [gossipingPeers] re-keys one real log rather than minting [PEERS] of them, which is a fixture
+     * optimisation standing on a claim about `Rga`: that an insert's `lamport` and `seq` are
+     * derived from the minting replica's own counters and never from its [ReplicaId]. If that ever
+     * stops being true the acceptance fixture silently stops being a fleet of real peers, and every
+     * number it produces stops meaning what its KDoc says. So the claim is asserted here rather
+     * than argued in a comment.
+     *
+     * Eight operations, not [OPS_PER_PEER]: the claim is per-operation, so length adds cost and no
+     * coverage.
+     */
+    @Test
+    fun everyPeersLogIsWhatThatPeerWouldReallyHaveMinted() {
+        val author = ReplicaId("peer-7")
+
+        val minted = liveLogOf(author, count = 8)
+        val derived = reKeyed(liveLogOf(ReplicaId("peer-0"), count = 8), author)
+
+        assertEquals(minted, derived, "re-keying peer 0's log must reproduce peer 7's exactly")
+    }
+
+    /**
+     * Inserts offered **out of order** are archived once and suppressed thereafter — the frontier
+     * closes the hole between them rather than treating it as a boundary.
+     *
+     * A merge hands the owner a peer's operations in no guaranteed order (`OpLogCrdt.operations()`
+     * says so), so this is the ordinary path and not an edge case.
+     *
+     * **Mutation receipt:** deleting the `joinsBelow && joinsAbove` arm of `DotFrontier.add` leaves
+     * this test green — the runs stay separate but still *contain* the dots — which is why
+     * [DotFrontierTest.dotsArrivingOutOfOrderMergeIntoOneRunAsTheHoleCloses] asserts the run count
+     * there rather than membership here. What this test pins is the decorator's side: that
+     * out-of-order arrival is suppressed at all.
+     */
+    @Test
+    fun insertsOfferedOutOfOrderAreArchivedOnceAndSuppressedAfterwards() =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val bolt = newBolt()
+            val decorator = decorate(bolt)
+            val log = liveLogOf(alice, count = 3)
+
+            decorator.publish(listOf(log[2]))
+            decorator.publish(listOf(log[0]))
+            decorator.publish(listOf(log[1]))
+            val reOffered = decorator.publish(log)
+            val archived = bolt.archivedOps()
+
+            assertAll(
+                { assertIs<AppendResult.Skipped>(reOffered, "every one of them is already held") },
+                { assertEquals(log.toSet(), archived.toSet(), "each archived once") },
+                { assertEquals(3L, decorator.health.value.framesWritten, "three frames, one per out-of-order offer") },
+            )
+        }
+
+    /**
+     * The frontier is **bounded** too, and a run pushed out of it is archived a second time rather
+     * than silently dropped.
+     *
+     * The bound is in *runs*, not operations — `alice`'s whole log is one entry — so this is a far
+     * larger fleet per unit memory than an identity window buys. But it is a bound, so the trade is
+     * asserted rather than left as a comment.
+     *
+     * The victim is the **shortest** run: `bob` contributed one insert, `alice` two. Under gossip
+     * every run is re-offered every round, so recency (the rule the removal window uses)
+     * discriminates nothing, while length is exactly how many suppressed re-offers the entry buys.
+     *
+     * **Mutation receipt:** short-circuiting `DotFrontier.trim` (`if (runCount >= 0) return`) reds
+     * the first two assertions — nothing is evicted, so `bob`'s insert is skipped as already-held
+     * and never archived again.
+     */
+    @Test
+    fun anInsertRunPushedOutOfTheFrontierIsArchivedAgainRatherThanLost() =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val bolt = newBolt()
+            val decorator = decorate(bolt, frontierWindow = 1)
+            val aliceLog = liveLogOf(alice, count = 2)
+            val bobLog = liveLogOf(bob, count = 1)
+
+            decorator.publish(aliceLog)
+            decorator.publish(bobLog)
+            val bobAgain = decorator.publish(bobLog)
+            val aliceAgain = decorator.publish(aliceLog)
+            val archived = bolt.archivedOps()
+
+            assertAll(
+                { assertIs<AppendResult.Written>(bobAgain, "the shortest run was evicted, so it is archived again") },
+                { assertEquals(4, archived.size, "three operations, one of them twice") },
+                { assertIs<AppendResult.Skipped>(aliceAgain, "and the longer run is the one that survived") },
+            )
+        }
+
+    /**
+     * **Inserts do not touch the removal window at all** — they are suppressed with it turned off
+     * entirely, and a remove is not.
+     *
+     * This is the residual, stated from both sides in one test. `removalWindow = 0` is the sharpest
+     * possible statement that the two mechanisms are separate: if a single insert consumed a window
+     * slot, a zero-sized window could suppress nothing at all.
+     *
+     * **Mutation receipt:** routing inserts through `ArchiveKey.Identity` reds the first assertion —
+     * with no window to hold them, every insert is archived again on every round.
+     */
+    @Test
+    fun insertsAreSuppressedWithNoRemovalWindowAtAll() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val bolt = newBolt()
+        val decorator = decorate(bolt, removalWindow = 0)
+        val inserts = liveLogOf(alice, count = 3)
+        val removal = removalsOf(alice, count = 1)
+
+        decorator.publish(inserts)
+        val insertsAgain = decorator.publish(inserts)
+        decorator.publish(removal)
+        val removalAgain = decorator.publish(removal)
+        val archived = bolt.archivedOps()
+
+        assertAll(
+            { assertIs<AppendResult.Skipped>(insertsAgain, "the frontier holds them with no window in sight") },
+            {
+                assertIs<AppendResult.Written>(
+                    removalAgain,
+                    "and a remove mints no dot, so with no window it is the residual — archived twice",
+                )
+            },
+            { assertEquals(5, archived.size, "three inserts once, one removal twice") },
+        )
+    }
+
+    // ── Removes: the residual, and the bounded window that holds it ───────────
+
+    /**
+     * The removal window is **bounded**, and an identity pushed out of it is archived a second time
+     * rather than silently dropped.
      *
      * That is the trade this class makes deliberately, so it is asserted rather than left as a
      * comment: an unbounded set would be sized by an archive that is unbounded by construction —
@@ -242,20 +491,24 @@ class BoltDecoratorTest {
      * miss costs bytes, never correctness, because folding an op-log CRDT's operation twice is
      * idempotent.
      *
+     * **Removes, not inserts.** An insert is recognised by the dot it mints and never reaches this
+     * window; a remove mints none, which is why the window still exists. Testing it with inserts —
+     * as this test did before #2254 — would now pin nothing, because the frontier would suppress
+     * them whatever the window did.
+     *
      * The dropped identity is the **least recently offered** — see
-     * [aReOfferedIdentitySurvivesEvictionWhileAnIdleOneDoesNot] for why that qualifier is the whole
+     * [aReOfferedRemovalSurvivesEvictionWhileAnIdleOneDoesNot] for why that qualifier is the whole
      * property and not a synonym for "oldest".
      *
      * **Mutation receipt:** short-circuiting `trimToWindow` (`if (archived.size >= 0) return`) reds
      * this test — the old identity stays remembered, so the re-publish is skipped.
      */
     @Test
-    fun anIdentityPushedOutOfTheWindowIsArchivedAgainRatherThanLost() =
+    fun aRemovalPushedOutOfTheWindowIsArchivedAgainRatherThanLost() =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val bolt = newBolt()
-            val decorator = decorate(bolt, dedupWindow = 1)
-            val (afterOld, old) = Rga.empty<String>().insertAt(alice, 0, "old")
-            val (_, new) = afterOld.insertAt(alice, 1, "new")
+            val decorator = decorate(bolt, removalWindow = 1)
+            val (old, new) = removalsOf(alice, count = 2)
 
             decorator.publish(listOf(old))
             decorator.publish(listOf(new))
@@ -277,23 +530,25 @@ class BoltDecoratorTest {
         }
 
     /**
-     * **The window is LRU, not FIFO** — a re-offered identity is refreshed and survives; an idle
-     * one is evicted in its place.
+     * **The removal window is LRU, not FIFO** — a re-offered identity is refreshed and survives; an
+     * idle one is evicted in its place.
      *
-     * This is the property the whole suppression design rests on, and it is invisible at any window
-     * size big enough to hold the fixture: FIFO and LRU agree until something is actually evicted,
-     * which is why this runs at `dedupWindow = 2` and steps one identity over the edge on purpose.
+     * This is the property the removal half of the suppression design rests on, and it is invisible
+     * at any window size big enough to hold the fixture: FIFO and LRU agree until something is
+     * actually evicted, which is why this runs at `removalWindow = 2` and steps one identity over
+     * the edge on purpose.
      *
-     * Under FIFO the archive grows by a full copy of every peer's log every `dedupWindow / rate`
-     * rounds — `LinkedHashSet.add` on a present element returns `false` and does **not** reorder
-     * it, so a peer's identities march toward the head on a clock set by *everybody else's* traffic
-     * and are evicted while that peer is still re-offering every one of them on every round. That
-     * is "growth proportional to time spent gossiping", the exact failure #2216 names.
+     * Under FIFO the archive grows by a full copy of every peer's tombstones every
+     * `removalWindow / rate` rounds — `LinkedHashSet.add` on a present element returns `false` and
+     * does **not** reorder it, so a peer's identities march toward the head on a clock set by
+     * *everybody else's* traffic and are evicted while that peer is still re-offering every one of
+     * them on every round. That is "growth proportional to time spent gossiping", the exact failure
+     * #2216 names.
      *
      * The sequence: claim A, claim B, **re-offer A** (a hit, which must refresh it), claim C — the
      * eviction. LRU evicts B; FIFO evicts A.
      *
-     * **Mutation receipt:** replacing `BoltDecorator.claim`'s body with a bare
+     * **Mutation receipt:** replacing `BoltDecorator.claimIdentity`'s body with a bare
      * `return archived.add(identity)` — i.e. FIFO — reds the **A** assertion and nothing else in
      * this file. Claiming after the append rather than before it reds it too.
      *
@@ -304,13 +559,11 @@ class BoltDecoratorTest {
      * is the precondition the A assertion's meaning rests on.
      */
     @Test
-    fun aReOfferedIdentitySurvivesEvictionWhileAnIdleOneDoesNot() =
+    fun aReOfferedRemovalSurvivesEvictionWhileAnIdleOneDoesNot() =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val bolt = newBolt()
-            val decorator = decorate(bolt, dedupWindow = 2)
-            val (r1, a) = Rga.empty<String>().insertAt(alice, 0, "a")
-            val (r2, b) = r1.insertAt(alice, 1, "b")
-            val (_, c) = r2.insertAt(alice, 2, "c")
+            val decorator = decorate(bolt, removalWindow = 2)
+            val (a, b, c) = removalsOf(alice, count = 3).let { Triple(it[0], it[1], it[2]) }
 
             decorator.publish(listOf(a))
             decorator.publish(listOf(b))
@@ -551,6 +804,79 @@ class BoltDecoratorTest {
     // ── fixtures ──────────────────────────────────────────────────────────────
 
     /**
+     * One author's live log: [count] inserts, minted by appending to a real [Rga].
+     *
+     * Real operations rather than hand-built `RgaOp.Insert` values, because the whole suppression
+     * story rests on how `Rga` mints a dot — dense, contiguous, starting at 1 — and a fixture that
+     * asserted that shape itself would be checking its own arithmetic. `insertAfter` is the O(1)
+     * append path, which is what keeps [OPS_PER_PEER] affordable.
+     */
+    private fun liveLogOf(author: ReplicaId, count: Int): List<RgaOp<String>> {
+        var replica = Rga.empty<String>()
+        var last = RgaId.HEAD
+        return List(count) { i ->
+            val (next, op) = replica.insertAfter(author, last, "record-$i")
+            replica = next
+            last = op.id
+            op
+        }
+    }
+
+    /**
+     * The acceptance fixture's fleet: [PEERS] peers, each holding [OPS_PER_PEER] inserts of its own.
+     *
+     * Peer 0's log is minted for real; every other peer's is that log **re-keyed** to its own
+     * [ReplicaId]. That is not a shortcut around real operations — it is *exactly* what each peer
+     * would mint. `Rga.mintInsert` derives an insert's `lamport` from the replica's own local
+     * counter (`lamport + 1`) and its `seq` from its own per-author counter, neither of which reads
+     * the `ReplicaId`. So [PEERS] replicas that each appended [OPS_PER_PEER] records without ever
+     * merging — the state a mesh is in immediately before its first anti-entropy round — produce
+     * byte-identical operations up to the id. [everyPeersLogIsWhatThatPeerWouldReallyHaveMinted]
+     * asserts that rather than asking anyone to believe it.
+     *
+     * What it buys is time: minting is O(n²) in the *source* `Rga` (each mint copies its op-set), so
+     * doing it [PEERS] times over rather than once is the fixture's dominant cost for no added
+     * fidelity.
+     */
+    private fun gossipingPeers(): List<List<RgaOp<String>>> {
+        val base = liveLogOf(ReplicaId("peer-0"), OPS_PER_PEER)
+        return List(PEERS) { peer -> if (peer == 0) base else reKeyed(base, ReplicaId("peer-$peer")) }
+    }
+
+    /** [log] as [author] would have minted it — every id, and every `after` link, re-pointed. */
+    private fun reKeyed(log: List<RgaOp<String>>, author: ReplicaId): List<RgaOp<String>> =
+        log.map { op ->
+            val insert = assertIs<RgaOp.Insert<String>>(op, "the acceptance fixture is inserts only")
+            insert.copy(
+                id = insert.id.copy(replicaId = author),
+                // HEAD is the shared sentinel, not anybody's dot, so it must NOT be re-keyed.
+                after = if (insert.after == RgaId.HEAD) RgaId.HEAD else insert.after.copy(replicaId = author),
+            )
+        }
+
+    /**
+     * [count] distinct removals by one author — the residual's fixture.
+     *
+     * Each tombstones a different element, so the [us.tractat.kuilt.crdt.LogOp.Remove] identities
+     * are distinct while none of them mints a dot. That is exactly the population the bounded window
+     * still has to hold.
+     */
+    private fun removalsOf(author: ReplicaId, count: Int): List<RgaOp<String>> {
+        var replica = Rga.empty<String>()
+        var last = RgaId.HEAD
+        repeat(count) { i ->
+            val (next, op) = replica.insertAfter(author, last, "doomed-$i")
+            replica = next
+            last = op.id
+        }
+        return List(count) {
+            val (next, removal) = assertNotNull(replica.removeAt(0), "an element must remain to tombstone")
+            replica = next
+            removal
+        }
+    }
+
+    /**
      * Two inserts and the removal of one of them — the shape a `Remove` has to survive.
      *
      * The removal is what makes the dedup identity non-trivial: it mints no dot of its own, so a
@@ -686,5 +1012,54 @@ class BoltDecoratorTest {
 
     private class FixedClock(private val at: Instant) : Clock {
         override fun now(): Instant = at
+    }
+
+    private companion object {
+        /**
+         * How many gossiping peers the acceptance fixture stands up.
+         *
+         * Also the `frontierWindow` it runs at — one run per author, not one entry spare. Raising
+         * one without the other loosens the rig rather than strengthening it.
+         *
+         * The decorator only ever sees the **aggregate** — precisely the quantity a shared window
+         * bounds, and the quantity #2254 is about — so `PEERS × OPS_PER_PEER` is the number that has
+         * to be big, and how it factorises is the fixture's business. That a single entry can cover
+         * a *long* run is pinned where it is cheap:
+         * [DotFrontierTest.aDenseRunOfSeqsCostsOneEntryHoweverManyDotsItCovers], at ten thousand dots.
+         */
+        const val PEERS = 80
+
+        /**
+         * How many inserts each peer re-offers every round.
+         *
+         * Its job, with [PEERS], is to put the aggregate above `DEFAULT_REMOVAL_WINDOW` — the
+         * *shipped* window, not just the small one this test runs at. Shrinking either is what would
+         * make the acceptance test vacuous, which is why the test asserts that threshold out loud
+         * before asserting anything else.
+         */
+        const val OPS_PER_PEER = 1_000
+
+        /**
+         * How many anti-entropy rounds re-offer the whole working set.
+         *
+         * **Three, not two, and the third one is not margin.** Two rounds prove an operation is
+         * suppressed *once*; they cannot distinguish that from a frontier that suppresses a round
+         * and then forgets — round two would be `Skipped` either way and the loss would only show
+         * in round three. The rounds after the first are also structurally the cheapest part of
+         * this test: every publish is `Skipped`, so they classify and look up and encode nothing.
+         * There is no runtime to buy by dropping one.
+         */
+        const val ROUNDS = 3
+
+        /**
+         * The identity window the acceptance fixture runs at — deliberately far too small to hold
+         * the offered set.
+         *
+         * Not zero: a zero-sized window could be dismissed as a special case in the code, while a
+         * small one is the ordinary path, thrashing exactly as `DEFAULT_REMOVAL_WINDOW` would at
+         * fleet scale. What it switches off is any possibility that the window, rather than the
+         * frontier, is what suppressed anything.
+         */
+        const val ISOLATING_REMOVAL_WINDOW = 16
     }
 }

@@ -128,7 +128,8 @@ class WarpLogRecordExporterAppliedOpsTest {
      * Deliberate, and worth pinning so nobody "fixes" it here: the exporter would have to keep a
      * per-sink memory sized by the op-log to do it, on the export hot path, for a decision only the
      * consumer can make correctly. Suppression belongs to the side that knows what it kept — see
-     * `BoltDecorator`, which does it with a bounded window.
+     * `BoltDecorator`, which does it from a frontier of archived causal dots plus a bounded window
+     * for the removes that mint none.
      */
     @Test
     fun theExporterDoesNotSuppressARePublishedRemoteLog() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
