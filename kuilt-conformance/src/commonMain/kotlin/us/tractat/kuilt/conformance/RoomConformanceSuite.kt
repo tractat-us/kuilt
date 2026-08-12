@@ -204,10 +204,14 @@ public abstract class RoomConformanceSuite {
 
             val hostRoster = host.roster.first { it.size == 1 }
             val joinerRoster = joiner.roster.first { it.isNotEmpty() }
+            // List-shaped, not `roster.single().identity`: `single()` throws a non-AssertionError
+            // on a roster that is not exactly one member, and `assertAll` lets that abort the
+            // whole block — masking the sibling and printing "Collection has more than one
+            // element" instead of naming the member a fabric wrongly admitted (#1823).
             assertAll(
                 // The joiner shows under its OWN name, not the discovered session name.
-                { assertEquals("Bob", hostRoster.single().identity.displayName) },
-                { assertEquals("Alice", joinerRoster.single().identity.displayName) },
+                { assertEquals(listOf("Bob"), hostRoster.map { it.identity.displayName }) },
+                { assertEquals(listOf("Alice"), joinerRoster.map { it.identity.displayName }) },
             )
 
             joiner.leave()

@@ -18,7 +18,6 @@ import us.tractat.kuilt.raft.RaftEnvelope
 import us.tractat.kuilt.raft.RaftTransport
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
-import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.time.Duration.Companion.seconds
 
@@ -73,13 +72,17 @@ class RelayDialectOriginPreservationTest {
             hub.sendToLearner(fromVoter = voterA, learnerId = clientId, bytes = "reply".encodeToByteArray())
             testScheduler.advanceUntilIdle()
 
+            // List-shaped, not `received.single()`: a broken leg leaves its list empty, and
+            // `single()`'s NoSuchElementException aborts the whole assertAll — so a failed up
+            // leg would hide whether the down leg worked at all, which is the first thing you
+            // want to know here (#1823).
             assertAll(
                 { assertEquals(1, voterReceived.size, "the up leg reaches exactly the addressed voter") },
-                { assertEquals(clientId, voterReceived.single().from, "up leg: from = the true client, not the relay") },
-                { assertContentEquals("propose".encodeToByteArray(), voterReceived.single().bytes) },
+                { assertEquals(listOf(clientId), voterReceived.map { it.from }, "up leg: from = the true client, not the relay") },
+                { assertEquals(listOf("propose"), voterReceived.map { it.bytes.decodeToString() }) },
                 { assertEquals(1, clientReceived.size, "the down leg reaches the client") },
-                { assertEquals(voterA, clientReceived.single().from, "down leg: from = the true voter, not the relay id") },
-                { assertContentEquals("reply".encodeToByteArray(), clientReceived.single().bytes) },
+                { assertEquals(listOf(voterA), clientReceived.map { it.from }, "down leg: from = the true voter, not the relay id") },
+                { assertEquals(listOf("reply"), clientReceived.map { it.bytes.decodeToString() }) },
             )
         }
 
