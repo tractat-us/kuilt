@@ -303,17 +303,32 @@ public abstract class RoomFanoutIsolationConformanceSuite {
     ): Set<PeerId> {
         val budget = awaitBudget ?: return peers.first(predicate)
         return withTimeoutOrNull(budget) { peers.first(predicate) }
-            ?: fail("peers never satisfied: $expected", budget)
+            ?: fail(
+                "peers never satisfied: $expected",
+                budget,
+                "A room's peer set carries the hub's own selfId plus its registered members " +
+                    "(#1506), so a set holding only the hub means the client's first frame on that " +
+                    "channel never reached the server's per-room accept path.",
+            )
     }
 
     /** Suspend until this seam delivers a frame; on expiry name the room and the peers it had. */
     private suspend fun Seam.awaitFrame(expected: String): Swatch {
         val budget = awaitBudget ?: return incoming.first()
         return withTimeoutOrNull(budget) { incoming.first() }
-            ?: fail("no frame arrived: $expected", budget)
+            ?: fail(
+                "no frame arrived: $expected",
+                budget,
+                "A per-room seam forwards only to the connections registered in THAT room, so an " +
+                    "unexpected peer set above explains a missing frame before the transport does.",
+            )
     }
 
-    private fun Seam.fail(headline: String, budget: Duration): Nothing =
+    /**
+     * The failure renderer both helpers share. The interpretive line is the caller's [hint], not a
+     * fixed tail: the peer-registration hint is wrong on a delivery failure and vice versa.
+     */
+    private fun Seam.fail(headline: String, budget: Duration, hint: String): Nothing =
         throw AssertionError(
             buildString {
                 appendLine("RoomFanoutIsolationConformanceSuite: $headline")
@@ -323,11 +338,7 @@ public abstract class RoomFanoutIsolationConformanceSuite {
                     "  peers (${peers.value.size}): " +
                         peers.value.joinToString(prefix = "[", postfix = "]") { it.value },
                 )
-                append(
-                    "  A room's peer set carries the hub's own selfId plus its registered members " +
-                        "(#1506), so a set holding only the hub means the client's first frame on " +
-                        "that channel never reached the server's per-room accept path.",
-                )
+                append("  $hint")
             },
         )
 }

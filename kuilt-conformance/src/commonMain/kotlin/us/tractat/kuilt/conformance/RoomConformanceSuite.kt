@@ -526,7 +526,21 @@ public abstract class RoomConformanceSuite {
     ): Set<Member> {
         val budget = awaitBudget ?: return roster.first(predicate)
         return withTimeoutOrNull(budget) { roster.first(predicate) }
-            ?: fail("roster never satisfied: $expected", budget)
+            ?: fail(
+                "roster never satisfied: $expected",
+                budget,
+                // Only when the roster is EMPTY. Said unconditionally it is a lie on the failure
+                // where the roster is *correctly* empty — which is how it read on the very first
+                // `awaitEvent` failure this change was proved against.
+                if (roster.value.isEmpty()) {
+                    "An empty roster is a fabric whose admit/identify handshake never completed: " +
+                        "check that the joiner's Hello reaches the host and the host's admit " +
+                        "reaches back."
+                } else {
+                    "The roster is non-empty but never took the expected shape — compare the " +
+                        "members above against what the obligation asks for."
+                },
+            )
     }
 
     /**
@@ -550,6 +564,9 @@ public abstract class RoomConformanceSuite {
             budget,
             "events observed while waiting (${observed.size}): " +
                 if (observed.isEmpty()) "none" else observed.joinToString(prefix = "[", postfix = "]"),
+            "The roster above is the authoritative level and the events are notifications that it " +
+                "moved, so a roster that already shows the change is a fabric that made the " +
+                "transition without announcing it.",
         )
     }
 
@@ -561,14 +578,21 @@ public abstract class RoomConformanceSuite {
     private suspend fun Room.awaitFrame(expected: String): RoomFrame {
         val budget = awaitBudget ?: return incoming.first()
         return withTimeoutOrNull(budget) { incoming.first() }
-            ?: fail("no frame arrived: $expected", budget)
+            ?: fail(
+                "no frame arrived: $expected",
+                budget,
+                "`Room.incoming` drops frames from peers that are not admitted, so an unexpected " +
+                    "roster above explains a missing frame before the transport does.",
+            )
     }
 
     /**
      * The one failure renderer the three helpers share — the actual deliverable of #2284.
      *
      * Names the room (role / selfId / roomId), prints the roster it observed member by member with
-     * liveness, and states the bound as virtual so nobody reads the expiry as a slow machine.
+     * liveness, and states the bound as virtual so nobody reads the expiry as a slow machine. Every
+     * interpretive line is passed in by the caller as [extra]: a hint that is right for one helper's
+     * failure is wrong for another's, and a wrong hint costs more than no hint.
      */
     private fun Room.fail(headline: String, budget: Duration, vararg extra: String): Nothing {
         val members = roster.value
@@ -583,12 +607,7 @@ public abstract class RoomConformanceSuite {
                             "${it.identity.displayName}/${it.id.value} liveness=${it.liveness}"
                         },
                 )
-                extra.forEach { appendLine("  $it") }
-                append(
-                    "  An empty roster here is a fabric whose admit/identify handshake never " +
-                        "completed: check that the joiner's Hello reaches the host and the host's " +
-                        "admit reaches back.",
-                )
+                append(extra.joinToString(separator = "\n") { "  $it" })
             },
         )
     }
