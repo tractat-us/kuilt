@@ -26,9 +26,11 @@ import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.TransportRole
 import us.tractat.kuilt.core.Loom
+import us.tractat.kuilt.core.LoomDefaults
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.freshPeerId
 import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.random.Random
 import kotlin.time.Duration
@@ -104,7 +106,7 @@ public class NwUnreachableException(message: String) : Exception(message)
  * @param random      source of the seam's per-connection dedup nonces; production defaults to
  *   [Random.Default], tests inject a seeded [Random] for a deterministic dedup tiebreak.
  * @param weaveTimeout how long [weave] waits for the first peer before throwing
- *   [NwUnreachableException] (default [DEFAULT_WEAVE_TIMEOUT], 30s). Injectable (#1447 item 1) so a
+ *   [NwUnreachableException] (default [DEFAULT_WEAVE_TIMEOUT]). Injectable (#1447 item 1) so a
  *   "wait for a friend" lobby can pass a generous value and hold the session open far longer than the
  *   default; deliberately NOT infinite by default. Tests inject a small value.
  * @param wovenPathGrace how long a path-lost (`ready → waiting`) connection is given to recover before
@@ -240,7 +242,7 @@ public class NwLoom(
         internal val NW_ROLES: Set<TransportRole> = setOf(TransportRole.Discovery, TransportRole.Data)
 
         /** How long [weave] waits for the first peer before declaring the fabric [CloseReason.Unreachable]. */
-        public val DEFAULT_WEAVE_TIMEOUT: Duration = 30.seconds
+        public val DEFAULT_WEAVE_TIMEOUT: Duration = LoomDefaults.WEAVE_TIMEOUT
 
         /**
          * How long a path-lost (`ready → waiting`) connection is given to recover before the woven seam
@@ -271,7 +273,7 @@ public class NwLoom(
          *
          * **Why 750 ms.** Bonjour resolves a TXT record within tens of milliseconds on a warm mDNS cache
          * and a few hundred on a cold AWDL link, so 750 ms clears the observed resolution window with
-         * room to spare while staying far below [DEFAULT_WEAVE_TIMEOUT] (30 s) and below
+         * room to spare while staying far below [DEFAULT_WEAVE_TIMEOUT] and below
          * [MAX_REDIAL_BACKOFF] (5 s) — a peer held back by the grace is delayed by less than one redial
          * backoff step, and a full mesh has that peer dialling US in the meantime regardless.
          *

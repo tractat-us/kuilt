@@ -5,6 +5,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Tag
+import us.tractat.kuilt.core.freshPeerId
 import kotlin.time.Duration
 
 /**

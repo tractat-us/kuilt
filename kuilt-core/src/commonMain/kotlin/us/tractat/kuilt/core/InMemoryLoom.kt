@@ -89,7 +89,7 @@ public class InMemoryLoom(
         }
 
     private fun newSeam(): InMemorySeam {
-        val id = freshPeerId()
+        val id = nextMeshPeerId()
         val link = InMemorySeam(id, this, policy)
         links[id] = link
         _peers.update { it + id }
@@ -132,7 +132,19 @@ public class InMemoryLoom(
         }
     }
 
-    private fun freshPeerId(): PeerId {
+    /**
+     * Mint the next identity for a seam woven on THIS mesh — a readable ordinal, not [freshPeerId].
+     *
+     * The counter is deliberate, and is not the per-loom counter that [freshPeerId] exists to
+     * replace. That defect was cross-*device* collision: two phones each minting `peer-1` and
+     * colliding the instant they met. One [InMemoryLoom] is one in-process mesh whose frames never
+     * leave it, so a value unique within the instance is unique everywhere it can be observed, and
+     * the counter buys back something a UUID costs — a failing test in any module above this one
+     * prints `peer-1`/`peer-2` rather than two indistinguishable hex blobs.
+     *
+     * Guarded by the factory [mutex]: both [weave] branches hold it across [newSeam].
+     */
+    private fun nextMeshPeerId(): PeerId {
         peerCounter++
         return PeerId("peer-$peerCounter")
     }
