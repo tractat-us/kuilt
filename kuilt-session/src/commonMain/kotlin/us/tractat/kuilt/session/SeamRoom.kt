@@ -1550,8 +1550,10 @@ internal class SeamRoom(
      * **Joiner only.** Record the host's [RoomId] the first time a `Welcome` carries one.
      *
      * Write-once, mirroring [JoinerResumeMachine.mintTokenIfAbsent]: the id is the room's identity
-     * for its whole life, so a later frame must not be able to move it. A host never reaches here —
-     * its level is non-null from construction, so the `== null` guard is already false.
+     * for its whole life, so a later frame must not be able to move it. A host never reaches here at
+     * all — the frame dispatch routes `Welcome` to [handleWelcome] only while [role] is
+     * [SessionRole.Joiner] — and the `== null` guard would refuse it anyway, since a host's level is
+     * non-null from construction.
      *
      * Callers hold [lock]; the write itself is to a [MutableStateFlow] and needs no further guard.
      */
