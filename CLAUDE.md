@@ -319,24 +319,45 @@ still compiles but self-skips at runtime, so `./gradlew build` doesn't run it.
     Exemplars: `Quilter`/`SeamRoom` (lock-guarded). The older `CompositeSeam`/`CompositeLoom`
     `limitedParallelism(1)` confinement is **legacy being migrated to primitives** — do not copy it.
 
-- **Exception discipline — never swallow cancellation.** In any `suspend`/coroutine context,
-  use `runCatchingCancellable { … }` (in `:kuilt-core`), **not** bare `runCatching` — the latter
-  catches `CancellationException` and converts a structured-concurrency cancel into a normal
-  `Result`, a silent bug. A `catch (e: Exception)`/`catch (e: Throwable)` that should tolerate
-  failure must `if (e is CancellationException) throw e` (or a leading `catch (CancellationException) { throw e }`)
-  before swallowing. Best-effort fabric sends are the common case:
-  `runCatchingCancellable { seam.broadcast(frame) }.onFailure { logger.debug { … } }`.
+- **Exception discipline — never swallow cancellation.** Bare `runCatching` is banned in any
+  `suspend`/coroutine context: it catches `CancellationException` and turns a structured-concurrency
+  cancel into a normal `Result`, a silent bug. What replaces it turns on one question — **whose
+  cancellation would this be, mine or the callee's?** Mine must propagate. But a callee can *mint*
+  one and throw it at me while my job stays perfectly alive: `withTimeout` inside a
+  consumer-authored `Seam.close`/`sendTo`/`Loom.weave` throws `TimeoutCancellationException` **to
+  its caller** without cancelling that caller. Rethrowing *that* one is #1834, and it is maximally
+  silent — the escaping throwable *is* a `CancellationException`, so my coroutine is **cancelled
+  rather than failed**: no handler runs, no stack trace, and every obligation behind the guard is
+  skipped.
 
-  **One carve-out — inside a `withContext(NonCancellable)` shield, do the opposite** (#1803, #1824).
-  The shield exists so cleanup completes *despite* outer cancellation, so your own job is never
-  cancelled there — which makes every `CancellationException` reachable inside it necessarily
-  callee-minted (a `withTimeout` in the callee), and rethrowing it aborts the very cleanup the shield
-  guarantees, skipping every remaining close. That bans `runCatchingCancellable` **and** the
-  hand-written `if (e is CancellationException) throw e` above. Use a plain `try` /
-  `catch (failure: Throwable)` + debug log, one guard **per** cleanup item —
-  `NwLoom.discardUnreturnedSeam` and `CompositeSeam.discardOrphanedPly` are the in-tree patterns:
+  **`currentCoroutineContext().ensureActive()` is the discriminator.** It throws only when *this*
+  job really is cancelled and falls through on a callee-minted one; type cannot tell the two apart,
+  which is why `runCatchingCancellable { … }` (`:kuilt-core`) rethrows both. So the full form is
+  `try { … } catch (_: Throwable) { currentCoroutineContext().ensureActive(); logger.debug { … } }`,
+  and **unshielded, with anything the caller still owes following the guarded call, it is the only
+  correct guard.** The trigger is *"does work follow"*, **not** *"is it a loop"*: #1834 first scoped
+  itself to two multi-item loops and was wrong about three single-item closes.
+  `MeshSeam.closeBestEffort` carries the full argument; `CompositeSeam.reconcile` and `SeamRoom`'s
+  admit fan-out writer are the others. There are exactly two legitimate elisions of it:
+
+  - **`runCatchingCancellable`, where a wrong rethrow costs nothing** — a best-effort call with no
+    obligation behind it (`runCatchingCancellable { seam.broadcast(frame) }.onFailure { logger.debug { … } }`),
+    or one on `sendTo`/`broadcast`/`weave`, which the contract forbids to mint at all — there the
+    elision rests on the callee's obligation rather than on consequence. This stays the default for
+    ordinary best-effort sends.
+  - **A plain `catch` inside `withContext(NonCancellable)`** (#1803, #1824) — the degenerate case:
+    my job cannot be cancelled there, so `ensureActive` is dead code and every reachable
+    `CancellationException` is necessarily callee-minted. One guard **per** cleanup item; that bans
+    `runCatchingCancellable` **and** the hand-written `if (e is CancellationException) throw e`,
+    either of which aborts the very cleanup the shield exists to guarantee.
+    `NwLoom.discardUnreturnedSeam` and `CompositeSeam.discardOrphanedPly` are the patterns.
 
   ```kotlin
+  // Unshielded, work follows: `ensureActive` is LIVE — my own cancel ends the loop, a minted one doesn't.
+  losers.forEach { conn ->
+      try { conn.close() } catch (_: Throwable) { currentCoroutineContext().ensureActive() }
+  }
+  // Shielded: `ensureActive` could never fire, so this is the same guard with the dead branch elided.
   withContext(NonCancellable) {
       seams.forEach { seam ->
           try { seam.close() } catch (failure: Throwable) { logger.debug { "close failed: $failure" } }
@@ -344,12 +365,14 @@ still compiles but self-skips at runtime, so `./gradlew build` doesn't run it.
   }
   ```
 
-  If a cancellable bound (`withTimeout`/`withTimeoutOrNull`) intervenes *inside* the shield, the
+  If a cancellable bound (`withTimeout`/`withTimeoutOrNull`) intervenes *inside* the shield, its
   premise is false at that position — hoist the `try`/`catch` outside the bound rather than
-  swallowing within it. The root build's `forbidRunCatchingCancellableUnderNonCancellable` (wired
-  into `check`) scans production `*Main` sources for the `runCatchingCancellable` **token**
-  lexically inside a shield: it cannot see the hand-written rethrow, and neither form is visible
-  when reached through a helper called from the shield. On those two, this paragraph is the guard.
+  swallowing within it. **On all of this the prose is the enforcement.** The root build's
+  `forbidRunCatchingCancellableUnderNonCancellable` (wired into `check`) scans production `*Main`
+  sources for the `runCatchingCancellable` **token** lexically inside a shield: it cannot see the
+  hand-written rethrow, sees neither form when reached through a helper called from the shield, and
+  cannot see the unshielded case at all — there is no shield to scan under, and without one the two
+  cancellations really are ambiguous.
 
 - **Debugging bugs a local suite can't see** (hardware/network/contention-only) follows the
   process rules in [`docs/debugging-process.md`](docs/debugging-process.md): don't `closes #N` a
