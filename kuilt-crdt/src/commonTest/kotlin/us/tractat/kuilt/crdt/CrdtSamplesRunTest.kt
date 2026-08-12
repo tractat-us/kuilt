@@ -42,6 +42,8 @@ class CrdtSamplesRunTest {
             "sampleFugue" to ::sampleFugue,
             "sampleRga" to ::sampleRga,
             "sampleRgaDropWindow" to ::sampleRgaDropWindow,
+            "sampleRgaHeadWindow" to ::sampleRgaHeadWindow,
+            "sampleOpLogCrdt" to ::sampleOpLogCrdt,
             "sampleMovableTree" to ::sampleMovableTree,
             "sampleHyperLogLog" to ::sampleHyperLogLog,
             "sampleHyperLogLogMerge" to ::sampleHyperLogLogMerge,

@@ -1860,6 +1860,316 @@ val verifySampleLinks by tasks.registering {
     }
 }
 
+// Guard: every callable `@sample` must actually be CALLED by a test (#2116).
+//
+// Its sibling `verifySampleLinks` asks whether a `@sample` tag resolves. `verifyDocCitations` asks
+// whether a quoted block still matches its source. Neither asks the only question that catches a
+// sample which is simply WRONG, and this one does: **is anything running it?**
+//
+// `src/commonSamples/kotlin` is compiled into `commonTest`, so a stale API breaks the build — which
+// is why this repo calls samples load-bearing. But compiling is not running. Nothing ever CALLED
+// one, so every `check(…)` and `assertEquals(…)` inside a sample was dead code, and a sample whose
+// claim had quietly become false stayed green forever. That is not hypothetical: #2110 found two
+// `:kuilt-crdt` samples asserting things that were false — one built an `ORSet` re-add reusing a dot
+// the remover had already witnessed, so the element it claimed survived was in fact dropped. Both
+// compiled. Both were quoted VERBATIM into `docs/agent-cookbook.md` and a Writerside topic. And
+// `verifyDocCitations` faithfully proved the quotes matched their source: the gate did its job
+// perfectly and certified a lie, because its job is quote fidelity, not truth.
+//
+// #2110 fixed those two and added `CrdtSamplesRunTest`. That fix decayed within weeks — by the time
+// this guard was written, `sampleRgaHeadWindow` and `sampleOpLogCrdt` had been added to
+// `CrdtSamples.kt` and nobody had added them to the hand-maintained list, so they were back to being
+// unexecuted. A hand-maintained inventory beside a machine-readable one always loses. Hence a guard
+// rather than a convention: this is the repo's "survey the category, then make it impossible".
+//
+// ── THE SUBJECT, and why it is arity and not assertions ─────────────────────────────────────────
+// A top-level, non-`private`, ZERO-PARAMETER function declared under a module's
+// `src/commonSamples/kotlin`. It must be named by that module's own test sources (`src/*Test/`).
+//
+// The tempting alternative — "a sample that CONTAINS an assertion must be run", which names the
+// actual defect rather than a proxy — was tried first and rejected. It needs a lexical
+// assertion-detector, and a fuzzy predicate inside a `check`-wired guard fails in the SILENT
+// direction: a sample the detector does not recognise is exempted with no output. Worse, it hands
+// out an evasion that looks like a cleanup — delete the `check(…)` and the sample leaves the
+// subject set entirely. Arity is crisp, has no false negatives, and its only dodge (add a
+// parameter) changes the documentation the sample exists to be, in a diff a reviewer reads.
+//
+// TWO EXCLUSIONS, both load-bearing:
+//   * `private` — every `private` function in a samples file is a stand-in helper for a
+//     parameterised sample (`ship`, `retryFrom`, `trimTheLiveReplicaWindow` in `:kuilt-bolt`). It is
+//     invisible outside its file, so no test COULD call it; requiring one would be a false red.
+//   * PARAMETERISED — `sampleBoltReplayVerdict(bolt)`, `:kuilt-session`'s whole cookbook file,
+//     `:kuilt-otel-tap`'s seven. Calling one needs a fixture, and a fixture invented to satisfy a
+//     guard is precisely how a runner ends up executing a sample while proving nothing. Note the
+//     shape of what this exempts: `:kuilt-session`'s samples take a live `Room`, assert nothing (every
+//     branch is `Unit`), and several `collect` forever. Forcing those into a runner would manufacture
+//     a green that means "it did not throw before we cancelled it" and nothing else.
+//
+// ── WHAT A GREEN HERE DOES NOT MEAN ─────────────────────────────────────────────────────────────
+// That a sample RAN, only. A sample with no assertions — `:kuilt-otel`'s `sampleOtlpEdge` has a body
+// of pure comments — satisfies this guard and proves nothing. The runners say so at their call
+// sites rather than leaving a reader to assume coverage. Adding assertions to such a sample to make
+// it meaningful would mean inventing claims about documentation, which is the defect #2116 exists to
+// catch, so the honest move is to name them and stop.
+//
+// ── THE BASELINE, and its one honest limit ──────────────────────────────────────────────────────
+// Three samples FAIL when executed (#2289 owns them), so they are recorded here rather than
+// red-lighting the build. Each entry must carry a reason naming an issue — the
+// `forbidProductionDispatcherInTests` rule that a reasonless marker is itself a violation, one turn
+// tighter. And the baseline is checked in BOTH directions: an entry for a sample that no longer
+// exists, or that a test now DOES call, fails the build, so it cannot rot into a silent exemption.
+//
+// The limit, stated rather than implied: this baseline **cannot mechanically refuse to grow.** It is
+// a literal in the same build script as the guard, so anyone adding an entry is already editing the
+// file that would have to forbid it — no scan can tell "burning down" from "giving up". A baseline
+// anyone can append to is decoration unless a reviewer reads it, and that is the honest description
+// of this one. What it buys is that appending is a deliberate, self-documenting act with an issue
+// number attached, and that a stale entry is loud. What actually keeps a NEW sample from reverting
+// to unexecuted is the guard itself, which has no allowlist of its own: a fresh sample is in the
+// subject set the moment it is written, and the correct count of new baseline entries is zero.
+//
+// ── KNOWN LIMITS, all of which fail LOUD ────────────────────────────────────────────────────────
+// The scan is lexical, over `KotlinCodeScanner.stripNonCode`, so prose and literals are invisible.
+// A reference is a whole-word occurrence of the name in a test source — `::sampleFoo`, `sampleFoo()`
+// and a mention in a KDoc-stripped identifier position all count, so a test naming a sample and NOT
+// calling it would satisfy this guard. That is deliberate: distinguishing them needs call-graph
+// resolution, which is not something a lexical scanner should be asked to do, and the failure mode
+// is a reviewer seeing a name with no call — visible in the diff — rather than a silent green.
+val unrunSampleBaseline: Map<String, String> = mapOf(
+    "kuilt-game/sampleGameNode" to
+        "wedges for the whole wedge-backstop when executed, alone or with siblings — #2289",
+    "kuilt-game/sampleSpeculativeSequencer" to
+        "asserts speculativeState already holds the action right after `async { propose(42) }`; " +
+        "true of SpeculativeSequencer (its KDoc promises the optimistic apply precedes the first " +
+        "suspension) but never reached, because runTest's default StandardTestDispatcher only " +
+        "QUEUES the async. Production contract right, sample mechanics wrong — #2289",
+    "kuilt-otel-logging/sampleWithActiveTrace" to
+        "NoClassDefFoundError: org/slf4j/LoggerFactory on its first line, KotlinLogging.logger(…) — " +
+        "slf4j is on neither commonMain nor jvmTest's runtime classpath, so no JVM test in the " +
+        "module has ever called the one entry point every consumer uses — #2289",
+)
+
+val verifySamplesAreRun by tasks.registering {
+    group = "verification"
+    description = "Fails if a callable @sample is never called by a test — compiling is not running (#2116)."
+    // Longest-path first, so mapping a file to its module is a first-match on a prefix even when one
+    // module's directory sits inside another's. Same derivation as `verifySampleLinks`.
+    val moduleDirs = subprojects
+        .map { it.projectDir.relativeTo(rootDir).invariantSeparatorsPath to it.projectDir }
+        .filter { it.second.resolve("src").isDirectory }
+        .sortedByDescending { it.second.invariantSeparatorsPath.length }
+    // Both halves of the question in one lazily-resolved set that `doLast` walks, per "Guard
+    // plumbing" above: the declarations (`src/commonSamples/`) and the references to them
+    // (`src/*Test/`). `commonSamples` does not end in `Test`, so the two patterns cannot overlap —
+    // which is what keeps a sample from vouching for itself by being referenced by a sibling sample.
+    val sources = kotlinSourcesIn(
+        moduleDirs.map { it.second.resolve("src") },
+        listOf("commonSamples/**/*.kt", "*Test/**/*.kt"),
+    )
+    inputs.files(sources).withPropertyName("kotlinSources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // The wiring this guard models; see the model check below.
+    val samplesWiring = rootDir.resolve("build-logic/src/main/kotlin/kuilt.kmp-library.gradle.kts")
+    inputs.file(samplesWiring).withPropertyName("samplesWiring")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // See "Guard plumbing" above: the stamp is what makes UP-TO-DATE possible (#1827). The verdict
+    // is a pure function of the scanned files' contents plus the baseline, and the baseline is a
+    // literal in this script, so it is folded into the task-action implementation hash.
+    val stamp = layout.buildDirectory.file("verification/verify-samples-are-run.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    val baseline = unrunSampleBaseline
+    // Captured out here, not read inside `doLast`: a script-level reference in the task action
+    // captures the `Build_gradle` instance, which the configuration cache cannot serialize. The
+    // same reason `KotlinCodeScanner` is an `object` — see its note above.
+    val rootPath = rootDir
+    doLast {
+        // ── The model check. A guard whose model of the world can silently go stale has stopped
+        // being a guard; `verifySampleLinks` and `verifyDocCitations` carry the same check. ──
+        // This guard's whole premise is that a sample is ON THE TEST COMPILE PATH, so a test can
+        // call it by name. That is one `srcDir` line in the convention plugin. Without it a sample
+        // is not compiled at all, every reference stops resolving, and requiring one would be
+        // nonsense. Read from CODE, so wiring that has been commented out registers as gone; the
+        // PATH is a string literal, which `stripNonCode` necessarily blanks, so it is read raw.
+        val wiringRaw = samplesWiring.readText()
+        val wiringCode = KotlinCodeScanner.stripNonCode(wiringRaw)
+        if (!wiringCode.contains("kotlin.srcDir(samplesDir)") ||
+            !wiringRaw.contains("src/commonSamples/kotlin")
+        ) {
+            error(
+                "verifySamplesAreRun requires every sample to be reachable from its module's tests, " +
+                    "which is true only because `kuilt.kmp-library` adds `src/commonSamples/kotlin` " +
+                    "to `commonTest`'s source roots. That wiring is no longer there, so a sample is " +
+                    "not on the test compile path and this guard's demand is unmeetable:\n  " +
+                    samplesWiring.relativeTo(rootPath).invariantSeparatorsPath + "\n" +
+                    "Update this task alongside the wiring (build.gradle.kts, #2116).",
+            )
+        }
+
+        fun moduleOf(f: java.io.File): String? =
+            moduleDirs.firstOrNull { (_, dir) -> f.startsWith(dir) }?.first
+
+        // Every modifier Kotlin allows in front of `fun`. Reading BACKWARDS over these is what makes
+        // the visibility test independent of how the modifiers are ordered or line-wrapped, and it
+        // stops cleanly at an annotation: `@Suppress("unused")` strips to `@Suppress(        )`, and
+        // a `)` is not an identifier character, so the walk ends there rather than reading into it.
+        val funModifiers = setOf(
+            "public", "internal", "private", "protected", "suspend", "inline", "noinline",
+            "crossinline", "expect", "actual", "external", "infix", "operator", "tailrec",
+            "open", "override", "final", "abstract", "annotation",
+        )
+        fun modifiersBefore(code: String, funStart: Int): Set<String> {
+            val mods = mutableSetOf<String>()
+            var i = funStart
+            while (true) {
+                while (i > 0 && code[i - 1].isWhitespace()) i--
+                var s = i
+                while (s > 0 && (code[s - 1].isLetterOrDigit() || code[s - 1] == '_')) s--
+                if (s == i) break
+                val word = code.substring(s, i)
+                if (word !in funModifiers) break
+                mods += word
+                i = s
+            }
+            return mods
+        }
+
+        // A function's own name: the trailing identifier of the text between `fun` and its parameter
+        // list. Reading from the END makes a type-parameter list and an extension receiver both
+        // irrelevant — `fun <T> CoroutineScope.sampleX(` is just `sampleX`. Same rule as
+        // `verifySampleLinks`, for the same reason.
+        fun trailingName(between: String): String? {
+            var e = between.length
+            while (e > 0 && between[e - 1].isWhitespace()) e--
+            if (e == 0) return null
+            if (between[e - 1] == '`') {
+                val s = between.lastIndexOf('`', e - 2)
+                return if (s < 0) null else between.substring(s + 1, e - 1)
+            }
+            var s = e
+            while (s > 0 && (between[s - 1].isLetterOrDigit() || between[s - 1] == '_')) s--
+            return if (s == e) null else between.substring(s, e)
+        }
+
+        val funToken = Regex("""(?<![A-Za-z0-9_])fun(?![A-Za-z0-9_])""")
+        // A declaration is in the subject set iff it is at brace depth 0 (top level — a member or a
+        // local function is not addressable the same way and is never a sample), not `private`, and
+        // takes no parameters. Held as a `Triple(module, name, "file:line")` rather than a local
+        // data class: a class declared in the task action captures the enclosing script object,
+        // which the configuration cache refuses to serialize.
+        val declared = mutableListOf<Triple<String, String, String>>()
+        val samplesMarker = "/src/commonSamples/"
+        val allFiles = sources.files.sortedBy { it.invariantSeparatorsPath }
+        allFiles.filter { it.invariantSeparatorsPath.contains(samplesMarker) }.forEach { f ->
+            val module = moduleOf(f) ?: return@forEach
+            val code = KotlinCodeScanner.stripNonCode(f.readText())
+            val rel = f.relativeTo(rootPath).invariantSeparatorsPath
+            var depth = 0
+            var i = 0
+            val funStarts = funToken.findAll(code).associateBy({ it.range.first }, { it.range.last + 1 })
+            while (i < code.length) {
+                when (code[i]) {
+                    '{' -> depth++
+                    '}' -> if (depth > 0) depth--
+                }
+                val end = funStarts[i]
+                if (end != null && depth == 0) {
+                    val open = code.indexOf('(', end)
+                    if (open > end) {
+                        var d = 0
+                        var j = open
+                        while (j < code.length) {
+                            if (code[j] == '(') d++
+                            if (code[j] == ')') { d--; if (d == 0) break }
+                            j++
+                        }
+                        val name = trailingName(code.substring(end, open))
+                        val zeroArg = j < code.length && code.substring(open + 1, j).isBlank()
+                        val mods = modifiersBefore(code, i)
+                        if (name != null && zeroArg && "private" !in mods) {
+                            val line = code.take(i).count { c -> c == '\n' } + 1
+                            declared += Triple(module, name, "$rel:$line")
+                        }
+                    }
+                }
+                i++
+            }
+        }
+
+        // Every identifier a module's own tests mention, in CODE — a name in a comment is not a call.
+        val referenced = mutableMapOf<String, MutableSet<String>>()
+        val identifier = Regex("""[A-Za-z_]\w*""")
+        allFiles.filterNot { it.invariantSeparatorsPath.contains(samplesMarker) }.forEach { f ->
+            val module = moduleOf(f) ?: return@forEach
+            val code = KotlinCodeScanner.stripNonCode(f.readText())
+            referenced.getOrPut(module) { mutableSetOf() } += identifier.findAll(code).map { it.value }
+        }
+
+        fun key(s: Triple<String, String, String>) = "${s.first}/${s.second}"
+        fun isRun(s: Triple<String, String, String>) = s.second in referenced[s.first].orEmpty()
+
+        // ── Direction 1: a sample nothing calls. ────────────────────────────────────────────────
+        val unrun = declared.filterNot { isRun(it) }.filterNot { key(it) in baseline }
+        if (unrun.isNotEmpty()) {
+            error(
+                "Sample(s) are compiled but never executed (#2116). A sample's body is compiled into " +
+                    "`commonTest`, so a stale API breaks the build — but its `check(…)` and " +
+                    "`assertEquals(…)` calls only run if something CALLS the function, and nothing " +
+                    "does. #2110 is the receipt: two `:kuilt-crdt` samples asserted things that were " +
+                    "false, compiled, and were quoted verbatim into the cookbook and the guide, while " +
+                    "`verifyDocCitations` faithfully proved the quotes matched. That gate answers " +
+                    "\"does the quote match the source?\"; only running the sample answers \"is the " +
+                    "source true?\":\n\n  " +
+                    unrun.sortedBy { key(it) }.joinToString("\n  ") { "${key(it)}\n      ${it.third}" } +
+                    "\n\nTHE FIX is one line in the module's `<Module>SamplesRunTest` — see " +
+                    "`CrdtSamplesRunTest` (a list of `::references`) or `QuilterSamplesRunTest` (one " +
+                    "`@Test` per sample, returning the `TestResult`, which a `runTest`-based sample " +
+                    "needs so JS and wasm await the promise rather than passing without running).\n" +
+                    "If the sample CANNOT be called un-parameterised, give it the parameter it really " +
+                    "needs and this guard exempts it — but a fixture invented only to satisfy this " +
+                    "guard executes the sample while proving nothing, which is worse than no runner.",
+            )
+        }
+
+        // ── Direction 2: the baseline must not rot. ─────────────────────────────────────────────
+        // Both stale shapes are failures, for the reason `forbidUnlintedModule` checks its own
+        // allowlist: an exemption nobody can see expiring is an exemption that never expires.
+        val declaredKeys = declared.map { key(it) }.toSet()
+        val runNow = declared.filter { isRun(it) }.map { key(it) }.toSet()
+        val vanished = baseline.keys.filterNot { it in declaredKeys }.sorted()
+        val fixed = baseline.keys.filter { it in runNow }.sorted()
+        val reasonless = baseline.filterValues { !it.contains('#') }.keys.sorted()
+        if (vanished.isNotEmpty() || fixed.isNotEmpty() || reasonless.isNotEmpty()) {
+            val detail = buildString {
+                if (fixed.isNotEmpty()) {
+                    append("\n\n  A test now CALLS these, so their baseline entries are spent — delete ")
+                    append("them, or the next sample to break here is silently exempt:\n  ")
+                    append(fixed.joinToString("\n  "))
+                }
+                if (vanished.isNotEmpty()) {
+                    append("\n\n  These name no sample any more (renamed, deleted, or given a ")
+                    append("parameter). Delete the entry:\n  ")
+                    append(vanished.joinToString("\n  "))
+                }
+                if (reasonless.isNotEmpty()) {
+                    append("\n\n  A baseline entry must say WHY and name the issue that owns the fix. ")
+                    append("Without one it is indistinguishable from giving up, and nothing ever ")
+                    append("expires it:\n  ")
+                    append(reasonless.joinToString("\n  "))
+                }
+            }
+            error("`unrunSampleBaseline` is stale (#2116)." + detail)
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText("ok — ${declared.size} callable sample(s), ${baseline.size} baselined\n")
+        logger.info(
+            "verifySamplesAreRun: ${declared.size - baseline.size} of ${declared.size} " +
+                "callable samples are executed",
+        )
+    }
+}
+
 // Guard: forbid `runCatchingCancellable` lexically inside a `withContext(NonCancellable)` block (#1803).
 //
 // `runCatchingCancellable` rethrows every `CancellationException`, which is right almost everywhere — it
@@ -2911,6 +3221,7 @@ allprojects {
         dependsOn(rootProject.tasks.named("forbidPortProbeRebind"))
         dependsOn(rootProject.tasks.named("verifyDocCitations"))
         dependsOn(rootProject.tasks.named("verifySampleLinks"))
+        dependsOn(rootProject.tasks.named("verifySamplesAreRun"))
         dependsOn(rootProject.tasks.named("verifyModuleTable"))
         dependsOn(rootProject.tasks.named("forbidRunCatchingCancellableUnderNonCancellable"))
         dependsOn(rootProject.tasks.named("forbidBareRunCatching"))
