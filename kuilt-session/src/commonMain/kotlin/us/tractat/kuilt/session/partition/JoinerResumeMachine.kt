@@ -7,7 +7,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -487,7 +489,19 @@ internal class JoinerResumeMachine(
                     // idling until the window expires (the same-instance-heal contract on
                     // [reweave]).
                     reweaved.getOrNull()?.takeIf { it !== seam }?.let { throwaway ->
-                        runCatchingCancellable { throwaway.close() }
+                        // The throwaway's failure to close must not cancel the terminal bookkeeping
+                        // below (#1834/#2286). A seam whose close() is withTimeout-bounded throws
+                        // TimeoutCancellationException to its caller WITHOUT cancelling that caller;
+                        // re-throwing it escapes withTimeoutOrNull and cancels this reconnect outright,
+                        // so `failureReason` is never set and onReconnectFailed never runs — the machine
+                        // just stops, and the room waits on a resume that will never complete. Type
+                        // cannot separate that from our own cancellation; ensureActive can.
+                        try {
+                            throwaway.close()
+                        } catch (failure: Throwable) {
+                            currentCoroutineContext().ensureActive()
+                            logger.debug { "resume.throwaway-close-failed host=$hostId failure=$failure" }
+                        }
                     }
                     failureReason = FailureReason.Unrecoverable
                     return@withTimeoutOrNull false

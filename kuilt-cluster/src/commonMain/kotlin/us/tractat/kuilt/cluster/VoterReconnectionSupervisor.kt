@@ -2,7 +2,9 @@ package us.tractat.kuilt.cluster
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -80,7 +82,20 @@ internal fun CoroutineScope.superviseVoterReconnection(
                                         // Close the dialed conn on a failed admit so a rejected/errored
                                         // redial does not leak a live WebSocket session (its ping would
                                         // otherwise keep the orphaned socket alive indefinitely).
-                                        runCatchingCancellable { conn.close() }
+                                        //
+                                        // The conn's failure to close must not cancel the redial that
+                                        // follows (#1834/#2286) — the same hazard the withTimeoutOrNull
+                                        // above already dodges, one line further down. A conn whose own
+                                        // close() is withTimeout-bounded throws TimeoutCancellationException
+                                        // to its caller WITHOUT cancelling that caller, and re-throwing it
+                                        // cancels this peer's redial coroutine outright: no delay, no
+                                        // retry, and mesh.peers never emits again to restart it. Type
+                                        // cannot separate that from our own cancellation; ensureActive can.
+                                        try {
+                                            conn.close()
+                                        } catch (_: Throwable) {
+                                            currentCoroutineContext().ensureActive()
+                                        }
                                     }
                             }
                             delay(backoff.delay(attempt++))
