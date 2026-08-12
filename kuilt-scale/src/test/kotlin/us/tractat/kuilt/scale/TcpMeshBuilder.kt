@@ -3,6 +3,7 @@
 package us.tractat.kuilt.scale
 
 import io.ktor.network.selector.SelectorManager
+import io.ktor.network.sockets.InetSocketAddress
 import io.ktor.network.sockets.Socket
 import io.ktor.network.sockets.aSocket
 import io.ktor.network.sockets.openReadChannel
@@ -23,7 +24,6 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.fabric.Connection
 import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.stream.framed
-import java.net.ServerSocket as JvmServerSocket
 
 /**
  * Builds a fully-connected TCP mesh of [n] peers on loopback sockets.
@@ -72,8 +72,12 @@ internal suspend fun buildTcpMesh(
 @Suppress("ForbiddenMethodCall") // real-network loopback pair — needs real IO
 private suspend fun tcpConnectionPair(selector: SelectorManager): Pair<Connection, Connection> =
     coroutineScope {
-        val port = JvmServerSocket(0).use { it.localPort }
-        val server = aSocket(selector).tcp().bind("127.0.0.1", port)
+        // Bind 0 and read the port back off the bound socket — probing a free port and re-binding
+        // the number is a TOCTOU: the probe closes before the real bind, so another process can
+        // take the port in that window (#1590). Binding 0 has no window. This builder opens
+        // N*(N-1)/2 pairs, so it is the densest port consumer in the tree.
+        val server = aSocket(selector).tcp().bind("127.0.0.1", 0)
+        val port = (server.localAddress as InetSocketAddress).port
         val acceptDeferred = async { server.accept() }
         val client: Socket = aSocket(selector).tcp().connect("127.0.0.1", port)
         val accepted = acceptDeferred.await()

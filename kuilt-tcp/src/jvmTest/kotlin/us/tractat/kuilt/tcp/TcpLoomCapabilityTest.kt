@@ -9,7 +9,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.TransportRole
-import java.net.ServerSocket as JvmServerSocket
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -27,8 +26,10 @@ class TcpLoomCapabilityTest {
 
     @BeforeTest
     fun setUp() = runBlocking {
-        val port = JvmServerSocket(0).use { it.localPort }
-        serverSocket = aSocket(selector).tcp().bind("127.0.0.1", port)
+        // Bind 0 rather than probing a free port and re-binding the number — the probe closes
+        // before the real bind, so another process can take the port in that window (#1590).
+        // This test never needs the number, so nothing reads it back.
+        serverSocket = aSocket(selector).tcp().bind("127.0.0.1", 0)
     }
 
     @AfterTest

@@ -3,6 +3,7 @@
 package us.tractat.kuilt.tcp
 
 import io.ktor.network.selector.SelectorManager
+import io.ktor.network.sockets.InetSocketAddress
 import io.ktor.network.sockets.ServerSocket
 import io.ktor.network.sockets.aSocket
 import kotlinx.coroutines.Dispatchers
@@ -13,7 +14,6 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.stream.DEFAULT_MAX_FRAME_SIZE
-import java.net.ServerSocket as JvmServerSocket
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -34,8 +34,11 @@ class TcpRoundTripTest {
 
     @BeforeTest
     fun setUp() = runBlocking {
-        port = JvmServerSocket(0).use { it.localPort }
-        serverSocket = aSocket(selector).tcp().bind("127.0.0.1", port)
+        // Bind 0 and read the port back off the socket we actually hold — probing a free port and
+        // re-binding the number is a TOCTOU: the probe closes before the real bind, so another
+        // process can take the port in that window (#1590). Binding 0 has no window.
+        serverSocket = aSocket(selector).tcp().bind("127.0.0.1", 0)
+        port = (serverSocket.localAddress as InetSocketAddress).port
     }
 
     @AfterTest
