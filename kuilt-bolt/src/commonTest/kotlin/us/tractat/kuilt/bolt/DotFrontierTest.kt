@@ -89,6 +89,62 @@ class DotFrontierTest {
     }
 
     /**
+     * **Descending arrival costs one run, not one per dot.**
+     *
+     * A run has to grow *downward* as well as upward, and until this test existed nothing said so.
+     * Every other case here adds ascending (`1..10_000`, `5_000..10_000`), and the out-of-order case
+     * adds 3, 1, 2 — which closes a hole *between* two runs and so reaches the merge arm, never the
+     * extend-downward one. Membership is right either way, so nothing reddened: the only thing that
+     * moves is `runCount`, which is the entire claim of this class.
+     *
+     * **Reachability is the ordinary path, not an edge case.** `OpLogCrdt.operations()` documents
+     * "in no guaranteed order" and `Rga` streams a `Set`, so a merge hands one author's seqs over in
+     * arbitrary order. Any descending stretch would fragment into one run per dot —
+     * O(archived inserts), the exact bound this class exists to escape — while `maxRuns` evicted
+     * length-1 runs every round to hide it.
+     *
+     * **Mutation receipt, measured:** replacing the `joinsAbove` arm of [DotFrontier.add] with
+     * "insert a new adjacent run" (`runs.add(at + 1, SeqRun(seq, seq)); runCount++`) leaves the
+     * whole `:kuilt-bolt` suite at exit 0 without this test, and reds it at 500 runs with it.
+     */
+    @Test
+    fun arrivalInDescendingOrderCostsOneRunRatherThanOnePerDot() {
+        val frontier = frontier()
+        (1L..500L).reversed().forEach { seq -> frontier.add(Dot(alice, seq)) }
+
+        assertAll(
+            { assertEquals(1, frontier.runCount, "a run must grow downward as readily as upward") },
+            { assertTrue((1L..500L).all { frontier.contains(Dot(alice, it)) }, "and hold every dot") },
+        )
+    }
+
+    /**
+     * The same downward growth **below a run that is not the first one** — the arm's other index.
+     *
+     * [arrivalInDescendingOrderCostsOneRunRatherThanOnePerDot] always arrives below *every* held
+     * run, so `floorIndex` answers `-1` on every call and the `at >= 0` path is never taken. Here
+     * `alice: 1` sits below, unadjacent, so the extension happens at a real index with a run on both
+     * sides — and the count must still not move.
+     *
+     * The last assertion is the vacuity guard: without it, a frontier that quietly *dropped* the
+     * dot would satisfy both counts.
+     */
+    @Test
+    fun aRunGrowsDownwardWhenTheDotBelowItArrivesAfterIt() {
+        val frontier = frontier()
+        frontier.add(Dot(alice, 1L))
+        frontier.add(Dot(alice, 10L))
+        val beforeExtending = frontier.runCount
+        frontier.add(Dot(alice, 9L))
+
+        assertAll(
+            { assertEquals(2, beforeExtending, "1 and 10 are far apart, so two runs") },
+            { assertEquals(2, frontier.runCount, "and 9 extends the upper one downward rather than making a third") },
+            { assertTrue(frontier.contains(Dot(alice, 9L)), "and it really was recorded, not dropped") },
+        )
+    }
+
+    /**
      * Re-adding a held dot answers `false` and costs nothing — the anti-entropy path, run every
      * round for every dot in every peer's log.
      */
