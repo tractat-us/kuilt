@@ -34,7 +34,7 @@ import kotlin.time.Instant
  * the suite's fixture puts the cursor at the **start** of the hole, and a segment can be pruned here
  * only when its *successor's* `baseOffset` is at or below the cursor — so the segment before the
  * hole is never prunable at that cursor, and the boundary it would have checked is read anyway.
- * See [MappedBolt.firstSegmentToRead] for the full argument.
+ * See `MappedBolt.firstSegmentToRead` for the full argument.
  *
  * What *is* reachable — and what [aResumeFromBeyondAHoleStillReportsIt] drives — is a consumer that
  * resumes from the **far side** of the hole, the shape a retention sweep produces: it consumed those
@@ -66,19 +66,24 @@ class MappedBoltPruningTest {
      * 6. **(the control for 5)** [ReplayScope.All] over that same damaged archive now stops at
      *    offset 0, so the damage in 5 is real rather than a corruption that missed.
      *
-     * **Mutation receipts**, each applied alone to [MappedBolt.firstSegmentToRead], reverted, and the
-     * verdict read out of the results XML:
+     * **Mutation receipts**, each applied alone to `MappedBolt.firstSegmentToRead`, reverted, the
+     * revert grep-verified, and the verdict read out of the results XML rather than the console:
      *
-     * | Mutation | Reds |
-     * |---|---|
-     * | Return `firstUnpruned` — prune the boundary segment, dropping the continuity cursor | 3, 4 |
-     * | Seed the cursor from the surviving header (`baseOffsetOf(reads[firstUnpruned])`) instead of parsing | 3, 4 |
-     * | Return `0` — prune nothing, the shipped behaviour before #2236 | 5 |
+     * | Mutation | Reds here | Reds in `BoltConformanceSuite` |
+     * |---|---|---|
+     * | Return `firstUnpruned` — prune the boundary segment, dropping the continuity cursor | 3, 4 | **none** |
+     * | Seed the cursor from the surviving header (`baseOffsetOf(reads[from])`) instead of parsing | 3, 4 | **none** |
+     * | Return `0` — prune nothing, the shipped behaviour before #2236 | 5 | **none** |
      *
-     * The first two are the landmine #2244 named: both hand back `CleanTail` plus two frames from
-     * beyond a hole. The third is the honest complement — it says assertion 5 is the only thing here
-     * that can tell pruning from not pruning, and that assertions 3 and 4 would go green on a backend
-     * that reads everything.
+     * The first two are the landmine #2244 named, and they land: both answer `CleanTail` plus two
+     * frames from beyond a hole, to a cursor sitting past it. The third is the honest complement — it
+     * says assertion 5 is the only thing here that can tell pruning from not pruning, and that 3 and
+     * 4 would go green on a backend that reads everything.
+     *
+     * **The right-hand column is the reason this file exists.** Every conformance case in
+     * `:kuilt-bolt:jvmTest` — five `BoltConformanceSuite` subclasses — stayed green under all three,
+     * `resumingFromTheHoleReachesTheSameVerdictRatherThanACleanTail` included. A backend can lose the
+     * continuity carry outright and the shared suite will not say so.
      */
     @Test
     fun aResumeFromBeyondAHoleStillReportsIt() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
@@ -180,10 +185,11 @@ class MappedBoltPruningTest {
      * [ReplayScope.All] arm is the control — it establishes what "read the archive" costs on this
      * fixture, exactly, so a saving cannot be an artefact of a small denominator.
      *
-     * **Mutation receipt:** returning `0` from [MappedBolt.firstSegmentToRead] — the shipped
-     * behaviour before #2236 — reds assertions 3 and 4 (the resume reads every byte [ReplayScope.All]
-     * does). Assertions 1 and 2 are the fixture's own preconditions and stay green, which is what
-     * they are for.
+     * **Mutation receipt:** returning `0` from `MappedBolt.firstSegmentToRead` — the shipped
+     * behaviour before #2236 — reds assertions 3 and 4: the resume goes from well under the pruned
+     * prefix's 17,896 bytes to **25,327**, which is every byte [ReplayScope.All] reads plus the
+     * header probes. Assertions 1 and 2 are the fixture's own preconditions and stay green, which is
+     * what they are for.
      */
     @Test
     fun aResumeReadsFarLessThanThePrefixItPrunes() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
