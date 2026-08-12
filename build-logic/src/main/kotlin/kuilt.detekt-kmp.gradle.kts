@@ -37,9 +37,15 @@ configure<DetektExtension> {
 afterEvaluate {
     val kmpExtension = extensions.getByType(KotlinMultiplatformExtension::class.java)
 
-    // Test-source detekt tasks use an extended config that also bans production
-    // dispatchers (Dispatchers.Default/IO/Main/Unconfined) and GlobalScope.
-    // Deliberate real-threading sites suppress with @Suppress("ForbiddenMethodCall").
+    // Test-source detekt tasks use an extended config that also bans importing
+    // Dispatchers or GlobalScope. Note what that does and does not reach: only these
+    // three tasks, and only the `import` form. Every other test source set — commonTest
+    // above all, for which detekt generates no task at all (#1960) — and the
+    // fully-qualified `kotlinx.coroutines.Dispatchers.Default` spelling are covered
+    // instead by `forbidProductionDispatcherInTests` in the root build (#1934), whose
+    // hatch is a line-tight `// ALLOW-realDispatcher: <reason>`. A deliberate
+    // real-threading harness silences THIS rule with @file:Suppress("ForbiddenImport");
+    // @Suppress("ForbiddenMethodCall") silences nothing anywhere (#1329).
     val testDetektConfig = rootProject.files(
         "config/detekt/detekt.yml",
         "config/detekt/detekt-test.yml",

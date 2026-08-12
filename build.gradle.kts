@@ -260,6 +260,13 @@ class TimeoutShapedFailureReporter(private val resultsDir: Provider<String>) : T
 fun kotlinSourcesIn(roots: List<java.io.File>, pattern: String = "**/*.kt"): FileTree =
     files(roots).asFileTree.matching { include(pattern) }
 
+// The same, for a guard whose scope needs more than one Ant pattern. `forbidProductionDispatcherInTests`
+// wants every TEST source set, and that is two shapes, not one: the KMP layout's `src/<target>Test/` and
+// the plain-JVM layout's `src/test/` (`:kuilt-scale`, `:demo-cli`, `:examples`). A single pattern can
+// express either, and the one that expresses the KMP shape silently drops three modules.
+fun kotlinSourcesIn(roots: List<java.io.File>, patterns: List<String>): FileTree =
+    files(roots).asFileTree.matching { include(patterns) }
+
 // Every subproject's `module.md`: the Dokka per-module doc surface, and a doc root in its own right.
 //
 // It is the FIRST page a reader meets a module through, it carries both of the things this build
@@ -2195,6 +2202,179 @@ val forbidKotlinAssert by tasks.registering {
     }
 }
 
+// Guard: forbid a production dispatcher or `GlobalScope` in TEST sources (#1934; the bug class is #340).
+//
+// WHAT IS BANNED. `Dispatchers.Default` / `.IO` / `.Main` / `.Unconfined` and `GlobalScope`, in any
+// test source set. A real dispatcher under `runTest` decouples the work from the virtual clock: the
+// test's assertions run on the test scheduler while the subject runs on real threads, so what the
+// test observes depends on how fast the box is. The fix is `StandardTestDispatcher(testScheduler)`
+// (FIFO at each virtual instant) — or `UnconfinedTestDispatcher(testScheduler)` where eager-inline
+// ordering cannot affect the outcome. See `docs/testing-coroutine-determinism.md`.
+//
+// WHY A GUARD AND NOT DETEKT — and this rule already HAD a detekt half, so the answer is specific.
+// `config/detekt/detekt-test.yml` configures `ForbiddenImport` on `kotlinx.coroutines.Dispatchers`
+// and `…GlobalScope`. That rule is real and does fire, but it is blind in two directions at once:
+//
+//   * it sees only the `import` FORM, so a fully-qualified `kotlinx.coroutines.Dispatchers.Default`
+//     — which needs no import — is invisible to it by construction; and
+//   * it runs only where `kuilt.detekt-kmp` wires the test config, i.e. `detektJvmTest` +
+//     the two `androidUnitTest` tasks. detekt generates NO task for `commonTest` at all, and none
+//     for `appleTest`/`iosTest`/`macosArm64Test`/`wasmJsTest` or the plain-JVM `src/test` layout —
+//     so most of kuilt's tests were never scanned by it (#1960).
+//
+// The config header used to name `@Suppress("ForbiddenMethodCall")` as the sanctioned escape hatch
+// for the deliberate harnesses, immediately above that live `ForbiddenImport` stanza, so the two
+// read as equivalent while only one did anything: `ForbiddenMethodCall` is configured in NEITHER
+// detekt config, and #1329 established it could not work here anyway (it resolves no kotlin-stdlib
+// callee in this KMP setup and silently no-ops). Twenty-one of those annotations had accumulated.
+// A source scan has neither blind spot — it reads files, so every test source set is covered by
+// construction, and it can enforce what an `@Suppress` structurally cannot: that a REASON exists.
+//
+// WHY THE IMPORT IS A VIOLATION AND NOT JUST THE USE. This is the load-bearing design decision, and
+// it is what makes a lexical scan complete rather than approximate. There are exactly two ways to
+// reach `Dispatchers` in Kotlin — import it, or fully qualify it — so those two spellings are the
+// whole language surface, and the import is a per-file choke point that every bare `Dispatchers.IO`
+// in that file passes through. Scanning USES instead would need a marker on each of ~76 call sites
+// (ten in one file) to buy the same property; scanning the import buys it once per file, on the line
+// a reader already looks at, and is the granularity the `@file:Suppress("ForbiddenImport")`
+// convention it replaces already used.
+//
+// The residual, stated rather than hidden: a file already marked as a real-threading harness can
+// gain a new careless `Dispatchers.Default` without the guard noticing. That is accepted — by then
+// the file is a harness whose every test runs on real threads, which is a far smaller blast radius
+// than a virtual-time test file quietly acquiring its first real dispatcher, which IS caught.
+//
+// THE ESCAPE HATCH is a line-scoped marker with a MANDATORY reason:
+//
+//     import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-socket example — blocking reads need a real IO dispatcher
+//
+// Trailing on the offending line or on the line immediately above — line-tight, like #1329's
+// `// ALLOW-runCatching:`. A marker with an EMPTY reason is itself a violation: the reason is the
+// entire value of the sweep, and it is the one thing the `@Suppress` this replaces could not require.
+// Markers are comments, so they are matched against the RAW text while the offence is found in the
+// STRIPPED text; `stripNonCode` preserves newlines, so the two line-index spaces coincide.
+//
+// DETECTION — two regexes over `KotlinCodeScanner.stripNonCode` output.
+//
+// The import form enumerates every spelling that brings the object into scope, because an exclusion
+// is where a lexical guard loses a true positive: plain (`import kotlinx.coroutines.Dispatchers`),
+// MEMBER (`…Dispatchers.IO`, then bare `IO`), STAR (`…Dispatchers.*`), ALIASED (`… as D`, then
+// `D.IO`), and the PACKAGE WILDCARD (`import kotlinx.coroutines.*`, then bare `Dispatchers.IO`).
+// The wildcard over-fires slightly — a file importing the package only for `launch` is asked for a
+// marker — and is in anyway: it is the one spelling that would otherwise be a silent hole, and the
+// tree contains zero of them. Whitespace is legal around every dot in an import, hence the `\s*`.
+//
+// The fully-qualified form is the same identifier chain outside an import. Stripping is load-bearing
+// for BOTH, not decorative: `WebSocketPingHalfOpenTest.kt`'s KDoc says the looms do "not import
+// `kotlinx.coroutines.Dispatchers`", which is prose that names the banned chain exactly.
+//
+// KNOWN COVERAGE EDGES, stated rather than fixed:
+//   * `src/commonSamples/` is NOT scanned. Samples compile into `commonTest` but demonstrate the
+//     PRODUCTION API, where a real dispatcher is often the correct thing to show.
+//   * A test-support module's `commonMain` (`:kuilt-test`, `:kuilt-raft-test`, `:kuilt-deal-test`)
+//     is not a test source set and is not scanned, so a helper published from one could hand a real
+//     dispatcher to a test that itself looks clean. Same edge `detekt-test.yml` always had.
+//   * An EXPLICITLY CONSTRUCTED real dispatcher evades this entirely — `newFixedThreadPoolContext`,
+//     `newSingleThreadContext`, `Executors.…asCoroutineDispatcher()`. That is not an oversight but
+//     it is not nothing either: five `:kuilt-otel*` / `:kuilt-otel-logging` harnesses get their real
+//     threads that way, and each carries a `@file:Suppress("ForbiddenImport")` that has never
+//     applied to anything, because they import no `Dispatchers`. The line drawn here is that those
+//     spellings are explicit, local and named at the site, where `Dispatchers.Default` is ambient —
+//     and the rule this guard enforces, in `CLAUDE.md` and in `detekt-test.yml`, names the four
+//     `Dispatchers` members and `GlobalScope`. Widening it is a separate decision, not a bug fix.
+//   * `:spike` (a subproject only under `-PincludeSpike`), `build-logic/` (a separate included
+//     build) and `*.kts` are unscanned, as with every sibling guard.
+val forbidProductionDispatcherInTests by tasks.registering {
+    group = "verification"
+    description = "Fails if a test source reaches a production dispatcher or GlobalScope without an ALLOW-realDispatcher marker (#1934)."
+    // Both test-source layouts: the KMP `src/<target>Test/` and the plain-JVM `src/test/`.
+    val sources = kotlinSourcesIn(
+        subprojects.map { it.projectDir.resolve("src") },
+        listOf("*Test/**/*.kt", "test/**/*.kt"),
+    )
+    inputs.files(sources).withPropertyName("kotlinTestSources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // See "Guard plumbing" above: the stamp is what makes UP-TO-DATE possible (#1827). The verdict is
+    // a pure function of file contents — there is no allowlist, the markers live in the sources
+    // themselves — so a RELATIVE fingerprint hit genuinely means "this exact source was verified".
+    val stamp = layout.buildDirectory.file("verification/forbid-production-dispatcher-in-tests.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    val rootPath = rootDir
+    doLast {
+        val importForm = Regex(
+            """^[ \t]*import\s+kotlinx\s*\.\s*coroutines\s*\.\s*(?:(?:Dispatchers|GlobalScope)(?![A-Za-z0-9_])|\*)""",
+            RegexOption.MULTILINE,
+        )
+        val qualifiedForm = Regex(
+            """kotlinx\s*\.\s*coroutines\s*\.\s*(?:Dispatchers|GlobalScope)(?![A-Za-z0-9_])""",
+        )
+        // Group 1 is everything after the colon; blank ⇒ a reasonless marker, itself a violation.
+        val marker = Regex("""//\s*ALLOW-realDispatcher:(.*)""")
+        val unmarked = mutableListOf<String>()
+        val reasonless = mutableListOf<String>()
+        sources.files.sortedBy { it.invariantSeparatorsPath }.forEach { file ->
+            val raw = file.readText()
+            val code = KotlinCodeScanner.stripNonCode(raw)
+            if (!qualifiedForm.containsMatchIn(code) && !importForm.containsMatchIn(code)) return@forEach
+            val rawLines = raw.lines()
+            fun linesOf(hits: Sequence<MatchResult>): Set<Int> =
+                hits.map { code.take(it.range.first).count { c -> c == '\n' } + 1 }.toSet()
+            val imports = linesOf(importForm.findAll(code))
+            // An import line matches the qualified form too — report it once, as the import it is.
+            val qualified = linesOf(qualifiedForm.findAll(code)) - imports
+            (imports + qualified).sorted().forEach { line ->
+                // Trailing on the same line, or the line immediately above. Deliberately NOT a
+                // multi-line lookback window — line-tight is the point.
+                val candidates = listOfNotNull(rawLines.getOrNull(line - 1), rawLines.getOrNull(line - 2))
+                val reasons = candidates.mapNotNull { marker.find(it)?.groupValues?.get(1)?.trim() }
+                val kind = if (line in imports) "import" else "fully-qualified"
+                val where = "${file.relativeTo(rootPath)}:$line  [$kind]  " +
+                    rawLines.getOrElse(line - 1) { "" }.trim()
+                when {
+                    reasons.any { it.isNotEmpty() } -> Unit // exempt
+                    reasons.isNotEmpty() -> reasonless += where
+                    else -> unmarked += where
+                }
+            }
+        }
+        if (unmarked.isNotEmpty() || reasonless.isNotEmpty()) {
+            val detail = buildString {
+                if (unmarked.isNotEmpty()) {
+                    append("\n  ").append(unmarked.joinToString("\n  "))
+                }
+                if (reasonless.isNotEmpty()) {
+                    append("\n\n  An `// ALLOW-realDispatcher:` marker with an EMPTY reason is itself a ")
+                    append("violation — the reason is the whole point, and is the one thing the ")
+                    append("`@Suppress` this replaces could not require. Say why this harness needs ")
+                    append("real threads:\n  ")
+                    append(reasonless.joinToString("\n  "))
+                }
+            }
+            error(
+                "A production dispatcher or `GlobalScope` is reachable from a test source (#1934). " +
+                    "Under `runTest` a real dispatcher decouples the subject from the virtual clock, " +
+                    "so what the test observes depends on how fast the box is — the #340 bug class. " +
+                    "Use `StandardTestDispatcher(testScheduler)`, or " +
+                    "`UnconfinedTestDispatcher(testScheduler)` where eager-inline ordering cannot " +
+                    "matter; prefer the published harnesses (`raftSimTest` / `warpSimTest`), which " +
+                    "wire one in. A `[fully-qualified]` hit needs no import, which is exactly why " +
+                    "detekt's `ForbiddenImport` cannot see it. If this really is a deliberate " +
+                    "real-threading harness — a true-parallelism stress probe, a callback-thread " +
+                    "regression test, a `runBlocking` benchmark, a real socket — keep it and say so " +
+                    "in a marker on this line or the line above:\n" +
+                    "      // ALLOW-realDispatcher: <why this harness needs real threads>\n" +
+                    "  `@Suppress(\"ForbiddenMethodCall\")` is NOT the escape hatch — that detekt " +
+                    "rule is configured nowhere and never fires, which is what #1934 exists to fix." +
+                    detail,
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText("ok — ${sources.files.size} Kotlin test sources scanned\n")
+    }
+}
+
 // Guard: forbid a bare duration literal as a `runTest(…)` timeout — at a CALL SITE (pass 1, a
 // per-file count ratchet) or in a WRAPPER's parameter default (pass 2, zero tolerance). #1739.
 //
@@ -2735,6 +2915,7 @@ allprojects {
         dependsOn(rootProject.tasks.named("forbidRunCatchingCancellableUnderNonCancellable"))
         dependsOn(rootProject.tasks.named("forbidBareRunCatching"))
         dependsOn(rootProject.tasks.named("forbidKotlinAssert"))
+        dependsOn(rootProject.tasks.named("forbidProductionDispatcherInTests"))
         dependsOn(rootProject.tasks.named("forbidTightRunTestTimeout"))
     }
 }

@@ -360,10 +360,9 @@ idempotency, availability).
 `:kuilt-tcp`'s conformance test is the copy-paste template:
 
 ```kotlin
-// kuilt-tcp/src/jvmTest/kotlin/us/tractat/kuilt/tcp/TcpConformanceTest.kt:34-64
+// kuilt-tcp/src/jvmTest/kotlin/us/tractat/kuilt/tcp/TcpConformanceTest.kt:34-63
 class TcpConformanceTest : SeamConformanceSuite() {
 
-    @Suppress("ForbiddenMethodCall")
     private val selector = SelectorManager(Dispatchers.IO)
     private lateinit var serverSocket: ServerSocket
     private var port: Int = 0
@@ -406,10 +405,14 @@ Key points:
   `runTest` and `StandardTestDispatcher` are off the table. The suite runs over a
   real loopback socket with `runBlocking`. This matches `:kuilt-websocket`'s
   conformance harness.
-- **`@Suppress("ForbiddenImport")` / `@Suppress("ForbiddenMethodCall")`** are
-  required at the file and call sites — the repo bans production dispatchers in
-  test sources to catch accidental real-clock leaks; a deliberate real-network
-  harness suppresses intentionally with a one-line reason comment.
+- **Two markers on the way in, and only two.** The repo bans production
+  dispatchers in test sources to catch accidental real-clock leaks, so a
+  deliberate real-network harness declares itself: `@file:Suppress("ForbiddenImport")`
+  silences detekt's import rule, and a line-tight
+  `// ALLOW-realDispatcher: <reason>` on the `import kotlinx.coroutines.Dispatchers`
+  line clears the whole-tree guard (`forbidProductionDispatcherInTests`), which
+  requires the reason. `@Suppress("ForbiddenMethodCall")` is **not** a mechanism —
+  that rule is configured nowhere and never fires (#1329, #1934).
 - **`newLoomPair()` returns distinct host and joiner looms** wired to reach each
   other over the shared `serverSocket`. The suite drives `host()` and `join()`
   concurrently; the host's `accept()`-then-handshake suspends until the joiner
