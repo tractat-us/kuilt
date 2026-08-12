@@ -56,6 +56,10 @@ kotlin {
             implementation(libs.kotlinx.coroutines.test)
         }
         jvmTest.dependencies {
+            // FakeRoom, for the jvmAndAndroidMain-only ServerCluster admit path (#2292). A shipped
+            // double rather than a local one: a hand-rolled Room in this module would be a second,
+            // divergent implementation of the same contract.
+            implementation(project(":kuilt-session-test"))
             // implementation (not runtimeOnly) so RoutedRaftTransportMisWiredRelayTest can attach a
             // logback ListAppender at compile time to assert the one-time mis-wired-relay WARN.
             implementation(libs.logback)
