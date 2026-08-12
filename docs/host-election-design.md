@@ -80,10 +80,11 @@ public interface ElectionLobby {
     public suspend fun start(memberName: String? = null): Room
 
     /**
-     * Await the session. On a MEMBER: suspend until the host's freeze arrives, ack it, adopt, return
-     * the Room. (The host obtains its Room from [start] instead.) Returns when the session freezes.
+     * Await the session. On a MEMBER: suspend until the host's freeze arrives, ack it, adopt.
+     * (The host obtains its Room from [start] instead.) Returns a sealed [ElectionOutcome] —
+     * `Adopted(room)`, `Torn(reason)`, or `BecameHost` (#1483; see below).
      */
-    public suspend fun awaitRoom(memberName: String? = null): Room
+    public suspend fun awaitRoom(memberName: String? = null): ElectionOutcome
 
     /** Leave the lobby, closing the underlying seam (only if no Room has adopted it). Idempotent. */
     public suspend fun leave()
@@ -119,8 +120,16 @@ pre-adopt — parallel to `AdmitMessage`, distinct prefix so the two never colli
    (host-authoritative gate — drop a `Freeze` from anyone who isn't this peer's elected host, the
    same gate `Farewell` already applies in `SeamRoom`).
 2. Reply `FreezeAck(hostId, epoch)`; await `Commit(hostId, epoch)` within a timeout.
-3. On `Commit`: `adopt(seam, role = Joiner, roomKey)`; return Room. On `Reopen(epoch)` or timeout:
-   discard and go back to step 1 (await a fresh `Freeze`).
+3. On `Commit`: `adopt(seam, role = Joiner, roomKey)`; return `Adopted(room)`. On `Reopen(epoch)` or
+   timeout: discard and go back to step 1 (await a fresh `Freeze`).
+4. **If the elected host leaves the roster** (`host` recomputes to `self`) a member can never receive
+   its `Freeze`, so the wait ends — but *how* it ends depends on what is left. Co-members still
+   present → `BecameHost`, whose recovery is `start()` on the **same** lobby (they are all still
+   parked on that seam; a fresh `electLobby(...)` would strand them). Roster drained to `{self}` →
+   `Torn`, the #1466 membership drain. The discriminator against the **weave-in transient** — being
+   momentarily the lowest id you have seen, before a lower peer propagates — is history, not roster
+   size: the signal only arms once it has observed some *other* peer as the elected host, mirroring
+   the host path's `everHadMembers` latch. (#1483)
 
 **Why the extra `Commit` phase:** a member must not adopt on `Freeze` alone — if the host aborts (didn't
 get all acks), a member that already adopted would be a joiner to a host that reopened, healing only

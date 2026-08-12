@@ -18,6 +18,34 @@ Every phone runs the same rule over the same set of *connected* peers, so they a
 reach the same answer with nothing to negotiate. This is the path to use. If your
 transport can connect the phones to each other, take it and stop reading.
 
+## What if the host walks out?
+
+Someone puts their phone in their pocket and leaves before the game starts. The
+phone with the next-lowest id is now the host — and it needs to know that, because
+it was waiting to be told the game had begun.
+
+`awaitRoom()` tells it. The call ends one of three ways, and only one of them is
+the game starting:
+
+| It ends with | What happened | What to do |
+|---|---|---|
+| `Adopted(room)` | The host started the session. | Play. |
+| `BecameHost` | The host left. **You** are the host now. | Call `start()` on the **same** lobby. |
+| `Torn(reason)` | Everyone else is gone. | Go back to `electLobby(...)`. |
+
+The important one is the middle row, and the important word in it is **same**.
+The other phones are still waiting on the connection you already have, so
+`start()` on that lobby reaches them instantly. Starting over with a fresh
+`electLobby(...)` builds a *new* connection they are not on — you would sit
+alone in an empty lobby while they wait for a host that never speaks.
+
+<tip>
+Don't infer "I was promoted" from <code>host.value == selfId</code> yourself.
+While the phones are still finding each other, whoever has the lowest id
+<em>so far</em> sees exactly that — and a lower phone is about to appear.
+<code>awaitRoom()</code> knows the difference; a bare comparison doesn't.
+</tip>
+
 ## Why not just pick from the list?
 
 Because the list isn't the same on every phone, and the phones can't tell.

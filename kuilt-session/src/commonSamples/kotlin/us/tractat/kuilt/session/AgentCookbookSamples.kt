@@ -8,6 +8,8 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.util.ExponentialBackoff
 import us.tractat.kuilt.session.admit.RejectCode
+import us.tractat.kuilt.session.election.ElectionLobby
+import us.tractat.kuilt.session.election.ElectionOutcome
 import us.tractat.kuilt.session.partition.JoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectEvent
 import us.tractat.kuilt.session.partition.ResumeResult
@@ -251,3 +253,22 @@ public suspend fun localFabricBannerSample(room: Room) {
         }
     }
 }
+
+/**
+ * Handle all three ways a member's wait for the session can end (#1483).
+ *
+ * [ElectionLobby.awaitRoom] does not only return a [Room]. The peer that was hosting can leave the
+ * roster, at which point this peer becomes the elected host — nothing has collapsed, and the
+ * recovery is [ElectionLobby.start] on the **same** lobby, not a re-election.
+ */
+public suspend fun handleEveryElectionOutcomeSample(lobby: ElectionLobby): Room? =
+    when (val outcome = lobby.awaitRoom(memberName = "Player 2")) {
+        is ElectionOutcome.Adopted -> outcome.room
+        // The hosting peer left and this peer is now the elected host, with the co-members still
+        // parked in their own awaitRoom on the SAME seam — so they ack this freeze round at once.
+        // Re-running electLobby(...) would weave a FRESH seam and strand them; calling leave() first
+        // would close the shared seam and collapse them.
+        ElectionOutcome.BecameHost -> lobby.start(memberName = "Player 2")
+        // A genuine mid-2PC collapse: the co-electors are gone. Retryable — re-run electLobby(...).
+        is ElectionOutcome.Torn -> null
+    }
