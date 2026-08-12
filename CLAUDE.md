@@ -57,7 +57,7 @@ and `docs/usage.md` for how to consume it.
 | `:kuilt-websocket` | all | Ktor WebSocket fabric — the "Far"/relay topology. `KtorClientLoom` everywhere; `KtorServerLoom` + `KtorRoomHost` on JVM/Android only. |
 | `:kuilt-tcp` | JVM, Android | Raw TCP fabric (the pluggable-fabric-kit headline). `TcpLoom.host`/`join` adapt a Ktor socket via `:kuilt-stream`'s `framed()` + `handshaking()` into a 2-peer `Seam`; real-IO only (guards against virtual-time construction). |
 | `:kuilt-multipeer` | iOS, macOS | Apple Multipeer Connectivity fabric — the "Near"/peer-to-peer topology. Provides `MultipeerRoomHost`. |
-| `:kuilt-nw` | all (Apple impl) | Apple Network.framework full-mesh peer-to-peer fabric — every peer advertises, browses and dials, and the redundant double-dial is deduplicated into one link; TLS-PSK derived from `Pattern.roomKey`, which is a required bearer secret (an open session is refused). The replacement for `:kuilt-multipeer`, whose AWDL teardown regressed on iOS 26. Native on iOS/macOS, plus a **macOS-only** desktop-JVM bridge over `libkuilt.dylib` (probe `NwNativeLib.jvmAvailability` first). See `kuilt-nw/module.md`. |
+| `:kuilt-nw` | all (Apple impl) | Apple Network.framework full-mesh peer-to-peer fabric — every peer advertises, browses and dials, and the redundant double-dial is deduplicated into one link; TLS-PSK derived from `Pattern.roomKey`, which is a required bearer secret (an open session is refused). The replacement for `:kuilt-multipeer`, whose MultipeerConnectivity layer regressed on iOS 26 (MC is also deprecated as of Xcode 27). Native on iOS/macOS, plus a **macOS-only** desktop-JVM bridge over `libkuilt.dylib`. See `kuilt-nw/module.md`. |
 | `:kuilt-nearby` | all (Android impl) | Google Nearby Connections fabric — Android implementation behind `play-services-nearby`. |
 | `:kuilt-webrtc` | all (browser/wasmJs) | WebRTC data-channel fabric. |
 | `:kuilt-mdns` | JVM, Android, iOS | Bonjour/mDNS discovery. On JVM it depends on `:kuilt-websocket` (discovery feeds a WebSocket connection — discovery is orthogonal to topology). |
@@ -71,8 +71,8 @@ and `docs/usage.md` for how to consume it.
 | `:kuilt-session-test` | all | Session test support (`FakeRoomFactory`, …). |
 | `:kuilt-raft-test` | all | Raft test harness (`FakeRaftNode`, …). |
 | `:kuilt-deal-test` | all | Commutative-scheme TCK — `CommutativeSchemeConformanceSuite` verifies any `CommutativeScheme` impl (round-trip recovery, commutativity, strip-order independence, key distinctness). Shipped in `commonMain` for subclassing. |
-| `:kuilt-gossip-test` | all | Gossip test support — `StarHarness`, a started in-memory star of `GossipSeam`s (a hub plus n clients) with an accept handle for admitting a fresh client mid-test. |
-| `:kuilt-warp-test` | all | Warp's published test infrastructure: the sandboxed-WASM conformance TCK plus `MultiNodeWarpSim` / `warpSimTest` — the deterministic virtual-time multi-node harness (warp's analogue of `RaftSimulation`; use it, don't hand-roll one). |
+| `:kuilt-gossip-test` | all | Gossip test support — `inMemoryStarOf(n)` returns a `Star`: a started in-memory star of `GossipSeam`s (a hub plus n clients) with an accept handle (`Star.source`) for admitting a fresh client mid-test. |
+| `:kuilt-warp-test` | all | Warp's published test infrastructure: the sandboxed-WASM conformance TCK plus `MultiNodeWarpSim` / `warpSimTest` — the deterministic virtual-time multi-node harness (warp's analogue of `:kuilt-raft-test`'s `MultiNodeRaftSim`; use it, don't hand-roll one). |
 | `:kuilt-otel-tap-test` | all | Log-tap test/CI support over `:kuilt-otel-tap` — `awaitLog` / `awaitLogBodyContaining` for live-tailing a tapped device from a test or simulator harness. |
 | `:kuilt-scale` | JVM | Scaling/bench harness: `MeteredSeam` + `SeamMetrics`/`ClusterMetrics` message-complexity counters, `ConvergenceTracker`, and `buildInMemoryMesh(n, topology)` (complete graph / ring / star). **Not published** — plain `kotlinJvm`, no `kuilt.publish`, excluded from the BOM. Real-TCP layer is opt-in via `-Pscale.tcp.tests=true`. |
 
@@ -96,10 +96,10 @@ and `docs/usage.md` for how to consume it.
 | `:kuilt-warp-runtime` | all | The sandbox that *runs* code another peer sent you: a walled-off WASM engine with no files, no network, no clock, and no way to run forever. |
 | `:kuilt-warp-compiler` | JVM, Android | The real optimizer a **compiler node** runs — implements `:kuilt-warp`'s `WasmOptimizer` seam by exec'ing a bundled `wasm-opt` (Binaryen). JVM/Android only: Apple bans externally-delivered machine code and a browser peer cannot fork a process. |
 | `:kuilt-warp-ksp` | JVM (build-time) | The `@WarpOp` symbol processor. Deliberately not a KMP module — a KSP processor always runs on the JVM inside the build, and the code it generates is plain `commonMain`. In-repo modules apply the `kuilt.warp-ops` convention plugin instead of wiring it by hand. |
-| `:kuilt-warp-planning` | all | The G4 coordination-cost model and planner over a `Draft` pipeline: `coordinationCost` scores what a monotonicity-aware executor would pay, and `WarpPlanner` rewrites the draft to a fixpoint to minimise it. |
+| `:kuilt-warp-planning` | all | The G4 coordination-cost model and planner over a `Draft` pipeline: `coordinationCost` scores what a monotonicity-aware executor would pay, and `Draft.plan()` rewrites the draft to a fixpoint (via `optimize()`) to minimise it. |
 | `:kuilt-warp-ml` | all | Learn one shared model from everybody's data without anybody handing over their data — federated aggregation over the mesh instead of collection on a server. |
 | `:kuilt-warp-otel` | all | Records `WarpNode` execution metrics (executions / duplicates / failovers) into a `WarpMetricExporter`. Idempotent under retry: the node's counters and the exporter's SUM series are the same `GCounter`. |
-| `:kuilt-warp-heddle` | all | Fair share *for* warp: layers `:kuilt-heddle`'s ledger over warp so "interactive work gets three times the grid batch work does" is expressible, without changing how warp picks who runs what. |
+| `:kuilt-warp-heddle` | all | Fair share *for* warp: layers `:kuilt-heddle`'s ledger over warp so "the interactive work gets three times the grid the batch work does" is expressible, without changing how warp picks who runs what. |
 
 **Packaging**
 
