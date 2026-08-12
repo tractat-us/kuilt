@@ -755,6 +755,15 @@ public class MappedBolt<Id : Any, V, Op : Any>(
      * and it is the only test in the tree that reds when this line is dropped. Resting a correctness
      * property on an accident of which bookkeeping happens to be inflated is how the next reader
      * loses it; `PosixMappedBolt` reached the same conclusion for the same reason.
+     *
+     * ### What a pruning replay stops reporting, said out loud
+     *
+     * Damage lying **wholly below the cursor** — a torn frame, an unreadable file — is no longer seen
+     * by a [ReplayScope.FromOffset] resume, where before this backend read every segment and stopped
+     * at it. That is the pruning contract rather than a loss: those bytes are behind what the caller
+     * asked for, [ReplayScope.All] still reports them, and both other backends have answered this way
+     * since they grew a `skippable`. It is stated here because "the resume went quiet about damage
+     * the whole-archive replay shouts about" is otherwise a bug report waiting to be filed.
      */
     private fun firstSegmentToRead(reads: List<SegmentRead>, scope: ReplayScope): Int {
         // Scope-gated: for `All` the header pass is pure overhead, and no offset predicate applies
