@@ -1,5 +1,8 @@
 import org.gradle.process.ExecOperations
 import java.io.File
+import java.io.FileNotFoundException
+import java.io.IOException
+import java.io.InputStream
 import java.net.URI
 import java.security.MessageDigest
 import javax.inject.Inject
@@ -199,12 +202,56 @@ abstract class ResolveWasmOpt : DefaultTask() {
     private fun File.isSharedLibrary(): Boolean =
         name.endsWith(".dylib") || name.contains(".so")
 
+    /**
+     * Fetches [url] into [target], retrying a transient network failure rather than
+     * failing the whole build on one blip (#1728: a single `UnknownHostException:
+     * github.com` threw away 2998 executed tasks of a publish run).
+     *
+     * Only an [IOException] — DNS, connect, reset, timeout, 5xx — is retried, and a
+     * [FileNotFoundException] (HTTP 404/410) is excluded because a missing asset on a
+     * *version-pinned* URL is a wrong pin, not a blip, and no number of attempts fixes
+     * it. A checksum mismatch is likewise never retried: verification stays in
+     * [resolve], outside this loop, so a corrupt or wrong artifact fails immediately
+     * with its own message instead of burning the backoff first.
+     */
     private fun downloadTo(url: String, target: File) {
         target.parentFile.mkdirs()
-        URI(url).toURL().openStream().use { input ->
-            target.outputStream().use { output -> input.copyTo(output) }
+        var lastFailure: IOException? = null
+        for (attempt in 1..DOWNLOAD_ATTEMPTS) {
+            try {
+                openStream(url).use { input ->
+                    target.outputStream().use { output -> input.copyTo(output) }
+                }
+                return
+            } catch (failure: FileNotFoundException) {
+                throw GradleException("Binaryen download failed — no such release asset: $url", failure)
+            } catch (failure: IOException) {
+                lastFailure = failure
+                // A partial body must not survive as a plausible-looking cache entry.
+                target.delete()
+                if (attempt == DOWNLOAD_ATTEMPTS) break
+                val backoffMillis = RETRY_BASE_DELAY_MILLIS shl (attempt - 1)
+                logger.warn(
+                    "Binaryen download attempt $attempt/$DOWNLOAD_ATTEMPTS failed ($failure); " +
+                        "retrying in ${backoffMillis}ms …",
+                )
+                Thread.sleep(backoffMillis)
+            }
         }
+        throw GradleException(
+            "Binaryen download failed after $DOWNLOAD_ATTEMPTS attempts: $url " +
+                "(last failure: $lastFailure)",
+            lastFailure,
+        )
     }
+
+    /** Opens [url] with both timeouts set, so a hung socket fails fast instead of never. */
+    private fun openStream(url: String): InputStream =
+        URI(url).toURL().openConnection().run {
+            connectTimeout = CONNECT_TIMEOUT_MILLIS
+            readTimeout = READ_TIMEOUT_MILLIS
+            getInputStream()
+        }
 
     private fun sha256(file: File): String {
         if (!file.exists()) return ""
@@ -218,6 +265,20 @@ abstract class ResolveWasmOpt : DefaultTask() {
             }
         }
         return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    private companion object {
+        /** Total download attempts before the task gives up — enough to ride out a DNS/network blip. */
+        const val DOWNLOAD_ATTEMPTS = 4
+
+        /** Backoff before the first retry; doubled per attempt (1s, 2s, 4s — ~7s worst case). */
+        const val RETRY_BASE_DELAY_MILLIS = 1_000L
+
+        /** Cap on establishing the connection, so an unreachable host is a retry rather than a stall. */
+        const val CONNECT_TIMEOUT_MILLIS = 30_000
+
+        /** Cap on any single read, so a half-open socket cannot block the build indefinitely. */
+        const val READ_TIMEOUT_MILLIS = 60_000
     }
 }
 
