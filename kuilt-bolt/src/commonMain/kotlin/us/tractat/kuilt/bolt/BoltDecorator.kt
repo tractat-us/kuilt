@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import us.tractat.kuilt.crdt.Dot
 import us.tractat.kuilt.crdt.LogOp
 
 /**
@@ -32,52 +33,54 @@ import us.tractat.kuilt.crdt.LogOp
  *
  * Anti-entropy re-offers the same remote log every round. Without suppression, each round writes
  * one full copy of the peer's log, so an archive that is supposed to grow with *history* would grow
- * with *time spent gossiping*. An append-only log gives no dedup for free, and neither does the
- * frame's dot field: a `Remove` mints no dot of its own — it reuses its target `Insert`'s id — so
- * dots cannot tell a repeated removal from a new one. Identity here is the [LogOp] classification
- * itself, which carries exactly the insert-versus-remove discriminator on the same id that the
- * dots cannot.
+ * with *time spent gossiping*. An append-only log gives no dedup for free.
  *
- * ### The suppression window is BOUNDED and LRU, and neither is what the issue proposed
+ * ### Inserts and removes are recognised by different things, and cost different amounts
  *
- * The design sketch proposed an unbounded set of archived identities, rebuilt from the archive's
- * tail whenever a process opens one. Both halves are unaffordable for the same reason — **a bolt's
- * archive is unbounded by construction, so nothing sized against it may be held in memory or read
- * at startup**. An unbounded set is one entry per archived operation for the life of the process, a
- * leak sized by the very thing the module promises to let grow; and reading "the tail" means
- * replaying to find it, while a *bounded* tail cannot suppress anything older than itself, which is
- * exactly the case it was proposed for.
+ * An `Insert` mints exactly one causal [Dot]. A `Remove` mints none — it reuses its target insert's
+ * id — so the two need different handles, and the difference is the whole memory story:
  *
- * So [dedupWindow] bounds the set explicitly and **nothing is rebuilt on open**. Skipping the
- * rebuild costs at most one extra copy of each peer's live log per process start — bounded,
- * one-off, and cheaper than reading an unbounded archive to avoid it.
+ * - **Inserts are suppressed from a [DotFrontier]**, which holds contiguous runs of archived `seq`
+ *   per author. One peer's entire live log is *one entry*, however many operations it holds. There
+ *   is no working set to exceed and no cliff to fall off: an insert this decorator has archived is
+ *   suppressed for the life of the process, at O(1) memory. Inserts are the bulk of any log.
+ * - **Removes are suppressed from a bounded LRU set of [LogOp] identities**, because there is no
+ *   dot to key them on. This is the residual, and it is bounded by [removalWindow].
  *
- * **The window is LRU, not FIFO, and the difference is the whole property.** A re-offered identity
- * is *refreshed* to the young end (see [claim]) rather than left where it was first archived.
- * Insertion order alone would evict a peer's identities on a schedule set by how much *other*
- * traffic arrived since — while that peer re-offered every one of them on every round in between —
- * so the archive would grow by a full copy of each peer's log every `dedupWindow / rate` rounds:
- * growth proportional to time spent gossiping, which is the exact failure this exists to prevent.
- * Under LRU, an offered working set that fits in [dedupWindow] produces **zero** duplicates however
- * long gossip runs.
+ * **The residual, stated with its bound.** Suppression of *removes* is total only while the
+ * aggregate offered working set of removes — every peer's live tombstones, plus this replica's own
+ * export stream, since one window serves them all — fits in [removalWindow]. Past that the window
+ * thrashes and the archive grows by roughly `Σ(offered removes) − removalWindow` operations per
+ * round. Removes are the minority of any log, and are themselves collected by the source's own
+ * compaction, so this is a materially smaller residual than one sized by every operation — but it
+ * is a residual, and raising [removalWindow] moves that cliff rather than removing it.
  *
- * **The residual, stated rather than implied.** Suppression is total only while the *aggregate*
- * offered working set — every peer's live log, plus this replica's own export stream, since one
- * window serves them all — fits in [dedupWindow]. Past that the window thrashes and the archive
- * grows by roughly `Σ(offered) − dedupWindow` operations per round. Raising [dedupWindow] moves
- * that cliff and does not remove it.
+ * The frontier has a bound too, in [frontierWindow], but it counts *runs* rather than operations:
+ * one per author, plus one for each hole that has not filled. Past it the shortest run is evicted
+ * and the inserts it covered are archived a second time.
  *
  * All of it is sound because a suppression miss costs *bytes*, never correctness: a duplicate
  * operation in the archive replays as a duplicate operation, and folding an op-log CRDT's operation
- * twice is idempotent.
+ * twice is idempotent. The frontier is careful to keep the error on that side — see [DotFrontier].
  *
- * **A third option exists and is not built here.** "Unbounded set" and "bounded window" are not
- * exhaustive. An `Insert` mints exactly one causal `Dot`, so inserts — the bulk of any log — can be
- * suppressed *completely* in O(authors) from a frontier this class accumulates itself: a
- * high-water `VersionVector` of archived dots plus a small gap set for out-of-order arrivals. A
- * `Remove` mints no dot, so removes would still need a bounded set, but they are the minority.
- * That is #2254, deliberately deferred: it is its own design (gap draining, holes that never fill,
- * whether the frontier survives a restart), and this window is correct without it.
+ * ### Nothing is rebuilt on open, and the frontier does not survive a restart either
+ *
+ * The design sketch this class grew from proposed an unbounded set of archived identities, rebuilt
+ * from the archive's tail whenever a process opens one. Both halves are unaffordable for the same
+ * reason — **a bolt's archive is unbounded by construction, so nothing sized against it may be held
+ * in memory or read at startup**.
+ *
+ * So a new process starts with an empty frontier and an empty removal window, and that is a
+ * deliberate choice rather than an omission. It costs at most one extra copy of each peer's live
+ * log per process start — bounded, one-off, and cheaper than reading an unbounded archive to avoid
+ * it. Persisting the frontier is possible (it is small and serialisable) and is *not* done here: it
+ * would put a second durable thing beside the archive that has to stay consistent with it across
+ * crashes, to save a cost that is already bounded. If that trade ever changes, it changes as its own
+ * issue.
+ *
+ * A restart is also why the frontier holds runs rather than a high-water mark: the second process
+ * meets each peer part-way through that peer's sequence, so there is a hole below first contact that
+ * will never fill. [DotFrontier] leaves it open at no cost.
  *
  * ### Ordering: this runs BEFORE the owner's durable write, on purpose
  *
@@ -105,26 +108,31 @@ import us.tractat.kuilt.crdt.LogOp
  *
  * @param bolt the archive to feed.
  * @param format how operations are classified and encoded — the same value the [bolt] was built
- *   with. Classification is what separates content from records of forgetting, and what supplies
- *   the identity a duplicate is recognised by.
- * @param dedupWindow how many operation identities to remember, evicted least-recently-offered
- *   first. **Size it to the aggregate working set you expect to be offered** — roughly the sum over
- *   peers of each peer's live log, plus this replica's own export stream, since one window serves
- *   them all. Below that the archive grows per round; above it, not at all. `0` disables
- *   suppression, which is only ever right for an owner that never merges.
+ *   with. Classification is what separates content from records of forgetting, supplies the causal
+ *   dot an insert is recognised by, and supplies the identity a repeated removal is recognised by.
+ * @param removalWindow how many **removal** identities to remember, evicted least-recently-offered
+ *   first. Inserts do not consume it — they are suppressed from the frontier — so size it to the
+ *   aggregate live *tombstones* you expect to be offered rather than to whole logs. `0` disables
+ *   removal suppression, which is only ever right for an owner that never merges.
+ * @param frontierWindow how many contiguous runs of archived insert dots to remember: one per
+ *   author while that author's dots arrive densely, one more for each hole that has not filled. It
+ *   is **not** sized by operations — a peer's whole log is one run — so the default covers a fleet
+ *   far larger than any [removalWindow] could.
  */
 public class BoltDecorator<Id : Any, V, Op : Any>(
     private val bolt: Bolt<Op>,
     private val format: BoltArchiveFormat<Id, V, Op>,
-    private val dedupWindow: Int = DEFAULT_DEDUP_WINDOW,
+    private val removalWindow: Int = DEFAULT_REMOVAL_WINDOW,
+    frontierWindow: Int = DEFAULT_FRONTIER_WINDOW,
 ) {
 
     init {
-        require(dedupWindow >= 0) { "dedupWindow must not be negative, was $dedupWindow" }
+        require(removalWindow >= 0) { "removalWindow must not be negative, was $removalWindow" }
+        require(frontierWindow >= 0) { "frontierWindow must not be negative, was $frontierWindow" }
     }
 
     /**
-     * Guards [archived].
+     * Guards [frontier], [inFlight] and [archived].
      *
      * An explicit lock rather than dispatcher confinement: an owner may publish from any thread,
      * and correctness here must not depend on where coroutines happen to run. Nothing inside a
@@ -134,14 +142,32 @@ public class BoltDecorator<Id : Any, V, Op : Any>(
     private val lock = reentrantLock()
 
     /**
-     * The identities already archived, **least recently offered first** — an insertion-ordered set
-     * whose order [claim] refreshes on every hit, so [trimToWindow] evicts by recency of *offer*
-     * rather than by age of first archive.
+     * Which inserts have been archived, as runs of causal `seq` per author — O(authors) + O(open
+     * holes), never O(archived operations). See [DotFrontier] for why runs rather than a high-water
+     * mark plus a gap set.
+     */
+    private val frontier = DotFrontier(frontierWindow)
+
+    /**
+     * Insert dots claimed by an append that has not returned yet.
      *
-     * A [LogOp] *is* the identity. `LogOp.Insert(id)` and `LogOp.Remove(id)` are distinct values
-     * for the same `id`, which is exactly the discriminator a frame's insert-only dots cannot
-     * supply. `LogOp.Compact` never reaches here: it names a *set* of ids rather than one, so it
-     * has no single identity — and the archive discards it anyway.
+     * The frontier records what was *archived*, so it cannot also carry a reservation — an entry
+     * added before the append would have to be un-added on a failure, and un-adding a `seq` that
+     * has already merged into a run means splitting the run back apart. Holding the in-flight dots
+     * separately makes both outcomes trivial: commit moves them into the frontier, failure drops
+     * them. It is bounded by the operations in concurrently-running publishes, and every exit path
+     * from [publish] — including cancellation — empties its own.
+     */
+    private val inFlight = HashSet<Dot>()
+
+    /**
+     * The **removal** identities already archived, least recently offered first — an
+     * insertion-ordered set whose order [claimIdentity] refreshes on every hit, so [trimToWindow]
+     * evicts by recency of *offer* rather than by age of first archive.
+     *
+     * Only `LogOp.Remove` reaches here. An `Insert` is recognised by the dot it mints and lives in
+     * [frontier]; a `LogOp.Compact` names a *set* of ids rather than one, so it has no single
+     * identity — and the archive discards it anyway.
      */
     private val archived = LinkedHashSet<LogOp<Id>>()
 
@@ -176,14 +202,12 @@ public class BoltDecorator<Id : Any, V, Op : Any>(
      * [AppendResult.Failed] and on [health], and the operation is claimed again on the next round.
      */
     public suspend fun publish(ops: List<Op>): AppendResult {
-        // Classification is pure and non-trivial, so it happens with no lock held.
-        val identified = ops.mapNotNull { op ->
-            val classified = format.classifyOp(op)
-            if (classified is LogOp.Compact) null else op to classified
-        }
+        // Classification and dot projection are pure and non-trivial, so they happen with no lock
+        // held — which is also why the key is computed once here rather than twice under the lock.
+        val identified = ops.mapNotNull { op -> archiveKeyOf(op)?.let { op to it } }
         if (identified.isEmpty()) return AppendResult.Skipped
 
-        val reserved = lock.withLock { identified.filter { (_, identity) -> claim(identity) } }
+        val reserved = lock.withLock { identified.filter { (_, key) -> claim(key) } }
         val suppressed = identified.size - reserved.size
         if (reserved.isEmpty()) {
             record(AppendResult.Skipped, suppressed)
@@ -193,26 +217,44 @@ public class BoltDecorator<Id : Any, V, Op : Any>(
         val result = appendOrConvert(reserved)
 
         lock.withLock {
-            if (result is AppendResult.Written) trimToWindow() else release(reserved)
+            if (result is AppendResult.Written) commit(reserved) else release(reserved)
         }
         record(result, suppressed)
         return result
     }
 
+    /** How [op] is recognised as already-archived, or `null` if it is a record of forgetting. */
+    private fun archiveKeyOf(op: Op): ArchiveKey<Id>? = when (val classified = format.classifyOp(op)) {
+        is LogOp.Insert -> ArchiveKey.MintedDot(format.dotOf(classified.id))
+        is LogOp.Remove -> ArchiveKey.Identity(classified)
+        is LogOp.Compact -> null
+    }
+
     /**
-     * Claim [identity] for an append about to happen — or, if it is already claimed, **refresh** it
-     * to the young end of the window and answer `false`. Called under [lock].
+     * Claim [key] for an append about to happen, answering whether it was free. Called under [lock].
      *
-     * The refresh is what makes [dedupWindow] an LRU bound rather than a FIFO one, and it is the
+     * An insert is free when the frontier has not archived its dot and no concurrent publish holds
+     * it. A remove goes through [claimIdentity], which also refreshes the LRU order.
+     */
+    private fun claim(key: ArchiveKey<Id>): Boolean = when (key) {
+        is ArchiveKey.MintedDot -> !frontier.contains(key.dot) && inFlight.add(key.dot)
+        is ArchiveKey.Identity -> claimIdentity(key.identity)
+    }
+
+    /**
+     * Claim a removal [identity] — or, if it is already claimed, **refresh** it to the young end of
+     * the window and answer `false`. Called under [lock].
+     *
+     * The refresh is what makes [removalWindow] an LRU bound rather than a FIFO one, and it is the
      * difference between suppressing a gossiping peer forever and suppressing it for
-     * `dedupWindow / rate` rounds. `LinkedHashSet.add` on a present element returns `false` and
+     * `removalWindow / rate` rounds. `LinkedHashSet.add` on a present element returns `false` and
      * leaves its position **unchanged**, so without the explicit remove-then-add a peer's
      * identities march toward the head on a clock set by everyone else's traffic and are evicted
      * while that peer is still re-offering every one of them. Deleting these two lines restores
      * exactly that; [BoltDecoratorTest] pins it at a window boundary, because at any other size the
      * two orders are indistinguishable.
      */
-    private fun claim(identity: LogOp<Id>): Boolean {
+    private fun claimIdentity(identity: LogOp<Id>): Boolean {
         if (archived.add(identity)) return true
         archived.remove(identity)
         archived.add(identity)
@@ -235,7 +277,7 @@ public class BoltDecorator<Id : Any, V, Op : Any>(
      * an archive failure. It releases the claim on its way out: nothing was written, so nothing may
      * stay reserved, and the operations are re-offered normally on the next round.
      */
-    private suspend fun appendOrConvert(reserved: List<Pair<Op, LogOp<Id>>>): AppendResult {
+    private suspend fun appendOrConvert(reserved: List<Pair<Op, ArchiveKey<Id>>>): AppendResult {
         val content = reserved.map { (op, _) -> op }
         return try {
             bolt.append(content)
@@ -254,16 +296,44 @@ public class BoltDecorator<Id : Any, V, Op : Any>(
         }
     }
 
-    /** Give back the claims an append did not honour. Called under [lock]. */
-    private fun release(reserved: List<Pair<Op, LogOp<Id>>>) {
-        reserved.forEach { (_, identity) -> archived.remove(identity) }
+    /**
+     * Move the claims an append honoured into the durable memory, then trim both bounds. Called
+     * under [lock].
+     *
+     * Trimming happens once per committed append rather than once per dot: a batch that closes
+     * several holes at once is measured after they have merged rather than while it is transiently
+     * over the cap, which is the difference between evicting nothing and evicting a run that was
+     * about to disappear anyway.
+     */
+    private fun commit(reserved: List<Pair<Op, ArchiveKey<Id>>>) {
+        reserved.forEach { (_, key) ->
+            if (key is ArchiveKey.MintedDot) {
+                inFlight.remove(key.dot)
+                frontier.add(key.dot)
+            }
+        }
+        frontier.trim()
+        trimToWindow()
     }
 
-    /** Drop the least recently offered identities until the set is back inside [dedupWindow]. Called under [lock]. */
+    /** Give back the claims an append did not honour. Called under [lock]. */
+    private fun release(reserved: List<Pair<Op, ArchiveKey<Id>>>) {
+        reserved.forEach { (_, key) ->
+            when (key) {
+                is ArchiveKey.MintedDot -> inFlight.remove(key.dot)
+                is ArchiveKey.Identity -> archived.remove(key.identity)
+            }
+        }
+    }
+
+    /**
+     * Drop the least recently offered removal identities until the set is back inside
+     * [removalWindow]. Called under [lock].
+     */
     private fun trimToWindow() {
-        if (archived.size <= dedupWindow) return
+        if (archived.size <= removalWindow) return
         val iterator = archived.iterator()
-        while (archived.size > dedupWindow && iterator.hasNext()) {
+        while (archived.size > removalWindow && iterator.hasNext()) {
             iterator.next()
             iterator.remove()
         }
@@ -298,19 +368,34 @@ public class BoltDecorator<Id : Any, V, Op : Any>(
 
     public companion object {
         /**
-         * How many operation identities are remembered by default.
+         * How many **removal** identities are remembered by default.
          *
-         * Sized as "a few peers' worth of a full log buffer", not as a fraction of the archive —
-         * the archive is unbounded and this must not be. A miss costs one duplicated operation in
-         * the archive, so the number is a space/bytes trade with no correctness edge to fall off.
+         * Unchanged from the all-operations window it replaces, so no consumer's suppression gets
+         * worse — but it now holds only removes, so the same memory covers many times the traffic.
+         * A miss costs one duplicated operation in the archive, so the number is a space/bytes
+         * trade with no correctness edge to fall off.
          *
-         * **It is a default, not a bound that scales.** A phone archiving only its own exports sits
-         * well inside it; a server gossiping with enough peers does not, because the window serves
-         * every peer at once. Raise it deliberately against the sizing rule on [dedupWindow] rather
-         * than assuming it covers a fleet — and see #2254 for the change that would remove the
-         * question for inserts entirely.
+         * **It is still a default, not a bound that scales.** Removes are the minority of a log and
+         * the source's own compaction collects them, so a fleet has to be large before this is the
+         * binding constraint — but it is bounded by operations, and inserts are not. Raise it
+         * deliberately against the sizing rule on [removalWindow] rather than assuming it covers a
+         * fleet.
          */
-        public const val DEFAULT_DEDUP_WINDOW: Int = 65_536
+        public const val DEFAULT_REMOVAL_WINDOW: Int = 65_536
+
+        /**
+         * How many contiguous runs of archived insert dots are remembered by default.
+         *
+         * Counted in *runs*, not operations: an author whose dots arrive densely costs one entry
+         * however long its log is, and one more for each hole that has not filled. So this is
+         * really "how many peers, plus how much delivery fragmentation" — and 4,096 is a fleet far
+         * larger than any archive built on this module is expected to gossip with, at a few hundred
+         * kilobytes.
+         *
+         * Past it the shortest run is evicted and the inserts it covered are archived a second
+         * time, which costs bytes and never correctness.
+         */
+        public const val DEFAULT_FRONTIER_WINDOW: Int = 4_096
 
         /**
          * How many [AppendResult.Failed] values [ArchiveHealth.recentFailures] retains.
@@ -320,4 +405,22 @@ public class BoltDecorator<Id : Any, V, Op : Any>(
          */
         public const val RETAINED_FAILURES: Int = 32
     }
+}
+
+/**
+ * How one offered operation is recognised as already archived.
+ *
+ * The split is not a stylistic one — it is the difference between O(1) memory per author and O(1)
+ * memory per operation. An `Insert` mints exactly one causal [Dot], so a frontier of archived dots
+ * answers for it. A `Remove` mints none (it reuses its target insert's id), so nothing but its
+ * whole [LogOp] identity distinguishes a repeated removal from a new one, and identities have to be
+ * remembered one at a time.
+ */
+private sealed interface ArchiveKey<Id> {
+
+    /** An `Insert`, recognised by the dot it minted. */
+    class MintedDot<Id>(val dot: Dot) : ArchiveKey<Id>
+
+    /** A `Remove`, recognised by the whole classification — there is no dot of its own to use. */
+    class Identity<Id>(val identity: LogOp<Id>) : ArchiveKey<Id>
 }
