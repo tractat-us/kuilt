@@ -78,8 +78,8 @@ Two existing Apple/radio fabrics offer opposite templates:
 - `kuilt-nearby` keeps **all** Loom/Seam/handshake logic in `commonMain` behind a
   thin `NearbyApi` interface, puts the one real platform binding in `androidMain`,
   and runs the **entire `SeamConformanceSuite` on the JVM** against a `FakeNearbyApi`.
-  No device needed for the logic layer. (One bug **not** to inherit: its
-  `freshPeerId()` is a per-loom counter that collides across devices — see
+  No device needed for the logic layer. (One bug **not** to inherit: it originally
+  minted identities from a per-loom counter that collides across devices — see
   [Identity](#identity--peerid).)
 
 `kuilt-nw` follows the Nearby shape:
@@ -185,9 +185,10 @@ consumer must never wedge the receive loop).
 ## Identity — `PeerId`
 
 `PeerId` is a **collision-resistant random** (UUID-grade) minted once per `NwLoom`
-instance — **not** a per-loom counter (Nearby's `nearby-peer-${counter}` collides:
-two devices both mint `nearby-peer-1`; masked only because Nearby's conformance runs
-one loom in-process). Each side sends its `PeerId` as the first framed message after
+instance — **not** a per-loom counter (Nearby's original `nearby-peer-${counter}`
+collided: two devices both minted `nearby-peer-1`, masked only because Nearby's
+conformance runs one loom in-process; it has since adopted the same random mint, and
+both now call the shared `freshPeerId()` in `:kuilt-core`). Each side sends its `PeerId` as the first framed message after
 a connection opens; the handshake resolves once both identities are known (and drives
 the dedup tie-break). A caller may inject a stable `PeerId` for reconnect continuity;
 the reconnect-stability contract (does a fresh `weave()` reuse identity?) is stated

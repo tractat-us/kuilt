@@ -22,8 +22,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Tag
-import kotlin.uuid.ExperimentalUuidApi
-import kotlin.uuid.Uuid
+import us.tractat.kuilt.core.freshPeerId
 
 /**
  * [Loom] implementation backed by Google Nearby Connections.
@@ -225,17 +224,6 @@ public class NearbyLoom(
             job.cancel()
         }
     }
-
-    /**
-     * Mint a fresh, globally-unique self-identity for one weave.
-     *
-     * Uses a random UUID (v4) so two devices never collide without coordination.
-     * The previous per-loom monotonic counter restarted at the same value on every
-     * device, minting the same `nearby-peer-1` sequence and colliding the instant two
-     * devices met (#1432, mirroring the #1405 fix in `:kuilt-nw`).
-     */
-    @OptIn(ExperimentalUuidApi::class)
-    private fun freshPeerId(): PeerId = PeerId(Uuid.random().toString())
 
     public companion object {
         /** Default Nearby Connections service ID. */

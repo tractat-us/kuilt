@@ -122,6 +122,7 @@ import platform.darwin.dispatch_queue_create
 import platform.darwin.dispatch_time
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.freshPeerId
 import us.tractat.kuilt.nw.cinterop.kuilt_nw_connection_receive
 
 private val log = KotlinLogging.logger("us.tractat.kuilt.nw.RealNwApi")

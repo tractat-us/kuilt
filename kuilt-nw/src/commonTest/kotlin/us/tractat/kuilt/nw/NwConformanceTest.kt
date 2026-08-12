@@ -17,7 +17,7 @@ import kotlin.random.Random
  * Unlike a single-instance fabric that returns `(loom, loom)`, [newLoomPair] returns two genuinely
  * distinct [NwLoom]s — one hosting, one joining — sharing ONE [FakeNwRadio] and the SAME Bonjour
  * [SERVICE_TYPE] so they discover each other. Each has its own [FakeNwApi] (its own event flows) and
- * a distinct UUID [NwLoom.selfId] (default [freshPeerId]), so no single instance ever sees both ends
+ * a distinct UUID [NwLoom.selfId] (default [us.tractat.kuilt.core.freshPeerId]), so no single instance ever sees both ends
  * of a link — cross-device roster/identity/dedup bugs surface on the JVM exactly as across two phones.
  *
  * ## Capabilities & the securesTransport gap
