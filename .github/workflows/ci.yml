@@ -647,14 +647,26 @@ jobs:
   # were added, so the class name is the contract and a new deterministic probe
   # opts into the gate by being named for it.
   #
-  # Today that matches exactly one class, CompositeCapabilityConcurrencyTest
-  # (#1767), guarding a lost-update race in CompositeSeam's capability rollup:
-  # two recomputes interleave and a stale confident `Available` lands last with
-  # no later emission to correct it. Reverting the fix does not make the probe
-  # flaky — it hangs RELIABLY (observed at round=842). That determinism is the
-  # entire reason this one can gate: a red here is a real defect essentially
-  # every time, and the failure class is exactly the one #1712 exists to
-  # eliminate (a peer confidently asserting a network state it never observed).
+  # Determinism is the entrance fee, and each member carries its receipt here.
+  # A red in this job is a real defect essentially every time; that is the whole
+  # reason it may gate. Today it matches two classes:
+  #
+  #   - CompositeCapabilityConcurrencyTest (#1767) — a lost-update race in
+  #     CompositeSeam's capability rollup: two recomputes interleave and a stale
+  #     confident `Available` lands last with no later emission to correct it.
+  #     Reverting the fix does not make the probe flaky — it hangs RELIABLY
+  #     (observed at round=842). Its failure class is exactly the one #1712
+  #     exists to eliminate (a peer confidently asserting a network state it
+  #     never observed).
+  #   - ScopedCloseableCloseOnceCapabilityConcurrencyTest (#2305) — a
+  #     check-then-set close guard in ScopedCloseable, the base class of ten
+  #     multi-threaded coordinators, letting two concurrent close() callers both
+  #     run onClose() against its at-most-once contract. On the unguarded flag it
+  #     reddens at 1336–1830 of 2000 rounds, worst count 8 of 8, in ~1 s per run.
+  #
+  # Keep this list current when a class opts in: it is the load-bearing
+  # justification for letting this job block merges at all, and a stale one tells
+  # an auditor something untrue about the gate itself.
   #
   # DELIBERATE OVERLAP: concurrency-probes still runs `*ConcurrencyTest`, which
   # includes this probe, so it executes twice per run. That costs seconds and

@@ -8,6 +8,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.yield
+import java.lang.management.ManagementFactory
 import java.util.concurrent.CyclicBarrier
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
@@ -46,10 +47,16 @@ import kotlin.test.assertTrue
  *
  * ## Why the rig asserts on itself
  *
- * Every arm that could silently reduce this to a serial close is asserted, not assumed: all [ROUNDS]
- * rounds must complete, and every round must have had all [CLOSERS] closers check in. Without those
- * a barrier timeout on a starved box would collect zero violations and report **green** — the
- * failure mode where the fixture quietly picks the case in which the property cannot fail.
+ * All [ROUNDS] rounds must complete. Without that, a barrier timeout on a starved box would collect
+ * zero violations and report **green** — the failure mode where a fixture quietly picks the case in
+ * which the property cannot fail. That every closer actually raced needs no separate assertion: the
+ * round-end barrier has arity `CLOSERS + 1`, so a round that completes *is* a round in which every
+ * closer passed the round-start barrier and checked in. The rest of the anti-vacuity evidence is the
+ * red-arm measurement above, which no green run can reproduce.
+ *
+ * Because this probe gates, a wedge must name its own cause: the completed-rounds failure carries
+ * the terminating exception type plus the fan-out, core count and load average, since an assertion
+ * failure (unlike the harness cap firing) runs none of [runConcurrencyStress]'s dumps.
  *
  * **JVM-hosted, `-Pconcurrency.stress.tests`-gated** (`kuilt-core/build.gradle.kts`), and named to
  * opt in to the **gating** `capability-probes` CI job: per that job's header the `*Capability`
@@ -80,16 +87,19 @@ class ScopedCloseableCloseOnceCapabilityConcurrencyTest {
         val current = atomic<CountingCloseable?>(null)
         val checkedIn = atomic(0)
         val closerFailures = atomic(emptyList<Throwable>())
+        // Why a round stopped early, if one ever does — the single fact a wedge red needs and the
+        // one `awaitRound` would otherwise discard.
+        val wedgeCause = atomic<String?>(null)
         // Violations are collected, not asserted per round: "1830 of 2000 rounds double-ran, worst 8"
         // is a far stronger receipt than the first failure alone, and every round is cheap.
         val doubleRuns = mutableListOf<Pair<Int, Int>>()
-        val shortRounds = mutableListOf<Pair<Int, Int>>()
         var completedRounds = 0
 
         val closers = (0 until CLOSERS).map { index ->
-            Thread({ runCloser(roundStart, roundEnd, current, checkedIn, closerFailures) }, "close-racer-$index")
-                .apply { isDaemon = true }
-                .also { it.start() }
+            Thread(
+                { runCloser(roundStart, roundEnd, current, checkedIn, closerFailures, wedgeCause) },
+                "close-racer-$index",
+            ).apply { isDaemon = true }.also { it.start() }
         }
 
         try {
@@ -98,12 +108,10 @@ class ScopedCloseableCloseOnceCapabilityConcurrencyTest {
                 current.value = closeable
                 checkedIn.value = 0
                 stage.at("round=$round close race") { "round=$round onCloseCount=${closeable.onCloseCount}" }
-                if (!awaitRound(roundStart) || !awaitRound(roundEnd)) return@repeat
+                if (!awaitRound(roundStart, wedgeCause) || !awaitRound(roundEnd, wedgeCause)) return@repeat
                 completedRounds++
                 val count = closeable.onCloseCount
                 if (count != 1) doubleRuns += round to count
-                val racers = checkedIn.value
-                if (racers != CLOSERS) shortRounds += round to racers
                 // The only cancellation checkpoint in the loop: both awaits above block a real
                 // thread, which `withTimeout` cannot interrupt, so without this the harness's cap
                 // could never fire on a wedged run.
@@ -123,13 +131,17 @@ class ScopedCloseableCloseOnceCapabilityConcurrencyTest {
             "closer thread(s) failed: ${closerFailures.value.map { "${it::class.simpleName}: ${it.message}" }}",
         )
         // Rig first: a probe that did not actually race proves nothing about the guard, and must not
-        // be allowed to report an empty violation list as a pass.
-        assertEquals(ROUNDS, completedRounds, "the probe wedged: only $completedRounds of $ROUNDS rounds ran")
+        // be allowed to report an empty violation list as a pass. This is the one red a green run
+        // cannot pre-diagnose, so it carries its own verdict rather than an invitation to reproduce.
         assertEquals(
-            0,
-            shortRounds.size,
-            "${shortRounds.size} round(s) raced fewer than $CLOSERS closers, so the race window was never " +
-                "contended there. First few (round to closers): ${shortRounds.take(FEW)}",
+            ROUNDS,
+            completedRounds,
+            "the probe wedged: only $completedRounds of $ROUNDS rounds ran. Terminated by " +
+                "${wedgeCause.value ?: "<no barrier exception recorded>"}; closers=$CLOSERS " +
+                "availableProcessors=${Runtime.getRuntime().availableProcessors()} " +
+                "systemLoadAverage=${ManagementFactory.getOperatingSystemMXBean().systemLoadAverage}. " +
+                "A TimeoutException with a load average well above the core count is a starved box; " +
+                "one on an idle box is a real wedge in close().",
         )
         assertEquals(
             0,
@@ -152,9 +164,10 @@ class ScopedCloseableCloseOnceCapabilityConcurrencyTest {
         current: AtomicRef<CountingCloseable?>,
         checkedIn: AtomicInt,
         failures: AtomicRef<List<Throwable>>,
+        wedgeCause: AtomicRef<String?>,
     ) {
         repeat(ROUNDS) {
-            if (!awaitRound(roundStart)) return
+            if (!awaitRound(roundStart, wedgeCause)) return
             try {
                 checkedIn.incrementAndGet()
                 awaitSiblings(checkedIn)
@@ -164,17 +177,17 @@ class ScopedCloseableCloseOnceCapabilityConcurrencyTest {
                 // barrier would simply time out with no cause attached.
                 failures.update { it + failure }
             }
-            if (!awaitRound(roundEnd)) return
+            if (!awaitRound(roundEnd, wedgeCause)) return
         }
     }
 
     private companion object {
         /**
          * Spins until every closer has checked in, falling back to [Thread.yield] past
-         * [SPIN_LIMIT]. The fallback is what keeps an oversubscribed box making progress:
-         * [Thread.onSpinWait] never yields, so on a runner with fewer usable cores than closers a
-         * pure spin would livelock — one closer burning a core while the sibling it waits for
-         * cannot get one.
+         * [SPIN_LIMIT]. [Thread.onSpinWait] never yields, so on a runner with fewer usable cores
+         * than closers a pure spin would wait out a full scheduler quantum for each sibling it is
+         * missing. Preemption breaks it either way — this is a latency floor, not a livelock — but
+         * yielding once the race is plainly not about to happen is cheaper and bounds the round.
          */
         fun awaitSiblings(checkedIn: AtomicInt) {
             var spins = 0
@@ -188,12 +201,17 @@ class ScopedCloseableCloseOnceCapabilityConcurrencyTest {
          * broken (the coordinator finished or failed), the wait timed out, or the thread was
          * interrupted. All three mean "stop"; none is silently tolerated, because a run that ends
          * this way fails the completed-rounds assertion above.
+         *
+         * The exception's type *is* the diagnosis — a `TimeoutException` is a wedge, a
+         * `BrokenBarrierException` is a sibling that already stopped — so it is recorded into
+         * [wedgeCause] for that assertion to quote. First writer wins: the first thread to give up
+         * is the one holding the cause, and every later one is downstream of it.
          */
-        @Suppress("SwallowedException") // the exception type is the signal; there is no cause to propagate.
-        fun awaitRound(barrier: CyclicBarrier): Boolean = try {
+        fun awaitRound(barrier: CyclicBarrier, wedgeCause: AtomicRef<String?>): Boolean = try {
             barrier.await(BARRIER_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             true
-        } catch (_: Exception) {
+        } catch (failure: Exception) {
+            wedgeCause.compareAndSet(null, failure::class.simpleName ?: failure.toString())
             false
         }
 

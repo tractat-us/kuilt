@@ -55,9 +55,11 @@ import kotlin.test.assertEquals
  * threads and genuine preemption, which no test dispatcher reproduces.
  *
  * **JVM-hosted, `-Pconcurrency.stress.tests`-gated** (matches the other seam probes): excluded from the
- * normal `jvmTest` run and executed on the dedicated concurrency-stress CI job. That job is
- * **deliberately outside `ci-required`'s aggregation** (see `.github/workflows/ci.yml`), so a regression
- * caught here produces signal but does NOT block a merge — read it, don't assume green means checked.
+ * normal `jvmTest` run and executed on a dedicated CI runner. The `*CapabilityConcurrencyTest` suffix
+ * puts it in the **gating** `capability-probes` job (`.github/workflows/ci.yml`), which *is* in
+ * `ci-required` — a red here blocks the merge. It also runs, non-gating, in `concurrency-probes`
+ * alongside every other `*ConcurrencyTest`; that overlap is deliberate. This KDoc said the opposite
+ * until #2305: the split in #1768 moved the deterministic probes under the gate.
  */
 class CompositeCapabilityConcurrencyTest {
 
