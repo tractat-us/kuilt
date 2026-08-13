@@ -7,11 +7,20 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.PeerId
+import kotlin.time.Duration
 
 /**
  * Drives the Nearby Connections request→initiate→accept→result handshake
  * for one side of a connection. Suspends until the live link is established
  * or throws on failure / timeout.
+ *
+ * ## [handshakeTimeout] bounds ONE connection, not a rendezvous
+ * The ceiling covers exactly the span this machine drives: kick off (`requestConnection`
+ * on an endpoint the discoverer has **already found**, or nothing at all on the advertiser
+ * side) through `CONNECTED` plus the identity payload. Endpoint *discovery* happens in
+ * [NearbyLoom] before this machine is constructed and is deliberately **not** covered, so
+ * this is not a `weaveTimeout` and must not be renamed to one — see
+ * [NearbyLoom.DEFAULT_HANDSHAKE_TIMEOUT].
  *
  * ## Subscribe-before-trigger
  * All event collectors are launched with [CoroutineStart.UNDISPATCHED] so they
@@ -40,7 +49,7 @@ internal class ConnectStateMachine(
     private val api: NearbyApi,
     private val endpointId: String?,
     private val serviceId: String,
-    private val timeoutMs: Long = 30_000L,
+    private val handshakeTimeout: Duration,
 ) {
 
     /**
@@ -56,7 +65,7 @@ internal class ConnectStateMachine(
         scope: CoroutineScope,
         trigger: suspend () -> Unit,
     ): ConnectedLink =
-        withTimeout(timeoutMs) {
+        withTimeout(handshakeTimeout) {
             val deferred = CompletableDeferred<ConnectedLink>()
             val handshake = HandshakeState(initialEndpoint = endpointId)
             val jobs = launchListeners(scope, deferred, handshake)

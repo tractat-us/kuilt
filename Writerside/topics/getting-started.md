@@ -102,7 +102,7 @@ the code unchanged:
 ```kotlin
 val loom: Loom = when {
     isApple   -> MultipeerPeerLinkFactory(displayName = "alice", serviceType = "com.example.app")
-    isAndroid -> NearbyLoom(api = GmsNearbyApi(context), serviceId = "com.example.app")
+    isAndroid -> nearbyLoom(context, serviceId = "com.example.app")
     isBrowser -> WebRTCPeerLinkFactory(signaling = WebSocketSignalingChannel(wsUrl), room = "myroom")
     else      -> KtorClientLoom(httpClient)
 }

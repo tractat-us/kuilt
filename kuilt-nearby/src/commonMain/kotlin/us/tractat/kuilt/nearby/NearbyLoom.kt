@@ -12,6 +12,7 @@ import kotlinx.coroutines.launch
 
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.TransportRole
@@ -23,6 +24,8 @@ import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.core.freshPeerId
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * [Loom] implementation backed by Google Nearby Connections.
@@ -46,15 +49,29 @@ import us.tractat.kuilt.core.freshPeerId
  * pattern and lets the conformance suite run a "one loom, one host, one joiner"
  * scenario.
  *
- * @param api              [NearbyApi] to use (real GMS or fake for tests).
- * @param serviceId        Nearby Connections service ID. Must match on both devices.
- * @param timeoutMs        Handshake timeout forwarded to [ConnectStateMachine].
- * @param maxChunkPayload  Per-chunk payload cap forwarded to [ChunkCodec].
+ * ## No loom-level `selfId` — identity is minted per weave
+ * Because one loom weaves *both* ends of a session (above), a loom-level identity would
+ * hand the host seam and the joiner seam the **same** [PeerId] — collapsing the roster to
+ * one entry, so `Weaving` would never reach `Woven`, and making every `sendTo` between them
+ * fail its own `peer != selfId` precondition. Each weave therefore mints its own
+ * [us.tractat.kuilt.core.freshPeerId], exactly as
+ * [us.tractat.kuilt.core.InMemoryLoom] does. That is why the uniform-`Loom`-construction
+ * convention's `selfId` knob is deliberately **absent** here rather than defaulted (#1430);
+ * `NearbyLoomKnobsTest` pins the distinctness the omission rests on.
+ *
+ * @param api               [NearbyApi] to use (real GMS or fake for tests).
+ * @param serviceId         Nearby Connections service ID. Must match on both devices.
+ * @param policy            Delivery policy for every woven seam's inbound buffer.
+ * @param handshakeTimeout  Ceiling on ONE connection's handshake, forwarded to
+ *                          [ConnectStateMachine]. **Not** a weave timeout — endpoint
+ *                          discovery sits outside it (see [DEFAULT_HANDSHAKE_TIMEOUT]).
+ * @param maxChunkPayload   Per-chunk payload cap forwarded to [ChunkCodec].
  */
 public class NearbyLoom(
     private val api: NearbyApi,
     private val serviceId: String = DEFAULT_SERVICE_ID,
-    private val timeoutMs: Long = 30_000L,
+    private val policy: DeliveryPolicy = DeliveryPolicy.Reliable,
+    private val handshakeTimeout: Duration = DEFAULT_HANDSHAKE_TIMEOUT,
     private val maxChunkPayload: Int = ChunkCodec.MAX_CHUNK_PAYLOAD,
 ) : Loom {
 
@@ -107,6 +124,7 @@ public class NearbyLoom(
             scope = seamScope,
             maxChunkPayload = maxChunkPayload,
             msgIdCounter = MsgIdCounter(),
+            policy = policy,
         )
         val linkDeferred = CompletableDeferred<ConnectedLink>()
         loomMutex.withLock {
@@ -127,7 +145,7 @@ public class NearbyLoom(
                     api = api,
                     endpointId = null,
                     serviceId = serviceId,
-                    timeoutMs = timeoutMs,
+                    handshakeTimeout = handshakeTimeout,
                 )
                 // Advertiser: already advertising, so no kickoff — just await a peer.
                 val link = machine.run(this) {}
@@ -165,6 +183,7 @@ public class NearbyLoom(
             scope = seamScope,
             maxChunkPayload = maxChunkPayload,
             msgIdCounter = MsgIdCounter(),
+            policy = policy,
         )
         sharedPeers.update { it + joinerPeerId }
 
@@ -179,7 +198,7 @@ public class NearbyLoom(
             api = api,
             endpointId = hostEndpointId,
             serviceId = serviceId,
-            timeoutMs = timeoutMs,
+            handshakeTimeout = handshakeTimeout,
         )
 
         // run() subscribes the handshake collectors before triggering requestConnection.
@@ -228,5 +247,20 @@ public class NearbyLoom(
     public companion object {
         /** Default Nearby Connections service ID. */
         public const val DEFAULT_SERVICE_ID: String = "us.tractat.kuilt.nearby"
+
+        /**
+         * Default ceiling on **one connection's** Nearby handshake.
+         *
+         * Deliberately *not* [us.tractat.kuilt.core.LoomDefaults.WEAVE_TIMEOUT], despite
+         * carrying the same number today. A weave timeout bounds a whole *rendezvous* —
+         * discovery, dialling and handshake — and this one cannot: on the discoverer path
+         * [NearbyApi.startDiscovery] and the wait for the first `EndpointFound` complete
+         * **before** the clock starts, and on the advertiser path `weave` has already
+         * returned its seam, so nothing the ceiling covers can fail a `weave` call at all.
+         * Naming it `weaveTimeout` would promise a bound on `weave` that no path delivers
+         * (#1430). It belongs with the `handshakeTimeout` family — a ceiling on a single
+         * connection — and moves independently of the shared rendezvous default.
+         */
+        public val DEFAULT_HANDSHAKE_TIMEOUT: Duration = 30.seconds
     }
 }

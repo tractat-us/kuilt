@@ -28,9 +28,15 @@ public object LoomDefaults {
      * value and should pass one explicitly.
      *
      * The value is the one every fabric that bounds a weave already converged on
-     * independently: `NwLoom.DEFAULT_WEAVE_TIMEOUT`, `:kuilt-nearby`'s connect state
-     * machine, and `:kuilt-webrtc`'s handshake runner all chose it before this constant
-     * existed. It is a shared default, not a measured optimum.
+     * independently: `NwLoom.DEFAULT_WEAVE_TIMEOUT` and `:kuilt-webrtc`'s handshake runner
+     * both chose it before this constant existed. It is a shared default, not a measured
+     * optimum.
+     *
+     * A fabric carrying the same number is not automatically a client of this constant.
+     * `:kuilt-nearby`'s connect state machine also uses 30 s, but it bounds one connection's
+     * handshake with discovery *outside* the clock — `NearbyLoom.DEFAULT_HANDSHAKE_TIMEOUT`,
+     * a different population that moves independently (#1430). Check what a candidate's clock
+     * actually starts and stops on before folding it in here.
      */
     public val WEAVE_TIMEOUT: Duration = 30.seconds
 }

@@ -12,6 +12,7 @@ import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ConnectStateMachineTest {
@@ -54,7 +55,13 @@ class ConnectStateMachineTest {
     fun happyPathResolvesWithRemoteIdentity() =
         runTest(UnconfinedTestDispatcher()) {
             val api = ControllableNearbyApi()
-            val machine = ConnectStateMachine(PeerId("me"), api, endpointId = "ep1", serviceId = "svc")
+            val machine = ConnectStateMachine(
+                PeerId("me"),
+                api,
+                endpointId = "ep1",
+                serviceId = "svc",
+                handshakeTimeout = NearbyLoom.DEFAULT_HANDSHAKE_TIMEOUT,
+            )
 
             val link =
                 machine.run(backgroundScope) {
@@ -77,7 +84,13 @@ class ConnectStateMachineTest {
     fun rejectionThrowsConnectionFailed() =
         runTest(UnconfinedTestDispatcher()) {
             val api = ControllableNearbyApi()
-            val machine = ConnectStateMachine(PeerId("me"), api, endpointId = "ep1", serviceId = "svc")
+            val machine = ConnectStateMachine(
+                PeerId("me"),
+                api,
+                endpointId = "ep1",
+                serviceId = "svc",
+                handshakeTimeout = NearbyLoom.DEFAULT_HANDSHAKE_TIMEOUT,
+            )
 
             val outcome =
                 runCatchingCancellable {
@@ -98,7 +111,13 @@ class ConnectStateMachineTest {
         runTest(UnconfinedTestDispatcher()) {
             val api = ControllableNearbyApi()
             val machine =
-                ConnectStateMachine(PeerId("me"), api, endpointId = "ep1", serviceId = "svc", timeoutMs = 1_000)
+                ConnectStateMachine(
+                    PeerId("me"),
+                    api,
+                    endpointId = "ep1",
+                    serviceId = "svc",
+                    handshakeTimeout = 1.seconds,
+                )
 
             // trigger emits nothing → withTimeout fires on the virtual clock.
             // ALLOW-runCatching: the assertion below is ON the captured TimeoutCancellationException — a CancellationException the test must catch; runCatchingCancellable would rethrow it and the assertion could never run.
