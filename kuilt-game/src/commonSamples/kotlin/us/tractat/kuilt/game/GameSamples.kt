@@ -2,6 +2,7 @@
 
 package us.tractat.kuilt.game
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filterIsInstance
@@ -11,6 +12,7 @@ import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.serializer
@@ -218,9 +220,16 @@ internal fun sampleServerCorePlacement() = runTest(StandardTestDispatcher(), tim
  *
  * [speculativeState][SpeculativeSequencer.speculativeState] is always current (with
  * optimistically applied local moves on top); the UI can observe it directly.
+ *
+ * Runs on an [UnconfinedTestDispatcher] so `async` starts its body eagerly, the way a
+ * real UI dispatcher would: that is what lets the assertion below observe the optimistic
+ * apply. Under `runTest`'s default `StandardTestDispatcher` the `async` is merely
+ * *queued*, so `propose` has not begun and the state still reads empty — a property of
+ * the test scheduler, not of [SpeculativeSequencer] (#2289).
  */
 @Suppress("unused")
-internal fun sampleSpeculativeSequencer() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+internal fun sampleSpeculativeSequencer() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
     // A trivially pure game: state is a list of committed integers.
     val counterGame = object : SpeculativeGame<List<Int>, Int> {
         override fun apply(state: List<Int>, action: Int): List<Int> = state + action
@@ -232,6 +241,14 @@ internal fun sampleSpeculativeSequencer() = runTest(timeout = TEST_WEDGE_BACKSTO
     node.setRole(RaftRole.Leader)
     val sequencer = TurnSequencer(node, Int.serializer())
 
+    // Hold the quorum open, so the in-flight window this sequencer exists to fill is
+    // actually observable. A real Raft round-trip suspends inside propose; the default
+    // FakeRaftNode commits without ever suspending, which would collapse the window to
+    // nothing and make the optimistic state indistinguishable from the committed state.
+    val quorum = CompletableDeferred<Unit>()
+    val commit = node.proposeBehavior
+    node.proposeBehavior = { command -> quorum.await(); commit(command) }
+
     val speculative = SpeculativeSequencer(
         sequencer = sequencer,
         game = counterGame,
@@ -239,11 +256,14 @@ internal fun sampleSpeculativeSequencer() = runTest(timeout = TEST_WEDGE_BACKSTO
         scope = backgroundScope,
     )
 
-    // Optimistic apply: speculativeState reflects 42 immediately, before quorum.
+    // Optimistic apply: speculativeState reflects 42 immediately, while the proposal is
+    // still in flight — no quorum has committed anything yet.
     val proposed = async { speculative.propose(42) }
     assertEquals(listOf(42), speculative.speculativeState.value)
+    assertEquals(1, speculative.pendingCount)
 
-    // Once quorum confirms, pending count drops to 0.
+    // Once quorum confirms, pending count drops to 0 and the same state is authoritative.
+    quorum.complete(Unit)
     val indexed = proposed.await()
     assertEquals(42, indexed.action)
     speculative.awaitConfirmedCount(1)
