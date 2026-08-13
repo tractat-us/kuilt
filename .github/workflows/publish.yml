@@ -4,7 +4,8 @@ name: publish
 # main publishes `${kuiltVersionLine}.0-dev.<run_number>` from gradle.properties (so
 # bumping the major.minor on a breaking-API release is a one-line PR — see
 # #22 for the full cutover history). The upload itself is ~20 s via `aws s3 sync`.
-# Tags are NOT a trigger — they're for tagging; publishing is continuous from main.
+# A `v<x.y.z>` tag IS a trigger, but only for the `maven-central` job below — the
+# Tigris snapshot publish stays continuous from main and never runs on a tag.
 #
 # Why staging-dir + AWS CLI instead of Gradle's native s3:// transport:
 # Gradle silently sets a request header (ACL or storage-class) Tigris rejects
