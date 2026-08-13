@@ -20,7 +20,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.tasks.await
+import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.FabricAvailability
+import kotlin.time.Duration
 import com.google.android.gms.common.ConnectionResult as GmsConnectionResult
 
 /**
@@ -147,8 +149,33 @@ public class GmsNearbyApi(context: Context) : NearbyApi {
  * Construct a [NearbyLoom] backed by the real Google Nearby Connections SDK.
  * Android entry point for the fabric; the consuming app supplies a [Context] and
  * (per [GmsNearbyApi]) the Nearby runtime permissions.
+ *
+ * Follows the uniform `Loom`-construction convention (#1430): the fabric's own required
+ * parameter first, then the universal knobs this fabric can genuinely honour, then its
+ * remaining fabric-specific tuning. Two of the convention's universal knobs are
+ * **deliberately absent** rather than accepted and ignored:
+ *
+ * - **`selfId`** — one [NearbyLoom] weaves both ends of a session, so identity is minted
+ *   per weave and a loom-level id would collide the two seams. See [NearbyLoom].
+ * - **`weaveTimeout`** — nothing here bounds a rendezvous; [handshakeTimeout] bounds a
+ *   single connection instead. See [NearbyLoom.DEFAULT_HANDSHAKE_TIMEOUT].
+ *
+ * @param context           Android [Context]; only its `applicationContext` is retained.
+ * @param serviceId         Nearby Connections service ID. Must match on both devices.
+ * @param policy            Delivery policy for every woven seam's inbound buffer.
+ * @param handshakeTimeout  Ceiling on one connection's handshake — not a weave timeout.
+ * @param maxChunkPayload   Per-chunk payload cap forwarded to [ChunkCodec].
  */
 public fun nearbyLoom(
     context: Context,
     serviceId: String = NearbyLoom.DEFAULT_SERVICE_ID,
-): NearbyLoom = NearbyLoom(api = GmsNearbyApi(context), serviceId = serviceId)
+    policy: DeliveryPolicy = DeliveryPolicy.Reliable,
+    handshakeTimeout: Duration = NearbyLoom.DEFAULT_HANDSHAKE_TIMEOUT,
+    maxChunkPayload: Int = ChunkCodec.MAX_CHUNK_PAYLOAD,
+): NearbyLoom = NearbyLoom(
+    api = GmsNearbyApi(context),
+    serviceId = serviceId,
+    policy = policy,
+    handshakeTimeout = handshakeTimeout,
+    maxChunkPayload = maxChunkPayload,
+)
