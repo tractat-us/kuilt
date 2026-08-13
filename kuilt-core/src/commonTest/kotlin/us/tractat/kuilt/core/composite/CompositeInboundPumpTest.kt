@@ -92,9 +92,9 @@ class CompositeInboundPumpTest {
                     "a dropped frame must be reported through onPlyFailure, not swallowed",
                 )
             },
-            // List-shaped, not `raised.single().cause`: `assertAll` lets a non-AssertionError propagate
-            // immediately, so a `single()` on an empty list would mask every sibling assertion — which is
-            // exactly the pre-fix state.
+            // List-shaped, not `raised.single().cause`: a `single()` on an empty list — exactly the
+            // pre-fix state — makes a NoSuchElementException the failure you read first. Since #2283
+            // the sibling assertions still run and ride along on it, but this names them directly.
             {
                 assertEquals(
                     listOf("IllegalArgumentException"),

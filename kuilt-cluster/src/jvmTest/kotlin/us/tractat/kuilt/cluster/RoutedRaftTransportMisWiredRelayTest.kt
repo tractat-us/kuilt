@@ -64,10 +64,10 @@ class RoutedRaftTransportMisWiredRelayTest {
                 testScheduler.advanceUntilIdle()
                 val warnsAfterSecond = appender.warnMessages()
 
-                // List-shaped, not `warnsAfterFirst.single()`: a WARN that never fires leaves the
-                // list empty, and `single()`'s NoSuchElementException aborts the whole assertAll —
-                // taking the one-time-WARN assertion below, which is the actual subject of this
-                // test, and discarding the size failure already collected above (#1823).
+                // List-shaped, not `warnsAfterFirst.single()`: a WARN that never fires leaves the list
+                // empty, and `single()`'s NoSuchElementException becomes the failure you read first.
+                // Since #2283 the one-time-WARN assertion below — the actual subject of this test —
+                // still runs and rides along on it, but naming these failures reports them directly.
                 assertAll(
                     { assertTrue(relay.directed.isEmpty(), "a mis-wired player relay must drop every relayed send — nothing forwarded") },
                     { assertTrue(relay.broadcasts.isEmpty(), "the relay decorator must never broadcast") },

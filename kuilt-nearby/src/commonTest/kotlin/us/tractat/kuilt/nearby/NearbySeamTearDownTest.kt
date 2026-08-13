@@ -188,8 +188,10 @@ class NearbySeamTearDownTest {
 
         seam.close()
 
-        // Sequential, NOT assertAll: `getCompleted()` throws a non-AssertionError when the probe
-        // never fired, which assertAll propagates immediately and would mask the sibling (#1823).
+        // Sequential, NOT assertAll — and still so after #2283, for a different reason. The masking
+        // it used to avoid is gone (assertAll now carries the sibling diagnoses along on the throw),
+        // but the first assertion GUARDS the second: `getCompleted()` throws when the probe never
+        // fired, and ordering them makes the named "did not latch it" failure the one you read.
         assertTrue(
             peersWhenTornBecameVisible.isCompleted,
             "the probe must have observed the terminal Torn — close() did not latch it",
