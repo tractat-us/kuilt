@@ -295,8 +295,13 @@ class TimeoutShapedFailureReporter(private val resultsDir: Provider<String>) : T
 // (see `settings.gradle.kts`), and it generalises past this one flag: a FREE KNOB ON A FIXTURE
 // DRIFTS TO THE ONE SETTING WHERE THE PROPERTY CANNOT FAIL. Before recording a 🟢, name what would
 // have had to be true for it to be a 🔴, and confirm the task actually EXECUTED — `UP-TO-DATE` or
-// `FROM-CACHE` on a mutation run is not a verdict, it is the previous verdict replayed. The local
-// build cache is shared across worktrees, so re-take control arms with `--no-build-cache`.
+// `FROM-CACHE` on a mutation run is not a verdict, it is the previous verdict replayed. Re-take
+// control arms with `--rerun-tasks` and demand the word EXECUTED, not merely the absence of
+// `FROM-CACHE`: `--no-build-cache` suppresses only the cache and leaves the stamp-based
+// `UP-TO-DATE` check fully in force, which is the mode a receipt-taker actually hits, because they
+// re-run in a warm worktree. Measured here — two `--no-build-cache` runs in a row report
+// `2 up-to-date`; `--rerun-tasks` reports `2 executed`. (Add `--no-build-cache` on top if a task
+// still says `FROM-CACHE`; the local cache is shared across worktrees.)
 //
 // WHY THE BOM CHECK IS NOT JUST MOVED TO A TASK, since that is the reflex on reading the above:
 // `publish` does not run `check`. A task-wired completeness check would let a module that forgot

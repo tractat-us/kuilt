@@ -78,10 +78,10 @@ val unaccounted = rootProject.subprojects.map { it.path }
     .minus(deliberatelyUnpublished)
     .minus(project.path)
 // The probe is exempted above, so it can only reach here if that exemption was deleted — a
-// different failure needing different advice, and one branch of the SAME message rather than a
-// check of its own, which would be unreachable while the exemption sits three lines up. Sending the
-// probe's reader to the flag they are already using would be a red whose SHAPE misdescribes the
-// failure, which is the defect #2272 is about.
+// different failure needing different advice. A branch of THIS message rather than a check of its
+// own, and the honest reason is one failure site instead of two, not reachability: a separate
+// `check` would need the same source mutation to fire. Sending the probe's reader to the flag they
+// are already using would be a red whose SHAPE misdescribes the failure, the defect #2272 is about.
 //
 // The suggested command names the RESERVED probe path, never `unaccounted`'s own contents. An
 // earlier version interpolated the offending module, i.e. handed a developer who forgot

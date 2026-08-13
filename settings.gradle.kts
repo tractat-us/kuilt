@@ -160,12 +160,15 @@ if (providers.gradleProperty("includeSpike").isPresent) {
 // THE PATH IS A RESERVED LITERAL, NOT A SHAPE THE CALLER CHOOSES, and both reasons were live
 // defects in the first version of this block, which took any new `:`-prefixed path:
 //
-//   - A validating check here CANNOT be order-independent. `rootProject.children` is evaluated
-//     where the block sits, so it saw only the includes ABOVE it. A module declared further down
-//     passed the check and had its project directory silently repointed here — its build script
-//     never applied, its sources invisible to `forbidUnlintedModule`, and itself exempted from
+//   - A validating check evaluated WHERE THIS BLOCK SITS cannot be order-independent.
+//     `rootProject.children` then holds only the includes ABOVE it, so a module declared further
+//     down passed the check and had its project directory silently repointed here — build script
+//     never applied, sources invisible to `forbidUnlintedModule`, itself exempted from
 //     `kuilt-bom`'s completeness backstop. The exact outcome the check's own message claimed to
 //     prevent, decided by a file position nothing pins. A literal cannot collide in any order.
+//     (Deferring to `settingsEvaluated` is what makes the residual collision check below sound;
+//     see its own comment. Both halves are needed — the literal alone still lost to a real module
+//     of the same name, which is the same defect a third time.)
 //   - The literal is inside the `:kuilt-` namespace ON PURPOSE. `verifyModuleTable` derives its
 //     input as `subprojects.filter { it.startsWith(":kuilt-") }`, so a probe named outside that
 //     namespace is included, exempted, and INVISIBLE to the guard: the receipt comes back GREEN,
@@ -176,16 +179,35 @@ if (providers.gradleProperty("includeSpike").isPresent) {
 // A future guard scoped to some other namespace needs a second reserved literal here, added
 // deliberately — not a relaxation of this one back into a shape check.
 val guardProbePath = ":kuilt-zzz-probe"
-providers.gradleProperty("guardProbeModule").orNull?.let { path ->
-    require(path == guardProbePath) {
-        "-PguardProbeModule accepts only the reserved probe path \"$guardProbePath\"; got \"$path\" " +
-            "(#2272). It is a fixed name because a free one lands on whichever module you name — " +
-            "silently repointing a REAL module at the probe directory if it is declared below this " +
-            "block — and because a name outside the `:kuilt-` namespace is invisible to " +
-            "`verifyModuleTable`, which then returns a receipt-shaped GREEN."
+
+// DEFERRED TO `settingsEvaluated` ON PURPOSE — do not "simplify" the wrapper away. Every `include`
+// in this file has been declared by the time it runs, which is the only position from which the
+// collision check below can see a module declared BELOW this block. Run inline, that check reads as
+// correct and silently is not, which is how the first two versions of this affordance shipped the
+// very defect (#2272) they exist to prevent. `include`/`projectDir` from here behave exactly as
+// they do inline: projects are not loaded until later.
+gradle.settingsEvaluated {
+    providers.gradleProperty("guardProbeModule").orNull?.let { path ->
+        require(path == guardProbePath) {
+            "-PguardProbeModule accepts only the reserved probe path \"$guardProbePath\"; got " +
+                "\"$path\" (#2272). It is a fixed name because a free one lands on whichever module " +
+                "you name — silently repointing a REAL module at the probe directory — and because " +
+                "a name outside the `:kuilt-` namespace is invisible to `verifyModuleTable`, which " +
+                "then returns a receipt-shaped GREEN."
+        }
+        // Checked AFTER the literal, so naming some other real module still gets the more useful
+        // "only accepts the reserved path" message. This one is for the last residual: someone
+        // creating a real module under the reserved name. Repointing it here would hide its
+        // sources and exempt it from the BOM backstop — Critical-1's failure a third time.
+        require(rootProject.children.none { ":${it.name}" == path }) {
+            "\"$path\" is already a module in this build, so -PguardProbeModule cannot use it as a " +
+                "probe: including it would repoint the real module at the probe directory, hiding " +
+                "its sources from the guards and exempting it from kuilt-bom's completeness check " +
+                "(#2272). Rename that module — this path is reserved for the mutation probe."
+        }
+        val probeDir = file("build/guard-probe")
+        probeDir.mkdirs()
+        include(path)
+        project(path).projectDir = probeDir
     }
-    val probeDir = file("build/guard-probe")
-    probeDir.mkdirs()
-    include(path)
-    project(path).projectDir = probeDir
 }
