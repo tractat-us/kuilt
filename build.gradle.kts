@@ -2030,10 +2030,7 @@ val verifySampleLinks by tasks.registering {
 // calling it would satisfy this guard. That is deliberate: distinguishing them needs call-graph
 // resolution, which is not something a lexical scanner should be asked to do, and the failure mode
 // is a reviewer seeing a name with no call — visible in the diff — rather than a silent green.
-val unrunSampleBaseline: Map<String, String> = mapOf(
-    "kuilt-game/sampleGameNode" to
-        "wedges for the whole wedge-backstop when executed, alone or with siblings — #2289",
-)
+val unrunSampleBaseline: Map<String, String> = mapOf()
 
 val verifySamplesAreRun by tasks.registering {
     group = "verification"

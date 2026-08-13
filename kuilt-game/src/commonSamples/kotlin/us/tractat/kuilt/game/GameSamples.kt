@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.serializer
@@ -106,7 +107,10 @@ internal fun sampleGameHostJoin() = runTest(StandardTestDispatcher(), timeout = 
     assertEquals(2, joinerMove.action)
 
     // Ride an application channel (chat, cursors, …) over the same fabric as consensus.
+    // Subscribe before the sender broadcasts: delivery is best-effort (`replay = 0`), so a
+    // frame sent while nobody is collecting is dropped and this receiver waits forever (#2289).
     val incoming = async { joiner.appChannel("chat").incoming.first() }
+    runCurrent()
     host.appChannel("chat").broadcast(byteArrayOf(0x68, 0x69)) // "hi"
     assertEquals(2, incoming.await().payloadSize)
 
@@ -159,7 +163,15 @@ internal fun sampleGameNode() = runTest(StandardTestDispatcher(), timeout = TEST
     TurnSequencer(session2.node, Int.serializer())
 
     // Ride named application channels (chat, cursors, …) over the same fabric.
+    //
+    // Subscribe BEFORE the sender broadcasts. [GameSession.appChannel] delivery is
+    // best-effort (`replay = 0`), so a frame sent while nobody is collecting is dropped,
+    // not queued — and this receiver would then wait forever. A real app subscribes once
+    // at startup, long before any peer sends; under `runTest`'s `StandardTestDispatcher`
+    // the `async` below is merely *queued*, so `runCurrent()` is what lets it reach
+    // `incoming` and subscribe first (#2289).
     val chatIncoming = async { session2.appChannel("chat").incoming.first() }
+    runCurrent()
     session1.appChannel("chat").broadcast(byteArrayOf(0x68, 0x69)) // "hi"
     assertEquals(2, chatIncoming.await().payloadSize)
 

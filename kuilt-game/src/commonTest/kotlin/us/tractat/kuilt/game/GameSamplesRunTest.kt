@@ -17,19 +17,30 @@ import kotlin.test.Test
  * swallowing it, because on JS and wasm the result is a promise the framework must receive to
  * await. Discarding it would make every one of these pass without running.
  *
- * **`sampleGameNode` is absent, and it FAILED when first executed** — it wedges for the whole
- * wedge-backstop, and is in `verifySamplesAreRun`'s baseline with the diagnosis while #2289 owns
- * the fix. It is quoted into `Writerside/topics/game-bootstrap.md`, so the fix changes what the
- * guide shows.
+ * Every sample in `GameSamples.kt` runs here, and `unrunSampleBaseline` is now empty (#2289).
+ * Two of the three samples that failed the moment #2116 first executed them were in this module,
+ * and both were **the same bug**: under `runTest`'s default `StandardTestDispatcher` an `async` is
+ * only *queued*, so its body has not begun when the next line runs.
  *
- * `sampleSpeculativeSequencer` failed the same way and is fixed: it asserts `speculativeState`
- * already holds the proposed action right after `async { propose(42) }`, which is a true statement
- * about `SpeculativeSequencer` — its KDoc promises the optimistic apply happens *before* the first
- * suspension — that the sample never reached, because `runTest`'s default `StandardTestDispatcher`
- * only *queues* the `async`. The production contract was right and the sample's test mechanics were
- * wrong, so the sample now runs on an `UnconfinedTestDispatcher` with every assertion intact.
+ * - `sampleSpeculativeSequencer` asserted `speculativeState` already held the action right after
+ *   `async { propose(42) }` — a true statement about `SpeculativeSequencer`, whose KDoc promises the
+ *   optimistic apply precedes the first suspension, that the sample never reached. It now runs on an
+ *   `UnconfinedTestDispatcher` and holds the quorum open so the assertion is load-bearing.
+ * - `sampleGameNode` **wedged for the whole backstop**, and the cause was the same queued `async`
+ *   one layer out: the receiver had not subscribed to `appChannel("chat")` when the sender
+ *   broadcast, and `appChannel` delivery is `replay = 0`, so the frame was dropped and the receiver
+ *   waited forever. It reads as a hang rather than a failure because the Raft election and heartbeat
+ *   timers re-arm forever, so `runTest` keeps advancing virtual time instead of detecting an idle
+ *   deadlock. A `runCurrent()` between the subscribe and the broadcast fixes it.
+ *
+ * `sampleGameHostJoin` carries the identical three lines and passed only because its earlier
+ * `propose` calls had already pumped the mux; it got the same explicit `runCurrent()` rather than
+ * being left to rely on that.
  */
 class GameSamplesRunTest {
+
+    @Test
+    fun gameNodeHolds(): TestResult = sampleGameNode()
 
     @Test
     fun gameHostJoinHolds(): TestResult = sampleGameHostJoin()
