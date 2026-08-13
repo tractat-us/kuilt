@@ -473,10 +473,14 @@ class OpLogCrdtTest {
      * the merged log.
      *
      * A forward site the test above cannot reach: that one compacts once and reads the result,
-     * while this merges two logs that compacted *different* ids — the only path through
+     * while this merges two logs that compacted *different* ids, which is what exercises
      * `mergedCompactedIds = compactedIds + other.compactedIds`. A merge that dropped the remote
-     * half would still converge on the visible sequence, and would surface only later, as a peer
+     * half would still converge on the visible sequence, and would surface only later — as a peer
      * re-admitting an element this replica had already forgotten.
+     *
+     * As above, the [Fugue] arm is the load-bearing one. Drop the remote half of that union on
+     * [Fugue] and this is the only test in the module that notices; do it on [Rga] and several
+     * older lattice-law and reroot tests catch it too.
      */
     @Test
     fun pieceUnionsCompactedIdsAndKeepsTheCacheMatchingTheLogForBoth() {
