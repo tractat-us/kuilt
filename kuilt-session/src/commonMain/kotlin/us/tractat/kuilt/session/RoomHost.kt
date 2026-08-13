@@ -1,16 +1,19 @@
 package us.tractat.kuilt.session
 
-import kotlinx.coroutines.CancellationException
+import io.github.oshai.kotlinlogging.KotlinLogging
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.liveness.HeartbeatConfig
-import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.time.Clock
 import kotlin.time.Instant
+
+private val logger = KotlinLogging.logger("us.tractat.kuilt.session.RoomHost")
 
 /**
  * Accepts incoming connections and surfaces each as an admitted [Room].
@@ -80,10 +83,38 @@ public class LoomRoomHost(
             try {
                 onRoom(room)
                 awaitCancellation()
-            } catch (e: CancellationException) {
-                throw e
             } finally {
-                runCatchingCancellable { room.leave(LeaveReason.Normal) }
+                leaveShielded(room)
+            }
+        }
+    }
+
+    /**
+     * Leave [room] on the way out of [start] — shielded, because otherwise the leave never happens at all.
+     *
+     * **`NonCancellable` is load-bearing here, not belt-and-braces.** Scope cancellation *is* this host's
+     * documented lifecycle ([close] is a no-op and says so) and [start]'s body ends in
+     * [awaitCancellation], so by the time this runs the coroutine is **always already cancelled**.
+     * [Room.leave] is a suspending call into a transport — a WebSocket close handshake, a Multipeer
+     * disconnect, an `NwConnection` cancel all suspend — so unshielded it throws at that suspension point
+     * and every host that shuts down the documented way silently vanishes off the fabric instead of
+     * departing: no `LeaveReason.Normal`, no `Seam.close`, peers left to time it out as a transport drop
+     * (#2286). The same idiom, for the same reason, is in `NwLoom.discardUnreturnedSeam` and
+     * `CompositeSeam.discardOrphanedPly`.
+     *
+     * `try` / `catch (Throwable)` rather than `runCatchingCancellable`: inside the shield this block's Job
+     * is parented to [NonCancellable], so there is no cancellation of ours left to preserve and every
+     * throwable arriving here — including a [kotlinx.coroutines.CancellationException] a
+     * `withTimeout`-bounded `leave` minted itself, which [Room.leave]'s contract forbids but a library
+     * cannot assume a consumer honours — is this one leave's failure. `runCatchingCancellable` would
+     * rethrow exactly that case, aborting the cleanup the shield exists to guarantee.
+     */
+    private suspend fun leaveShielded(room: Room) {
+        withContext(NonCancellable) {
+            try {
+                room.leave(LeaveReason.Normal)
+            } catch (failure: Throwable) {
+                logger.debug { "roomHost.leave-failed session=${pattern.sessionName} failure=$failure" }
             }
         }
     }
