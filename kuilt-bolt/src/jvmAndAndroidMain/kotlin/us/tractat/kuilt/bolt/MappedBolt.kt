@@ -763,8 +763,9 @@ public class MappedBolt<Id : Any, V, Op : Any>(
      * Say it plainly, because the near-miss reading of this paragraph is what would delete the line
      * above. Dropping the minus-one here answers [CleanTail] to a [ReplayScope.FromOffset] resume
      * over an archive with a hole in it — #2240's symptom, on this backend, measured (see the
-     * mutation table on `MappedBoltPruningTest.aResumeFromBeyondAHoleStillReportsIt`). The carry is
-     * load-bearing and this function is why.
+     * mutation table on
+     * `BoltConformanceSuite.resumingFromBeyondTheHoleReachesTheSameVerdictRatherThanACleanTail`). The
+     * carry is load-bearing and this function is why.
      *
      * What differs is only *which* sub-case reaches it. `InMemoryBolt`'s exact extent lets it prune a
      * segment while the hole behind that segment still **straddles** the cursor, and that is the case
@@ -776,10 +777,13 @@ public class MappedBolt<Id : Any, V, Op : Any>(
      *
      * The minus-one read is kept anyway, and not out of caution alone. It is what makes this backend
      * answer a *lost middle* the same way the other two do when a consumer resumes from the far side
-     * of the hole — `MappedBoltPruningTest.aResumeFromBeyondAHoleStillReportsIt` pins that agreement,
-     * and it is the only test in the tree that reds when this line is dropped. Resting a correctness
+     * of the hole, and that agreement is a **conformance** obligation:
+     * `BoltConformanceSuite.resumingFromBeyondTheHoleReachesTheSameVerdictRatherThanACleanTail` reds
+     * on all three subclasses of this backend when this line is dropped. It was a JVM-only test until
+     * #2268 — which meant the identical line in `PosixMappedBolt` was pinned by nothing at all, the
+     * state two workers were in when they shipped the same defect twice. Resting a correctness
      * property on an accident of which bookkeeping happens to be inflated is how the next reader
-     * loses it.
+     * loses it; resting it on one backend's private test is how the next *backend* loses it.
      *
      * `PosixMappedBolt` reaches the same conclusion, and after a reopen by the same algebra: adoption
      * derives every non-last extent as `next.baseOffset - baseOffset`, so its `baseOffset + extent`
