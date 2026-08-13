@@ -22,7 +22,7 @@ class InMemoryBoltConformanceTest : BoltConformanceSuite() {
     override suspend fun newTruncatedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         truncatedInMemoryBolt(clock, intactFrames, InMemoryBolt.DEFAULT_SEGMENT_FRAME_BYTES)
 
-    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
+    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): DiscontinuousFixture =
         discontinuousInMemoryBolt(clock, intactFrames)
 
     override fun newBoltThatCannotFlush(clock: Clock): DurabilityFixture = inMemoryPromisedNothing(clock)
@@ -48,7 +48,7 @@ class TinySegmentInMemoryBoltConformanceTest : BoltConformanceSuite() {
     override suspend fun newTruncatedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         truncatedInMemoryBolt(clock, intactFrames, segmentFrameBytes = 1L)
 
-    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
+    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): DiscontinuousFixture =
         discontinuousInMemoryBolt(clock, intactFrames)
 
     override fun newBoltThatCannotFlush(clock: Clock): DurabilityFixture = inMemoryPromisedNothing(clock)
@@ -149,22 +149,29 @@ private suspend fun truncatedInMemoryBolt(
  * is pre-allocated, a segment's array holds exactly the bytes written into it, and `snapshot.used`
  * bounds every parse. So the zero-tail configuration the mmap fixtures both drive does not exist
  * here, and one budget covers this backend completely.
+ *
+ * `beyondTheHole` is the offset the **first frame behind the hole** was written at, taken from that
+ * append's own [AppendResult.Written] rather than computed — the hole swallows one whole segment, so
+ * the frame at index `intactFrames + 1` is the first survivor and its `offset` is where a consumer
+ * that had already read past the lost segment resumes from. Losing the segment moves nothing: the
+ * offsets of the frames behind it are untouched, which is precisely what makes the archive
+ * discontinuous rather than short.
  */
-private suspend fun discontinuousInMemoryBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> {
+private suspend fun discontinuousInMemoryBolt(clock: Clock, intactFrames: Int): DiscontinuousFixture {
     require(intactFrames >= 1) { "the fixture stops AFTER a frame, so it needs at least one" }
     val format: BoltArchiveFormat<RgaId, String, RgaOp<String>> = BoltArchiveFormat.rga(serializer<String>())
     val bolt = InMemoryBolt(format, clock, segmentFrameBytes = 1L)
     val alice = ReplicaId("alice")
 
     var live = Rga.empty<String>()
-    repeat(intactFrames + 1 + FRAMES_BEHIND_THE_HOLE) { index ->
+    val written = (0 until intactFrames + 1 + FRAMES_BEHIND_THE_HOLE).map { index ->
         val (next, op) = live.insertAt(alice, live.size, "frame-$index")
         live = next
         assertIs<AppendResult.Written>(bolt.append(listOf(op)), "every fixture frame must be written")
     }
     bolt.loseSegment(intactFrames)
 
-    return bolt
+    return DiscontinuousFixture(bolt, beyondTheHole = written[intactFrames + 1].offset)
 }
 
 /** Frames behind the hole. More than one, so "stepped over it" is unmistakable rather than off-by-one. */

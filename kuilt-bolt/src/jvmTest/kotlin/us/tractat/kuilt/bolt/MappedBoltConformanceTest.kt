@@ -29,7 +29,7 @@ class MappedBoltConformanceTest : BoltConformanceSuite() {
      * With a real pre-allocated tail on every segment — the shipped shape. The default 1 MiB budget
      * cannot be used as-is: it puts the whole fixture in ONE file, leaving no middle to lose.
      */
-    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
+    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): DiscontinuousFixture =
         discontinuousMappedBolt(clock, intactFrames, PRE_ALLOCATED_TAIL_BYTES)
 
     override fun newBoltThatCannotFlush(clock: Clock): DurabilityFixture =
@@ -55,7 +55,7 @@ class TinySegmentMappedBoltConformanceTest : BoltConformanceSuite() {
         truncatedMappedBolt(clock, intactFrames)
 
     /** The complement of the default subclass: **no** pre-allocated tail behind the last frame. */
-    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
+    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): DiscontinuousFixture =
         discontinuousMappedBolt(clock, intactFrames, NO_PRE_ALLOCATED_TAIL)
 
     /**
@@ -85,7 +85,7 @@ class AsynchronousMappedBoltConformanceTest : BoltConformanceSuite() {
     override suspend fun newTruncatedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         truncatedMappedBolt(clock, intactFrames)
 
-    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
+    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): DiscontinuousFixture =
         discontinuousMappedBolt(clock, intactFrames, PRE_ALLOCATED_TAIL_BYTES)
 
     /**
@@ -244,12 +244,18 @@ private suspend fun truncatedMappedBolt(clock: Clock, intactFrames: Int): Bolt<R
  * Reopened afterwards so the replay reads the surviving files from disk rather than out of a mapping
  * this process wrote, exactly as it would after a restart. Recovery only ever scans the newest
  * segment, which is healthy, so the hole is discovered by the replay.
+ *
+ * `beyondTheHole` is the offset the **first frame behind the hole** was written at, taken from that
+ * append's own [AppendResult.Written] rather than computed from file sizes — one frame per file makes
+ * it the frame at index `intactFrames + 1`. Deleting a file frees its bytes without moving anything:
+ * every surviving header still carries the absolute `baseOffset` it was written with, which is exactly
+ * why the archive is discontinuous rather than short.
  */
 private suspend fun discontinuousMappedBolt(
     clock: Clock,
     intactFrames: Int,
     zeroTailBytes: Long,
-): Bolt<RgaOp<String>> {
+): DiscontinuousFixture {
     require(intactFrames >= 1) { "the fixture stops AFTER a frame, so it needs at least one" }
     val directory = tempArchiveDirectory()
     val format = rgaStringFormat()
@@ -277,7 +283,7 @@ private suspend fun discontinuousMappedBolt(
     val budget = if (zeroTailBytes == NO_PRE_ALLOCATED_TAIL) 1L else frameBytes + zeroTailBytes
     val bolt = MappedBolt(directory, format, clock, segmentFrameBytes = budget)
 
-    ops.forEach { assertIs<AppendResult.Written>(bolt.append(listOf(it)), "every fixture frame must be written") }
+    val written = ops.map { assertIs<AppendResult.Written>(bolt.append(listOf(it)), "every fixture frame is written") }
     check(segmentsIn(directory).size == ops.size) {
         "the fixture needs one frame per segment, or there is no middle segment to lose"
     }
@@ -298,7 +304,10 @@ private suspend fun discontinuousMappedBolt(
     }
     check(segmentsIn(directory)[intactFrames].delete()) { "the fixture's hole must actually be punched" }
 
-    return MappedBolt(directory, format, clock, segmentFrameBytes = budget)
+    return DiscontinuousFixture(
+        MappedBolt(directory, format, clock, segmentFrameBytes = budget),
+        beyondTheHole = written[intactFrames + 1].offset,
+    )
 }
 
 /** The frame that gets damaged, and the healthy one behind it. */

@@ -34,7 +34,7 @@ class PosixMappedBoltConformanceTest : BoltConformanceSuite() {
      * zero-tail/recorded-extent machinery is actually consulted. The default 1 MiB budget cannot be
      * used as-is: it puts the whole fixture in ONE segment, leaving no middle to lose.
      */
-    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
+    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): DiscontinuousFixture =
         discontinuousPosixMappedBolt(clock, intactFrames, synchronous = true, PRE_ALLOCATED_TAIL_BYTES)
 
     override fun newBoltThatCannotFlush(clock: Clock): DurabilityFixture =
@@ -71,7 +71,7 @@ class TinySegmentPosixMappedBoltConformanceTest : BoltConformanceSuite() {
      * the parse loop normally — never consulting the recorded extent at all. The two configurations
      * reach the continuity check by different routes and must reach the same verdict.
      */
-    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
+    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): DiscontinuousFixture =
         discontinuousPosixMappedBolt(clock, intactFrames, synchronous = true, NO_PRE_ALLOCATED_TAIL)
 
     /**
@@ -97,7 +97,7 @@ class AsynchronousPosixMappedBoltConformanceTest : BoltConformanceSuite() {
     override suspend fun newTruncatedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         truncatedPosixMappedBolt(clock, intactFrames, PosixMappedBolt.DEFAULT_SEGMENT_FRAME_BYTES)
 
-    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
+    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): DiscontinuousFixture =
         discontinuousPosixMappedBolt(clock, intactFrames, synchronous = false, PRE_ALLOCATED_TAIL_BYTES)
 
     override fun newBoltThatCannotFlush(clock: Clock): DurabilityFixture =
@@ -203,13 +203,19 @@ private suspend fun truncatedPosixMappedBolt(
  * "the segment after the intact prefix" is just the file at index [intactFrames]. The writer is
  * closed before its file is deleted, and the archive is re-opened afterwards, so the replay adopts
  * what is actually on disk rather than a segment list that predates the hole.
+ *
+ * `beyondTheHole` is the offset the **first frame behind the hole** was written at, taken from that
+ * append's own [AppendResult.Written] rather than computed from file sizes — one frame per file makes
+ * it the frame at index `intactFrames + 1`. Removing a file frees its bytes without moving anything:
+ * every surviving header still carries the absolute `baseOffset` it was written with, which is exactly
+ * why the archive is discontinuous rather than short.
  */
 private suspend fun discontinuousPosixMappedBolt(
     clock: Clock,
     intactFrames: Int,
     synchronous: Boolean,
     zeroTailBytes: Long,
-): Bolt<RgaOp<String>> {
+): DiscontinuousFixture {
     require(intactFrames >= 1) { "the fixture stops AFTER a frame, so it needs at least one" }
     val format = rgaArchiveFormat()
     val alice = ReplicaId("alice")
@@ -239,7 +245,7 @@ private suspend fun discontinuousPosixMappedBolt(
     val directory = boltTestDirectory()
     val writer = PosixMappedBolt(format, clock, directory, synchronous, budget)
 
-    ops.forEach { assertIs<AppendResult.Written>(writer.append(listOf(it)), "every fixture frame must be written") }
+    val written = ops.map { assertIs<AppendResult.Written>(writer.append(listOf(it)), "every fixture frame is written") }
     writer.close()
     check(segmentFiles(directory).size == ops.size) {
         "the fixture needs one frame per segment, or there is no middle segment to lose"
@@ -267,7 +273,10 @@ private suspend fun discontinuousPosixMappedBolt(
         "the fixture's hole must actually be punched — $hole is still there"
     }
 
-    return PosixMappedBolt(format, clock, directory, synchronous, budget)
+    return DiscontinuousFixture(
+        PosixMappedBolt(format, clock, directory, synchronous, budget),
+        beyondTheHole = written[intactFrames + 1].offset,
+    )
 }
 
 /** Frames behind the hole. More than one, so "stepped over it" is unmistakable rather than off-by-one. */

@@ -117,8 +117,16 @@ abstract class BoltConformanceSuite {
      *
      * The obligation asserts its own precondition, so a backend that returns a healthy archive — or
      * one damaged some other way — fails loudly rather than passing quietly.
+     *
+     * **It hands back [DiscontinuousFixture.beyondTheHole] as well as the bolt, and that is the one
+     * thing the suite cannot work out for itself.** Every scope this contract offers scans forward from
+     * the archive's oldest surviving segment, so every one of them *stops at the hole* — there is no
+     * call a conformance test can make that names an offset on the far side of it. Only the fixture,
+     * which wrote those frames, knows. See
+     * [resumingFromBeyondTheHoleReachesTheSameVerdictRatherThanACleanTail] for what it buys and what
+     * the suite can and cannot check about it.
      */
-    protected abstract suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>>
+    protected abstract suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): DiscontinuousFixture
 
     /**
      * A bolt of this backend whose durability operation **cannot succeed** — its `msync`, its
@@ -666,7 +674,7 @@ abstract class BoltConformanceSuite {
      */
     @Test
     fun anArchiveMissingAMiddleRegionStopsAtTheHoleAndSaysSo() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
-        val bolt = newDiscontinuousBolt(FixedClock(epoch), INTACT_FRAMES)
+        val bolt = newDiscontinuousBolt(FixedClock(epoch), INTACT_FRAMES).bolt
 
         val events = bolt.replay(ReplayScope.All).toList()
         val frames = events.filterIsInstance<Archived<RgaOp<String>>>()
@@ -768,8 +776,12 @@ abstract class BoltConformanceSuite {
      * unprunable and its boundary read either way. Dropping that backend's continuity carry is a real
      * defect and **this property does not see it**: the sub-case that reaches it is a consumer
      * resuming from *past* the hole, which this fixture cannot express because it derives its cursor
-     * from the [ReplayScope.All] replay, and that replay stops **at** the hole. `MappedBoltPruningTest`
-     * carries the pin meanwhile; #2268 is the fixture hook that would let it live here.
+     * from the [ReplayScope.All] replay, and that replay stops **at** the hole.
+     * [resumingFromBeyondTheHoleReachesTheSameVerdictRatherThanACleanTail] is that sub-case, and it is
+     * why [newDiscontinuousBolt] hands back an offset as well as a bolt (#2268). **Keep both.** This
+     * one is the only one whose cursor a *consumer* can obtain — it is the offset the previous replay
+     * just handed it — so it is the shape a reader reaches first; its sibling drives the shape a
+     * retention sweep produces.
      *
      * Row 4 is the trap this test was expected to close and **does not**: carrying the cursor from
      * bookkeeping is exactly right for `InMemoryBolt` (whose extents are exact) and a tautology on
@@ -780,11 +792,11 @@ abstract class BoltConformanceSuite {
      * **What it cannot reach:** a cursor *inside* the hole rather than at its start; an archive all of
      * whose segments are prunable (nothing is emitted and no boundary survives to check — that replay
      * is a [CleanTail] and this test does not claim otherwise); and a hole lying entirely below the
-     * cursor, which no scope-respecting replay is obliged to report.
+     * cursor — which its sibling now drives, and which the three backends agree is still reportable.
      */
     @Test
     fun resumingFromTheHoleReachesTheSameVerdictRatherThanACleanTail() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
-        val bolt = newDiscontinuousBolt(FixedClock(epoch), INTACT_FRAMES)
+        val bolt = newDiscontinuousBolt(FixedClock(epoch), INTACT_FRAMES).bolt
 
         val whole = bolt.replay(ReplayScope.All).toList()
         val verdict = whole.lastOrNull()
@@ -820,6 +832,115 @@ abstract class BoltConformanceSuite {
             },
         )
     }
+
+    /**
+     * A resume from **beyond** a lost region still reports it — the shape a *retention sweep*
+     * produces, and the one no scope can reach on its own.
+     *
+     * Not an exotic corruption: a consumer read up to `C`, the segment holding the records below `C`
+     * was swept, and it resumes from `C`. Every record it is asking for survives; the ones it says it
+     * already has do not exist anywhere. A backend that prunes whole segments below the cursor prunes
+     * away the last boundary that could notice, and then answers [CleanTail] — "your history joins
+     * up" — to an archive whose whole product is *I still hold what the live replica forgot*.
+     *
+     * ### Why this needed a fixture hook, and why it is not the sibling above
+     *
+     * [resumingFromTheHoleReachesTheSameVerdictRatherThanACleanTail] derives its cursor from the
+     * [ReplayScope.All] replay, and that replay **stops at the hole** — so the offset it can name is
+     * the hole's *start*, never its far side. Nor can any other scope name it: [ReplayScope.Arrived]
+     * and [ReplayScope.InsertsAbove] both scan from the oldest surviving segment and stop at the same
+     * boundary. The far side is simply not observable through this contract once the archive is
+     * discontinuous, which is why [DiscontinuousFixture] carries it.
+     *
+     * And the distinction is load-bearing rather than fastidious. At the hole's *start* the segment
+     * before it is unprunable on both mmap backends — their predicates reduce to the successor's
+     * `baseOffset`, which is inflated by exactly the hole — so its boundary is read either way and the
+     * sibling's table records **two green rows** there. Move the cursor past the hole and that
+     * inflation stops covering: the segment becomes prunable, and only a deliberate minus-one keeps
+     * the boundary. Before this property, dropping that minus-one reddened nothing on
+     * `PosixMappedBolt` anywhere in the tree — the exact unpinned state in which two workers
+     * independently shipped the same defect (#2240), with `MappedBolt` pinned only by a JVM-only test
+     * (#2264).
+     *
+     * Three assertions, and the numbering the receipts use: **1** the cursor really is past the hole,
+     * **2** the resume replays nothing, **3** it reaches the same verdict [ReplayScope.All] does.
+     *
+     * **Mutation receipts** — each applied alone, reverted, the revert grep-verified, and the verdict
+     * read out of the results XML rather than the console.
+     *
+     * | Mutation | Reds here | Reds elsewhere in `:kuilt-bolt` |
+     * |---|---|---|
+     * | Drop the minus-one — `InMemoryBolt.replay` | 2, 3 | the sibling above |
+     * | Drop the minus-one — `PosixMappedBolt.replay` | 2, 3 | **nothing** |
+     * | Drop the minus-one — `MappedBolt.firstSegmentToRead` | 2, 3 | `MappedBoltPruningTest` |
+     * | Seed the boundary cursor from the surviving header instead of parsing it | 2, 3 | `MappedBoltPruningTest` |
+     * | Delete the continuity check outright, any backend | 1 (as a precondition failure) | both siblings |
+     * | **Fixture:** hand back the hole's start as `beyondTheHole` | 1 | — |
+     * | **Fixture:** hand back an offset past the archive's end | 3 | — |
+     *
+     * Row 2 is the finding this property exists for: one backend implementing one contract, whose
+     * continuity carry could be deleted without a single test in the tree noticing.
+     *
+     * **What the suite cannot check about the hook, said plainly.** It cannot verify that
+     * [DiscontinuousFixture.beyondTheHole] names a frame that really exists — per the paragraph above,
+     * nothing in this contract can see past the hole, so there is no positive check to make. What it
+     * has instead is both directions of *wrong* being loud: an offset at or below the hole's start
+     * fails assertion 1, which exists for no other reason, and an offset past the archive's end makes
+     * every segment prunable, which is a [CleanTail] and fails assertion 3. The last two rows are those
+     * two mutations, measured rather than argued.
+     *
+     * **What it does not reach.** It never proves the pruned prefix was *skipped* rather than read and
+     * forgiven — every assertion here would hold on a backend that read the whole archive every time.
+     * That claim is about bytes off a filesystem, so it is not expressible over [Bolt];
+     * `MappedBoltPruningTest` carries it for the one backend that makes the claim. Also unreached, as
+     * in the sibling: a hole spanning more than one lost segment, and a backwards jump.
+     */
+    @Test
+    fun resumingFromBeyondTheHoleReachesTheSameVerdictRatherThanACleanTail() =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val fixture = newDiscontinuousBolt(FixedClock(epoch), INTACT_FRAMES)
+            val bolt = fixture.bolt
+
+            val whole = bolt.replay(ReplayScope.All).toList()
+            val verdict = assertIs<Truncated>(
+                whole.lastOrNull(),
+                "newDiscontinuousBolt must hand back an archive with a HOLE in it — a healthy one " +
+                    "makes this obligation vacuous, so it fails here rather than passing",
+            )
+            val resumed = bolt.replay(ReplayScope.FromOffset(fixture.beyondTheHole)).toList()
+            val resumedFrames = resumed.filterIsInstance<Archived<RgaOp<String>>>()
+
+            assertAll(
+                {
+                    assertTrue(
+                        fixture.beyondTheHole > verdict.atOffset,
+                        "the fixture's cursor must sit BEYOND the missing region — it measured " +
+                            "${fixture.beyondTheHole} against a hole starting at ${verdict.atOffset}, and at " +
+                            "the hole's start this is the shape the sibling property already drives, where " +
+                            "the boundary segment is unprunable and every backend is green for free",
+                    )
+                },
+                {
+                    assertEquals(
+                        0,
+                        resumedFrames.size,
+                        "a resume from past the hole replays NOTHING — the frames beyond it are real, but " +
+                            "the records this cursor claims to have consumed are gone, so their history is " +
+                            "not, and a frame handed back here carries offsets that jump",
+                    )
+                },
+                {
+                    assertEquals(
+                        whole.lastOrNull(),
+                        resumed.lastOrNull(),
+                        "and reaches the SAME verdict: a scope that prunes whole segments below the cursor " +
+                            "must not prune the one boundary that proves the surviving archive joins up — " +
+                            "least of all for the retention sweep, which is the ordinary way a consumer " +
+                            "ends up holding a cursor past a region nobody kept",
+                    )
+                },
+            )
+        }
 
     // ── 7. durability() is honest about the promise this backend made ─────────
 
@@ -1155,6 +1276,29 @@ abstract class BoltConformanceSuite {
         val STEP = 10.seconds
     }
 }
+
+/**
+ * An archive with a whole region missing out of its middle, and the offset the first surviving frame
+ * **beyond** that region starts at — the fixture [BoltConformanceSuite.newDiscontinuousBolt] hands
+ * back.
+ *
+ * A pair rather than a bare bolt because of an asymmetry in what the two sides can see. The suite can
+ * find where a hole *starts* — it is the offset the [ReplayScope.All] verdict reports — but not where
+ * it *ends*, because every scope this contract offers scans forward and stops at the same boundary.
+ * The fixture wrote those frames and knows. Handing the offset back with the bolt it belongs to is
+ * also what stops the two drifting: one construction, one place, no second fixture to keep in step.
+ *
+ * Top-level, and mirroring `DurabilityFixture`, so a fixture helper outside a suite subclass can
+ * build one.
+ *
+ * @property bolt the discontinuous archive.
+ * @property beyondTheHole the offset of the first frame **after** the missing region — what a consumer
+ *   that had already read past it hands back. Must be strictly greater than where the hole starts, or
+ *   this degenerates into the shape
+ *   [BoltConformanceSuite.resumingFromTheHoleReachesTheSameVerdictRatherThanACleanTail] already drives;
+ *   the suite asserts that rather than trusting it.
+ */
+class DiscontinuousFixture(val bolt: Bolt<RgaOp<String>>, val beyondTheHole: Long)
 
 /**
  * A bolt whose durability operation cannot succeed, and what its backend **promised** in the
