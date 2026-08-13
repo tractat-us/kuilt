@@ -251,11 +251,45 @@ public class Fugue<V> private constructor(
         cache?.insertsById ?: computeInsertsById()
     }
 
+    /**
+     * Private, unlike [Rga.tombstones], and deliberately so: that one is public for
+     * `WindowPolicy.byCount` in `:kuilt-quilter`, and the windowing path is [Rga]-only — [Fugue]
+     * has no `dropWindow` and no floor. See #2326 for the surface a [Fugue]-partitioning consumer
+     * would need, of which this is one member.
+     */
     private val tombstones: Set<FugueId> by lazy {
         cache?.tombstones ?: computeTombstones()
     }
 
-    private val compactedIds: Set<FugueId> by lazy {
+    /**
+     * All ids that have been garbage-collected by any [FugueOp.Compact] in this op-log.
+     *
+     * Public for the same reason as [Rga.compactedIds], and the two are deliberately kept at the
+     * same visibility: a consumer that partitions the op-log across storage segments needs to know
+     * which ids are **suppressed** — already forgotten, so a segment carrying only their ops holds
+     * nothing a recovered log would miss. On [Fugue] this set is the whole suppression story rather
+     * than half of it: there is no [Rga.compactedBelow] floor here, so every id this replica has
+     * forgotten is named by a retained [FugueOp.Compact].
+     *
+     * **Suppression is not retirability — this set alone must never decide a delete.** A segment
+     * may be dropped only if it *also* holds no [FugueOp.Compact] at all. A `Compact` is the only
+     * carrier of the "once compacted, always compacted" guarantee for the ids it names, nothing
+     * ever prunes one, and a peer that never received the compaction re-admits the purged elements
+     * on the next [piece] — so dropping the storage that holds one silently revokes the guarantee.
+     * Count them by walking [OpLogCrdt.operations] with [OpLogCrdt.classify], since [Fugue] has no
+     * `compactOpCount`; **never** by `compactedIds.isNotEmpty()`, which is blind to a `Compact`
+     * carrying an empty positions map and so answers "may I delete this?" with a predicate that has
+     * a false-negative case. [Rga.compactOpCount] states the same argument where the counter exists.
+     *
+     * **Publishing it adds no information, only an accessor.** The same set is already reachable
+     * through the [OpLogCrdt] contract — union the [LogOp.Compact.compactedIds] of every
+     * classified op — so a determined consumer could always compute it, at O(ops) per call. This
+     * is the cached O(1) form of that walk, which is why exposing it costs no new commitment.
+     * For the same reason it stays *here* rather than moving onto [OpLogCrdt]: a second contract
+     * member answering a question [OpLogCrdt.classify] already answers would only be a surface
+     * the two routes could drift apart on.
+     */
+    public val compactedIds: Set<FugueId> by lazy {
         cache?.compactedIds ?: computeCompactedIds()
     }
 

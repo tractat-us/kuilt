@@ -36,6 +36,8 @@ class OpLogCrdtTest {
 
     private val a = ReplicaId("A")
     private val b = ReplicaId("B")
+    private val c = ReplicaId("C")
+    private val d = ReplicaId("D")
     private val cbor = Cbor {}
 
     // ── operations() ──────────────────────────────────────────────────────────
@@ -433,6 +435,95 @@ class OpLogCrdtTest {
         )
     }
 
+    // ── compactedIds ──────────────────────────────────────────────────────────
+
+    /**
+     * The concrete `compactedIds` accessor must agree with the set derived through the [OpLogCrdt]
+     * contract, on **both** implementations.
+     *
+     * This is what makes publishing that accessor on both types (#2223) a convenience rather than
+     * a new commitment: the same set is already reachable by unioning the
+     * [LogOp.Compact.compactedIds] of every classified op, so the accessor adds a cached O(1) read
+     * of something a consumer could always have walked the log for.
+     *
+     * It is not a tautology. The accessor reads the **threaded cache** — `compact` folds the GC'd
+     * ids forward into it — while [compactedIdsVia] re-reads the **retained `Compact` ops**.
+     *
+     * The two arms are not equally load-bearing, and the [Fugue] one is why this exists. Break the
+     * cache-forward on [Fugue] and this is the only test in the module that notices; break it on
+     * [Rga] and several older tests catch it too, indirectly — re-inflation of a compacted id, and
+     * the floor walk, both read through the same cache. So read a green [Rga] arm as redundant
+     * cover, not as this test's justification.
+     */
+    @Test
+    fun compactedIdsAgreesWithTheContractDerivedSetForBoth() {
+        val (rga, _) = rgaWithACompaction()
+        val (fugue, _) = fugueWithACompaction()
+
+        assertAll(
+            { assertTrue(rga.compactedIds.isNotEmpty(), "Rga: the fixture must have compacted something") },
+            { assertTrue(fugue.compactedIds.isNotEmpty(), "Fugue: the fixture must have compacted something") },
+            { assertEquals(compactedIdsVia(rga), rga.compactedIds, "Rga: accessor must equal the contract-derived union") },
+            { assertEquals(compactedIdsVia(fugue), fugue.compactedIds, "Fugue: accessor must equal the contract-derived union") },
+        )
+    }
+
+    /**
+     * `piece` must union both sides' compacted ids **and** leave the merged cache still matching
+     * the merged log.
+     *
+     * A forward site the test above cannot reach: that one compacts once and reads the result,
+     * while this merges two logs that compacted *different* ids, which is what exercises
+     * `mergedCompactedIds = compactedIds + other.compactedIds`. A merge that dropped the remote
+     * half would still converge on the visible sequence, and would surface only later — as a peer
+     * re-admitting an element this replica had already forgotten.
+     *
+     * As above, the [Fugue] arm is the load-bearing one. Drop the remote half of that union on
+     * [Fugue] and this is the only test in the module that notices; do it on [Rga] and several
+     * older lattice-law and reroot tests catch it too.
+     */
+    @Test
+    fun pieceUnionsCompactedIdsAndKeepsTheCacheMatchingTheLogForBoth() {
+        val (rgaLeft, _) = rgaWithACompaction()
+        val (rgaRight, _) = rgaWithACompaction(author = c, coauthor = d)
+        val rga = rgaLeft.piece(rgaRight)
+
+        val (fugueLeft, _) = fugueWithACompaction()
+        val (fugueRight, _) = fugueWithACompaction(author = c, coauthor = d)
+        val fugue = fugueLeft.piece(fugueRight)
+
+        assertAll(
+            // Each side must contribute a *distinct* id, or the union assertions below are vacuous.
+            { assertEquals(2, rga.compactedIds.size, "Rga: each side must contribute one distinct compacted id") },
+            { assertEquals(2, fugue.compactedIds.size, "Fugue: each side must contribute one distinct compacted id") },
+            {
+                assertEquals(
+                    rgaLeft.compactedIds + rgaRight.compactedIds,
+                    rga.compactedIds,
+                    "Rga: piece must union both sides' compacted ids",
+                )
+            },
+            {
+                assertEquals(
+                    fugueLeft.compactedIds + fugueRight.compactedIds,
+                    fugue.compactedIds,
+                    "Fugue: piece must union both sides' compacted ids",
+                )
+            },
+            { assertEquals(compactedIdsVia(rga), rga.compactedIds, "Rga: the merged cache must match the merged log") },
+            { assertEquals(compactedIdsVia(fugue), fugue.compactedIds, "Fugue: the merged cache must match the merged log") },
+        )
+    }
+
+    /** The compacted-id set, derived from [OpLogCrdt] alone — the union of every compaction record. */
+    private fun <Id : Any, V, Op : Any> compactedIdsVia(crdt: OpLogCrdt<Id, V, Op>): Set<Id> =
+        crdt.operations().flatMap { op ->
+            when (val shape = crdt.classify(op)) {
+                is LogOp.Compact -> shape.compactedIds.asSequence()
+                is LogOp.Insert, is LogOp.Remove -> emptySequence()
+            }
+        }.toSet()
+
     // ── fixtures ──────────────────────────────────────────────────────────────
 
     /**
@@ -443,12 +534,15 @@ class OpLogCrdtTest {
      * [Fugue]), so compacting the *first* element of a two-element sequence silently yields
      * `null` and no compaction at all.
      */
-    private fun rgaWithACompaction(): Pair<Rga<String>, RgaOp.Compact> {
-        val (r1, i1) = Rga.empty<String>().insertAt(a, 0, "x")
-        val (r2, i2) = r1.insertAt(b, 1, "y")
+    private fun rgaWithACompaction(
+        author: ReplicaId = a,
+        coauthor: ReplicaId = b,
+    ): Pair<Rga<String>, RgaOp.Compact> {
+        val (r1, i1) = Rga.empty<String>().insertAt(author, 0, "x")
+        val (r2, i2) = r1.insertAt(coauthor, 1, "y")
         val (r3, _) = assertNotNull(r2.removeAt(1), "removeAt(1) must find the trailing element")
 
-        val cut = VersionVector.of(mapOf(a to i1.id.seq, b to i2.id.seq))
+        val cut = VersionVector.of(mapOf(author to i1.id.seq, coauthor to i2.id.seq))
         val (compacted, compactOp) = assertNotNull(
             r3.compact(stableCut = cut, frontierMax = cut, delivered = cut),
             "the tombstoned, causally-stable, unanchored insert must be GC-eligible",
@@ -458,12 +552,15 @@ class OpLogCrdtTest {
     }
 
     /** A [Fugue] whose log holds a surviving Insert, plus a retained [FugueOp.Compact]. */
-    private fun fugueWithACompaction(): Pair<Fugue<String>, FugueOp.Compact> {
-        val (f1, i1) = Fugue.empty<String>().insertAt(a, 0, "x")
-        val (f2, i2) = f1.insertAt(b, 1, "y")
+    private fun fugueWithACompaction(
+        author: ReplicaId = a,
+        coauthor: ReplicaId = b,
+    ): Pair<Fugue<String>, FugueOp.Compact> {
+        val (f1, i1) = Fugue.empty<String>().insertAt(author, 0, "x")
+        val (f2, i2) = f1.insertAt(coauthor, 1, "y")
         val (f3, _) = assertNotNull(f2.removeAt(1), "removeAt(1) must find the trailing element")
 
-        val cut = VersionVector.of(mapOf(a to i1.id.seq, b to i2.id.seq))
+        val cut = VersionVector.of(mapOf(author to i1.id.seq, coauthor to i2.id.seq))
         val (compacted, compactOp) = assertNotNull(
             f3.compact(stableCut = cut, frontierMax = cut, delivered = cut),
             "the tombstoned, causally-stable, unanchored insert must be GC-eligible",

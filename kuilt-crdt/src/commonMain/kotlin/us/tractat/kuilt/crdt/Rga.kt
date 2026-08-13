@@ -247,6 +247,10 @@ public class Rga<V> private constructor(
      * set. Reading only the floor would judge a *foreign* author's windowed-away element
      * unsuppressed — [dropWindow] can never fold a foreign dot into the floor — and so keep its
      * segment on disk forever.
+     *
+     * [Fugue.compactedIds] is public for the same reason and is kept at the same visibility on
+     * purpose (#2223) — the two op-log CRDTs are meant to be interchangeable behind [OpLogCrdt],
+     * so a consumer that swaps one for the other must not hit a wall here.
      */
     public val compactedIds: Set<RgaId> by lazy {
         cache?.compactedIds ?: computeCompactedIds()
