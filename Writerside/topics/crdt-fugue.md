@@ -121,12 +121,17 @@ traversal order.
 | Left-origin tracking | ✓ | ✓ |
 | Right-origin tracking | — | ✓ |
 | Non-interleaving guarantee | ✗ (can interleave) | ✓ (maximal non-interleaving) |
-| GC / compaction | ✓ via `RgaGcCoordinator` | Not yet (op-log grows unbounded) |
+| GC / compaction | ✓ via `RgaGcCoordinator` | ✓ via `FugueGcCoordinator` |
+| History windowing (drop the oldest entries) | ✓ via `WindowPolicy` | — |
 
-The op-log currently grows without bound. Garbage-collecting tombstones once they are
-*causally stable* (every peer has seen the remove) requires causal-stability tracking,
-which is not yet implemented. If bounded memory is important and the non-interleaving
-guarantee is not required, [Rga](crdt-rga.md) currently has richer GC support.
+Both types keep the op-log bounded the same way: once a removal is *causally stable* — every
+peer has seen it — the entry it tombstoned can be dropped for good, and a small record of the
+forgetting is kept so a peer that reconnects later doesn't bring it back.
+
+They differ in how far that goes. `Rga` can additionally be told to keep only the last *n*
+entries and forget older ones regardless of age. Fugue has no equivalent, so it shrinks only as
+fast as removals become causally stable. If you need a hard cap on history and the
+non-interleaving guarantee is not required, [Rga](crdt-rga.md) has the richer controls.
 
 ## When to use
 
