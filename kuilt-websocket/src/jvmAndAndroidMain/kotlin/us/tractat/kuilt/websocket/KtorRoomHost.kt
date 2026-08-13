@@ -4,14 +4,15 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
-import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Principal
 import us.tractat.kuilt.session.Room
@@ -102,13 +103,54 @@ public class KtorRoomHost internal constructor(
                     try {
                         onRoom(room)
                     } catch (e: CancellationException) {
+                        // Load-bearing, unlike the same arm in [us.tractat.kuilt.session.LoomRoomHost]
+                        // (which had no swallowing arm and so removed it as a no-op). Here the
+                        // `catch (Throwable)` below WOULD swallow it — CancellationException is an
+                        // IllegalStateException on the JVM — turning a structured-concurrency cancel
+                        // into a logged warning. This arm is the only thing keeping that from happening.
                         throw e
                     } catch (e: Throwable) {
                         log.warn(e) { "ws.room.onRoom failure: ${e.message}" }
                     } finally {
-                        runCatchingCancellable { room.leave(LeaveReason.Normal) }
+                        leaveShielded(room)
                     }
                 }
+            }
+        }
+    }
+
+    /**
+     * Leave [room] on the way out of its accept-loop child — shielded, because otherwise the leave
+     * never happens at all.
+     *
+     * **`NonCancellable` is load-bearing here, not belt-and-braces.** Two paths reach this `finally`
+     * on an **already-cancelled** coroutine, and both are ordinary: cancelling the calling scope, which
+     * is this host's entire documented shutdown ([close] is a no-op and says so); and a non-cancellation
+     * accept failure, which [start] rethrows, failing the enclosing `coroutineScope` and cancelling every
+     * sibling room handler with it. [Room.leave] is a suspending call into the transport — the WebSocket
+     * close handshake suspends — so unshielded it throws at that suspension point and the leave never
+     * completes: no `LeaveReason.Normal`, no `Seam.close`, and every room the server was hosting silently
+     * vanishes off the fabric instead of departing, leaving peers to time it out as a transport drop
+     * (#2286). The same idiom, for the same reason, is in `NwLoom.discardUnreturnedSeam` and
+     * `CompositeSeam.discardOrphanedPly`.
+     *
+     * The bug is specific to those two paths: `onRoom` returning normally, or throwing into the
+     * swallowing `catch` above, both reach this `finally` uncancelled, where the leave already worked.
+     * That is what made the site look safe on inspection.
+     *
+     * `try` / `catch (Throwable)` rather than `runCatchingCancellable`: inside the shield this block's Job
+     * is [NonCancellable], so there is no cancellation of ours left to preserve, and every throwable
+     * arriving here — including a [CancellationException] a `withTimeout`-bounded `leave` minted itself,
+     * which [Room.leave]'s contract forbids but a library cannot assume a consumer honours — is this one
+     * leave's failure. `runCatchingCancellable` would rethrow exactly that case, aborting the cleanup the
+     * shield exists to guarantee.
+     */
+    private suspend fun leaveShielded(room: Room) {
+        withContext(NonCancellable) {
+            try {
+                room.leave(LeaveReason.Normal)
+            } catch (failure: Throwable) {
+                log.debug { "ws.room.leave-failed path=$path sessionName=${pattern.sessionName} failure=$failure" }
             }
         }
     }
