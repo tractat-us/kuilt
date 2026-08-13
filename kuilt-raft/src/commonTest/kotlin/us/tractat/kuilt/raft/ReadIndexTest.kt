@@ -12,6 +12,7 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.encodeToByteArray
 import us.tractat.kuilt.raft.internal.RaftMessage
+import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
@@ -20,8 +21,6 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
-
-private fun assertAll(vararg assertions: () -> Unit) = assertions.forEach { it() }
 
 /**
  * Config for the stale-ACK BLOCKER 1 test: heartbeat stays at 2 ms (so we can advance
