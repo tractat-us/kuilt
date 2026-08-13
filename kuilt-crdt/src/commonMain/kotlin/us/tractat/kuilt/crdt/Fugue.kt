@@ -255,7 +255,25 @@ public class Fugue<V> private constructor(
         cache?.tombstones ?: computeTombstones()
     }
 
-    private val compactedIds: Set<FugueId> by lazy {
+    /**
+     * All ids that have been garbage-collected by any [FugueOp.Compact] in this op-log.
+     *
+     * Public for the same reason as [Rga.compactedIds], and the two are deliberately kept at the
+     * same visibility: a consumer that partitions the op-log across storage segments has to decide
+     * whether a segment is fully superseded before it may drop it, and this set is what answers
+     * that. On [Fugue] it answers it *alone* — there is no [Rga.compactedBelow] floor here, so
+     * every id this replica has forgotten is named by a retained [FugueOp.Compact], and this set is
+     * the whole suppression story rather than half of it.
+     *
+     * **Publishing it adds no information, only an accessor.** The same set is already reachable
+     * through the [OpLogCrdt] contract — union the [LogOp.Compact.compactedIds] of every
+     * classified op — so a determined consumer could always compute it, at O(ops) per call. This
+     * is the cached O(1) form of that walk, which is why exposing it costs no new commitment.
+     * For the same reason it stays *here* rather than moving onto [OpLogCrdt]: a second contract
+     * member answering a question [OpLogCrdt.classify] already answers would only be a surface
+     * the two routes could drift apart on.
+     */
+    public val compactedIds: Set<FugueId> by lazy {
         cache?.compactedIds ?: computeCompactedIds()
     }
 

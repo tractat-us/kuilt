@@ -433,6 +433,43 @@ class OpLogCrdtTest {
         )
     }
 
+    // ── compactedIds ──────────────────────────────────────────────────────────
+
+    /**
+     * The concrete `compactedIds` accessor must agree with the set derived through the [OpLogCrdt]
+     * contract, on **both** implementations.
+     *
+     * This is what makes publishing that accessor on both types (#2223) a convenience rather than
+     * a new commitment: the same set is already reachable by unioning the
+     * [LogOp.Compact.compactedIds] of every classified op, so the accessor adds a cached O(1) read
+     * of something a consumer could always have walked the log for.
+     *
+     * It is not a tautology. The accessor reads the **threaded cache** — `compact` folds the GC'd
+     * ids forward into it — while [compactedIdsVia] re-reads the **retained `Compact` ops**. A
+     * cache that drifted from the log would fail here and nowhere else.
+     */
+    @Test
+    fun compactedIdsAgreesWithTheContractDerivedSetForBoth() {
+        val (rga, _) = rgaWithACompaction()
+        val (fugue, _) = fugueWithACompaction()
+
+        assertAll(
+            { assertTrue(rga.compactedIds.isNotEmpty(), "Rga: the fixture must have compacted something") },
+            { assertTrue(fugue.compactedIds.isNotEmpty(), "Fugue: the fixture must have compacted something") },
+            { assertEquals(compactedIdsVia(rga), rga.compactedIds, "Rga: accessor must equal the contract-derived union") },
+            { assertEquals(compactedIdsVia(fugue), fugue.compactedIds, "Fugue: accessor must equal the contract-derived union") },
+        )
+    }
+
+    /** The compacted-id set, derived from [OpLogCrdt] alone — the union of every compaction record. */
+    private fun <Id : Any, V, Op : Any> compactedIdsVia(crdt: OpLogCrdt<Id, V, Op>): Set<Id> =
+        crdt.operations().flatMap { op ->
+            when (val shape = crdt.classify(op)) {
+                is LogOp.Compact -> shape.compactedIds.asSequence()
+                is LogOp.Insert, is LogOp.Remove -> emptySequence()
+            }
+        }.toSet()
+
     // ── fixtures ──────────────────────────────────────────────────────────────
 
     /**
