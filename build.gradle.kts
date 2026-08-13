@@ -257,6 +257,7 @@ class TimeoutShapedFailureReporter(private val resultsDir: Provider<String>) : T
 // re-runs the guard. Moving an allowlist to `gradle.properties`, a resource file, or any other
 // external source would silently drop it out of the key and reintroduce exactly the stale-green
 // class these stamps were made safe against — if you externalise one, declare it as an input too.
+//
 // TAKING A MUTATION RECEIPT ON A GUARD WHOSE INPUT IS THE MODULE SET (#2272). Several guards here
 // take the subproject set as an input — `verifyModuleTable` and `forbidUnlintedModule` among them —
 // and the obvious receipt is "add a module to `settings.gradle.kts`, watch it go red". It does go
@@ -284,6 +285,18 @@ class TimeoutShapedFailureReporter(private val resultsDir: Provider<String>) : T
 //
 // The complementary receipt needs no probe at all — REMOVE an `include`. Nothing pre-empts a module
 // going away, and it exercises the same input property from the other side.
+//
+// DISTRUST THE GREEN AT LEAST AS HARD AS THE RED. Everything above is about a red that names the
+// wrong thing, which at least makes you look. The worse verdict this probe can hand you is a GREEN,
+// and it has: the probe path used to be a caller-chosen string, and `-PguardProbeModule=:zzz-probe`
+// returned BUILD SUCCESSFUL from `verifyModuleTable` — because that guard filters on `:kuilt-`, so
+// the probe was included, exempted, and INVISIBLE, on a cache key identical to the no-probe run.
+// A receipt-shaped nothing. That is why the path is now a reserved literal rather than a shape
+// (see `settings.gradle.kts`), and it generalises past this one flag: a FREE KNOB ON A FIXTURE
+// DRIFTS TO THE ONE SETTING WHERE THE PROPERTY CANNOT FAIL. Before recording a 🟢, name what would
+// have had to be true for it to be a 🔴, and confirm the task actually EXECUTED — `UP-TO-DATE` or
+// `FROM-CACHE` on a mutation run is not a verdict, it is the previous verdict replayed. The local
+// build cache is shared across worktrees, so re-take control arms with `--no-build-cache`.
 //
 // WHY THE BOM CHECK IS NOT JUST MOVED TO A TASK, since that is the reflex on reading the above:
 // `publish` does not run `check`. A task-wired completeness check would let a module that forgot

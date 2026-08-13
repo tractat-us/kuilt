@@ -156,11 +156,33 @@ if (providers.gradleProperty("includeSpike").isPresent) {
 // revert), and `kuilt-bom` accounts for the same property so configuration succeeds. A guard that
 // needs the probe to carry Kotlin source — `forbidUnlintedModule` — reads `build/guard-probe/src/`.
 // The full receipt shape is in the root build script's "Guard plumbing" section.
+//
+// THE PATH IS A RESERVED LITERAL, NOT A SHAPE THE CALLER CHOOSES, and both reasons were live
+// defects in the first version of this block, which took any new `:`-prefixed path:
+//
+//   - A validating check here CANNOT be order-independent. `rootProject.children` is evaluated
+//     where the block sits, so it saw only the includes ABOVE it. A module declared further down
+//     passed the check and had its project directory silently repointed here — its build script
+//     never applied, its sources invisible to `forbidUnlintedModule`, and itself exempted from
+//     `kuilt-bom`'s completeness backstop. The exact outcome the check's own message claimed to
+//     prevent, decided by a file position nothing pins. A literal cannot collide in any order.
+//   - The literal is inside the `:kuilt-` namespace ON PURPOSE. `verifyModuleTable` derives its
+//     input as `subprojects.filter { it.startsWith(":kuilt-") }`, so a probe named outside that
+//     namespace is included, exempted, and INVISIBLE to the guard: the receipt comes back GREEN,
+//     from a cache key identical to the no-probe run, having proved nothing. A free knob drifts to
+//     the one setting where the property cannot fail, and a vacuous green is far harder to notice
+//     than a misattributed red.
+//
+// A future guard scoped to some other namespace needs a second reserved literal here, added
+// deliberately — not a relaxation of this one back into a shape check.
+val guardProbePath = ":kuilt-zzz-probe"
 providers.gradleProperty("guardProbeModule").orNull?.let { path ->
-    require(path.startsWith(":") && rootProject.children.none { ":${it.name}" == path }) {
-        "-PguardProbeModule must name a NEW ':'-prefixed module path; \"$path\" is not one. " +
-            "Pointing it at a module that already exists would silently move that module's " +
-            "project directory to the probe directory (#2272)."
+    require(path == guardProbePath) {
+        "-PguardProbeModule accepts only the reserved probe path \"$guardProbePath\"; got \"$path\" " +
+            "(#2272). It is a fixed name because a free one lands on whichever module you name — " +
+            "silently repointing a REAL module at the probe directory if it is declared below this " +
+            "block — and because a name outside the `:kuilt-` namespace is invisible to " +
+            "`verifyModuleTable`, which then returns a receipt-shaped GREEN."
     }
     val probeDir = file("build/guard-probe")
     probeDir.mkdirs()
