@@ -73,9 +73,9 @@ class RelayDialectOriginPreservationTest {
             testScheduler.advanceUntilIdle()
 
             // List-shaped, not `received.single()`: a broken leg leaves its list empty, and
-            // `single()`'s NoSuchElementException aborts the whole assertAll — so a failed up
-            // leg would hide whether the down leg worked at all, which is the first thing you
-            // want to know here (#1823).
+            // `single()`'s NoSuchElementException becomes the failure you read first. Since #2283 the
+            // other leg's diagnosis rides along rather than being discarded, but whether the down leg
+            // worked is the first thing you want to know here, so it is named outright.
             assertAll(
                 { assertEquals(1, voterReceived.size, "the up leg reaches exactly the addressed voter") },
                 { assertEquals(listOf(clientId), voterReceived.map { it.from }, "up leg: from = the true client, not the relay") },

@@ -158,8 +158,9 @@ public abstract class RaftStorageConformanceSuite {
         storage.appendEntries(toAppend)
         val retrieved = storage.entries()
         // List-shaped, not `retrieved[0]`/`[1]`/`[2]`: a storage that drops an entry makes those
-        // throw IndexOutOfBoundsException, which `assertAll` lets abort the block — so an
-        // implementor is shown that instead of the named count and content failures (#1823).
+        // throw IndexOutOfBoundsException. Since #2283 that no longer costs the sibling diagnoses —
+        // `assertAll` carries them along on it — but the implementor still reads the throw first,
+        // where a named count/content failure prints both sides outright.
         assertAll(
             { assertEquals(3, retrieved.size, "should have 3 entries") },
             { assertEquals(listOf(1L, 2L, 3L), retrieved.map { it.index }, "every appended index, in order") },

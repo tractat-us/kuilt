@@ -55,8 +55,9 @@ class RaftRelayHubTest {
             testScheduler.advanceUntilIdle()
 
             // List-shaped, not `at1.single()`: an undelivered frame leaves `at1` empty, and
-            // `single()`'s NoSuchElementException aborts the whole assertAll — taking the
-            // dest-routing assertion below AND the size failure already collected (#1823).
+            // `single()`'s NoSuchElementException becomes the failure you read first. Since #2283
+            // it no longer discards the size and dest-routing diagnoses, but naming them still beats
+            // reading "List is empty." and inferring the rest.
             assertAll(
                 { assertEquals(1, at1.size, "the named voter's inbound must receive exactly one frame") },
                 { assertEquals(listOf(learnerId), at1.map { it.from }, "true origin preserved as RaftEnvelope.from") },
