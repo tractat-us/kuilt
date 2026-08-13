@@ -60,7 +60,11 @@ val unaccounted = rootProject.subprojects.map { it.path }
     .minus(project.path)
 check(unaccounted.isEmpty()) {
     "Modules neither published (apply kuilt.publish / kuilt.kmp-library) nor listed " +
-        "as deliberatelyUnpublished in kuilt-bom/build.gradle.kts: $unaccounted"
+        "as deliberatelyUnpublished in kuilt-bom/build.gradle.kts: $unaccounted\n" +
+        "  If you added this module as a PROBE, to prove some OTHER guard notices a new " +
+        "module: this failure is CONFIGURATION-time, so it pre-empted that guard and your " +
+        "red says nothing about it (#2272). Add the probe here too, or take the receipt " +
+        "from the other side by REMOVING an `include` from settings.gradle.kts."
 }
 val staleExclusions = deliberatelyUnpublished.filter { path ->
     rootProject.subprojects.none { it.path == path } || publishedSiblings.any { it.path == path }
