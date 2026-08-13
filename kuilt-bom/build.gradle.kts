@@ -31,6 +31,7 @@ mavenPublishing {
 // (Same cross-project-at-configuration-time pattern as the root build script's
 // forbidSourcelessKmpTarget guard; fine without isolated projects, which this
 // build does not enable.)
+
 // The mutation-receipt probe (#2272), if one was asked for. This check is the reason the probe
 // needs an entry at all: it runs at CONFIGURATION time, so without an exemption it fails before any
 // task executes and pre-empts the very guard the probe exists to prove. Keeping it here rather than
@@ -77,6 +78,16 @@ val unaccounted = rootProject.subprojects.map { it.path }
     .minus(publishedSiblings.map { it.path }.toSet())
     .minus(deliberatelyUnpublished)
     .minus(project.path)
+// The probe is exempted by construction, so its presence here means the exemption above was
+// deleted. Checked separately because the general message below would send that reader to the flag
+// they are already using — a red whose SHAPE misdescribes the failure is the defect #2272 is about.
+if (guardProbeModule != null) {
+    check(guardProbeModule !in unaccounted) {
+        "-PguardProbeModule=$guardProbeModule reached the completeness check, which means the " +
+            "probe's exemption in `deliberatelyUnpublished` above has been deleted. Restore it, " +
+            "or the documented receipt shape silently stops reaching the guard under test (#2272)."
+    }
+}
 check(unaccounted.isEmpty()) {
     "Modules neither published (apply kuilt.publish / kuilt.kmp-library) nor listed " +
         "as deliberatelyUnpublished in kuilt-bom/build.gradle.kts: $unaccounted\n" +
