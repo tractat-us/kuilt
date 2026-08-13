@@ -65,6 +65,16 @@ class EntitlementLedgerLawsTest {
             leafRelocOut = randomEdgeCounters(rnd),
             rollupRelocIn = randomEdgeCounters(rnd),
             rollupRelocOut = randomEdgeCounters(rnd),
+            // The gauge register (#1752) joins componentwise on (Rational, Long) — a product of
+            // two total orders, so the same product-of-lattices argument covers it. Parameterised
+            // in so the fourteenth component is not silently exempt from the laws.
+            gauges = edges.filter { rnd.nextBoolean() }.associateWith { randomGauge(rnd) },
+        )
+
+    private fun randomGauge(rnd: Random): Gauge =
+        Gauge(
+            floor = Rational.of(rnd.nextLong(-1_000L, 1_000L), rnd.nextLong(1L, 8L)),
+            folded = rnd.nextLong(0L, 1_000L),
         )
 
     @Test

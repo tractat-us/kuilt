@@ -86,7 +86,7 @@ import kotlinx.serialization.Serializable
  *
  * ## The representation
  *
- * Thirteen components, each already a join-semilattice, so [piece] is just their
+ * Fourteen components, each already a join-semilattice, so [piece] is just their
  * componentwise join (the product-of-lattices idiom):
  *
  *  - [records] — the immutable topology (parent/child/weight per edge) as a
@@ -103,6 +103,11 @@ import kotlinx.serialization.Serializable
  *    by [PathKey]; the row for a donor is written only by that donor.
  *  - the **relocation counters** — `issuedRelocIn`, `leafRelocIn`/`leafRelocOut`,
  *    `rollupRelocIn`/`rollupRelocOut`, described next.
+ *  - `gauges` — the per-edge virtual-time seat register ([Gauge]), joined **componentwise**
+ *    max. This is the only *multi-writer* per-edge component: unlike a counter slot, which
+ *    exactly one replica writes, any peer may assert a floor for any edge. The pairing of each
+ *    floor with the issuance its writer observed is what makes that safe under an order-free
+ *    join — see [Gauge] and [grossVirtualService].
  *
  * The `spent` split ([leafSpent] vs [rollupSpent]) is the load-bearing choice: a
  * completed charge on a leaf path charges the leaf's own final edge in `leafSpent`
@@ -167,6 +172,7 @@ public class EntitlementLedger private constructor(
     private val leafRelocOut: Map<AttachmentId, GCounter> = emptyMap(),
     private val rollupRelocIn: Map<AttachmentId, GCounter> = emptyMap(),
     private val rollupRelocOut: Map<AttachmentId, GCounter> = emptyMap(),
+    private val gauges: Map<AttachmentId, Gauge> = emptyMap(),
 ) : Quilted<EntitlementLedger> {
 
     /** The join: the componentwise least-upper-bound of `this` and [other]. */
@@ -191,6 +197,10 @@ public class EntitlementLedger private constructor(
             leafRelocOut = leafRelocOut.mergeEdgeCounters(other.leafRelocOut),
             rollupRelocIn = rollupRelocIn.mergeEdgeCounters(other.rollupRelocIn),
             rollupRelocOut = rollupRelocOut.mergeEdgeCounters(other.rollupRelocOut),
+            // The virtual-time gauge: a per-edge register joined COMPONENTWISE (max floor, max
+            // fold) — never lexicographically by floor, which would keep a stale writer's pair
+            // whole and reintroduce the double count (#1752, see [Gauge]).
+            gauges = gauges.mergeValues(other.gauges) { mine, theirs -> mine.join(theirs) },
         )
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -258,6 +268,63 @@ public class EntitlementLedger private constructor(
      */
     public fun record(id: AttachmentId): AttachmentRecord? = recordOf(id)
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // The virtual-time gauge (issue #1752) — the replicated seat register and the
+    // read path over it. Absent ⇒ the edge reads from zero, exactly as an unseated
+    // edge should.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * [id]'s stored virtual-time [Gauge], or `null` when the edge carries none — either it has
+     * never been seated, or this view is simply missing the patch that seated it. The two are
+     * indistinguishable here **on purpose**: absence is the seat-bump predicate (see [Gauge]),
+     * and it is a *local* read, so a peer that has not seen the seat may re-seat from its own
+     * front. That is safe precisely because its bump folds its own observed issuance.
+     */
+    public fun gauge(id: AttachmentId): Gauge? = gauges[id]
+
+    /**
+     * [id]'s **gross** virtual service — `floor + (baseIssued − folded) / w`, or `baseIssued / w`
+     * when no [Gauge] is stored. `null` if [id] is unknown *or divergent* (no single record ⇒ no
+     * single weight to divide by).
+     *
+     * ## Base issuance, not effective (issue #1752, F2)
+     *
+     * The fold axis is the **base** `issued` counter — deliberately *not* `effIssued`, which adds
+     * `issuedRelocIn`. A relocated magnitude is *economics*: it restores a re-homed child's
+     * spendable holdings, and it must not also advance the child's virtual clock, because the
+     * service it accounts for was already charged against the strand's own virtual time on the
+     * dead generation. Reading it here would make a relocation-receiving edge appear to have
+     * consumed its entire re-homed strand the instant it received it — permanent starvation sized
+     * by the strand. It is also what makes the register **arrival-order independent**: a
+     * `reconcileStranded` patch touches no term of this read, so it cannot matter whether it lands
+     * before or after the edge is seated.
+     *
+     * @throws ArithmeticException if the exact arithmetic would exceed `Long` (§10.12 — a
+     *   deterministic throw, never a silent wrap; see [CheckedMath]).
+     */
+    public fun grossVirtualService(id: AttachmentId): Rational? =
+        recordOf(id)?.let { grossVirtualService(id, it.weight) }
+
+    /**
+     * [id]'s virtual service net of returns — `grossVirtualService − returned / w` (design §7.1's
+     * `b + committedService / weight`, with the gauge supplying `b` and the fold). `null` if [id]
+     * is unknown or divergent.
+     *
+     * @throws ArithmeticException if the exact arithmetic would exceed `Long`.
+     */
+    public fun virtualService(id: AttachmentId): Rational? {
+        val w = recordOf(id)?.weight ?: return null
+        return grossVirtualService(id, w) - perWeight(counterValue(returned, id), w)
+    }
+
+    /** [grossVirtualService] once the edge's single weight is in hand. */
+    private fun grossVirtualService(id: AttachmentId, w: Weight): Rational {
+        val base = counterValue(issued, id)
+        val g = gauges[id] ?: return perWeight(base, w)
+        return g.floor + perWeight(checkedSub(base, g.folded), w)
+    }
+
     /**
      * The [Lifecycle] of [id], or `null` if [id] is entirely unknown to this ledger.
      * A known edge with no explicit register entry reads as [Lifecycle.ACTIVE] (the
@@ -279,7 +346,7 @@ public class EntitlementLedger private constructor(
     private fun isKnown(id: AttachmentId): Boolean =
         id in records || id in issued || id in returned || id in leafSpent || id in rollupSpent ||
             id in lifecycle || id in issuedRelocIn || id in leafRelocIn || id in leafRelocOut ||
-            id in rollupRelocIn || id in rollupRelocOut
+            id in rollupRelocIn || id in rollupRelocOut || id in gauges
 
     /** The lifecycle of a **known** edge: the stored value, or [Lifecycle.ACTIVE] by default. */
     private fun lifecycleOf(id: AttachmentId): Lifecycle = lifecycle[id] ?: Lifecycle.ACTIVE
@@ -1168,6 +1235,7 @@ public class EntitlementLedger private constructor(
         leafRelocOut = leafRelocOut[id]?.let { mapOf(id to it) } ?: emptyMap(),
         rollupRelocIn = rollupRelocIn[id]?.let { mapOf(id to it) } ?: emptyMap(),
         rollupRelocOut = rollupRelocOut[id]?.let { mapOf(id to it) } ?: emptyMap(),
+        gauges = gauges[id]?.let { mapOf(id to it) } ?: emptyMap(),
     )
 
     override fun equals(other: Any?): Boolean =
@@ -1184,7 +1252,8 @@ public class EntitlementLedger private constructor(
             leafRelocIn == other.leafRelocIn &&
             leafRelocOut == other.leafRelocOut &&
             rollupRelocIn == other.rollupRelocIn &&
-            rollupRelocOut == other.rollupRelocOut
+            rollupRelocOut == other.rollupRelocOut &&
+            gauges == other.gauges
 
     override fun hashCode(): Int {
         var h = records.hashCode()
@@ -1200,6 +1269,7 @@ public class EntitlementLedger private constructor(
         h = 31 * h + leafRelocOut.hashCode()
         h = 31 * h + rollupRelocIn.hashCode()
         h = 31 * h + rollupRelocOut.hashCode()
+        h = 31 * h + gauges.hashCode()
         return h
     }
 
@@ -1208,7 +1278,7 @@ public class EntitlementLedger private constructor(
             "returned=$returned, leafSpent=$leafSpent, rollupSpent=$rollupSpent, " +
             "transfers=$transfers, lifecycle=$lifecycle, issuedRelocIn=$issuedRelocIn, " +
             "leafRelocIn=$leafRelocIn, leafRelocOut=$leafRelocOut, " +
-            "rollupRelocIn=$rollupRelocIn, rollupRelocOut=$rollupRelocOut)"
+            "rollupRelocIn=$rollupRelocIn, rollupRelocOut=$rollupRelocOut, gauges=$gauges)"
 
     public companion object {
         /** The empty ledger: no topology, no supply, no accounting. The lattice bottom. */
@@ -1270,10 +1340,11 @@ public class EntitlementLedger private constructor(
             leafRelocOut: Map<AttachmentId, GCounter> = emptyMap(),
             rollupRelocIn: Map<AttachmentId, GCounter> = emptyMap(),
             rollupRelocOut: Map<AttachmentId, GCounter> = emptyMap(),
+            gauges: Map<AttachmentId, Gauge> = emptyMap(),
         ): EntitlementLedger =
             EntitlementLedger(
                 records, minted, issued, returned, leafSpent, rollupSpent, transfers, lifecycle,
-                issuedRelocIn, leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut,
+                issuedRelocIn, leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut, gauges,
             )
     }
 }
@@ -1328,6 +1399,14 @@ private fun counterValue(counters: Map<AttachmentId, GCounter>, id: AttachmentId
 /** The single `(id, r)` slot value, or 0. */
 private fun slot(counters: Map<AttachmentId, GCounter>, id: AttachmentId, r: ReplicaId): Long =
     counters[id]?.count(r) ?: 0L
+
+/**
+ * [units] of service converted to virtual time at weight [w]: `units / w = units * den / num`.
+ * The one place that division happens, so the gauge read and [HeddlePolicy.virtualService] cannot
+ * drift in how they weight a quantity. Overflow-checked (§10.12).
+ */
+private fun perWeight(units: Long, w: Weight): Rational =
+    Rational.of(checkedMul(units, w.denominator), w.numerator)
 
 /** A `GCounter` carrying just the `(id, r)` slot bumped to its new absolute value (overflow-checked). */
 private fun bumpedSlot(counters: Map<AttachmentId, GCounter>, id: AttachmentId, r: ReplicaId, by: Long): GCounter =

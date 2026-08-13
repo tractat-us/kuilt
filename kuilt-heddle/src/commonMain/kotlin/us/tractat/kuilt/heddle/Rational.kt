@@ -1,5 +1,13 @@
 package us.tractat.kuilt.heddle
 
+import kotlinx.serialization.KSerializer
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+
 /**
  * An **exact rational number** — a `numerator/denominator` pair over `Long`, kept
  * reduced to lowest terms with a strictly positive denominator.
@@ -19,15 +27,19 @@ package us.tractat.kuilt.heddle
  * portable choice; the reduce-after-every-op keeps realistic scheduler workloads far
  * from the ceiling.
  *
- * **Deliberately not `@Serializable`.** A `Rational` is scheduler-local: it appears only
- * as [PolicyEdge.virtualOffset], which design §7.2 explicitly does not replicate. The
- * generated serializer would deserialize past [of] — the only path that reduces and
- * forces a positive denominator — so an unreduced or sign-denormalized value could
- * arrive over the wire and break [equals]/[compareTo] exactly as it could for [Weight]
- * (#1647). Leaving the annotation off makes that unreachable by construction: a future
- * change that tries to replicate a `Rational` fails to compile instead of silently
- * shipping a bypassing serializer. If a virtual time ever must be replicated, give it a
- * normalizing serializer routed through [of], the way [WeightSerializer] does.
+ * **Deliberately not `@Serializable`.** The generated serializer would deserialize past
+ * [of] — the only path that reduces and forces a positive denominator — so an unreduced
+ * or sign-denormalized value could arrive over the wire and break [equals]/[compareTo]
+ * exactly as it could for [Weight] (#1647). Leaving the annotation off makes that
+ * unreachable *by default*: a type that wants to replicate a `Rational` cannot simply
+ * inherit wire-legality, it has to name a normalizing serializer at the property.
+ *
+ * **Replication is opt-in, per site, through [RationalSerializer]** — the normalizing
+ * serializer routed through [of] that this stance always prescribed, and the same shape as
+ * [WeightSerializer]. Two sites exist today: [PolicyEdge.virtualOffset] is scheduler-local
+ * and design §7.2 explicitly does *not* replicate it, while [Gauge.floor] **is** replicated
+ * (issue #1752) and carries `@Serializable(with = RationalSerializer::class)`. Annotate the
+ * property, never this class — that is what keeps the default closed.
  *
  * @property numerator the reduced numerator; may be negative, zero, or positive.
  * @property denominator the reduced denominator; always `> 0` and coprime with [numerator].
@@ -134,5 +146,69 @@ public class Rational private constructor(
         public fun max(a: Rational, b: Rational): Rational = if (a >= b) a else b
 
         private tailrec fun gcd(a: Long, b: Long): Long = if (b == 0L) a else gcd(b, a % b)
+    }
+}
+
+/**
+ * Decodes a [Rational] **through [Rational.of]**, so a value that arrived over the wire is
+ * indistinguishable from one the factory built (#1647, #1752).
+ *
+ * [Rational] is deliberately not `@Serializable` (see its KDoc): the plugin-generated
+ * serializer would write straight into the private primary constructor, skipping the only
+ * path that reduces to lowest terms and forces a positive denominator. An unreduced `2/4`
+ * would then be structurally unequal to `1/2`, and a negative denominator would invert
+ * [Rational.compareTo] — whose cross-multiplication assumes a positive denominator — so a
+ * corrupt or hostile peer could **flip sibling ordering cluster-wide** by encoding `1/2` as
+ * `-1/-2`. Where a `Rational` genuinely must be replicated the property names this
+ * serializer explicitly; [Gauge.floor] is the one such site today.
+ *
+ * **Repair where a canonical form exists; refuse only where none does** — the same split
+ * [WeightSerializer] makes, and for the same reason, which applies verbatim here because a
+ * [Gauge] rides the wire inside the very same [EntitlementLedger] frames a [Weight] does.
+ * Both decode boundaries that carry this state — `Quilter`'s delta dispatch and the heddle
+ * control plane's `applyEntry` — swallow a decode failure and drop the **entire frame**.
+ * Rejecting a merely denormalized encoding would therefore discard every legitimate record
+ * travelling with it, and anti-entropy would re-send the same frame forever: a silent,
+ * permanent convergence wedge between two peers over a difference with no semantic content.
+ * Sign-normalization and reduction have a unique correct answer, so they are applied —
+ * [Rational.of] does both.
+ *
+ * A **zero denominator** names no rational at all. There is nothing to repair to, and
+ * substituting a default would fabricate a virtual-time claim out of hostile input — a
+ * fairness-relevant lie, since a gauge floor is what seats an edge. That throws
+ * [SerializationException] at the decode boundary, before any lattice state is touched; the
+ * frame is dropped and the merge loop survives.
+ */
+public object RationalSerializer : KSerializer<Rational> {
+
+    /**
+     * Field-for-field what the generated form would have been, including the serial name, so
+     * a future decision to annotate the class instead would be wire-compatible with anything
+     * already persisted or in flight.
+     */
+    @Serializable
+    @SerialName("us.tractat.kuilt.heddle.Rational")
+    private data class Surrogate(val numerator: Long, val denominator: Long)
+
+    override val descriptor: SerialDescriptor = Surrogate.serializer().descriptor
+
+    override fun serialize(encoder: Encoder, value: Rational) {
+        encoder.encodeSerializableValue(
+            Surrogate.serializer(),
+            Surrogate(value.numerator, value.denominator),
+        )
+    }
+
+    override fun deserialize(decoder: Decoder): Rational {
+        val (numerator, denominator) = decoder.decodeSerializableValue(Surrogate.serializer())
+        // of() already sign-normalizes n/-d to -n/d and reduces to lowest terms, so the
+        // repairable cases need no pre-pass here; it throws on what cannot be repaired.
+        return try {
+            Rational.of(numerator, denominator)
+        } catch (e: ArithmeticException) {
+            // A zero denominator (no rational named), or negate(Long.MIN_VALUE) during
+            // sign-normalization (no representable canonical form).
+            throw SerializationException("Not a valid Rational: $numerator/$denominator", e)
+        }
     }
 }
