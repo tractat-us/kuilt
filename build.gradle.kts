@@ -2033,10 +2033,6 @@ val verifySampleLinks by tasks.registering {
 val unrunSampleBaseline: Map<String, String> = mapOf(
     "kuilt-game/sampleGameNode" to
         "wedges for the whole wedge-backstop when executed, alone or with siblings — #2289",
-    "kuilt-otel-logging/sampleWithActiveTrace" to
-        "NoClassDefFoundError: org/slf4j/LoggerFactory on its first line, KotlinLogging.logger(…) — " +
-        "slf4j is on neither commonMain nor jvmTest's runtime classpath, so no JVM test in the " +
-        "module has ever called the one entry point every consumer uses — #2289",
 )
 
 val verifySamplesAreRun by tasks.registering {
