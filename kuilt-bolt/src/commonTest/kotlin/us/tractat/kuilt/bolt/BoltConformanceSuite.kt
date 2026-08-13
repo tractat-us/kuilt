@@ -865,29 +865,39 @@ abstract class BoltConformanceSuite {
      * Three assertions, and the numbering the receipts use: **1** the cursor really is past the hole,
      * **2** the resume replays nothing, **3** it reaches the same verdict [ReplayScope.All] does.
      *
-     * **Mutation receipts** — each applied alone, reverted, the revert grep-verified, and the verdict
-     * read out of the results XML rather than the console.
+     * **Mutation receipts** — each applied alone, reverted, the revert grep-verified, the results XML
+     * deleted first, and the log checked for a compile failure (a mutation that does not compile
+     * leaves Gradle serving the previous run's XML, which fabricates a plausible copy of the row
+     * above it).
      *
      * | Mutation | Reds here | Reds elsewhere in `:kuilt-bolt` |
      * |---|---|---|
      * | Drop the minus-one — `InMemoryBolt.replay` | 2, 3 | the sibling above |
-     * | Drop the minus-one — `PosixMappedBolt.replay` | 2, 3 | **nothing** |
+     * | Drop the minus-one — `PosixMappedBolt.replay` | 2, 3 | **nothing at all** |
      * | Drop the minus-one — `MappedBolt.firstSegmentToRead` | 2, 3 | `MappedBoltPruningTest` |
-     * | Seed the boundary cursor from the surviving header instead of parsing it | 2, 3 | `MappedBoltPruningTest` |
-     * | Delete the continuity check outright, any backend | 1 (as a precondition failure) | both siblings |
-     * | **Fixture:** hand back the hole's start as `beyondTheHole` | 1 | — |
-     * | **Fixture:** hand back an offset past the archive's end | 3 | — |
+     * | Prune the boundary segment and seed its cursor from the surviving *header* | 2, 3 | `MappedBoltPruningTest`, one `MappedBoltDamageTest` case |
+     * | Delete the continuity check outright — `InMemoryBolt` | **the precondition**, before any assertion | both siblings |
+     * | **Fixture:** hand back the hole's start as `beyondTheHole` | **1 only** | — |
+     * | **Fixture:** hand back an offset past the archive's end | **3 only** | — |
      *
-     * Row 2 is the finding this property exists for: one backend implementing one contract, whose
-     * continuity carry could be deleted without a single test in the tree noticing.
+     * **Row 2 is the finding this property exists for.** Measured over the whole `macosArm64Test`
+     * suite: dropping that backend's continuity carry reds exactly three tests, and all three are this
+     * property. Before it, the same edit was invisible to every test in the tree.
+     *
+     * Row 4 is what stops rows 1–3 riding on "it read one more segment": the mutated code still reads
+     * the boundary segment's *header*, and still answers [CleanTail]. Only **parsing** that segment
+     * recovers where its frames really ended, which is the argument `InMemoryBolt.replay` makes in
+     * prose and this row makes as a red. It has one piece of collateral — a `MappedBoltDamageTest`
+     * case that also depends on the prune boundary — so it is not a clean single-mechanism row.
      *
      * **What the suite cannot check about the hook, said plainly.** It cannot verify that
      * [DiscontinuousFixture.beyondTheHole] names a frame that really exists — per the paragraph above,
      * nothing in this contract can see past the hole, so there is no positive check to make. What it
-     * has instead is both directions of *wrong* being loud: an offset at or below the hole's start
-     * fails assertion 1, which exists for no other reason, and an offset past the archive's end makes
-     * every segment prunable, which is a [CleanTail] and fails assertion 3. The last two rows are those
-     * two mutations, measured rather than argued.
+     * has instead is both directions of *wrong* being loud, and the last two rows are those two
+     * mutations rather than an argument. An offset at the hole's start fails assertion **1 and only
+     * 1** — 2 and 3 stay green there, which is the sibling's whole table restated and precisely why a
+     * hook that quietly drifted back to the near side would otherwise cost nothing. An offset past the
+     * archive's end makes every segment prunable, which is a [CleanTail], and fails assertion 3.
      *
      * **What it does not reach.** It never proves the pruned prefix was *skipped* rather than read and
      * forgiven — every assertion here would hold on a backend that read the whole archive every time.
