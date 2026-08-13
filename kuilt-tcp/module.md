@@ -10,9 +10,27 @@ it to a `Connection` with `tcpConnection` (Ktor channels → kotlinx-io `Source`
 `:kuilt-stream`'s `framed()`), then hand that to `:kuilt-core`'s `handshaking` to
 negotiate identity in-band and yield a 2-peer `Seam`.
 
-- `TcpLoom.host(serverSocket, …)` — `weave(Rendezvous.New)` accepts one connection
-  on a pre-bound `ServerSocket`.
-- `TcpLoom.join(…)` — `weave(Rendezvous.Existing(TcpAddress))` dials the address.
+- `tcpLoomHost(serverSocket, selector, …)` — `weave(Rendezvous.New)` accepts one
+  connection on a pre-bound `ServerSocket`.
+- `tcpLoomJoin(selector, …)` — `weave(Rendezvous.Existing(TcpAddress))` dials the address.
+
+Those two are the consumer surface, in the argument order every kuilt fabric factory
+shares: the fabric's own required arguments first, then the universal knobs. The
+constructors they wrap — `TcpLoom.host` / `TcpLoom.join` — are unchanged and remain the
+surface for dependency injection and tests.
+
+Splitting host from join at construction is irreducible here: a host needs a bound
+`ServerSocket` a joiner has no use for.
+
+Two knobs other fabrics' factories take are **deliberately absent**, because this one
+cannot honour them and an argument that is accepted and then ignored is worse than one
+that does not exist:
+
+- **`weaveTimeout`** — `weave` bounds neither `accept()` nor `connect()`, and a host that
+  waits indefinitely for its first joiner is the intended behaviour here.
+- **`policy`** — the inbox `DeliveryPolicy` is settable on `identified`, but not on
+  `handshaking`, the identity negotiation this fabric goes through, so nothing passed in
+  could reach the seam.
 
 `TcpAddress(host, port)` is the `Tag` a joiner resolves.
 
