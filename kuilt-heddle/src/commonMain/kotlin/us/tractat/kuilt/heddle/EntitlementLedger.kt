@@ -284,6 +284,14 @@ public class EntitlementLedger private constructor(
     public fun gauge(id: AttachmentId): Gauge? = gauges[id]
 
     /**
+     * [id]'s **base** issuance — `Σ_r issued(id)[r]`, excluding relocation credit. This is the
+     * [Gauge]'s fold axis, and it is published because a consumer holding a [gauge] cannot
+     * interpret the register without it: the read is `floor + (baseIssuance − folded) / w`, and
+     * [edge]'s [EdgeSummary.issued] is the *effective* value, which deliberately is not this.
+     */
+    public fun baseIssuance(id: AttachmentId): Long = counterValue(issued, id)
+
+    /**
      * [id]'s **gross** virtual service — `floor + (baseIssued − folded) / w`, or `baseIssued / w`
      * when no [Gauge] is stored. `null` if [id] is unknown *or divergent* (no single record ⇒ no
      * single weight to divide by).
@@ -319,10 +327,19 @@ public class EntitlementLedger private constructor(
     }
 
     /** [grossVirtualService] once the edge's single weight is in hand. */
-    private fun grossVirtualService(id: AttachmentId, w: Weight): Rational {
-        val base = counterValue(issued, id)
-        val g = gauges[id] ?: return perWeight(base, w)
-        return g.floor + perWeight(checkedSub(base, g.folded), w)
+    private fun grossVirtualService(id: AttachmentId, w: Weight): Rational =
+        grossVirtualServiceAt(id, w, counterValue(issued, id))
+
+    /**
+     * The gross virtual service [id] would read at base issuance [issuance] — the same arithmetic
+     * as [grossVirtualService], evaluated at a *hypothetical* issuance rather than the stored one.
+     * This is what a checkpoint's floor is: the value the writer asserts *after* its own grant
+     * lands. Sharing the arithmetic is deliberate — a checkpoint computed by a second copy of this
+     * expression could drift from the read that has to agree with it.
+     */
+    private fun grossVirtualServiceAt(id: AttachmentId, w: Weight, issuance: Long): Rational {
+        val g = gauges[id] ?: return perWeight(issuance, w)
+        return g.floor + perWeight(checkedSub(issuance, g.folded), w)
     }
 
     /**
@@ -591,6 +608,14 @@ public class EntitlementLedger private constructor(
         leafRelocOut = leafRelocOut[edge]?.let { mapOf(edge to it) } ?: emptyMap(),
         rollupRelocIn = rollupRelocIn[edge]?.let { mapOf(edge to it) } ?: emptyMap(),
         rollupRelocOut = rollupRelocOut[edge]?.let { mapOf(edge to it) } ?: emptyMap(),
+        // The gauge travels with any republished base `issued`, always (#1752). This witness is
+        // the one other place in the ledger that republishes an edge's base issuance, and a
+        // republish that shipped counters without their checkpoint is *precisely* the patch-split
+        // the negative control shows reintroducing F1's double count — a receiver would hold the
+        // advanced counter against an absent gauge and its next seat bump would count the service
+        // twice. Harmless today only because a witnessed edge is RETIRED and so never a scheduling
+        // candidate; co-carrying it costs one line and does not depend on that staying true.
+        gauges = gauges[edge]?.let { mapOf(edge to it) } ?: emptyMap(),
     )
 
     /**
@@ -845,7 +870,23 @@ public class EntitlementLedger private constructor(
      *    [LedgerConflict.DualActiveInbound] — quarantines the contested lineage, §10.11);
      *  - [r]'s holdings at the parent are insufficient.
      *
-     * Bumps `issued(edge)[r]`.
+     * Bumps `issued(edge)[r]`, and — **in this same patch** — writes the [Gauge] checkpoint for
+     * the issuance that bump produces.
+     *
+     * ## The checkpoint is patch-atomic with the counter it folds, and that is load-bearing
+     *
+     * The checkpoint asserts *"at base issuance `issuedAfter`, this edge's gross virtual service
+     * was `grossEv(issuedAfter)`"* — computed in this peer's own view, which is the only view it
+     * can honestly speak for. Riding the **same** [Patch] as the `issued` bump is what puts F1's
+     * precondition outside the reachable sublattice: every reachable view is a join of published
+     * patches, so no view can hold this edge's advanced counter while missing the checkpoint that
+     * accounts for it. Unrepresentable, rather than merely unlikely.
+     *
+     * **Do not split this into two patches, and do not republish base `issued` for a schedulable
+     * edge without its gauge.** Either move restores exactly the state the negative control in
+     * `GaugeWriteRulesTest` shows reintroducing the full double count. That is why [drainWitness]
+     * co-carries the gauge, and it is the standing constraint on any future boot-time republish of
+     * authored base slots (see #1783).
      */
     public fun delegate(r: ReplicaId, edge: AttachmentId, amount: Long): Patch<EntitlementLedger>? {
         require(amount >= 1L) { "delegate amount must be positive, was $amount" }
@@ -856,8 +897,45 @@ public class EntitlementLedger private constructor(
         if (lineageEdges(rec.child) == null) return null
         if (amount > holdings(rec.parent, r)) return null
         val lineage = lineageEdges(rec.parent) ?: return null
-        val bump = of(issued = mapOf(edge to bumpedSlot(issued, edge, r, amount)))
+        val issuedAfter = checkedAdd(counterValue(issued, edge), amount)
+        val bump = of(
+            issued = mapOf(edge to bumpedSlot(issued, edge, r, amount)),
+            gauges = mapOf(edge to Gauge(grossVirtualServiceAt(edge, rec.weight, issuedAfter), issuedAfter)),
+        )
         return Patch(bump.piece(witness(r, lineage)))
+    }
+
+    /**
+     * Seat [edge] at [front] — write its first [Gauge], keyed on **gauge absence**.
+     *
+     * `null` if [edge] is unknown or divergent, or if it **already carries a gauge**. That
+     * predicate is the whole point of the revision. The refuted §5.2 keyed seating on
+     * `effIssued == 0`, which was stale-readable (F1: a peer missing only this edge's own
+     * issuance slots reads `0` and re-seats an already-served edge) *and* permanently false for a
+     * relocation-receiving edge (F2: `effIssued = issued + issuedRelocIn`, so once
+     * `reconcileStranded` re-homes onto a fresh edge the predicate never holds again, in any merge
+     * order). Gauge absence has neither defect: it is the exact question "has anybody seated this
+     * edge yet", and the relocation counters are not a term of it.
+     *
+     * The floor written is `max(front, baseIssued / w)`, and the fold is this peer's **own
+     * observed** base issuance. Both halves matter:
+     *  - the `max` means a bump can never seat an edge *behind* what its own observed service
+     *    already implies, so this write has no lifetime-credit direction (§10.5);
+     *  - folding the observed issuance is what makes a *stale* bump self-limiting. A peer that has
+     *    seen none of this edge's service writes `(itsFront, 0)`, and the componentwise join then
+     *    pairs that floor with a better-informed fold and deflates it. A restarted peer's
+     *    `(0, 0)` is absorbed with no effect at all.
+     *
+     * [front] is the parent's virtual time over the set [edge] is joining — see
+     * [HeddlePolicy.front], which excludes the joiner. It is a scheduler-level read and therefore
+     * passed in: the ledger holds no demand and no wake clamps, so it cannot compute a front, and
+     * two peers legitimately compute different ones.
+     */
+    public fun seat(edge: AttachmentId, front: Rational): Patch<EntitlementLedger>? {
+        val w = recordOf(edge)?.weight ?: return null
+        if (edge in gauges) return null
+        val observed = counterValue(issued, edge)
+        return Patch(of(gauges = mapOf(edge to Gauge(Rational.max(front, perWeight(observed, w)), observed))))
     }
 
     /**
@@ -1236,6 +1314,23 @@ public class EntitlementLedger private constructor(
         rollupRelocIn = rollupRelocIn[id]?.let { mapOf(id to it) } ?: emptyMap(),
         rollupRelocOut = rollupRelocOut[id]?.let { mapOf(id to it) } ?: emptyMap(),
         gauges = gauges[id]?.let { mapOf(id to it) } ?: emptyMap(),
+    )
+
+    /**
+     * This state with every [Gauge] entry removed and all thirteen other components untouched.
+     *
+     * `internal` — and it exists for exactly one caller: the **negative control** that splits a
+     * [delegate] patch so its counters travel without their checkpoint, and thereby demonstrates
+     * that the same-patch rule in [delegate] is load-bearing rather than stylistic. Without a way
+     * to express that split the rule would be an unenforced convention, and the next refactor
+     * would delete it with a green suite.
+     *
+     * Nothing in production may call this. Publishing a patch built this way is precisely the
+     * F1 double count.
+     */
+    internal fun withoutGauges(): EntitlementLedger = EntitlementLedger(
+        records, minted, issued, returned, leafSpent, rollupSpent, transfers, lifecycle,
+        issuedRelocIn, leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut, gauges = emptyMap(),
     )
 
     override fun equals(other: Any?): Boolean =
