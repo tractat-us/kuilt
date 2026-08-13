@@ -43,7 +43,7 @@ the kit once you have `Connection`s in hand.
 prefix per frame. Oversize prefixes throw `FrameTooLargeException` before any
 allocation; a clean EOF at a frame boundary completes `incoming` normally.
 
-**`:kuilt-tcp`** (`TcpLoom.host` / `TcpLoom.join`, JVM/Android only) is the worked
+**`:kuilt-tcp`** (`tcpLoomHost` / `tcpLoomJoin`, JVM/Android only) is the worked
 example: it wires a Ktor socket's channels through `framed()` into a `Connection`,
 then hands that to `handshaking` for in-band identity negotiation, yielding a
 2-peer `Seam`. The pattern — obtain a socket, call `framed()`, call `handshaking` —
