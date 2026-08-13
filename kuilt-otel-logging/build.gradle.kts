@@ -24,8 +24,27 @@ kotlin {
         // jvmTest carries the source-scan regression guard (InternalLoggerNameGuardTest),
         // which walks the repo tree — a JVM-only (java.io.File) check. Declare kotlin.test
         // here explicitly since the intermediates above disable KMP hierarchy auto-wiring.
+        //
+        // logback is the SLF4J backend for kotlin-logging on the JVM. commonMain deliberately
+        // ships NO binding — a library must not pick its consumers' backend — so the binding is
+        // a TEST-only dependency here, exactly as in every sibling module (:kuilt-session,
+        // :kuilt-crdt, :kuilt-raft, … ~30 of them). Without it `KotlinLogging.logger(name)`
+        // throws NoClassDefFoundError: org/slf4j/LoggerFactory, because on the JVM
+        // kotlin-logging resolves through an slf4j-backed factory.
+        //
+        // This module hid that for longer than its siblings: installLogCapture swaps in
+        // DirectLoggerFactory, which needs no slf4j, so every test that either drives the
+        // capture core directly or asks for a logger INSIDE an installation stayed green. Only
+        // the default path — a consumer asking for a logger with no capture installed — hits the
+        // binding, and nothing exercised it until sampleWithActiveTrace did and died on its first
+        // line. DefaultLoggerFactoryReachableTest (jvmTest) now pins the default path so it
+        // cannot silently reopen (#2289).
         jvmTest.dependencies {
             implementation(libs.kotlin.test)
+            runtimeOnly(libs.logback)
+        }
+        androidUnitTest.dependencies {
+            runtimeOnly(libs.logback)
         }
 
         // The capture edge is one uniform commonMain hook now (oshai 8.x makes the

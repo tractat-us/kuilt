@@ -2030,19 +2030,7 @@ val verifySampleLinks by tasks.registering {
 // calling it would satisfy this guard. That is deliberate: distinguishing them needs call-graph
 // resolution, which is not something a lexical scanner should be asked to do, and the failure mode
 // is a reviewer seeing a name with no call — visible in the diff — rather than a silent green.
-val unrunSampleBaseline: Map<String, String> = mapOf(
-    "kuilt-game/sampleGameNode" to
-        "wedges for the whole wedge-backstop when executed, alone or with siblings — #2289",
-    "kuilt-game/sampleSpeculativeSequencer" to
-        "asserts speculativeState already holds the action right after `async { propose(42) }`; " +
-        "true of SpeculativeSequencer (its KDoc promises the optimistic apply precedes the first " +
-        "suspension) but never reached, because runTest's default StandardTestDispatcher only " +
-        "QUEUES the async. Production contract right, sample mechanics wrong — #2289",
-    "kuilt-otel-logging/sampleWithActiveTrace" to
-        "NoClassDefFoundError: org/slf4j/LoggerFactory on its first line, KotlinLogging.logger(…) — " +
-        "slf4j is on neither commonMain nor jvmTest's runtime classpath, so no JVM test in the " +
-        "module has ever called the one entry point every consumer uses — #2289",
-)
+val unrunSampleBaseline: Map<String, String> = mapOf()
 
 val verifySamplesAreRun by tasks.registering {
     group = "verification"
