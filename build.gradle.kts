@@ -257,6 +257,40 @@ class TimeoutShapedFailureReporter(private val resultsDir: Provider<String>) : T
 // re-runs the guard. Moving an allowlist to `gradle.properties`, a resource file, or any other
 // external source would silently drop it out of the key and reintroduce exactly the stale-green
 // class these stamps were made safe against — if you externalise one, declare it as an input too.
+// TAKING A MUTATION RECEIPT ON A GUARD WHOSE INPUT IS THE MODULE SET (#2272). Several guards here
+// take the subproject set as an input — `verifyModuleTable` and `forbidUnlintedModule` among them —
+// and the obvious receipt is "add a module to `settings.gradle.kts`, watch it go red". It does go
+// red. It reds on something else, and the red NAMES YOUR PROBE, which is what makes it so easy to
+// tick off. Two things pre-empt the guard, in this order: Gradle refuses to configure a project
+// whose directory does not exist, and then `kuilt-bom/build.gradle.kts`'s completeness check fails
+// at CONFIGURATION time, before any task runs at all.
+//
+// The shape that works is a flag, not an edit:
+//
+//     ./gradlew <theGuardUnderTest> -PguardProbeModule=:kuilt-zzz-probe
+//
+// `settings.gradle.kts` includes that path against a directory under `build/` and `kuilt-bom`
+// accounts for it, so configuration succeeds and the guard under test is the only thing left that
+// can fail. Nothing tracked is edited, so there is nothing to revert — which also retires the
+// follow-on trap of the hand-edited version, where a `deliberatelyUnpublished` entry that outlives
+// the probe trips `staleExclusions` on the NEXT run, a second red about a second unrelated thing.
+// For a guard that needs the probe to CARRY something — `forbidUnlintedModule` wants Kotlin source
+// with no detekt task — write it into `build/guard-probe/src/`, which is gitignored for the same
+// reason the probe directory is.
+//
+// SCOPE THE INVOCATION to the guard under test. Task-level guards never pre-empt one another, but
+// they do all report: a probe module reds `verifyModuleTable` (it has no CLAUDE.md row) whatever
+// else you were proving, so `./gradlew build` hands back two reds of which one is noise.
+//
+// The complementary receipt needs no probe at all — REMOVE an `include`. Nothing pre-empts a module
+// going away, and it exercises the same input property from the other side.
+//
+// WHY THE BOM CHECK IS NOT JUST MOVED TO A TASK, since that is the reflex on reading the above:
+// `publish` does not run `check`. A task-wired completeness check would let a module that forgot
+// `kuilt.publish` be absent from a PUBLISHED BOM's constraints with nothing failing — the exact
+// drift #1044 exists to end, traded away to make a rare receipt cheaper. WHAT NONE OF THIS COVERS,
+// stated rather than implied: a NEW configuration-time failure added anywhere in the build would
+// pre-empt the probe again, and the only thing that detects that is reading the red you got.
 fun kotlinSourcesIn(roots: List<java.io.File>, pattern: String = "**/*.kt"): FileTree =
     files(roots).asFileTree.matching { include(pattern) }
 
@@ -3318,12 +3352,11 @@ val verifyModuleTable by tasks.registering {
     // declares its `detektRegistration` map: without it, adding a module would land on a cached
     // green (see "Guard plumbing" above — a stamp is only safe if the inputs are honest).
     //
-    // RECEIPT ORDERING, for whoever re-proves that: adding a module to `settings.gradle.kts` does
-    // NOT reach this task first. `kuilt-bom/build.gradle.kts`'s `deliberatelyUnpublished` check runs
-    // at CONFIGURATION time and fails the build before any task executes, so the naive receipt
-    // ("add a module, watch it go red") records a red from the wrong guard. Either allowlist the
-    // probe module in the BOM as well, or prove the property from the other side — remove an
-    // `include` and watch the row become a phantom, which reaches this task unimpeded.
+    // RECEIPT ORDERING, for whoever re-proves that: adding a module to `settings.gradle.kts` by hand
+    // does NOT reach this task — it is pre-empted at configuration time and the red is about
+    // something else. Use `-PguardProbeModule=:kuilt-zzz-probe`, or prove the property from the
+    // other side by removing an `include`. See "Guard plumbing" above for why, and for what the
+    // probe flag does not cover.
     val modulePaths = subprojects.map { it.path }.filter { it.startsWith(":kuilt-") }.sorted()
     inputs.property("modulePaths", modulePaths)
     val stamp = layout.buildDirectory.file("verification/verify-module-table.ok")

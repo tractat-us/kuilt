@@ -31,6 +31,25 @@ mavenPublishing {
 // (Same cross-project-at-configuration-time pattern as the root build script's
 // forbidSourcelessKmpTarget guard; fine without isolated projects, which this
 // build does not enable.)
+// The mutation-receipt probe (#2272), if one was asked for. This check is the reason the probe
+// needs an entry at all: it runs at CONFIGURATION time, so without an exemption it fails before any
+// task executes and pre-empts the very guard the probe exists to prove. Keeping it here rather than
+// making the receipt-taker edit `deliberatelyUnpublished` by hand is what removes the follow-on trap
+// — a hand-added entry that survives the revert then trips `staleExclusions` on the NEXT run, a
+// second red about a second unrelated thing.
+//
+// The two halves live in two files, so verify the other one is still there. If the property is set
+// and the module is absent, `settings.gradle.kts`'s probe block has been deleted or broken and the
+// documented receipt has silently reverted to the invalid shape.
+val guardProbeModule: String? = providers.gradleProperty("guardProbeModule").orNull
+if (guardProbeModule != null) {
+    check(rootProject.subprojects.any { it.path == guardProbeModule }) {
+        "-PguardProbeModule=$guardProbeModule was passed but no such module is in the build. " +
+            "The probe block in settings.gradle.kts is missing or broken, so the receipt shape " +
+            "documented in the root build script's \"Guard plumbing\" section no longer works (#2272)."
+    }
+}
+
 val deliberatelyUnpublished = setOf(
     ":kuilt-scale", // JVM-only scaling/bench harness (plain kotlinJvm)
     ":examples", // test-only usage examples (plain kotlinJvm)
@@ -43,7 +62,7 @@ val deliberatelyUnpublished = setOf(
     setOf(":spike") // Phase-0 kuilt-nw connectivity spike (#1403), opt-in via -PincludeSpike; throwaway
 } else {
     emptySet()
-}
+} + guardProbeModule?.let { setOf(it) }.orEmpty() // mutation-receipt probe (#2272), opt-in; see below
 
 val publishedSiblings = rootProject.subprojects
     .filter { it.path != project.path }
@@ -61,10 +80,12 @@ val unaccounted = rootProject.subprojects.map { it.path }
 check(unaccounted.isEmpty()) {
     "Modules neither published (apply kuilt.publish / kuilt.kmp-library) nor listed " +
         "as deliberatelyUnpublished in kuilt-bom/build.gradle.kts: $unaccounted\n" +
-        "  If you added this module as a PROBE, to prove some OTHER guard notices a new " +
-        "module: this failure is CONFIGURATION-time, so it pre-empted that guard and your " +
-        "red says nothing about it (#2272). Add the probe here too, or take the receipt " +
-        "from the other side by REMOVING an `include` from settings.gradle.kts."
+        "  If you added this module as a PROBE, to prove some OTHER guard notices a new module: " +
+        "this failure is CONFIGURATION-time, so it pre-empted that guard and this red says " +
+        "nothing about it (#2272). Revert the settings.gradle.kts edit and use the probe flag " +
+        "instead — `./gradlew <theGuardUnderTest> -PguardProbeModule=${unaccounted.first()}` — which is " +
+        "accounted for here and so reaches the guard. See the root build script's \"Guard " +
+        "plumbing\" section."
 }
 val staleExclusions = deliberatelyUnpublished.filter { path ->
     rootProject.subprojects.none { it.path == path } || publishedSiblings.any { it.path == path }

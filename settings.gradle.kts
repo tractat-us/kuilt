@@ -142,3 +142,28 @@ project(":demo-tap").projectDir = file("demo/tap")
 if (providers.gradleProperty("includeSpike").isPresent) {
     include(":spike")
 }
+
+// Mutation-receipt probe module (#2272) — opt-in via `-PguardProbeModule=:kuilt-zzz-probe`.
+//
+// Several guards in the root build script take the module SET as an input, and the natural way to
+// prove one of them notices a new module is to add an `include` here by hand. That receipt is
+// invalid, twice over: Gradle refuses to configure a project whose directory does not exist, and
+// once you create the directory, `kuilt-bom`'s completeness check fails at CONFIGURATION time —
+// before any task runs. Either way the red is about something other than the guard under test.
+//
+// This block makes the valid shape a command-line flag with NO tracked-file edit: the directory is
+// created under `build/` (gitignored, so a probe can never be committed and there is nothing to
+// revert), and `kuilt-bom` accounts for the same property so configuration succeeds. A guard that
+// needs the probe to carry Kotlin source — `forbidUnlintedModule` — reads `build/guard-probe/src/`.
+// The full receipt shape is in the root build script's "Guard plumbing" section.
+providers.gradleProperty("guardProbeModule").orNull?.let { path ->
+    require(path.startsWith(":") && rootProject.children.none { ":${it.name}" == path }) {
+        "-PguardProbeModule must name a NEW ':'-prefixed module path; \"$path\" is not one. " +
+            "Pointing it at a module that already exists would silently move that module's " +
+            "project directory to the probe directory (#2272)."
+    }
+    val probeDir = file("build/guard-probe")
+    probeDir.mkdirs()
+    include(path)
+    project(path).projectDir = probeDir
+}
