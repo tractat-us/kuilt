@@ -517,6 +517,12 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
         // `baseOffset + writtenFrameBytes` equals that base by construction and the continuity check
         // would compare a value with itself — green, over a real hole. One extra `read(2)` of a
         // segment whose frames are all filtered out cannot lie.
+        //
+        // Dropping this minus-one reddened NOTHING anywhere in the tree until #2268 — this backend
+        // reached the right answer through a predicate no test distinguished from the wrong one, which
+        // is precisely the unpinned state in which two backends shipped the same defect (#2240). It is
+        // now a conformance obligation:
+        // `BoltConformanceSuite.resumingFromBeyondTheHoleReachesTheSameVerdictRatherThanACleanTail`.
         val firstUnpruned = views.indexOfFirst { !skippable(it, scope) }
         if (firstUnpruned < 0) return@flow emit(CleanTail)
         // Null until the first segment has spoken: the archive's offset space starts wherever its
