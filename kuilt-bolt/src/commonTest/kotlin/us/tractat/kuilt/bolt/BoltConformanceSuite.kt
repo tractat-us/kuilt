@@ -874,15 +874,20 @@ abstract class BoltConformanceSuite {
      * |---|---|---|
      * | Drop the minus-one — `InMemoryBolt.replay` | 2, 3 | the sibling above |
      * | Drop the minus-one — `PosixMappedBolt.replay` | 2, 3 | **nothing at all** |
-     * | Drop the minus-one — `MappedBolt.firstSegmentToRead` | 2, 3 | `MappedBoltPruningTest` |
-     * | Prune the boundary segment and seed its cursor from the surviving *header* | 2, 3 | `MappedBoltPruningTest`, one `MappedBoltDamageTest` case |
+     * | Drop the minus-one — `MappedBolt.firstSegmentToRead` | 2, 3 | **nothing at all** |
+     * | Prune the boundary segment and seed its cursor from the surviving *header* | 2, 3 | one `MappedBoltDamageTest` case |
      * | Delete the continuity check outright — `InMemoryBolt` | **the precondition**, before any assertion | both siblings |
      * | **Fixture:** hand back the hole's start as `beyondTheHole` | **1 only** | — |
      * | **Fixture:** hand back an offset past the archive's end | **3 only** | — |
      *
-     * **Row 2 is the finding this property exists for.** Measured over the whole `macosArm64Test`
-     * suite: dropping that backend's continuity carry reds exactly three tests, and all three are this
-     * property. Before it, the same edit was invisible to every test in the tree.
+     * **Rows 2 and 3 are the finding this property exists for, and their right-hand column is the
+     * measurement.** Dropping either mmap backend's continuity carry now reds this property and
+     * *nothing else in the module* — measured over the whole `macosArm64Test` and `jvmTest` suites.
+     * For `PosixMappedBolt` that was already true before this property existed, which is the unpinned
+     * state #2240 shipped out of twice. For `MappedBolt` it became true **because of this change**:
+     * `MappedBoltPruningTest` used to carry that pin, and handing it over is the point — a correctness
+     * property belongs where every backend meets it, and what is left in that file is the one claim a
+     * conformance property structurally cannot make.
      *
      * Row 4 is what stops rows 1–3 riding on "it read one more segment": the mutated code still reads
      * the boundary segment's *header*, and still answers [CleanTail]. Only **parsing** that segment
@@ -890,14 +895,24 @@ abstract class BoltConformanceSuite {
      * prose and this row makes as a red. It has one piece of collateral — a `MappedBoltDamageTest`
      * case that also depends on the prune boundary — so it is not a clean single-mechanism row.
      *
-     * **What the suite cannot check about the hook, said plainly.** It cannot verify that
-     * [DiscontinuousFixture.beyondTheHole] names a frame that really exists — per the paragraph above,
-     * nothing in this contract can see past the hole, so there is no positive check to make. What it
-     * has instead is both directions of *wrong* being loud, and the last two rows are those two
-     * mutations rather than an argument. An offset at the hole's start fails assertion **1 and only
-     * 1** — 2 and 3 stay green there, which is the sibling's whole table restated and precisely why a
-     * hook that quietly drifted back to the near side would otherwise cost nothing. An offset past the
-     * archive's end makes every segment prunable, which is a [CleanTail], and fails assertion 3.
+     * **What the suite cannot check about the hook, said plainly, including the part that is not
+     * guarded.** It cannot verify that [DiscontinuousFixture.beyondTheHole] names a frame that really
+     * exists — per the paragraph above, nothing in this contract can see past the hole, so there is no
+     * positive check to make. Two of the three ways to get it wrong are loud, and the last two receipt
+     * rows are those mutations rather than an argument: an offset **at** the hole's start fails
+     * assertion **1 and only 1** (2 and 3 stay green there, which is the sibling's whole table
+     * restated), and an offset **past the archive's end** makes every segment prunable, which is a
+     * [CleanTail], and fails assertion 3.
+     *
+     * **The third way is silent, and a fixture must not take it: an offset strictly *inside* the
+     * missing region.** It clears assertion 1, which only demands `> atOffset`, and it is vacuous on
+     * both mmap backends — their predicates prune a segment only when its *successor* starts at or
+     * below the cursor, and the successor of the segment before the hole is the segment *after* it, so
+     * a mid-hole cursor leaves the boundary unprunable and its continuity read either way. Measured:
+     * with a fixture returning `holeStart + 1` **and** `MappedBolt`'s minus-one dropped, this property
+     * goes green. The suite has no way to close that band — the far side is exactly the quantity it
+     * cannot observe — so the obligation is on the fixture, and each one in this tree asserts it: take
+     * the value from the **first surviving append's own `offset`**, never by arithmetic on the hole.
      *
      * **What it does not reach.** It never proves the pruned prefix was *skipped* rather than read and
      * forgiven — every assertion here would hold on a backend that read the whole archive every time.
@@ -1303,12 +1318,43 @@ abstract class BoltConformanceSuite {
  *
  * @property bolt the discontinuous archive.
  * @property beyondTheHole the offset of the first frame **after** the missing region — what a consumer
- *   that had already read past it hands back. Must be strictly greater than where the hole starts, or
- *   this degenerates into the shape
- *   [BoltConformanceSuite.resumingFromTheHoleReachesTheSameVerdictRatherThanACleanTail] already drives;
- *   the suite asserts that rather than trusting it.
+ *   that had already read past it hands back. Take it from that append's own
+ *   [AppendResult.Written.offset]; **do not compute it** from the hole's start. The suite can only
+ *   assert it is greater than where the hole starts, so an offset landing *inside* the missing region
+ *   passes that check and is vacuous on any backend whose pruning predicate reduces to the successor's
+ *   base offset — see
+ *   [BoltConformanceSuite.resumingFromBeyondTheHoleReachesTheSameVerdictRatherThanACleanTail], which
+ *   measures that band rather than assuming it away.
  */
 class DiscontinuousFixture(val bolt: Bolt<RgaOp<String>>, val beyondTheHole: Long)
+
+/**
+ * The offset the first frame **behind** the hole starts at, for a fixture that wrote one frame per
+ * segment and lost the segment at index [intactFrames].
+ *
+ * Shared by all three backends' fixtures because the index arithmetic is the part worth getting wrong
+ * once rather than three times — and because of the `check`, which is the guard the *suite* cannot
+ * make. [BoltConformanceSuite.resumingFromBeyondTheHoleReachesTheSameVerdictRatherThanACleanTail] can
+ * only assert this offset is above where the hole starts; an offset landing *inside* the missing
+ * region clears that and is measurably vacuous on both mmap backends. So the fixture proves the value
+ * is the hole's **far edge** — by reaching it from the *lost* frame's own end, which is a different
+ * append's reported offset than the one being returned. An index slip in either direction reds here,
+ * in the fixture, rather than passing quietly in the suite.
+ *
+ * **Receipt, because a `check` that cannot fail is worse than none:** slipping `survivor` to
+ * `written[intactFrames + 2]` reds all three discontinuous-archive properties on every subclass, with
+ * this message. The guard fires.
+ */
+fun firstOffsetBehindTheHole(written: List<AppendResult.Written>, intactFrames: Int): Long {
+    val lost = written[intactFrames]
+    val survivor = written[intactFrames + 1]
+    check(survivor.offset == lost.endOffset) {
+        "the frame behind the hole must start exactly where the LOST frame ended — one frame per " +
+            "segment is what makes ${intactFrames + 1} the first survivor, and it measured " +
+            "${survivor.offset} against ${lost.endOffset}"
+    }
+    return survivor.offset
+}
 
 /**
  * A bolt whose durability operation cannot succeed, and what its backend **promised** in the

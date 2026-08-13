@@ -306,7 +306,7 @@ private suspend fun discontinuousMappedBolt(
 
     return DiscontinuousFixture(
         MappedBolt(directory, format, clock, segmentFrameBytes = budget),
-        beyondTheHole = written[intactFrames + 1].offset,
+        beyondTheHole = firstOffsetBehindTheHole(written, intactFrames),
     )
 }
 

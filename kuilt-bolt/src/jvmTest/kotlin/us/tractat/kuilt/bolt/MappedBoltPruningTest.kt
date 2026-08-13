@@ -35,9 +35,12 @@ import kotlin.time.Instant
  * anywhere reddened if its continuity carry was dropped**, which is the shape that shipped one
  * defect twice already (#2240).
  *
- * That promotion also retired the no-pre-allocated-tail duplicate of it here: the suite drives both
- * segment-tail shapes on both mapped backends through its `TinySegment…` subclasses, so a second copy
- * of the assertions pinned nothing the suite did not.
+ * That promotion also retired the no-pre-allocated-tail duplicate of it here, and the claim is worth
+ * stating exactly rather than generously: the suite drives both segment-tail shapes on both mapped
+ * backends through its `TinySegment…` subclasses, so the *correctness* assertions lost nothing. The
+ * pruning receipt below is no longer measured in the no-tail shape anywhere — which is deliberate,
+ * because which segments get pruned is decided from **headers alone**, and a header is a fixed size
+ * whatever follows it.
  *
  * ### What is left, and why it cannot follow
  *
@@ -81,20 +84,27 @@ class MappedBoltPruningTest {
      *
      * | Mutation | Reds here | Reds in `BoltConformanceSuite` |
      * |---|---|---|
-     * | Return `firstUnpruned` — prune the boundary segment, dropping the continuity cursor | 3 | the promoted property, on **all three** backends |
-     * | Seed the cursor from the surviving header (`baseOffsetOf`) instead of parsing | 3 | the same |
+     * | Return `firstUnpruned` — prune the boundary segment, dropping the continuity cursor | **none** | the promoted property, all three `MappedBolt` subclasses |
+     * | Seed the cursor from the surviving header (`baseOffsetOf`) instead of parsing | **none** | the same, plus one `MappedBoltDamageTest` case |
      * | Return `0` — prune nothing, the shipped behaviour before #2236 | 3 | **none** |
      *
      * **The right-hand column has inverted since this file shipped, and that is the point of #2268.**
-     * It used to read "none" on every row: a backend could lose its continuity carry outright and no
-     * conformance case anywhere would say so, which is why the correctness assertions had to live in
-     * a JVM-only file. They no longer do. What the column still shows is the honest complement —
-     * **row 3 reds nothing but assertion 3**, because "prune nothing" is a *performance* regression
-     * that answers every question correctly. That row is this file's whole remaining warrant.
+     * Every row used to read "none" there: a backend could lose its continuity carry outright and no
+     * conformance case anywhere would say so, which is why the correctness assertions had to live in a
+     * JVM-only file. They no longer do — and the left column inverted with it.
      *
-     * Rows 1 and 2 also red assertion 3, and for an uninteresting reason: they prune one segment too
-     * many, so the corruption lands somewhere still unread *and* the verdict changes. They are kept
-     * because the right-hand column is what they now measure.
+     * **Rows 1 and 2 are green *here*, and that is structural rather than an oversight.** Both prune
+     * *more* than the shipped code, and assertion 3 works by corrupting a segment the shipped code
+     * already skips — so under either mutation the corruption stays unread in **both** replays and the
+     * two stay equal. Nothing in this file can see a defect that prunes too much; the promoted property
+     * is the only thing that can, which is the whole argument for having promoted it.
+     *
+     * So row 3 is this file's entire warrant: "prune nothing" is a *performance* regression that
+     * answers every question correctly, and no conformance property can be asked about it. **Its
+     * coverage here is a subset of its siblings'** — [aResumeReadsFarLessThanThePrefixItPrunes] and
+     * [everyScopeWithoutAnOffsetStillReadsTheWholeArchive] red under it too. What this test alone
+     * drives is that receipt over a **discontinuous** archive, where the temptation to prune the
+     * boundary is greatest and the cost of doing so is a silently gapped history.
      */
     @Test
     fun aResumeOverAHoleReadsNothingBelowTheBoundary() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
@@ -103,7 +113,6 @@ class MappedBoltPruningTest {
             clock,
             HOLE_FIXTURE_FRAMES,
             PIN_PAYLOAD_CHARS,
-            PRE_ALLOCATED_TAIL_BYTES,
         )
         check(segmentsIn(archive.directory)[LOST_SEGMENT].delete()) { "the fixture's hole must be punched" }
         val bolt = archive.reopened(clock)
@@ -192,7 +201,6 @@ class MappedBoltPruningTest {
                 clock,
                 TAIL_FIXTURE_FRAMES,
                 PIN_PAYLOAD_CHARS,
-                PRE_ALLOCATED_TAIL_BYTES,
             )
             flipByteAt(segmentsIn(archive.directory)[damaged], segmentHeaderBytes() + FIRST_BODY_BYTE)
             val bolt = archive.reopened(clock)
@@ -257,7 +265,6 @@ class MappedBoltPruningTest {
             clock,
             PRUNING_FIXTURE_FRAMES,
             PRUNED_PAYLOAD_CHARS,
-            PRE_ALLOCATED_TAIL_BYTES,
         )
         val bolt = archive.reopened(clock)
         val files = segmentsIn(archive.directory)
@@ -333,7 +340,6 @@ class MappedBoltPruningTest {
             clock,
             PRUNING_FIXTURE_FRAMES,
             PRUNED_PAYLOAD_CHARS,
-            PRE_ALLOCATED_TAIL_BYTES,
         )
         val bolt = archive.reopened(clock)
         val onDisk = segmentsIn(archive.directory).dropLast(1).sumOf { it.length() }
@@ -367,17 +373,23 @@ class MappedBoltPruningTest {
 
     /**
      * An archive of [frameCount] frames, **one per segment file**, each carrying a [payloadChars]-long
-     * element, with [zeroTailBytes] of pre-allocated tail behind every frame.
+     * element, with [PRE_ALLOCATED_TAIL_BYTES] of pre-allocated tail behind every frame.
      *
      * The budget is measured off a real encoded frame rather than guessed: it has to be big enough
      * for one frame and too small for two, and a fixture that quietly packed two frames into a file
      * would have no segment to prune and no boundary to lose.
+     *
+     * **The tail is a constant here, not a knob, and that is a deliberate narrowing.** It used to be a
+     * parameter so a sibling test could drive segments ending exactly on a frame boundary; #2268 moved
+     * that test's correctness assertions into `BoltConformanceSuite`, whose `TinySegment…` subclasses
+     * drive both tail shapes on both mapped backends. What is left in this file measures *which
+     * segments were read*, which is decided from headers alone and so cannot depend on the tail. A
+     * parameter with one value left is a configuration nobody sets.
      */
     private suspend fun oneFramePerSegmentArchive(
         clock: Clock,
         frameCount: Int,
         payloadChars: Int,
-        zeroTailBytes: Long,
     ): PrunableArchive {
         val directory = tempArchiveDirectory()
         val format = rgaStringFormat()
@@ -393,12 +405,8 @@ class MappedBoltPruningTest {
         val frameBytes = encodeFrame(
             RawFrame(clock.now(), setOf(ops[0].id.dot), null, listOf(format.encode(ops[0]))),
         ).size.toLong()
-        check(zeroTailBytes < frameBytes) { "a $zeroTailBytes-byte pad would leave room for a second frame" }
-        // A ONE-byte budget is how "no tail at all" is expressed: a segment is allocated at
-        // `maxOf(budget, frame.size)`, so a one-byte budget sizes each file to exactly the frame that
-        // forced it. Padding a measured frame size would not do it — these frames grow by a few bytes
-        // as the `Rga` ids do, so every segment but the first would still get an accidental tail.
-        val budget = if (zeroTailBytes == NO_PRE_ALLOCATED_TAIL) 1L else frameBytes + zeroTailBytes
+        check(PRE_ALLOCATED_TAIL_BYTES < frameBytes) { "that pad would leave room for a second frame" }
+        val budget = frameBytes + PRE_ALLOCATED_TAIL_BYTES
         val bolt = mappedBolt(clock, directory, segmentFrameBytes = budget)
         val written = ops.map { assertIs<AppendResult.Written>(bolt.append(listOf(it)), "every frame is written") }
         check(segmentsIn(directory).size == frameCount) {
@@ -407,9 +415,9 @@ class MappedBoltPruningTest {
         // VERIFIED, not merely configured: which shape a segment ends in decides which exit its
         // parse takes, and that is where this backend computes the boundary offset from.
         val tail = segmentsIn(directory).first().length() - segmentHeaderBytes() - frameBytes
-        check(if (zeroTailBytes == NO_PRE_ALLOCATED_TAIL) tail == 0L else tail > 0L) {
-            "a segment must end the way this fixture says it does, and its tail measured $tail bytes " +
-                "against a request for $zeroTailBytes"
+        check(tail > 0L) {
+            "every segment must carry the pre-allocated tail this fixture asked for, and the oldest " +
+                "one measured $tail bytes"
         }
         return PrunableArchive(directory, budget, written)
     }
@@ -538,8 +546,6 @@ class MappedBoltPruningTest {
         /** A real pre-allocated tail on every segment. Smaller than a frame, so one frame lands per file. */
         const val PRE_ALLOCATED_TAIL_BYTES = 32L
 
-        /** No tail: every segment is sized to the one frame that forced it. */
-        const val NO_PRE_ALLOCATED_TAIL = 0L
 
         /**
          * The first byte of a frame's body — past the length prefix, so flipping it breaks the frame's

@@ -275,7 +275,7 @@ private suspend fun discontinuousPosixMappedBolt(
 
     return DiscontinuousFixture(
         PosixMappedBolt(format, clock, directory, synchronous, budget),
-        beyondTheHole = written[intactFrames + 1].offset,
+        beyondTheHole = firstOffsetBehindTheHole(written, intactFrames),
     )
 }
 

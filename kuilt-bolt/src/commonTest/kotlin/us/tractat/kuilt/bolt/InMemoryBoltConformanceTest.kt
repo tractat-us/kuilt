@@ -171,7 +171,7 @@ private suspend fun discontinuousInMemoryBolt(clock: Clock, intactFrames: Int): 
     }
     bolt.loseSegment(intactFrames)
 
-    return DiscontinuousFixture(bolt, beyondTheHole = written[intactFrames + 1].offset)
+    return DiscontinuousFixture(bolt, beyondTheHole = firstOffsetBehindTheHole(written, intactFrames))
 }
 
 /** Frames behind the hole. More than one, so "stepped over it" is unmistakable rather than off-by-one. */
