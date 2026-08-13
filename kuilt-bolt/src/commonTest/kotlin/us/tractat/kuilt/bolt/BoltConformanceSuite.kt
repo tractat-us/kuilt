@@ -615,7 +615,7 @@ abstract class BoltConformanceSuite {
      * not join up — so nothing checks it unless a backend compares each segment's absolute base
      * offset against where the previous one stopped. Two backends shipped without that check (#2240).
      *
-     * Six assertions, in the order they appear below, and the numbering the receipts use:
+     * Eight assertions, in the order they appear below, and the numbering the receipts use:
      *
      * 1. the verdict is [Truncated], not a clean tail — a hole is damage, not something to step over;
      * 2. exactly one terminal event;
@@ -628,7 +628,11 @@ abstract class BoltConformanceSuite {
      * 5. its `reason` is [TruncationReason.MissingRegion] — the constant a consumer branches on to
      *    learn that `atOffset` is **not** somewhere to resume from, because the records between here
      *    and the next segment exist nowhere;
-     * 6. the verdict is last.
+     * 6. the verdict is last;
+     * 7. [ReplayScope.Arrived] reaches the **same verdict** — a hole is damage under a scope with no
+     *    offset predicate at all;
+     * 8. and so does [ReplayScope.InsertsAbove], which selects on a frame's *body* and so has even
+     *    less occasion to look at where segments join.
      *
      * **Mutation receipts**, measured on this branch — each mutation applied alone, reverted, and the
      * verdict read out of the results XML rather than the console:
@@ -664,13 +668,25 @@ abstract class BoltConformanceSuite {
      * It is kept because it is the only one that would catch a replay emitting its verdict and then
      * more frames, and no mutation of the *current* code produces that shape (the verdict is a
      * `return`); its justification is inherited from [aTruncatedArchiveStopsAtTheDamageAndSaysSo],
-     * which pins the same pair one level down. Beyond that, this drives **one shape of hole** — a
-     * whole segment lost out of the middle — and only under [ReplayScope.All];
-     * [resumingFromTheHoleReachesTheSameVerdictRatherThanACleanTail] is the sibling that drives the
-     * pruning scope, and its own KDoc lists what *it* cannot reach. Still unpinned anywhere: a
-     * **backwards** jump (a header claiming an offset *below* where the previous segment stopped), a
-     * hole spanning more than one lost segment, and a hole in an archive whose surviving segments were
-     * written by more than one format version.
+     * which pins the same pair one level down.
+     *
+     * **Assertions 7 and 8 close a gap the first draft of this property left open**, and it was the
+     * same shape as everything else here: the hole was only ever asked about under scopes that carry
+     * an *offset*. A backend whose continuity check hung off the offset predicate — reporting the hole
+     * to [ReplayScope.All] and [ReplayScope.FromOffset], stepping over it for [ReplayScope.Arrived] and
+     * [ReplayScope.InsertsAbove] — was green across this entire suite. The three in-tree backends
+     * avoid it only because the check sits in the shared per-segment path, which is an implementation
+     * accident and exactly what #2247 exists to stop resting on. **Receipt:** gating the check on
+     * `scope is All || scope is FromOffset` in `InMemoryBolt.emitFrames` reds **only** assertions 7 and
+     * 8, on both `InMemoryBolt` subclasses, and nothing else in `:kuilt-bolt:jvmTest`.
+     *
+     * Beyond that, this drives **one shape of hole** — a whole segment lost out of the middle.
+     * [resumingFromTheHoleReachesTheSameVerdictRatherThanACleanTail] and
+     * [resumingFromBeyondTheHoleReachesTheSameVerdictRatherThanACleanTail] drive the pruning scope at
+     * the hole's two edges, and their KDoc lists what *they* cannot reach. Still unpinned anywhere,
+     * tracked in #2331: a **backwards** jump (a header claiming an offset *below* where the previous
+     * segment stopped), a hole spanning more than one lost segment, and a hole in an archive whose
+     * surviving segments were written by more than one format version.
      */
     @Test
     fun anArchiveMissingAMiddleRegionStopsAtTheHoleAndSaysSo() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
@@ -679,6 +695,10 @@ abstract class BoltConformanceSuite {
         val events = bolt.replay(ReplayScope.All).toList()
         val frames = events.filterIsInstance<Archived<RgaOp<String>>>()
         val verdict = events.lastOrNull()
+        // The two scopes with no offset predicate. Both select every frame this fixture wrote — one
+        // fixed clock, all inserts — so a correct backend owes them the identical verdict.
+        val byArrival = bolt.replay(ReplayScope.Arrived(epoch, epoch + STEP)).toList()
+        val byDots = bolt.replay(ReplayScope.InsertsAbove(VersionVector.EMPTY)).toList()
 
         assertAll(
             {
@@ -719,6 +739,23 @@ abstract class BoltConformanceSuite {
                     frames.size,
                     events.indexOfFirst { it !is Archived<*> },
                     "the verdict is LAST — every event before it is a frame, and none follows it",
+                )
+            },
+            {
+                assertEquals(
+                    verdict,
+                    byArrival.lastOrNull(),
+                    "a hole is damage under EVERY scope, not only the ones carrying an offset — a " +
+                        "backend whose continuity check hangs off the offset predicate steps over it " +
+                        "here and is otherwise green across this whole suite",
+                )
+            },
+            {
+                assertEquals(
+                    verdict,
+                    byDots.lastOrNull(),
+                    "and the same for dot-scoped replay, which selects by a frame's BODY and so has " +
+                        "even less occasion to look at where segments join",
                 )
             },
         )
@@ -904,15 +941,22 @@ abstract class BoltConformanceSuite {
      * restated), and an offset **past the archive's end** makes every segment prunable, which is a
      * [CleanTail], and fails assertion 3.
      *
-     * **The third way is silent, and a fixture must not take it: an offset strictly *inside* the
-     * missing region.** It clears assertion 1, which only demands `> atOffset`, and it is vacuous on
-     * both mmap backends — their predicates prune a segment only when its *successor* starts at or
-     * below the cursor, and the successor of the segment before the hole is the segment *after* it, so
-     * a mid-hole cursor leaves the boundary unprunable and its continuity read either way. Measured:
-     * with a fixture returning `holeStart + 1` **and** `MappedBolt`'s minus-one dropped, this property
-     * goes green. The suite has no way to close that band — the far side is exactly the quantity it
-     * cannot observe — so the obligation is on the fixture, and each one in this tree asserts it: take
-     * the value from the **first surviving append's own `offset`**, never by arithmetic on the hole.
+     * **The third way was silent, and closing it is why [DiscontinuousFixture] takes two appends
+     * rather than an offset.** An offset strictly *inside* the missing region clears assertion 1,
+     * which only demands `> atOffset`, and it is vacuous on both mmap backends — their predicates
+     * prune a segment only when its *successor* starts at or below the cursor, and the successor of
+     * the segment before the hole is the segment *after* it, so a mid-hole cursor leaves the boundary
+     * unprunable and its continuity read either way. Measured, while the hook was a bare `Long`: a
+     * fixture returning `holeStart + 1` **and** `MappedBolt`'s minus-one dropped left this property
+     * green.
+     *
+     * The first draft answered that with a convention — "take it from the first surviving append" —
+     * and a helper that enforced it. That is the mechanism this whole PR argues is insufficient: a TCK
+     * exists for the fixtures that have not been written, and a helper is a thing their author is free
+     * never to call. So the band is not documented, it is **unrepresentable**: [DiscontinuousFixture]
+     * takes the lost frame and the first survivor and proves the far edge from them, and a mid-hole
+     * offset is not a value that constructor can be handed. See its KDoc for the receipts on each way
+     * of slipping it.
      *
      * **What it does not reach.** It never proves the pruned prefix was *skipped* rather than read and
      * forgiven — every assertion here would hold on a backend that read the whole archive every time.
@@ -955,8 +999,8 @@ abstract class BoltConformanceSuite {
                     )
                 },
                 {
-                    assertEquals(
-                        whole.lastOrNull(),
+                    assertEquals<ReplayEvent<RgaOp<String>>?>(
+                        verdict,
                         resumed.lastOrNull(),
                         "and reaches the SAME verdict: a scope that prunes whole segments below the cursor " +
                             "must not prune the one boundary that proves the surviving archive joins up — " +
@@ -1307,53 +1351,70 @@ abstract class BoltConformanceSuite {
  * **beyond** that region starts at — the fixture [BoltConformanceSuite.newDiscontinuousBolt] hands
  * back.
  *
- * A pair rather than a bare bolt because of an asymmetry in what the two sides can see. The suite can
- * find where a hole *starts* — it is the offset the [ReplayScope.All] verdict reports — but not where
- * it *ends*, because every scope this contract offers scans forward and stops at the same boundary.
- * The fixture wrote those frames and knows. Handing the offset back with the bolt it belongs to is
- * also what stops the two drifting: one construction, one place, no second fixture to keep in step.
+ * More than a bare bolt because of an asymmetry in what the two sides can see. The suite can find
+ * where a hole *starts* — it is the offset the [ReplayScope.All] verdict reports — but not where it
+ * *ends*, because every scope this contract offers scans forward and stops at the same boundary. The
+ * fixture wrote those frames and knows.
+ *
+ * ### Why it takes two appends and not the answer
+ *
+ * [beyondTheHole] is derived here rather than supplied, and that is the whole design. As a plain
+ * `Long` parameter it was **unvalidated**: the suite can only assert it lies above where the hole
+ * starts, and an offset landing strictly *inside* the missing region clears that check while being
+ * vacuous on any backend whose pruning predicate reduces to the successor's `baseOffset` — which is
+ * both mmap backends. Measured, in that shape: a fixture returning `holeStart + 1` made
+ * [BoltConformanceSuite.resumingFromBeyondTheHoleReachesTheSameVerdictRatherThanACleanTail] pass on a
+ * `MappedBolt` with its continuity carry deleted. A silent band, in the one obligation added to close
+ * a silent gap.
+ *
+ * A convention ("take it from the first surviving append") plus a helper function does not close it,
+ * because a TCK's whole subject is the fixtures that do not exist yet and a helper is a thing a new
+ * backend's author is free never to call. Taking the two **appends** instead makes the band
+ * *unrepresentable*: an offset inside the hole is not a value this constructor can be handed. It is
+ * `DurabilityFixture`'s argument one screen down — sealed rather than a bolt plus a boolean, so the
+ * two cannot drift apart — and [newExhaustedBolt]'s argument one file up, that an opt-out only moves
+ * the vacuity somewhere harder to see.
+ *
+ * **Receipts, because an `init` that cannot fail is worse than none.** Measured by slipping
+ * `MappedBoltConformanceTest`'s call site, so "every subclass" below means that backend's three:
+ *
+ * | Fixture mutation | What happens |
+ * |---|---|
+ * | Slip [firstSurvivor] alone | the `init` reds — **9 tests**, all three hole properties × every subclass |
+ * | Slip **both**, staying contiguous | `init` passes; the cursor lands one frame past the far edge, reddening assertions 2 and 3 |
+ * | A contiguous pair from **before** the hole | `init` passes; the cursor is below the hole, reddening assertions 1 and 2 |
+ * | An offset strictly **inside** the hole | not constructible |
+ *
+ * The last row is the point of the shape, and the three above it are why it is not enough to say so:
+ * the pair can still be wrong, and every way of being wrong lands on an assertion.
  *
  * Top-level, and mirroring `DurabilityFixture`, so a fixture helper outside a suite subclass can
  * build one.
  *
  * @property bolt the discontinuous archive.
- * @property beyondTheHole the offset of the first frame **after** the missing region — what a consumer
- *   that had already read past it hands back. Take it from that append's own
- *   [AppendResult.Written.offset]; **do not compute it** from the hole's start. The suite can only
- *   assert it is greater than where the hole starts, so an offset landing *inside* the missing region
- *   passes that check and is vacuous on any backend whose pruning predicate reduces to the successor's
- *   base offset — see
- *   [BoltConformanceSuite.resumingFromBeyondTheHoleReachesTheSameVerdictRatherThanACleanTail], which
- *   measures that band rather than assuming it away.
+ * @param lostFrame the append whose segment was then destroyed — the **evidence** for where the hole
+ *   ends, and a different append's reported offset than the one handed back.
+ * @param firstSurvivor the first append whose frame is still readable behind the hole.
  */
-class DiscontinuousFixture(val bolt: Bolt<RgaOp<String>>, val beyondTheHole: Long)
-
-/**
- * The offset the first frame **behind** the hole starts at, for a fixture that wrote one frame per
- * segment and lost the segment at index [intactFrames].
- *
- * Shared by all three backends' fixtures because the index arithmetic is the part worth getting wrong
- * once rather than three times — and because of the `check`, which is the guard the *suite* cannot
- * make. [BoltConformanceSuite.resumingFromBeyondTheHoleReachesTheSameVerdictRatherThanACleanTail] can
- * only assert this offset is above where the hole starts; an offset landing *inside* the missing
- * region clears that and is measurably vacuous on both mmap backends. So the fixture proves the value
- * is the hole's **far edge** — by reaching it from the *lost* frame's own end, which is a different
- * append's reported offset than the one being returned. An index slip in either direction reds here,
- * in the fixture, rather than passing quietly in the suite.
- *
- * **Receipt, because a `check` that cannot fail is worse than none:** slipping `survivor` to
- * `written[intactFrames + 2]` reds all three discontinuous-archive properties on every subclass, with
- * this message. The guard fires.
- */
-fun firstOffsetBehindTheHole(written: List<AppendResult.Written>, intactFrames: Int): Long {
-    val lost = written[intactFrames]
-    val survivor = written[intactFrames + 1]
-    check(survivor.offset == lost.endOffset) {
-        "the frame behind the hole must start exactly where the LOST frame ended — one frame per " +
-            "segment is what makes ${intactFrames + 1} the first survivor, and it measured " +
-            "${survivor.offset} against ${lost.endOffset}"
+class DiscontinuousFixture(
+    val bolt: Bolt<RgaOp<String>>,
+    lostFrame: AppendResult.Written,
+    firstSurvivor: AppendResult.Written,
+) {
+    init {
+        check(firstSurvivor.offset == lostFrame.endOffset) {
+            "the first frame behind the hole must start exactly where the LOST frame ended, or this " +
+                "fixture is naming an offset inside the missing region rather than its far edge — " +
+                "${firstSurvivor.offset} against ${lostFrame.endOffset}"
+        }
     }
-    return survivor.offset
+
+    /**
+     * The offset of the first frame **after** the missing region — what a consumer that had already
+     * read past it hands back, and the one quantity no [ReplayScope] can name once the archive is
+     * discontinuous.
+     */
+    val beyondTheHole: Long = firstSurvivor.offset
 }
 
 /**

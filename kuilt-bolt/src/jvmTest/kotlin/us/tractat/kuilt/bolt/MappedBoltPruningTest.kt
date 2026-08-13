@@ -137,10 +137,14 @@ class MappedBoltPruningTest {
                 )
             },
             {
-                assertTrue(
-                    cursor > archive.written[LOST_SEGMENT].offset,
-                    "the cursor must sit BEYOND the hole — at its start the boundary segment is " +
-                        "unprunable, and there is no pruned prefix left to corrupt",
+                // `cursor > written[LOST_SEGMENT].offset` would be the obvious wording and cannot
+                // fail — append offsets increase — so it is the hole's FAR EDGE that is asserted:
+                // the surviving frame must start exactly where the lost one ended.
+                assertEquals(
+                    archive.written[LOST_SEGMENT].endOffset,
+                    cursor,
+                    "the cursor must sit at the far edge of the hole — inside it the boundary segment " +
+                        "is unprunable, and there is no pruned prefix left to corrupt",
                 )
             },
             {
@@ -545,7 +549,6 @@ class MappedBoltPruningTest {
 
         /** A real pre-allocated tail on every segment. Smaller than a frame, so one frame lands per file. */
         const val PRE_ALLOCATED_TAIL_BYTES = 32L
-
 
         /**
          * The first byte of a frame's body — past the length prefix, so flipping it breaks the frame's
