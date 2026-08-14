@@ -1194,6 +1194,12 @@ public class EntitlementLedger private constructor(
      *    [LedgerConflict.PersistentNegativeHoldings] at the delegator). Its value is that it
      *    is derived from the raw totals, so it still catches manufactured authority when the
      *    per-lineage derivation of [holdings] is itself the thing that regressed.
+     *  - [LedgerConflict.OrphanedTransferPath] — transfer rows the topology moved out from under
+     *    (#2366): a [PathKey] no group's live lineage reads, whose rows a generation move did not
+     *    carry across, still holding a non-zero balance for one of the parties. The one fault here
+     *    that conservation is *structurally* blind to — `Σ_r transferNet(k, r) = 0` on every key, so
+     *    abandoning a whole key is sum-preserving — and that the negative-holdings check misses
+     *    because the recipient lands on `0` rather than below it.
      *
      * **What is deliberately not reported:** a group whose only inbound edges are all
      * prepared/retired is quarantined (holdings `0`) but *silent* — that is the normal window
@@ -1229,6 +1235,7 @@ public class EntitlementLedger private constructor(
                 if (holdings(g, r) < 0L) conflicts += LedgerConflict.PersistentNegativeHoldings(g, r)
             }
         }
+        for (path in orphanedTransferPaths()) conflicts += LedgerConflict.OrphanedTransferPath(path)
         // The global backstop, last: totals read straight off the components, so it survives a
         // regression in the per-lineage derivation the checks above all depend on.
         val spentTotal = leafSpentTotal()
@@ -1238,6 +1245,68 @@ public class EntitlementLedger private constructor(
         }
         return conflicts.sorted()
     }
+
+    /**
+     * The path keys carrying transfer rows that no group's live lineage reads any more, sorted —
+     * the derivation behind [LedgerConflict.OrphanedTransferPath] (issue #2366). Its three clauses,
+     * and why each is load-bearing, are in that type's KDoc; this is where they are evaluated.
+     *
+     * **Enumerated over the rows themselves, never over an edge's counter slots.** The whole point
+     * of the defect is a recipient who *only* holds transferred credit: it has no slot on the edge,
+     * so [replicasOnEdge] — which walks the counter families — does not contain it, and an
+     * enumeration built from that set would silently drop exactly the party the report exists for.
+     */
+    private fun orphanedTransferPaths(): List<PathKey> {
+        if (transfers.isEmpty()) return emptyList()
+        val edgeByPath = allEdges().associateBy { PathKey.of(it) }
+        val out = ArrayList<PathKey>()
+        for ((path, rows) in transfers) {
+            // The root path has no final edge, so no reshape can move it: it is live on every state.
+            if (path == PathKey.ROOT) continue
+            val edge = edgeByPath[path]
+            if (edge == null) {
+                out += path // names no generation this ledger knows — unreadable by construction
+                continue
+            }
+            // Unknown or divergent record ⇒ the lineage is quarantined and [RecordDivergence] owns
+            // it; `null` lineage ⇒ the honest-reshape window, the standing silent exception.
+            val child = recordOf(edge)?.child ?: continue
+            val livePath = lineageEdges(child)?.let { it.lastOrNull()?.let(PathKey::of) ?: PathKey.ROOT } ?: continue
+            if (livePath == path) continue // still the key `holdings` reads at this group
+            if (rowsCarriedAcross(rows, livePath)) continue // a move took them with it: nothing lost
+            val parties = HashSet<ReplicaId>()
+            for ((donor, row) in rows) { parties += donor; parties += row.replicas() }
+            if (parties.any { r -> transferNet(path, r) != 0L && strandedOn(edge, r) != 0L }) out += path
+        }
+        return out.sorted()
+    }
+
+    /**
+     * True when every `(donor, recipient)` cumulative in [rows] is matched or exceeded at [livePath]
+     * — i.e. a generation move carried the hand-offs across with the counter families it re-homed.
+     * Compared **per pair** rather than on the net, so a move that carried only some of the rows
+     * still reports.
+     */
+    private fun rowsCarriedAcross(rows: Map<ReplicaId, GCounter>, livePath: PathKey): Boolean {
+        val live = transfers[livePath] ?: emptyMap()
+        return rows.all { (donor, row) ->
+            val there = live[donor]
+            row.replicas().all { recipient -> row.count(recipient) <= (there?.count(recipient) ?: 0L) }
+        }
+    }
+
+    /**
+     * What [r] would still hold at [edge] if it were live — the **inbound half** of the [holdings]
+     * derivation, `netInflow + transferNet − effLeafSpent`, evaluated on a generation nothing reads
+     * any more. The group-level `childEdges` subtraction is deliberately absent: it does not move
+     * when the inbound generation is replaced, so it is not part of what a move must carry.
+     *
+     * Zero on a generation whose books closed honestly before it died, whatever it once carried.
+     */
+    private fun strandedOn(edge: AttachmentId, r: ReplicaId): Long = checkedSub(
+        checkedAdd(netInflow(edge, r), transferNet(PathKey.of(edge), r)),
+        effLeafSpentSlot(edge, r),
+    )
 
     /**
      * The number of **live** ([Lifecycle.ACTIVE] or [Lifecycle.CLOSING]) inbound edges
