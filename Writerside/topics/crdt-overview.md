@@ -74,6 +74,10 @@ counter = counter.piece(delta)             // apply locally
 
 See [Quilter](crdt-quilter.md) for usage and the `MuxSeam` multiplexing pattern that lets multiple replicators share one transport.
 
+## Keeping more than the live copy does
+
+Devices that sync with each other also share their forgetting: when a phone drops its oldest records to save room, the server it syncs with drops them too. A [bolt](bolt.md) breaks that link — an archive kept beside the live copy, so a server can hold a year of edits while the phone that fed it holds an hour.
+
 ## Serialization
 
 Every CRDT type is `@Serializable`. Wire transport (CBOR by default, via `Quilter`) and JSON round-trips both work. Each type's serializer is accessible via `T.serializer()` or `T.serializer(elementSerializer)`.
