@@ -388,11 +388,15 @@ public class InRangePastEndVector internal constructor(
  *
  * It cannot distinguish an impl that re-fetches its memory handle from one that never cached a
  * stale handle to begin with — both simply pass. This is a property about the *observable*
- * contract, and "you must re-fetch" is an implementation strategy, not a contract term. Nor can it
- * tell whether a host re-read a *correct* size but a stale base that happened to still be valid
- * (an allocator that grew in place); that is unobservable from outside by construction, and the
- * property's value is that the impls where it is *not* unobservable — a moved `ByteBuffer`, a
- * detached `ArrayBuffer`, a `realloc`ed wasm3 arena — fail it on content.
+ * contract, and "you must re-fetch" is an implementation strategy, not a contract term.
+ *
+ * Nor can it tell whether a host re-read a *correct* size but a stale **base** that happened to
+ * still be valid, and that is measured rather than supposed: caching `Wasm3WasmRuntime`'s base
+ * pointer across the grow leaves this property green, because m3 grew a 64 KiB arena to 128 KiB in
+ * place. A base that is still correct is indistinguishable from one that was re-fetched, so no
+ * property over [us.tractat.kuilt.warp.Op] closes it. What the vector *does* reach is every impl
+ * where the handle really is invalidated — a stale memory **size** on any of the three, and a
+ * detached `ArrayBuffer` in the browser — and each of those is a measured red.
  *
  * @param initialPages the module's declared initial linear memory, in pages.
  * @param maxPages the module's declared max, in pages — exactly one page of headroom, so the

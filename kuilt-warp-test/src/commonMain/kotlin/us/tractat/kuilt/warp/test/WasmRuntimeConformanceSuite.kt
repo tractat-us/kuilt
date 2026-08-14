@@ -316,33 +316,47 @@ public abstract class WasmRuntimeConformanceSuite {
      * what makes it different from its siblings; [InRangePastEndVector] makes a fixture that fails
      * them unconstructible, and cross-checks all three against the module bytes.
      *
-     * **Mutation receipts**, measured on this branch — each mutation applied alone, reverted, and
-     * read out of the results XML. Backends: `ChicoryWasmRuntimeConformanceTest` (JVM, `jvmTest`)
-     * and `Wasm3WasmRuntimeConformanceTest` (native, `macosArm64Test`).
+     * **Mutation receipts**, measured on this branch — each applied alone, reverted, and read out
+     * of the results XML. Three backends: `ChicoryWasmRuntimeConformanceTest` (`jvmTest`),
+     * `Wasm3WasmRuntimeConformanceTest` (`macosArm64Test`), `BrowserWasmRuntimeConformanceTest`
+     * (`wasmJsBrowserTest`).
      *
      * | Mutation | Reds here | Reds elsewhere |
      * |---|---|---|
-     * | `requireInBounds` → sign-only (`ptr < 0 \|\| len < 0`) — `:kuilt-warp` | **native only** | 4 `WarpAbiResultTest` cases; no other conformance property, on either backend |
-     * | `requireInBounds` → sign-only, and drop the length ceiling too | **native only** | as above |
-     * | **Fixture:** move `resultPointer` into the high-bit region | assertion **1**, at construction | nothing |
-     * | **Fixture:** shrink `resultLength` so the window fits | assertion **3**, at construction | nothing |
+     * | The hand-rolled signed unpack every impl's KDoc forbids: `requireInBounds` narrows to `Int` and checks only the sign — `:kuilt-warp` | **native RED**; JVM **green**; browser unreachable | 1 of 9 `WarpAbiResultTest`. **All three high-bit siblings stay green, on every backend** |
+     * | The same defect in the browser's JS mirror — `asUintN` → `asIntN`, a sign check, and a clamping `slice` in place of the bounded view | **browser RED** | nothing: 19 of 20 green, siblings included |
+     * | Drop the range arm but keep the words unsigned (`ptr < 0 \|\| len < 0`) | native: **the test binary crashed** | 4 of 9 `WarpAbiResultTest`; crashed the native runner on `allocPointerWithHighBitSetIsBounded` |
+     * | **Fixture:** `resultPointer` back into the high-bit region | precondition, at construction | nothing |
+     * | **Fixture:** `resultLength` shrunk until the window fits | precondition, at construction | nothing |
+     * | **Fixture:** `resultLength` off by one from the module's own `i64.const` | the artefact cross-check, at construction | nothing |
      *
-     * **The first row is the finding, and its "native only" is the honest half.** On wasm3 the
-     * decode ends in raw pointer arithmetic (`base[ptr + i]` over `m3_GetMemory`), so
-     * `requireInBounds` is the *only* thing between a guest word and host memory: sign-only makes
-     * this property red and every sibling vector stay green, which is the whole claim of #2314
-     * demonstrated in one measurement. On Chicory it stays green, because Chicory's `Memory` API
-     * re-checks the narrowed index natively and throws, which the runtime wraps — the guard is
-     * layered there, and this property proves the *composite* rather than the outer check. Said
-     * plainly rather than left as an absence: **on the JVM backend, no mutation of the shared
-     * decoder alone reds this test.** What it holds on that backend is the contract term — the
-     * fault surfaces as [WasmExecutionException] rather than a hang or a raw engine error — and
-     * what it holds for the *next* backend is everything, because a new impl inherits wasm3's
-     * shape (a raw memory view) far more often than Chicory's.
+     * **Rows 1 and 2 are the finding**, and together they are #2314 demonstrated rather than
+     * argued: on two of the three backends, an implementation that keeps a sign check and loses
+     * the range check passes every pre-existing out-of-bounds vector in this suite and reds only
+     * this one. On wasm3 the decode ends in raw pointer arithmetic (`base[ptr + i]` over
+     * `m3_GetMemory`), so [InRangePastEndVector]'s window is read straight out of host memory and
+     * handed back; in the browser the clamping `slice` silently returns a short array where the
+     * bounded `Uint8Array(buffer, ptr, len)` view would have thrown.
      *
-     * The two fixture rows are the vacuity guards, and they are the mutations a fixture author
-     * commits by accident: both fail *before* any assertion runs, at
-     * [InRangePastEndVector]'s construction, rather than passing quietly.
+     * **The JVM cell is green, and that is worth saying out loud rather than leaving as an
+     * absence.** Chicory's `Memory` API re-checks the narrowed index natively and throws, which
+     * `ChicoryWasmRuntime` wraps — so the guard is layered there and no mutation of the shared
+     * decoder *alone* reds this property on that backend. What it holds on the JVM is the contract
+     * term (the fault surfaces as [WasmExecutionException], not a hang or a raw engine error);
+     * what it holds for the *next* implementation is everything, because a new backend inherits
+     * wasm3's shape — a raw memory view with no second opinion — far more often than Chicory's.
+     *
+     * Row 3 is the clumsy neighbour of row 1 and is reported because its shape is the argument:
+     * dropping the range check while leaving the words unsigned lets a `0x8000_0000` alloc pointer
+     * through as a positive `Long`, and wasm3 writes there — the native test binary died rather
+     * than failing. It is *not* the mutation this property exists for, because it reds a sibling
+     * too; row 1 is the discriminating one.
+     *
+     * The last three rows are the vacuity guards — the edits a fixture author commits by accident.
+     * All three fail at [InRangePastEndVector]'s construction, before any assertion, and each
+     * names the relation it broke. The last of them is the one no relational check could catch:
+     * every number in the descriptor stays mutually consistent, and only the cross-check against
+     * the module's own constant notices that it is describing a vector nobody is running.
      */
     @Test
     public fun resultWindowPastMemoryEndIsBounded(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
@@ -416,18 +430,28 @@ public abstract class WasmRuntimeConformanceSuite {
      *
      * | Mutation | Reds here | Reds elsewhere |
      * |---|---|---|
-     * | Read linear-memory size **once at load** instead of after each guest call — `ChicoryWasmRuntime.runAbi` | **2, 3** (as a bounds rejection) | nothing else in `jvmTest` |
-     * | The same — `Wasm3WasmRuntime.memoryBaseFor` | **2, 3** | nothing else in `macosArm64Test` |
-     * | **Fixture:** write the result at offset 0 instead of the new page | **3 only** | nothing |
+     * | Bound the result against the memory size read **before** the guest call — `ChicoryWasmRuntime.runAbi` | RED: `window [65536, 65544) outside [0, 65536)` escapes `invoke` | nothing else in `jvmTest` |
+     * | The same on native — `Wasm3WasmRuntime.runAbi` | RED, same window | nothing else in `macosArm64Test` |
+     * | Cache `exports.memory.buffer` **before** `warp_run` — `BrowserWasmRuntime`'s worker | RED: *"Cannot perform Construct on a detached ArrayBuffer"* | nothing else in `wasmJsBrowserTest` |
+     * | Cache the linear-memory **base pointer** before the guest call — `Wasm3WasmRuntime.runAbi` | **green** | nothing |
+     * | **Fixture:** write the result at offset 0 instead of into the new page | **assertion 3 only** — *"0 against 65536"* | nothing |
      *
-     * **Row 3 is the one that matters day to day**: it is the fixture edit that turns this back
-     * into an ordinary round-trip property, and assertion 3 is the only thing that notices.
+     * The first three rows are the property earning its place: each is the *exact* mechanism that
+     * backend's own comment says it avoids, and before this vector existed each was held by the
+     * comment alone. The browser row is the one to read twice — the detached-`ArrayBuffer` message
+     * is the failure mode named in `BrowserWasmRuntime`'s KDoc, arriving as a real red.
      *
-     * **What this cannot detect, said plainly.** It cannot distinguish an impl that re-fetches its
-     * memory handle from one that never cached a stale handle to begin with — both pass, and
-     * "re-fetch" is an implementation strategy rather than a contract term. Nor can it see a stale
-     * *base* that a grow-in-place left valid; that is unobservable from outside by construction.
-     * See [GrowThenWriteVector].
+     * **Row 4 is green, and it is the more interesting measurement.** Caching wasm3's base pointer
+     * across the grow — the stale-base bug `Wasm3WasmRuntime.memoryBaseFor`'s KDoc exists to
+     * prevent — changes nothing, because m3 grew a 64 KiB arena to 128 KiB **in place** and the
+     * cached pointer stayed valid. So this property does not pin that half of the contract on that
+     * backend, and no property expressible over [us.tractat.kuilt.warp.Op] could: a base that is
+     * still correct is indistinguishable from a base that was re-fetched. It is stated here rather
+     * than left for a reader to assume the green row proves something. See [GrowThenWriteVector].
+     *
+     * Row 5 is the vacuity guard, and the one that matters day to day: it is the fixture edit that
+     * turns this back into an ordinary round-trip property, and assertion 3 is the only thing that
+     * notices.
      */
     @Test
     public fun resultWrittenIntoNewlyGrownMemoryIsReadBack(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
