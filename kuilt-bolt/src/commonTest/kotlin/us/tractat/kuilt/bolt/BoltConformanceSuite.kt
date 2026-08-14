@@ -125,8 +125,54 @@ abstract class BoltConformanceSuite {
      * which wrote those frames, knows. See
      * [resumingFromBeyondTheHoleReachesTheSameVerdictRatherThanACleanTail] for what it buys and what
      * the suite can and cannot check about it.
+     *
+     * **[lostSegments] is a parameter rather than a literal in each fixture, and that is the whole of
+     * #2331's second gap.** A hole is observable through [Bolt] only as two offsets, so no assertion
+     * here can tell one destroyed segment from four — which means a fixture left to choose for itself
+     * chooses one, and a backend whose continuity check happens to recover across a *wider* gap than a
+     * single segment passes. Threading the count through the hook drives the same fixture code at both
+     * widths instead of adding a second fixture a subclass could get differently wrong, exactly as
+     * `zeroTailBytes` is threaded through the mmap fixtures rather than hardcoded per subclass. The
+     * fixture answers with [DiscontinuousFixture.lostFrameCount] appends as its evidence, and the
+     * suite checks that against what it asked for.
      */
-    protected abstract suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): DiscontinuousFixture
+    protected abstract suspend fun newDiscontinuousBolt(
+        clock: Clock,
+        intactFrames: Int,
+        lostSegments: Int,
+    ): DiscontinuousFixture
+
+    /**
+     * A bolt of this backend whose segment sequence runs **backwards**: after exactly [intactFrames]
+     * readable frames, a segment whose header claims an absolute `baseOffset` *below* where its
+     * predecessor's frames ended — a stale segment file restored over a newer one, a directory
+     * holding two generations of the same archive, a snapshot rolled back under a live writer.
+     * Whatever doubling back looks like for this backend, produced deterministically.
+     *
+     * Non-nullable for the reason the three hooks above are, and here the vacuity it removes is
+     * narrow and sharp rather than broad. [newDiscontinuousBolt] can make the gap as wide as you like
+     * and can never make it *negative*, so every archive in this tree agrees that a successor's base
+     * offset is too **high** — and a backend spelling its continuity check `header.baseOffset >
+     * resumeOffset`, which reads perfectly and is how most people would write "this segment starts too
+     * far along", is green across the entire suite. The archive it then hands back is not merely
+     * short: it replays records a consumer has already consumed, at offsets already handed out, which
+     * is the failure [Bolt] exists to make impossible rather than a milder version of the hole.
+     *
+     * **Frames must survive behind the jump**, for the reason [newTruncatedBolt] gives one level down:
+     * without them, "stop at the jump" and "step over it" emit identical events. Here they also carry
+     * the harm — the frames behind a backwards jump are *duplicates*, so a backend that steps over one
+     * emits a record twice rather than merely skipping some.
+     *
+     * **The jump must go back past a WHOLE frame**, not to a boundary inside the last one, and
+     * [BackwardsJumpFixture] refuses to be built otherwise. That is what lets the suite verify the
+     * fixture's account instead of trusting it: a frame the replay already emitted must be sitting at
+     * [BackwardsJumpFixture.jumpsBackTo].
+     *
+     * The obligation asserts its own precondition, so a backend that returns a healthy archive — or
+     * one damaged some other way, a forward gap in particular — fails loudly rather than passing
+     * quietly.
+     */
+    protected abstract suspend fun newBackwardsJumpBolt(clock: Clock, intactFrames: Int): BackwardsJumpFixture
 
     /**
      * A bolt of this backend whose durability operation **cannot succeed** — its `msync`, its
@@ -680,17 +726,18 @@ abstract class BoltConformanceSuite {
      * `scope is All || scope is FromOffset` in `InMemoryBolt.emitFrames` reds **only** assertions 7 and
      * 8, on both `InMemoryBolt` subclasses, and nothing else in `:kuilt-bolt:jvmTest`.
      *
-     * Beyond that, this drives **one shape of hole** — a whole segment lost out of the middle.
+     * Beyond that, this drives **one shape of hole** — a single whole segment lost out of the middle.
      * [resumingFromTheHoleReachesTheSameVerdictRatherThanACleanTail] and
      * [resumingFromBeyondTheHoleReachesTheSameVerdictRatherThanACleanTail] drive the pruning scope at
-     * the hole's two edges, and their KDoc lists what *they* cannot reach. Still unpinned anywhere,
-     * tracked in #2331: a **backwards** jump (a header claiming an offset *below* where the previous
-     * segment stopped), a hole spanning more than one lost segment, and a hole in an archive whose
-     * surviving segments were written by more than one format version.
+     * the hole's two edges, and their KDoc lists what *they* cannot reach;
+     * [aHoleSpanningSeveralLostSegmentsIsReportedAtItsStartLikeAnyOther] drives a wider one and
+     * [anArchiveWhoseSegmentsDoubleBackStopsAtTheJumpAndSaysSo] the one shape that is not a gap at all
+     * (#2331). Still unpinned anywhere: a hole in an archive whose surviving segments were written by
+     * more than one format version.
      */
     @Test
     fun anArchiveMissingAMiddleRegionStopsAtTheHoleAndSaysSo() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
-        val bolt = newDiscontinuousBolt(FixedClock(epoch), INTACT_FRAMES).bolt
+        val bolt = newDiscontinuousBolt(FixedClock(epoch), INTACT_FRAMES, ONE_LOST_SEGMENT).bolt
 
         val events = bolt.replay(ReplayScope.All).toList()
         val frames = events.filterIsInstance<Archived<RgaOp<String>>>()
@@ -833,7 +880,7 @@ abstract class BoltConformanceSuite {
      */
     @Test
     fun resumingFromTheHoleReachesTheSameVerdictRatherThanACleanTail() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
-        val bolt = newDiscontinuousBolt(FixedClock(epoch), INTACT_FRAMES).bolt
+        val bolt = newDiscontinuousBolt(FixedClock(epoch), INTACT_FRAMES, ONE_LOST_SEGMENT).bolt
 
         val whole = bolt.replay(ReplayScope.All).toList()
         val verdict = whole.lastOrNull()
@@ -961,13 +1008,15 @@ abstract class BoltConformanceSuite {
      * **What it does not reach.** It never proves the pruned prefix was *skipped* rather than read and
      * forgiven — every assertion here would hold on a backend that read the whole archive every time.
      * That claim is about bytes off a filesystem, so it is not expressible over [Bolt];
-     * `MappedBoltPruningTest` carries it for the one backend that makes the claim. Also unreached, as
-     * in the sibling: a hole spanning more than one lost segment, and a backwards jump.
+     * `MappedBoltPruningTest` carries it for the one backend that makes the claim. A wider hole and a
+     * backwards jump were also unreached here, and are now driven by
+     * [aHoleSpanningSeveralLostSegmentsIsReportedAtItsStartLikeAnyOther] and
+     * [anArchiveWhoseSegmentsDoubleBackStopsAtTheJumpAndSaysSo] (#2331).
      */
     @Test
     fun resumingFromBeyondTheHoleReachesTheSameVerdictRatherThanACleanTail() =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
-            val fixture = newDiscontinuousBolt(FixedClock(epoch), INTACT_FRAMES)
+            val fixture = newDiscontinuousBolt(FixedClock(epoch), INTACT_FRAMES, ONE_LOST_SEGMENT)
             val bolt = fixture.bolt
 
             val whole = bolt.replay(ReplayScope.All).toList()
@@ -1010,6 +1059,254 @@ abstract class BoltConformanceSuite {
                 },
             )
         }
+
+    /**
+     * A hole spanning **several consecutive segments** is reported exactly as a one-segment hole is —
+     * at its start, with the same reason, under a whole-archive replay and under a resume from past
+     * it.
+     *
+     * Not a bigger number for its own sake. Every other hole property in this suite drives an archive
+     * that lost exactly one segment, so a backend is only ever asked about a gap *one segment wide*,
+     * and "recovers across a wider one" is a live shape: a continuity check written against a
+     * bookkeeping-derived expectation rather than a parsed one — segment-index arithmetic, a
+     * fixed-stride assumption, a resynchronisation that tolerates a plausible single loss — is
+     * single-gap-correct and blind here. A partial retention sweep, or a directory that lost a day's
+     * files rather than an hour's, produces this archive and not the narrow one.
+     *
+     * ### What the suite can prove about the width, and what it cannot — because the second half is
+     * the interesting half
+     *
+     * Nothing in [Bolt] mentions a segment, so no assertion can read back how many were destroyed: a
+     * hole is two offsets, and two adjacent lost segments are indistinguishable through this contract
+     * from one lost segment twice the size. **There is therefore no archive-side check of the width at
+     * all** — every proxy that suggests itself (the missing region is wider than the widest frame
+     * replayed; it is `n` times the narrowest) smuggles in an assumption about how this fixture's
+     * payloads are sized, which is the kind of thing that goes quietly wrong later and is exactly the
+     * #2247 shape one level down.
+     *
+     * So the width arrives as **evidence** — one [AppendResult.Written] per destroyed segment — and
+     * assertion 1 counts it against what this test asked for, so a fixture that quietly lost one
+     * segment when told to lose two reds instead of restating its sibling. Two residuals, both named
+     * rather than argued away: the step from *frame* to *segment* belongs to the subclass, which is the
+     * only place the notion exists (all three in-tree fixtures `check` one frame per segment beside
+     * their budget); and a fixture that destroyed one segment while *listing* two lost frames satisfies
+     * everything here, because the archive it hands back is then a consistent narrower hole. See
+     * [DiscontinuousFixture].
+     *
+     * Five assertions, in the order below: **1** the hole really spans more than one lost segment;
+     * **2** the verdict is [Truncated] with [TruncationReason.MissingRegion], at the offset the missing
+     * region starts; **3** the fixture's account of what it destroyed agrees with the archive — the
+     * hole starts where the last surviving frame ended; **4** every frame ahead of the hole survives
+     * and nothing beyond it is replayed; **5** a resume from past the wider hole reaches the same
+     * verdict and replays nothing.
+     *
+     * **Mutation receipts** — each applied alone, reverted, and read out of the results XML.
+     *
+     * | Mutation | Reds here | Reds in the one-segment properties |
+     * |---|---|---|
+     * | Report a gap only while it is no wider than one lost frame — `InMemoryBolt` | 2, 4, 5 | nothing |
+     * | The same in `MappedBolt.emitSegment` | 2, 4, 5 | nothing |
+     * | The same in `PosixMappedBolt.emitFrames` | 2, 4, 5 | nothing |
+     * | Delete the continuity check outright | 2, 4, 5 | all three |
+     * | **Fixture:** lose one segment however many were asked for | **1 only** | nothing |
+     *
+     * **Row 1 is synthetic and is labelled so rather than dressed up.** No *natural* mutation of the
+     * three shipped backends distinguishes a wide hole from a narrow one, because all three compare a
+     * **parsed** resume offset against the successor header's absolute base, and that comparison
+     * cannot see how far apart the two are. That is the honest measurement, and it is the argument for
+     * the property rather than against it: the check being width-blind is a property of *these three*
+     * implementations, held by nothing, and the first backend to derive its expectation instead of
+     * parsing it inherits the gap silently. The rows show the property has the discriminating power
+     * the argument needs — a check that recovers across a double gap reds here and **nowhere else**.
+     *
+     * The last row is the vacuity guard, and it is the one that matters day to day: it is the mutation
+     * a fixture author commits by accident.
+     */
+    @Test
+    fun aHoleSpanningSeveralLostSegmentsIsReportedAtItsStartLikeAnyOther() =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val fixture = newDiscontinuousBolt(FixedClock(epoch), INTACT_FRAMES, SEVERAL_LOST_SEGMENTS)
+            val bolt = fixture.bolt
+
+            val events = bolt.replay(ReplayScope.All).toList()
+            val frames = events.filterIsInstance<Archived<RgaOp<String>>>()
+            val verdict = events.lastOrNull()
+            val resumed = bolt.replay(ReplayScope.FromOffset(fixture.beyondTheHole)).toList()
+
+            assertAll(
+                {
+                    assertEquals(
+                        SEVERAL_LOST_SEGMENTS,
+                        fixture.lostFrameCount,
+                        "newDiscontinuousBolt was asked to destroy several segments, and this obligation " +
+                            "is a restatement of its one-segment sibling unless it did — a hole is two " +
+                            "offsets through this contract, so the count is the only evidence there is",
+                    )
+                },
+                {
+                    assertEquals(
+                        Truncated(fixture.holeStartsAt, TruncationReason.MissingRegion),
+                        verdict,
+                        "a wider hole is the same damage as a narrow one and gets the same verdict, at the " +
+                            "offset the missing region STARTS — not at its far edge, and not a CleanTail",
+                    )
+                },
+                {
+                    assertEquals<Long?>(
+                        frames.lastOrNull()?.endOffset,
+                        fixture.holeStartsAt,
+                        "and the fixture's account of what it destroyed agrees with the archive it handed " +
+                            "back: the hole starts where the last surviving frame ended",
+                    )
+                },
+                {
+                    assertEquals(
+                        INTACT_FRAMES,
+                        frames.size,
+                        "every frame ahead of the hole survives, and nothing beyond it is replayed — a " +
+                            "wider hole is more records missing, not a licence to step over them",
+                    )
+                },
+                {
+                    assertEquals<ReplayEvent<RgaOp<String>>?>(
+                        verdict,
+                        resumed.lastOrNull(),
+                        "and a resume from past the wider hole reaches the same verdict, replaying " +
+                            "${resumed.filterIsInstance<Archived<RgaOp<String>>>().size} frames where it owes " +
+                            "none: more segments below the cursor are prunable here than in the narrow case, " +
+                            "and the boundary that proves the archive joins up is among them",
+                    )
+                },
+            )
+        }
+
+    /**
+     * An archive whose segments **double back** — a header claiming an absolute `baseOffset` *below*
+     * where its predecessor's frames ended — stops at the jump rather than replaying records it has
+     * already handed out.
+     *
+     * ### The one hole shape that is not a hole, and the check that reads correctly and is wrong
+     *
+     * Every other discontinuity property in this suite drives a gap **forward**: [newDiscontinuousBolt]
+     * can widen a hole without limit and can never invert one, because losing a segment only ever
+     * moves the next header's base further from the previous segment's end. So a backend is only ever
+     * asked "does this segment start too far along?", and `header.baseOffset > resumeOffset` — which
+     * reads perfectly, and is how the question is naturally phrased — is green across this entire
+     * suite while replaying *this* archive as a [CleanTail].
+     *
+     * And the failure it lets through is worse than the one #2240 shipped, not milder. A hole hands
+     * back a short history that says it is short. A backwards jump hands back the same records
+     * **twice**, at offsets a consumer has already consumed and acknowledged — so a consumer resuming
+     * by offset sees an old `(replica, seq)` arrive as a new one, which is the exact confusion the
+     * [Bolt] KDoc says a gapped history causes, reached from the other side.
+     *
+     * Six assertions: **1** the archive really is damaged; **2** the jump really goes *backwards*,
+     * into a frame this replay already emitted; **3** the verdict stops where the fixture says the
+     * readable history ends; **4** every frame ahead of the jump survives and none from beyond it is
+     * replayed; **5** exactly one terminal event, and it is last; **6** the scopes with no offset
+     * predicate reach the same verdict.
+     *
+     * **Assertion 2 is what stops this being its sibling restated**, and it is checkable rather than
+     * declared: the successor's claimed base must be the start of a frame the replay *already handed
+     * out*. A fixture describing a forward gap cannot construct [BackwardsJumpFixture] at all, and one
+     * whose evidence has slipped off the archive it built reds here or at assertion 3.
+     *
+     * **Mutation receipts** — each applied alone, reverted, and read out of the results XML.
+     *
+     * | Mutation | Reds here | Reds elsewhere in `:kuilt-bolt` |
+     * |---|---|---|
+     * | `header.baseOffset != resumeOffset` → `>` — `InMemoryBolt.emitFrames` | 1, 3, 4, 5 | **nothing** |
+     * | The same in `MappedBolt.emitSegment` | 1, 3, 4, 5 | **nothing** |
+     * | The same in `PosixMappedBolt.emitFrames` | 1, 3, 4, 5 | **nothing** |
+     * | Delete the continuity check outright | 1, 3, 4, 5 | the three hole properties |
+     * | **Fixture:** restore the stale segment over the newest one instead | the fixture's own `check` | — |
+     *
+     * **The first three rows are the finding, and their right-hand column is the whole of it.**
+     * Narrowing the comparison to a forward gap is a real defect on all three backends and, before
+     * this property, reddened *nothing anywhere in the module* — the unpinned state #2240 shipped out
+     * of twice, in a second dimension nobody had looked at. Row 4 is what keeps assertions 1 and 3
+     * from riding on the hole properties: deleting the check reds those too, so it says nothing about
+     * this shape on its own.
+     *
+     * **The green assertions, said plainly.** Assertions 2 and 6 were green under every mutation
+     * above. Assertion 2 is a *precondition* rather than a claim about the backend — its job is to red
+     * when the fixture drifts, and the last row is that measurement. Assertion 6 inherits its
+     * justification from [anArchiveMissingAMiddleRegionStopsAtTheHoleAndSaysSo], where the same pair of
+     * scopes closed a real gap: a continuity check hung off the offset predicate is invisible to every
+     * other property, and there is no reason to believe a backwards jump would be pinned by a
+     * different accident than a forward one.
+     *
+     * **What it does not reach.** A jump backwards to an offset that is not a frame boundary — the
+     * fixture is obliged to land the successor on a frame the replay emitted, because that is the only
+     * form the suite can verify rather than take on trust. And the reason it asserts is
+     * [TruncationReason.MissingRegion], which all three backends already report for any disagreement:
+     * a backwards jump is not literally a *missing* region, but the constant's consumer contract —
+     * `atOffset` is the honest end of the readable history and is **not** somewhere to resume from —
+     * is exactly right here, and inventing a fourth constant for a shape no backend distinguishes
+     * would put a knob in the contract no consumer asked for.
+     */
+    @Test
+    fun anArchiveWhoseSegmentsDoubleBackStopsAtTheJumpAndSaysSo() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val fixture = newBackwardsJumpBolt(FixedClock(epoch), INTACT_FRAMES)
+        val bolt = fixture.bolt
+
+        val events = bolt.replay(ReplayScope.All).toList()
+        val frames = events.filterIsInstance<Archived<RgaOp<String>>>()
+        val verdict = events.lastOrNull()
+        // The two scopes with no offset predicate, exactly as the forward-hole property drives them.
+        val byArrival = bolt.replay(ReplayScope.Arrived(epoch, epoch + STEP)).toList()
+        val byDots = bolt.replay(ReplayScope.InsertsAbove(VersionVector.EMPTY)).toList()
+
+        assertAll(
+            {
+                assertIs<Truncated>(
+                    verdict,
+                    "newBackwardsJumpBolt must hand back an archive that DOUBLES BACK — a healthy one " +
+                        "makes this obligation vacuous, so it fails here rather than passing",
+                )
+            },
+            {
+                assertTrue(
+                    frames.any { it.offset == fixture.jumpsBackTo },
+                    "the successor must re-enter at a frame this replay ALREADY emitted — that is what " +
+                        "makes the jump backwards rather than a forward gap, which is the property one " +
+                        "screen up; it claimed ${fixture.jumpsBackTo}, and the frames replayed start at " +
+                        "${frames.map { it.offset }}",
+                )
+            },
+            {
+                assertEquals(
+                    Truncated(fixture.stopsAt, TruncationReason.MissingRegion),
+                    verdict,
+                    "the verdict stops where the readable history ends — at the last intact frame, not " +
+                        "at the offset the successor doubles back to, and not a CleanTail over a history " +
+                        "that hands the same records out twice",
+                )
+            },
+            {
+                assertEquals(
+                    INTACT_FRAMES,
+                    frames.size,
+                    "every frame ahead of the jump survives, and nothing from beyond it is replayed — " +
+                        "those frames are DUPLICATES, so stepping over the jump emits a record a second " +
+                        "time at an offset a consumer has already consumed",
+                )
+            },
+            {
+                assertEquals(
+                    frames.size,
+                    events.indexOfFirst { it !is Archived<*> },
+                    "the verdict is LAST — every event before it is a frame, and none follows it",
+                )
+            },
+            {
+                assertAll(
+                    { assertEquals(verdict, byArrival.lastOrNull(), "a jump backwards is damage under EVERY scope") },
+                    { assertEquals(verdict, byDots.lastOrNull(), "including the one that selects by a frame's BODY") },
+                )
+            },
+        )
+    }
 
     // ── 7. durability() is honest about the promise this backend made ─────────
 
@@ -1342,6 +1639,25 @@ abstract class BoltConformanceSuite {
 
         /** More than one, so "stopped at the damage" is distinguishable from "stopped at the start". */
         const val INTACT_FRAMES = 3
+
+        /**
+         * The hole the three original discontinuity properties drive: one segment, gone.
+         *
+         * Named rather than written as a `1` at each call site so the *narrow* case reads as a
+         * deliberate choice next to [SEVERAL_LOST_SEGMENTS], which is the whole subject of #2331 —
+         * a bare literal is what let three properties agree on one width without anyone noticing.
+         */
+        const val ONE_LOST_SEGMENT = 1
+
+        /**
+         * More than one, so "recovered across the gap" is distinguishable from "recovered across a
+         * gap of the one width every other property drives".
+         *
+         * Two rather than a larger number because the step from one to two is the whole of the
+         * claim: a check that cannot see how wide a gap is behaves identically at two and at twenty,
+         * and every extra segment costs a fixture an append and a file on three backends.
+         */
+        const val SEVERAL_LOST_SEGMENTS = 2
         val STEP = 10.seconds
     }
 }
@@ -1388,24 +1704,49 @@ abstract class BoltConformanceSuite {
  * The last row is the point of the shape, and the three above it are why it is not enough to say so:
  * the pair can still be wrong, and every way of being wrong lands on an assertion.
  *
+ * ### And why the lost frames are a LIST
+ *
+ * A hole is a hole: through [Bolt] it is a start offset, an end offset, and nothing else. Whether the
+ * missing bytes were one segment or four is a *backend-private* fact, so no assertion in this suite
+ * can read it back — which is precisely the shape of vacuity #2331 names, because the fixture is then
+ * free to lose one segment however many the suite asked for and stay green.
+ *
+ * So the width comes back as evidence rather than as a claim: one [AppendResult.Written] per
+ * destroyed segment, checked here to be a *contiguous run* ending exactly where the survivor begins,
+ * and counted by [lostFrameCount] against what
+ * [BoltConformanceSuite.newDiscontinuousBolt] was asked for. What that leaves to the subclass — and it
+ * is the residual, said plainly — is the step from *frame* to *segment*: only a fixture holding the
+ * backend's own notion of a segment can assert that each of these frames occupied one, and all three
+ * in-tree fixtures do it with a `check` beside their segment budget. A backend packing two frames per
+ * segment could satisfy this list with one lost segment; nothing at this level sees it.
+ *
  * Top-level, and mirroring `DurabilityFixture`, so a fixture helper outside a suite subclass can
  * build one.
  *
  * @property bolt the discontinuous archive.
- * @param lostFrame the append whose segment was then destroyed — the **evidence** for where the hole
- *   ends, and a different append's reported offset than the one handed back.
+ * @param lostFrames the appends whose segments were then destroyed, oldest first — the **evidence**
+ *   for both edges of the hole and for how wide it is, and different appends' reported offsets than
+ *   the one handed back.
  * @param firstSurvivor the first append whose frame is still readable behind the hole.
  */
 class DiscontinuousFixture(
     val bolt: Bolt<RgaOp<String>>,
-    lostFrame: AppendResult.Written,
+    lostFrames: List<AppendResult.Written>,
     firstSurvivor: AppendResult.Written,
 ) {
     init {
-        check(firstSurvivor.offset == lostFrame.endOffset) {
-            "the first frame behind the hole must start exactly where the LOST frame ended, or this " +
-                "fixture is naming an offset inside the missing region rather than its far edge — " +
-                "${firstSurvivor.offset} against ${lostFrame.endOffset}"
+        check(lostFrames.isNotEmpty()) { "an archive that lost nothing has no hole in it" }
+        lostFrames.zipWithNext { earlier, later ->
+            check(later.offset == earlier.endOffset) {
+                "the destroyed frames must be a CONTIGUOUS run, or what is missing is several holes " +
+                    "with surviving records between them rather than one wider one — ${later.offset} " +
+                    "does not follow ${earlier.endOffset}"
+            }
+        }
+        check(firstSurvivor.offset == lostFrames.last().endOffset) {
+            "the first frame behind the hole must start exactly where the LAST lost frame ended, or " +
+                "this fixture is naming an offset inside the missing region rather than its far edge " +
+                "— ${firstSurvivor.offset} against ${lostFrames.last().endOffset}"
         }
     }
 
@@ -1415,6 +1756,79 @@ class DiscontinuousFixture(
      * discontinuous.
      */
     val beyondTheHole: Long = firstSurvivor.offset
+
+    /**
+     * Where the missing region **starts**: the offset the first destroyed frame was written at, and
+     * so the offset a correct replay stops at.
+     *
+     * The suite can find this for itself — it is the last surviving frame's `endOffset` — which is
+     * what makes it worth carrying: asserting the two agree ties the fixture's account of what it
+     * destroyed to the archive it actually handed back.
+     */
+    val holeStartsAt: Long = lostFrames.first().offset
+
+    /** How many whole frames the hole swallowed. One per destroyed segment; see the class KDoc. */
+    val lostFrameCount: Int = lostFrames.size
+}
+
+/**
+ * An archive whose segments **double back**: one segment's header claims an absolute `baseOffset`
+ * *below* where its predecessor's frames ended, rather than above it — the fixture
+ * [BoltConformanceSuite.newBackwardsJumpBolt] hands back.
+ *
+ * ### Why this is not the discontinuous fixture with a different number in it
+ *
+ * [DiscontinuousFixture] can widen a hole arbitrarily and can never invert one. Every archive it
+ * builds has each header claiming an offset *above* where the previous segment stopped, so a backend
+ * whose continuity check is spelled `header.baseOffset > resumeOffset` — a perfectly natural way to
+ * write "this segment starts too far along" — passes every property in this suite and replays *this*
+ * archive as a [CleanTail]. What it then hands back is worse than a hole: the same records a second
+ * time, at offsets a consumer has already consumed and told the world it holds.
+ *
+ * ### Why it takes two appends and not the answer
+ *
+ * Same argument as its sibling one screen up, and the same trap avoided. As a pair of `Long`s the
+ * fixture could name any two numbers, including a *forward* gap — at which point this obligation
+ * silently becomes the existing hole property restated, on every backend, forever. Taking the two
+ * **appends** and checking them here makes a forward jump not a value this constructor can be handed:
+ * the frame the successor re-enters at must end strictly *before* the last frame ahead of the jump
+ * does. Strictly, and by a whole frame, so "backwards" is unmistakable rather than an off-by-one at a
+ * boundary — and so the suite has a *verifiable* handle on it, because a frame it already replayed
+ * must be sitting at [jumpsBackTo].
+ *
+ * **What this cannot check.** That [revisited] and [lastFrameBeforeTheJump] describe the archive
+ * actually handed back, rather than two appends the fixture liked the look of. The suite closes most
+ * of that from the other side — the verdict must stop at [stopsAt], and a frame it replayed must
+ * start at [jumpsBackTo] — so a slipped pair reds rather than passing quietly. See
+ * [BoltConformanceSuite.anArchiveWhoseSegmentsDoubleBackStopsAtTheJumpAndSaysSo].
+ *
+ * @property bolt the archive that doubles back.
+ * @param revisited the append the successor segment's header now claims to start at — a frame the
+ *   replay has **already emitted**, which is what makes the jump backwards rather than forward.
+ * @param lastFrameBeforeTheJump the last append still readable ahead of the jump.
+ */
+class BackwardsJumpFixture(
+    val bolt: Bolt<RgaOp<String>>,
+    revisited: AppendResult.Written,
+    lastFrameBeforeTheJump: AppendResult.Written,
+) {
+    init {
+        check(revisited.endOffset < lastFrameBeforeTheJump.endOffset) {
+            "the successor must re-enter the offset space BEHIND a whole frame this replay already " +
+                "handed out, or this fixture is describing a forward gap — which is the property one " +
+                "screen up, and would make this one a restatement of it — ${revisited.endOffset} " +
+                "against ${lastFrameBeforeTheJump.endOffset}"
+        }
+    }
+
+    /**
+     * The offset the successor segment's header claims to start at: **below** [stopsAt], and the
+     * start of a frame this replay has already emitted.
+     */
+    val jumpsBackTo: Long = revisited.offset
+
+    /** Where the readable history ends, and so the offset a correct replay's verdict reports. */
+    val stopsAt: Long = lastFrameBeforeTheJump.endOffset
 }
 
 /**

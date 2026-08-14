@@ -22,8 +22,14 @@ class InMemoryBoltConformanceTest : BoltConformanceSuite() {
     override suspend fun newTruncatedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         truncatedInMemoryBolt(clock, intactFrames, InMemoryBolt.DEFAULT_SEGMENT_FRAME_BYTES)
 
-    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): DiscontinuousFixture =
-        discontinuousInMemoryBolt(clock, intactFrames)
+    override suspend fun newDiscontinuousBolt(
+        clock: Clock,
+        intactFrames: Int,
+        lostSegments: Int,
+    ): DiscontinuousFixture = discontinuousInMemoryBolt(clock, intactFrames, lostSegments)
+
+    override suspend fun newBackwardsJumpBolt(clock: Clock, intactFrames: Int): BackwardsJumpFixture =
+        backwardsJumpInMemoryBolt(clock, intactFrames)
 
     override fun newBoltThatCannotFlush(clock: Clock): DurabilityFixture = inMemoryPromisedNothing(clock)
 }
@@ -48,8 +54,14 @@ class TinySegmentInMemoryBoltConformanceTest : BoltConformanceSuite() {
     override suspend fun newTruncatedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         truncatedInMemoryBolt(clock, intactFrames, segmentFrameBytes = 1L)
 
-    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): DiscontinuousFixture =
-        discontinuousInMemoryBolt(clock, intactFrames)
+    override suspend fun newDiscontinuousBolt(
+        clock: Clock,
+        intactFrames: Int,
+        lostSegments: Int,
+    ): DiscontinuousFixture = discontinuousInMemoryBolt(clock, intactFrames, lostSegments)
+
+    override suspend fun newBackwardsJumpBolt(clock: Clock, intactFrames: Int): BackwardsJumpFixture =
+        backwardsJumpInMemoryBolt(clock, intactFrames)
 
     override fun newBoltThatCannotFlush(clock: Clock): DurabilityFixture = inMemoryPromisedNothing(clock)
 }
@@ -128,8 +140,51 @@ private suspend fun truncatedInMemoryBolt(
 }
 
 /**
- * An in-memory archive of [intactFrames] ordinary frames, then a **lost segment**, then two healthy
- * frames behind the hole.
+ * An in-memory archive of [intactFrames] ordinary frames, then a **stale segment restored** over the
+ * one that should follow them, then two healthy frames behind the jump.
+ *
+ * The archive's oldest segment is copied — bytes and base offset together — over the segment just
+ * past the intact prefix, which is what a backup restoring one generation of a file over another
+ * leaves on a disk-backed backend. Nothing is corrupted and nothing is missing: every surviving
+ * segment reads perfectly, and the archive's offset space simply runs **backwards** at one boundary.
+ * `loseSegment` cannot express this, and that is the point — see
+ * `InMemoryBolt.restoreStaleSegment` and `BoltConformanceSuite.newBackwardsJumpBolt`.
+ *
+ * The stale copy is the **oldest** segment rather than the immediately preceding one, so the jump
+ * goes back past whole frames rather than to the boundary inside the last of them, and
+ * [BackwardsJumpFixture]'s `check` demands exactly that. The frames behind the jump are therefore
+ * duplicates of frames the replay has already emitted, which is the harm: a backend stepping over the
+ * jump hands a consumer the same record twice at an offset it has already consumed.
+ *
+ * A one-byte segment budget puts exactly one frame in each segment regardless of which subclass asks,
+ * so the frame at index `intactFrames` is the segment that gets overwritten and the frame at index 0
+ * is the one the successor's header now claims to start at. The default 1 MiB budget would put the
+ * whole archive in one segment, where there is no boundary to invert.
+ */
+private suspend fun backwardsJumpInMemoryBolt(clock: Clock, intactFrames: Int): BackwardsJumpFixture {
+    require(intactFrames >= 2) { "the jump must go back past a WHOLE frame, so it needs a frame to spare" }
+    val format: BoltArchiveFormat<RgaId, String, RgaOp<String>> = BoltArchiveFormat.rga(serializer<String>())
+    val bolt = InMemoryBolt(format, clock, segmentFrameBytes = 1L)
+    val alice = ReplicaId("alice")
+
+    var live = Rga.empty<String>()
+    val written = (0 until intactFrames + 1 + FRAMES_BEHIND_THE_HOLE).map { index ->
+        val (next, op) = live.insertAt(alice, live.size, "frame-$index")
+        live = next
+        assertIs<AppendResult.Written>(bolt.append(listOf(op)), "every fixture frame must be written")
+    }
+    bolt.restoreStaleSegment(over = intactFrames, from = 0)
+
+    return BackwardsJumpFixture(
+        bolt,
+        revisited = written[0],
+        lastFrameBeforeTheJump = written[intactFrames - 1],
+    )
+}
+
+/**
+ * An in-memory archive of [intactFrames] ordinary frames, then [lostSegments] **lost segments**, then
+ * two healthy frames behind the hole.
  *
  * Every frame here is written through [Bolt.append], so the archive is the real thing rather than
  * bytes this fixture believes are right — the only damage is that one whole segment is dropped out of
@@ -141,8 +196,14 @@ private suspend fun truncatedInMemoryBolt(
  *
  * A one-byte segment budget puts exactly one frame in each segment regardless of which subclass asks,
  * so "the segment after the intact prefix" is just the segment at index [intactFrames] — no offset
- * arithmetic to get wrong. The default 1 MiB budget would put the whole archive in one segment, where
- * there is no middle to lose.
+ * arithmetic to get wrong, and one lost frame per lost segment, which is what
+ * [DiscontinuousFixture]'s count is obliged to mean. The default 1 MiB budget would put the whole
+ * archive in one segment, where there is no middle to lose.
+ *
+ * [lostSegments] consecutive segments are removed at that same index — the list closes up behind each
+ * removal, so the one after the prefix is always the next to go — leaving **one** wider hole rather
+ * than several narrow ones. Which is the distinction [DiscontinuousFixture]'s contiguity `check`
+ * enforces from the other side.
  *
  * The suite's obligation asks a fixture to end its pre-hole segment the way this backend's ordinary
  * segments end, **pre-allocated tail included**. This backend has no such tail to reproduce: nothing
@@ -150,31 +211,36 @@ private suspend fun truncatedInMemoryBolt(
  * bounds every parse. So the zero-tail configuration the mmap fixtures both drive does not exist
  * here, and one budget covers this backend completely.
  *
- * `beyondTheHole` is the offset the **first frame behind the hole** was written at, taken from that
- * append's own [AppendResult.Written] rather than computed — the hole swallows one whole segment, so
- * the frame at index `intactFrames + 1` is the first survivor and its `offset` is where a consumer
- * that had already read past the lost segment resumes from. Losing the segment moves nothing: the
- * offsets of the frames behind it are untouched, which is precisely what makes the archive
- * discontinuous rather than short.
+ * Both edges of the hole are handed back as the **appends themselves** rather than as offsets this
+ * fixture computed: the destroyed frames are the run at `[intactFrames, intactFrames + lostSegments)`
+ * and the first survivor is the one after it. Losing a segment moves nothing — the offsets of the
+ * frames behind it are untouched, which is precisely what makes the archive discontinuous rather than
+ * short — so those appends' own reported offsets are still where those frames sit, and where a
+ * consumer that had already read past them resumes from.
  */
-private suspend fun discontinuousInMemoryBolt(clock: Clock, intactFrames: Int): DiscontinuousFixture {
+private suspend fun discontinuousInMemoryBolt(
+    clock: Clock,
+    intactFrames: Int,
+    lostSegments: Int,
+): DiscontinuousFixture {
     require(intactFrames >= 1) { "the fixture stops AFTER a frame, so it needs at least one" }
+    require(lostSegments >= 1) { "an archive that lost nothing has no hole in it" }
     val format: BoltArchiveFormat<RgaId, String, RgaOp<String>> = BoltArchiveFormat.rga(serializer<String>())
     val bolt = InMemoryBolt(format, clock, segmentFrameBytes = 1L)
     val alice = ReplicaId("alice")
 
     var live = Rga.empty<String>()
-    val written = (0 until intactFrames + 1 + FRAMES_BEHIND_THE_HOLE).map { index ->
+    val written = (0 until intactFrames + lostSegments + FRAMES_BEHIND_THE_HOLE).map { index ->
         val (next, op) = live.insertAt(alice, live.size, "frame-$index")
         live = next
         assertIs<AppendResult.Written>(bolt.append(listOf(op)), "every fixture frame must be written")
     }
-    bolt.loseSegment(intactFrames)
+    repeat(lostSegments) { bolt.loseSegment(intactFrames) }
 
     return DiscontinuousFixture(
         bolt,
-        lostFrame = written[intactFrames],
-        firstSurvivor = written[intactFrames + 1],
+        lostFrames = written.subList(intactFrames, intactFrames + lostSegments),
+        firstSurvivor = written[intactFrames + lostSegments],
     )
 }
 
