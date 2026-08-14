@@ -669,6 +669,87 @@ class EntitlementLedgerValidateTest {
     }
 
     /**
+     * The report is about *transfer* credit going unread, so a party who nets to nothing at the dead
+     * key has lost nothing by it dying — however much the dead generation still strands in its
+     * **counters**. Here the hand-offs cancel (`alice → bob 40`, `bob → alice 40`) while 60 really is
+     * stranded on the retired strand, and the only voice is the one that owns that: the raced retire.
+     *
+     * Without the "this party's transfer net is non-zero" conjunct the counter residue alone would
+     * raise an orphan report, mis-attributing a lifecycle fault to the hand-offs.
+     */
+    @Test
+    fun rowsThatNetToNothingAreNotOrphanedByAStrandedCounterResidue() {
+        val cancelling = EntitlementLedger.of(
+            records = mapOf(
+                e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE)),
+                e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.ONE)),
+                e3 to setOf(AttachmentRecord(e3, g1, g2, Weight.ONE)),
+            ),
+            minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+            issued = mapOf(e1 to GCounter.of(alice to 100L), e2 to GCounter.of(alice to 60L)),
+            transfers = mapOf(
+                PathKey.of(e2) to mapOf(
+                    alice to GCounter.of(bob to 40L),
+                    bob to GCounter.of(alice to 40L),
+                ),
+            ),
+            lifecycle = mapOf(e1 to Lifecycle.ACTIVE, e2 to Lifecycle.RETIRED, e3 to Lifecycle.ACTIVE),
+        )
+        assertAll(
+            { assertEquals(60L, cancelling.edge(e2)!!.outstanding, "rig: 60 really is stranded on the dead strand") },
+            {
+                assertEquals(
+                    listOf(LedgerConflict.ClosureViolation(e2)),
+                    cancelling.validate(),
+                    "the raced retire is the only fault here — the cancelling rows lost nobody anything",
+                )
+            },
+        )
+    }
+
+    /**
+     * A key whose generation has a **divergent** record is deliberately left to
+     * [LedgerConflict.RecordDivergence]: the topology itself is in dispute, so which group would
+     * have read these rows is not a question this state can answer, and naming an orphan on top of
+     * it would be speculation dressed as a second finding.
+     *
+     * Pinned because the deferral is otherwise invisible — the rows here really are unreachable, and
+     * a rule that resolved the fork by picking a record would report them.
+     */
+    @Test
+    fun aKeyWhoseGenerationHasADivergentRecordDefersToTheDivergenceReport() {
+        val forked = EntitlementLedger.of(
+            records = mapOf(
+                e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE)),
+                e2 to setOf(
+                    AttachmentRecord(e2, g1, g2, Weight.ONE),
+                    AttachmentRecord(e2, g1, g2, Weight.of(3, 1)),
+                ),
+                e3 to setOf(AttachmentRecord(e3, g1, g2, Weight.ONE)),
+            ),
+            minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+            issued = mapOf(e1 to GCounter.of(alice to 100L), e2 to GCounter.of(alice to 60L)),
+            transfers = mapOf(PathKey.of(e2) to mapOf(alice to GCounter.of(bob to 40L))),
+            lifecycle = mapOf(e1 to Lifecycle.ACTIVE, e2 to Lifecycle.RETIRED, e3 to Lifecycle.ACTIVE),
+        )
+        assertAll(
+            { assertEquals(listOf(e1, e3), forked.lineageOf(g2), "rig: the fork is off the live lineage, not on it") },
+            {
+                assertTrue(
+                    LedgerConflict.RecordDivergence(e2) in forked.validate(),
+                    "rig: the divergence itself is reported",
+                )
+            },
+            {
+                assertTrue(
+                    forked.validate().none { it is LedgerConflict.OrphanedTransferPath },
+                    "a disputed topology gets one voice, not two: ${forked.validate()}",
+                )
+            },
+        )
+    }
+
+    /**
      * The report's canonical order (the [Comparable] contract every peer folds): the new kind takes
      * the last rank, and two orphans sort by path. Asserted directly on the sealed subtypes so the
      * `compareTo` arm is pinned without needing a state that reaches every kind at once.
