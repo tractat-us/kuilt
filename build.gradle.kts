@@ -999,21 +999,19 @@ gradle.projectsEvaluated {
             if (target.platformType == org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType.common) return@forEach
             val main = target.compilations.findByName("main") ?: return@forEach
             // DECLARED source only — anything under the module's `build/` is dropped (#2374).
-            // A source-set closure can contain GENERATED directories: `kuilt.warp-ops` adds
-            // `build/generated/ksp/metadata/commonMain/kotlin` to commonMain. Scanning those was
-            // wrong in both directions. It made the verdict depend on whether a generator had run,
-            // which none of this task's declared inputs express — the same input dishonesty the
-            // per-target properties below exist to prevent, one level down; and because
-            // `SourceDirectorySet.srcDirs` is a `Set<File>`, which has nowhere to carry a producer,
-            // the tree could not infer the edge a compile task infers, so Gradle 9 failed a
-            // module-scoped `:kuilt-warp-test:build` outright on an implicit dependency on
-            // `kspCommonMainKotlinMetadata`. Both go away by measuring what the module DECLARES,
-            // which is also what the question means: a target whose only Kotlin is emitted by a
-            // processor reading hand-written commonMain has that hand-written source too. The
-            // narrow case this deliberately fails loudly on is a target with generated source and
-            // no declared source at all — no module here is that, and one that became it should
-            // argue for itself rather than be waved through. Same principle as
-            // `forbidUnlintedModule`, which scans `src/` for the same reason.
+            // `kuilt.warp-ops` puts `build/generated/ksp/metadata/commonMain/kotlin` in commonMain,
+            // and scanning it cost two things: Gradle 9 failed a module-scoped
+            // `:kuilt-warp-test:build` on an implicit dependency on `kspCommonMainKotlinMetadata`
+            // (`srcDirs` is a `Set<File>` — nowhere to carry a producer), and, measured rather than
+            // theorised, a genuinely source-less target went GREEN as soon as one file sat under
+            // `build/`. What the filter costs, stated as a cost: a target whose only Kotlin is
+            // generated now reads as source-less — a FALSE POSITIVE, since its compilation would
+            // produce a klib and publish fine. Acceptable today because no target here is in that
+            // position (the filtered probe going green across every declared target is the proof)
+            // and it is unreachable for `kuilt.warp-ops`, whose KSP run generates from `@WarpOp`
+            // declarations in hand-written `commonMain`. A judgement call — scanning generated dirs
+            // and adding a `dependsOn` on the generator has no false positive, but puts the verdict
+            // back at the mercy of whether the generator ran, the dishonesty #2374 exists to end.
             val buildRoot = sub.layout.buildDirectory.get().asFile.toPath()
             val srcDirs = main.allKotlinSourceSets.flatMap { it.kotlin.srcDirs }
                 .filterNot { it.toPath().startsWith(buildRoot) }
