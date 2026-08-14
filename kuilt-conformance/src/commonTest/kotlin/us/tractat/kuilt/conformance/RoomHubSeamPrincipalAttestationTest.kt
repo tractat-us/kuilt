@@ -41,18 +41,33 @@ class RoomHubSeamPrincipalAttestationTest : PrincipalAttestationConformanceSuite
         private val room: Seam,
     ) : AttestationHarness {
 
+        override val seam: Seam get() = room
+
         override val roster: PrincipalRoster get() = room as PrincipalRoster
 
         /** Client seams, one per admitted peer — kept so [drop] can tear the link. */
         private val clientByPeer = mutableMapOf<PeerId, Seam>()
         private var seed = 200
 
-        override suspend fun admit(peer: PeerId, principal: Principal?) {
+        override suspend fun admit(peer: PeerId, principal: Principal?): Unit =
+            connect(peer, verified = principal, firstFrame = byteArrayOf())
+
+        /**
+         * The joiner's channel for asserting an identity is the very frame that registers it into
+         * the room — the hop where [us.tractat.kuilt.core.MuxServerLoom] pairs a connection's
+         * payload with the principal it read off that connection. Sending `claimed` there is what
+         * makes "the hub believed the client's announcement instead of the host's stamp" a
+         * *reachable* state for this fabric, rather than one the suite has to take on trust.
+         */
+        override suspend fun admitClaiming(peer: PeerId, verified: Principal?, claimed: Principal): Unit =
+            connect(peer, verified, firstFrame = claimed.value.encodeToByteArray())
+
+        private suspend fun connect(peer: PeerId, verified: Principal?, firstFrame: ByteArray) {
             if (peer in room.peers.value) drop(peer) // a repeat admit is a reconnect: replace the link
-            val client = fabric.clientSeam(peer, Random((seed++).toLong()), principal)
+            val client = fabric.clientSeam(peer, Random((seed++).toLong()), verified)
             clientByPeer[peer] = client
             // The first frame on the room's channel is what registers the connection into the room.
-            NamedMux(client, scope).channel(ROOM).broadcast(byteArrayOf())
+            NamedMux(client, scope).channel(ROOM).broadcast(firstFrame)
             room.peers.first { peer in it }
         }
 
