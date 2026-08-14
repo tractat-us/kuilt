@@ -54,10 +54,10 @@ get re-litigated from scratch.
   on desktop JVM — so the `expect`/`actual` spread is the widest of any fabric, for
   the worst transport.
 - **The one genuine gap it would close** is *cross-ecosystem* proximity:
-  `kuilt-nw` is Apple-only and Nearby is Android-only, and they don't interoperate. A raw
-  BLE/L2CAP fabric is the only way an iPhone and an Android phone connect with no
-  AP, router, or internet — but it's a narrow niche, viable only for small,
-  low-rate payloads given BLE's throughput.
+  `kuilt-nw` is Apple-only and Nearby is Android-only, and they don't
+  interoperate. A raw BLE/L2CAP fabric is the only way an iPhone and an Android
+  phone connect with no AP, router, or internet — but it's a narrow niche,
+  viable only for small, low-rate payloads given BLE's throughput.
 
 This costs nothing to defer: fabrics are pluggable, so a `:kuilt-ble` module can
 be added later as a normal fabric that passes `SeamConformanceSuite` via
