@@ -139,6 +139,12 @@ public abstract class CommutativeSchemeConformanceSuite {
      * exponent only when `gcd(e, p-1) != 1`, which admits `e = 1` — the identity. That an
      * astronomically-improbable draw is needed to hit it is a property of the CSPRNG, not of the
      * check, and a scheme's key generator is exactly the kind of code a later optimisation edits.
+     *
+     * **Mutation receipt.** Making `SraScheme.encrypt`/`strip` return their argument reds the first
+     * assertion here and leaves the second green — the round-trip cannot see an identity scheme at
+     * all. But so does making only *some* key the identity, and this property draws one key: with
+     * `generateKey` degenerate on an instance's **second** draw it stays **green**, which is what
+     * [generatedKeyPairsAreUsable] is for.
      */
     @Test
     public fun encryptHidesThePlaintextAndStripRecoversIt() {
@@ -264,6 +270,13 @@ public abstract class CommutativeSchemeConformanceSuite {
      * "nobody can read a card until the last player releases it" means. It is free — the
      * intermediates are computed anyway — and it is the assertion that reds if some later key
      * turns out to cancel an earlier one.
+     *
+     * **Mutation receipts.** An identity `SraScheme.encrypt`/`strip` reds it at intermediate 0; a
+     * `generateKey` that hands back the identity on an instance's **second** draw reds it at
+     * intermediate 4, with recovery green either way — the recovery assertion is the anti-regression
+     * here, not the discriminator. Deleting the `underCover` captures reds the non-empty guard in
+     * [assertStayedCovered] on all three bindings *(synthetic — only a body edit reaches it)*, which
+     * is what stops a loop that ran zero times from satisfying "none of them was readable".
      */
     @Test
     public fun multiLayerDealRecoversPlaintextRegardlessOfStripOrder() {
@@ -402,6 +415,15 @@ public abstract class CommutativeSchemeConformanceSuite {
      * assertion narrows the window rather than closing it. Raising the count is the wrong lever —
      * it multiplies a heavyweight scheme's key generation for a linear gain against an exponential
      * problem.
+     *
+     * **Mutation receipt — the measurement of the hole this suite had.** Give `SraScheme.generateKey`
+     * the identity exponent `e = d = 1` on an instance's **second** draw and exactly two properties
+     * red: the second assertion here, and the "stayed covered" arm of
+     * [multiLayerDealRecoversPlaintextRegardlessOfStripOrder]. Both are new in #2313. Everything
+     * that existed before stays green — including the first assertion here (the identity key
+     * round-trips perfectly) and [distinctKeysProduceDistinctCiphertexts], which compares two
+     * *keys* rather than a key against the plaintext, so one degenerate key beside one healthy key
+     * still yields differing ciphertexts.
      */
     @Test
     public fun generatedKeyPairsAreUsable() {
@@ -490,15 +512,21 @@ public abstract class CommutativeSchemeConformanceSuite {
      * implementation. (`RecomputingXorScheme`, the binding that exercises the rejecting arm, is
      * exactly such a scheme.)
      *
-     * **Mutation receipts**, measured on this branch — each applied alone, verdict read out of the
-     * results XML, reverted, and the revert grep-verified:
+     * **Mutation receipts**, measured on this branch (JVM, `--rerun-tasks`, every task `EXECUTED`) —
+     * each applied alone, verdict read out of the results XML, reverted, revert grep-verified.
+     * Bindings: **S** = `SraScheme`, **X** = [XorKeystreamScheme], **R** = `RecomputingXorScheme`.
      *
      * | Mutation | Reds |
      * |---|---|
-     * | `RecomputingXorScheme.verifyEncrypt`/`verifyStrip` → `return true` | this property, on that binding **only** — every other property in the suite stays green on all three bindings |
-     * | `SraScheme.encrypt` returns its `plaintext` argument | [encryptHidesThePlaintextAndStripRecoversIt] and both multi-layer properties — and **not** commutativity, key distinctness, cross-peer commutativity or `verifyAcceptsHonestTransitions` |
-     * | Fixture: `RecomputingXorSchemeConformanceTest` declares `AcceptsEverything` | this property, on that binding — the declaration cannot drift silently in either direction |
-     * | Body: replace the impostor's key with the honest one throughout | the preconditions, not the arm |
+     * | `RecomputingXorScheme.verify*` → `return true` | **this property, on R only** — all six forgeries in one aggregated failure. Nothing else in the suite reds, on any binding |
+     * | Fixture: R declares `AcceptsEverything` | this property, on R only — the declaration is pinned in *both* directions |
+     * | Body: `impostor = honest` in [forgeriesOf] | **three preconditions, on all three bindings — and the arm never runs** |
+     * | `SraScheme.encrypt`/`strip` return their argument | the preconditions again (an identity scheme has no forgeries to offer), on S |
+     *
+     * The third row is the load-bearing one. Collapsing the impostor onto the honest key turns all
+     * six "forgeries" into honest transitions, which the [ProofStrength.AcceptsEverything] arm
+     * accepts happily — on **X** the preconditions are the *only* thing that fires, and without them
+     * this property would be green while asserting the opposite of what it reads as.
      */
     @Test
     public fun verifyAnswersForgedTransitionsAsDeclared() {
