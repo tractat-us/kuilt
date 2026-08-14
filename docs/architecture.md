@@ -14,7 +14,8 @@ asymmetric handshake baked into the interface. A fabric implements two types
 
 A 2-peer WebSocket connection — historically modelled as client+server — is just
 the **degenerate `peers.size == 2` case** of the symmetric model. This is why
-the WebSocket fabric and a future N-peer Multipeer mesh can share one contract.
+the WebSocket fabric and the N-peer Apple peer-to-peer mesh (`kuilt-nw`) share
+one contract.
 
 ## Near and Far
 
