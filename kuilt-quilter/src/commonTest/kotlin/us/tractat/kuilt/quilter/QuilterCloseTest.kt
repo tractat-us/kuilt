@@ -7,7 +7,6 @@ package us.tractat.kuilt.quilter
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.conformance.CloseableLifecycleConformanceSuite
@@ -103,21 +102,12 @@ class QuilterCloseTest : CloseableLifecycleConformanceSuite() {
     // forgot to close the replicator. Child-Job ownership (ScopedCloseable) makes the
     // owned coroutines structural children of the parent scope's Job, so cancelling the
     // parent — exactly what `runTest` does at teardown — stops them WITHOUT any explicit
-    // close(). This proves the mechanism deterministically (no reliance on runTest cleanup
-    // timing, so it cannot itself hang), and confirms that relying on scope cancellation
-    // for cleanup is now a legitimate, leak-free pattern.
-
-    @Test
-    fun parentScopeCancellationStopsJobsWithoutClose() = runTest(UnconfinedTestDispatcher()) {
-        val parent = CoroutineScope(coroutineContext + Job())
-        val replicator = makeReplicator(parent)
-        assertTrue(replicator.backgroundJobsForTest.all { it.isActive }, "jobs active before cancel")
-
-        parent.cancel() // caller's scope dies; no one called close()
-
-        assertTrue(
-            replicator.backgroundJobsForTest.all { !it.isActive },
-            "child-Job ownership must stop owned jobs when the parent scope is cancelled (the #329 fix)",
-        )
-    }
+    // close(), which is what makes relying on scope cancellation for cleanup a legitimate,
+    // leak-free pattern.
+    //
+    // The test that pins it is now CloseableLifecycleConformanceSuite's
+    // `parentScopeCancellationStopsBackgroundJobs` (#2308), inherited by this class and
+    // running against exactly this binding's `backgroundJobsForTest`. It was hoisted there
+    // because it is a property of every ScopedCloseable, not of Quilter — a coordinator
+    // that owns a parentless job passes every close()-driven property in that suite.
 }
