@@ -269,6 +269,17 @@ list a false conflict that self-heals on anti-entropy. The checks:
   transient negative on an incomplete state is **not** a conflict.
 - **`RecordDivergence(id)`** — two distinct immutable records under one `AttachmentId`.
 - **`DualActiveInbound(group)`** / **`ClosureViolation(e)`** — H2 (lifecycle); shipped.
+- **`OrphanedTransferPath(path)`** — transfer rows the topology moved out from under (#2366):
+  `transfers` is keyed by `PathKey.of(edge)` — the *generation's* id — so replacing a group's
+  inbound generation carries the counter families across and leaves the hand-offs behind, where
+  `holdings` no longer reads them. The donor silently recovers what it gave away. **No other check
+  can see it:** `Σ_r transferNet(k, r) = 0` on every key identically, so abandoning a key is
+  sum-preserving and conservation is *structurally* blind, and the recipient lands on `0` rather
+  than below it, so `PersistentNegativeHoldings` stays silent. Fires only when all three hold — the
+  key is no longer read, a move did not carry its rows to the group's live key, and some party still
+  has a non-zero balance stranded on the dead generation. Deliberately silent while the group has no
+  live inbound at all (the honest-reshape window) and where the generation's record is divergent
+  (`RecordDivergence` owns that state).
 - **`LineageCycle(group)`** — the live inbound edges loop back instead of reaching a root.
   Reported once per loop member, never for a group merely below the loop. Records are
   grow-only, so a loop seen on any state is real; it can still be *transient* in the honest

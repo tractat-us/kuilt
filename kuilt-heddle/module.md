@@ -91,8 +91,10 @@ whole ledger inherits the three merge laws for free.
 - `LedgerConflict` — the surfaced integrity/topology faults, including
   `DualActiveInbound` (a child with two active inbound generations),
   `ClosureViolation` (entitlement crossing a retired generation), `LineageCycle`
-  (inbound edges that loop instead of reaching a root) and `ConservationViolation`
-  (the global backstop: more service charged than supply ever minted).
+  (inbound edges that loop instead of reaching a root), `OrphanedTransferPath`
+  (a peer-to-peer hand-off the topology moved out from under, which conservation
+  is structurally blind to) and `ConservationViolation` (the global backstop:
+  more service charged than supply ever minted).
 - `EdgeSummary` — the parent-facing projection of one edge (`issued`/`returned`/
   `spent` and the derived `outstanding`).
 - `EntitlementLedger` — the replicated `Quilted` state itself.
