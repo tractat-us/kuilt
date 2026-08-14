@@ -93,6 +93,30 @@ import kotlin.test.assertTrue
  * host's verification was any good: `verified` is taken on trust, as the fabric's accept handler
  * takes `call.principal()` on trust.
  *
+ * ## What is deliberately NOT here: dispossession (#2357)
+ *
+ * "A live, host-verified link cannot be dispossessed of its peer identity by a second link the host
+ * verified as nothing" is a real obligation, and it is **not** in this suite, because the two
+ * reference seams honestly differ on it and enshrining an arm for the one that fails would make the
+ * defect conformant.
+ *
+ * The difference is *how many live links one peer id can have*. A mux hub holds two at once — the
+ * claimant registers alongside the peer, both connections stay open — so it can, and now must,
+ * refuse the claimant (`RoomHubSeamUnattestedClaimTest`). A mesh cannot: duplicate links to one id
+ * are collapsed by a canonical-nonce tiebreak and the loser is **closed**, so exactly one link
+ * survives and the roster, being derived from the live link set, describes it accurately either way.
+ * When a claimant wins there, the peer really is gone; reporting it unattested is correct, not an
+ * erasure. What the mesh cannot do is *refuse* the claimant on attestation grounds — the tiebreak is
+ * a pure function of the two nonces precisely so both ends derive the same survivor with no
+ * coordination, and a local veto would have each end keep a different link and close the one its
+ * peer kept. Its defence is deployment policy instead, and unlike [us.tractat.kuilt.core.RoomAuthorizer]
+ * it *can* express one: `LinkAdmission` receives the principal
+ * (`MeshAdmissionTest.bindingMismatchIsRejectedBeforeDedupLottery`).
+ *
+ * So the obligation lives with the seam that can meet it. A future hub seam that also holds
+ * concurrent links for one id should be held to `RoomHubSeamUnattestedClaimTest`'s shape; the day
+ * there are two such seams, that is the moment to lift it in here.
+ *
  * ## Mutation receipt (#2316)
  *
  * Baseline and the reverted control arm are 16/16 green (8 properties × 2 subclasses).
@@ -343,15 +367,25 @@ public abstract class PrincipalAttestationConformanceSuite {
     // ── reconnect refresh ─────────────────────────────────────────────────────
 
     /**
-     * A peer that reconnects with a new principal supersedes its prior roster entry.
+     * A peer that reconnects with a **new principal** supersedes its prior roster entry.
      *
-     * **This mandates a takeover, and the takeover is reachable by an impostor (#2357).** The
-     * harness cannot distinguish "alice reconnecting" from "someone else claiming alice's id" — the
-     * peer id is self-asserted — so requiring the second link to win obliges the hub to let an
-     * *unattested* link displace an *attested* one of the same id. That is a live behaviour of both
-     * reference seams, not a hypothetical, and #2357 carries the reproducer and the three candidate
-     * policies. This property is left as-is deliberately: changing it is a behaviour decision with
-     * consumer impact, not a test fix, and #2316 declined to smuggle one in under a test PR.
+     * **What this still mandates, after #2357: attested → attested supersession only.** Both
+     * principals here are non-null, so this property obliges the seam to let a link the host
+     * verified as `verified-alice-2` replace one it verified as `verified-alice-1`. Since the peer id
+     * is self-asserted, the harness cannot distinguish "alice reconnecting" from "someone else the
+     * host also verified, claiming alice's id", so that displacement stays reachable by an impostor
+     * holding *some* valid credential. Whether a seam should bind an id to an attestation is a
+     * behaviour decision with consumer impact and remains open — `RoomAuthorizer` cannot express it
+     * at all today, and `LinkAdmission` can express only a static binding (#2357).
+     *
+     * **What it never mandated: unattested displacement.** It used to carry a note reading it as
+     * *also* obliging a seam to let a link the host verified as **nothing** erase an attestation,
+     * because a second link always won. That was over-read: both principals here are non-null, so
+     * this property has never exercised the unattested case in either direction. What happens there
+     * is now settled per seam rather than by this property — the mux hub refuses the claimant
+     * outright (`RoomHubSeamUnattestedClaimTest`), the mesh lets its nonce tiebreak decide and
+     * reports the survivor honestly (`MeshAdmissionTest`). See "What is deliberately NOT here" above
+     * for why that asymmetry is not smoothed over with an arm in this suite.
      */
     @Test
     public fun rosterUpdatesPrincipalOnReconnect(): TestResult =

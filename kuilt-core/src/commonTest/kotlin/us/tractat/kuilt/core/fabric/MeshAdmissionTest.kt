@@ -218,6 +218,75 @@ class MeshAdmissionTest {
         )
     }
 
+    // ── #2357: the roster reports the SURVIVING link, and never inherits an attestation ──
+
+    /**
+     * **Security (#2357).** The roster never reports an attestation for a link the host verified as
+     * nothing. When an unattested duplicate wins the canonical-nonce tiebreak, it takes the peer id
+     * *and* the peer is reported **unattested** — the losing link is closed, so there is no verified
+     * connection left for the id and saying otherwise would be a lie.
+     *
+     * This is the mesh's honest answer to #2357, and it is deliberately **not** the mux hub's.
+     * A hub holds two live links for one id and can refuse the claimant, so it does
+     * (`RoomHubSeamUnattestedClaimTest`). A mesh collapses duplicates to one link, so its roster is
+     * derived from a single live connection and is accurate either way; what it *cannot* do is
+     * refuse on attestation grounds, because the tiebreak is a pure function of the two nonces
+     * precisely so both ends derive the same survivor with no coordination — a local veto would have
+     * each end keep a different link and close the one its peer kept, the half-open failure the
+     * nonce rule exists to prevent, in both directions at once.
+     *
+     * So a *displacement* by an unattested link is still reachable here, and the defence is
+     * deployment policy: unlike [us.tractat.kuilt.core.RoomAuthorizer], [LinkAdmission] receives the
+     * principal, and [bindingMismatchIsRejectedBeforeDedupLottery] proves the check runs before the
+     * lottery. What this test forbids is the *tempting* half-fix — having the survivor inherit the
+     * displaced link's principal. That would keep the entry alive at the cost of making the roster
+     * assert a verification for a connection the host verified as nothing: a fail-open, and strictly
+     * worse than reporting the downgrade truthfully.
+     *
+     * Written against the construction-time dedup path, which shares the rule with [Mesh.addLink].
+     */
+    @Test
+    fun unattestedDuplicateWinningDedupIsReportedUnattested() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val hub = PeerId("hub")
+        val victim = PeerId("victim")
+
+        val (attestedMine, attestedTheirs) = connectionPair()
+        val (plainMine, plainTheirs) = connectionPair()
+        val attestedHandshake = launch { handshakeRemote(attestedTheirs, victim, nonce = meshNonce(-1)) }
+        val plainHandshake = launch { handshakeRemote(plainTheirs, victim, nonce = ByteArray(MESH_NONCE_BYTES)) }
+
+        val mesh = hubMesh(
+            hub,
+            listOf(attestedMine.withPrincipal(Principal("victim")), plainMine),
+            dispatcher,
+            Random(0),
+        )
+        attestedHandshake.join()
+        plainHandshake.join()
+
+        // Rig: the unattested duplicate really did win the lottery — point-to-point traffic for the
+        // peer lands on IT, not on the attested link. Without this the roster assertion below would
+        // pass just as well on a run where the attested link survived and nothing was ever displaced.
+        val payload = byteArrayOf(5, 5, 5)
+        val received = async { plainTheirs.incoming.first() }
+        mesh.sendTo(victim, payload)
+        val plainGot = received.await()
+
+        assertAll(
+            { assertEquals(setOf(hub, victim), mesh.peers.value) },
+            { assertContentEquals(payload, plainGot, "rig: the unattested duplicate won dedup and owns the peer id") },
+            {
+                assertTrue(
+                    mesh.attestedPrincipals.value.isEmpty(),
+                    "the surviving link was verified as nothing, so the peer must be reported unattested — " +
+                        "inheriting the displaced link's principal would make the roster assert a " +
+                        "verification for a connection the host never verified (#2357)",
+                )
+            },
+        )
+    }
+
     // ── Self-connection guard (#1488) — a peer dialing its own endpoint ───────
 
     /**

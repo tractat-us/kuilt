@@ -593,7 +593,22 @@ private class MeshSeam(
         val existing = links[link.remoteId]
         when {
             existing == null -> { links[link.remoteId] = link; publishRosters(); null }
-            // Displacement keeps the peer set identical but may change the peer's attestation.
+            // Displacement keeps the peer set identical but may change the peer's attestation —
+            // including to NONE, and that is deliberate (#2357). The displaced conn is closed, so
+            // after this there is exactly one live link for the id; the roster is derived from that
+            // link and must describe IT. Having the survivor inherit the loser's principal was tried
+            // and reverted: it keeps the entry alive at the price of asserting a verification for a
+            // connection the host verified as nothing, while routing follows the survivor — a
+            // fail-open for any consumer that gates a send on the roster.
+            //
+            // Refusing the displacement instead is not available here. The tiebreak is a pure
+            // function of the two nonces precisely so both ends derive the same survivor with no
+            // coordination; a veto on local attestation would have each end keep a different link
+            // and close the one its peer kept, which is the half-open failure the nonce rule exists
+            // to prevent, in both directions at once. So an unattested link CAN still take an
+            // attested peer's id here, and the defence is deployment policy — unlike `RoomAuthorizer`,
+            // `LinkAdmission` receives the principal and runs BEFORE this lottery. `RoomHubSeam`
+            // refuses in code instead, because it holds both links live and can.
             link.linkNonce < existing.linkNonce -> { links[link.remoteId] = link; publishRosters(); existing.conn }
             else -> link.conn
         }

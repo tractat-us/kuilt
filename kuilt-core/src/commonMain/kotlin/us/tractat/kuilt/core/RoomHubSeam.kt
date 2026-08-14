@@ -53,6 +53,12 @@ internal fun interface OutboundSender {
  * stale entry; the stale connection's later [deregister] is a no-op because its [OutboundSender]
  * is no longer the registered one — the resumed membership survives the old connection's teardown.
  *
+ * The one replacement that is **refused** is an unattested link claiming an id whose live link the
+ * host verified (#2357) — a peer id is self-asserted and public, so without that guard anyone could
+ * take both the roster entry and the unicast route of a verified peer, presenting no credential.
+ * See [principals]. Attested → attested replacement is unaffected, and so is a deployment that
+ * attests nothing at all.
+ *
  * ## Thread safety
  *
  * All mutable state ([registered] and the [attestedPrincipals] roster) is guarded by a reentrant
@@ -83,9 +89,21 @@ public class RoomHubSeam(
 
     /**
      * Host-verified principals of currently-registered peers ([PrincipalRoster]). Maintained under
-     * [lock] in the SAME critical sections that mutate [registered]/[_peers], so it can never
-     * desync from the live membership. A peer admitted with no attestation (null principal) is
-     * absent from the map.
+     * [lock] in the SAME critical sections that mutate [registered]/[_peers], so its key set can
+     * never desync from the live membership: an entry is added only alongside a registration and
+     * removed only alongside a deregistration or [close].
+     *
+     * A peer that has **never** been admitted with an attestation is absent from the map — never a
+     * `null`-valued entry.
+     *
+     * **Presence here is what makes an id defended (#2357).** An entry means the host verified this
+     * peer on a link that is still live, and [deliver] will refuse to let a link it verified as
+     * nothing take that id over — so this map and [registered] cannot come to describe different
+     * connections for one peer. It follows that the two agree on more than their key sets: whatever
+     * [attestedPrincipals] reports for a peer is a verification of the connection [sendTo] reaches.
+     *
+     * Its keys are therefore always a **subset** of [registered]'s, maintained under [lock] in the
+     * same critical sections, and an entry outlives only the connection it describes.
      */
     private val principals = mutableMapOf<PeerId, Principal>()
 
@@ -128,9 +146,13 @@ public class RoomHubSeam(
      * connection so the room can fan broadcasts back to it.
      *
      * [principal] is the host-verified identity for this connection (the mesh admitted the link
-     * before the room ever sees a frame). It is recorded in [attestedPrincipals] at registration;
-     * a `null` principal leaves the peer unattested (absent from the roster). A reconnect (same
-     * [connPeerId], fresh [sender]) re-registers and refreshes the entry.
+     * before the room ever sees a frame). It is recorded in [attestedPrincipals] at registration; a
+     * `null` principal leaves a first-time peer unattested (absent from the roster).
+     *
+     * A reconnect (same [connPeerId], fresh [sender]) re-registers and an attested one refreshes the
+     * entry — **unless** the id is already attested and this link is not, which is refused outright
+     * and structurally, exactly as an authorizer rejection is (#2357; see [principals] and the guard
+     * in the registration block). A deployment that attests nothing never meets that guard.
      *
      * Suspends only outside the lock (authorizer + spool delivery). Thread-safe.
      */
@@ -155,9 +177,47 @@ public class RoomHubSeam(
                 // while `state` still reads non-terminal. Reading `state` here would admit exactly
                 // the registration this guard exists to reject.
                 if (closed) return@withLock false
+                // THE DISPOSSESSION GUARD (#2357). A link the host verified as NOTHING may not take
+                // over a peer id the host has already verified on a link that is still live.
+                //
+                // Everything an attacker needs is the peer id, and that is not a secret — it is the
+                // self-asserted preamble field every peer broadcasts. Dial a second connection
+                // alongside the victim's (hers is never torn), announce her id, send one frame, and
+                // before this guard you took both halves of her identity: `principals` dropped her
+                // entry and `registered` became your sender, so `sendTo(her, …)` delivered to you.
+                // `authorizer` cannot stop it — [RoomAuthorizer.authorize] never receives a
+                // [Principal], so the policy is not merely unimplemented but unexpressible.
+                //
+                // It has to be BOTH halves. Keeping the roster entry while still handing over
+                // `registered` is worse than either: the room would report `alice → verified-alice`
+                // while her bytes went elsewhere, so a consumer that gates a send on the roster —
+                // the security-conscious pattern — flips from accidentally fail-CLOSED to fail-OPEN.
+                //
+                // Keyed on [principals] alone: `principals`' keys are a subset of `registered`'s by
+                // construction (both are mutated only here, in [deregister], and in [close], and an
+                // entry is only ever added here alongside a registration), so an entry here IS a live
+                // attested link. A peer whose link dropped is out of both maps and rejoins freely,
+                // attested or not.
+                //
+                // Refusal is structural and silent — not registered, not in [_peers], frame dropped —
+                // byte-identical in shape to an authorizer denial. Silent because kuilt-core is
+                // logger-free by contract, and because the only caller of [deliver] is a
+                // per-connection read loop that a throw would tear down. The cost is that a
+                // deployment cannot see it is under attack; the nearest signal is that its
+                // [RoomAuthorizer] was invoked for a frame that never registered.
+                if (principal == null && connPeerId in principals) return@withLock false
                 registered[connPeerId] = sender
                 _peers.update { it + connPeerId }
-                if (principal == null) principals.remove(connPeerId) else principals[connPeerId] = principal
+                // With the guard above, a `null` principal here means this id has no attestation to
+                // erase, so the old `principals.remove(connPeerId)` could only ever be a no-op —
+                // writing it would suggest a forgetting that can no longer happen. Attested →
+                // attested supersession is deliberately untouched (and still mandated by
+                // `PrincipalAttestationConformanceSuite.rosterUpdatesPrincipalOnReconnect`).
+                //
+                // The republication stays UNCONDITIONAL: `deliver`'s contract is that the roster has
+                // decided about this peer by the time it returns, and a harness may be awaiting the
+                // emission itself rather than a change in the value.
+                if (principal != null) principals[connPeerId] = principal
                 _attestedPrincipals.value = principals.toMap()
                 true
             }
