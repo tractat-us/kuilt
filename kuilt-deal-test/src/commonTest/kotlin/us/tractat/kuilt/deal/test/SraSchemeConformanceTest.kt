@@ -10,4 +10,10 @@ class SraSchemeConformanceTest : CommutativeSchemeConformanceSuite() {
     // instances agree on the modulus by construction; the cross-peer properties are what turn that
     // into something the build checks rather than something the reader has to notice.
     override fun newPeerScheme() = SraScheme()
+
+    // SraScheme.verifyEncrypt/verifyStrip are `return true` — the stub CommutativeScheme permits
+    // until real proofs land, and which nothing in production consults. Declared rather than
+    // asserted away: this line is what the suite holds the scheme to, in both directions, so the
+    // day SraScheme grows a real verifier it reds here until someone updates it.
+    override fun proofStrength() = ProofStrength.AcceptsEverything
 }
