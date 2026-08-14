@@ -44,6 +44,97 @@ public class RetirementReAssertion<S : Quilted<S>>(
 )
 
 /**
+ * The least number of pairwise-distinct [QuiltedConformanceSuite.samples] the four laws need before
+ * any of them is a claim about the type rather than about one value.
+ *
+ * **Three, not two, because associativity is the law that pays for the third.** A two-value list
+ * cannot spell an ordered triple of three *different* operands, and that triple is the whole content
+ * of `(a ⊔ b) ⊔ c == a ⊔ (b ⊔ c)`: with only `a` and `b` available, every triple repeats an operand,
+ * and a bracketing that drops a contribution as soon as a third one arrives between the brackets is
+ * unreachable. Three-different-operands is the shape
+ * [QuiltedConformanceSuite.samplesReAssertAfterRetirement] exists to insist on, and its KDoc carries
+ * the measurement of what a list missing it costs.
+ *
+ * **Three is a floor, not a target.** Clearing it says the laws compared something; it does not say
+ * they compared anything interesting, and every live binding returns more. Read
+ * [QuiltedConformanceSuite.samplesMeetTheEvidenceFloor] for the list of what clearing it does not
+ * buy.
+ */
+public const val DISTINCT_SAMPLE_FLOOR: Int = 3
+
+/**
+ * What a binding's [QuiltedConformanceSuite.samples] list actually offered the laws, measured by
+ * [checkSampleEvidenceFloor].
+ *
+ * Printed on every run, green or red, for the reason the sibling suite prints its vacuity rates: a
+ * floor whose value nobody sees is a floor nobody notices drifting toward. The two counts are
+ * carried separately because they fail differently and want different fixes — `5 samples,
+ * 5 distinct` is healthy, `5 samples, 2 distinct` is a list carrying three redundant entries, and
+ * only the second number is the floor. A binding drifting from the first shape toward the second is
+ * visible here long before it becomes fatal.
+ *
+ * @param samples entries the binding returned.
+ * @param distinctSamples entries no earlier entry equalled, by `==`. See [checkSampleEvidenceFloor]
+ *   for why this is counted rather than taken from a `Set`, and for what `==` is the right relation.
+ */
+public class SampleEvidenceReport(
+    public val samples: Int,
+    public val distinctSamples: Int,
+) {
+    override fun toString(): String =
+        "  samples returned  $samples\n" +
+            "  distinct by `==`  $distinctSamples  floor ≥ $DISTINCT_SAMPLE_FLOOR"
+}
+
+/**
+ * Measure [samples] and refuse a list too thin for [QuiltedConformanceSuite]'s laws to have tested
+ * anything — fewer than [DISTINCT_SAMPLE_FLOOR] values distinct by `==`.
+ *
+ * Separate from the suite, and public, for the reason
+ * [us.tractat.kuilt.conformance.lattice.LatticeLawHarness.checkVacuityFloors] is: a floor that lives
+ * only inside a `@Test` method can be rigged only by subclassing the suite, and a subclass of a
+ * suite is itself a test class the framework discovers and runs — so the rig would fail the build it
+ * is trying to document. `SampleEvidenceFloorRigs` in this module's `commonTest` calls this
+ * function, and the suite's [QuiltedConformanceSuite.samplesMeetTheEvidenceFloor] is a delegation to
+ * it. A binding that composes rather than subclasses can check its own list the same way.
+ *
+ * **Distinct means distinct by `==`, and for this suite that is not a choice between two readings —
+ * it is the only relation available.** Every assertion in [QuiltedConformanceSuite] compares with
+ * `==`, so two samples that are `==` are literally interchangeable in every one of them and the
+ * second contributes no comparison the first did not already make. The obvious alternative,
+ * distinctness by *encoded bytes*, is not merely a stricter reading here — it is unavailable:
+ * [Quilted] carries no serializer, and this suite has no codec in it anywhere. It is also not the
+ * same measurement, which is worth being explicit about rather than assuming the two agree: the
+ * sibling's codec pass counts distinct states and distinct *encodings* as two separate numbers
+ * precisely because a type whose `equals` is coarser than its wire form is legitimate, and an
+ * injectivity law relating them was considered and rejected on those grounds (#2342). A binding
+ * whose samples differ only in bytes is, to the four laws here, one sample — so `==` is not a
+ * weaker floor than bytes would be, it is the floor that describes what these laws can see.
+ *
+ * **Counted in `O(n²)` against a growing list, deliberately not `samples.toSet().size`.** `hashCode`
+ * is not part of the [Quilted] contract — a type that overrides equality without it reads every
+ * entry as distinct through a `Set`, so the `toSet` spelling passes `listOf(x, x, x)` on exactly the
+ * types whose author was least careful, which is the decoration this floor exists to replace. The
+ * sibling harness counts its pool the same way and for the same reason.
+ *
+ * @throws IllegalStateException if fewer than [DISTINCT_SAMPLE_FLOOR] entries are pairwise distinct.
+ * @return what was measured, so a caller can print it on a green run too.
+ */
+public fun <S : Quilted<S>> checkSampleEvidenceFloor(samples: List<S>): SampleEvidenceReport {
+    val distinct = ArrayList<S>(samples.size)
+    for (sample in samples) if (distinct.none { it == sample }) distinct += sample
+    val report = SampleEvidenceReport(samples = samples.size, distinctSamples = distinct.size)
+    check(distinct.size >= DISTINCT_SAMPLE_FLOOR) {
+        "samples() is too thin for the laws to have tested anything: ${samples.size} sample(s), " +
+            "${distinct.size} distinct by `==`, floor $DISTINCT_SAMPLE_FLOOR. Every law in " +
+            "QuiltedConformanceSuite quantifies over samples(), so on this list each of them " +
+            "compared a value with itself and passed — on any type whatsoever. " +
+            "Distinct values were: $distinct"
+    }
+    return report
+}
+
+/**
  * Reusable contract test suite for [Quilted] (delta-state CRDT) implementations.
  *
  * Subclass and implement [samples] to bind any type under test; every [Test]
@@ -58,8 +149,11 @@ public class RetirementReAssertion<S : Quilted<S>>(
  * ```
  *
  * [samples] must return at least **three distinct** values for the associativity
- * and absorption checks to be meaningful; more variety is better. The type's
- * `equals` must reflect lattice equality — the laws are checked with `==`.
+ * and absorption checks to be meaningful; more variety is better. That floor is
+ * **checked** — by [samplesMeetTheEvidenceFloor], since #2312. It spent a long time documented and
+ * unenforced, which is the shape a precondition takes when every binding written so far happens to
+ * satisfy it. The type's `equals` must reflect lattice equality — the laws are checked with `==`,
+ * and so is the floor.
  *
  * A type that can **retire** additionally sets [retirementIsMeaningful] and names the
  * assert/retire/re-assert shape, plus the subject predicate that makes the retirement observable,
@@ -70,8 +164,57 @@ public class RetirementReAssertion<S : Quilted<S>>(
  */
 public abstract class QuiltedConformanceSuite<S : Quilted<S>> {
 
-    /** Representative, distinct sample values (≥ 3). */
+    /**
+     * Representative, distinct sample values — at least [DISTINCT_SAMPLE_FLOOR] of them, distinct by
+     * `==`, enforced by [samplesMeetTheEvidenceFloor].
+     */
     public abstract fun samples(): List<S>
+
+    /**
+     * The four laws below were handed enough evidence to have tested anything: **at least
+     * [DISTINCT_SAMPLE_FLOOR] pairwise-distinct samples**.
+     *
+     * **This is not a test of the type; it is a test of the evidence** — the same job
+     * [us.tractat.kuilt.conformance.lattice.LatticeLawSuite.generatorIsNotVacuous] does for the
+     * generated half of this pair, which is the half that had it. Every law here quantifies over
+     * [samples], so a binding returning `listOf(x)` — or `listOf(x, x, x)` — clears
+     * [pieceIsIdempotent], [pieceIsCommutative], [pieceIsAssociative] and [pieceIsLeastUpperBound]
+     * having compared one value with itself, on *any* type whatsoever, and the suite reports four
+     * green laws over a lattice it never entered. That was true of this suite from the day it was
+     * written: the floor was in [samples]' KDoc and nothing read it (#2312). Hand-picked lists are
+     * exactly the ones a tidy-up shrinks, and a shrunk list has no other tripwire.
+     *
+     * The measured counts print on every run, green or red, because a floor whose value nobody sees
+     * is a floor nobody notices drifting toward.
+     *
+     * **Distinct by `==`, and why that is the reading rather than distinct-by-bytes** — see
+     * [checkSampleEvidenceFloor], which also argues why the count is not `samples().toSet().size`.
+     *
+     * **What this cannot detect, and where each one is covered instead:**
+     * - **Three distinct but totally ordered samples.** A chain clears this floor, and a chain is a
+     *   thinner search than three mutually concurrent states — concurrency is where a join has to
+     *   decide something. It is not floored here because it cannot be: a genuinely
+     *   totally-ordered lattice has no concurrent pair to offer (`IntMax` is one, and its binding is
+     *   a chain by nature), so a concurrency floor needs a per-binding declaration to waive it. The
+     *   sibling has exactly that —
+     *   [us.tractat.kuilt.conformance.lattice.VacuityFloors.concurrentPairs], waived by
+     *   [us.tractat.kuilt.conformance.lattice.VacuityFloors.totalOrder] — and measures it as a
+     *   *rate* over a generated pool, which a hand-picked list of four is not.
+     * - **Samples that are distinct but dull** — three values that never exercise a branch of the
+     *   type's `piece`. Nothing here reads the type's decision tree; [retirementReAssertion] is the
+     *   one shape this suite insists on by name, and the sibling's op alphabet is where breadth is
+     *   measured.
+     * - **A type whose `equals` is broken outright** — one returning `false` for a value against
+     *   itself reads every entry as distinct and clears this floor. [pieceIsIdempotent] reds on such
+     *   a type first, so the pair is sound; this guard alone is not.
+     * - **A [samples] that returns a different list on each call.** The floor measures the call it
+     *   made; another law's call could still be thin. No binding does this and nothing stops one.
+     */
+    @Test
+    public open fun samplesMeetTheEvidenceFloor() {
+        val report = checkSampleEvidenceFloor(samples())
+        println("${this::class.simpleName} — sample evidence\n$report")
+    }
 
     /**
      * Whether this type can **retire** — stop showing something it once showed, while still only
