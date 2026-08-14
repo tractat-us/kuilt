@@ -623,7 +623,7 @@ public class HeddleNode internal constructor(
      */
     private fun seatUnseated(s: EntitlementLedger, parent: GroupId): Patch<EntitlementLedger>? {
         val edges = policyEdges(s, parent)
-        val unseated = edges.filterTo(HashSet()) { it.gauge == null }.mapTo(HashSet()) { it.record.id }
+        val unseated = edges.filter { it.gauge == null }.mapTo(HashSet()) { it.record.id }
         if (unseated.isEmpty()) return null
         val front = HeddlePolicy.front(edges, excluding = unseated) ?: Rational.ZERO
         var seated: EntitlementLedger? = null
