@@ -12,13 +12,14 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNotSame
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
  * Reusable contract test suite for [RaftStorage] implementations.
  *
- * Subclass and implement [newStorage] to bind any storage under test.
+ * Subclass and implement [newStorage] and [reopen] to bind any storage under test.
  * Every [Test] in this class encodes a required invariant of the [RaftStorage]
  * contract — a conforming implementation must pass all of them.
  *
@@ -28,11 +29,15 @@ import kotlin.test.assertTrue
  * ```kotlin
  * class SqliteRaftStorageConformanceTest : RaftStorageConformanceSuite() {
  *     override fun newStorage(): RaftStorage = SqliteRaftStorage(inMemoryDb())
+ *     override suspend fun reopen(storage: RaftStorage): RaftStorage =
+ *         SqliteRaftStorage((storage as SqliteRaftStorage).closeAndReopenTheSameFile())
  * }
  * ```
  *
  * [newStorage] must return a **fresh, empty** instance on every call — term `0`,
- * no vote, no established leader, empty log.
+ * no vote, no established leader, empty log. [reopen] must return a **second handle onto the
+ * medium the given instance wrote to**, which is what makes the durability half of this contract
+ * checkable at all (#2301).
  *
  * ## Faithfulness, not validation (#1922)
  *
@@ -59,6 +64,47 @@ public abstract class RaftStorageConformanceSuite {
      * `leaderForTerm() == null`, and `entries() == emptyList()`.
      */
     public abstract fun newStorage(): RaftStorage
+
+    /**
+     * A **new handle onto the same durable medium** [storage] wrote to — what a process restart
+     * hands back. Reopening the file, re-running the decoder, re-issuing the `SELECT`: whatever
+     * "come back after a crash" means for this implementation, performed deterministically.
+     *
+     * ## Why this is not nullable (#2301)
+     *
+     * [RaftStorage]'s own contract opens with *"durable state that a Raft node must persist to
+     * survive restarts"*, and until this hook existed **no property in this suite obtained a second
+     * handle onto anything**. Every read-back above is off the same live object that just took the
+     * write, so an adapter that buffers each write in a `HashMap` and flushes on `close()` — or
+     * never — passes all of them, as does one whose write is an `INSERT` with no `COMMIT`, as does
+     * the `NSUserDefaults`-without-`synchronize()` shape [RaftStorage.saveTermAndVotedFor]'s KDoc
+     * warns about **by name**.
+     *
+     * An `if (cannotReopen) return` opt-out would move that vacuity one level up, where it is
+     * harder to see: the suite would go green for an adapter that never crossed its own
+     * encode/decode boundary at all. There is no adapter for which the state is unreachable —
+     * a durable one reopens its medium, and an in-memory one models a restart by rebuilding a
+     * fresh instance from what its **public read surface** reports.
+     *
+     * ## What the reference must not do, and what this suite can and cannot check
+     *
+     * **Rebuild through the public read surface; never copy fields.** A reopen that aliases the
+     * original's internals makes both handles move together — the two sides agree by construction
+     * and the property is a tautology dressed as durability, which is precisely the shape #2240
+     * shipped twice one module over. `InMemoryRaftStorage` keeps all five of its fields private, so
+     * a field-copying reopen is not even writable from a subclass here; that is structure doing the
+     * work rather than a convention.
+     *
+     * The suite checks the one half of that it can: every property below asserts, before anything
+     * else, that what came back is a **different object** (see [reopened]), so an implementation
+     * returning `this` fails loudly instead of passing quietly. What it **cannot** detect, stated
+     * plainly: a thin wrapper delegating every call to the original object is indistinguishable
+     * from a genuine reopen through this contract, because nothing in [RaftStorage] exposes the
+     * medium. That residual is narrow — it takes deliberate effort to write — and the alternative
+     * (a `medium()` accessor on the contract, invented so a test could check it) would put a knob
+     * in the interface that no consumer asked for.
+     */
+    protected abstract suspend fun reopen(storage: RaftStorage): RaftStorage
 
     // ── Term / vote ──────────────────────────────────────────────────────────
 
@@ -616,7 +662,214 @@ public abstract class RaftStorageConformanceSuite {
         )
     }
 
+    // ── Durability across a restart (#2301) ──────────────────────────────────
+
+    /**
+     * The §5.1/§5.2 pair, on the far side of a restart — the property [RaftStorage] exists for.
+     *
+     * [saveTermAndVotedFor_persistsBoth] proves the two are visible *together*; it cannot prove
+     * either was written anywhere, because it reads them back off the object that took the write.
+     * A node that comes back having forgotten a vote it cast votes **twice in one term**, which is
+     * the §5.2 Election Safety violation the whole interface is arranged around. A node that comes
+     * back having forgotten only the *term* is worse still: it re-enters an election at a term it
+     * already resolved.
+     *
+     * The second arm is the shape a durable adapter gets wrong in the other direction. A cleared
+     * vote must come back **cleared**, not resurrected from the row that preceded it — the
+     * `UPDATE … SET voted_for = NULL` an adapter writes as an `INSERT` that simply omits the column,
+     * or the key-value store whose `remove` is a no-op on a missing key. That costs liveness rather
+     * than safety (the node believes it already voted this term and refuses everyone), but it is
+     * indistinguishable from a wedge at the cluster level and unattributable without this.
+     *
+     * **The knob here is the term value, and a small literal would switch this property's sharpest
+     * detection off.** A restart is the only path in this suite that crosses an encode/decode
+     * boundary, which is exactly where a term column too narrow to hold a `Long` bites — so the
+     * term is written at `MAX_PLAUSIBLE - 1`, the value [snapshotMeta_roundTripsAtPlausibilityCeiling]
+     * explains needs 60 mantissa bits and therefore survives neither a 32-bit column nor a `Double`.
+     * `7L` would be round-tripped correctly by both.
+     */
+    @Test
+    public fun termAndVoteSurviveAReopen(): TestResult = runTest {
+        val storage = newStorage()
+        storage.saveTermAndVotedFor(DURABLE_TERM, NodeId("node-a"))
+        val restarted = reopened(storage)
+        val cleared = newStorage()
+        cleared.saveTermAndVotedFor(DURABLE_TERM, NodeId("node-a"))
+        cleared.saveTermAndVotedFor(DURABLE_TERM + 1L, null)
+        val afterClear = reopened(cleared)
+        val term = restarted.term()
+        val votedFor = restarted.votedFor()
+        val clearedTerm = afterClear.term()
+        val clearedVote = afterClear.votedFor()
+        assertAll(
+            { assertEquals(DURABLE_TERM, term, "the term must survive a restart, exactly") },
+            { assertEquals(NodeId("node-a"), votedFor, "and the vote with it — or the node votes twice") },
+            { assertEquals(DURABLE_TERM + 1L, clearedTerm, "the later term must survive too") },
+            { assertNull(clearedVote, "a vote CLEARED before the restart must not come back") },
+        )
+    }
+
+    /**
+     * The §3.10 sender-authority pin, on the far side of a restart — and the restart is the only
+     * moment it matters at all.
+     *
+     * [saveLeaderForTerm]'s KDoc makes the argument in full: a node that comes back holding no
+     * leader for a term it durably restored cannot tell the real leader's `TimeoutNow` from any
+     * other voter's. Every other property in this suite reads the pin back off the handle that
+     * wrote it, so an adapter that keeps this record in memory and writes only the term/vote pair —
+     * a very natural omission, since the pin is *not* a §5.2 safety requirement — is green across
+     * all of them and loses the record on every restart.
+     *
+     * Both halves are asserted through one [LeaderForTerm] equality rather than separately, for the
+     * reason [savesAndLoadsLeaderForTerm] gives: an identity paired with a term it was never
+     * established for is worse than no record, and it is the *pair* that has to cross the boundary
+     * intact. Same term-value reasoning as [termAndVoteSurviveAReopen] — the pin's term is compared
+     * for **equality** with `currentTerm`, so a column that narrows it makes the pin permanently
+     * invisible at the one term it was written for.
+     */
+    @Test
+    public fun theEstablishedLeaderSurvivesAReopen(): TestResult = runTest {
+        val storage = newStorage()
+        storage.saveLeaderForTerm(DURABLE_TERM, NodeId("node-a"))
+        val restarted = reopened(storage)
+        assertEquals(
+            LeaderForTerm(DURABLE_TERM, NodeId("node-a")),
+            restarted.leaderForTerm(),
+            "the leader established for a term must survive the restart that is the only reason to store it",
+        )
+    }
+
+    /**
+     * The log, whole and in order, on the far side of a restart — including the filtered read the
+     * engine actually restores from.
+     *
+     * The fixture is [logEntryIndexAndTerm_roundTripAtPlausibilityCeiling]'s, deliberately: that
+     * property can be satisfied by a live field holding the entries, so it says nothing about the
+     * column they were written to. Here the same values cross the encode/decode boundary, which is
+     * where a 32-bit index, a `Double` term, or a `SELECT` with no `ORDER BY` actually bites —
+     * `RaftLogMath` resolves `entryAt(i)` positionally, so a restored log that is short, reordered,
+     * or gapped returns the wrong entry for every lookup above the defect, with no error anywhere.
+     *
+     * The `entries(fromIndex = top)` read is the shape `RaftEngine`'s own restore takes on a
+     * compacted node (`entries(snapshotIndex + 1)`), and `top` is past `Int.MAX_VALUE`, so an
+     * adapter whose reopened handle rebuilds its index through a 32-bit comparison fails here and
+     * nowhere else.
+     */
+    @Test
+    public fun theLogSurvivesAReopenWhole(): TestResult = runTest {
+        val storage = newStorage()
+        val top = MAX_PLAUSIBLE
+        val written = listOf(
+            LogEntry(index = top - 2L, term = MAX_PLAUSIBLE - 1L, command = byteArrayOf(1)),
+            LogEntry(index = top - 1L, term = MAX_PLAUSIBLE - 1L, command = byteArrayOf(2)),
+            LogEntry(index = top, term = MAX_PLAUSIBLE, command = byteArrayOf(3)),
+        )
+        storage.appendEntries(written)
+        val restarted = reopened(storage)
+        val restored = restarted.entries()
+        val fromTop = restarted.entries(fromIndex = top)
+        assertAll(
+            { assertEquals(3, restored.size, "every appended entry must survive the restart") },
+            { assertEquals(written, restored, "whole and in order — indices, terms and commands alike") },
+            { assertEquals(listOf(written.last()), fromTop, "the filtered read the engine restores from must work too") },
+        )
+    }
+
+    /**
+     * The snapshot — metadata and bytes — on the far side of a restart.
+     *
+     * A node whose log was compacted has nothing else: the entries the snapshot covers were
+     * discarded, so an adapter that persists the log but keeps the snapshot in memory comes back
+     * with a *hole* rather than a short history, and the engine's contiguity check refuses to start
+     * (`CorruptDurableStateException`) if it is lucky. The metadata halves seed `state.snapshotIndex`
+     * / `state.snapshotTerm`, which §5.4.1 orders elections by, so a value that drifts upward through
+     * a lossy column across the restart makes the node unbeatable while carrying a log it cannot
+     * justify.
+     *
+     * [SnapshotMeta.config] is deliberately **not** exercised here — that round trip is #2302's, on
+     * this same suite, and pinning it in two places would leave two things to keep in step.
+     */
+    @Test
+    public fun theSnapshotSurvivesAReopen(): TestResult = runTest {
+        val storage = newStorage()
+        val edge = MAX_PLAUSIBLE - 1L
+        storage.saveSnapshot(SnapshotMeta(lastIncludedIndex = edge, lastIncludedTerm = edge), byteArrayOf(7, 8, 9))
+        val restarted = reopened(storage)
+        val stored = restarted.loadSnapshot()
+        assertAll(
+            { assertNotNull(stored, "a saved snapshot must still be there after a restart") },
+            { assertEquals(edge, stored?.meta?.lastIncludedIndex, "lastIncludedIndex must survive exactly") },
+            { assertEquals(edge, stored?.meta?.lastIncludedTerm, "lastIncludedTerm must survive exactly") },
+            { assertContentEquals(byteArrayOf(7, 8, 9), stored?.state, "and the state bytes with them") },
+        )
+    }
+
+    /**
+     * The **decode-of-absence** half, which none of the four properties above can reach: reopening a
+     * medium nothing was ever written to must yield the same empty state [newStorage] promises, not
+     * a fabricated one.
+     *
+     * Every property above writes a value first, so all of them are blind to an adapter whose
+     * *decoder* invents state from nothing — the `SELECT … LIMIT 1` over an empty table that returns
+     * a default row, the JSON store whose missing document decodes to `SnapshotMeta(0, 0)`, the
+     * key-value read that maps a missing key to `0`. Each of those is the sentinel confusion
+     * [leaderForTermBeforeAnySave_isNull] and [snapshotAtZeroBaseline_roundTrips] guard on the write
+     * path, arriving through the one door only a restart opens. A node that starts believing it
+     * established a leader, or holds a snapshot at index 0 with an empty config, adopts the wrong
+     * membership baseline on its very first read.
+     *
+     * **This property is green under every mutation of the reference implementation and of the
+     * reference's own reopen, including the one that returns a fresh empty storage** — said outright
+     * because a green row in a mutation table names an unproven test, and pretending otherwise is
+     * worse than the gap. It earns its place on the adapter side rather than here: no
+     * `InMemoryRaftStorage` can fabricate, and no reopen written over its public read surface can
+     * either, so the failure is structurally unreachable for the reference exactly the way the
+     * restart itself was before this hook existed. Judge it by the *adapter* it fails, not by the
+     * reference it cannot.
+     */
+    @Test
+    public fun anUnwrittenMediumReopensEmpty(): TestResult = runTest {
+        val restarted = reopened(newStorage())
+        val term = restarted.term()
+        val votedFor = restarted.votedFor()
+        val pin = restarted.leaderForTerm()
+        val entries = restarted.entries()
+        val snapshot = restarted.loadSnapshot()
+        assertAll(
+            { assertEquals(0L, term, "an unwritten medium must decode to term 0, not a fabricated one") },
+            { assertNull(votedFor, "and to no vote") },
+            { assertNull(pin, "and to no established leader — absence is not a zero-term sentinel") },
+            { assertEquals(emptyList(), entries, "and to an empty log") },
+            { assertNull(snapshot, "and to no snapshot — not one at index 0 with an empty config") },
+        )
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    /**
+     * [reopen], with its precondition checked **eagerly** — a handle that is not a second handle
+     * must fail as a fixture, before any durability assertion is evaluated, rather than surfacing as
+     * a green.
+     *
+     * Returning `this` is the way to make every property in the restart section hold vacuously while
+     * looking implemented, and it is the *plausible* mistake rather than a contrived one: an adapter
+     * whose writes really are synchronous has no work to do here and `return storage` reads like the
+     * honest answer. It is not — it re-reads the object that took the writes, which is what the
+     * other 24 properties already do.
+     */
+    private suspend fun reopened(storage: RaftStorage): RaftStorage {
+        val restarted = reopen(storage)
+        assertNotSame(
+            storage,
+            restarted,
+            "reopen() handed back the SAME instance it was given, so every durability property below " +
+                "would read the object that took the writes — which is what every other property in " +
+                "this suite already does. Return a new handle onto the same medium; an in-memory " +
+                "implementation " +
+                "rebuilds one from its own public read surface.",
+        )
+        return restarted
+    }
 
     /** Asserts [entries] step by exactly one index at a time, in ascending order. */
     private fun assertContiguousAscending(entries: List<LogEntry>) {
@@ -637,6 +890,20 @@ public abstract class RaftStorageConformanceSuite {
          * are not public API, and this suite must pin the exact values those checks admit.
          */
         const val MAX_PLAUSIBLE = 1L shl 60
+
+        /**
+         * The term the restart properties write, one below [MAX_PLAUSIBLE].
+         *
+         * A named constant rather than a literal at each site because it is a **knob**, and the
+         * setting that switches the detection off is the comfortable one: a small term round-trips
+         * through a 32-bit column and through a `Double` alike, so a restart property written with
+         * `7L` proves only that *something* crossed the boundary. `2^60 - 1` needs 60 mantissa bits
+         * and survives neither. [termAndVoteSurviveAReopen] carries the argument.
+         *
+         * `+ 1` is applied at the one site that needs a second, higher term; the ceiling itself is
+         * left free for that, which is why this is the ceiling minus one rather than the ceiling.
+         */
+        const val DURABLE_TERM = MAX_PLAUSIBLE - 1L
     }
 }
 
