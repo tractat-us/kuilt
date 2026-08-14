@@ -4,4 +4,10 @@ import us.tractat.kuilt.deal.SraScheme
 
 class SraSchemeConformanceTest : CommutativeSchemeConformanceSuite() {
     override fun newScheme() = SraScheme()
+
+    // A second SraScheme, constructed exactly the way a remote player's process constructs its own
+    // — no shared state is threaded in. SRA's group parameters are a companion constant, so two
+    // instances agree on the modulus by construction; the cross-peer properties are what turn that
+    // into something the build checks rather than something the reader has to notice.
+    override fun newPeerScheme() = SraScheme()
 }

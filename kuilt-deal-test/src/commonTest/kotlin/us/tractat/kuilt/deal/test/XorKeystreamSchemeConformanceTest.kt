@@ -1,13 +1,25 @@
 package us.tractat.kuilt.deal.test
 
 import us.tractat.kuilt.deal.CommutativeScheme
+import kotlin.random.Random
 
 /**
  * Verifies the fast [XorKeystreamScheme] test double satisfies the full
  * commutative-encryption contract (round-trip, commutativity, strip-order
- * independence, key distinctness, honest-transition verification) — the same
- * TCK `SraSchemeConformanceTest` runs against the real crypto.
+ * independence, key distinctness, cross-peer-instance commutativity, honest-transition
+ * verification) — the same TCK `SraSchemeConformanceTest` runs against the real crypto.
  */
 class XorKeystreamSchemeConformanceTest : CommutativeSchemeConformanceSuite() {
-    override fun newScheme(): CommutativeScheme = XorKeystreamScheme()
+
+    // One seeded source of sub-seeds, so every instance the suite asks for is deterministic AND
+    // distinct. Seeding the instances identically would be the vacuous configuration this scheme
+    // makes easiest to reach: XOR is self-inverse, so two peers holding the same key have layers
+    // that cancel, and the cross-peer properties would pass without crossing anything. The suite's
+    // "peers encrypted the same message to the same ciphertext" precondition reds on that, but the
+    // fixture should not be relying on the suite to catch its own configuration.
+    private val seeder = Random(seed = 0x5EED)
+
+    override fun newScheme(): CommutativeScheme = XorKeystreamScheme(Random(seeder.nextInt()))
+
+    override fun newPeerScheme(): CommutativeScheme = XorKeystreamScheme(Random(seeder.nextInt()))
 }

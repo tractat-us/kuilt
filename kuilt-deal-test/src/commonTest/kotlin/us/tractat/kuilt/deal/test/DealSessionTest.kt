@@ -10,6 +10,7 @@ import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.deal.DealSession
 import us.tractat.kuilt.test.FakeSeam
 import us.tractat.kuilt.test.assertAll
+import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -32,9 +33,8 @@ class DealSessionTest {
     fun twoPlayerPokerDeal_aliceSeesHerCard_bobCannotRead() = runTest {
         val alice = PeerId("alice")
         val bob = PeerId("bob")
-        val scheme = XorKeystreamScheme()
         val (aliceSession, bobSession) =
-            fakeDealSessionPair(alice, bob, scheme, CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
+            fakeDealSessionPair(alice, bob, seededXorSchemes(), CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
 
         val originalCard = "ACE_OF_SPADES".encodeToByteArray()
         val deck = listOf(originalCard)
@@ -64,9 +64,8 @@ class DealSessionTest {
     fun twoPlayerDeal_holderCannotSeeOwnCard() = runTest {
         val alice = PeerId("alice")
         val bob = PeerId("bob")
-        val scheme = XorKeystreamScheme()
         val (aliceSession, bobSession) =
-            fakeDealSessionPair(alice, bob, scheme, CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
+            fakeDealSessionPair(alice, bob, seededXorSchemes(), CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
 
         val originalCard = "KING_OF_HEARTS".encodeToByteArray()
         val deck = listOf(originalCard)
@@ -95,9 +94,8 @@ class DealSessionTest {
     fun communityCard_quorumOfAllPlayers_everyPlayerCanDecrypt() = runTest {
         val alice = PeerId("alice")
         val bob = PeerId("bob")
-        val scheme = XorKeystreamScheme()
         val (aliceSession, bobSession) =
-            fakeDealSessionPair(alice, bob, scheme, CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
+            fakeDealSessionPair(alice, bob, seededXorSchemes(), CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
 
         val originalCard = "QUEEN_OF_DIAMONDS".encodeToByteArray()
         val deck = listOf(originalCard)
@@ -149,7 +147,7 @@ class DealSessionTest {
         val carol = PeerId("carol")
         val sessions = fakeDealSessionGroup(
             playerIds = listOf(alice, bob, carol),
-            scheme = XorKeystreamScheme(),
+            newScheme = seededXorSchemes(),
             scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)),
         )
         val (aliceSession, bobSession, carolSession) = sessions
@@ -173,5 +171,16 @@ class DealSessionTest {
             { assertEquals(originalCard.toList(), bobSession.decrypt(0).toList()) },
             { assertNotEquals(originalCard.toList(), carolAttempt?.toList()) },
         )
+    }
+
+    /**
+     * A factory handing each session its **own** [XorKeystreamScheme], as every player runs their
+     * own in production (#2311) — and its own seed, drawn from one seeded source so the whole run
+     * stays deterministic. Two peers seeded identically would hold the same XOR key, and XOR
+     * layers with equal keys cancel, so the deal would degenerate rather than exercise anything.
+     */
+    private fun seededXorSchemes(seed: Int = 0x0DEA1): () -> XorKeystreamScheme {
+        val seeder = Random(seed)
+        return { XorKeystreamScheme(Random(seeder.nextInt())) }
     }
 }
