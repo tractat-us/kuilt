@@ -187,7 +187,7 @@ private suspend fun backwardsJumpInMemoryBolt(clock: Clock, intactFrames: Int): 
  * two healthy frames behind the hole.
  *
  * Every frame here is written through [Bolt.append], so the archive is the real thing rather than
- * bytes this fixture believes are right — the only damage is that one whole segment is dropped out of
+ * bytes this fixture believes are right — the only damage is that whole segments are dropped out of
  * the middle afterwards, leaving the append cursor and every surviving segment untouched. That is
  * exactly what a deleted segment file is on a disk-backed backend, and it is the one archive shape
  * `seedRawSegment` deliberately cannot express: its `baseOffset == nextOffset` requirement is what

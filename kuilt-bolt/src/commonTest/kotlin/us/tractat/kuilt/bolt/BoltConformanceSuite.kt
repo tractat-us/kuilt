@@ -1163,8 +1163,8 @@ abstract class BoltConformanceSuite {
                 },
                 {
                     assertEquals<Long?>(
-                        frames.lastOrNull()?.endOffset,
                         fixture.holeStartsAt,
+                        frames.lastOrNull()?.endOffset,
                         "and the fixture's account of what it destroyed agrees with the archive it handed " +
                             "back: the hole starts where the last surviving frame ended",
                     )
@@ -1201,14 +1201,16 @@ abstract class BoltConformanceSuite {
      * can widen a hole without limit and can never invert one, because losing a segment only ever
      * moves the next header's base further from the previous segment's end. So a backend is only ever
      * asked "does this segment start too far along?", and `header.baseOffset > resumeOffset` — which
-     * reads perfectly, and is how the question is naturally phrased — is green across this entire
-     * suite while replaying *this* archive as a [CleanTail].
+     * reads perfectly, and is how the question is naturally phrased — is green across this entire suite
+     * while walking straight into *this* archive.
      *
-     * And the failure it lets through is worse than the one #2240 shipped, not milder. A hole hands
-     * back a short history that says it is short. A backwards jump hands back the same records
-     * **twice**, at offsets a consumer has already consumed and acknowledged — so a consumer resuming
-     * by offset sees an old `(replica, seq)` arrive as a new one, which is the exact confusion the
-     * [Bolt] KDoc says a gapped history causes, reached from the other side.
+     * And what it lets through is a different failure from the one #2240 shipped, not a milder one. A
+     * hole hands back a short history that says it is short. A backwards jump hands back frames the
+     * replay has **already emitted**, at offsets it has already passed — so `Archived.endOffset` stops
+     * being the monotone cursor [ReplayScope.FromOffset] documents it as, and a consumer holding the
+     * last one it saw would resume *behind* itself. What that costs a specific consumer is not
+     * something this suite can say; that the events are no longer an ordered history is enough, and it
+     * is the one thing [replay] is for.
      *
      * Six assertions: **1** the archive really is damaged; **2** the jump really goes *backwards*,
      * into a frame this replay already emitted; **3** the verdict stops where the fixture says the
