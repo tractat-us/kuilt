@@ -218,4 +218,275 @@ public object WasmKernelFixtures {
         0x0b, 0x04, 0x00, 0x42, 0x00, 0x0b,
     )
 
+    /**
+     * `oobinrange.wat` (88 bytes) — the vector the three high-bit siblings above cannot express:
+     * `warp_run` returns `(resPtr = 65530, resLen = 100)` on a one-page memory. **Neither word
+     * has bit 31 set**, the pointer is an ordinary offset *inside* linear memory, and the window
+     * `[65530, 65630)` runs 94 bytes past the end of it.
+     *
+     * [HIGH_BIT_RESULT_POINTER], [HIGH_BIT_RESULT_LENGTH] and [HIGH_BIT_ALLOC_POINTER] all fail
+     * the same way — bit 31 set — so a host whose only guard is `if (word < 0) reject` passes
+     * every one of them and still reads past the end of linear memory here. That is the whole
+     * reason this vector exists; see
+     * [WasmRuntimeConformanceSuite.resultWindowPastMemoryEndIsBounded].
+     */
+    public val OOB_IN_RANGE_RESULT: InRangePastEndVector = InRangePastEndVector(
+        bytes = wasm(
+            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0c, 0x02, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+            0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7e, 0x03, 0x03, 0x02, 0x00, 0x01, 0x05, 0x04, 0x01, 0x01, 0x01,
+            0x01, 0x07, 0x22, 0x03, 0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x02, 0x00, 0x0a, 0x77, 0x61,
+            0x72, 0x70, 0x5f, 0x61, 0x6c, 0x6c, 0x6f, 0x63, 0x00, 0x00, 0x08, 0x77, 0x61, 0x72, 0x70, 0x5f,
+            0x72, 0x75, 0x6e, 0x00, 0x01, 0x0a, 0x11, 0x02, 0x04, 0x00, 0x41, 0x00, 0x0b, 0x0a, 0x00, 0x42,
+            0xe4, 0x80, 0x80, 0x80, 0xa0, 0xff, 0x3f, 0x0b,
+        ),
+        declaredPages = 1,
+        resultPointer = 65530L,
+        resultLength = 100L,
+    )
+
+    /**
+     * `growwrite.wat` (136 bytes) — memory declared `1 2`; `warp_run` grows it by one page
+     * mid-call, writes its result entirely inside the page that did not exist a moment ago, and
+     * returns a pointer into it.
+     *
+     * Every other loadable vector here either never grows or grows past its declared max and traps
+     * ([GROW_PAST_DECLARED_MAX]), so a **successful** grow was unreachable — and the failure it
+     * provokes is silent corruption rather than an exception (a stale `ByteBuffer` on the JVM, a
+     * detached `ArrayBuffer` in the browser, a stale base pointer from `m3_GetMemory` on wasm3).
+     * A suite that only ever drives refusals is also satisfied by a host that refuses everything;
+     * this is the one vector that proves the bound *moves*. See
+     * [WasmRuntimeConformanceSuite.resultWrittenIntoNewlyGrownMemoryIsReadBack].
+     */
+    public val GROW_THEN_WRITE: GrowThenWriteVector = GrowThenWriteVector(
+        bytes = wasm(
+            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0c, 0x02, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+            0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7e, 0x03, 0x03, 0x02, 0x00, 0x01, 0x05, 0x04, 0x01, 0x01, 0x01,
+            0x02, 0x07, 0x22, 0x03, 0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x02, 0x00, 0x0a, 0x77, 0x61,
+            0x72, 0x70, 0x5f, 0x61, 0x6c, 0x6c, 0x6f, 0x63, 0x00, 0x00, 0x08, 0x77, 0x61, 0x72, 0x70, 0x5f,
+            0x72, 0x75, 0x6e, 0x00, 0x01, 0x0a, 0x41, 0x02, 0x04, 0x00, 0x41, 0x00, 0x0b, 0x3a, 0x01, 0x02,
+            0x7f, 0x41, 0x01, 0x40, 0x00, 0x21, 0x02, 0x20, 0x02, 0x41, 0x7f, 0x46, 0x04, 0x40, 0x00, 0x0b,
+            0x20, 0x02, 0x41, 0x80, 0x80, 0x04, 0x6c, 0x21, 0x03, 0x20, 0x03, 0x20, 0x03, 0x36, 0x02, 0x00,
+            0x20, 0x03, 0x41, 0x04, 0x6a, 0x41, 0xd7, 0x82, 0xc9, 0x82, 0x05, 0x36, 0x02, 0x00, 0x20, 0x03,
+            0xad, 0x42, 0x20, 0x86, 0x42, 0x08, 0x84, 0x0b,
+        ),
+        initialPages = 1,
+        maxPages = 2,
+        markerWord = 0x5052_4157,
+    )
+
 }
+
+/** Bytes per WASM linear-memory page. Fixed by the WebAssembly spec at 64 KiB. */
+public const val WASM_PAGE_BYTES: Long = 65_536L
+
+/**
+ * The lowest value with bit 31 set. A guest-controlled ABI word at or above this is what the
+ * three high-bit vectors carry, and what a sign-only guard already rejects — so an
+ * [InRangePastEndVector] must stay strictly below it or it proves nothing the siblings do not.
+ *
+ * Public so [WasmRuntimeConformanceSuite] states the same threshold rather than a second copy of
+ * the number: a suite-local constant and a fixture-local one are exactly the pair that drifts.
+ */
+public const val ABI_WORD_SIGN_BIT: Long = 0x8000_0000L
+
+/**
+ * A kernel whose `warp_run` returns a result window that is **in range and past the end**: both
+ * ABI words are ordinary small positive numbers, the pointer addresses real linear memory, and
+ * only `ptr + len` crosses the memory end.
+ *
+ * ### Why this takes the geometry rather than a boolean
+ *
+ * The claim "this window is past the end" is a *relation* between three numbers — the pointer,
+ * the length and the live memory size — and a fixture carrying it as an answer can be handed the
+ * wrong one. So the descriptor takes the **inputs** ([declaredPages], [resultPointer],
+ * [resultLength]) and derives the relation in [init]; a vector that has drifted into the siblings'
+ * high-bit region, or whose window no longer leaves memory, is not a value this constructor can be
+ * handed.
+ *
+ * ### What is checked against the artefact, and what is not
+ *
+ * The three numbers are *claims about a byte literal*, and a regenerated literal with a stale
+ * descriptor beside it is the same defect one level up. [init] therefore also reads the module:
+ * it requires the memory section to declare exactly [declaredPages] as both min and max, and the
+ * `i64.const` the kernel returns to be exactly `(resultPointer shl 32) or resultLength`.
+ *
+ * What that still cannot see is whether `warp_run` *returns* that constant rather than merely
+ * containing it — a kernel could push it and drop it. Nothing short of executing the module
+ * settles that, and executing it is what the property does: an impl that rejects the window
+ * proves the constant reached the host decoder.
+ *
+ * @param declaredPages the module's declared linear-memory size, in pages — min and max alike.
+ * @property resultPointer the `resPtr` word `warp_run` returns.
+ * @property resultLength the `resLen` word `warp_run` returns.
+ */
+public class InRangePastEndVector internal constructor(
+    public val bytes: ByteArray,
+    declaredPages: Int,
+    public val resultPointer: Long,
+    public val resultLength: Long,
+) {
+    /** The live linear-memory size this window is measured against — the module never grows. */
+    public val memoryBytes: Long = declaredPages * WASM_PAGE_BYTES
+
+    init {
+        check(resultPointer > 0L && resultLength > 0L) {
+            "both ABI words must be ordinary positive numbers — $resultPointer / $resultLength"
+        }
+        check(resultPointer < ABI_WORD_SIGN_BIT && resultLength < ABI_WORD_SIGN_BIT) {
+            "neither word may have bit 31 set, or this vector is the high-bit siblings restated " +
+                "and a sign-only guard rejects it for the wrong reason — $resultPointer / $resultLength"
+        }
+        check(resultPointer < memoryBytes) {
+            "the POINTER must address real linear memory — a pointer already past the end is also " +
+                "caught by a guard that only clamps the pointer — $resultPointer against $memoryBytes"
+        }
+        check(resultPointer + resultLength > memoryBytes) {
+            "and the WINDOW must leave it, or there is nothing out of bounds here — " +
+                "${resultPointer + resultLength} against $memoryBytes"
+        }
+        check(bytes.containsSequence(memorySection(declaredPages, declaredPages))) {
+            "the module must declare memory `$declaredPages $declaredPages`, or memoryBytes is a " +
+                "claim about a different module than the one this fixture hands out"
+        }
+        check(bytes.containsSequence(i64Const((resultPointer shl 32) or resultLength))) {
+            "the module must return the packed word this descriptor names, or the property's " +
+                "preconditions describe a vector nobody is running"
+        }
+    }
+}
+
+/**
+ * A kernel that **successfully** grows linear memory mid-call and writes its result into the page
+ * that did not exist before the grow.
+ *
+ * ### The payload is self-reporting, so the property can prove its own rig fired
+ *
+ * "A grow happened" is not observable through [us.tractat.kuilt.warp.Op] — the result is bytes.
+ * So the kernel writes the result pointer *into* the result: the first four bytes are that pointer
+ * as a little-endian `i32` ([reportedPointer]), followed by [marker]. The property asserts the
+ * reported pointer sits at or above [memoryEndBeforeGrow], which is the difference between "this
+ * read came from newly-grown memory" and "this read happened to succeed" — and it is an honest
+ * self-report rather than a claim, because the host read those very bytes *from that address*.
+ *
+ * The kernel also traps on a denied grow rather than falling through, so an engine that refuses
+ * the grow reds loudly instead of quietly reverting the vector to a plain in-bounds read.
+ *
+ * ### What it cannot detect
+ *
+ * It cannot distinguish an impl that re-fetches its memory handle from one that never cached a
+ * stale handle to begin with — both simply pass. This is a property about the *observable*
+ * contract, and "you must re-fetch" is an implementation strategy, not a contract term. Nor can it
+ * tell whether a host re-read a *correct* size but a stale base that happened to still be valid
+ * (an allocator that grew in place); that is unobservable from outside by construction, and the
+ * property's value is that the impls where it is *not* unobservable — a moved `ByteBuffer`, a
+ * detached `ArrayBuffer`, a `realloc`ed wasm3 arena — fail it on content.
+ *
+ * @param initialPages the module's declared initial linear memory, in pages.
+ * @param maxPages the module's declared max, in pages — exactly one page of headroom, so the
+ *   single grow the kernel performs is the last one the engine can allow.
+ * @param markerWord the `i32` the kernel stores after the pointer; [marker] is its little-endian
+ *   bytes, derived here rather than restated, so the two cannot disagree.
+ */
+public class GrowThenWriteVector internal constructor(
+    public val bytes: ByteArray,
+    initialPages: Int,
+    maxPages: Int,
+    markerWord: Int,
+) {
+    /** The linear-memory end **before** the grow — the boundary the result must sit above. */
+    public val memoryEndBeforeGrow: Long = initialPages * WASM_PAGE_BYTES
+
+    /** The linear-memory end **after** the grow, and the module's declared ceiling. */
+    public val memoryEndAfterGrow: Long = maxPages * WASM_PAGE_BYTES
+
+    /** The bytes the kernel stores after the self-reported pointer. */
+    public val marker: ByteArray = ByteArray(I32_BYTES) { (markerWord ushr (8 * it)).toByte() }
+
+    /** How many bytes `warp_run` claims to return: the self-reported pointer plus [marker]. */
+    public val resultSize: Int = I32_BYTES + marker.size
+
+    init {
+        check(maxPages == initialPages + 1) {
+            "the module must declare exactly one page of headroom, so the kernel's single grow is " +
+                "the last one the engine can allow — $initialPages then $maxPages"
+        }
+        check(bytes.containsSequence(memorySection(initialPages, maxPages))) {
+            "the module must declare memory `$initialPages $maxPages`, or both boundaries this " +
+                "fixture reports are claims about a different module"
+        }
+        check(bytes.containsSequence(i32Const(markerWord))) {
+            "the module must store the marker this descriptor names, or the content assertion is " +
+                "comparing the result against bytes nothing ever wrote"
+        }
+    }
+
+    /**
+     * The result pointer the kernel wrote into the first four bytes of [result], little-endian.
+     *
+     * @throws IllegalStateException if [result] is not [resultSize] bytes — a short result means
+     *   the kernel did not run to completion, and reading a pointer out of it would report a
+     *   number rather than the failure.
+     */
+    public fun reportedPointer(result: ByteArray): Long {
+        check(result.size == resultSize) {
+            "the kernel returns $resultSize bytes; got ${result.size}, so there is no pointer to read"
+        }
+        return (0 until I32_BYTES).fold(0L) { acc, i -> acc or ((result[i].toLong() and 0xFF) shl (8 * i)) }
+    }
+
+    /**
+     * The marker bytes carried by [result], for comparison against [marker].
+     *
+     * @throws IllegalStateException if [result] is not [resultSize] bytes (see [reportedPointer]).
+     */
+    public fun markerOf(result: ByteArray): ByteArray {
+        check(result.size == resultSize) {
+            "the kernel returns $resultSize bytes; got ${result.size}, so there is no marker to read"
+        }
+        return result.copyOfRange(I32_BYTES, resultSize)
+    }
+
+    private companion object {
+        /** Width of the self-reported pointer, and of the marker: one WASM `i32`. */
+        const val I32_BYTES: Int = 4
+    }
+}
+
+/**
+ * The WASM memory section declaring one memory with an explicit max: section id `0x05`, four
+ * payload bytes, one memory, limits flag `0x01` (max present), then min and max as LEB128.
+ *
+ * Both page counts are below 128, so each LEB128 is a single byte and the section is one exact
+ * subsequence to look for. A page count that outgrows a byte would silently stop matching, which
+ * is why [InRangePastEndVector] and [GrowThenWriteVector] `check` the result rather than assuming.
+ */
+private fun memorySection(minPages: Int, maxPages: Int): ByteArray {
+    check(minPages in 0..0x7F && maxPages in 0..0x7F) {
+        "this encoder is single-byte-LEB128 only — $minPages / $maxPages"
+    }
+    return byteArrayOf(0x05, 0x04, 0x01, 0x01, minPages.toByte(), maxPages.toByte())
+}
+
+/** The `i64.const` opcode followed by [value] as signed LEB128 — what `wat2wasm` emits. */
+private fun i64Const(value: Long): ByteArray = byteArrayOf(0x42) + sleb128(value)
+
+/** The `i32.const` opcode followed by [value] as signed LEB128 — what `wat2wasm` emits. */
+private fun i32Const(value: Int): ByteArray = byteArrayOf(0x41) + sleb128(value.toLong())
+
+/** Signed LEB128, the encoding every WASM `*.const` immediate uses. */
+private fun sleb128(value: Long): ByteArray {
+    val out = mutableListOf<Byte>()
+    var remaining = value
+    while (true) {
+        val septet = (remaining and 0x7FL).toInt()
+        remaining = remaining shr 7
+        val signBitSet = septet and 0x40 != 0
+        val done = (remaining == 0L && !signBitSet) || (remaining == -1L && signBitSet)
+        out += (if (done) septet else septet or 0x80).toByte()
+        if (done) return out.toByteArray()
+    }
+}
+
+/** Whether [needle] appears in this array as a contiguous run. */
+private fun ByteArray.containsSequence(needle: ByteArray): Boolean =
+    (0..size - needle.size).any { start -> needle.indices.all { this[start + it] == needle[it] } }

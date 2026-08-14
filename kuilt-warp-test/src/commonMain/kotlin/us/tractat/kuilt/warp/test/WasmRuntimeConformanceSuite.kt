@@ -12,7 +12,9 @@ import us.tractat.kuilt.warp.WasmSandboxConfig
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertContentEquals
+import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -47,9 +49,13 @@ import kotlin.time.Duration.Companion.seconds
  *   timeout must not poison subsequent invocations;
  * - a trap (`unreachable`) surfaces as an execution failure;
  * - `memory.grow` past the declared max is denied by the engine (the evidence that
- *   reject-no-max is a sufficient memory ceiling);
+ *   reject-no-max is a sufficient memory ceiling), while a grow *within* it succeeds and the
+ *   bound moves with it (see [resultWrittenIntoNewlyGrownMemoryIsReadBack]);
  * - guest-controlled ABI words (alloc pointer, packed result pointer/length) with the high
- *   bit set are bounds-rejected, never sign-wrapped into host-memory access.
+ *   bit set are bounds-rejected, never sign-wrapped into host-memory access — **and so is a
+ *   window that sets no high bit at all** and simply runs off the end
+ *   (see [resultWindowPastMemoryEndIsBounded], which is what separates a real bounds check
+ *   from a sign check).
  *
  * **Load-phase execution bound** — a module's `(start)` function runs at instantiation,
  * before any ABI call, so the invocation budget alone cannot bound it. The contract is
@@ -277,6 +283,191 @@ public abstract class WasmRuntimeConformanceSuite {
     public fun allocPointerWithHighBitSetIsBounded(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val op = newRuntime().load(WasmKernelFixtures.HIGH_BIT_ALLOC_POINTER)
         assertFailsWith<WasmExecutionException> { op.invoke(byteArrayOf(1, 2, 3, 4)) }
+    }
+
+    /**
+     * A result window that is **in range and past the end** — an ordinary positive pointer
+     * addressing real linear memory, whose `ptr + len` leaves it — is bounds-rejected.
+     *
+     * ### Why the three vectors above do not already cover this
+     *
+     * They all fail the same way: **bit 31 set**. An implementation whose entire guard is
+     * `if (word < 0) reject` passes every one of them, and then reads 94 bytes past the end of
+     * linear memory on `(resPtr = 65530, resLen = 100)` — a benign-looking pair no fixture in
+     * [WasmKernelFixtures] could produce before this one. A bounds-check suite in which every
+     * out-of-bounds vector happens to set the sign bit cannot tell a real bounds check from a
+     * sign check, and this is a sandbox boundary: it is the thing that stops code another peer
+     * sent you from reaching memory it should not.
+     *
+     * The in-range-past-end case *is* covered one layer down, by `WarpAbiResultTest` over
+     * `requireInBounds` in `:kuilt-warp`. That proves the shared decoder is correct; it does not
+     * prove any given runtime routes through it, which is precisely what every impl's KDoc
+     * promises ("never a hand-rolled unpack") with nothing behind it.
+     *
+     * Three preconditions, then the claim. **1** neither ABI word has bit 31 set, so a sign-only
+     * guard cannot be what rejects this; **2** the pointer itself addresses real memory, so a
+     * guard that only clamps the pointer cannot be either; **3** the window really does leave
+     * memory. They run **first**, and a failure among them ends the test before the claim, because
+     * a claim about the wrong vector is not evidence. Then **4**: the impl surfaces
+     * [WasmExecutionException] — a guest runtime fault, never an OOB host access and never a raw
+     * error escaping the sealed hierarchy.
+     *
+     * 1–3 are the fixture's own preconditions, restated here so a reader of the property can see
+     * what makes it different from its siblings; [InRangePastEndVector] makes a fixture that fails
+     * them unconstructible, and cross-checks all three against the module bytes.
+     *
+     * **Mutation receipts**, measured on this branch — each mutation applied alone, reverted, and
+     * read out of the results XML. Backends: `ChicoryWasmRuntimeConformanceTest` (JVM, `jvmTest`)
+     * and `Wasm3WasmRuntimeConformanceTest` (native, `macosArm64Test`).
+     *
+     * | Mutation | Reds here | Reds elsewhere |
+     * |---|---|---|
+     * | `requireInBounds` → sign-only (`ptr < 0 \|\| len < 0`) — `:kuilt-warp` | **native only** | 4 `WarpAbiResultTest` cases; no other conformance property, on either backend |
+     * | `requireInBounds` → sign-only, and drop the length ceiling too | **native only** | as above |
+     * | **Fixture:** move `resultPointer` into the high-bit region | assertion **1**, at construction | nothing |
+     * | **Fixture:** shrink `resultLength` so the window fits | assertion **3**, at construction | nothing |
+     *
+     * **The first row is the finding, and its "native only" is the honest half.** On wasm3 the
+     * decode ends in raw pointer arithmetic (`base[ptr + i]` over `m3_GetMemory`), so
+     * `requireInBounds` is the *only* thing between a guest word and host memory: sign-only makes
+     * this property red and every sibling vector stay green, which is the whole claim of #2314
+     * demonstrated in one measurement. On Chicory it stays green, because Chicory's `Memory` API
+     * re-checks the narrowed index natively and throws, which the runtime wraps — the guard is
+     * layered there, and this property proves the *composite* rather than the outer check. Said
+     * plainly rather than left as an absence: **on the JVM backend, no mutation of the shared
+     * decoder alone reds this test.** What it holds on that backend is the contract term — the
+     * fault surfaces as [WasmExecutionException] rather than a hang or a raw engine error — and
+     * what it holds for the *next* backend is everything, because a new impl inherits wasm3's
+     * shape (a raw memory view) far more often than Chicory's.
+     *
+     * The two fixture rows are the vacuity guards, and they are the mutations a fixture author
+     * commits by accident: both fail *before* any assertion runs, at
+     * [InRangePastEndVector]'s construction, rather than passing quietly.
+     */
+    @Test
+    public fun resultWindowPastMemoryEndIsBounded(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val vector = WasmKernelFixtures.OOB_IN_RANGE_RESULT
+        val op = newRuntime().load(vector.bytes)
+        assertAll(
+            {
+                assertTrue(
+                    vector.resultPointer < ABI_WORD_SIGN_BIT && vector.resultLength < ABI_WORD_SIGN_BIT,
+                    "neither ABI word may set bit 31, or a sign-only guard rejects this vector for " +
+                        "the wrong reason and it restates its three siblings — " +
+                        "${vector.resultPointer} / ${vector.resultLength}",
+                )
+            },
+            {
+                assertTrue(
+                    vector.resultPointer in 1 until vector.memoryBytes,
+                    "the pointer must address real linear memory, or a guard that only clamps the " +
+                        "pointer catches this too — ${vector.resultPointer} against ${vector.memoryBytes}",
+                )
+            },
+            {
+                assertTrue(
+                    vector.resultPointer + vector.resultLength > vector.memoryBytes,
+                    "and the window must leave it, or there is nothing out of bounds here — " +
+                        "${vector.resultPointer + vector.resultLength} against ${vector.memoryBytes}",
+                )
+            },
+        )
+        assertFailsWith<WasmExecutionException>(
+            "an in-range pointer whose window runs past the memory end is a bounds violation like " +
+                "any other, and must surface as a guest runtime fault",
+        ) { op.invoke(ByteArray(0)) }
+    }
+
+    /**
+     * A guest that **successfully** grows linear memory mid-call and writes its result into the
+     * new region gets those exact bytes back.
+     *
+     * ### Why a suite of refusals needs one success
+     *
+     * Every other loadable vector either never calls `memory.grow` or grows past its declared max
+     * and traps ([growPastDeclaredMaxTraps]), so no property here has ever asked an implementation
+     * to notice that the bound **moved**. A suite that only drives refusals is satisfied by an
+     * implementation that refuses everything — and more to the point, the failure a legitimate
+     * grow provokes is *silent corruption*, not an exception: a `ByteBuffer` whose backing store
+     * moved on the JVM, a detached `ArrayBuffer` in the browser, a base pointer from
+     * `m3_GetMemory` that a `realloc` invalidated on wasm3. All three shipped impls re-fetch after
+     * the guest call and each says so in a comment; nothing held them to it.
+     *
+     * So this property asserts **content**, not absence of an exception. A host reading through a
+     * stale handle either throws (which reds) or hands back other bytes (which also reds).
+     *
+     * ### How it proves its own rig fired
+     *
+     * "A grow happened" is not observable through [us.tractat.kuilt.warp.Op] — the result is
+     * bytes — and a vector that quietly stopped growing would still return *something*, in bounds,
+     * and pass. The kernel therefore writes the result pointer into the first four bytes of its own
+     * result, and assertion 3 demands that pointer sit at or above the pre-grow memory end. It is a
+     * self-report rather than a claim because the host read those bytes *from that address*. The
+     * kernel also traps on a denied grow instead of falling through, so an engine that refuses the
+     * grow reds rather than reverting this vector to a plain in-bounds read.
+     *
+     * Four assertions: **1** the result is the size the kernel promises; **2** the marker bytes
+     * survive the round trip — the content claim; **3** the result was written at or above the
+     * pre-grow memory end — the rig-fired claim; **4** and within the grown memory, so the
+     * self-report is a real address rather than an arbitrary number.
+     *
+     * **Mutation receipts**, measured on this branch — each applied alone and reverted. Backends
+     * as above.
+     *
+     * | Mutation | Reds here | Reds elsewhere |
+     * |---|---|---|
+     * | Read linear-memory size **once at load** instead of after each guest call — `ChicoryWasmRuntime.runAbi` | **2, 3** (as a bounds rejection) | nothing else in `jvmTest` |
+     * | The same — `Wasm3WasmRuntime.memoryBaseFor` | **2, 3** | nothing else in `macosArm64Test` |
+     * | **Fixture:** write the result at offset 0 instead of the new page | **3 only** | nothing |
+     *
+     * **Row 3 is the one that matters day to day**: it is the fixture edit that turns this back
+     * into an ordinary round-trip property, and assertion 3 is the only thing that notices.
+     *
+     * **What this cannot detect, said plainly.** It cannot distinguish an impl that re-fetches its
+     * memory handle from one that never cached a stale handle to begin with — both pass, and
+     * "re-fetch" is an implementation strategy rather than a contract term. Nor can it see a stale
+     * *base* that a grow-in-place left valid; that is unobservable from outside by construction.
+     * See [GrowThenWriteVector].
+     */
+    @Test
+    public fun resultWrittenIntoNewlyGrownMemoryIsReadBack(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val vector = WasmKernelFixtures.GROW_THEN_WRITE
+        val result = newRuntime().load(vector.bytes).invoke(ByteArray(0))
+        assertAll(
+            {
+                assertEquals(
+                    vector.resultSize,
+                    result.size,
+                    "the kernel returns a self-reported pointer plus its marker; a different size " +
+                        "means it never reached its return, so nothing below is readable",
+                )
+            },
+            {
+                assertContentEquals(
+                    vector.marker,
+                    vector.markerOf(result),
+                    "the marker must survive the round trip — a host reading through a handle the " +
+                        "grow invalidated hands back other bytes, and that is silent corruption " +
+                        "rather than an exception",
+                )
+            },
+            {
+                assertTrue(
+                    vector.reportedPointer(result) >= vector.memoryEndBeforeGrow,
+                    "the result must have been written at or above the PRE-GROW memory end, or this " +
+                        "vector never exercised newly-grown memory and is an ordinary round trip — " +
+                        "${vector.reportedPointer(result)} against ${vector.memoryEndBeforeGrow}",
+                )
+            },
+            {
+                assertTrue(
+                    vector.reportedPointer(result) + vector.resultSize <= vector.memoryEndAfterGrow,
+                    "and inside the grown memory, or the self-reported pointer is an arbitrary " +
+                        "number rather than the address these bytes came from — " +
+                        "${vector.reportedPointer(result)} against ${vector.memoryEndAfterGrow}",
+                )
+            },
+        )
     }
 
     private companion object {
