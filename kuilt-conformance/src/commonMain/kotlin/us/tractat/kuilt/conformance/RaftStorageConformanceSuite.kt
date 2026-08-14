@@ -924,19 +924,84 @@ public abstract class RaftStorageConformanceSuite {
      * - **[LogEntry.dedupKey]** — §8 client-serial dedup is lost, and a client command that already
      *   committed is applied a second time after the restart.
      *
-     * **Three entries rather than one, which is what makes this more than a second spelling of the
-     * defaults.** A single entry carrying all three fields is satisfied by a storage that
-     * *hardcodes* them — `isNoOp = true` on every read passes it, and so does a decoder that
-     * fabricates a config. Here each field is non-default in **exactly one** entry and default in
-     * the other two, mirroring the three shapes `RaftEngine` actually writes (the no-op it appends
-     * on winning an election, the config entry `appendConfigEntry` writes, the `dedupKey`-stamped
-     * application entry `propose` writes). A constant therefore fails on the two entries where the
-     * field must be absent, and a drop fails on the one where it must be present. Neither direction
-     * has a green.
+     * **Three entries rather than one**, each field non-default in **exactly one** of them and
+     * default in the other two, mirroring the three shapes `RaftEngine` actually writes: the no-op
+     * it appends on winning an election, the config entry `appendConfigEntry` writes, the
+     * `dedupKey`-stamped application entry `propose` writes.
+     *
+     * **The measured reason for that arrangement is narrower than the obvious one, and the obvious
+     * one is wrong.** It is tempting to say the single-entry version would be passed by a storage
+     * that *hardcodes* `isNoOp = true`. It would — but the **suite** would still catch it, on four
+     * pre-existing properties, because every entry those properties construct leaves `isNoOp` at
+     * `false` and `assertEquals(toAppend, retrieved)` compares it (measured: that mutation reds
+     * `appendsAndRetrievesEntries`, `appendAfterTruncate_works`,
+     * `logEntryIndexAndTerm_roundTripAtPlausibilityCeiling` and `theLogSurvivesAReopenWhole`
+     * alongside these two). The *fabrication* direction was already covered; only the **drop**
+     * direction was the hole, and that is what this property is for.
+     *
+     * What the arrangement genuinely buys, and what nothing else in the suite reaches, is the
+     * storage that **derives** a field instead of persisting it. `isNoOp = command.isEmpty()` is the
+     * plausible shortcut — no-ops do carry an empty command — and it is wrong for the reason
+     * [LogEntry.command]'s own KDoc gives: *"An application may legitimately propose an empty
+     * command — emptiness alone does not mark an entry internal."* Every pre-existing entry in this
+     * suite has a non-empty command, so all 36 of them are green under that mutation. These two are
+     * not, because entry 2 has an empty command and is **not** a no-op. Measured, and the only
+     * mutation in the receipt that no pre-existing property sees.
      *
      * **What this cannot detect:** anything about durability. Every read here is off the handle that
      * took the write, so a storage holding these fields in a live object and persisting none of them
      * passes. [logEntryInternalFields_surviveAReopen] is that half.
+     *
+     * ## Mutation receipt (#2302)
+     *
+     * Measured over `:kuilt-conformance:jvmTest --tests "*RaftStorage*"` (42 tests, green at
+     * baseline). One mutation at a time, reverted after, the revert verified with `git status`;
+     * results XML deleted before every run and the log grepped for compile errors, because a
+     * mutation that does not compile leaves Gradle serving the previous run's XML.
+     *
+     * Every row is a **reference-subclass** mutation — a decorator written inside
+     * `InMemoryRaftStorageConformanceTest.kt`, which nothing outside that file references, so the
+     * confinement is **structural** rather than measured. No production mutation appears, and none
+     * was available: `InMemoryRaftStorage` holds [LogEntry] and `StoredSnapshot` **by reference**,
+     * so it has no field-by-field boundary at which a value could be dropped. That is the same fact
+     * that let the hole exist.
+     *
+     * "What the pre-existing suite did" is read off the same run rather than assumed: every property
+     * added by #2302 is a new method name, so a failure list containing only new names *is* the
+     * measurement that the other 36 were green.
+     *
+     * | Mutation | Reds, of #2302's properties | Reds, of the 36 pre-existing |
+     * |---|---|---|
+     * | `appendEntries` drops `isNoOp` | this and [logEntryInternalFields_surviveAReopen] | **none** |
+     * | `appendEntries` drops `config` | the same two | **none** |
+     * | `appendEntries` drops `dedupKey` | the same two | **none** |
+     * | `appendEntries` derives `isNoOp = command.isEmpty()` | the same two | **none** |
+     * | `appendEntries` hardcodes `isNoOp = true` | the same two | **four** — see above |
+     * | `saveSnapshot` drops `meta.config` | [snapshotConfig_roundTrips], [theSnapshotConfigSurvivesAReopen], [snapshotWithEmptyState_isStillASnapshot] | **none** |
+     * | `saveSnapshot` keeps the FIRST snapshot | [saveSnapshot_overwritesThePriorSnapshotWhole] — 5 arms, same-handle and restart | **none** |
+     * | `saveSnapshot` stores nothing when `state` is empty | [snapshotWithEmptyState_isStillASnapshot] | **none** |
+     * | `reopen` drops the entries' internal fields | [logEntryInternalFields_surviveAReopen] **only** | **none** |
+     * | `reopen` drops `meta.config` | [theSnapshotConfigSurvivesAReopen] **only** | **none** |
+     * | write-through cache whose restart-side read has no `ORDER BY … DESC` | [saveSnapshot_overwritesThePriorSnapshotWhole] — the **2 restart arms only** | **none** |
+     * | **Fixture:** `internalFieldEntries()` reverts to the three defaults | both log properties, on the **precondition** | — |
+     * | **Fixture:** [JOINT_CONFIG] becomes simple and voters-only | 4 properties, on the **precondition** | — |
+     * | **Fixture:** the superseded snapshot's config becomes `null` | [saveSnapshot_overwritesThePriorSnapshotWhole], on the **precondition** | — |
+     * | **Fixture:** the empty snapshot state gains a byte | [snapshotWithEmptyState_isStillASnapshot], on the **precondition** | — |
+     *
+     * **The last three rows of the first block are the pair-splitting evidence.** Each reds a
+     * restart property and **not** its same-handle sibling, which is what makes the pairs two
+     * properties rather than one counted twice. The `ORDER BY` row is the sharpest: the same
+     * property reds on 5 arms under "keeps the first snapshot" and on exactly the 2 restart arms
+     * here, so the *shape* of the red distinguishes the two adapter bugs — read the arms, not the
+     * test count.
+     *
+     * **The fixture rows red the precondition and leave the round-trips green**, which is the point
+     * of having them: under fixture drift the property does not fail, it stops asserting. Those four
+     * arms are the only thing that turns a silent vacuity into a red.
+     *
+     * **Almost every cell in the right column is "none", and that is the finding rather than a
+     * suspiciously clean table** — it is the literal statement of #2302. The one row that is not
+     * "none" is in the table because it disproves a claim this KDoc made before it was measured.
      */
     @Test
     public fun logEntryInternalFields_roundTripPerEntry(): TestResult = runTest {
