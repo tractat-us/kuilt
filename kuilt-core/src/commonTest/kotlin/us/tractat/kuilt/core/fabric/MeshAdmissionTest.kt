@@ -218,6 +218,58 @@ class MeshAdmissionTest {
         )
     }
 
+    // ── #2357: an unattested duplicate may win dedup, but never erases the attestation ──
+
+    /**
+     * Construction-time dedup obeys the same rule [Mesh.addLink] does: the link that survives
+     * carries forward an attestation the duplicate it displaced had and it does not (#2357).
+     *
+     * Two connections in one construction batch resolve to the same peer — one the host verified,
+     * one it verified as nothing — and the unattested one carries the all-zero nonce that wins the
+     * canonical tiebreak. It wins; the host's verification of that peer must survive anyway. Without
+     * the carry, whether a peer is attested would turn on a coin flip between two links to it.
+     */
+    @Test
+    fun constructionDedupLetsNoUnattestedDuplicateEraseAnAttestation() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val hub = PeerId("hub")
+        val victim = PeerId("victim")
+
+        val (attestedMine, attestedTheirs) = connectionPair()
+        val (plainMine, plainTheirs) = connectionPair()
+        val attestedHandshake = launch { handshakeRemote(attestedTheirs, victim, nonce = meshNonce(-1)) }
+        val plainHandshake = launch { handshakeRemote(plainTheirs, victim, nonce = ByteArray(MESH_NONCE_BYTES)) }
+
+        val mesh = hubMesh(
+            hub,
+            listOf(attestedMine.withPrincipal(Principal("victim")), plainMine),
+            dispatcher,
+            Random(0),
+        )
+        attestedHandshake.join()
+        plainHandshake.join()
+
+        // Rig: the unattested duplicate really did win the lottery — point-to-point traffic for the
+        // peer lands on IT, not on the attested link. Without this the roster assertion below would
+        // pass just as well on a run where the attested link survived and nothing was ever displaced.
+        val payload = byteArrayOf(5, 5, 5)
+        val received = async { plainTheirs.incoming.first() }
+        mesh.sendTo(victim, payload)
+        val plainGot = received.await()
+
+        assertAll(
+            { assertEquals(setOf(hub, victim), mesh.peers.value) },
+            { assertContentEquals(payload, plainGot, "rig: the unattested duplicate won dedup") },
+            {
+                assertEquals(
+                    mapOf(victim to Principal("victim")),
+                    mesh.attestedPrincipals.value,
+                    "the displaced link's attestation must survive an unattested duplicate winning dedup",
+                )
+            },
+        )
+    }
+
     // ── Self-connection guard (#1488) — a peer dialing its own endpoint ───────
 
     /**

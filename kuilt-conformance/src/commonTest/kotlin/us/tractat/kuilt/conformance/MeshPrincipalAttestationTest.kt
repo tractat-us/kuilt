@@ -49,6 +49,13 @@ class MeshPrincipalAttestationTest : PrincipalAttestationConformanceSuite() {
 
         /** Far-end seams, one per admitted peer — kept so [drop] can tear the link. */
         private val farByPeer = mutableMapOf<PeerId, Mesh>()
+
+        /**
+         * Second, concurrent far ends claiming an already-live peer id. Held apart from [farByPeer]
+         * so an impostor never becomes the seam [drop] tears — [admitConcurrentClaim] exists
+         * precisely because the *legitimate* link stays up.
+         */
+        private val impostors = mutableListOf<Mesh>()
         private var seed = 100
 
         /**
@@ -75,6 +82,29 @@ class MeshPrincipalAttestationTest : PrincipalAttestationConformanceSuite() {
             hub.peers.first { peer in it }
         }
 
+        /**
+         * A *second* link to the hub announcing [peer]'s id and carrying no attestation, admitted
+         * while [peer]'s legitimate link stays open — so the two contend in the mesh's duplicate-link
+         * dedup rather than one replacing the other by teardown.
+         *
+         * **The impostor is rigged to WIN that contest, deterministically.** Its preamble nonce is
+         * all-zero bytes ([AllZeroNonces]), so its canonical link nonce — the sorted hex pair both
+         * ends derive — is strictly the smallest unless the hub itself drew an all-zero nonce, which
+         * a seeded [Random] does not. This is the same craft `MeshAdmissionTest`'s
+         * `controlSpoofedLinkWinsDedupLotteryUnderAcceptAll` uses, and for the same reason: a
+         * property about what survives a displacement is worth nothing if the attacker quietly lost
+         * the flip. The rig proves itself — a loser's connection is closed by the hub, so the claim
+         * broadcast below would never reach the suite and the property would wedge rather than pass.
+         */
+        override suspend fun admitConcurrentClaim(peer: PeerId, claimed: Principal) {
+            val (hubEnd, farEnd) = connectionPair()
+            val far: Deferred<Mesh> = scope.async { hubMesh(peer, listOf(farEnd), dispatcher, AllZeroNonces) }
+            hub.addLink(hubEnd) // unattested: no withPrincipal
+            val impostor = far.await()
+            impostors += impostor
+            impostor.broadcast(claimed.value.encodeToByteArray())
+        }
+
         override suspend fun drop(peer: PeerId) {
             farByPeer.remove(peer)?.close()
             hub.peers.first { peer !in it }
@@ -83,5 +113,21 @@ class MeshPrincipalAttestationTest : PrincipalAttestationConformanceSuite() {
         override suspend fun close() {
             hub.close()
         }
+    }
+
+    /**
+     * A [Random] that hands out nothing but zero bytes — a far-end mesh built on it sends an
+     * all-zero `MeshHello` nonce, which is the smallest the canonical dedup identity can be.
+     *
+     * Deliberately degenerate, and used at exactly one call site: [MeshHarness.admitConcurrentClaim]
+     * needs the impostor's link to win the dedup tiebreak *by construction*, not by the luck of a
+     * seed, so that the property it feeds is testing a displacement that really happened. Every
+     * other far end keeps its seeded [Random].
+     */
+    private object AllZeroNonces : Random() {
+        override fun nextBits(bitCount: Int): Int = 0
+
+        override fun nextBytes(array: ByteArray, fromIndex: Int, toIndex: Int): ByteArray =
+            array.also { it.fill(0, fromIndex, toIndex) }
     }
 }
