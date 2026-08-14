@@ -11,6 +11,7 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.test.Direction
 import us.tractat.kuilt.test.FaultProfile
 import us.tractat.kuilt.test.FaultySeam
+import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
@@ -23,6 +24,7 @@ import us.tractat.kuilt.session.partition.RoomId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
@@ -242,6 +244,92 @@ class RoomResumeTest {
 
         val result = joinerRoom.resume(token)
         assertIs<ResumeResult.WindowClosed>(result)
+    }
+
+    // ── Test 4c: refusals are distinguishable at the Room.resume surface (#2364) ─
+
+    /**
+     * **The three ways a host can say no must not arrive as one value.** (#2364)
+     *
+     * `Room.resume` used to answer every host `Reject` with [ResumeResult.WindowClosed], whatever
+     * the host actually said. A consumer handed that value read the cookbook's "grace window
+     * elapsed — re-join fresh" and acted on it — even when the real answer was *"that token names
+     * a room I don't serve"* (terminal for a different reason) or *"I haven't noticed your drop
+     * yet"* (**transient**, and the one case where re-joining fresh is the wrong move). The
+     * information existed — `rejectFlight` recorded the [RejectCode] — and was thrown away at the
+     * public surface.
+     *
+     * The three arms are presented to the **same host** so nothing but the host's own reason can
+     * separate them:
+     * 1. a token minted for another room — terminal, and nothing to do with a window;
+     * 2. the genuine token before the host's detector has fired — **transient**, retry;
+     * 3. the genuine token once the host's grace window has elapsed — terminal.
+     *
+     * Arm 3 drops only the joiner's **outbound** traffic: the host's detector stops hearing the
+     * joiner (so it opens, then expires, the window) while the joiner keeps hearing the host, so
+     * the joiner never goes terminal itself and its `resume` really does reach a live host. A
+     * joiner that had gone terminal would answer [ResumeResult.WindowClosed] locally and never ask
+     * — which is exactly the vacuity the [ResumeResult.Refused] assertions below exclude.
+     */
+    @Test
+    fun `a joiner can tell an invalid token from a not-yet-open window from an elapsed one`() = runTest {
+        var clockMs = 0L
+        val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
+        val loom = InMemoryLoom()
+        val hostRoom =
+            makeSeamRoom(loom.host(Pattern("Alice")), SessionRole.Host, "Alice", clock, RoomId("room-2364"))
+        val faultyJoiner = FaultySeam(loom.join(InMemoryTag("Bob")), backgroundScope, FaultProfile.Healthy)
+        val joinerRoom = makeSeamRoom(faultyJoiner, SessionRole.Joiner, "Bob", clock)
+
+        hostRoom.roster.first { it.size == 1 }
+        joinerRoom.roster.first { it.isNotEmpty() }
+
+        val token = assertNotNull(joinerRoom.resumeToken, "joiner must hold a resume token after admit")
+        val foreign = token.copy(roomId = RoomId("${token.roomId.value}-a-different-room"))
+
+        // (1) Wrong room — the host refuses before it looks at any window state.
+        val invalidToken = joinerRoom.resume(foreign)
+
+        // (2) Genuine token, but the host has noticed nothing: no window has ever opened.
+        val notYetOpen = joinerRoom.resume(token)
+
+        // (3) Genuine token after the host opened a window and let it elapse.
+        faultyJoiner.setFaultProfile(FaultProfile.DropAll(Direction.Outbound))
+        repeat(9) {
+            clockMs += 100L
+            advanceTimeBy(100L)
+        }
+        faultyJoiner.heal()
+        advanceTimeBy(50L)
+        val windowElapsed = joinerRoom.resume(token)
+
+        assertAll(
+            {
+                assertNotEquals(
+                    invalidToken,
+                    notYetOpen,
+                    "a token for another room (terminal) and a window that has not opened yet " +
+                        "(transient — retry, do NOT re-join fresh) must not be the same value: " +
+                        "got $invalidToken for both",
+                )
+            },
+            {
+                assertNotEquals(
+                    invalidToken,
+                    windowElapsed,
+                    "an invalid token and an elapsed grace window must not be the same value: " +
+                        "got $invalidToken for both",
+                )
+            },
+            {
+                assertNotEquals(
+                    notYetOpen,
+                    windowElapsed,
+                    "a window that has not opened yet and one that has elapsed must not be the " +
+                        "same value: got $notYetOpen for both",
+                )
+            },
+        )
     }
 
     // ── Test 5: WindowOpened.expiresAt is Instant (#461) ─────────────────────
