@@ -44,8 +44,9 @@ class NewbornSeatPocTest {
 
     /**
      * One child edge as a scheduler sees it. [seat] is whatever mechanism supplies the
-     * virtual-time origin (today: the record's `initialVirtualTime`; under A: a local offset;
-     * under B: the replicated max-register), [committed] is `issued − returned`, [w] the weight.
+     * virtual-time origin (as of this PoC: the record's `initialVirtualTime`; under A: a local
+     * offset; under B: the replicated max-register — B is what shipped, as a [Gauge], and the
+     * record's field is gone, #1752), [committed] is `issued − returned`, [w] the weight.
      */
     private data class Child(val id: String, var seat: Rational, var committed: Long = 0L, val w: Long = 1L) {
         val ev: Rational get() = seat + Rational.of(committed, w)

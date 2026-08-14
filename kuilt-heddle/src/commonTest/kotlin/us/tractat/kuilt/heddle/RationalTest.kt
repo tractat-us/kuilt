@@ -46,9 +46,11 @@ class RationalTest {
     }
 
     /**
-     * The exact ceiling — the rounding rule behind
-     * [AttachmentRecord.neutralInitialVirtualTime]. Note the contrast with Kotlin's `Long`
-     * division, which truncates toward zero: `7/2` truncates to `3` but ceils to `4`.
+     * The exact ceiling — [Rational.ceil]. Note the contrast with Kotlin's `Long` division,
+     * which truncates toward zero: `7/2` truncates to `3` but ceils to `4`. It has no
+     * production caller since the seat moved into [Gauge.floor], which is a [Rational] and
+     * needs no rounding at all (#1752); the direction is pinned here because it is the part a
+     * future `Long` virtual-time field would get wrong.
      */
     @Test
     fun ceilRoundsUpToTheLeastEnclosingWhole() {

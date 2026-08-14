@@ -1,6 +1,29 @@
 # Where a newborn's seat lives — settling #1713 and #1696
 
-> **Status: PARKED after adversarial review. Not implemented, and not ready to be.**
+> **Status: SUPERSEDED and shipped — the revision this document asked for exists, and it
+> landed.** The `Gauge` composition recorded on
+> [#1752](https://github.com/tractat-us/kuilt/issues/1752) replaced §5.2's refuted write
+> gate and §5.1's additive read path; it shipped in three slices, the last of which
+> deleted `AttachmentRecord.initialVirtualTime` outright. Read this document for *why the
+> seat had to move* (§1–§4 are unaffected and were strengthened by review) and for the
+> attacks in §5.5 and §11 that killed the first composition. Do **not** read §5.1/§5.2 as
+> the design, §7 as work to be done, or §9's fork as open — see the three notes below.
+>
+> - **§7's escape hatch is moot.** It designed a non-`data` `AttachmentRecord` plus a
+>   ~40-line legacy `KSerializer` that would keep writing a `0` seat element on the wire,
+>   because #1713 said the field had to be *retained*. The field was deleted instead
+>   (@keddie, 2026-08-12: *"just break it… no one is using it at the moment"*), so there
+>   is nothing left to make inexpressible and no legacy element to carry. §7.1's analysis
+>   of what deleting it costs — undecodable historical `Prepare` entries are **silently
+>   skipped** on replay — is still accurate, and is the price that was knowingly paid.
+> - **§9's fork is decided, the same way.** "Is a breaking `EntitlementLedger` wire change
+>   acceptable?" — yes; the relocation design's precedent held.
+> - **§5.4's deletions all happened**, including `prepareNeutral`'s `readIndex()` fence and
+>   applied-prefix gate, and both of that method's documented residuals.
+>
+> ---
+>
+> **Original status header, kept for the record: PARKED after adversarial review.**
 > This settles a question two issues ask in two different voices: when a new child joins
 > the fair-share tree, *what decides where it starts*, and *where does that decision
 > live*? #1713 recommends removing the stored answer; #1696 recommends storing a better
