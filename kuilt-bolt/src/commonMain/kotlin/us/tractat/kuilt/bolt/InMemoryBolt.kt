@@ -229,6 +229,40 @@ public class InMemoryBolt<Id : Any, V, Op : Any>(
         usedBytes -= segments.removeAt(index).byteSize
     }
 
+    /**
+     * Replace the segment at [over] with a byte-for-byte copy of the **earlier** segment at [from],
+     * its `baseOffset` included — which is precisely what a *stale segment file restored over a
+     * newer one* is on a disk-backed backend, and the only way this archive's offset space can run
+     * **backwards**.
+     *
+     * **Only a damaged archive needs this, and only a test wants one.** [loseSegment] can widen a
+     * hole but never invert one: every archive it can build has each header claiming an offset
+     * *above* where the previous segment stopped, so the continuity check in [emitFrames] is only
+     * ever asked about a forward gap. A backend that spelled that check `header.baseOffset >
+     * resumeOffset` rather than `!=` is green against every other fixture in the tree and replays
+     * this archive as a [CleanTail] — over a history that hands the same records back twice, at
+     * offsets a consumer has already consumed. Which is worse than the hole, not milder: a
+     * re-delivered `(replica, seq)` looks like a *new* record to a consumer resuming by offset.
+     *
+     * A restore, not an arbitrary rewrite. [from] must precede [over] — the *whole* segment moves,
+     * bytes and base offset together, so the header and this class's bookkeeping still agree and
+     * `emitFrames`' assertion about them stays a statement about *this class*, never a way for a
+     * fixture to manufacture a state no filesystem could produce. And [over] may not be the newest
+     * segment, which is the archive's append target: overwriting it would move the cursor, and the
+     * damage this hook exists to model does not.
+     */
+    internal fun restoreStaleSegment(over: Int, from: Int): Unit = lock.withLock {
+        require(over in segments.indices) { "no segment at $over — this archive has ${segments.size}" }
+        require(from in 0 until over) { "a stale segment is an EARLIER one restored over a later one, not $from over $over" }
+        require(over < segments.lastIndex) { "segment $over is the append target, and restoring over it would move the cursor" }
+        val stale = segments[from].copy()
+        // `nextOffset` is deliberately untouched, exactly as in [loseSegment]: restoring an old file
+        // over a newer one does not move the append cursor, which a disk-backed backend re-derives
+        // from the NEWEST header — and the newest segment is the one this hook refuses to touch.
+        usedBytes += stale.byteSize - segments[over].byteSize
+        segments[over] = stale
+    }
+
     /** Start a new segment whose first frame sits at [offset]. Called under [lock]. */
     private fun rollSegment(offset: Long): Segment {
         val header = encodeSegmentHeader(
@@ -393,6 +427,16 @@ public class InMemoryBolt<Id : Any, V, Op : Any>(
         }
 
         fun snapshot(): SegmentSnapshot = SegmentSnapshot(baseOffset, bytes, used, frameBytes)
+
+        /**
+         * This segment's content and base offset again, in a segment of its own — what copying a
+         * file gives a disk-backed backend for free. See [restoreStaleSegment].
+         *
+         * A copy rather than a second reference to this instance: the archive would otherwise hold
+         * one mutable object at two indices, and a later append to the newest segment would be
+         * visible at an older one, which no filesystem does.
+         */
+        fun copy(): Segment = Segment(baseOffset, bytes.copyOf(used), headerBytes)
     }
 
     private class SegmentSnapshot(

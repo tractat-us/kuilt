@@ -34,8 +34,16 @@ class PosixMappedBoltConformanceTest : BoltConformanceSuite() {
      * zero-tail/recorded-extent machinery is actually consulted. The default 1 MiB budget cannot be
      * used as-is: it puts the whole fixture in ONE segment, leaving no middle to lose.
      */
-    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): DiscontinuousFixture =
-        discontinuousPosixMappedBolt(clock, intactFrames, synchronous = true, PRE_ALLOCATED_TAIL_BYTES)
+    override suspend fun newDiscontinuousBolt(
+        clock: Clock,
+        intactFrames: Int,
+        lostSegments: Int,
+    ): DiscontinuousFixture =
+        discontinuousPosixMappedBolt(clock, intactFrames, lostSegments, synchronous = true, PRE_ALLOCATED_TAIL_BYTES)
+
+    /** With the same pre-allocated tail, so the segment before the jump ends the shipped way. */
+    override suspend fun newBackwardsJumpBolt(clock: Clock, intactFrames: Int): BackwardsJumpFixture =
+        backwardsJumpPosixMappedBolt(clock, intactFrames, synchronous = true, PRE_ALLOCATED_TAIL_BYTES)
 
     override fun newBoltThatCannotFlush(clock: Clock): DurabilityFixture =
         unflushablePosixMappedBolt(clock, synchronous = true)
@@ -71,8 +79,16 @@ class TinySegmentPosixMappedBoltConformanceTest : BoltConformanceSuite() {
      * the parse loop normally — never consulting the recorded extent at all. The two configurations
      * reach the continuity check by different routes and must reach the same verdict.
      */
-    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): DiscontinuousFixture =
-        discontinuousPosixMappedBolt(clock, intactFrames, synchronous = true, NO_PRE_ALLOCATED_TAIL)
+    override suspend fun newDiscontinuousBolt(
+        clock: Clock,
+        intactFrames: Int,
+        lostSegments: Int,
+    ): DiscontinuousFixture =
+        discontinuousPosixMappedBolt(clock, intactFrames, lostSegments, synchronous = true, NO_PRE_ALLOCATED_TAIL)
+
+    /** The complement again: the segment before the jump ends exactly on a frame boundary. */
+    override suspend fun newBackwardsJumpBolt(clock: Clock, intactFrames: Int): BackwardsJumpFixture =
+        backwardsJumpPosixMappedBolt(clock, intactFrames, synchronous = true, NO_PRE_ALLOCATED_TAIL)
 
     /**
      * One frame per segment, so a durability doubt is carried across **rolls** rather than staying
@@ -97,8 +113,15 @@ class AsynchronousPosixMappedBoltConformanceTest : BoltConformanceSuite() {
     override suspend fun newTruncatedBolt(clock: Clock, intactFrames: Int): Bolt<RgaOp<String>> =
         truncatedPosixMappedBolt(clock, intactFrames, PosixMappedBolt.DEFAULT_SEGMENT_FRAME_BYTES)
 
-    override suspend fun newDiscontinuousBolt(clock: Clock, intactFrames: Int): DiscontinuousFixture =
-        discontinuousPosixMappedBolt(clock, intactFrames, synchronous = false, PRE_ALLOCATED_TAIL_BYTES)
+    override suspend fun newDiscontinuousBolt(
+        clock: Clock,
+        intactFrames: Int,
+        lostSegments: Int,
+    ): DiscontinuousFixture =
+        discontinuousPosixMappedBolt(clock, intactFrames, lostSegments, synchronous = false, PRE_ALLOCATED_TAIL_BYTES)
+
+    override suspend fun newBackwardsJumpBolt(clock: Clock, intactFrames: Int): BackwardsJumpFixture =
+        backwardsJumpPosixMappedBolt(clock, intactFrames, synchronous = false, PRE_ALLOCATED_TAIL_BYTES)
 
     override fun newBoltThatCannotFlush(clock: Clock): DurabilityFixture =
         unflushablePosixMappedBolt(clock, synchronous = false)
@@ -188,10 +211,10 @@ private suspend fun truncatedPosixMappedBolt(
 }
 
 /**
- * An on-disk archive of [intactFrames] ordinary frames, then a **deleted segment file**, then two
- * healthy frames behind the hole.
+ * An on-disk archive of [intactFrames] ordinary frames, then [lostSegments] **deleted segment files**,
+ * then two healthy frames behind the hole.
  *
- * Every frame is written through [Bolt.append] and then one whole file is removed — nothing is
+ * Every frame is written through [Bolt.append] and then whole files are removed — nothing is
  * rewritten, nothing is corrupted. That is the point: the surviving files are byte-for-byte intact
  * and every one of their headers reads perfectly, so no checksum anywhere can notice, and the archive
  * is discontinuous only in the sense that one header's absolute `baseOffset` no longer follows the
@@ -199,85 +222,177 @@ private suspend fun truncatedPosixMappedBolt(
  * what a healthy pre-allocated segment ends in, and the recorded-extent check is derived across the
  * hole and so is corrupted by exactly the state it would have to detect.
  *
- * A one-byte segment budget puts exactly one frame in each file regardless of which subclass asks, so
- * "the segment after the intact prefix" is just the file at index [intactFrames]. The writer is
- * closed before its file is deleted, and the archive is re-opened afterwards, so the replay adopts
- * what is actually on disk rather than a segment list that predates the hole.
+ * One frame per segment file, so "the segment after the intact prefix" is just the file at index
+ * [intactFrames] — and one removed file is one lost frame, which is what makes
+ * [DiscontinuousFixture]'s count mean lost *segments* on this backend. The writer is closed before any
+ * file is deleted, and the archive is re-opened afterwards, so the replay adopts what is actually on
+ * disk rather than a segment list that predates the hole.
  *
- * `beyondTheHole` is the offset the **first frame behind the hole** was written at, taken from that
- * append's own [AppendResult.Written] rather than computed from file sizes — one frame per file makes
- * it the frame at index `intactFrames + 1`. Removing a file frees its bytes without moving anything:
- * every surviving header still carries the absolute `baseOffset` it was written with, which is exactly
- * why the archive is discontinuous rather than short.
+ * Both edges of the hole are handed back as the **appends themselves** rather than as offsets computed
+ * from file sizes. Removing a file frees its bytes without moving anything: every surviving header
+ * still carries the absolute `baseOffset` it was written with, which is exactly why the archive is
+ * discontinuous rather than short.
  */
 private suspend fun discontinuousPosixMappedBolt(
     clock: Clock,
     intactFrames: Int,
+    lostSegments: Int,
     synchronous: Boolean,
     zeroTailBytes: Long,
 ): DiscontinuousFixture {
     require(intactFrames >= 1) { "the fixture stops AFTER a frame, so it needs at least one" }
+    require(lostSegments >= 1) { "an archive that lost nothing has no hole in it" }
+    val archive = oneFramePerSegmentArchive(
+        clock,
+        intactFrames + lostSegments + FRAMES_BEHIND_THE_HOLE,
+        synchronous,
+        zeroTailBytes,
+    )
+    archive.checkTailBefore(intactFrames, "the hole")
+    repeat(lostSegments) {
+        // Always the file at [intactFrames]: the listing closes up behind each removal, so removing
+        // that index repeatedly takes CONSECUTIVE segments and leaves one wider hole rather than
+        // several narrow ones — which is what `DiscontinuousFixture` checks from the other side.
+        val hole = segmentFiles(archive.directory)[intactFrames]
+        check(NSFileManager.defaultManager.removeItemAtPath(hole, error = null)) {
+            "the fixture's hole must actually be punched — $hole is still there"
+        }
+    }
+
+    return DiscontinuousFixture(
+        archive.reopen(),
+        lostFrames = archive.written.subList(intactFrames, intactFrames + lostSegments),
+        firstSurvivor = archive.written[intactFrames + lostSegments],
+    )
+}
+
+/**
+ * An on-disk archive of [intactFrames] ordinary frames, then a **stale segment file restored** over
+ * the one that should follow them, then two healthy frames behind the jump.
+ *
+ * The oldest segment file is copied over the file just past the intact prefix — a backup restoring one
+ * generation of a file over another, a directory holding two generations of the same archive. Nothing
+ * is corrupted and nothing is missing: every file reads perfectly, and the archive's offset space
+ * simply runs **backwards** at one boundary, because that file's header carries the *absolute* base
+ * offset it was written with. A backend asking only whether a segment starts too far *along* is blind
+ * to it, and every other fixture in this tree agrees with such a backend.
+ *
+ * The stale copy is the **oldest** segment rather than the immediately preceding one, so the jump goes
+ * back past whole frames rather than to a boundary inside the last of them — [BackwardsJumpFixture]
+ * refuses to be built otherwise. The frames behind the jump are therefore duplicates of frames the
+ * replay has already emitted, which is the harm a backend stepping over the jump commits.
+ *
+ * Adoption derives every non-last segment's extent as its successor's base minus its own, so a base
+ * offset that runs backwards makes one of those derivations **negative**. That is left alone rather
+ * than smoothed over: a derived extent is an inference *from* continuity and this backend's replay
+ * says so in as many words, refusing to treat it as evidence about the very thing it assumes. A
+ * fixture that arranged the damage to keep those derivations tidy would be choosing the configuration
+ * in which the claim cannot fail.
+ */
+private suspend fun backwardsJumpPosixMappedBolt(
+    clock: Clock,
+    intactFrames: Int,
+    synchronous: Boolean,
+    zeroTailBytes: Long,
+): BackwardsJumpFixture {
+    require(intactFrames >= 2) { "the jump must go back past a WHOLE frame, so it needs a frame to spare" }
+    val archive = oneFramePerSegmentArchive(clock, intactFrames + 1 + FRAMES_BEHIND_THE_HOLE, synchronous, zeroTailBytes)
+    archive.checkTailBefore(intactFrames, "the jump")
+    val files = segmentFiles(archive.directory)
+    val manager = NSFileManager.defaultManager
+    check(manager.removeItemAtPath(files[intactFrames], error = null)) {
+        "the segment the stale copy lands on must be cleared first — ${files[intactFrames]} is still there"
+    }
+    check(manager.copyItemAtPath(files[0], toPath = files[intactFrames], error = null)) {
+        "the stale segment must actually be restored over ${files[intactFrames]}"
+    }
+
+    return BackwardsJumpFixture(
+        archive.reopen(),
+        revisited = archive.written[0],
+        lastFrameBeforeTheJump = archive.written[intactFrames - 1],
+    )
+}
+
+/**
+ * [frames] appends into a fresh directory at a budget that puts exactly **one frame in each segment
+ * file**, plus [zeroTailBytes] of pre-allocated tail on each, with the writer closed.
+ *
+ * The budget is measured from a real encoded frame rather than guessed: it has to be big enough for
+ * one frame and too small for two, and a fixture that silently packed two frames into a segment would
+ * have no middle segment to damage. A budget of ONE byte is how "no tail at all" is expressed — a
+ * segment is allocated at `maxOf(budget, frame.size)`, so a one-byte budget sizes every segment to
+ * exactly the frame that forced it. Adding the pad to a *measured* frame size would not do it: these
+ * frames differ in size by a few bytes as the `Rga` ids grow, so every segment but one would still get
+ * a small accidental tail and the "ends on a frame boundary" path would go undriven.
+ */
+private suspend fun oneFramePerSegmentArchive(
+    clock: Clock,
+    frames: Int,
+    synchronous: Boolean,
+    zeroTailBytes: Long,
+): FixtureArchive {
     val format = rgaArchiveFormat()
     val alice = ReplicaId("alice")
     val ops = buildList {
         var live = Rga.empty<String>()
-        repeat(intactFrames + 1 + FRAMES_BEHIND_THE_HOLE) { index ->
+        repeat(frames) { index ->
             val (next, op) = live.insertAt(alice, live.size, "frame-$index")
             live = next
             add(op)
         }
     }
-    // One frame per segment, plus whatever tail this subclass asked for. Measured from a real
-    // encoded frame rather than guessed: the budget has to be big enough for one frame and too
-    // small for two, and a fixture that silently packed two frames into a segment would have no
-    // middle to lose.
-    //
-    // A budget of ONE byte is how "no tail at all" is expressed: a segment is allocated at
-    // `maxOf(budget, frame.size)`, so a one-byte budget sizes every segment to exactly the frame
-    // that forced it. Adding the pad to a MEASURED frame size would not do it — these frames differ
-    // in size by a few bytes as the `Rga` ids grow, so every segment but one would still get a
-    // small accidental tail, and the "ends on a frame boundary" path would go undriven.
-    val frameBytes = encodeFrame(
-        RawFrame(clock.now(), setOf(ops[0].id.dot), null, listOf(format.encode(ops[0]))),
-    ).size.toLong()
+    val frameBytes = encodedFrameBytes(format, clock, ops[0])
     check(zeroTailBytes < frameBytes) { "a $zeroTailBytes-byte pad would leave room for a second frame" }
     val budget = if (zeroTailBytes == NO_PRE_ALLOCATED_TAIL) 1L else frameBytes + zeroTailBytes
     val directory = boltTestDirectory()
     val writer = PosixMappedBolt(format, clock, directory, synchronous, budget)
-
     val written = ops.map { assertIs<AppendResult.Written>(writer.append(listOf(it)), "every fixture frame is written") }
     writer.close()
     check(segmentFiles(directory).size == ops.size) {
-        "the fixture needs one frame per segment, or there is no middle segment to lose"
+        "the fixture needs one frame per segment, or there is no middle segment to damage — and one " +
+            "removed file would then be more than one lost frame, which is what the suite counts"
     }
-    // VERIFIED, not merely configured. Which shape the segment before the hole ends in decides
-    // which of this backend's two stop paths the replay takes, and a fixture that quietly produced
-    // the other one would leave the property blind exactly the way #2240 describes — so the tail is
-    // measured off the file rather than assumed from the budget.
-    val preHole = segmentFiles(directory)[intactFrames - 1]
-    val preHoleFrame = encodeFrame(
-        RawFrame(
-            clock.now(),
-            setOf(ops[intactFrames - 1].id.dot),
-            null,
-            listOf(format.encode(ops[intactFrames - 1])),
-        ),
-    ).size.toLong()
-    val preHoleTail = fileSize(preHole) - headerBytesOf(format) - preHoleFrame
-    check(if (zeroTailBytes == NO_PRE_ALLOCATED_TAIL) preHoleTail == 0L else preHoleTail > 0L) {
-        "the segment before the hole must end the way this subclass says it does, and its " +
-            "pre-allocated tail measured $preHoleTail bytes against a request for $zeroTailBytes"
-    }
-    val hole = segmentFiles(directory)[intactFrames]
-    check(NSFileManager.defaultManager.removeItemAtPath(hole, error = null)) {
-        "the fixture's hole must actually be punched — $hole is still there"
+    return FixtureArchive(directory, format, clock, synchronous, budget, ops, written, zeroTailBytes)
+}
+
+/** The bytes one frame carrying [op] encodes to, computed the way the backend computes them. */
+private fun encodedFrameBytes(
+    format: BoltArchiveFormat<RgaId, String, RgaOp<String>>,
+    clock: Clock,
+    op: RgaOp.Insert<String>,
+): Long = encodeFrame(RawFrame(clock.now(), setOf(op.id.dot), null, listOf(format.encode(op)))).size.toLong()
+
+/** One frame per segment file, and everything the damage fixtures need to say what they did. */
+private class FixtureArchive(
+    val directory: String,
+    private val format: BoltArchiveFormat<RgaId, String, RgaOp<String>>,
+    private val clock: Clock,
+    private val synchronous: Boolean,
+    private val budget: Long,
+    private val ops: List<RgaOp.Insert<String>>,
+    val written: List<AppendResult.Written>,
+    private val zeroTailBytes: Long,
+) {
+    /**
+     * **VERIFIED, not merely configured.** Which shape the segment before [index] ends in decides
+     * which of this backend's two stop paths the replay takes to reach the continuity check, and a
+     * fixture that quietly produced the other one would leave the property blind exactly the way
+     * #2240 describes — so the tail is measured off the file rather than assumed from the budget.
+     * [damage] names what follows, for the failure message.
+     */
+    fun checkTailBefore(index: Int, damage: String) {
+        val frameBytes = encodedFrameBytes(format, clock, ops[index - 1])
+        val tail = fileSize(segmentFiles(directory)[index - 1]) - headerBytesOf(format) - frameBytes
+        check(if (zeroTailBytes == NO_PRE_ALLOCATED_TAIL) tail == 0L else tail > 0L) {
+            "the segment before $damage must end the way this subclass says it does, and its " +
+                "pre-allocated tail measured $tail bytes against a request for $zeroTailBytes"
+        }
     }
 
-    return DiscontinuousFixture(
-        PosixMappedBolt(format, clock, directory, synchronous, budget),
-        lostFrame = written[intactFrames],
-        firstSurvivor = written[intactFrames + 1],
-    )
+    /** The archive as it is on disk now — the shape a restart sees, and the only one that is damaged. */
+    fun reopen(): PosixMappedBolt<RgaId, String, RgaOp<String>> =
+        PosixMappedBolt(format, clock, directory, synchronous, budget)
 }
 
 /** Frames behind the hole. More than one, so "stepped over it" is unmistakable rather than off-by-one. */
