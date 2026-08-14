@@ -160,6 +160,16 @@ class EntitlementLedgerConservationTest {
         var nested = 0
         var accumulated = 0
         var underAcks = 0
+
+        /**
+         * Every draw's outcome, carried in each floor's failure message. A floor that reds then says
+         * *where* the draws went rather than only that too few arrived — the non-moving outcomes are
+         * how this fixture goes quietly vacuous, and diagnosing that from a bare count already cost
+         * it one round (see the funding-chain comment in [randomizedRunWithRelocation]).
+         */
+        override fun toString(): String =
+            "moved=$moved refused=$refused nothingToMove=$nothingToMove unfunded=$unfunded " +
+                "nested=$nested accumulated=$accumulated underAcks=$underAcks"
     }
 
     private fun EntitlementLedger.applying(patch: Patch<EntitlementLedger>?): EntitlementLedger =
@@ -441,11 +451,14 @@ class EntitlementLedgerConservationTest {
                 }
             },
             {
-                // Per-edge safety may also fire on `e1`: a residue leaves spendable credit behind,
-                // and charging it rolls up through the prefix edge. Nothing else may move — in
-                // particular no negative holdings, no dual inbound, no negative effective spend.
+                // Nothing beyond the #1783 shape may move: per-edge safety and the closure violation
+                // on the STRANDS themselves, plus the global backstop once the residue is large
+                // enough to show in the totals. In particular no negative holdings, no dual inbound,
+                // no negative effective spend, and no per-edge report on an edge that was never
+                // under-acked — including the prefix `e1`, which the residue's spendable credit
+                // could in principle roll up through and measurably does not.
                 val stray = conflicts.filterNot {
-                    it is LedgerConflict.PerEdgeSafety && (it.edge in strands || it.edge == e1) ||
+                    it is LedgerConflict.PerEdgeSafety && it.edge in strands ||
                         it is LedgerConflict.ClosureViolation && it.edge in strands ||
                         it is LedgerConflict.ConservationViolation
                 }
@@ -464,9 +477,9 @@ class EntitlementLedgerConservationTest {
         val rig = RelocationRig()
         repeat(80) { randomizedRunWithRelocation(rnd, minted = 1_000L, allowUnderAck = false, rig = rig) }
         assertAll(
-            { assertTrue(rig.moved >= 250, "too few generations actually moved: ${rig.moved}") },
-            { assertTrue(rig.nested >= 150, "too few strands carried an earlier move's credit (§12.1): ${rig.nested}") },
-            { assertTrue(rig.accumulated >= 50, "the §12.3 accumulation arm fired too rarely: ${rig.accumulated}") },
+            { assertTrue(rig.moved >= 250, "too few generations actually moved — $rig") },
+            { assertTrue(rig.nested >= 150, "too few strands carried an earlier move's credit (§12.1) — $rig") },
+            { assertTrue(rig.accumulated >= 50, "the §12.3 accumulation arm fired too rarely — $rig") },
         )
     }
 
@@ -481,9 +494,9 @@ class EntitlementLedgerConservationTest {
         val rig = RelocationRig()
         repeat(80) { randomizedRunWithRelocation(rnd, minted = 1_000L, allowUnderAck = true, rig = rig) }
         assertAll(
-            { assertTrue(rig.underAcks >= 25, "the under-ack rig fired too rarely: ${rig.underAcks}") },
-            { assertTrue(rig.moved >= 250, "too few generations actually moved: ${rig.moved}") },
-            { assertTrue(rig.accumulated >= 50, "the §12.3 accumulation arm fired too rarely: ${rig.accumulated}") },
+            { assertTrue(rig.underAcks >= 25, "the under-ack rig fired too rarely — $rig") },
+            { assertTrue(rig.moved >= 250, "too few generations actually moved — $rig") },
+            { assertTrue(rig.accumulated >= 50, "the §12.3 accumulation arm fired too rarely — $rig") },
         )
     }
 }
