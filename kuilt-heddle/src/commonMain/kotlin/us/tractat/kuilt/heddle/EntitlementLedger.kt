@@ -1244,6 +1244,14 @@ public class EntitlementLedger private constructor(
     /** The edge ids carrying an `issuedRelocIn` slot — where a re-home's credit legally lands. */
     internal fun issuedRelocInEdges(): Set<AttachmentId> = issuedRelocIn.keys
 
+    /**
+     * The donors holding a transfer row at [edge]'s path key — the rows a generation move off [edge]
+     * would abandon (#2366). Empty for an edge nobody has handed entitlement across.
+     * `internal` — the [relocationPatch] precondition reads the same map; test support.
+     */
+    internal fun transferDonorsOn(edge: AttachmentId): Set<ReplicaId> =
+        transfers[PathKey.of(edge)]?.keys ?: emptySet()
+
     /** Every group named as a parent or child by any (singleton or divergent) record. */
     internal fun allGroups(): Set<GroupId> =
         records.values.flatten().flatMapTo(HashSet()) { listOf(it.parent, it.child) }

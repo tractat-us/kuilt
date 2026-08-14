@@ -34,6 +34,10 @@ class EntitlementLedgerReconcileTest {
     private val e2 = AttachmentId("e2") // g    → h
     private val e3 = AttachmentId("e3") // root → g  (the legal reparent generation)
 
+    // #2366 — the transfer tangle's QUIET half: a recipient who merely *holds* transferred credit.
+    private val bob = ReplicaId("bob") // the transfer RECIPIENT; p3 is the donor
+    private val e4 = AttachmentId("e4") // g → h, the legal reparent generation for `h`
+
     // #1916 — the cross-parent reparent: `g` moves out from under `a` and in under `b`.
     private val a = GroupId("a")
     private val b = GroupId("b")
@@ -571,6 +575,144 @@ class EntitlementLedgerReconcileTest {
             fromCompleteView.patch,
             fromEmptyView.patch,
             "the derived patch must not depend on the deriving peer's data-plane view at all",
+        )
+    }
+
+    // ── #2366 — the transfer tangle's QUIET half ─────────────────────────────────────────────────
+
+    /**
+     * The #2366 strand, verbatim from the issue (`root →e1→ g →e2→ h`, `h` a leaf; 100 minted to the
+     * donor `p3`). `p3` delegates 100 down `e1` and 60 down `e2`, then hands 40 of what it holds at
+     * `h` to `bob`. The transfer row lands on `PathKey.of(e2)` — the **generation's** id — so the
+     * pre-race pockets read `p3@h = 20`, `bob@h = 40`.
+     *
+     * Then the ordinary #1665 race: `e2` is retired with entitlement still outstanding, and `h` is
+     * legally reparented onto a fresh `e4`. `holdings` now keys transfers off `PathKey.of(e4)`, where
+     * there are no rows at all — so `bob`'s 40 is already unread, and the generation move is about to
+     * re-home the whole 60 onto `p3` and make that permanent.
+     *
+     * @param withTransfer `false` builds the identical strand with the hand-off omitted — the control
+     *   arm for every refusal assertion below, so "refuse everything" cannot pass this group.
+     */
+    private fun transferTangledLeafStrand(withTransfer: Boolean = true): EntitlementLedger {
+        var l = EntitlementLedger.ZERO.piece(EntitlementLedger.bootstrap(root, mapOf(p3 to 100L), nonce = "genesis"))
+        l = l.piece(l.prepare(rec(e1, root, g))!!.delta)
+        l = l.piece(l.activate(e1)!!.delta)
+        l = l.piece(l.prepare(rec(e2, g, h))!!.delta)
+        l = l.piece(l.activate(e2)!!.delta)
+        l = l.piece(l.delegate(p3, e1, 100L)!!.delta)
+        l = l.piece(l.delegate(p3, e2, 60L)!!.delta)
+        if (withTransfer) {
+            // The hand-off, at `h`, while `e2` is still `h`'s live inbound: transfers[PathKey.of(e2)].
+            l = l.piece(l.transfer(h, p3, bob, 40L)!!.delta)
+            assertEquals(20L, l.holdings(h, p3), "fixture: the donor keeps 60 − 40")
+            assertEquals(40L, l.holdings(h, bob), "fixture: the recipient holds the handed-off 40")
+        }
+        // The raced advisory retire, then the legal reparent onto a fresh generation.
+        l = l.piece(l.close(e2)!!.delta)
+        l = l.piece(EntitlementLedger.of(lifecycle = mapOf(e2 to Lifecycle.RETIRED)))
+        l = l.piece(l.prepare(rec(e4, g, h))!!.delta)
+        l = l.piece(l.activate(e4)!!.delta)
+        return l
+    }
+
+    /**
+     * The fix (#2366 option 2): a strand whose path key carries **any** transfer row is refused,
+     * widening `relocationPatch`'s documented out-of-scope case from the loud half (`n < 0`, a
+     * recipient who also spent or released across the strand) to the quiet half — a recipient who
+     * merely *holds*, has no counter slot on the strand at all, and so is invisible to every existing
+     * precondition.
+     */
+    @Test
+    fun aStrandWhosePathKeyCarriesTransferRowsIsRefused() {
+        val l = transferTangledLeafStrand()
+        val refused = assertIs<Relocation.Refused>(
+            l.relocateFromConvergedView(h),
+            "a generation move that would abandon the strand's transfer rows must refuse",
+        )
+        assertAll(
+            // ── the rig fired for the RIGHT reason. A bare `assertIs<Refused>` passes just as
+            // loudly when the move was refused for cover, for a net-negative slot, or because the
+            // fixture had nothing to move — so pin the row's existence and the reason's identity.
+            {
+                assertEquals(
+                    setOf(p3),
+                    l.transferDonorsOn(e2),
+                    "rig: the strand's path key really does carry a transfer row",
+                )
+            },
+            {
+                assertTrue(
+                    l.baseFinalsOn(e2).values.all { it.issued >= it.returned },
+                    "rig: nobody is net-negative on the strand, so the `n < 0` guard CANNOT be what refused",
+                )
+            },
+            {
+                assertEquals(
+                    emptySet(),
+                    l.transferDonorsOn(e4),
+                    "rig: the live edge's path key carries no rows — the abandonment is the whole defect",
+                )
+            },
+            { assertTrue(refused.reason.contains(e2.value), "the refusal names the strand: ${refused.reason}") },
+            { assertTrue(refused.reason.contains("transfer"), "…and says transfer rows are why: ${refused.reason}") },
+            { assertTrue(refused.reason.contains(p3.value), "…and names the donor whose row would be abandoned: ${refused.reason}") },
+        )
+    }
+
+    /**
+     * Non-vacuity for the refusal above: the **identical** strand with the hand-off omitted still
+     * moves, and lands the whole 60 on the donor because that is now the truth. Without this arm a
+     * guard that refused every strand would pass the test above unremarked.
+     */
+    @Test
+    fun aStrandWithNoTransferRowsStillMoves() {
+        val l = transferTangledLeafStrand(withTransfer = false)
+        val moved = assertIs<Relocation.Moved>(
+            l.relocateFromConvergedView(h),
+            "the guard must be about the transfer rows, not about this topology",
+        )
+        val reconciled = l.piece(moved.patch)
+        assertAll(
+            { assertEquals(60L, reconciled.holdings(h, p3), "the full net inflow re-homes onto the live generation") },
+            { assertEquals(0L, reconciled.holdings(h, bob), "…and there was never a recipient here") },
+            { assertTrue(reconciled.validate().isEmpty(), "the strand's conflicts clear: ${reconciled.validate()}") },
+        )
+    }
+
+    /**
+     * The corruption itself, pinned — the motivation, and the shape option 1 has to make legal again.
+     *
+     * It is derived the way `HeddleControlPlane.reconcile` derives it: `relocationPatch` on the
+     * control plane's own relocation accumulator (`FenceState.relocations`), which is log-pure and
+     * therefore carries **no transfer rows at all**. So this is simultaneously two statements:
+     *
+     *  1. what the move does to a transfer-tangled strand — `bob`'s 40 evaporates and the donor
+     *     silently recovers it, with `validate()` empty and conservation exactly intact, because
+     *     `Σ_r transferNet(pathKey, r) = 0` makes abandoning a whole path key sum-preserving; and
+     *  2. that the option-2 refusal does **not** reach the H5 control-plane path, whose receiver can
+     *     never carry the rows it would have to see. Containing that needs the rows to become a
+     *     consensus fact (carried in the `QuiesceAck` alongside `SlotFinals`) — option 1's job.
+     */
+    @Test
+    fun theAbandonedRowsSilentlyReassignTheRecipientsEntitlementToTheDonor() {
+        val l = transferTangledLeafStrand()
+        val move = assertIs<Relocation.Moved>(
+            EntitlementLedger.ZERO.relocationPatch(e4, mapOf(e2 to l.baseFinalsOn(e2))),
+            "the log-pure control-plane derivation still moves — it cannot see the rows",
+        )
+        val moved = l.piece(move.patch)
+        assertAll(
+            { assertEquals(60L, moved.holdings(h, p3), "the donor recovers the 40 it gave away (should be 20)") },
+            { assertEquals(0L, moved.holdings(h, bob), "…and the recipient's credit is gone (should be 40)") },
+            { assertTrue(moved.validate().isEmpty(), "nothing diagnoses it — the corruption is silent: ${moved.validate()}") },
+            {
+                assertEquals(
+                    moved.mintedTotal(),
+                    moved.allGroups().sumOf { moved.holdings(it, p3) + moved.holdings(it, bob) } + moved.leafSpentTotal(),
+                    "…and conservation is structurally blind to it: the sum is preserved, only the owner changed",
+                )
+            },
         )
     }
 }
