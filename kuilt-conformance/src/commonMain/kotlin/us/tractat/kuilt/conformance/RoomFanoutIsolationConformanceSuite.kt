@@ -2,8 +2,10 @@ package us.tractat.kuilt.conformance
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.produceIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.runTest
@@ -14,6 +16,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.RoomAuthorizer
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
@@ -22,6 +25,8 @@ import kotlin.coroutines.CoroutineContext
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -47,6 +52,36 @@ import kotlin.time.Duration.Companion.seconds
  *    ([closingOneRoomDoesNotAffectSibling]).
  *  - **(c) Auth-reject exclusion** — a connection the [RoomAuthorizer] rejects is structurally
  *    absent from the room ([rejectedConnectionIsStructurallyExcluded]).
+ *  - **(d) Ingress** — the mirror of (a) and (c): a frame a non-member *sends into* a room reaches
+ *    neither the hub's own inbox nor the room's members ([aNonMembersFrameNeverEntersTheRoom]).
+ *  - **(e) Departure** — a client whose link tears leaves every room it joined, and the room keeps
+ *    working for whoever is left ([aDepartedClientLeavesEveryRoomItJoined]).
+ *
+ * ## Why (d) and (e) were missing, and what that cost — #2307
+ *
+ * (a)–(c) are all **egress**: every one of them originates its frame at a *server room seam* and
+ * asks where it landed. A client-side send appeared in this suite only as a registration signal, and
+ * nothing asserted where a client's frame went — so an implementation that admitted **anything** into
+ * a room's inbox passed all four properties. That is half a membership boundary: the direction an
+ * authorizer exists to stop was the unasserted one.
+ *
+ * Nobody wrote it because the reference [us.tractat.kuilt.core.MuxServerLoom] cannot represent it.
+ * There, *sending on a room's channel **is** the join*, so "a non-member sends into a room" has no
+ * construction — the sender becomes a member. And registration and ingress are **one code path**:
+ * [us.tractat.kuilt.core.RoomHubSeam] returns on a rejected authorization *before* it spools the
+ * frame, so the reference gets its ingress guard for free from the registration guard it had to
+ * write anyway. Any real server with an explicit admit step and a session store has these as two
+ * separate code paths, and only one of them had a property. This is the general shape stated in the
+ * repo guide: *a conformance property is only as strong as the weakest failure the reference
+ * implementation can reach* — here in its **half-a-boundary** form, one direction asserted and the
+ * mirror direction not.
+ *
+ * (d) reaches the state the reference makes unrepresentable by using the [RoomAuthorizer] the suite
+ * already owns: it refuses exactly one `(peer, room)` pair, which makes that peer a **live, admitted,
+ * otherwise-legitimate** connection that is nonetheless not a member of the room it sends into. That
+ * subsumes #2307's two ingress items rather than splitting them, and deliberately: a backend gating
+ * ingress on "is this connection in *any* room" passes the stranger case and fails this one, so this
+ * is the strictly stronger of the two and there is no backend that passes it and fails the other.
  *
  * **Virtual time convention:** every test runs under [StandardTestDispatcher] with the
  * [TEST_WEDGE_BACKSTOP] wedge ceiling, and awaits registration on observable state ([awaitPeers])
@@ -73,6 +108,26 @@ public abstract class RoomFanoutIsolationConformanceSuite {
      * and take `runTest`'s own [TEST_WEDGE_BACKSTOP] as its backstop.
      */
     public open val awaitBudget: Duration? = 2.seconds
+
+    /**
+     * How long an **absence** assertion waits for the frame it expects never to arrive
+     * ([awaitSilence]).
+     *
+     * Deliberately **not** nullable, where [awaitBudget] is: a wait for something to happen may
+     * legitimately be unbounded and lean on `runTest`'s [TEST_WEDGE_BACKSTOP], but a wait for
+     * *nothing* to happen that never expires never returns. So a real-I/O subclass that sets
+     * [awaitBudget] to `null` still gets a terminating absence check — this budget is then real
+     * wall-clock rather than virtual, and such a subclass should raise it to whatever its transport's
+     * worst-case one-way latency is. Under an in-memory harness it is virtual and free.
+     *
+     * **What it cannot do is turn absence into proof.** "No frame arrived in N" is green when the
+     * frame was merely slow, and no value of N fixes that. What makes the absence assertions here
+     * load-bearing is not this number but the ordering around them: every one is preceded by a
+     * *positive control* on the same path — a frame that demonstrably **did** arrive after the one
+     * under test was demonstrably dispatched — so the check cannot pass merely by nothing having
+     * happened yet. Raising this budget is a latency accommodation, never a strengthening.
+     */
+    public open val absenceBudget: Duration = 1.seconds
 
     /**
      * Binds a server-fanout [Loom] under test to a way of connecting client [Seam]s to it.
@@ -288,6 +343,237 @@ public abstract class RoomFanoutIsolationConformanceSuite {
             )
         }
 
+    // ── (d) ingress: a non-member's frame never enters the room ───────────────
+
+    /**
+     * **The mirror of (a) and (c), and the half of the membership boundary #2307 found unasserted.**
+     *
+     * A peer the policy admits to `table-7` and **refuses** for `table-9` puts a frame on `table-9`'s
+     * channel — which a [NamedMux] client can do at will over the one connection it already holds.
+     * That frame must reach neither `table-9`'s hub inbox ([Seam.incoming]) nor `table-9`'s members,
+     * and must not put its sender in `table-9`'s roster or its fanout.
+     *
+     * ### The anchor — why "it was dropped" is provable here rather than assumed
+     *
+     * Every absence assertion below would be green if the intruding frame had merely not been *read*
+     * yet, and a bounded wait cannot tell those apart. So the frame's disposition is *settled* before
+     * anything is asserted, by a **sequencing anchor**: immediately after the intrusion the same
+     * connection sends a frame on `table-7`, a room that peer **is** in, and the test waits for that
+     * frame at `table-7`'s hub inbox. A server reads one connection with a single sequential
+     * collection, so the anchor's arrival proves the intrusion was already dequeued and dispatched.
+     * That is a happens-before, not a timing guess, and it holds for a real-I/O backend as strongly as
+     * for an in-memory one — unlike anything keyed to a second connection's ordering, which nothing
+     * guarantees. It is also the **rig-fired** receipt for the send itself: without it, a harness whose
+     * `channel("table-9").broadcast` silently did nothing would pass this test with no ingress attempt
+     * ever made. What the anchor deliberately does **not** claim is *which* branch dropped the frame —
+     * it proves the server's read path handled it, and the room boundary is what is under assertion.
+     *
+     * The second rig receipt is [RefusingAuthorizer.refusals], which counts the consultations that
+     * returned `false` for the refused pair. That pins [RoomAuthorizer]'s own documented invocation
+     * contract ("invoked once per connection per room tag when a connection first emits a frame on
+     * that channel") rather than adding an obligation, and it is what distinguishes "the frame was
+     * refused" from "the frame never reached the room's gate at all".
+     *
+     * ### The positive controls
+     *
+     * Each of the three destinations is proved *observable* by a frame that does arrive on it, sent
+     * only after the anchor:
+     *  - the hub inbox — a member's own frame, drained for and found;
+     *  - the member's inbox — a hub broadcast, drained for and found;
+     *  - the intruder's own `table-9` view — the only one with no positive control available, since
+     *    nothing may legitimately be delivered to it. Its silence is bounded by [absenceBudget] and
+     *    is the weakest assertion here; it is anchored by the *member* having received the very
+     *    broadcast whose fanout list the intruder must be absent from, so a broadcast provably
+     *    happened between the intrusion and the check.
+     *
+     * ### Mutation receipt
+     *
+     * Reference: [us.tractat.kuilt.core.RoomHubSeam.deliver]. Spooling the frame on the rejected
+     * branch — `if (!authorizer.authorize(…)) { inboundSpool.deliver(frame); return }`, i.e. keeping
+     * the *registration* guard and dropping only the *ingress* guard, which is exactly the
+     * admitted-to-inbox-while-excluded-from-fanout backend #2307 describes — reddens this test on the
+     * hub-inbox assertion and leaves all four pre-existing properties green. That single row is the
+     * whole argument for this property's existence. Deleting the authorization check outright reddens
+     * this test *and* [rejectedConnectionIsStructurallyExcluded], which is the weaker control.
+     */
+    @Test
+    public fun aNonMembersFrameNeverEntersTheRoom(): TestResult =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor]) {
+                "weave/handshake: no dispatcher (ContinuationInterceptor) in coroutine context"
+            }
+            val intruder = PeerId("client-intruder")
+            val member = PeerId("client-member")
+            // The intruder is a fully legitimate peer everywhere EXCEPT table-9. That is what makes it
+            // a non-member of a room it can still physically reach, which the reference loom — where
+            // sending on a channel IS joining it — otherwise cannot represent.
+            val authorizer = RefusingAuthorizer(intruder, "table-9")
+            val harness = newHarness(backgroundScope, dispatcher, authorizer, Random(2307L))
+
+            val serverRoom7 = harness.serverLoom.host(Pattern("table-7"))
+            val serverRoom9 = harness.serverLoom.host(Pattern("table-9"))
+
+            val intruderMux = NamedMux(harness.connectClient(intruder, Random(1L)), backgroundScope)
+            val memberMux = NamedMux(harness.connectClient(member, Random(2L)), backgroundScope)
+
+            val intruderRoom7 = intruderMux.channel("table-7")
+            // Materialise the intruder's table-9 view BEFORE any table-9 frame exists: a mux channel
+            // view spools from the moment it is created, so a view that exists early cannot miss a
+            // leak, and the later silence check is about delivery rather than about subscription
+            // timing.
+            val intruderRoom9 = intruderMux.channel("table-9")
+            val memberRoom9 = memberMux.channel("table-9")
+
+            intruderRoom7.broadcast(JOIN)
+            memberRoom9.broadcast(JOIN)
+
+            serverRoom7.awaitPeers("table-7 admits the intruder") { it.contains(intruder) }
+            val room9Before = serverRoom9.awaitPeers("table-9 admits its member") { it.contains(member) }
+
+            // The intrusion, then the anchor — same connection, so the anchor's arrival at table-7
+            // proves the intrusion was already read and dispatched.
+            intruderRoom9.broadcast(INTRUSION)
+            intruderRoom7.broadcast(ANCHOR)
+            val room7Saw = serverRoom7.drainUntil(ANCHOR, "the intruder's anchor frame on table-7")
+
+            // Positive controls, only now that the intrusion's fate is settled.
+            memberRoom9.broadcast(MEMBER_INGRESS)
+            val hubSaw = serverRoom9.drainUntil(MEMBER_INGRESS, "the member's own frame at table-9's hub inbox")
+            serverRoom9.broadcast(HUB_EGRESS)
+            val memberSaw = memberRoom9.drainUntil(HUB_EGRESS, "table-9's broadcast at its member")
+            val leakedToIntruder = intruderRoom9.awaitSilence()
+
+            assertAll(
+                {
+                    assertTrue(
+                        intruder !in room9Before,
+                        "precondition: the intruder must NOT be in table-9's roster when it sends; got $room9Before",
+                    )
+                },
+                {
+                    assertTrue(
+                        authorizer.refusals() > 0,
+                        "rig: the room's membership gate must have been consulted for the refused pair and " +
+                            "said no — otherwise the intruding frame never reached the room at all. " +
+                            "Consultations: ${authorizer.log()}",
+                    )
+                },
+                {
+                    assertTrue(
+                        room7Saw.any { it.contentEquals(ANCHOR) },
+                        "the anchor frame must arrive on the room the intruder IS in; saw ${render(room7Saw)}",
+                    )
+                },
+                {
+                    assertTrue(
+                        hubSaw.none { it.contentEquals(INTRUSION) },
+                        "a non-member's frame must never reach the room's own inbox; saw ${render(hubSaw)}",
+                    )
+                },
+                {
+                    assertTrue(
+                        memberSaw.none { it.contentEquals(INTRUSION) },
+                        "a non-member's frame must never be relayed to the room's members; saw ${render(memberSaw)}",
+                    )
+                },
+                {
+                    assertNull(
+                        leakedToIntruder,
+                        "sending into a room must not add the sender to its fanout: the intruder received a frame " +
+                            "on table-9 after a broadcast its member did receive",
+                    )
+                },
+                {
+                    assertTrue(
+                        intruder !in serverRoom9.peers.value,
+                        "sending into a room must not add the sender to its roster; got ${serverRoom9.peers.value}",
+                    )
+                },
+            )
+        }
+
+    // ── (e) departure: a dropped client leaves every room it joined ───────────
+
+    /**
+     * A client whose link tears leaves every room it joined, and the room keeps serving whoever is
+     * left.
+     *
+     * [closingOneRoomDoesNotAffectSibling] closes a room from the **server** side; nothing in this
+     * suite closed a *client*. A hub that leaks a dead connection into its fanout list keeps a stale
+     * roster and writes to a dead socket forever, and every other property here stays green — the
+     * departure path is reached only by a client going away, which no egress-only property does.
+     *
+     * ### What keeps each assertion from being vacuous
+     *
+     * [awaitPeers] is itself the precondition gate at both ends: it fails with the roster it actually
+     * observed, so "both joined" and "the leaver left" cannot pass by never having been true. The
+     * remaining risk is a room that answers "the leaver is gone" by collapsing entirely — a torn hub,
+     * a cleared roster, a dead fanout all satisfy that. Three assertions close it: the surviving
+     * member is still in the roster, the hub is still in its own roster (the `{ selfId }` collapse a
+     * closed [Seam] publishes would otherwise read as success), and a broadcast issued *after* the
+     * departure still reaches the survivor. The rig itself is receipted by the departing seam's own
+     * terminal [SeamState] — without it, a harness whose `close()` did nothing would leave this test
+     * asserting a departure that never happened.
+     *
+     * ### Mutation receipt
+     *
+     * Reference: deleting the per-room deregistration loop in
+     * [us.tractat.kuilt.core.MuxServerLoom.teardownConnection] reddens this test's roster assertion
+     * and leaves all four pre-existing properties green.
+     */
+    @Test
+    public fun aDepartedClientLeavesEveryRoomItJoined(): TestResult =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor]) {
+                "weave/handshake: no dispatcher (ContinuationInterceptor) in coroutine context"
+            }
+            val leaver = PeerId("client-leaver")
+            val stayer = PeerId("client-stayer")
+            val harness = newHarness(backgroundScope, dispatcher, RoomAuthorizer.AllowAll, Random(2307L))
+
+            val serverRoom7 = harness.serverLoom.host(Pattern("table-7"))
+
+            val leaverSeam = harness.connectClient(leaver, Random(1L))
+            val leaverMux = NamedMux(leaverSeam, backgroundScope)
+            val stayerMux = NamedMux(harness.connectClient(stayer, Random(2L)), backgroundScope)
+            val stayerRoom7 = stayerMux.channel("table-7")
+
+            leaverMux.channel("table-7").broadcast(JOIN)
+            stayerRoom7.broadcast(JOIN)
+
+            // Precondition, enforced by the wait itself: both really are members before one departs.
+            serverRoom7.awaitPeers("table-7 registers both clients") {
+                it.containsAll(setOf(leaver, stayer))
+            }
+
+            leaverSeam.close()
+
+            val after = serverRoom7.awaitPeers("the departed client leaves table-7") { leaver !in it }
+
+            // The room must still work for whoever is left — a room that answered by collapsing would
+            // satisfy the assertion above.
+            serverRoom7.broadcast(AFTER_DEPARTURE)
+            val stayerSaw = stayerRoom7.drainUntil(AFTER_DEPARTURE, "table-7's broadcast after the departure")
+
+            assertAll(
+                { assertIs<SeamState.Torn>(leaverSeam.state.value, "rig: the departing client's seam must be torn") },
+                { assertTrue(leaver !in after, "a departed client must leave every room it joined; got $after") },
+                { assertTrue(stayer in after, "the surviving member must remain in the roster; got $after") },
+                {
+                    assertTrue(
+                        serverRoom7.selfId in after,
+                        "the hub must remain in its own roster — a collapsed roster is not a departure; got $after",
+                    )
+                },
+                {
+                    assertTrue(
+                        stayerSaw.any { it.contentEquals(AFTER_DEPARTURE) },
+                        "the room must still fan out to the survivor; saw ${render(stayerSaw)}",
+                    )
+                },
+            )
+        }
+
     // ── Bounded waits ─────────────────────────────────────────────────────────
 
     /**
@@ -311,6 +597,39 @@ public abstract class RoomFanoutIsolationConformanceSuite {
                     "channel never reached the server's per-room accept path.",
             )
     }
+
+    /**
+     * Drain frames from this seam until one equals [sentinel], returning **everything** seen along
+     * the way, sentinel included.
+     *
+     * This, rather than an emptiness check on a snapshot, is how the ingress properties assert a
+     * negative: the sentinel is sent only after the frame under test was provably dispatched, so any
+     * leak is necessarily *ahead of* the sentinel in this seam's own FIFO and appears in the returned
+     * list. A snapshot check has to guess when to look; this one is ordered by construction. It also
+     * carries its own positive control — the sentinel arriving at all proves this destination is
+     * observable, so "no leak" cannot be an artefact of a destination nobody was reading.
+     *
+     * Each individual wait is bounded by [awaitBudget] via [awaitFrame], and a failure names every
+     * frame drained so far.
+     */
+    private suspend fun Seam.drainUntil(sentinel: ByteArray, expected: String): List<ByteArray> {
+        val seen = mutableListOf<ByteArray>()
+        while (true) {
+            val frame = awaitFrame("$expected — drained ${render(seen)} so far").toByteArray()
+            seen += frame
+            if (frame.contentEquals(sentinel)) return seen
+        }
+    }
+
+    /**
+     * Wait [absenceBudget] for a frame that must never come, returning it if it does and `null` if
+     * the seam stayed silent.
+     *
+     * The bound is [absenceBudget] and not [awaitBudget] because this wait must terminate even for a
+     * subclass that sets [awaitBudget] to `null`. On its own it proves only that nothing arrived
+     * *yet*; what makes it an assertion is the ordering its caller establishes around it.
+     */
+    private suspend fun Seam.awaitSilence(): Swatch? = withTimeoutOrNull(absenceBudget) { incoming.first() }
 
     /** Suspend until this seam delivers a frame; on expiry name the room and the peers it had. */
     private suspend fun Seam.awaitFrame(expected: String): Swatch {
@@ -341,4 +660,61 @@ public abstract class RoomFanoutIsolationConformanceSuite {
                 append("  $hint")
             },
         )
+
+    private companion object {
+        /**
+         * Distinct payloads, because every ingress assertion is "this exact frame is absent from
+         * that exact destination". The empty registration frame the older properties use would make
+         * a leak indistinguishable from a join.
+         */
+        val JOIN = byteArrayOf(0x0A)
+        val INTRUSION = byteArrayOf(0x66, 0x66, 0x66)
+        val ANCHOR = byteArrayOf(0x0B)
+        val MEMBER_INGRESS = byteArrayOf(0x0C)
+        val HUB_EGRESS = byteArrayOf(0x0D)
+        val AFTER_DEPARTURE = byteArrayOf(0x0E)
+    }
+}
+
+/** Render drained frames for a failure message. */
+private fun render(frames: List<ByteArray>): String =
+    frames.joinToString(prefix = "[", postfix = "]") { it.contentToString() }
+
+/**
+ * A [RoomAuthorizer] that admits everything except one `(peer, room)` pair, and **counts** what it
+ * was asked.
+ *
+ * The refusal is what makes [RoomFanoutIsolationConformanceSuite.aNonMembersFrameNeverEntersTheRoom]
+ * constructible at all: it turns a peer that is live, handshaked and admitted elsewhere into a
+ * non-member of one specific room, which is a state a loom whose join *is* a send cannot otherwise
+ * reach.
+ *
+ * The count is the rig receipt. A refusal that never happened and a frame that never left the client
+ * produce the same silence at the room, and only [refusals] tells them apart. It counts refusals
+ * rather than inferring them from the absence they are supposed to cause — an inference that stays
+ * true when the guard under test is deleted, which is the whole failure mode.
+ *
+ * [log] records every consultation, refused or not, so a failure can say what the gate was actually
+ * asked instead of only that it was not asked the expected thing.
+ */
+private class RefusingAuthorizer(
+    private val refusedPeer: PeerId,
+    private val refusedRoom: String,
+) : RoomAuthorizer {
+
+    private val consultations = MutableStateFlow<List<String>>(emptyList())
+    private val refusalCount = MutableStateFlow(0)
+
+    override suspend fun authorize(peerId: PeerId, channelName: String): Boolean {
+        consultations.update { it + "${peerId.value}@$channelName" }
+        val refused = peerId == refusedPeer && channelName == refusedRoom
+        if (refused) refusalCount.update { it + 1 }
+        return !refused
+    }
+
+    /** How many times this gate was consulted for the refused pair and said no. */
+    fun refusals(): Int = refusalCount.value
+
+    /** Every consultation, in order — for a failure message. */
+    fun log(): List<String> = consultations.value
 }
