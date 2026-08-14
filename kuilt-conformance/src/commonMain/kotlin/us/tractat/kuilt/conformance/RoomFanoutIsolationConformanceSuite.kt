@@ -83,6 +83,33 @@ import kotlin.time.Duration.Companion.seconds
  * ingress on "is this connection in *any* room" passes the stranger case and fails this one, so this
  * is the strictly stronger of the two and there is no backend that passes it and fails the other.
  *
+ * ## Mutation receipt
+ *
+ * Against the reference `MuxServerLoomFanoutIsolationTest` (6 tests), JVM. "four" = the pre-existing
+ * properties (a)–(c). **Real** = a defect a backend could plausibly ship; **synthetic** = code added
+ * to the reference purely to reach an assertion the reference cannot otherwise falsify; **rig** =
+ * a mutation of this suite itself, checking that a rig-fired counter is not decorative.
+ *
+ * | # | Mutation | Kind | (d) | (e) | four |
+ * |---|----------|------|-----|-----|------|
+ * | 1 | `RoomHubSeam.deliver` spools the frame on the **rejected** branch — registration guard kept, ingress guard dropped | real | RED — hub-inbox assertion **only**, drained `[JOIN, INTRUSION, MEMBER_INGRESS]` | green | **green** |
+ * | 2 | `MuxServerLoom.teardownConnection` drops its per-room deregistration loop | real | green | RED — roster, `peers (3): [server, client-leaver, client-stayer]` | **green** |
+ * | 3 | `deliver` ignores the authorization verdict entirely | real (control) | RED — 3 of 7 | green | (c) RED |
+ * | 4 | a refused peer is added to fanout + roster, its frame still not spooled | synthetic | RED — fanout-silence + roster; hub-inbox correctly **stays green** | green | (c) RED |
+ * | 5 | a refused frame is relayed to the room's members | synthetic | RED — member-relay assertion **only** | green | (c) RED, but on an unrelated assertion (blast radius, not a diagnosis) |
+ * | 6 | the intrusion send is deleted from this test | rig | RED — rig counter only, naming the log `[client-intruder@table-7, client-member@table-9]` | green | green |
+ *
+ * Row 1 is the whole argument: the defect #2307 describes, invisible to every pre-existing property,
+ * named in one assertion by the new one. **Row 2's claim is narrower** and the KDoc on
+ * [aDepartedClientLeavesEveryRoomItJoined] states it: that mutation also reds five tests outside this
+ * suite, so it is not unseen — only unseen *here*, which is what a second backend inherits.
+ *
+ * **The green cells are the interesting ones.** Row 1's (e), rows 2/4/5/6's greens and every row's
+ * untouched assertions are what make this table a set of diagnoses rather than a blast radius. One
+ * assertion has no red anywhere: the precondition that the intruder is absent from `table-9`'s roster
+ * *before* it sends. That is correct — it does not describe behaviour under test, and it can only red
+ * on a harness that hands back an already-admitted peer, which is the one thing it exists to catch.
+ *
  * **Virtual time convention:** every test runs under [StandardTestDispatcher] with the
  * [TEST_WEDGE_BACKSTOP] wedge ceiling, and awaits registration on observable state ([awaitPeers])
  * rather than polling after `advanceUntilIdle`, so the data path is driven deterministically.
@@ -503,6 +530,17 @@ public abstract class RoomFanoutIsolationConformanceSuite {
      * roster and writes to a dead socket forever, and every other property here stays green — the
      * departure path is reached only by a client going away, which no egress-only property does.
      *
+     * **What this one is and is not.** Unlike [aNonMembersFrameNeverEntersTheRoom], this is not a
+     * defect nothing in the tree can see: the reference loom's own unit tests cover deregistration
+     * directly, and two shared suites red on it as collateral. What was missing is narrower and worth
+     * stating exactly — it was not an obligation **of this suite**, so a second server-fanout backend
+     * subclassing [RoomFanoutIsolationConformanceSuite] inherited no departure property at all. The
+     * two suites that do catch it catch it for reasons a fanout backend cannot rely on:
+     * `SeamConformanceSuite`'s drain property is gated behind an opt-in injection hook, and
+     * `PrincipalAttestationConformanceSuite` is subclassed only by a backend that attests principals.
+     * Both also red here as a **wedge** — a timeout or an `UncompletedCoroutinesError` — rather than
+     * as a diagnosis; this property reds in one line with the offending roster printed.
+     *
      * ### What keeps each assertion from being vacuous
      *
      * [awaitPeers] is itself the precondition gate at both ends: it fails with the roster it actually
@@ -518,8 +556,11 @@ public abstract class RoomFanoutIsolationConformanceSuite {
      * ### Mutation receipt
      *
      * Reference: deleting the per-room deregistration loop in
-     * [us.tractat.kuilt.core.MuxServerLoom.teardownConnection] reddens this test's roster assertion
-     * and leaves all four pre-existing properties green.
+     * [us.tractat.kuilt.core.MuxServerLoom.teardownConnection] reddens this test's roster assertion —
+     * `peers never satisfied: the departed client leaves table-7 … peers (3): [server, client-leaver,
+     * client-stayer]` — and leaves all four pre-existing properties of this suite green. It also reds
+     * five tests elsewhere, per the paragraph above; the row's claim is that this suite could not see
+     * it, not that nothing could.
      */
     @Test
     public fun aDepartedClientLeavesEveryRoomItJoined(): TestResult =
