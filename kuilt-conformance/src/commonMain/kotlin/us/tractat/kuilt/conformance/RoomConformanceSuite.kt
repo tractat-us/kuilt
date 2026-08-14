@@ -107,6 +107,44 @@ import kotlin.time.Instant
  * [RoomFactory] to check the claim against, and inventing one would put a knob in the contract no
  * consumer asked for. What the arm does buy is that the claim now exists, is attributable, and
  * carries a URL somebody has to keep alive. The residual is narrower, not gone.
+ *
+ * ### Mutation receipt
+ *
+ * JVM, `--rerun-tasks` (27/27 EXECUTED). Subjects: `InMemoryRoomConformanceTest` (the reference, 14
+ * tests) and `RoomConformanceGapDeclarationTest` (6). **Real** = a defect an implementation could
+ * plausibly ship; **synthetic** = a change made purely to reach an assertion no real defect reaches;
+ * **rig** = a mutation of this suite itself. The "before" column is the measurement of the hole —
+ * what the *pre-#2306* suite did under the same mutation.
+ *
+ * | # | Mutation | Kind | after | before |
+ * |---|----------|------|-------|--------|
+ * | M1 | `SeamRoom.resumeToken` returns `null` — a room opting out of resume entirely | real | RED: [resumeWithinWindowFiresResumed] and [aTokenMintedForAnotherRoomIsRefused] on the loud precondition, naming `role=Joiner … roster=1 member(s)` | [joinerLearnsHostRoomIdOnAdmission] RED — but [resumeWithinWindowFiresResumed] **green by absence** |
+ * | M2 | [injectorOrDeclaredGap] drops its assertion — i.e. the pre-#2306 silent `?: return@runTest`, exactly | rig | RED: all four `blankTrackingUrl*` | all green; the four gated obligations passed under a gap declaring nothing |
+ * | M3 | delete the `token.roomId != roomId` guard in `DefaultJoinerReconnectController.tryResume` | real | RED: [aTokenMintedForAnotherRoomIsRefused], all 3 assertions — `got Success`, then `WindowClosed` for the genuine token | every pre-existing test of this suite **green** |
+ * | M4 | the host drops a foreign token silently instead of refusing it | synthetic | RED: [aTokenMintedForAnotherRoomIsRefused], 2 of 3 — `Got TimedOut` | all green |
+ *
+ * **M1 is the argument for [requireResumeToken].** The same fabric was *already* failing
+ * [joinerLearnsHostRoomIdOnAdmission] while [resumeWithinWindowFiresResumed] returned green without
+ * asserting anything — two tests of one suite, opposite verdicts on one room. The early return was
+ * not protecting a population; it was hiding a contradiction.
+ *
+ * **M4 is why the "verdict, not silence" assertion is not decoration.** Under it the first
+ * assertion — "must not be [ResumeResult.Success]" — stays **green**, because `TimedOut` is not
+ * `Success`; only the second reds. A lone refusal check would have passed a host that never
+ * answered at all. (Its third assertion also reds under M4, but as *blast radius*: the window
+ * elapses during the resume timeout. Not an independent diagnosis, and not claimed as one.)
+ *
+ * **M3's claim is narrower than it looks, and the narrowing matters.** It also reds two tests in
+ * `:kuilt-session`'s own `JoinerReconnectControllerTest`, so the defect is not invisible to the
+ * tree — only to the *contract*. That is precisely the thing a second [RoomFactory] inherits
+ * nothing of: an implementation's private suite is not a conformance obligation.
+ *
+ * **One assertion has no red anywhere**, and that is correct:
+ * `RoomConformanceGapDeclarationTest.aDeclaredGapSkipsEveryGatedObligationCleanly`. It does not
+ * describe behaviour under test — it is the survivability check, and its falsifying input is a
+ * future edit that moves work *above* the gate (a suspending wait, a `links[0]` access), not any
+ * defect present today. Stating it rather than hiding it: an all-red table would mean the table was
+ * measuring blast radius instead of diagnoses.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 public abstract class RoomConformanceSuite {
@@ -570,8 +608,15 @@ public abstract class RoomConformanceSuite {
      * [us.tractat.kuilt.session.partition.DefaultJoinerReconnectController.tryResume] makes the
      * foreign token indistinguishable from the genuine one: it consumes the window, so the first
      * resume returns [ResumeResult.Success] (reddening the refusal assertions) and the second
-     * returns [ResumeResult.WindowClosed] (reddening the positive control). Every pre-existing test
-     * of this suite stays green.
+     * returns [ResumeResult.WindowClosed] (reddening the positive control). Measured: all three
+     * assertions red, every pre-existing test of this suite green.
+     *
+     * **Not invisible everywhere, though — say what the row actually claims.** That same mutation
+     * reds two tests in `:kuilt-session`'s own `JoinerReconnectControllerTest`. What was missing is
+     * narrower: the guard was proven by the *implementation's private suite* and by nothing in the
+     * *contract*, so a second [RoomFactory] subclassing this suite inherited no such property at
+     * all. Making a room refuse a foreign token is the kind of obligation every implementation owes
+     * and only one had been asked for.
      */
     @Test
     public fun aTokenMintedForAnotherRoomIsRefused(): TestResult =
