@@ -945,6 +945,37 @@ public abstract class SeamConformanceSuite {
     //
     // Gated on `reportsPeerLoss`; every `false` is a tracked bug, not a by-design gap — a fabric that
     // keeps a departed peer reachable-looking is lying to every consumer that reads `peers`.
+    //
+    // ## Mutation receipt (#2304)
+    //
+    // JVM, `--rerun`/source-changed so every row EXECUTED. "pre-existing" is the same mutation with
+    // this property removed from the picture — it measures the HOLE rather than asserting it. **real**
+    // = a defect that could ship; **rig** = a mutation of this obligation itself, checking each arm is
+    // load-bearing.
+    //
+    // | # | Mutation | Kind | this property | pre-existing suite |
+    // |---|----------|------|---------------|--------------------|
+    // | 1 | `InMemoryLoom.remove` stops removing the peer from the shared roster | real (reference) | RED — in-memory, tiered, composite (roster arm) | RED — `peersDrainWithoutTear…` ×2, `MeshConformanceSuite.peerLeaveUpdatesSurvivorRosters` ×2 |
+    // | 2 | `BridgePeerLink` keeps the peer on `.notConnected` | real (fabric) | RED — multipeer | RED — 4 × `MultipeerPeerLinkFactoryJvmTerminalDropTest` |
+    // | 3 | the multipeer fake's `mc_session_close` back to `= Unit` (its pre-#2304 body) | real (harness) | **RED — multipeer, 1 of 67** | **green — all 66** |
+    // | 4 | `MeshSeam.publishRosters` makes `peers` grow-only | real (fabric) | **green** | RED — 12 across `:kuilt-core` + `:kuilt-conformance` |
+    // | 5 | the mux-hub harness un-declares its `reportsPeerLoss` gap | rig | RED in 0.004 s — the Torn precondition, naming the cause | green |
+    // | 6 | roster arm deleted from the disjunction | rig | RED — in-memory, tiered, composite, gossip | green |
+    // | 7 | state arm deleted from the disjunction | rig | **green everywhere** | green |
+    //
+    // **Row 3 is the argument.** A fake whose session-close told nobody could not represent a peer
+    // departure at all, and the entire pre-existing suite was green against it — the hole this
+    // obligation closes, measured rather than claimed. Rows 1 and 2 are blast radius, not diagnosis:
+    // both defects were already caught elsewhere, and the rows say so.
+    //
+    // **The green cells are the interesting ones, and rows 4 and 7 are one fact seen twice.** The
+    // state arm never carries a verdict in tree (row 7), because every in-tree fabric that tears on
+    // peer loss also collapses its roster — so a roster-only defect on a *tearing* fabric is invisible
+    // here (row 4). That is correct rather than a shortfall: a survivor that latches Torn while
+    // freezing its pre-tear roster is exactly `SeamCapabilities.collapsesPeersOnTear`'s shortfall, and
+    // dropping the arm would make this obligation red for a gap another flag already owns and another
+    // property (`peersCollapseToSelfIdWhenTorn`) already asserts. N-peer roster shrinkage is
+    // `MeshConformanceSuite`'s, which row 4 shows holding.
 
     @Test
     public fun survivorStopsAdvertisingADepartedPeer(): TestResult =
