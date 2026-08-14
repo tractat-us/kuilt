@@ -38,7 +38,7 @@ jobs:
       INSTANCE: Writerside/kuilt
       ARTIFACT: webHelpKUILT2-all.zip
       # Writerside builder image version (JetBrains-published; bump deliberately).
-      DOCKER_VERSION: 243.21565
+      DOCKER_VERSION: 2026.07.8925
     steps:
       - uses: actions/checkout@v7
 
