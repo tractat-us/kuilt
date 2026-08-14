@@ -346,6 +346,13 @@ public abstract class CommutativeSchemeConformanceSuite {
      * | Fixture: `newPeerScheme()` hands back a cached instance | 1 |
      * | Fixture: two distinct instances seeded identically | 2 |
      * | Body: delete the assertion-2 call | **4 only — 3 stays green**, both subclasses |
+     * | Fixture: **one** peer's scheme is the identity, the other two real (#2313) | **5 only** — 1, 2, 3 and 4 all pass |
+     *
+     * That last row is assertion 5's whole justification, and it is the realistic threat: one player
+     * who applies no layer while everyone else does. The deal still round-trips (his strip is the
+     * identity too), his single layer is still distinct from the others', and he encrypted and
+     * stripped exactly as often as the rig demands — so 1 through 4 are all satisfied by a deal in
+     * which the first player could read the card the whole time.
      *
      * **What this cannot reach.** It drives one deranged order out of the six; a scheme that
      * commuted for some permutations and not others would need the full sweep, and no scheme that
