@@ -103,6 +103,44 @@ public abstract class RaftStorageConformanceSuite {
      * medium. That residual is narrow — it takes deliberate effort to write — and the alternative
      * (a `medium()` accessor on the contract, invented so a test could check it) would put a knob
      * in the interface that no consumer asked for.
+     *
+     * ## Mutation receipt
+     *
+     * Measured over `:kuilt-conformance:jvmTest --tests "*InMemoryRaftStorageConformanceTest*"`
+     * (36 tests, green at baseline). Each mutation applied alone, reverted, the revert verified with
+     * `git status`; the results XML deleted before every run and the log grepped for compile errors,
+     * because a mutation that does not compile leaves Gradle serving the previous run's XML and
+     * fabricates a plausible copy of the row above it.
+     *
+     * | Mutation | Reds |
+     * |---|---|
+     * | **Fixture:** `reopen` returns the instance it was given | the **precondition** in all five — no durability assertion is reached |
+     * | **Fixture:** `reopen` returns a fresh empty storage | [termAndVoteSurviveAReopen] (3 of its 4), [theEstablishedLeaderSurvivesAReopen], [theLogSurvivesAReopenWhole], [theSnapshotSurvivesAReopen] |
+     * | **Fixture:** drop the term/vote restore | [termAndVoteSurviveAReopen] only (3 of 4) |
+     * | **Fixture:** drop the pin restore | [theEstablishedLeaderSurvivesAReopen] only |
+     * | **Fixture:** drop the log restore | [theLogSurvivesAReopenWhole] only |
+     * | **Fixture:** drop the snapshot restore | [theSnapshotSurvivesAReopen] only |
+     * | **Fixture:** resurrect a cleared vote (`storage.votedFor() ?: NodeId("node-a")`) | one assertion in [termAndVoteSurviveAReopen], one in [anUnwrittenMediumReopensEmpty] |
+     * | **Production:** drop `currentTerm = term` in `InMemoryRaftStorage.saveTermAndVotedFor` | [termAndVoteSurviveAReopen] **and four pre-existing properties** |
+     *
+     * **The fixture rows are the load-bearing ones, and that is the finding rather than a dodge.**
+     * kuilt ships no durable [RaftStorage], so the reference's own `reopen` is the closest this tree
+     * has to an adapter's persistence layer — mutating it *is* mutating the thing under test. Rows 3
+     * to 6 are what make these five properties per-record rather than one property counted five
+     * times.
+     *
+     * **The last row is blast radius, not discrimination, and no production row could be otherwise.**
+     * The reference's reopen reads through the same public surface the same-handle properties read,
+     * so every mutation of `InMemoryRaftStorage` that reaches a restart property reaches an older one
+     * first. Said outright: over `InMemoryRaftStorage` *alone*, these five properties add no
+     * discriminating power at all. They discriminate over the adapters that do not exist in this
+     * tree — which is the whole of #2247's thesis, and the reason the obligation belongs in the TCK
+     * rather than in a backend's own tests.
+     *
+     * **Row 2 reds 3 of 4 assertions, not 4** — the cleared-vote arm survives it, because a fresh
+     * empty storage happens to have no vote either. Row 7 is the mutation that reds *that* arm, and
+     * it is in the table for exactly that reason: without it the arm would be an assertion no
+     * measurement had ever moved.
      */
     protected abstract suspend fun reopen(storage: RaftStorage): RaftStorage
 
@@ -818,14 +856,14 @@ public abstract class RaftStorageConformanceSuite {
      * established a leader, or holds a snapshot at index 0 with an empty config, adopts the wrong
      * membership baseline on its very first read.
      *
-     * **This property is green under every mutation of the reference implementation and of the
-     * reference's own reopen, including the one that returns a fresh empty storage** — said outright
-     * because a green row in a mutation table names an unproven test, and pretending otherwise is
-     * worse than the gap. It earns its place on the adapter side rather than here: no
-     * `InMemoryRaftStorage` can fabricate, and no reopen written over its public read surface can
-     * either, so the failure is structurally unreachable for the reference exactly the way the
-     * restart itself was before this hook existed. Judge it by the *adapter* it fails, not by the
-     * reference it cannot.
+     * **Measured: green under every mutation that LOSES state — including the one that returns a
+     * fresh empty storage — and red under the one that FABRICATES it.** That is the split it exists
+     * for, and it is worth stating both halves rather than only the flattering one. A reopen rigged
+     * to resurrect a cleared vote (`storage.votedFor() ?: NodeId("node-a")`, the shape of an adapter
+     * whose `UPDATE … SET voted_for = NULL` is written as an `INSERT` that omits the column) reds
+     * exactly one assertion here and one in [termAndVoteSurviveAReopen], and nothing else in the
+     * suite. Every property above writes a value first, so none of them can be handed an empty
+     * medium to decode — this is the only place that door is opened.
      */
     @Test
     public fun anUnwrittenMediumReopensEmpty(): TestResult = runTest {
