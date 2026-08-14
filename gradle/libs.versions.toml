@@ -28,7 +28,7 @@ vanniktechMavenPublish = "0.37.0"
 otel = "1.65.0"
 # KSP versions ≥2.3.0 are decoupled from the Kotlin version (KSP2 only) — no
 # Kotlin-prefix matching required, works with the catalog's Kotlin 2.3.x.
-ksp = "2.3.10"
+ksp = "2.3.11"
 
 [libraries]
 # atomicfu — multiplatform reentrant lock (locks API only; the runtime artifact is
