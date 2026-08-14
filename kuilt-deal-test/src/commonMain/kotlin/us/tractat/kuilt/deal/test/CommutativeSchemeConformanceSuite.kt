@@ -385,18 +385,45 @@ public abstract class CommutativeSchemeConformanceSuite {
         )
     }
 
+    /**
+     * Every pair [CommutativeScheme.generateKey] hands out both round-trips **and hides** — the
+     * secrecy floor said of the *generator* rather than of one key.
+     *
+     * The distinction is the whole reason the second assertion is here rather than left to
+     * [encryptHidesThePlaintextAndStripRecoversIt]. That property draws one key, so it catches a
+     * generator that is degenerate *always*; a generator degenerate only *sometimes* — SRA's
+     * rejection loop tests `gcd(e, p-1) != 1` and nothing else, so `e = 1` is inside its output
+     * domain — slips past it whenever the healthy key is the one drawn. Round-tripping is no
+     * defence either: the identity key round-trips perfectly, which is exactly what makes it hard
+     * to see.
+     *
+     * **What this cannot detect.** Two draws. A generator that emits a degenerate key one time in
+     * a thousand is invisible here and would stay invisible at any count a TCK can afford; the
+     * assertion narrows the window rather than closing it. Raising the count is the wrong lever —
+     * it multiplies a heavyweight scheme's key generation for a linear gain against an exponential
+     * problem.
+     */
     @Test
     public fun generatedKeyPairsAreUsable() {
         val scheme = newScheme()
         // Two independently generated pairs — enough to show generateKey() yields
         // usable, distinct pairs. (Kept low so a heavyweight scheme's key generation
         // stays within the wasmJs 2s test budget.)
-        repeat(2) {
+        repeat(2) { draw ->
             val key = scheme.generateKey()
             val m = validPlaintexts().first()
             val (cipher, _) = scheme.encrypt(m, key.encryptKey)
             val (recovered, _) = scheme.strip(cipher, key.stripKey)
-            assertTrue(m.contentEquals(recovered), "generated key pair failed to round-trip")
+            assertAll(
+                { assertTrue(m.contentEquals(recovered), "generated key pair $draw failed to round-trip") },
+                {
+                    assertNotEquals(
+                        m.toList(),
+                        cipher.toList(),
+                        "generated key pair $draw is the identity — it round-trips, and hides nothing",
+                    )
+                },
+            )
         }
     }
 
