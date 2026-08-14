@@ -244,9 +244,12 @@ example adapts the decorator as `{ ops -> publish(ops) }` — deliberately does 
 
 ## Adding a backend
 
-Subclass `BoltConformanceSuite` and implement its six fixture hooks. It pins seven properties, and
-the second is the reason the module exists: a bolt fed a `Compact` keeps the ops that `Compact`
-suppresses and never replays the `Compact` itself.
+Subclass `BoltConformanceSuite` and implement its six fixture hooks. It pins the properties every
+archive must satisfy — chief among them the reason the module exists: a bolt fed a `Compact` keeps
+the ops that `Compact` suppresses and never replays the `Compact` itself. (Neither a count of those
+properties nor a position in the list is named here on purpose: the suite grows — #2331 added two —
+and a number in prose rots silently the moment it does. The hook count is named because the table
+below enumerates them, so the two cannot drift apart unseen.)
 
 **No hook is nullable**, and for the four damage fixtures that is the point of them: an "I cannot
 reach this state" opt-out moves the vacuity one level up, where it is harder to see — the suite would
