@@ -2,5 +2,32 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "local>tractat-us/renovate-config"
+  ],
+  "customManagers": [
+    {
+      "description": "Writerside builder image. It is pinned as a bare env var in docs.yml, so no built-in manager sees it. Tracked against the Docker Hub mirror (jetbrains/writerside-builder); the workflow pulls the same tags from registry.jetbrains.team, which Renovate cannot enumerate. The mirror has carried every release so far — if it ever lags, the bump arrives late rather than wrong.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/docs\\.yml$/"
+      ],
+      "matchStrings": [
+        "DOCKER_VERSION:\\s*(?<currentValue>[0-9][^\\s#]*)"
+      ],
+      "depNameTemplate": "jetbrains/writerside-builder",
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "loose"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Never auto-merge the Writerside builder. The org preset auto-merges non-majors once CI is green, but ci-required never builds the guide — docs.yml does, only on push to main. So a bad bump cannot fail CI; it breaks the published guide after merge. Overrides the preset rule.",
+      "matchDepNames": [
+        "jetbrains/writerside-builder"
+      ],
+      "automerge": false,
+      "prBodyNotes": [
+        ":warning: **CI does not build the guide** — `ci-required` only classifies `Writerside/**` as docs-only. Build locally with the new image before merging and diff the inspection report against the current pin; the builder exits 0 even on document errors. See the verification recipe in [#2346](https://github.com/tractat-us/kuilt/pull/2346)."
+      ]
+    }
   ]
 }
