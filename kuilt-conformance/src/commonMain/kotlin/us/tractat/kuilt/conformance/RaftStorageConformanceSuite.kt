@@ -999,6 +999,19 @@ public abstract class RaftStorageConformanceSuite {
      * of having them: under fixture drift the property does not fail, it stops asserting. Those four
      * arms are the only thing that turns a silent vacuity into a red.
      *
+     * **The admission the table makes if you read it the other way: nothing reds either same-handle
+     * property alone.** Every mutation that reaches this one or [snapshotConfig_roundTrips] also
+     * reaches its restart sibling, and structurally that cannot be otherwise *over this reference* —
+     * `InMemoryRaftStorageConformanceTest.reopen` rebuilds through `entries()` and `loadSnapshot()`,
+     * the same reads the same-handle properties perform, so a loss on the near side is a loss on the
+     * far side too. Over the reference alone the two same-handle properties are therefore subsumed.
+     * They are not written for the reference. Their independent value for an adapter is that they do
+     * not depend on [reopen] being implemented correctly at all: an adapter that fails the
+     * `assertNotSame` precondition in [reopened] still gets a clean, named report of which field its
+     * schema drops, instead of four properties failing on the fixture. Same shape as #2301's own
+     * finding, inverted — and worth saying rather than leaving a reader to infer the pairs are
+     * independent.
+     *
      * **Almost every cell in the right column is "none", and that is the finding rather than a
      * suspiciously clean table** — it is the literal statement of #2302. The one row that is not
      * "none" is in the table because it disproves a claim this KDoc made before it was measured.
