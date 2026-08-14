@@ -116,7 +116,10 @@ public abstract class CommutativeSchemeConformanceSuite {
      *    reds too.
      *    This is [distinctKeysProduceDistinctCiphertexts] in its cross-peer form, and it is free:
      *    both ciphertexts are already needed as the second layer's input;
-     * 3. **the law** — `E_bob(E_alice(m)) == E_alice(E_bob(m))` for every valid plaintext;
+     * 3. **the law** — `E_bob(E_alice(m)) == E_alice(E_bob(m))` for every valid plaintext, over a
+     *    [validPlaintexts] asserted non-empty. That knob's empty setting is the one that switches
+     *    this property off wholesale: the law asserts nothing over an empty list *and* the rig
+     *    below expects zero encryptions, so both would pass by arithmetic;
      * 4. **the rig fired** — each peer performed exactly two encryptions per message, its own
      *    layer once as the outer and once as the inner. Rewriting the body to route both layers
      *    through one peer is precisely how this property decays back into its single-instance
@@ -134,6 +137,11 @@ public abstract class CommutativeSchemeConformanceSuite {
         val bob = SchemePeer(newPeerScheme())
         val peers = listOf(alice, bob)
         val messages = validPlaintexts()
+        // [validPlaintexts] is the one free knob this property has, and empty is the setting at
+        // which it switches itself off: the law below would assert nothing over an empty list, and
+        // the rig would expect — and get — zero encryptions, so the whole test would pass by
+        // arithmetic. Named here rather than left to the reader to notice.
+        assertTrue(messages.isNotEmpty(), "validPlaintexts() is empty, so this property asserts nothing")
         val crossed = messages.map { m ->
             val (byAlice, byBob) = independentSingleLayers(peers, m)
             Triple(m, bob.encrypt(byAlice), alice.encrypt(byBob))
