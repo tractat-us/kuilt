@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.first
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Principal
 import us.tractat.kuilt.core.PrincipalRoster
+import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.fabric.Mesh
 import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.core.withPrincipal
@@ -42,11 +43,25 @@ class MeshPrincipalAttestationTest : PrincipalAttestationConformanceSuite() {
         private val hub: Mesh,
     ) : AttestationHarness {
 
+        override val seam: Seam get() = hub
+
         override val roster: PrincipalRoster get() = hub
 
         /** Far-end seams, one per admitted peer — kept so [drop] can tear the link. */
         private val farByPeer = mutableMapOf<PeerId, Mesh>()
         private var seed = 100
+
+        /**
+         * The mesh preamble carries only a [PeerId], so the joiner's channel for asserting an
+         * identity is the frame body: the far end broadcasts `claimed` as the first thing it says
+         * after the handshake. A hub that re-stamped its roster from an inbound frame — or that took
+         * the self-asserted preamble id as an identity, which the suite spells into [peer] — would
+         * report it.
+         */
+        override suspend fun admitClaiming(peer: PeerId, verified: Principal?, claimed: Principal) {
+            admit(peer, verified)
+            farByPeer.getValue(peer).broadcast(claimed.value.encodeToByteArray())
+        }
 
         override suspend fun admit(peer: PeerId, principal: Principal?) {
             if (peer in hub.peers.value) drop(peer) // a repeat admit is a reconnect: replace the link
