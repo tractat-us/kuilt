@@ -544,12 +544,13 @@ class EntitlementLedgerConservationTest {
         var refused = 0
         var nothingToMove = 0
         var nested = 0
+        var accumulatedRollup = 0
         var underAcks = 0
         var residues = 0
 
         override fun toString(): String =
             "moved=$moved carriedRollup=$carriedRollup refused=$refused nothingToMove=$nothingToMove " +
-                "nested=$nested underAcks=$underAcks residues=$residues"
+                "nested=$nested accumulatedRollup=$accumulatedRollup underAcks=$underAcks residues=$residues"
     }
 
     /** `Σ_r effRollupSpent(edge)[r]` — base + `rollupRelocIn` − `rollupRelocOut`, off the stored slots. */
@@ -682,10 +683,10 @@ class EntitlementLedgerConservationTest {
         // the rung, and only the first two make it possible. The leaf ladder needed two steps in
         // order and the base mutators drew it ~35 times in 4,800 (#2365); three is strictly worse,
         // so it is drawn explicitly rather than left to coincide.
-        fun fundAndSpendThroughLadder(l: EntitlementLedger, actor: ReplicaId): EntitlementLedger {
+        fun fundAndSpendThrough(l: EntitlementLedger, actor: ReplicaId, rung: AttachmentId): EntitlementLedger {
             val atRoot = maxOf(0L, minOf(l.holdings(root, actor), 40L))
             if (atRoot < 1L) return l
-            var out = l.applying(l.delegate(actor, live, rnd.nextLong(1L, atRoot + 1L)))
+            var out = l.applying(l.delegate(actor, rung, rnd.nextLong(1L, atRoot + 1L)))
             val atG1 = maxOf(0L, minOf(out.holdings(g1, actor), 40L))
             if (atG1 < 1L) return out
             out = out.applying(out.delegate(actor, e3, rnd.nextLong(1L, atG1 + 1L)))
@@ -693,6 +694,47 @@ class EntitlementLedgerConservationTest {
             if (atG3 < 1L) return out
             return out.applying(out.spend(actor, g3, rnd.nextLong(1L, atG3 + 1L)))
         }
+
+        /**
+         * Give a rung minted **inside a step** both cover and roll-up charge, in that order — the
+         * funding [relocateTwiceOntoOnePrefixRung]'s second strand needs, which [fundAndSpendThrough]
+         * cannot supply.
+         *
+         * Two knobs here are the whole difficulty, and each was measured rather than reasoned about:
+         *  - **No delegation down to `g3`.** While the old rung is still stranded, `holdings(g1)` is
+         *    underwater by exactly what the pending move has yet to restore — and it cannot be topped
+         *    up, because the missing credit *is* the stranded credit. So the charge comes from the
+         *    actor's existing pocket at `g3` (funded through `e3`, which no reshape of a `root → g1`
+         *    rung touches). Delegating down first is the natural-looking spelling and reaches the
+         *    ladder ~0% of the time.
+         *  - **The spend is capped at the cover just delegated.** A spend at `g3` charges
+         *    `rollupSpent` on whichever prefix rung is live *now*, so an uncapped one lands charge on
+         *    a rung whose cover sits on its stranded sibling, and `relocationPatch`'s
+         *    `cover < charge` precondition refuses the move — 513 refusals per arm, measured.
+         *
+         * The actor is drawn by trying all three and keeping the first whose chain actually charges
+         * the rung; an unreached conjunction is the failure mode this fixture keeps rediscovering.
+         */
+        fun coverAndCharge(l: EntitlementLedger, rung: AttachmentId): EntitlementLedger {
+            for (actor in replicas.shuffled(rnd)) {
+                val atRoot = maxOf(0L, minOf(l.holdings(root, actor), 40L))
+                if (atRoot < 1L) continue
+                val cover = rnd.nextLong(1L, atRoot + 1L)
+                val funded = l.applying(l.delegate(actor, rung, cover))
+                val cap = maxOf(0L, minOf(funded.holdings(g3, actor), cover))
+                if (cap < 1L) continue
+                return funded.applying(funded.spend(actor, g3, rnd.nextLong(1L, cap + 1L)))
+            }
+            return l
+        }
+
+        /** `Σ_r rsp` on [strand] under [finals] — the magnitude the derivation is specified to move. */
+        fun rollupCarried(l: EntitlementLedger, strand: AttachmentId, finals: Map<ReplicaId, SlotFinals>): Long =
+            finals.entries.sumOf { (r, acked) ->
+                acked.rollupSpent +
+                    l.storedSlot(CounterFamily.ROLLUP_RELOC_IN, strand, r) -
+                    l.storedSlot(CounterFamily.ROLLUP_RELOC_OUT, strand, r)
+            }
 
         // Clamped to what the actor holds: an over-large spend is a no-op the property cannot fail
         // on, and a starved spend arm is a starved roll-up arm — the rung's `rollupSpent` has no
@@ -711,11 +753,7 @@ class EntitlementLedgerConservationTest {
             // `rsp = acked.rollupSpent + rollupRelocIn(s) − rollupRelocOut(s)`, summed over the acking
             // replicas — read off the INPUTS the derivation is specified over, so a mutation of the
             // derivation moves the assertion and not the counter that is supposed to police it.
-            val rspTotal = finals.entries.sumOf { (r, acked) ->
-                acked.rollupSpent +
-                    staged.storedSlot(CounterFamily.ROLLUP_RELOC_IN, strand, r) -
-                    staged.storedSlot(CounterFamily.ROLLUP_RELOC_OUT, strand, r)
-            }
+            val rspTotal = rollupCarried(staged, strand, finals)
             val creditBefore = replicas.sumOf { staged.storedSlot(CounterFamily.ROLLUP_RELOC_IN, fresh, it) }
             val debitBefore = replicas.sumOf { staged.storedSlot(CounterFamily.ROLLUP_RELOC_OUT, strand, it) }
             val outstandingBefore = staged.outstandingTotal()
@@ -774,6 +812,93 @@ class EntitlementLedgerConservationTest {
             }
         }
 
+        // §12.3, the ROLL-UP half: two stranded prefix rungs re-homed onto ONE live rung, in two
+        // moves, the second derived from a view that merged the first. Their roll-up credits must
+        // ACCUMULATE on the live edge; a max-collide would swallow the smaller one.
+        //
+        // This shape is here because [relocateOnce] cannot reach it and a mutation proved so: every
+        // re-home there lands on a rung `reshape` has just minted, where `rollupRelocIn` is `0`, so
+        // `max(standing, add)` and `standing + add` agree and rewriting the live-edge accumulation
+        // as a max stayed GREEN across both prefix arms. The leaf ladder's §12.3 shape does not
+        // cover it either — that one asserts on `ISSUED_RELOC_IN` alone.
+        fun relocateTwiceOntoOnePrefixRung(l: EntitlementLedger, underAck: Boolean): EntitlementLedger {
+            val strandA = live
+            val (withB, edgeB) = reshape(l, strandA)
+            // Cover and charge B, so the second move carries a roll-up magnitude a max-collide could
+            // swallow. Nothing else writes B: it is minted inside this step.
+            val staged = coverAndCharge(withB, edgeB)
+            val (withC, edgeC) = reshape(staged, edgeB)
+            val wasNested = replicas.any { withC.storedSlot(CounterFamily.ISSUED_RELOC_IN, strandA, it) > 0L }
+            val (finalsA, under) = finalsFor(withC, strandA, underAck)
+            val rspA = rollupCarried(withC, strandA, finalsA)
+
+            val first = withC.relocationPatch(edgeC, mapOf(strandA to finalsA))
+            if (first !is Relocation.Moved) {
+                if (first is Relocation.Refused) rig.refused++ else rig.nothingToMove++
+                return l
+            }
+            val afterFirst = withC.piece(first.patch)
+
+            val standing = replicas.associateWith { afterFirst.storedSlot(CounterFamily.ROLLUP_RELOC_IN, edgeC, it) }
+            val finalsB = afterFirst.baseFinalsOn(edgeB)
+            // Per replica, off the PRE-move state — the same `rsp` the KDoc says the second move
+            // re-homes, not a figure recomputed from the patch it is meant to police.
+            val moving = replicas.associateWith { r ->
+                (finalsB[r]?.rollupSpent ?: 0L) +
+                    afterFirst.storedSlot(CounterFamily.ROLLUP_RELOC_IN, edgeB, r) -
+                    afterFirst.storedSlot(CounterFamily.ROLLUP_RELOC_OUT, edgeB, r)
+            }
+            val outstandingBefore = afterFirst.outstandingTotal()
+            val second = afterFirst.relocationPatch(edgeC, mapOf(edgeB to finalsB))
+            if (second !is Relocation.Moved) {
+                if (second is Relocation.Refused) rig.refused++ else rig.nothingToMove++
+                return l
+            }
+            val afterSecond = afterFirst.piece(second.patch)
+
+            assertAll(
+                {
+                    for (r in replicas) {
+                        assertEquals(
+                            standing.getValue(r) + moving.getValue(r),
+                            afterSecond.storedSlot(CounterFamily.ROLLUP_RELOC_IN, edgeC, r),
+                            "a second move onto ${edgeC.value} must ACCUMULATE ${r.value}'s roll-up charge " +
+                                "onto the standing credit, not collide with it (§12.3)",
+                        )
+                    }
+                },
+                {
+                    assertEquals(
+                        outstandingBefore,
+                        afterSecond.outstandingTotal(),
+                        "the second move must not create or destroy outstanding entitlement",
+                    )
+                },
+                {
+                    assertEquals(
+                        under?.delta ?: 0L,
+                        afterSecond.effRollupOn(strandA),
+                        "${strandA.value} must be left carrying exactly the roll-up its ack failed to hand over",
+                    )
+                },
+            )
+
+            // Only the arm where `max` and `+` actually differ: with no standing credit, or nothing
+            // to add, the assertion above holds under either spelling and proves nothing.
+            if (replicas.any { standing.getValue(it) > 0L && moving.getValue(it) > 0L }) rig.accumulatedRollup++
+            rig.moved += 2
+            if (rspA > 0L) rig.carriedRollup++
+            if (moving.values.sum() > 0L) rig.carriedRollup++
+            if (wasNested) rig.nested++
+            if (under != null) {
+                rig.underAcks++
+                if (afterSecond.effRollupOn(strandA) > 0L) rig.residues++
+                underAcked += under
+            }
+            live = edgeC
+            return afterSecond
+        }
+
         repeat(60) {
             val actor = replicas.random(rnd)
             val edges = listOf(live, e2, e3)
@@ -789,8 +914,9 @@ class EntitlementLedgerConservationTest {
                     ledger.applying(ledger.transfer(allGroups.random(rnd), actor, to, rnd.nextLong(1L, 40L)))
                 }
                 3 -> spendAtLeaf(ledger, actor, listOf(g2, g3).random(rnd))
-                4, 5 -> fundAndSpendThroughLadder(ledger, actor)
-                else -> relocateOnce(ledger, allowUnderAck && rnd.nextInt(2) == 0)
+                4, 5 -> fundAndSpendThrough(ledger, actor, live)
+                6 -> relocateOnce(ledger, allowUnderAck && rnd.nextInt(2) == 0)
+                else -> relocateTwiceOntoOnePrefixRung(ledger, allowUnderAck && rnd.nextInt(2) == 0)
             }
             assertPrefixLadderInvariants(ledger, minted)
         }
@@ -820,12 +946,19 @@ class EntitlementLedgerConservationTest {
             { assertTrue(rig.moved >= 300, "too few generations actually moved — $rig") },
             {
                 assertTrue(
-                    rig.carriedRollup >= 250,
+                    rig.carriedRollup >= 300,
                     "too few moves carried a NON-ZERO roll-up charge — an empty move is a legitimate " +
                         "§5.4 idempotence case but proves nothing about the roll-up half — $rig",
                 )
             },
-            { assertTrue(rig.nested >= 250, "too few strands carried an earlier move's credit (§12.1) — $rig") },
+            { assertTrue(rig.nested >= 200, "too few strands carried an earlier move's credit (§12.1) — $rig") },
+            {
+                assertTrue(
+                    rig.accumulatedRollup >= 90,
+                    "the §12.3 roll-up accumulation arm fired too rarely — with no standing credit on the " +
+                        "live rung, `max` and `+` agree and the assertion proves nothing — $rig",
+                )
+            },
         )
     }
 
@@ -858,8 +991,14 @@ class EntitlementLedgerConservationTest {
                     "an under-ack that left NO residue understated nothing — $rig",
                 )
             },
-            { assertTrue(rig.carriedRollup >= 250, "too few moves carried a non-zero roll-up charge — $rig") },
+            { assertTrue(rig.carriedRollup >= 300, "too few moves carried a non-zero roll-up charge — $rig") },
             { assertTrue(rig.moved >= 300, "too few generations actually moved — $rig") },
+            {
+                assertTrue(
+                    rig.accumulatedRollup >= 90,
+                    "the §12.3 roll-up accumulation arm fired too rarely — $rig",
+                )
+            },
         )
     }
 
