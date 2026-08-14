@@ -707,6 +707,105 @@ class HeddleNodeTest {
     }
 
     /**
+     * **A newborn and a waker in the same round are one joiner set, measured against one front**
+     * (issue #1752). Both read from further back than the competing set — the newborn from its own
+     * origin, having no [Gauge] yet; the waker from the stale virtual service it slept on, this
+     * round's clamp not yet computed. So each must be excluded from the front the *other* is
+     * measured against, or each drags it down toward itself and both bank the difference.
+     *
+     * The scenario is the smallest one that separates the two designs. `e1` runs alone to `200`
+     * while `e2` sleeps at `0`; then in a single [HeddleNode.schedule] call `e2` wakes and newborn
+     * `e3` arrives. The only child that is neither joiner is `e1`, so the one true front is `200`,
+     * and all three belong there.
+     *
+     * Seating and clamping in two passes over two fronts — which is what a `seatUnseated` followed
+     * by a separate `refreshWakeClamps` does — gets **both** wrong, in the same direction:
+     *
+     * | | two passes | one joiner set |
+     * |---|---|---|
+     * | `e3` seat | `mean(e1 200, e2 0)` = **100** | 200 |
+     * | `e2` clamp | `mean(e1 200, e3 100)` = **150** | 200 |
+     *
+     * `e3`'s share of that is permanent — a [Gauge.floor] the join only ratchets up — so the
+     * assertion that matters is its seat. The behavioural tell is that both joiners then take
+     * grants ahead of the incumbent instead of level with it.
+     *
+     * The joining round holds everyone **competing but unservable** (`maximumUsefulGrant = 0`,
+     * this file's idiom from [aRewakeCannotLowerAnEffectiveVirtualService]) so the seat can be read
+     * back as the seat: [EntitlementLedger.delegate] writes its own checkpoint into the same gauge,
+     * so a grant landing in the same round would leave the floor advanced past what was seated and
+     * the assertion would be reading the wrong number.
+     */
+    @Test
+    fun aNewbornAndAWakerInOneRoundAreSeatedOnTheSameFront() = runTest(
+        StandardTestDispatcher(),
+        timeout = TEST_WEDGE_BACKSTOP,
+    ) {
+        val h = harness(peers = 1, mint = mapOf(0 to 500L), topology = flatTopology())
+        h.pump()
+        val node = h.peers[0].node
+
+        // Phase 1 — e1 runs alone to 200; e2 is observed idle, so its next demand is a wake.
+        node.advertise(e1, Demand(targetOutstanding = 200L, maximumUsefulGrant = 10L))
+        node.schedule(root)
+        h.pump()
+        assertEquals(Rational.of(200L), node.parentVirtualTime(root), "e1 alone sets the front at 200")
+
+        // Phase 2 — in ONE round: e3 is born, and e2 wakes. Nothing is servable, so the round
+        // seats and clamps without granting, and the gauge reads back as the seat itself.
+        val newborn = AttachmentRecord(AttachmentId("e3"), root, GroupId("g3"), Weight.ONE)
+        assertTrue(node.prepare(newborn) && node.activate(newborn.id))
+        val competingUnservable = Demand(targetOutstanding = 10_000L, maximumUsefulGrant = 0L)
+        node.advertise(e1, competingUnservable)
+        node.advertise(e2, competingUnservable)
+        node.advertise(newborn.id, competingUnservable)
+        node.schedule(root)
+        h.pump()
+        assertEquals(
+            Gauge(Rational.of(200L), folded = 0L),
+            node.ledger.value.gauge(newborn.id),
+            "the newborn is seated at the front over the set it is joining — e1 alone, since the " +
+                "waker is a joiner too and cannot be averaged into it",
+        )
+
+        // Phase 3 — all three now servable and level at 200, so they split what is left (300 units,
+        // 30 quanta) three ways. Neither joiner is a joiner any more, so no front is recomputed.
+        val hungrier = Demand(targetOutstanding = 10_000L, maximumUsefulGrant = 10L)
+        node.advertise(e1, hungrier)
+        node.advertise(e2, hungrier)
+        node.advertise(newborn.id, hungrier)
+        node.schedule(root)
+        h.pump()
+
+        val ledger = node.ledger.value
+        val issued = "e1=${ledger.edge(e1)!!.issued}, e2=${ledger.edge(e2)!!.issued}, " +
+            "e3=${ledger.edge(newborn.id)!!.issued}"
+        assertAll(
+            {
+                assertEquals(
+                    100L,
+                    ledger.edge(newborn.id)!!.issued,
+                    "seated level, the newborn takes a third of what is left — not a catch-up burst ($issued)",
+                )
+            },
+            {
+                assertEquals(
+                    100L,
+                    ledger.edge(e2)!!.issued,
+                    "and so does the waker — clamped to the same front, not to one the newborn pulled down ($issued)",
+                )
+            },
+            {
+                assertEquals(
+                    300L,
+                    ledger.edge(e1)!!.issued,
+                    "and the incumbent keeps its third rather than being overtaken by two joiners ($issued)",
+                )
+            },
+        )
+    }
+
+    /**
      * The clamp fires on an observed idle→demand **transition**, never on the first sight of an
      * edge: a first observation carries no evidence the child was ever idle, and forfeiting a
      * real deficit accrued under some *other* peer's scheduling would be a penalty this peer has

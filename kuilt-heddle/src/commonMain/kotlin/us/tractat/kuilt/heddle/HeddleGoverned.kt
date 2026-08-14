@@ -242,23 +242,20 @@ public class GovernedHeddleNode internal constructor(
         return control.submit(ControlCommand.Mint(holder, amount), timeout)
     }
 
-    /** Introduce a new attachment generation, serialized through the log ([EntitlementLedger.prepare]). */
-    public suspend fun prepare(record: AttachmentRecord, timeout: Duration? = null): ControlOutcome =
-        control.submit(ControlCommand.Prepare(record), timeout)
-
     /**
-     * Introduce a new attachment generation from its parts, serialized through the log — the same
-     * act as [prepare], spelled without making the caller build the record.
+     * Introduce a new attachment generation, serialized through the log
+     * ([EntitlementLedger.prepare]).
      *
-     * **No seat is proposed, and none is fenced** (issue #1752). This method used to read
-     * [parentVirtualTime] here and freeze `⌈V⌉` into the committed bytes, which is why it carried
-     * a `readIndex()` authority fence and an applied-prefix freshness gate: a proposer reading a
-     * view that had not yet applied its siblings would otherwise have frozen an origin seat that
-     * every peer then applied permanently (issue #1713). A record no longer carries a seat, so a
-     * stale proposer's `Prepare` is inert, there is nothing left to fence, and both of that
-     * fence's documented residuals — the unfenced *partial*-view case, and the false refusal right
-     * after an election, when a withheld internal entry legitimately leaves the applied prefix
-     * behind the fenced index — go with it.
+     * **This is the only way to create a generation, and it proposes no seat** (issue #1752).
+     * There used to be a second entry point, `prepareNeutral`, which read [parentVirtualTime] here
+     * and froze `⌈V⌉` into the committed bytes — and which therefore needed a `readIndex()`
+     * authority fence and an applied-prefix freshness gate, because a proposer reading a view that
+     * had not yet applied its siblings would otherwise freeze an origin seat that every peer then
+     * applied permanently (issue #1713). A record no longer carries a seat, so a stale proposer's
+     * `Prepare` is inert: the fence, both of its documented residuals — the unfenced *partial*-view
+     * case, and the false refusal right after an election, when a withheld internal entry
+     * legitimately leaves the applied prefix behind the fenced index — and the method itself are
+     * all gone, rather than left as a name that still says "neutral" while doing nothing of the kind.
      *
      * Where the child starts competing is decided afterwards and by everybody: [schedule]'s seat
      * bump writes the [Gauge] at the front the edge is actually joining, on every peer that still
@@ -269,13 +266,8 @@ public class GovernedHeddleNode internal constructor(
      * with a [ControlConflict.Refused] naming the bound id — that is about the record's *intent*
      * (its parent, child and weight), which two honest proposers can still disagree on.
      */
-    public suspend fun prepareNeutral(
-        id: AttachmentId,
-        parent: GroupId,
-        child: GroupId,
-        weight: Weight,
-        timeout: Duration? = null,
-    ): ControlOutcome = prepare(AttachmentRecord(id, parent, child, weight), timeout)
+    public suspend fun prepare(record: AttachmentRecord, timeout: Duration? = null): ControlOutcome =
+        control.submit(ControlCommand.Prepare(record), timeout)
 
     /**
      * Open delegation across [edge], serialized through the log (design §9 #2). The **reshape

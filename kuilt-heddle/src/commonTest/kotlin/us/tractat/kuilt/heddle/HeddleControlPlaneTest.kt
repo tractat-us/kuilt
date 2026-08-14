@@ -714,7 +714,7 @@ class HeddleControlPlaneTest {
         val newborn = AttachmentId("newborn")
         assertNull(governed.parentVirtualTime(root), "the stale view must show no front at all")
 
-        assertIs<ControlOutcome.Applied>(governed.prepareNeutral(newborn, root, GroupId("child"), Weight.ONE))
+        assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(newborn, root, GroupId("child"), Weight.ONE)))
         val record = governed.ledger.value.record(newborn)
         assertNotNull(record)
         assertAll(
@@ -763,7 +763,7 @@ class HeddleControlPlaneTest {
         // grant does — the stored gauge is the seat itself, not a later `delegate` checkpoint.
         val first = AttachmentId("first")
         assertNull(governed.parentVirtualTime(root), "a parent with no active children has no front")
-        assertIs<ControlOutcome.Applied>(governed.prepareNeutral(first, root, GroupId("leaf"), Weight.ONE))
+        assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(first, root, GroupId("leaf"), Weight.ONE)))
         assertIs<ControlOutcome.Applied>(governed.activate(first))
         governed.schedule(root)
         assertEquals(
@@ -784,7 +784,7 @@ class HeddleControlPlaneTest {
         // edge, is exactly `first`'s virtual service at that moment. Again scheduled with nothing
         // newly advertised for it, so the gauge read back is the seat and not a checkpoint.
         val second = AttachmentId("second")
-        assertIs<ControlOutcome.Applied>(governed.prepareNeutral(second, root, GroupId("leaf2"), Weight.ONE))
+        assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(second, root, GroupId("leaf2"), Weight.ONE)))
         assertIs<ControlOutcome.Applied>(governed.activate(second))
         assertNull(governed.ledger.value.gauge(second), "a freshly activated edge carries no seat yet")
 

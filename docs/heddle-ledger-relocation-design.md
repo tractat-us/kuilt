@@ -911,8 +911,9 @@ section documented as safe turns out to be a real conservation break in one shap
 2. **The boot fence does not need `readIndex()`, and is better without it.** §6.5.3 specifies "one
    `readIndex()` + wait". `readIndex()` throws on a non-leader, so a follower could never open its
    own gate, and §11's own note about entries Raft withholds from `committedFrom` means the
-   applied prefix can legitimately sit below the fenced index (the trap `prepareNeutral` already
-   documents). A strictly better fence with the same guarantee: **wait for this peer's own
+   applied prefix can legitimately sit below the fenced index (the trap `ControlPlane.applyEntry`
+   documents at its `roster.advancedTo` — `prepareNeutral` used to carry it too, until its fence
+   was retired with the frozen seat in #1752). A strictly better fence with the same guarantee: **wait for this peer's own
    post-boot `Enroll(self)` to apply here.** Raft applies in index order, so a peer that has
    applied its own enroll has applied every entry before it — every barrier committed earlier is
    restored, and every later one arrives in order. It works on a follower, it cannot be wedged by

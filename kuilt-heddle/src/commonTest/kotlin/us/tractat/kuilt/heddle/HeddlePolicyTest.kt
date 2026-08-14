@@ -381,6 +381,17 @@ class HeddlePolicyTest {
      *
      * Here two near-converged siblings put the parent at `V = 109/10`, where the old floor (`10`)
      * and ceiling (`11`) sat either side of the answer.
+     *
+     * **What this test does and does not prove.** Asserting `newborn.virtualService() == v` would
+     * be worthless here — the fixture *sets* the seat to `v` and the read is `v + (0−0)/w`, so it
+     * restates itself. The seating decision lives in [EntitlementLedger.seat], and
+     * `HeddleControlPlaneTest.theSchedulerSeatsAJoinerAtTheFrontAndSchedulesItFromThere` and
+     * `HeddleNodeTest.aNewbornAndAWakerInOneRoundAreSeatedOnTheSameFront` are what pin it. What is
+     * observable *here*, at the policy, is the consequence the rounding rule used to cost: a
+     * newborn seated exactly on the front is **eligible** in the round it was created in, where the
+     * old `⌈V⌉ = 11` put it at `11 > V' = 120/11` and therefore outside the eligible set — a
+     * penalty, bounded but real. It is eligible and still does not win, which is the whole of what
+     * §10.5 asks for in both directions.
      */
     @Test
     fun neutralCreationAtFractionalVirtualTimeLandsExactlyOnTheFront() {
@@ -392,24 +403,24 @@ class HeddlePolicyTest {
         assertEquals(Rational.of(109, 10), v, "the fixture must put the parent at a fractional V")
 
         val newborn = Sim("n", Weight.ONE, seat = v)
+        val round = listOf(light, heavy, newborn)
 
         assertAll(
-            // Exactly on the front: neither §10.5's forbidden credit (ev < V) nor the rounding
-            // penalty the Long seat had to accept (ev > V). This is the assertion the old
-            // ceiling rule could not make.
+            // No penalty: seated on the front it is eligible immediately. Seating at the retired
+            // ceiling (11) would put it above the round's V and out of the eligible set entirely.
             {
-                assertEquals(
-                    v,
-                    newborn.virtualService(),
-                    "an exact-Rational seat must land the newborn on the front, not a rounding step either side",
+                assertTrue(
+                    newborn.effectiveVirtualService() <= effectiveParentVirtualTime(round),
+                    "a newborn seated on the front must be eligible in its creation round: " +
+                        "ev=${newborn.effectiveVirtualService()} vs V=${effectiveParentVirtualTime(round)}",
                 )
             },
-            // Behaviourally unchanged: it still does not take the round it was created in. The
-            // heavier sibling's deadline (98/9 + 1/9 = 11) beats the newborn's (109/10 + 1 = 119/10).
+            // No credit either: it still does not take the round it was created in. The heavier
+            // sibling's deadline (98/9 + 1/9 = 11) beats the newborn's (109/10 + 1 = 119/10).
             {
                 assertEquals(
                     "h",
-                    pick(listOf(light, heavy, newborn), config)?.attachment?.value,
+                    pick(round, config)?.attachment?.value,
                     "the newborn must not win the round it was created in",
                 )
             },

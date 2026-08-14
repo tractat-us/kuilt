@@ -261,8 +261,8 @@ public class EntitlementLedger private constructor(
             .mapNotNull { edge(it) }
 
     /**
-     * The single [AttachmentRecord] for [id] — its parent, child, weight, and virtual-time
-     * origin — or `null` if [id] is unknown *or divergent* (two conflicting records under
+     * The single [AttachmentRecord] for [id] — its parent, child and weight — or `null` if
+     * [id] is unknown *or divergent* (two conflicting records under
      * one id, which a healthy ledger never has; see [validate]). The parent-facing read a
      * scheduler pairs with [edge]'s [EdgeSummary] to build a policy input.
      */
@@ -930,6 +930,16 @@ public class EntitlementLedger private constructor(
      * `GaugeWriteRulesTest` shows reintroducing the full double count. That is why [drainWitness]
      * co-carries the gauge, and it is the standing constraint on any future boot-time republish of
      * authored base slots (see #1783).
+     *
+     * ## Seat before you delegate — this method will not do it for you
+     *
+     * Delegating down an edge that carries **no** gauge silently seats it at its own origin: the
+     * checkpoint written here is `grossEv(issuedAfter)`, which for an unseated edge is
+     * `issuedAfter / w`, and [seat] refuses forever afterwards because a gauge now exists. The join
+     * cannot repair it either — `max` on a floor that is already the minimum is a no-op. So a
+     * caller driving this must seat first; `HeddleNode.settleJoiners` does, and `HeddleNode.pickOne`
+     * additionally refuses a gauge-absent edge as a candidate so a mid-round `Activate` cannot slip
+     * through the gap.
      */
     public fun delegate(r: ReplicaId, edge: AttachmentId, amount: Long): Patch<EntitlementLedger>? {
         require(amount >= 1L) { "delegate amount must be positive, was $amount" }
