@@ -1066,14 +1066,23 @@ public abstract class RaftStorageConformanceSuite {
      * state serialises to, and a state machine whose state is empty at the cut serialises to none.
      * The config is non-null here for the same reason — it is the field most likely to be lost
      * *along with* the state under a "the row is empty, drop it" encoding.
+     *
+     * **The rig is a single byte, and the setting that switches this property off is one keystroke
+     * away.** Give the state one byte and this becomes a slightly wordier
+     * [snapshotAtZeroBaseline_roundTrips] that goes green against the very adapter it exists to
+     * catch — the drift shape that has recurred repeatedly in this tree. So the emptiness is
+     * asserted rather than merely written: the arm below is near-tautological against the literal
+     * on the line above it, and that is exactly its job.
      */
     @Test
     public fun snapshotWithEmptyState_isStillASnapshot(): TestResult = runTest {
         val storage = newStorage()
         val meta = SnapshotMeta(lastIncludedIndex = 3L, lastIncludedTerm = 1L, config = SIMPLE_CONFIG)
-        storage.saveSnapshot(meta, byteArrayOf())
+        val emptyState = byteArrayOf()
+        storage.saveSnapshot(meta, emptyState)
         val stored = storage.loadSnapshot()
         assertAll(
+            { assertTrue(emptyState.isEmpty(), "fixture: the state must be EMPTY, or this property is a second spelling of snapshotAtZeroBaseline_roundTrips") },
             { assertNotNull(stored, "an empty application state is a snapshot, not an absent one") },
             { assertContentEquals(byteArrayOf(), stored?.state, "the empty state must come back empty, not null and not fabricated") },
             { assertEquals(meta, stored?.meta, "and the metadata beside it, config included") },
