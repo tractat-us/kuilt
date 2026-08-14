@@ -51,9 +51,14 @@ public class RetirementReAssertion<S : Quilted<S>>(
  * cannot spell an ordered triple of three *different* operands, and that triple is the whole content
  * of `(a ⊔ b) ⊔ c == a ⊔ (b ⊔ c)`: with only `a` and `b` available, every triple repeats an operand,
  * and a bracketing that drops a contribution as soon as a third one arrives between the brackets is
- * unreachable. That is not a hypothetical shape — it is the one
- * [QuiltedConformanceSuite.samplesReAssertAfterRetirement] exists for, and the one whose absence let
- * a real lattice defect sit under a green `pieceIsAssociative`.
+ * unreachable. Three-different-operands is the shape
+ * [QuiltedConformanceSuite.samplesReAssertAfterRetirement] exists to insist on, and its KDoc carries
+ * the measurement of what a list missing it costs.
+ *
+ * **Three is a floor, not a target.** Clearing it says the laws compared something; it does not say
+ * they compared anything interesting, and every live binding returns more. Read
+ * [QuiltedConformanceSuite.samplesMeetTheEvidenceFloor] for the list of what clearing it does not
+ * buy.
  */
 public const val DISTINCT_SAMPLE_FLOOR: Int = 3
 
@@ -64,8 +69,9 @@ public const val DISTINCT_SAMPLE_FLOOR: Int = 3
  * Printed on every run, green or red, for the reason the sibling suite prints its vacuity rates: a
  * floor whose value nobody sees is a floor nobody notices drifting toward. The two counts are
  * carried separately because they fail differently and want different fixes — `5 samples,
- * 5 distinct` is healthy, `5 samples, 2 distinct` is a list with three spellings of one value in it,
- * and only the second number is the floor.
+ * 5 distinct` is healthy, `5 samples, 2 distinct` is a list carrying three redundant entries, and
+ * only the second number is the floor. A binding drifting from the first shape toward the second is
+ * visible here long before it becomes fatal.
  *
  * @param samples entries the binding returned.
  * @param distinctSamples entries no earlier entry equalled, by `==`. See [checkSampleEvidenceFloor]

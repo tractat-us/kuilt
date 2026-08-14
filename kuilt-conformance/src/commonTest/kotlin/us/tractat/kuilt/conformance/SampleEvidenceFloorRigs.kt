@@ -174,33 +174,47 @@ internal class SampleEvidenceFloorSelfTest {
     }
 
     /**
-     * **The input at which `samples().toSet().size` — the obvious spelling, and the one the issue
-     * proposed — is green while the shipped spelling is red.**
+     * **The input on which `samples().toSet().size` — the obvious spelling, and the one #2312
+     * proposed — does not agree with `==`, and does not even agree with itself across targets.**
      *
-     * `hashCode` is not part of the [us.tractat.kuilt.crdt.Quilted] contract. [EqualButUnhashed]
-     * overrides equality and leaves `hashCode` at identity, so three equal instances land in three
-     * buckets and a `Set` reads three distinct values where `==` reads one. The type is not a
-     * contrivance: nothing in `Quilted` asks for `hashCode`, so a binding author who does not write
-     * one has broken no rule — and would have got a floor that passes on `listOf(x, x, x)` for their
-     * trouble. This arm is why [checkSampleEvidenceFloor] counts in `O(n²)` against a list.
+     * `hashCode` is not part of the [Quilted] contract. [EqualButUnhashed] overrides equality and
+     * leaves `hashCode` at identity, which breaks the `equals`/`hashCode` contract a hash container
+     * relies on — so what a `Set` makes of three equal instances is **unspecified**, and measurably
+     * so. Three of them read as *three* distinct on JVM, Android, `macosArm64` and
+     * `iosSimulatorArm64`, and as *two* on `wasmJs`, where two of the identity hashes shared a
+     * bucket and `equals` collapsed them there. The type is not a contrivance: nothing in `Quilted`
+     * asks for `hashCode`, so a binding author who writes none has broken no rule — and under a
+     * `toSet()` floor would have got an evidence count that varies by target for their trouble.
+     * A floor whose verdict depends on identity-hash allocation is not a floor.
      *
-     * A red here means the count went back to a `Set`.
+     * **So the assertion is on `==`, and the `Set` number is printed rather than pinned.** An
+     * earlier draft asserted `toSet().size == 3`; it passed on four targets and reddened on
+     * `wasmJs` — the rig's own precondition was the platform-dependent thing, which is the finding
+     * rather than a flake. What is deterministic on every target is that
+     * [checkSampleEvidenceFloor] consults no hash and reads **one**.
+     *
+     * That is enough to red a `toSet()` mutation wherever the two disagree: at a `Set` count of 3
+     * the floor stops raising at all and [assertFailsWith] reds; at 2 it raises with the wrong
+     * count and the message check reds. **What it cannot detect** is a hypothetical target whose
+     * `Set` collapses all three into one bucket — there the two spellings agree on this input, and
+     * no assertion over it could separate them.
      */
     @Test
     fun equalValuesWithoutAHashCodeStillCollapse() {
         val three = listOf(EqualButUnhashed(7), EqualButUnhashed(7), EqualButUnhashed(7))
+        println("`toSet()` on three equal instances with no hashCode reads ${three.toSet().size} on this target")
         assertAll(
             {
                 assertTrue(
-                    three.toSet().size == 3,
-                    "the rig is only meaningful while a Set reads these as three: ${three.toSet().size}",
+                    three.all { it == three[0] },
+                    "the rig is only meaningful while these really are one value by `==`: $three",
                 )
             },
             {
                 val failure = assertFailsWith<IllegalStateException> { checkSampleEvidenceFloor(three) }
                 assertTrue(
                     "3 sample(s), 1 distinct" in failure.message.orEmpty(),
-                    "`==` must see one value where the Set saw three: ${failure.message}",
+                    "`==` must see one value here on every target, whatever the Set saw: ${failure.message}",
                 )
             },
         )
