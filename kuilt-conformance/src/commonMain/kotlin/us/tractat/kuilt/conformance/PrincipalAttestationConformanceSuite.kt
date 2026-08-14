@@ -95,17 +95,27 @@ import kotlin.test.assertTrue
  *
  * ## Mutation receipt (#2316)
  *
- * | Mutation | Reds |
- * |---|---|
- * | `MuxServerLoom.readLoop`: `principal ?: nonEmptyPayloadAsPrincipal(frame)` — fall back to the identity the client announced in its first frame | `peerAssertedPrincipalNeverReachesTheRoster` (RoomHub) |
- * | `MuxServerLoom.readLoop`: `nonEmptyPayloadAsPrincipal(frame) ?: principal` — prefer the client's announcement | both provenance properties (RoomHub) |
- * | `MeshSeam.readLoop`: re-stamp `principals[remoteId]` from each inbound frame | both provenance properties (Mesh) |
- * | `MeshSeam.handshakeLink`: `principal = Principal(remote.peerId.value)` — trust the self-asserted id | `peerAssertedPrincipalNeverReachesTheRoster` **and** `unattestedPeerIsAbsentFromRoster` |
+ * Baseline and the reverted control arm are 16/16 green (8 properties × 2 subclasses).
  *
- * The last row is the one the carriage half already caught, and it is listed to show where the new
- * properties are *not* load-bearing. The first three are invisible to every pre-existing property in
- * this suite: they only ever fire on a frame body, and no carriage property sends one that carries an
- * identity. Per-subclass counts and the reverted-fix control arm are in the PR that added them.
+ * | Mutation | Reds | Stays green |
+ * |---|---|---|
+ * | M1 `MuxServerLoom.readLoop`: `principal ?: payloadAsPrincipal(body)` — fall back to the identity the client announced in its first frame | `peerAssertedPrincipalNeverReachesTheRoster` (RoomHub) — 1/16 | all 6 carriage properties, both subclasses |
+ * | M2 `MuxServerLoom.readLoop`: `payloadAsPrincipal(body) ?: principal` — prefer the client's announcement | both provenance properties (RoomHub) — 2/16 | all 6 carriage properties, both subclasses |
+ * | M3 `MeshSeam.readLoop`: re-stamp the link's principal from each inbound frame body | both provenance properties (Mesh) — 2/16 | all 6 carriage properties, both subclasses |
+ * | M4 `MeshSeam.handshakeLink`: `principal ?: Principal(remote.peerId.value)` — trust the self-asserted id | `peerAssertedPrincipalNeverReachesTheRoster` **and** `unattestedPeerIsAbsentFromRoster`, on **both** subclasses (a room rides a per-connection `hubMesh`) — 4/16 | `hostVerifiedPrincipalOutranksThePeersClaim` |
+ *
+ * The greens are the point of the table. M1–M3 are invisible to every pre-existing property here:
+ * they can only fire on a frame body, and no carriage property sends one carrying an identity — so
+ * those three are what the new properties buy. M4 is the converse, listed to mark where they are
+ * *not* load-bearing: `unattestedPeerIsAbsentFromRoster` already caught it. M4's own green is honest
+ * too — its `?:` cannot fire when the host verified something, which is exactly the half
+ * [hostVerifiedPrincipalOutranksThePeersClaim] exists for and M2/M3 do red.
+ *
+ * Read the shape, not just the count: under M1 the two refusal assertions red while the rig
+ * assertion ("a host-verified admission is reported in this run") stays green — the roster is alive
+ * and the failure is a refusal that did not happen, not a roster that never filled. Under M2/M3
+ * `hostVerifiedPrincipalOutranksThePeersClaim` reds with
+ * `expected verified-guest but was verified-admin` — the forged value in the roster by name.
  *
  * **Virtual time convention:** every test runs under [StandardTestDispatcher] and awaits
  * admission/removal on observable roster state (`attestedPrincipals.first { … }`) rather than polling
@@ -332,7 +342,17 @@ public abstract class PrincipalAttestationConformanceSuite {
 
     // ── reconnect refresh ─────────────────────────────────────────────────────
 
-    /** A peer that reconnects with a new principal supersedes its prior roster entry. */
+    /**
+     * A peer that reconnects with a new principal supersedes its prior roster entry.
+     *
+     * **This mandates a takeover, and the takeover is reachable by an impostor (#2357).** The
+     * harness cannot distinguish "alice reconnecting" from "someone else claiming alice's id" — the
+     * peer id is self-asserted — so requiring the second link to win obliges the hub to let an
+     * *unattested* link displace an *attested* one of the same id. That is a live behaviour of both
+     * reference seams, not a hypothetical, and #2357 carries the reproducer and the three candidate
+     * policies. This property is left as-is deliberately: changing it is a behaviour decision with
+     * consumer impact, not a test fix, and #2316 declined to smuggle one in under a test PR.
+     */
     @Test
     public fun rosterUpdatesPrincipalOnReconnect(): TestResult =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
