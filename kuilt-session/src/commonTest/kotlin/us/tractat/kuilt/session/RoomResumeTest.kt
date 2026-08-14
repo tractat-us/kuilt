@@ -18,6 +18,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
@@ -175,14 +176,17 @@ class RoomResumeTest {
         assertIs<ResumeResult.WindowClosed>(result)
     }
 
-    // ── Test 4a: wrong roomId → WindowClosed ─────────────────────────────────
+    // ── Test 4a: wrong roomId → Refused(ResumeTokenInvalid) ──────────────────
 
     /**
-     * Acceptance criterion 4a: [Room.resume] with a wrong [RoomId] returns
-     * [ResumeResult.WindowClosed]; no state change.
+     * Acceptance criterion 4a: [Room.resume] with a wrong [RoomId] is refused; no state change.
+     *
+     * The value used to be [ResumeResult.WindowClosed] — the same value the host returns for a
+     * window that genuinely elapsed, and the same one the joiner returns when it never asked at
+     * all. Since #2364 it carries the host's own [RejectCode.ResumeTokenInvalid].
      */
     @Test
-    fun `resume with wrong roomId returns WindowClosed`() = runTest {
+    fun `resume with wrong roomId is refused as ResumeTokenInvalid`() = runTest {
         var clockMs = 0L
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
         val loom = InMemoryLoom()
@@ -198,17 +202,30 @@ class RoomResumeTest {
         )
 
         val result = joinerRoom.resume(badToken)
-        assertIs<ResumeResult.WindowClosed>(result)
+        assertEquals(
+            ResumeResult.Refused("resume-token-invalid: session-mismatch", RejectCode.ResumeTokenInvalid),
+            result,
+        )
     }
 
-    // ── Test 4b: expired window → WindowClosed ────────────────────────────────
+    // ── Test 4b: the joiner gave up first → WindowClosed ─────────────────────
 
     /**
-     * Acceptance criterion 4b: [Room.resume] after the reconnect window has expired
-     * returns [ResumeResult.WindowClosed].
+     * Acceptance criterion 4b: once the joiner's own reconnect has failed, [Room.resume] answers
+     * [ResumeResult.WindowClosed] **locally** — it does not ask the host at all.
+     *
+     * **This is not the host's window expiring, though it was named for it until #2364.** Both
+     * directions are dropped for longer than the reconnect window, so the joiner's own host
+     * detector fires, its reconnect finds no `reweave` and goes terminal, and the `resume` below
+     * short-circuits on `isTerminal()`. While every reject also completed as
+     * [ResumeResult.WindowClosed] the two were indistinguishable, so nothing here noticed which
+     * one it was measuring. A host that really does refuse an elapsed window now answers
+     * `Refused(RejectCode.ResumeWindowExpired)` — see
+     * [a joiner can tell an invalid token from a not-yet-open window from an elapsed one], whose
+     * third arm drops only the joiner's *outbound* traffic so the joiner stays alive to hear it.
      */
     @Test
-    fun `resume after reconnect window expires returns WindowClosed`() = runTest {
+    fun `resume after the joiner's own reconnect has failed returns WindowClosed`() = runTest {
         var clockMs = 0L
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
         val loom = InMemoryLoom()
@@ -304,6 +321,29 @@ class RoomResumeTest {
         val windowElapsed = joinerRoom.resume(token)
 
         assertAll(
+            {
+                assertEquals(
+                    ResumeResult.Refused("resume-token-invalid: session-mismatch", RejectCode.ResumeTokenInvalid),
+                    invalidToken,
+                    "a token minted for another room must surface the host's own terminal code",
+                )
+            },
+            {
+                assertEquals(
+                    ResumeResult.Refused("resume-window-not-yet-open", RejectCode.ResumeWindowNotYetOpen),
+                    notYetOpen,
+                    "a window the host has not opened yet must surface as RETRYABLE — this is the arm " +
+                        "a consumer must not treat as 'grace window elapsed, re-join fresh'",
+                )
+            },
+            {
+                assertEquals(
+                    ResumeResult.Refused("resume-window-expired", RejectCode.ResumeWindowExpired),
+                    windowElapsed,
+                    "an elapsed grace window must surface as the host's terminal expiry code, not as " +
+                        "the joiner's local WindowClosed (which would mean it never asked)",
+                )
+            },
             {
                 assertNotEquals(
                     invalidToken,
