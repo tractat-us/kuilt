@@ -531,7 +531,7 @@ class EntitlementLedgerConservationTest {
     )
 
     /**
-     * What the prefix run reached. [carriedRollup] is the arm this whole file exists for, and it is
+     * What the prefix run reached. [carriedRollup] is the arm this ladder exists for, and it is
      * counted from the move's **inputs** — the acked finals plus the strand's own relocation state,
      * i.e. the same `rsp` the derivation is specified to compute — never from the patch's effect. A
      * counter read off the effect would fall to zero in lockstep with the very write it is supposed
@@ -908,8 +908,9 @@ class EntitlementLedgerConservationTest {
                 2 -> {
                     // `g1` stays in the draw although a transfer there writes `transfers[PathKey.of(live)]`
                     // and #2366's precondition then refuses every later move off that rung — an absorbing
-                    // state for the run that draws it. Measured rather than assumed: including `g1` costs
-                    // ~6% of the moves and buys the transfer-tangle refusal, so it is in.
+                    // state for the run that draws it. Kept because it was measured rather than feared:
+                    // dropping `g1` bought back only a few percent of the moves, and keeping it is what
+                    // puts the transfer-tangle refusal in the sequence. `rig.refused` is the census.
                     val to = replicas.filter { it != actor }.random(rnd)
                     ledger.applying(ledger.transfer(allGroups.random(rnd), actor, to, rnd.nextLong(1L, 40L)))
                 }
