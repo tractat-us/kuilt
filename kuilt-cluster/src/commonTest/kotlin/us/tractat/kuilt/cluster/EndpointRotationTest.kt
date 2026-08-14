@@ -7,6 +7,7 @@ import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
@@ -14,6 +15,7 @@ import us.tractat.kuilt.session.partition.RoundRobinEndpointSelector
 import us.tractat.kuilt.session.partition.ServerClusterReconnect
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -25,7 +27,7 @@ import kotlin.time.Duration.Companion.seconds
  *
  * Tests are in `:kuilt-cluster` (not `:kuilt-session`) because they verify the
  * *policy* of how ClusterClient drives reconnect — specifically: round-robin order
- * on failover, and the WindowClosed→fresh-join fallback (proven by #532).
+ * on failover, and the terminal-refusal→fresh-join fallback (proven by #532).
  *
  * All tests run under [StandardTestDispatcher] with a tight 5s timeout.
  */
@@ -98,21 +100,24 @@ class EndpointRotationTest {
         }
 
     @Test
-    fun `WindowClosed on cross-server resume is a fresh-join signal not an error`(): TestResult =
+    fun `a terminal cross-server refusal is a fresh-join signal not an error`(): TestResult =
         runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             // This test encodes the ClusterClient's required policy from the O4/#532 finding:
-            // presenting a token from server-A to server-B always returns WindowClosed
-            // because server-B's JoinerReconnectController has no window state for this peer.
+            // presenting a token from server-A to server-B is always terminally refused, because
+            // server-B mints its own RoomId and keeps its reconnect windows in memory. The real
+            // wire measurement lives in :examples' ResumeTokenFailoverTest; this models the policy
+            // the client applies to it.
             //
-            // ClusterClient must handle WindowClosed as "fall back to fresh join" — not as error.
+            // ClusterClient must handle it as "fall back to fresh join" — not as an error.
 
-            val result: ResumeResult = ResumeResult.WindowClosed
+            val result: ResumeResult.JoinerOutcome =
+                ResumeResult.Refused("resume-token-invalid: session-mismatch", RejectCode.ResumeTokenInvalid)
 
-            // Verify the type — this is the value ClusterClient must treat as a trigger for
-            // fresh-join rather than re-throwing or erroring.
-            assertIs<ResumeResult.WindowClosed>(result)
+            // Terminal is the operative property: a retryable refusal would mean "try the same
+            // endpoint again", which across servers can never work.
+            assertFalse(assertIs<ResumeResult.Refused>(result).code.retryable)
 
-            // After treating WindowClosed as fresh-join, the token should be cleared
+            // After treating the refusal as fresh-join, the token should be cleared
             // (it was from the old server and will never succeed on the new one).
             // This models the ClusterClient's post-failover cleanup contract.
             val reconnect = ServerClusterReconnect(
@@ -127,10 +132,10 @@ class EndpointRotationTest {
                 ),
             )
 
-            // Simulate the ClusterClient's WindowClosed handling: clear the stale token.
+            // Simulate the ClusterClient's refusal handling: clear the stale token.
             reconnect.clearToken()
 
-            assertNull(reconnect.pendingToken(), "token must be cleared after WindowClosed / fresh-join")
+            assertNull(reconnect.pendingToken(), "token must be cleared after refusal / fresh-join")
         }
 
     @Test

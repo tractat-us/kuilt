@@ -120,7 +120,7 @@ import kotlin.time.Instant
  * |---|----------|------|-------|--------|
  * | M1 | `SeamRoom.resumeToken` returns `null` — a room opting out of resume entirely | real | RED: [resumeWithinWindowFiresResumed] and [aTokenMintedForAnotherRoomIsRefused] on the loud precondition, naming `role=Joiner … roster=1 member(s)` | [joinerLearnsHostRoomIdOnAdmission] RED — but [resumeWithinWindowFiresResumed] **green by absence** |
  * | M2 | [injectorOrDeclaredGap] drops its assertion — i.e. the pre-#2306 silent `?: return@runTest`, exactly | rig | RED: all four `blankTrackingUrl*` | all green; the four gated obligations passed under a gap declaring nothing |
- * | M3 | delete the `token.roomId != roomId` guard in `DefaultJoinerReconnectController.tryResume` | real | RED: [aTokenMintedForAnotherRoomIsRefused], all 3 assertions — `got Success`, then `WindowClosed` for the genuine token | every pre-existing test of this suite **green** |
+ * | M3 | delete the `token.roomId != roomId` guard in `DefaultJoinerReconnectController.tryResume` | real | RED: [aTokenMintedForAnotherRoomIsRefused], all 4 assertions — `got Success`, then a refusal for the genuine token | every pre-existing test of this suite **green** |
  * | M4 | the host drops a foreign token silently instead of refusing it | synthetic | RED: [aTokenMintedForAnotherRoomIsRefused], 2 of 3 — `Got TimedOut` | all green |
  *
  * **M1 is the argument for [requireResumeToken].** The same fabric was *already* failing
@@ -586,21 +586,33 @@ public abstract class RoomConformanceSuite {
      *
      * ### What the `Room.resume` surface can and cannot observe — read before strengthening this
      *
-     * #2306 asked for [ResumeResult.TokenInvalid] here. **It is not observable through
-     * [Room.resume].** The reference host does produce it (`DefaultJoinerReconnectController`
+     * #2306 asked for [ResumeResult.TokenInvalid] here, and at the time it was **not observable
+     * through [Room.resume]**: the reference host produced it (`DefaultJoinerReconnectController`
      * checks the room id before it touches any window, which is why this test needs no window state
-     * of its own for the *refusal* half), but it travels the wire as an
-     * `AdmitMessage.Reject(RejectCode.ResumeTokenInvalid)` and the joiner's resume machine completes
-     * **every** reject as [ResumeResult.WindowClosed] — deliberately, so its retry loop survives the
-     * transient window-not-yet-open race. So `Room.resume`'s reachable range on the reference is
-     * `{Success, WindowClosed, TimedOut}`; [ResumeResult.TokenInvalid] and
-     * [ResumeResult.WindowNotYetOpen] are host-internal verdicts. Asserting `TokenInvalid` here
-     * would have pinned a value no implementation can return.
+     * of its own for the *refusal* half), it travelled the wire as an
+     * `AdmitMessage.Reject(RejectCode.ResumeTokenInvalid)`, and the joiner's resume machine
+     * completed **every** reject as [ResumeResult.WindowClosed] — so an elapsed window, a foreign
+     * token and a window the host had not opened yet were one value.
      *
-     * This test therefore asserts the strongest thing the surface admits — a **terminal refusal**,
-     * either spelling — and deliberately excludes [ResumeResult.TimedOut], which is the rig receipt:
+     * #2364 fixed that. A reject now completes as [ResumeResult.Refused] carrying the host's own
+     * [us.tractat.kuilt.session.admit.RejectCode], and the host-side verdicts are a different half of the hierarchy
+     * ([ResumeResult.HostVerdict]) that a joiner cannot receive at all — `refused is
+     * ResumeResult.TokenInvalid` is now a *compile* error here, which is how this KDoc's own
+     * warning stopped needing to be prose. So `Room.resume`'s reachable range is
+     * `{Success, Refused, TimedOut, WindowClosed}`, and this test asserts the strongest thing the
+     * surface admits: a refusal that is a **host verdict** (not local silence) and whose code is
+     * **terminal**. It still excludes [ResumeResult.TimedOut], which is the rig receipt —
      * `TimedOut` means no verdict arrived at all, so a host that never saw the frame reds here
-     * instead of passing as a refusal it never made.
+     * instead of passing as a refusal it never made — and now also excludes
+     * [ResumeResult.WindowClosed], which after #2364 means the *joiner* gave up locally without
+     * asking.
+     *
+     * The code itself is left unpinned to one constant on purpose: a room may honestly answer
+     * [us.tractat.kuilt.session.admit.RejectCode.ResumeTokenInvalid] or
+     * [us.tractat.kuilt.session.admit.RejectCode.RoomMismatch] for a token naming a room it
+     * does not serve. What every implementation owes is that the answer is **not retryable** —
+     * re-presenting that token can never work, and a room that said otherwise would send the
+     * joiner into a doomed retry loop for its whole window.
      *
      * ### Mutation receipt
      *
@@ -608,8 +620,12 @@ public abstract class RoomConformanceSuite {
      * [us.tractat.kuilt.session.partition.DefaultJoinerReconnectController.tryResume] makes the
      * foreign token indistinguishable from the genuine one: it consumes the window, so the first
      * resume returns [ResumeResult.Success] (reddening the refusal assertions) and the second
-     * returns [ResumeResult.WindowClosed] (reddening the positive control). Measured: all three
-     * assertions red, every pre-existing test of this suite green.
+     * returns a refusal (reddening the positive control). Measured: all three assertions red,
+     * every pre-existing test of this suite green.
+     *
+     * Weakening the guard to answer `RejectCode.ResumeWindowNotYetOpen` (retryable) instead of removing it
+     * keeps the first two assertions green and reds only the third — which is why the terminality
+     * of the code, not merely the presence of a refusal, is the assertion that carries this test.
      *
      * **Not invisible everywhere, though — say what the row actually claims.** That same mutation
      * reds two tests in `:kuilt-session`'s own `JoinerReconnectControllerTest`. What was missing is
@@ -654,10 +670,20 @@ public abstract class RoomConformanceSuite {
                     )
                 },
                 {
-                    assertTrue(
-                        refused is ResumeResult.WindowClosed || refused is ResumeResult.TokenInvalid,
-                        "the refusal must be a VERDICT, not silence: ResumeResult.TimedOut means no reply " +
-                            "arrived, which would make the assertion above vacuous. Got $refused",
+                    assertIs<ResumeResult.Refused>(
+                        refused,
+                        "the refusal must be a VERDICT the host rendered, not silence and not a local " +
+                            "give-up: ResumeResult.TimedOut means no reply arrived and " +
+                            "ResumeResult.WindowClosed means this joiner never asked, either of which " +
+                            "would make the assertion above vacuous. Got $refused",
+                    )
+                },
+                {
+                    assertFalse(
+                        (refused as? ResumeResult.Refused)?.code?.retryable ?: true,
+                        "a token minted for another room can never validate here, so the host's " +
+                            "RejectCode must be terminal — a retryable one sends the joiner into a " +
+                            "doomed retry loop for its whole window. Got $refused",
                     )
                 },
                 {

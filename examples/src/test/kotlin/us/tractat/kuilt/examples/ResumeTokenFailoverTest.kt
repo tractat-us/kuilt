@@ -12,6 +12,7 @@ import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.session.SeamRoomFactory
+import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.RoundRobinEndpointSelector
 import us.tractat.kuilt.session.partition.ServerClusterReconnect
@@ -19,7 +20,7 @@ import us.tractat.kuilt.websocket.KtorClientLoom
 import us.tractat.kuilt.websocket.KtorRoomHost
 import us.tractat.kuilt.websocket.WebSocketAdvertisement
 import kotlin.test.Test
-import kotlin.test.assertIs
+import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.time.Duration.Companion.seconds
 
@@ -39,16 +40,23 @@ import kotlin.time.Duration.Companion.seconds
  * - Each `KtorRoomHost` creates a fresh [SeamRoomFactory] and therefore a fresh
  *   [us.tractat.kuilt.session.SeamRoom] per accepted connection.
  * - Each `SeamRoom` owns a `DefaultJoinerReconnectController` whose reconnect window
- *   registry (`windows` map) is **in-memory and per-room-instance**.
- * - Server-B has no window entry for the client's `PeerId` — it was never the entry
- *   server. `tryResume` returns `WindowClosed` immediately.
+ *   registry (`windows` map) is **in-memory and per-room-instance** — *and* whose
+ *   [us.tractat.kuilt.session.partition.RoomId] is minted per room, so server-B does not even
+ *   recognise the room server-A's token names.
  *
- * [Room.resume] therefore returns [ResumeResult.WindowClosed] when the client presents
- * the token from server-A to server-B. This is the characterisation this test proves.
+ * [Room.resume] therefore returns [ResumeResult.Refused] carrying
+ * [RejectCode.ResumeTokenInvalid] — a **terminal** code — when the client presents the token
+ * from server-A to server-B. This is the characterisation this test proves.
+ *
+ * **The room-id mismatch is the operative reason, and it was invisible until #2364.** This KDoc
+ * used to say the token was "structurally valid (correct RoomId)" and that the refusal came from a
+ * missing window entry. It never did: server-B rejects on the room id, *before* it looks at any
+ * window. Nothing here could tell, because every reject reached the joiner as one
+ * `ResumeResult.WindowClosed`. The measured code now says which check fired.
  *
  * ## Implication for S3 ClusterClient
  *
- * The `ClusterClient.connect`-on-failover code path must treat `ResumeResult.WindowClosed`
+ * The `ClusterClient.connect`-on-failover code path must treat a terminal `ResumeResult.Refused`
  * as a signal to fall back to a fresh join (re-admit handshake), not as an error. Resume
  * is a **best-effort optimisation** that succeeds only when the reconnect stays on the
  * same entry server within its reconnect window. Cross-endpoint failover always requires
@@ -74,7 +82,7 @@ class ResumeTokenFailoverTest {
     private val roomPattern = Pattern("failover-test-room")
 
     @Test
-    fun `resume token from server-A degrades to WindowClosed on server-B — fresh join required`() =
+    fun `resume token from server-A is terminally refused by server-B — fresh join required`() =
         testApplication {
             val hostA = KtorRoomHost(
                 application = application,
@@ -202,11 +210,17 @@ class ResumeTokenFailoverTest {
                 // (correct RoomId) but server-B's JoinerReconnectController has no window
                 // state for this peer's PeerId. Fresh join (the admit handshake above) is
                 // the correct fallback path.
-                assertIs<ResumeResult.WindowClosed>(
+                assertEquals(
+                    ResumeResult.Refused(
+                        "resume-token-invalid: session-mismatch",
+                        RejectCode.ResumeTokenInvalid,
+                    ),
                     resumeResult,
-                    "ResumeToken from server-A must return WindowClosed on server-B: " +
-                        "each server's JoinerReconnectController is in-memory and per-host-room. " +
-                        "ClusterClient.connect-on-failover must fall back to a fresh join.",
+                    "ResumeToken from server-A must be REFUSED by server-B with a TERMINAL code: " +
+                        "each server mints its own RoomId and keeps its reconnect windows in memory, " +
+                        "so re-presenting this token can never work and " +
+                        "ClusterClient.connect-on-failover must fall back to a fresh join. A " +
+                        "retryable code here would send the client into a doomed retry loop.",
                 )
 
                 // ── Teardown ──────────────────────────────────────────────────────

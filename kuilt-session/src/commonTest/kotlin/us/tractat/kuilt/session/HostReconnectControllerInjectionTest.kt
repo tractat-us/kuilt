@@ -63,7 +63,7 @@ class HostReconnectControllerInjectionTest {
             _events.tryEmit(JoinerReconnectEvent.WindowOpened(peerId, expiresAt = SENTINEL_EXPIRES_AT))
         }
 
-        override suspend fun tryResume(token: ResumeToken, at: Long): ResumeResult =
+        override suspend fun tryResume(token: ResumeToken, at: Long): ResumeResult.HostVerdict =
             ResumeResult.WindowNotYetOpen
 
         override fun expire(peerId: PeerId, at: Long) = Unit

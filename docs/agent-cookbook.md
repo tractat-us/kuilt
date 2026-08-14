@@ -106,23 +106,36 @@ public suspend fun callerSuppliedRoomIdSample(
 
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#resumeAfterDropSample -->
 ```kotlin
-public suspend fun resumeAfterDropSample(room: Room) {
+public suspend fun resumeAfterDropSample(room: Room): Boolean {
     // After the admit handshake the joiner holds a reconnect credential — save it.
-    val token: ResumeToken = room.resumeToken ?: return
+    val token: ResumeToken = room.resumeToken ?: return false
     // ... transport drops; you redial the fabric and rebuild the room ...
     // Present the saved token to re-enter within the leader's grace window.
-    when (room.resume(token)) {
-        ResumeResult.Success -> Unit // back in the room; state resync follows
-        ResumeResult.WindowClosed -> Unit // grace window elapsed — re-join fresh
-        ResumeResult.WindowNotYetOpen -> Unit // host hasn't noticed the drop yet — retry shortly
-        ResumeResult.TimedOut -> Unit // no reply within resumeTimeout (host unreachable) — retry shortly
-        is ResumeResult.TokenInvalid -> Unit // wrong session — re-join fresh
+    return when (val outcome = room.resume(token)) {
+        ResumeResult.Success -> false // back in the room; state resync follows
+        // The host answered, and said no. WHY is in the code, never in the message: an elapsed
+        // window and a token for another room are terminal, a window the host has not opened
+        // yet is not. See classifyRejectCodeSample.
+        is ResumeResult.Refused -> outcome.code.retryable
+        ResumeResult.TimedOut -> true // no reply within resumeTimeout — the host is unreachable now
+        // We never asked: this room is already over (left, or the host was lost), or the frame
+        // could not be sent. Re-join fresh.
+        ResumeResult.WindowClosed -> false
     }
 }
 ```
 
+Those four arms are the whole of `ResumeResult.JoinerOutcome`. The host's own verdicts —
+`WindowNotYetOpen`, `TokenInvalid` — are the other half of the hierarchy (`ResumeResult.HostVerdict`)
+and never travel to a joiner as values; they arrive as the `RejectCode` on `Refused`. Branching on
+one here is a **compile error**, which is how this entry stopped being able to advertise a
+discrimination the API does not offer (#2364). Until then it listed both, the sample compiled, and a
+consumer reading `WindowClosed -> // grace window elapsed` acted on a value that also meant "wrong
+room" and "the host hasn't noticed your drop yet" — the last of which is *transient*, and re-joining
+fresh is the wrong move for it.
+
 **Intent:** decide whether a host's *refusal* is worth retrying, instead of string-matching the reason.
-**Primitive:** `RejectCode` on `FailureReason.Refused` / `AdmissionFailure.Rejected` (`us.tractat.kuilt.session.admit`) — branch on the code and treat anything unrecognised as retryable.
+**Primitive:** `RejectCode` on `ResumeResult.Refused` / `FailureReason.Refused` / `AdmissionFailure.Rejected` (`us.tractat.kuilt.session.admit`) — branch on the code and treat anything unrecognised as retryable. The same classifier serves an in-flight resume and a session that already ended.
 
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#classifyRejectCodeSample -->
 ```kotlin

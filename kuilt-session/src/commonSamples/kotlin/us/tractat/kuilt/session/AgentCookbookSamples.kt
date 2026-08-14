@@ -89,18 +89,26 @@ public suspend fun callerSuppliedRoomIdSample(
 /**
  * Reconnect after a transport drop by presenting the saved [ResumeToken], instead of
  * re-joining fresh (which would reset the slot). Don't re-track the grace window yourself.
+ *
+ * The four arms below are the whole of [ResumeResult.JoinerOutcome] — the host's own verdicts are
+ * a different half of the hierarchy and never reach a joiner as values, so a branch on one is a
+ * compile error rather than dead code.
  */
-public suspend fun resumeAfterDropSample(room: Room) {
+public suspend fun resumeAfterDropSample(room: Room): Boolean {
     // After the admit handshake the joiner holds a reconnect credential — save it.
-    val token: ResumeToken = room.resumeToken ?: return
+    val token: ResumeToken = room.resumeToken ?: return false
     // ... transport drops; you redial the fabric and rebuild the room ...
     // Present the saved token to re-enter within the leader's grace window.
-    when (room.resume(token)) {
-        ResumeResult.Success -> Unit // back in the room; state resync follows
-        ResumeResult.WindowClosed -> Unit // grace window elapsed — re-join fresh
-        ResumeResult.WindowNotYetOpen -> Unit // host hasn't noticed the drop yet — retry shortly
-        ResumeResult.TimedOut -> Unit // no reply within resumeTimeout (host unreachable) — retry shortly
-        is ResumeResult.TokenInvalid -> Unit // wrong session — re-join fresh
+    return when (val outcome = room.resume(token)) {
+        ResumeResult.Success -> false // back in the room; state resync follows
+        // The host answered, and said no. WHY is in the code, never in the message: an elapsed
+        // window and a token for another room are terminal, a window the host has not opened
+        // yet is not. See classifyRejectCodeSample.
+        is ResumeResult.Refused -> outcome.code.retryable
+        ResumeResult.TimedOut -> true // no reply within resumeTimeout — the host is unreachable now
+        // We never asked: this room is already over (left, or the host was lost), or the frame
+        // could not be sent. Re-join fresh.
+        ResumeResult.WindowClosed -> false
     }
 }
 

@@ -65,11 +65,11 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.cluster.ClusterClient")
  *
  * On transport tear the underlying [ServerClusterReconnect] advances to the next
  * endpoint. When it presents the previous [us.tractat.kuilt.session.partition.ResumeToken]
- * to the new server, the response is
- * [us.tractat.kuilt.session.partition.ResumeResult.WindowClosed] (proven by #532):
- * each server's reconnect window registry is in-memory and per-host-room,
- * so a cross-server resume always degrades to fresh-join. `ClusterClient` treats
- * `WindowClosed` as a fall-back-to-fresh-join signal, **not** an error.
+ * to the new server, the response is a terminal
+ * [us.tractat.kuilt.session.partition.ResumeResult.Refused] (proven by #532; the code is
+ * `RejectCode.ResumeTokenInvalid`, since each server mints its own `RoomId` and keeps its
+ * reconnect windows in memory), so a cross-server resume always degrades to fresh-join.
+ * `ClusterClient` treats that refusal as a fall-back-to-fresh-join signal, **not** an error.
  *
  * @see clusterClientWithNode for the test / caller-managed-transport construction path.
  */
@@ -171,8 +171,8 @@ public data class ClusterEndpoints(
  * ## Cross-server resume
  *
  * A cross-server failover always requires a fresh join (proven by #532): each server's
- * reconnect-window registry is in-memory and per-room-instance, so `ResumeResult.WindowClosed`
- * is the invariable response. This extension therefore always performs a plain `loom.join()`
+ * reconnect-window registry is in-memory and per-room-instance and its `RoomId` is its own, so a
+ * terminal `ResumeResult.Refused` is the invariable response. This extension therefore always performs a plain `loom.join()`
  * on every reconnect — there is no optimistic resume attempt at the Seam level.
  *
  * ## Dispatcher injection
@@ -192,7 +192,7 @@ public data class ClusterEndpoints(
  * @param clock Injected clock for session resume-token timestamps. **Required** — no real-clock
  *   default (prevents silent virtual-time breakage per the "optional ≠ tuning" policy).
  *   Threaded into the room-layer [SeamRoomFactory], which stamps reconnect-token `issuedAt`
- *   timestamps and drives partition detection. (Cross-*server* resume is always `WindowClosed`
+ *   timestamps and drives partition detection. (Cross-*server* resume is always terminally refused
  *   per the in-memory per-room reconnect registry, so the token is issued but never consumed
  *   across a failover — the clock still governs same-server room timing.)
  */
@@ -254,7 +254,7 @@ public fun CoroutineScope.clusterClient(
  * to the channel seam, triggering the reconnect loop, which swaps the [ManagedSeam] — the
  * [RoutedRaftTransport] and [RaftNode] live untouched across failover.
  *
- * Cross-server resume is always [us.tractat.kuilt.session.partition.ResumeResult.WindowClosed]
+ * Cross-server resume is always a terminal [us.tractat.kuilt.session.partition.ResumeResult.Refused]
  * per #532 so fresh-join (no resume attempt) is used on every reconnect.
  */
 internal fun buildClusterClient(
@@ -299,7 +299,7 @@ internal fun buildClusterClient(
             // Wait for the current channel seam to tear (propagated from the underlying WS seam).
             currentSeam.state.first { it is SeamState.Torn }
 
-            // Rotate to the next endpoint. Cross-server resume is always WindowClosed
+            // Rotate to the next endpoint. Cross-server resume is always terminally refused
             // per #532 so we skip the resume attempt and always do a fresh join.
             reconnect.onTransportTear()
 

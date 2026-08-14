@@ -1460,10 +1460,10 @@ internal class SeamRoom(
                 AdmitMessage.Reject("resume-window-expired", RejectCode.ResumeWindowExpired)
             is ResumeResult.TokenInvalid ->
                 AdmitMessage.Reject("resume-token-invalid: ${result.reason}", RejectCode.ResumeTokenInvalid)
-            // Host-side validation is synchronous and always renders a verdict; TimedOut is the
-            // joiner's await-side outcome only (#1587) and cannot originate here.
-            ResumeResult.TimedOut ->
-                error("tryResume must not return TimedOut: it is a joiner await outcome, not a host verdict")
+            // No TimedOut arm: host-side validation is synchronous and always renders a verdict,
+            // and since #2364 `tryResume` returns ResumeResult.HostVerdict, so the compiler knows
+            // it. This `when` used to carry a hand-written `error("… not a host verdict")` for a
+            // case the type now excludes.
         }
         if (reject != null) {
             runCatchingCancellable { seam.sendTo(sender, AdmitMessage.encode(reject)) }
@@ -3347,10 +3347,14 @@ internal class SeamRoom(
      * **Joiner only.** The host's [JoinerReconnectController] holds the reconnect window;
      * this method sends [AdmitMessage.Resume] to the host and awaits the reply:
      * - Host replies [AdmitMessage.ResumeAck] → [ResumeResult.Success]; [MembershipEvent.Resumed] fires.
-     * - Host replies [AdmitMessage.Reject] → [ResumeResult.WindowClosed].
+     * - Host replies [AdmitMessage.Reject] → [ResumeResult.Refused], carrying the host's
+     *   [RejectCode] so the caller can tell an elapsed window from an invalid token from a window
+     *   the host has not opened yet (#2364).
+     * - Host says nothing within `HeartbeatConfig.resumeTimeout` → [ResumeResult.TimedOut].
      *
-     * **Not valid** after [MembershipEvent.HostLost] — the room is terminal at that point.
-     * Callers should guard with [hostLost] before calling.
+     * **Not valid** after [MembershipEvent.HostLost] — the room is terminal at that point and this
+     * returns [ResumeResult.WindowClosed] without asking the host. Callers should guard with
+     * [hostLost] before calling.
      *
      * **Not valid** on the host side — returns [ResumeResult.WindowClosed] immediately.
      *
@@ -3358,7 +3362,7 @@ internal class SeamRoom(
      * owns the single-flight reply slot and the joining semantics; see its KDoc for the full
      * contract.
      */
-    override suspend fun resume(token: ResumeToken): ResumeResult =
+    override suspend fun resume(token: ResumeToken): ResumeResult.JoinerOutcome =
         resumeMachine?.resume(token) ?: ResumeResult.WindowClosed
 
     override suspend fun leave(reason: LeaveReason) {

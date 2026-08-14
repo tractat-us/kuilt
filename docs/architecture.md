@@ -591,9 +591,10 @@ the room roster — no explicit client identification step is needed.
 - **M=3 voter mesh is proven under simulation; M=1 is proven over real sockets
   (`ServerClusterE2ETest`).** Real-socket M>1 E2E is a follow-up (see #545).
 - **Cross-server resume degrades to fresh-join** (see #532). Each server's
-  reconnect window registry is in-memory and per-room-instance; a `ResumeToken`
-  issued by server-A is unknown to server-B, so failover always produces
-  `ResumeResult.WindowClosed` and the client fresh-joins the new server.
+  reconnect window registry is in-memory and per-room-instance *and* each mints
+  its own `RoomId`, so a `ResumeToken` issued by server-A names a room server-B
+  does not serve: failover always produces a terminal `ResumeResult.Refused`
+  (`RejectCode.ResumeTokenInvalid`) and the client fresh-joins the new server.
   This is correct and fast; it costs a re-snapshot on the client's Raft log.
 - **The `CoroutineScope.clusterClient()` production path** (relay-room, full
   reconnect wiring) requires a stable client identity derived from the `Loom`'s
