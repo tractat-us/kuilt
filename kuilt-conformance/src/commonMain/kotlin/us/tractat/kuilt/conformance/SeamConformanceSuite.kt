@@ -976,6 +976,11 @@ public abstract class SeamConformanceSuite {
     // dropping the arm would make this obligation red for a gap another flag already owns and another
     // property (`peersCollapseToSelfIdWhenTorn`) already asserts. N-peer roster shrinkage is
     // `MeshConformanceSuite`'s, which row 4 shows holding.
+    //
+    // Two more assertions have no red in any row: the two "before" preconditions. That is correct and
+    // not a gap — neither describes behaviour under test, and the only thing either can catch is a
+    // harness handing back a pair that is not actually connected, which is exactly what they exist
+    // for. The third precondition is the one that does describe behaviour, and row 5 is its red.
 
     @Test
     public fun survivorStopsAdvertisingADepartedPeer(): TestResult =
