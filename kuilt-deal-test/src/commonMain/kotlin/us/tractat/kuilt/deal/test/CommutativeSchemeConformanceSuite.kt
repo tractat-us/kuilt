@@ -10,12 +10,13 @@ import kotlin.test.assertTrue
 
 /**
  * Conformance TCK for [CommutativeScheme]. Validate a new scheme by subclassing
- * this suite and overriding [newScheme] and [newPeerScheme]:
+ * this suite and overriding [newScheme], [newPeerScheme] and [proofStrength]:
  *
  * ```kotlin
  * class MySchemeConformanceTest : CommutativeSchemeConformanceSuite() {
  *     override fun newScheme() = MyScheme()
  *     override fun newPeerScheme() = MyScheme()
+ *     override fun proofStrength() = ProofStrength.RejectsForgeries
  * }
  * ```
  *
@@ -26,6 +27,17 @@ import kotlin.test.assertTrue
  * contract on in-domain byte messages — plaintext domain encoding (e.g. SRA's
  * marker codec) is a scheme-layer concern and is out of scope here; override
  * [validPlaintexts] if your scheme's valid domain differs from short ASCII.
+ *
+ * **Every law above is satisfied by a scheme that does nothing.** A `encrypt` returning its
+ * argument round-trips, commutes, strips in any order and — because
+ * [distinctKeysProduceDistinctCiphertexts] compares two keys rather than a key against the
+ * plaintext — survives even that. So two properties here are about the laws being *worth*
+ * something rather than about them holding: [encryptHidesThePlaintextAndStripRecoversIt] and the
+ * two multi-layer properties assert a layer **changes** what it covers and keeps changing it until
+ * the last one comes off; [verifyAnswersForgedTransitionsAsDeclared] calls the scheme's `verify*`
+ * pair with transitions it did **not** produce. Before #2313 the suite touched `verify*` only on
+ * honest input, which is the accept branch of a predicate every shipped scheme stubs to `true` —
+ * coverage in appearance and nothing in fact.
  */
 public abstract class CommutativeSchemeConformanceSuite {
 
@@ -70,6 +82,36 @@ public abstract class CommutativeSchemeConformanceSuite {
      */
     public abstract fun newPeerScheme(): CommutativeScheme
 
+    /**
+     * What this scheme's [CommutativeScheme.verifyEncrypt] / [CommutativeScheme.verifyStrip] pair
+     * does with a transition it did **not** produce — a declaration the subclass makes and
+     * [verifyAnswersForgedTransitionsAsDeclared] then holds it to.
+     *
+     * **Why a declaration and not simply a property.** `CommutativeScheme` documents that an
+     * implementation may `return true` unconditionally until real proofs land, and both schemes in
+     * this repo take that option; a suite that flatly asserted rejection would fail them, and one
+     * that asserted nothing — this suite, before #2313 — pins only the accept branch of a
+     * predicate that is unconditionally true. Neither is the truth. The declaration puts the
+     * scheme's posture in the fixture, in one word, where the next reader of
+     * `XorKeystreamSchemeConformanceTest` cannot mistake "the TCK exercises verification" for
+     * "the TCK detects cheating".
+     *
+     * **Both arms are checkable, which is what makes this different from a skip.** A hook that
+     * says "I cannot reach that state" is an opt-out, and #2247's finding is that an opt-out moves
+     * the vacuity one level up. Here neither arm opts out: [ProofStrength.RejectsForgeries] fails
+     * if a forgery is accepted, and [ProofStrength.AcceptsEverything] fails if one is *rejected*.
+     * A stub-true scheme that grows a real verifier reds until it updates this line, and a real
+     * verifier that regresses to `return true` reds immediately — which is the direction that
+     * matters.
+     *
+     * **What no declaration can detect.** Nothing here inspects *how* a verifier decides, so a
+     * [ProofStrength.RejectsForgeries] scheme that rejects the six forgeries
+     * [verifyAnswersForgedTransitionsAsDeclared] derives and accepts a seventh nobody thought of
+     * is invisible. The suite tests a floor, not soundness; a real proof system needs its own
+     * adversary, not a TCK.
+     */
+    public abstract fun proofStrength(): ProofStrength
+
     /** Sample messages guaranteed to lie in the scheme's valid input domain. */
     public open fun validPlaintexts(): List<ByteArray> = listOf(
         "card:ACE_OF_SPADES".encodeToByteArray(),
@@ -77,14 +119,49 @@ public abstract class CommutativeSchemeConformanceSuite {
         "7".encodeToByteArray(),
     )
 
+    /**
+     * Round-trip — `strip(encrypt(m, k), k) == m` — **and the secrecy floor**: the ciphertext is
+     * not the plaintext.
+     *
+     * The second half is one `assertNotEquals` and it is the whole of what this suite says about
+     * hiding. Without it a scheme whose `encrypt` returns its argument passes every property here:
+     * the round-trip inverts trivially, both commutativity properties hold because nothing moves,
+     * strip order is free, and [distinctKeysProduceDistinctCiphertexts] compares two *keys* — so
+     * one degenerate key beside one healthy key still yields differing ciphertexts and stays
+     * green. Since a card deal's entire purpose is that no player can read a card another player
+     * covered, that is the one law worth having if you may only have one.
+     *
+     * It costs nothing: the ciphertext is already in hand for the round-trip, and this reuses the
+     * loop rather than adding a second one — deliberately, because [newScheme] may be SRA doing
+     * 2048-bit modular exponentiation per layer.
+     *
+     * **Reachable, not hypothetical, on the real scheme.** `SraScheme.generateKey` rejects an
+     * exponent only when `gcd(e, p-1) != 1`, which admits `e = 1` — the identity. That an
+     * astronomically-improbable draw is needed to hit it is a property of the CSPRNG, not of the
+     * check, and a scheme's key generator is exactly the kind of code a later optimisation edits.
+     */
     @Test
-    public fun encryptThenStripRecoversPlaintext() {
+    public fun encryptHidesThePlaintextAndStripRecoversIt() {
         val scheme = newScheme()
         val key = scheme.generateKey()
-        for (m in validPlaintexts()) {
+        val messages = validPlaintexts()
+        // Empty is the setting at which this property switches itself off — both assertions below
+        // live inside the loop, so an empty domain passes by arithmetic. See #2347.
+        assertTrue(messages.isNotEmpty(), "validPlaintexts() is empty, so this property asserts nothing")
+        for (m in messages) {
             val (cipher, _) = scheme.encrypt(m, key.encryptKey)
             val (recovered, _) = scheme.strip(cipher, key.stripKey)
-            assertEquals(m.toList(), recovered.toList(), "round-trip failed for ${m.toList()}")
+            assertAll(
+                {
+                    assertNotEquals(
+                        m.toList(),
+                        cipher.toList(),
+                        "encrypt returned its own argument for ${m.toList()} — the layer hid nothing, and " +
+                            "every other law in this suite holds vacuously for a scheme that does that",
+                    )
+                },
+                { assertEquals(m.toList(), recovered.toList(), "round-trip failed for ${m.toList()}") },
+            )
         }
     }
 
@@ -177,6 +254,17 @@ public abstract class CommutativeSchemeConformanceSuite {
         )
     }
 
+    /**
+     * Three layers on, three off in a deranged order, and the plaintext comes back — **and the
+     * card is unreadable at every step in between**.
+     *
+     * The second half is the deal's actual secrecy claim, and it is strictly stronger than
+     * [encryptHidesThePlaintextAndStripRecoversIt]'s: that one says a single layer changes the
+     * value, this one says the value stays changed while *any* layer remains, which is what
+     * "nobody can read a card until the last player releases it" means. It is free — the
+     * intermediates are computed anyway — and it is the assertion that reds if some later key
+     * turns out to cancel an earlier one.
+     */
     @Test
     public fun multiLayerDealRecoversPlaintextRegardlessOfStripOrder() {
         val scheme = newScheme()
@@ -188,11 +276,24 @@ public abstract class CommutativeSchemeConformanceSuite {
         val m = validPlaintexts().first()
         // Layer all three encryptions (order k0, k1, k2).
         var cipher = m
-        for (k in keys) cipher = scheme.encrypt(cipher, k.encryptKey).first
+        val underCover = mutableListOf<ByteArray>()
+        for (k in keys) {
+            cipher = scheme.encrypt(cipher, k.encryptKey).first
+            underCover += cipher
+        }
         // Strip in a fully deranged order (k2, k0, k1) — no layer in its encryption
-        // position — so commutativity is genuinely exercised.
-        for (k in listOf(keys[2], keys[0], keys[1])) cipher = scheme.strip(cipher, k.stripKey).first
-        assertEquals(m.toList(), cipher.toList(), "multi-layer recovery failed for ${m.toList()}")
+        // position — so commutativity is genuinely exercised. Every value up to and
+        // including the second-last strip still carries at least one layer.
+        val stripOrder = listOf(keys[2], keys[0], keys[1])
+        for (k in stripOrder.dropLast(1)) {
+            cipher = scheme.strip(cipher, k.stripKey).first
+            underCover += cipher
+        }
+        val recovered = scheme.strip(cipher, stripOrder.last().stripKey).first
+        assertAll(
+            { assertEquals(m.toList(), recovered.toList(), "multi-layer recovery failed for ${m.toList()}") },
+            { assertStayedCovered(underCover, m) },
+        )
     }
 
     /**
@@ -217,7 +318,12 @@ public abstract class CommutativeSchemeConformanceSuite {
      * 4. **the rig fired** — every peer encrypted twice (its solo layer for assertion 2, then its
      *    layer in the chain) and stripped exactly once. This is what pins assertion 2 *in place*:
      *    dropping the precondition call is a one-line edit that leaves the law passing, and the
-     *    counts are the only thing that reds on it.
+     *    counts are the only thing that reds on it;
+     * 5. **the card stayed covered** — no intermediate in the chain, from the first layer on to the
+     *    second-last strip, equals the plaintext. Appended as 5 rather than inserted so the
+     *    numbering above (and the receipts below, measured on #2311) still reads true. Free, since
+     *    the intermediates exist regardless, and it is the only assertion here that would notice
+     *    three peers whose layers cancelled each other out mid-chain.
      *
      * **Mutation receipts**, measured as for the sibling property above:
      *
@@ -240,11 +346,19 @@ public abstract class CommutativeSchemeConformanceSuite {
         independentSingleLayers(peers, m)
         // Layer all three encryptions (order peer0, peer1, peer2), each applied by its own instance.
         var cipher = m
-        for (peer in peers) cipher = peer.encrypt(cipher)
+        val underCover = mutableListOf<ByteArray>()
+        for (peer in peers) {
+            cipher = peer.encrypt(cipher)
+            underCover += cipher
+        }
         // Strip in a fully deranged order (peer2, peer0, peer1) — no layer in its encryption
         // position — again each by its own instance, which is what every player does for real.
-        for (peer in listOf(peers[2], peers[0], peers[1])) cipher = peer.strip(cipher)
-        val recovered = cipher
+        val stripOrder = listOf(peers[2], peers[0], peers[1])
+        for (peer in stripOrder.dropLast(1)) {
+            cipher = peer.strip(cipher)
+            underCover += cipher
+        }
+        val recovered = stripOrder.last().strip(cipher)
         assertAll(
             {
                 assertEquals(
@@ -254,6 +368,7 @@ public abstract class CommutativeSchemeConformanceSuite {
                 )
             },
             { assertRigCrossed(peers, expectedEncryptions = 2, expectedStrips = 1) },
+            { assertStayedCovered(underCover, m) },
         )
     }
 
@@ -287,9 +402,15 @@ public abstract class CommutativeSchemeConformanceSuite {
 
     /**
      * Honest-path verification: an [CommutativeScheme.encrypt]/[CommutativeScheme.strip]
-     * transition that the scheme itself produced must verify. Current schemes stub the
-     * verify methods to `true`, so this pins the baseline a future (e.g. ZK-proof)
-     * implementation must also satisfy — honest transitions are always accepted.
+     * transition that the scheme itself produced must verify. This is the **completeness** half —
+     * a verifier that rejects everything is as useless as one that accepts everything, and only
+     * this property refuses it.
+     *
+     * On its own it proves very little, and for years it was the suite's only mention of
+     * `verify*`: on a scheme that stubs both to `true` — which every scheme in this repo does, and
+     * which [CommutativeScheme] expressly permits — it pins the accept branch of a predicate with
+     * no other branch. [verifyAnswersForgedTransitionsAsDeclared] is the half that has teeth;
+     * this one is what stops that half from being satisfiable by `return false`.
      */
     @Test
     public fun verifyAcceptsHonestTransitions() {
@@ -306,6 +427,135 @@ public abstract class CommutativeSchemeConformanceSuite {
             scheme.verifyStrip(cipher, recovered, stripProof, key.encryptKey),
             "verifyStrip rejected an honestly-produced strip",
         )
+    }
+
+    /**
+     * `verify*` called with six transitions the scheme did **not** produce, and held to the answer
+     * [proofStrength] declared for all six.
+     *
+     * **The hole this closes.** Every other mention of `verify*` in this suite hands it material
+     * the scheme just made itself. Against an accept-only predicate that is indistinguishable from
+     * not calling it at all — and both shipped schemes *are* accept-only, and no production caller
+     * consults either method, so "the TCK covers verification" was a sentence with nothing behind
+     * it. Forcing a predicate always-true proves it is **consulted**, never that it is
+     * **sufficient**; here it was not even consulted with anything that could fail.
+     *
+     * **The forgeries are derived, never supplied.** There is no `newForgery()` hook, because a
+     * fixture that hands back an answer can hand back a wrong one — the cheapest wrong one being a
+     * "forgery" that is really an honest transition, which every arm accepts and nobody notices.
+     * The suite mints two keys from the scheme under test and crosses honest material with itself:
+     * a ciphertext produced under the *other* key (the substituted-layer cheat), a transition where
+     * nothing happened at all (`next == prev`, the skipped-layer cheat — a player who pockets a
+     * card without covering it), and an honest transition re-attributed to the *other* player's
+     * public key (the framed-peer cheat). Three shapes, once for `verifyEncrypt` and once for
+     * `verifyStrip`.
+     *
+     * **Each of the six is checked to be a forgery before it is used**, eagerly, so a scheme on
+     * which they degenerate into honest transitions reds as a fixture problem rather than passing
+     * the [ProofStrength.RejectsForgeries] arm by accident. Those preconditions are the rig, and
+     * on this property the rig is the whole risk: an "adversarial" input that is not adversarial
+     * makes the arm assert the opposite of what it reads as.
+     *
+     * **Not forged: a garbled proof.** `verifyEncrypt(m, cipher, EncryptProof(garbage), pubKey)`
+     * looks like the obvious seventh case and is deliberately absent — a scheme whose transition is
+     * recomputable from `prev`, `next` and `pubKey` may legitimately ignore the proof bytes
+     * entirely, so rejection is not a contract obligation and asserting it would fail a correct
+     * implementation. (`RecomputingXorScheme`, the binding that exercises the rejecting arm, is
+     * exactly such a scheme.)
+     *
+     * **Mutation receipts**, measured on this branch — each applied alone, verdict read out of the
+     * results XML, reverted, and the revert grep-verified:
+     *
+     * | Mutation | Reds |
+     * |---|---|
+     * | `RecomputingXorScheme.verifyEncrypt`/`verifyStrip` → `return true` | this property, on that binding **only** — every other property in the suite stays green on all three bindings |
+     * | `SraScheme.encrypt` returns its `plaintext` argument | [encryptHidesThePlaintextAndStripRecoversIt] and both multi-layer properties — and **not** commutativity, key distinctness, cross-peer commutativity or `verifyAcceptsHonestTransitions` |
+     * | Fixture: `RecomputingXorSchemeConformanceTest` declares `AcceptsEverything` | this property, on that binding — the declaration cannot drift silently in either direction |
+     * | Body: replace the impostor's key with the honest one throughout | the preconditions, not the arm |
+     */
+    @Test
+    public fun verifyAnswersForgedTransitionsAsDeclared() {
+        val scheme = newScheme()
+        val messages = validPlaintexts()
+        assertTrue(messages.isNotEmpty(), "validPlaintexts() is empty, so this property asserts nothing")
+        val strength = proofStrength()
+        val accepts = strength == ProofStrength.AcceptsEverything
+        val note = if (accepts) {
+            "this scheme DETECTS that cheat — declare ProofStrength.RejectsForgeries and get the credit"
+        } else {
+            "a scheme that accepts it cannot tell an honest deal from a rigged one"
+        }
+        assertAll(
+            *forgeriesOf(scheme, messages.first()).map { (what, accepted) ->
+                {
+                    assertEquals(
+                        accepts,
+                        accepted,
+                        "declared $strength, yet $what was ${if (accepted) "ACCEPTED" else "REJECTED"} — $note",
+                    )
+                }
+            }.toTypedArray(),
+        )
+    }
+
+    /**
+     * Six transitions the scheme did not produce, each paired with the verdict its own `verify*`
+     * returned — and each proved to be a forgery first.
+     *
+     * The preconditions run before any verdict is read, and every one of them says the same thing
+     * in a different place: *the value being passed off differs from the value that key really
+     * produces*. Drop one and the corresponding row stops being adversarial while still reading as
+     * if it were.
+     */
+    private fun forgeriesOf(scheme: CommutativeScheme, m: ByteArray): List<Pair<String, Boolean>> {
+        val honest = scheme.generateKey()
+        val impostor = scheme.generateKey()
+        val (cipher, encryptProof) = scheme.encrypt(m, honest.encryptKey)
+        val underImpostorsKey = scheme.encrypt(m, impostor.encryptKey).first
+        val (stripped, stripProof) = scheme.strip(cipher, honest.stripKey)
+        val strippedByImpostor = scheme.strip(cipher, impostor.stripKey).first
+        val rigged = "is not a forgery at all on this scheme, so the arm below asserts the opposite of what it reads as:"
+        assertAll(
+            { assertNotEquals(honest.encryptKey, impostor.encryptKey, "$rigged two generateKey() calls returned the same key") },
+            { assertNotEquals(m.toList(), cipher.toList(), "$rigged encrypting left the plaintext unchanged") },
+            { assertNotEquals(cipher.toList(), underImpostorsKey.toList(), "$rigged two keys encrypt m identically") },
+            { assertNotEquals(cipher.toList(), stripped.toList(), "$rigged stripping left the ciphertext unchanged") },
+            { assertNotEquals(stripped.toList(), strippedByImpostor.toList(), "$rigged two keys strip identically") },
+        )
+        return listOf(
+            "an encryption attributed to a key that did not produce it" to
+                scheme.verifyEncrypt(m, underImpostorsKey, encryptProof, honest.encryptKey),
+            "an encryption that never happened (next == prev — a card pocketed uncovered)" to
+                scheme.verifyEncrypt(m, m, encryptProof, honest.encryptKey),
+            "an honest encryption re-attributed to another player's public key" to
+                scheme.verifyEncrypt(m, cipher, encryptProof, impostor.encryptKey),
+            "a strip attributed to a key that did not produce it" to
+                scheme.verifyStrip(cipher, strippedByImpostor, stripProof, honest.encryptKey),
+            "a strip that never happened (next == prev)" to
+                scheme.verifyStrip(cipher, cipher, stripProof, honest.encryptKey),
+            "an honest strip re-attributed to another player's public key" to
+                scheme.verifyStrip(cipher, stripped, stripProof, impostor.encryptKey),
+        )
+    }
+
+    /**
+     * Asserts no value in [underCover] — every intermediate of a multi-layer deal that still
+     * carries at least one layer — is the [plaintext].
+     *
+     * Non-empty is checked too: the callers build the list in a loop, and a loop that ran zero
+     * times would satisfy "none of them is readable" without covering anything.
+     */
+    private fun assertStayedCovered(underCover: List<ByteArray>, plaintext: ByteArray) {
+        assertTrue(underCover.isNotEmpty(), "no intermediate was captured, so this assertion covered nothing")
+        underCover.forEachIndexed { step, value ->
+            assertNotEquals(
+                plaintext.toList(),
+                value.toList(),
+                "the card was readable at intermediate $step of ${underCover.size}, every one of which still " +
+                    "carries at least one unreleased layer — a layer that cancels another is a player " +
+                    "reading a card nobody released",
+            )
+        }
     }
 
     /**
@@ -365,6 +615,48 @@ public abstract class CommutativeSchemeConformanceSuite {
             )
         }
     }
+}
+
+/**
+ * What a subclass claims its scheme's [CommutativeScheme.verifyEncrypt] /
+ * [CommutativeScheme.verifyStrip] pair does with a transition the scheme did not produce — the
+ * answer [CommutativeSchemeConformanceSuite.verifyAnswersForgedTransitionsAsDeclared] holds it to.
+ *
+ * **Sealed and two-armed rather than a nullable forgery fixture.** A nullable hook reads "I cannot
+ * reach that state", which is an opt-out, and #2247's finding is that an opt-out relocates the
+ * vacuity one level up where it is harder to see. Neither arm here opts out: each asserts the
+ * answer its own name promises, over the same six derived forgeries, so a mis-declaration reds in
+ * **either** direction and the fixture cannot quietly stop testing anything.
+ *
+ * Top-level rather than nested so a fixture helper outside a suite subclass can name one, matching
+ * `DurabilityFixture` in `:kuilt-bolt`.
+ */
+public sealed interface ProofStrength {
+
+    /**
+     * `verify*` accept every transition, forged or honest — the `return true` stub
+     * [CommutativeScheme] permits until real proofs exist, and what both `SraScheme` and
+     * [XorKeystreamScheme] do today.
+     *
+     * **What this arm cannot detect: any cheat whatsoever.** It is not a security property and no
+     * amount of green here is evidence a deal is safe against a malicious peer. Its entire value is
+     * that the claim is now *written down in the fixture* and *pinned by the build* — a scheme that
+     * grows a verifier has to come here and say so, instead of the suite silently continuing to
+     * report "honest-transition verification" coverage over a predicate with one branch.
+     */
+    public data object AcceptsEverything : ProofStrength
+
+    /**
+     * `verify*` reject a transition that was not produced by applying the key behind the named
+     * `pubKey` to `prev` — the substituted-layer, skipped-layer and framed-peer cheats
+     * [CommutativeSchemeConformanceSuite.verifyAnswersForgedTransitionsAsDeclared] derives.
+     *
+     * **What this arm cannot detect.** It fixes a floor, not soundness: rejecting those six says
+     * nothing about a seventh forgery nobody enumerated, and nothing at all about the *proof
+     * system* — a scheme is free to satisfy this arm by recomputing the transition from material a
+     * real verifier would not hold. Declaring it is a claim about the six, and only the six.
+     */
+    public data object RejectsForgeries : ProofStrength
 }
 
 /**
