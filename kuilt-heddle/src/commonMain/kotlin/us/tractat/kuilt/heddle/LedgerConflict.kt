@@ -45,6 +45,7 @@ public sealed interface LedgerConflict : Comparable<LedgerConflict> {
                 mintedTotal.compareTo(other.mintedTotal)
             }
             is NegativeEffectiveSpend -> edge.compareTo((other as NegativeEffectiveSpend).edge)
+            is OrphanedTransferPath -> path.compareTo((other as OrphanedTransferPath).path)
         }
     }
 
@@ -229,5 +230,76 @@ public sealed interface LedgerConflict : Comparable<LedgerConflict> {
      */
     public data class NegativeEffectiveSpend(public val edge: AttachmentId) : LedgerConflict {
         override val order: Int get() = 7
+    }
+
+    /**
+     * Transfer rows the topology has moved out from under (issue #2366) — a [PathKey] no
+     * group's live lineage reads any more, still carrying a peer-to-peer hand-off that
+     * [EntitlementLedger.holdings] therefore no longer counts.
+     *
+     * `transfers` is keyed by `PathKey.of(edge)` — the **generation's** id, not the child
+     * group. So when a group's inbound generation is replaced (a reshape, or a relocation
+     * re-homing the counter families onto a fresh edge), the counters travel and the
+     * transfer rows do not: the recipient's credit and the donor's debit both drop out of
+     * the derivation at once, and **the donor silently recovers what it gave away**.
+     *
+     * ## Why this needs its own report
+     *
+     * Every other check here is structurally incapable of seeing it:
+     *
+     *  - **Conservation is blind by construction.** `Σ_r transferNet(k, r) = 0` for every
+     *    key, identically — so abandoning a key's rows (or halving them, or double-moving
+     *    them) is *sum-preserving*. `mintedTotal = Σ holdings + Σ effLeafSpent` still holds
+     *    exactly; only the owner changed.
+     *  - **[PersistentNegativeHoldings] catches only the loud half.** The recipient lands on
+     *    `0`, not below, so nothing goes negative unless the recipient *also* spent or
+     *    released across the dead generation.
+     *  - The same asymmetry is why `EntitlementLedger.relocationPatch`'s `n < 0` precondition
+     *    misses it: a recipient who merely *holds* transferred credit has no counter slot on
+     *    the edge at all and is absent from every per-slot enumeration.
+     *
+     * ## What it takes to fire — all three, together
+     *
+     *  1. **The key is no longer read.** Its edge's child group has a live lineage whose
+     *     final key is a *different* one.
+     *  2. **The live key does not already cover the rows.** Some `(donor, recipient)` cumulative
+     *     at this key exceeds the same pair's cumulative at the group's live key.
+     *
+     *     This is a **magnitude** test and so a **necessary condition for abandonment** — *not*
+     *     evidence that a move carried the rows across, and the state cannot support that
+     *     stronger reading. `EntitlementLedger.transfer` accumulates onto the very same
+     *     `(path, donor, recipient)` slot this compares, so "the move carried these rows" and
+     *     "the same pair independently transferred at least as much again at the live key" are
+     *     *byte-identical* states. The consequence is a real, permanent blind spot: a later
+     *     ordinary transfer between those two peers at the live key **masks** a report that had
+     *     been firing, and rows are grow-only, so the live cumulative never falls back to unmask
+     *     it. If the eventual fix re-keys `transfers` by group rather than by generation, this
+     *     clause disappears along with the key it compares against.
+     *  3. **It is consequential.** Some party to those rows still has a non-zero balance
+     *     stranded on the dead generation — `netInflow + transferNet − effLeafSpent ≠ 0`,
+     *     the inbound half of [EntitlementLedger.holdings] evaluated where it is no longer
+     *     evaluated. Without this clause every honestly drained-and-retired generation that
+     *     ever carried a hand-off would be reported forever, since the rows are grow-only
+     *     and its books have already closed at zero.
+     *
+     * **One arm fires on two clauses, not three.** Rows keyed on a generation this ledger does
+     * not know are unreadable by construction: clause 1 has no liveness question left to ask and
+     * clause 2 has no live key to compare against. That arm keeps the half of clause 3 that
+     * survives without an edge — some party's net at the key is non-zero — so that it agrees with
+     * the three-clause arm about rows that merely *cancel*, rather than reporting there what the
+     * main arm deliberately does not.
+     *
+     * **Deliberately silent** where the group has *no* live lineage at all: that is the
+     * normal window of an honest reshape (old generation retired, new one not yet active)
+     * and the standing exception to §10.11's quarantine ⟺ report correspondence, shared with
+     * [EntitlementLedger.holdings]. A quarantined or divergent lineage is likewise left to
+     * [RecordDivergence] / [DualActiveInbound] / [LineageCycle] rather than voiced twice.
+     *
+     * Like every report here it is a diagnostic, not a safety gate.
+     *
+     * @property path the path key whose rows are no longer reachable
+     */
+    public data class OrphanedTransferPath(public val path: PathKey) : LedgerConflict {
+        override val order: Int get() = 8
     }
 }

@@ -688,11 +688,16 @@ class EntitlementLedgerReconcileTest {
      * therefore carries **no transfer rows at all**. So this is simultaneously two statements:
      *
      *  1. what the move does to a transfer-tangled strand — `bob`'s 40 evaporates and the donor
-     *     silently recovers it, with `validate()` empty and conservation exactly intact, because
+     *     silently recovers it, with conservation exactly intact, because
      *     `Σ_r transferNet(pathKey, r) = 0` makes abandoning a whole path key sum-preserving; and
      *  2. that the option-2 refusal does **not** reach the H5 control-plane path, whose receiver can
      *     never carry the rows it would have to see. Containing that needs the rows to become a
      *     consensus fact (carried in the `QuiesceAck` alongside `SlotFinals`) — option 1's job.
+     *
+     * The corruption is no longer *silent*: [LedgerConflict.OrphanedTransferPath] names the dead key
+     * (#2366's diagnostic half). That assertion is the **acceptance signal for the fix** — a change
+     * that carries the rows across with the generation flips it from naming `e2` to naming nothing,
+     * with the two holdings above becoming 20 and 40 in the same PR.
      */
     @Test
     fun theAbandonedRowsSilentlyReassignTheRecipientsEntitlementToTheDonor() {
@@ -705,7 +710,13 @@ class EntitlementLedgerReconcileTest {
         assertAll(
             { assertEquals(60L, moved.holdings(h, p3), "the donor recovers the 40 it gave away (should be 20)") },
             { assertEquals(0L, moved.holdings(h, bob), "…and the recipient's credit is gone (should be 40)") },
-            { assertTrue(moved.validate().isEmpty(), "nothing diagnoses it — the corruption is silent: ${moved.validate()}") },
+            {
+                assertEquals(
+                    listOf(LedgerConflict.OrphanedTransferPath(PathKey.of(e2))),
+                    moved.validate(),
+                    "the abandoned rows are diagnosed, and are the ONLY thing diagnosed",
+                )
+            },
             {
                 assertEquals(
                     moved.mintedTotal(),

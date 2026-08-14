@@ -24,6 +24,7 @@ class EntitlementLedgerValidateTest {
     private val g2 = GroupId("g2")
     private val e1 = AttachmentId("e1") // root → g1
     private val e2 = AttachmentId("e2") // g1   → g2 (leaf, two edges deep)
+    private val e3 = AttachmentId("e3") // g1   → g2, the fresh generation g2 is re-homed onto
     private val alice = ReplicaId("alice")
     private val bob = ReplicaId("bob")
 
@@ -371,5 +372,506 @@ class EntitlementLedgerValidateTest {
             { assertEquals(20L, merged.holdings(otherRoot, alice), "…so Σ holdings is 40 against 20 minted") },
             { assertTrue(merged.validate().isEmpty(), "and the double-count is silent — the hazard this pins") },
         )
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // OrphanedTransferPath (#2366) — transfer rows the topology moved out from under
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * The #2366 shape at rest: alice handed bob 40 at `g2` while `e2` was g2's live inbound, then a
+     * generation move re-homed the counter families onto `e3` and left `transfers[PathKey.of(e2)]`
+     * exactly where it was. Fully drained, so nothing else in `validate` has anything to say.
+     *
+     * Hand-assembled rather than replayed so each clause of the report gets a control arm differing
+     * in **one** component. The same state derived the production way — `relocationPatch` on a real
+     * strand — is pinned by `EntitlementLedgerReconcileTest`.
+     *
+     * @param movedRows what the move carried across to `e3`. Empty is the defect; the whole row is
+     *   what a fix that moves the rows with the generation produces.
+     * @param successor `e3`'s lifecycle — `ACTIVE` is the completed move, `PREPARED` is the window
+     *   between generations where `g2` has no live inbound at all.
+     */
+    private fun reHomedAwayFromTheRows(
+        movedRows: Map<ReplicaId, GCounter> = emptyMap(),
+        successor: Lifecycle = Lifecycle.ACTIVE,
+    ): EntitlementLedger = EntitlementLedger.of(
+        records = mapOf(
+            e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE)),
+            e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.ONE)),
+            e3 to setOf(AttachmentRecord(e3, g1, g2, Weight.ONE)),
+        ),
+        minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+        issued = mapOf(e1 to GCounter.of(alice to 100L), e2 to GCounter.of(alice to 60L)),
+        returned = mapOf(e2 to GCounter.of(alice to 60L)), // the move drained the strand…
+        issuedRelocIn = mapOf(e3 to GCounter.of(alice to 60L)), // …and credited the successor
+        transfers = mapOf(PathKey.of(e2) to mapOf(alice to GCounter.of(bob to 40L))) +
+            if (movedRows.isEmpty()) emptyMap() else mapOf(PathKey.of(e3) to movedRows),
+        lifecycle = mapOf(e1 to Lifecycle.ACTIVE, e2 to Lifecycle.RETIRED, e3 to successor),
+    )
+
+    /**
+     * The defect, and the only thing that names it. The donor recovers what it gave away, the
+     * recipient's credit is gone, conservation is exactly intact and no pocket is negative — so
+     * every pre-existing check is structurally silent and [LedgerConflict.OrphanedTransferPath] is
+     * the whole report.
+     */
+    @Test
+    fun rowsLeftBehindByAGenerationMoveAreReported() {
+        val orphaned = reHomedAwayFromTheRows()
+        assertAll(
+            {
+                assertEquals(
+                    listOf(LedgerConflict.OrphanedTransferPath(PathKey.of(e2))),
+                    orphaned.validate(),
+                    "the abandoned rows must be named, and be the ONLY thing named",
+                )
+            },
+            // ── the corruption the report is about, so a fixture that stopped corrupting reds here
+            // rather than passing quietly on a report that fires for some other reason.
+            { assertEquals(60L, orphaned.holdings(g2, alice), "the donor recovered the 40 it gave away") },
+            { assertEquals(0L, orphaned.holdings(g2, bob), "…and the recipient's 40 is gone") },
+            {
+                assertEquals(
+                    orphaned.mintedTotal(),
+                    listOf(root, g1, g2).sumOf { orphaned.holdings(it, alice) + orphaned.holdings(it, bob) } +
+                        orphaned.leafSpentTotal(),
+                    "conservation is structurally blind: Σ_r transferNet(k, r) = 0, so only the owner changed",
+                )
+            },
+            {
+                assertTrue(
+                    orphaned.validate().none { it is LedgerConflict.PersistentNegativeHoldings },
+                    "the recipient lands on 0, not below — the loud half of the tangle never fires",
+                )
+            },
+        )
+    }
+
+    /**
+     * Clause 1's control arm: the identical hand-off while `e2` is still `g2`'s live inbound. The
+     * key is read, the numbers are the truth, and nothing is reported — so the report is about the
+     * key having gone dead, not about a transfer row existing.
+     */
+    @Test
+    fun rowsAtAGroupsLiveKeyAreNotOrphaned() {
+        val live = EntitlementLedger.of(
+            records = mapOf(
+                e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE)),
+                e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.ONE)),
+            ),
+            minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+            issued = mapOf(e1 to GCounter.of(alice to 100L), e2 to GCounter.of(alice to 60L)),
+            transfers = mapOf(PathKey.of(e2) to mapOf(alice to GCounter.of(bob to 40L))),
+        )
+        assertAll(
+            { assertEquals(20L, live.holdings(g2, alice), "rig: the hand-off is still being read") },
+            { assertEquals(40L, live.holdings(g2, bob), "rig: …by both parties") },
+            { assertTrue(live.validate().isEmpty(), "a live key is never an orphan: ${live.validate()}") },
+        )
+    }
+
+    /**
+     * Clause 2's control arm, and the **acceptance signal for the eventual fix** (#2366 option 1):
+     * carry the rows across with the generation and the report clears itself. Nothing else in this
+     * state changes — the same dead key still carries the same rows — so what clears it is exactly
+     * that the hand-off is readable again, which is also visible in the restored holdings.
+     */
+    @Test
+    fun rowsCarriedAcrossToTheLiveKeyClearTheReport() {
+        val fixed = reHomedAwayFromTheRows(movedRows = mapOf(alice to GCounter.of(bob to 40L)))
+        assertAll(
+            { assertEquals(20L, fixed.holdings(g2, alice), "the donor keeps only what it kept") },
+            { assertEquals(40L, fixed.holdings(g2, bob), "…and the recipient has its credit back") },
+            {
+                assertTrue(
+                    fixed.transfersAt(PathKey.of(e2)).isNotEmpty(),
+                    "rig: the dead key still carries the rows — transfers are grow-only, a fix cannot erase them",
+                )
+            },
+            { assertTrue(fixed.validate().isEmpty(), "a carried-across row is not orphaned: ${fixed.validate()}") },
+        )
+    }
+
+    /**
+     * The **strengthened** acceptance arm, and the fix this oracle exists to reject.
+     *
+     * A move onto a live key that **already carries its own hand-off** between the same pair must
+     * **sum**: 40 abandoned on `e2` plus 15 already standing at `e3` is 55, so the truth after a
+     * correct fix is `alice 5 / bob 55`. But `transfers` rows join by per-recipient **max**
+     * (`mergeRows`) while the counter families a move re-homes deliberately accumulate — so the
+     * natural one-liner `transfers[t] = transfers[t].mergeRows(transfers[s])` yields
+     * `max(15, 40) = 40`, silently losing 15.
+     *
+     * Both arms are asserted because **clause 2 is green either way** — `40 <= 40` reads as covered —
+     * so `validate()` alone cannot tell a correct carry from a lossy one. What rejects the lossy fix
+     * is the holdings assertion, and that is the whole reason this test states the arithmetic rather
+     * than just checking the report is empty.
+     */
+    @Test
+    fun aCarryOntoALiveKeyThatAlreadyHasItsOwnMustSumRatherThanMaxJoin() {
+        val summed = reHomedAwayFromTheRows(movedRows = mapOf(alice to GCounter.of(bob to 55L)))
+        val maxJoined = reHomedAwayFromTheRows(movedRows = mapOf(alice to GCounter.of(bob to 40L)))
+        assertAll(
+            // ── the correct carry: 15 already there + 40 abandoned = 55.
+            { assertEquals(5L, summed.holdings(g2, alice), "a summing carry leaves the donor 60 − 55") },
+            { assertEquals(55L, summed.holdings(g2, bob), "…and the recipient its own 15 plus the moved 40") },
+            { assertTrue(summed.validate().isEmpty(), "a correct carry is not orphaned: ${summed.validate()}") },
+            // ── the lossy carry: max(15, 40) = 40. Clause 2 cannot see it; the arithmetic can.
+            {
+                assertTrue(
+                    maxJoined.validate().isEmpty(),
+                    "clause 2 reads a max-join as covered — this is what makes it insufficient ALONE: " +
+                        "${maxJoined.validate()}",
+                )
+            },
+            { assertEquals(20L, maxJoined.holdings(g2, alice), "…yet the donor keeps 15 that is not hers") },
+            { assertEquals(40L, maxJoined.holdings(g2, bob), "…and the recipient is 15 short of the truth (55)") },
+        )
+    }
+
+    /**
+     * Clause 2 again, one row short: a move that carried **part** of the hand-off across is still
+     * an abandonment of the rest. Without the per-`(donor, recipient)` comparison — comparing nets,
+     * say — a partial carry would net out on some other row and read as complete.
+     */
+    @Test
+    fun aPartiallyCarriedRowIsStillReported() {
+        val partial = reHomedAwayFromTheRows(movedRows = mapOf(alice to GCounter.of(bob to 25L)))
+        assertAll(
+            { assertEquals(35L, partial.holdings(g2, alice), "rig: 15 of the hand-off is still missing (truth is 20)") },
+            { assertEquals(25L, partial.holdings(g2, bob), "rig: …so the recipient is 15 short (truth is 40)") },
+            {
+                assertTrue(
+                    LedgerConflict.OrphanedTransferPath(PathKey.of(e2)) in partial.validate(),
+                    "a partial carry is still an abandonment: ${partial.validate()}",
+                )
+            },
+        )
+    }
+
+    /**
+     * The **masking hole**, pinned as a documented limitation rather than as desired behaviour.
+     *
+     * Clause 2 compares magnitudes on a slot that `transfer` *accumulates* onto, so it cannot tell
+     * "the move carried these rows across" from "the same pair transferred at least as much again,
+     * independently, at the live key" — the two are byte-identical states. Here the corrupt ledger
+     * is left to run: alice, apparently holding 60, hands bob 40 through the ordinary mutator. The
+     * live key's cumulative reaches 40, clause 2 reads the dead key's 40 as covered, and the report
+     * that had been firing **goes quiet — permanently**, because rows are grow-only and the live
+     * cumulative never falls back.
+     *
+     * The numbers even come out looking right, which is the trap: the true history is alice `−20`
+     * (she has now given away 40 she never had, on top of the 40 already abandoned) and bob `80`.
+     * The abandonment has been laundered into a state that reads as legitimate.
+     *
+     * Closing this needs provenance the lattice does not carry. If the eventual #2366 fix re-keys
+     * `transfers` by group, the clause and its hole disappear together.
+     */
+    @Test
+    fun aLaterTransferBetweenTheSamePairMasksTheReport() {
+        val orphaned = reHomedAwayFromTheRows()
+        val masked = orphaned.piece(orphaned.transfer(g2, alice, bob, 40L)!!)
+        assertAll(
+            {
+                assertEquals(
+                    listOf(LedgerConflict.OrphanedTransferPath(PathKey.of(e2))),
+                    orphaned.validate(),
+                    "rig: the report really was firing before the masking transfer",
+                )
+            },
+            {
+                assertEquals(
+                    40L,
+                    masked.transfersAt(PathKey.of(e3))[alice]?.count(bob),
+                    "rig: the ordinary mutator brought the live key's cumulative up to the abandoned 40",
+                )
+            },
+            { assertTrue(masked.validate().isEmpty(), "…and the report goes quiet: ${masked.validate()}") },
+            { assertEquals(20L, masked.holdings(g2, alice), "the numbers even look right — truth is −20") },
+            { assertEquals(40L, masked.holdings(g2, bob), "…and 40 rather than the true 80") },
+        )
+    }
+
+    /**
+     * Clause 3's control arm — and the reason the report is not simply "a dead key with rows on it".
+     *
+     * `e2` here died the honest way: bob spent the 40 he was handed, alice released her remaining 20,
+     * the edge drained to `outstanding == 0` and retired, and `g2` was later re-homed onto `e3`. The
+     * rows are still on the dead key and always will be (transfers are grow-only), and the key is
+     * genuinely no longer read — but its books closed at zero for **both** parties, so there is
+     * nothing to report. A rule keyed only on "non-live key with a non-zero transfer net" reports
+     * this state, permanently, on every healthy ledger that ever combined a hand-off with a reshape.
+     */
+    @Test
+    fun aStrandWhoseBooksClosedBeforeItDiedIsNotReported() {
+        val drained = EntitlementLedger.of(
+            records = mapOf(
+                e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE)),
+                e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.ONE)),
+                e3 to setOf(AttachmentRecord(e3, g1, g2, Weight.ONE)),
+            ),
+            minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+            issued = mapOf(e1 to GCounter.of(alice to 100L), e2 to GCounter.of(alice to 60L)),
+            returned = mapOf(e2 to GCounter.of(alice to 20L)), // alice released what she still held
+            leafSpent = mapOf(e2 to GCounter.of(bob to 40L)), // bob spent what he was handed
+            transfers = mapOf(PathKey.of(e2) to mapOf(alice to GCounter.of(bob to 40L))),
+            lifecycle = mapOf(e1 to Lifecycle.ACTIVE, e2 to Lifecycle.RETIRED, e3 to Lifecycle.ACTIVE),
+        )
+        assertAll(
+            // ── the rig: every ingredient of the report is present except the harm.
+            {
+                assertTrue(
+                    drained.transfersAt(PathKey.of(e2)).isNotEmpty(),
+                    "rig: the dead key really does still carry the hand-off",
+                )
+            },
+            {
+                assertEquals(
+                    listOf(e1, e3),
+                    drained.lineageOf(g2),
+                    "rig: …and g2's live lineage really has moved off it, so the key really is unread",
+                )
+            },
+            { assertEquals(0L, drained.edge(e2)!!.outstanding, "rig: the strand drained before it died") },
+            { assertTrue(drained.validate().isEmpty(), "an honestly closed strand is not an orphan: ${drained.validate()}") },
+        )
+    }
+
+    /**
+     * The standing silent exception (§10.11), shared with [EntitlementLedger.holdings]: while `g2`
+     * has **no** live inbound at all — the window after the old generation retires and before the
+     * new one activates — the whole lineage is quarantined and deliberately unreported. Flagging it
+     * would fire on the normal middle of an honest reshape.
+     */
+    @Test
+    fun theWindowBetweenGenerationsStaysSilent() {
+        val midReshape = reHomedAwayFromTheRows(successor = Lifecycle.PREPARED)
+        assertAll(
+            { assertEquals(null, midReshape.lineageOf(g2), "rig: g2 is quarantined, with no live inbound") },
+            { assertEquals(0L, midReshape.holdings(g2, alice), "rig: …so holdings reads nothing at all there") },
+            { assertTrue(midReshape.validate().isEmpty(), "the reshape window must stay silent: ${midReshape.validate()}") },
+        )
+    }
+
+    /**
+     * The root path has no final edge, so no reshape can move it out from under its rows — it is
+     * live on every state, and a hand-off made at the root is never orphaned however the tree below
+     * is rearranged.
+     */
+    @Test
+    fun aHandOffAtTheRootPathIsNeverOrphaned() {
+        val atRoot = EntitlementLedger.of(
+            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE))),
+            minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+            transfers = mapOf(PathKey.ROOT to mapOf(alice to GCounter.of(bob to 30L))),
+        )
+        assertAll(
+            { assertEquals(70L, atRoot.holdings(root, alice), "rig: the root hand-off is being read") },
+            { assertEquals(30L, atRoot.holdings(root, bob), "rig: …by both parties") },
+            { assertTrue(atRoot.validate().isEmpty(), "the root path is live on every state: ${atRoot.validate()}") },
+        )
+    }
+
+    /**
+     * Rows at a key naming no generation this ledger knows are unreadable by construction — there is
+     * no edge whose child could ever read them — so they are reported without any liveness question
+     * to ask. This is the shape a partially-delivered or hand-built state reaches.
+     */
+    @Test
+    fun rowsAtAKeyNamingNoKnownGenerationAreReported() {
+        val dangling = EntitlementLedger.of(
+            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE))),
+            minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+            transfers = mapOf(PathKey.of(AttachmentId("nowhere")) to mapOf(alice to GCounter.of(bob to 30L))),
+        )
+        assertEquals(
+            listOf(LedgerConflict.OrphanedTransferPath(PathKey.of(AttachmentId("nowhere")))),
+            dangling.validate(),
+            "rows keyed on an unknown generation can never be read",
+        )
+    }
+
+    /**
+     * The dangling arm fires on **two** clauses, and this is the second one.
+     *
+     * A key naming no known generation has no liveness question left to ask and no live key to
+     * compare against, so clauses 1 and 2 are vacuous there — but the derivable half of clause 3 is
+     * not, and dropping it would make the two arms disagree about the identical fact. These rows
+     * cancel (`alice → bob 30`, `bob → alice 30`), costing nobody anything, exactly as in
+     * [rowsThatNetToNothingAreNotOrphanedByAStrandedCounterResidue]; a dangling key must not be
+     * reported for what a known-but-dead key is deliberately forgiven.
+     */
+    @Test
+    fun aDanglingKeyWhoseRowsCancelIsNotReported() {
+        val cancelling = EntitlementLedger.of(
+            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE))),
+            minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+            transfers = mapOf(
+                PathKey.of(AttachmentId("nowhere")) to mapOf(
+                    alice to GCounter.of(bob to 30L),
+                    bob to GCounter.of(alice to 30L),
+                ),
+            ),
+        )
+        assertAll(
+            {
+                assertTrue(
+                    cancelling.transfersAt(PathKey.of(AttachmentId("nowhere"))).isNotEmpty(),
+                    "rig: the dangling key really does carry rows",
+                )
+            },
+            { assertTrue(cancelling.validate().isEmpty(), "cancelling rows lost nobody anything: ${cancelling.validate()}") },
+        )
+    }
+
+    /**
+     * The enumeration hazard, pinned (#2366 trap 2): the parties to a hand-off are read off the
+     * **rows**, never off the edge's counter families. A recipient who merely *holds* transferred
+     * credit has authored no slot on the strand at all — it is absent from `replicasOnEdge` and from
+     * every `SlotFinals` the fence collects — so an enumeration built from those would drop exactly
+     * the party the report exists for.
+     *
+     * Rigged so bob is the **only** qualifying party: alice released 20, leaving her own books on
+     * the dead key balanced (`netInflow 40 − transferred 40 = 0`) while bob's 40 is stranded. The
+     * raced advisory retire that produced this state (#1665) is separately reported, and asserting
+     * both keeps the two voices distinct.
+     */
+    @Test
+    fun theStrandedPartyNeedNotHaveACounterSlotOnTheStrand() {
+        val recipientOnly = EntitlementLedger.of(
+            records = mapOf(
+                e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE)),
+                e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.ONE)),
+                e3 to setOf(AttachmentRecord(e3, g1, g2, Weight.ONE)),
+            ),
+            minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+            issued = mapOf(e1 to GCounter.of(alice to 100L), e2 to GCounter.of(alice to 60L)),
+            returned = mapOf(e2 to GCounter.of(alice to 20L)),
+            transfers = mapOf(PathKey.of(e2) to mapOf(alice to GCounter.of(bob to 40L))),
+            lifecycle = mapOf(e1 to Lifecycle.ACTIVE, e2 to Lifecycle.RETIRED, e3 to Lifecycle.ACTIVE),
+        )
+        assertAll(
+            {
+                assertEquals(
+                    setOf(alice),
+                    recipientOnly.baseFinalsOn(e2).keys,
+                    "rig: bob authored no counter slot on the strand — a slot-walking enumeration cannot see him",
+                )
+            },
+            {
+                assertEquals(
+                    0L,
+                    CounterFamily.entries.sumOf { recipientOnly.storedSlot(it, e2, bob) },
+                    "rig: …in ANY of the nine families, base or relocation",
+                )
+            },
+            {
+                assertTrue(
+                    LedgerConflict.OrphanedTransferPath(PathKey.of(e2)) in recipientOnly.validate(),
+                    "bob's stranded 40 must still be named: ${recipientOnly.validate()}",
+                )
+            },
+            {
+                assertTrue(
+                    LedgerConflict.ClosureViolation(e2) in recipientOnly.validate(),
+                    "…alongside the raced retire that stranded it, as a separate voice",
+                )
+            },
+        )
+    }
+
+    /**
+     * The report is about *transfer* credit going unread, so a party who nets to nothing at the dead
+     * key has lost nothing by it dying — however much the dead generation still strands in its
+     * **counters**. Here the hand-offs cancel (`alice → bob 40`, `bob → alice 40`) while 60 really is
+     * stranded on the retired strand, and the only voice is the one that owns that: the raced retire.
+     *
+     * Without the "this party's transfer net is non-zero" conjunct the counter residue alone would
+     * raise an orphan report, mis-attributing a lifecycle fault to the hand-offs.
+     */
+    @Test
+    fun rowsThatNetToNothingAreNotOrphanedByAStrandedCounterResidue() {
+        val cancelling = EntitlementLedger.of(
+            records = mapOf(
+                e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE)),
+                e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.ONE)),
+                e3 to setOf(AttachmentRecord(e3, g1, g2, Weight.ONE)),
+            ),
+            minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+            issued = mapOf(e1 to GCounter.of(alice to 100L), e2 to GCounter.of(alice to 60L)),
+            transfers = mapOf(
+                PathKey.of(e2) to mapOf(
+                    alice to GCounter.of(bob to 40L),
+                    bob to GCounter.of(alice to 40L),
+                ),
+            ),
+            lifecycle = mapOf(e1 to Lifecycle.ACTIVE, e2 to Lifecycle.RETIRED, e3 to Lifecycle.ACTIVE),
+        )
+        assertAll(
+            { assertEquals(60L, cancelling.edge(e2)!!.outstanding, "rig: 60 really is stranded on the dead strand") },
+            {
+                assertEquals(
+                    listOf(LedgerConflict.ClosureViolation(e2)),
+                    cancelling.validate(),
+                    "the raced retire is the only fault here — the cancelling rows lost nobody anything",
+                )
+            },
+        )
+    }
+
+    /**
+     * A key whose generation has a **divergent** record is deliberately left to
+     * [LedgerConflict.RecordDivergence]: the topology itself is in dispute, so which group would
+     * have read these rows is not a question this state can answer, and naming an orphan on top of
+     * it would be speculation dressed as a second finding.
+     *
+     * Pinned because the deferral is otherwise invisible — the rows here really are unreachable, and
+     * a rule that resolved the fork by picking a record would report them.
+     */
+    @Test
+    fun aKeyWhoseGenerationHasADivergentRecordDefersToTheDivergenceReport() {
+        val forked = EntitlementLedger.of(
+            records = mapOf(
+                e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE)),
+                e2 to setOf(
+                    AttachmentRecord(e2, g1, g2, Weight.ONE),
+                    AttachmentRecord(e2, g1, g2, Weight.of(3, 1)),
+                ),
+                e3 to setOf(AttachmentRecord(e3, g1, g2, Weight.ONE)),
+            ),
+            minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+            issued = mapOf(e1 to GCounter.of(alice to 100L), e2 to GCounter.of(alice to 60L)),
+            transfers = mapOf(PathKey.of(e2) to mapOf(alice to GCounter.of(bob to 40L))),
+            lifecycle = mapOf(e1 to Lifecycle.ACTIVE, e2 to Lifecycle.RETIRED, e3 to Lifecycle.ACTIVE),
+        )
+        assertAll(
+            { assertEquals(listOf(e1, e3), forked.lineageOf(g2), "rig: the fork is off the live lineage, not on it") },
+            {
+                assertTrue(
+                    LedgerConflict.RecordDivergence(e2) in forked.validate(),
+                    "rig: the divergence itself is reported",
+                )
+            },
+            {
+                assertTrue(
+                    forked.validate().none { it is LedgerConflict.OrphanedTransferPath },
+                    "a disputed topology gets one voice, not two: ${forked.validate()}",
+                )
+            },
+        )
+    }
+
+    /**
+     * The report's canonical order (the [Comparable] contract every peer folds): the new kind takes
+     * the last rank, and two orphans sort by path. Asserted directly on the sealed subtypes so the
+     * `compareTo` arm is pinned without needing a state that reaches every kind at once.
+     */
+    @Test
+    fun orphanedTransferPathTakesTheLastRankAndSortsByPath() {
+        val first = LedgerConflict.OrphanedTransferPath(PathKey.of(e1))
+        val second = LedgerConflict.OrphanedTransferPath(PathKey.of(e2))
+        val other = LedgerConflict.NegativeEffectiveSpend(e1)
+        assertEquals(listOf(other, first, second), listOf(second, first, other).sorted())
     }
 }
