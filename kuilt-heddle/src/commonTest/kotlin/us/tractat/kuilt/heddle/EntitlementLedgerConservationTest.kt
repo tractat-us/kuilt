@@ -1019,8 +1019,19 @@ class EntitlementLedgerConservationTest {
                 }
             },
             {
-                for (s in strands) {
-                    assertTrue(l.effRollupOn(s) > 0L, "the under-ack rig never fired on ${s.value}")
+                // Sharper than "a residue exists": it must be exactly what the ack withheld, and it
+                // must sit on the withholding replica's OWN slot. An edge-wide `> 0` would be
+                // satisfied by a residue the move misplaced onto a bystander.
+                for (u in underAcked) {
+                    val residue = l.storedSlot(CounterFamily.ROLLUP_SPENT, u.strand, u.replica) +
+                        l.storedSlot(CounterFamily.ROLLUP_RELOC_IN, u.strand, u.replica) -
+                        l.storedSlot(CounterFamily.ROLLUP_RELOC_OUT, u.strand, u.replica)
+                    assertEquals(
+                        u.delta,
+                        residue,
+                        "the residue on ${u.strand.value} must sit on ${u.replica.value}'s own slot and be " +
+                            "exactly what the ack withheld — otherwise the under-ack rig never fired",
+                    )
                 }
             },
             {
