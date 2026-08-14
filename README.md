@@ -66,6 +66,7 @@ val loom = InMemoryLoom()                            // swap for any real fabric
 val host  = loom.host(Pattern(sessionName = "alice"))
 val guest = loom.join(InMemoryTag("bob"))
 
+// Collect `incoming` exactly once per Seam; fan out with shareIn if you need to.
 scope.launch { host.incoming.collect { println(it.payload.decodeToString()) } }
 guest.broadcast("hello".encodeToByteArray())
 ```
@@ -97,8 +98,11 @@ dependencies {
 }
 ```
 
-Every module re-exports the `kuilt-core` contract, so you only list `kuilt-core`
-directly if it's the sole thing you depend on.
+Fabric and session modules re-export the `kuilt-core` contract, so you rarely
+list `kuilt-core` directly. The data modules are the exception: `kuilt-crdt` and
+`kuilt-bolt` are plain serializable value types that don't depend on the
+networking contract at all, so add `kuilt-core` yourself if you want `Loom` and
+`Seam` alongside them.
 
 ### Without the BOM
 
@@ -124,7 +128,7 @@ Replace `0.7.3` with the [latest release](https://central.sonatype.com/artifact/
 
 | Module | Targets | What it gives you |
 |--------|---------|-------------------|
-| `kuilt-crdt` | all | Delta-state CRDT zoo (`GCounter`, `ORSet`, `LWWMap`, `Rga`, `JsonCrdt`, `EphemeralMap`, …) + `Quilter` live replication. |
+| `kuilt-crdt` | all | Delta-state CRDT zoo (`GCounter`, `ORSet`, `LWWMap`, `Rga`, `JsonCrdt`, `EphemeralMap`, …). Plain value types — no network needed. Live replication over a `Seam` is `kuilt-quilter`'s `Quilter`. |
 | `kuilt-bolt` | all | Write-only history archive kept beside a live replica (`Bolt`, `BoltDecorator`): a server can keep a year of edits while the phone that fed it keeps an hour. `InMemoryBolt` everywhere; memory-mapped files on JVM/Android (`MappedBolt`) and Apple (`PosixMappedBolt`). |
 | `kuilt-gossip` | all | Partial-mesh overlay (`GossipSeam`): each peer gossips with ~k neighbours so broadcast and GC scale O(k), not O(N), for large sessions. |
 | `kuilt-deal` | all | Cryptographically fair card dealing (`DealSession`, `SraScheme`) + dealer-less fair-random seed agreement (`FairRandom`). |
@@ -163,7 +167,12 @@ Replace `0.7.3` with the [latest release](https://central.sonatype.com/artifact/
 |--------|---------|-------------------|
 | `kuilt-warp` | all | Coordination-free distributed task scheduler over a connected mesh: spread work across whoever is connected, no central boss, no peer doing the same job twice (`WarpNode`). See the [Warp guide](https://tractat-us.github.io/kuilt/guide/warp.html). |
 
-Every module depends only on `kuilt-core` (plus any fabric it wraps).
+Most modules sit directly on `kuilt-core`, but the higher-level ones build on
+each other — `kuilt-heddle` layers over `kuilt-raft` and `kuilt-quilter`, and
+`kuilt-game` over `kuilt-raft` and `kuilt-session`. Gradle pulls in whatever a
+module needs; the BOM keeps every version aligned. The one rule that never bends
+is the direction: nothing points back into `kuilt-core`, which is what keeps the
+contract free of any one fabric's assumptions.
 
 ## The vocabulary
 
@@ -183,17 +192,6 @@ The contract is quilt-themed. Eight types carry the whole surface:
 There is **no client/server split**. Every peer holds an identical `Seam`; a
 2-peer WebSocket connection is the degenerate `peers.size == 2` case of the same
 symmetric model.
-
-## Quick start
-
-```kotlin
-// In a test, or any layer above the wire, the in-memory fabric needs no network:
-val loom: Loom = InMemoryLoom()
-val host = loom.host(Pattern(sessionName = "alice"))
-
-launch { host.incoming.collect { swatch -> handle(swatch.payload) } } // collect once
-host.broadcast("hello".encodeToByteArray())
-```
 
 ## Documentation
 

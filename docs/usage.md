@@ -27,8 +27,12 @@ dependencies {
 }
 ```
 
-Each module re-exports the `kuilt-core` contract (`Loom`/`Seam`/`Swatch`), so you
-don't list `kuilt-core` separately unless it's the *only* thing you depend on.
+The fabric and session modules re-export the `kuilt-core` contract
+(`Loom`/`Seam`/`Swatch`), so you don't list `kuilt-core` separately alongside
+them. `kuilt-crdt` and `kuilt-bolt` don't — they're plain value types with no
+dependency on the networking contract — so add `kuilt-core` explicitly if you
+want both.
+
 Without the BOM, pin each module explicitly (`us.tractat.kuilt:kuilt-core:VERSION`).
 Replace `VERSION` with the [latest release](https://central.sonatype.com/artifact/us.tractat.kuilt/kuilt-core).
 
@@ -39,7 +43,7 @@ frames). Everything below is those three types over different wires.
 
 ```kotlin
 // 1. Get a Seam — either by hosting a session or joining one.
-val seam: Seam = loom.host(Pattern(displayName = "alice", maxPeers = 4))
+val seam: Seam = loom.host(Pattern(sessionName = "alice", maxPeers = 4))
 
 // 2. Collect incoming frames EXACTLY ONCE. Fan out with shareIn if you need to.
 scope.launch {
@@ -97,7 +101,7 @@ or mDNS fabrics in production:
 val factory: RoomFactory = SeamRoomFactory(loom, scope) // loom = any Loom; scope owns the room's coroutines
 
 // Host a room (this peer becomes the Host) or join one (becomes a Joiner).
-val room: Room = factory.host(Pattern(displayName = "alice", maxPeers = 4))
+val room: Room = factory.host(Pattern(sessionName = "alice", maxPeers = 4))
 // val room = factory.join(someTag)   // on the joining peer
 
 // The roster holds admitted members only — never raw, unidentified peers.
@@ -159,7 +163,7 @@ val seam = client.join(
     WebSocketAdvertisement(
         url = "ws://192.168.1.10:8080/live",
         serverPeerId = PeerId("server-1"),     // must match the server's selfPeerId
-        displayName = "alice",
+        sessionName = "alice",
     ),
 )
 ```
@@ -345,7 +349,7 @@ suite stays fast and deterministic.
 
 `Tag` is an open interface, not sealed, so each fabric defines its own
 (`WebSocketAdvertisement`, `MDNSAdvertisement`, …). A custom fabric supplies its
-own `Tag` carrying whatever its `join` needs (`displayName` + a stable `peerKey`
+own `Tag` carrying whatever its `join` needs (`sessionName` + a stable `peerKey`
 are the only required fields).
 
 ## Live-converging state (`kuilt-crdt`)

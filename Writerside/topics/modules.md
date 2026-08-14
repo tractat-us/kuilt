@@ -1,8 +1,14 @@
 # All modules
 
-Every module in kuilt. The [overview](overview.md) highlights the handful you meet
-first; this is the complete set. Each is published independently — you depend only on
-the ones you use.
+The [overview](overview.md) highlights the handful you meet first; this page goes
+wider. Each module is published independently, so you depend only on the ones you
+use.
+
+There are more in the build than are listed here — a test-support module for
+several of the libraries below, the `kuilt-bom` version-alignment platform,
+[Heddle](heddle.md), and the [Warp](warp.md) family. The
+[API reference](https://tractat-us.github.io/kuilt/api/) covers every published
+module.
 
 | Module | What it gives you |
 |--------|-------------------|

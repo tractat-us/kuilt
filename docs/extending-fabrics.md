@@ -235,7 +235,7 @@ class in `commonMain`:
 public data class TcpAddress(
     val host: String,
     val port: Int,
-    override val displayName: String = "$host:$port",
+    override val sessionName: String = "$host:$port",
 ) : Tag {
     override val peerKey: String get() = "$host:$port"
 }

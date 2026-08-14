@@ -32,7 +32,12 @@ dependencies {
 
 Without the BOM, pin each module explicitly (for example, `us.tractat.kuilt:kuilt-crdt:VERSION`). Replace `VERSION` with the [latest release](https://central.sonatype.com/artifact/us.tractat.kuilt/kuilt-core).
 
-Every module re-exports the `kuilt-core` contract (`Loom`/`Seam`/`Swatch`), so you do not need to list `kuilt-core` separately when using those modules. If you only need in-memory message passing, `kuilt-core` alone is enough.
+The fabric and session modules re-export the `kuilt-core` contract
+(`Loom`/`Seam`/`Swatch`), so you do not need to list `kuilt-core` separately
+alongside them. The data modules are different: `kuilt-crdt` and `kuilt-bolt` are
+plain serializable value types that work with no network at all, so they do not
+bring the contract with them — add `kuilt-core` yourself if you want it too. If
+you only need in-memory message passing, `kuilt-core` alone is enough.
 
 If you're unsure where to start, begin with one transport module
 (`kuilt-websocket` is usually the easiest), then add `kuilt-crdt`,
@@ -51,7 +56,7 @@ When the `kuilt/` directory is absent (CI, temporary worktrees), Gradle falls ba
 
 ## Test utilities
 
-Two modules are available for testing code built on kuilt:
+These are the two you reach for first when testing code built on kuilt:
 
 ```kotlin
 // commonTest
@@ -60,3 +65,7 @@ testImplementation("us.tractat.kuilt:kuilt-conformance:VERSION") // SeamConforma
 ```
 
 `kuilt-conformance` includes `SeamConformanceSuite`, which verifies that a `Loom` implementation follows the kuilt contract. See [Connections](fabrics.md) for usage.
+
+Several libraries ship their own test-support module too — `kuilt-raft-test`,
+`kuilt-session-test`, `kuilt-gossip-test`, `kuilt-deal-test` — published on the
+same version line, so the BOM covers them.

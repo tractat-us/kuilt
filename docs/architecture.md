@@ -628,26 +628,42 @@ Genuinely out of scope for kuilt at every layer:
 ## Module boundary
 
 ```
-kuilt-core         the contract + InMemoryLoom + MuxSeam + NamedMux + CompositeLoom + SeamConformanceSuite (depends on nothing fabric-specific)
-  ├── kuilt-raft        Raft consensus (election, log, snapshots, membership, reads, transfer)  → depends on kuilt-core
-  │     ├── kuilt-game  turn-based game facade (TurnSequencer / SpeculativeSequencer)  → depends on kuilt-raft
-  │     └── kuilt-cluster  server-cluster facade (ServerCluster / ClusterClient / VoterMesh)  → depends on kuilt-raft + kuilt-session + kuilt-websocket (JVM/Android)
-  ├── kuilt-crdt        delta-state CRDT zoo + Quilter   → depends on kuilt-core
-  │     └── kuilt-deal  fair card dealing + fair-random (SRA / commit-reveal)  → depends on kuilt-crdt + kuilt-core
-  ├── kuilt-session     membership/room layer (admit, roster, roles, resume)  → depends on kuilt-core
-  ├── kuilt-websocket   Ktor WebSocket fabric (Far)            → depends on kuilt-core
-  ├── kuilt-nw          Apple Network.framework fabric (Near, iOS/macOS)  → depends on kuilt-core
-  ├── kuilt-multipeer   Apple Multipeer fabric (Near, superseded by kuilt-nw)  → depends on kuilt-core
-  ├── kuilt-nearby      Google Nearby fabric (Android)         → depends on kuilt-core
-  ├── kuilt-webrtc      WebRTC data-channel fabric (wasmJs)    → depends on kuilt-core
-  └── kuilt-mdns        Bonjour discovery → WebSocket session  → depends on kuilt-core + kuilt-websocket
+kuilt-core         the contract + InMemoryLoom + MuxSeam + NamedMux + CompositeLoom (depends on nothing fabric-specific)
+  ├── kuilt-conformance SeamConformanceSuite + RoomConformanceSuite (the TCKs)  → kuilt-core
+  ├── kuilt-liveness    heartbeat partition detection over a Seam  → kuilt-core
+  ├── kuilt-raft        Raft consensus (election, log, snapshots, membership, reads, transfer)  → kuilt-core
+  │     ├── kuilt-game  turn-based game facade (TurnSequencer / SpeculativeSequencer)  → kuilt-raft + kuilt-session
+  │     ├── kuilt-heddle  fair-share ledger for a pooled resource  → kuilt-raft + kuilt-quilter + kuilt-crdt
+  │     └── kuilt-cluster  server-cluster facade (ServerCluster / ClusterClient / VoterMesh)  → kuilt-raft + kuilt-session + kuilt-websocket (JVM/Android)
+  ├── kuilt-session     membership/room layer (admit, roster, roles, resume)  → kuilt-core + kuilt-liveness + kuilt-quilter
+  ├── kuilt-gossip      partial-mesh broadcast overlay (GossipSeam)  → kuilt-core + kuilt-liveness
+  ├── kuilt-stream      length-prefix framing: a byte stream becomes a Connection  → kuilt-core
+  │     └── kuilt-tcp   raw TCP fabric (JVM/Android)            → kuilt-stream
+  ├── kuilt-websocket   Ktor WebSocket fabric (Far)            → kuilt-core
+  ├── kuilt-nw          Apple Network.framework fabric (Near, iOS/macOS)  → kuilt-core
+  ├── kuilt-multipeer   Apple Multipeer fabric (Near, superseded by kuilt-nw)  → kuilt-core
+  ├── kuilt-nearby      Google Nearby fabric (Android)         → kuilt-core
+  ├── kuilt-webrtc      WebRTC data-channel fabric (wasmJs)    → kuilt-core
+  └── kuilt-mdns        Bonjour discovery → WebSocket session  → kuilt-core + kuilt-websocket
+
+kuilt-crdt           delta-state CRDT zoo — plain value types, depends on NO other kuilt module
+  ├── kuilt-quilter    live replication of a CRDT over a Seam (Quilter)  → kuilt-crdt + kuilt-core
+  ├── kuilt-bolt       write-only op archive kept beside a live replica  → kuilt-crdt
+  └── kuilt-deal       fair card dealing + fair-random (SRA / commit-reveal)  → kuilt-crdt + kuilt-core
 
 kuilt-bom            Gradle/Maven platform constraining every module to one aligned version (not a code module)
 ```
 
-The dependency arrow only ever points *down* toward `kuilt-core`. Keeping
-`kuilt-core` free of fabric imports is what lets the whole boundary be
-build-enforced when consumed as a composite build or a published artifact.
+Two roots, and that is the point. `kuilt-core` carries the networking contract;
+`kuilt-crdt` carries data types that need no network at all, which is why it
+depends on no other kuilt module and can be used entirely on its own. Everything
+else hangs off one of the two, and the arrow only ever points *down* — nothing
+points back into either root. Keeping `kuilt-core` free of fabric imports is what
+lets the whole boundary be build-enforced when consumed as a composite build or a
+published artifact.
+
+The tree above is the shape of the boundary, not an inventory; `CLAUDE.md`'s
+module table is the complete list and is build-enforced (`verifyModuleTable`).
 
 ## Compatibility surface
 
