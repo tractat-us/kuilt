@@ -83,9 +83,20 @@ public class RoomHubSeam(
 
     /**
      * Host-verified principals of currently-registered peers ([PrincipalRoster]). Maintained under
-     * [lock] in the SAME critical sections that mutate [registered]/[_peers], so it can never
-     * desync from the live membership. A peer admitted with no attestation (null principal) is
-     * absent from the map.
+     * [lock] in the SAME critical sections that mutate [registered]/[_peers], so its key set can
+     * never desync from the live membership: an entry is added only alongside a registration and
+     * removed only alongside a deregistration or [close].
+     *
+     * A peer that has **never** been admitted with an attestation is absent from the map — never a
+     * `null`-valued entry. A peer that **has** been keeps its entry for as long as it stays
+     * registered, even if a later link for that id carries no attestation (#2357): forgetting a
+     * verified identity must not be something an unauthenticated party can ask for. One consequence
+     * is worth naming, because the [registered] map does *not* work this way — a later unattested
+     * link **does** take over that peer's [OutboundSender] — so after such a takeover this map
+     * describes an identity the host verified over a connection that is no longer the one
+     * [sendTo] reaches. #2357 records that residual deliberately: refusing the re-claim, binding the
+     * id to the attestation, and re-keying the roster on the principal are all behaviour changes
+     * with consumer impact, and none of them is decided here.
      */
     private val principals = mutableMapOf<PeerId, Principal>()
 
@@ -128,9 +139,10 @@ public class RoomHubSeam(
      * connection so the room can fan broadcasts back to it.
      *
      * [principal] is the host-verified identity for this connection (the mesh admitted the link
-     * before the room ever sees a frame). It is recorded in [attestedPrincipals] at registration;
-     * a `null` principal leaves the peer unattested (absent from the roster). A reconnect (same
-     * [connPeerId], fresh [sender]) re-registers and refreshes the entry.
+     * before the room ever sees a frame). It is recorded in [attestedPrincipals] at registration; a
+     * `null` principal leaves a first-time peer unattested (absent from the roster) but never
+     * **erases** an attestation already recorded for that id (#2357 — see [principals]). A reconnect
+     * (same [connPeerId], fresh [sender]) re-registers, and an attested one refreshes the entry.
      *
      * Suspends only outside the lock (authorizer + spool delivery). Thread-safe.
      */
@@ -157,7 +169,20 @@ public class RoomHubSeam(
                 if (closed) return@withLock false
                 registered[connPeerId] = sender
                 _peers.update { it + connPeerId }
-                if (principal == null) principals.remove(connPeerId) else principals[connPeerId] = principal
+                // An unattested link never ERASES an attestation the host already verified (#2357).
+                // The old `if (principal == null) principals.remove(...)` made forgetting a verified
+                // identity something an unauthenticated party could ask for: dial a second link, put
+                // the target's id in your preamble — it is not a secret, every peer broadcasts it —
+                // and the roster drops the entry. No credential required, and `authorizer` never sees
+                // a Principal, so no deployment can refuse it. Keeping the entry is the smallest
+                // change that closes that, and it prejudges nothing about the policy questions #2357
+                // leaves open (attested → attested supersession is untouched, and still mandated by
+                // `PrincipalAttestationConformanceSuite.rosterUpdatesPrincipalOnReconnect`).
+                //
+                // The republication stays UNCONDITIONAL: `deliver`'s contract is that the roster has
+                // decided about this peer by the time it returns, and a harness may be awaiting the
+                // emission itself rather than a change in the value.
+                if (principal != null) principals[connPeerId] = principal
                 _attestedPrincipals.value = principals.toMap()
                 true
             }
