@@ -41,9 +41,8 @@ class DealBenchmark {
     @Test
     fun fullCyclePoker52CardsTwoPlayers() = runBlocking {
         val ids = listOf(PeerId("alice"), PeerId("bob"))
-        val scheme = SraScheme()
         val scope = CoroutineScope(Dispatchers.Unconfined)
-        val (alice, bob) = fakeDealSessionPair(ids[0], ids[1], scheme, scope)
+        val (alice, bob) = fakeDealSessionPair(ids[0], ids[1], { SraScheme() }, scope)
 
         val deck = (1..52).map { "card:$it".encodeToByteArray() }
 
@@ -67,9 +66,8 @@ class DealBenchmark {
     @Test
     fun fullCycleTwoPlayers50Cards() = runBlocking {
         val ids = listOf(PeerId("alice"), PeerId("bob"))
-        val scheme = SraScheme()
         val scope = CoroutineScope(Dispatchers.Unconfined)
-        val (alice, bob) = fakeDealSessionPair(ids[0], ids[1], scheme, scope)
+        val (alice, bob) = fakeDealSessionPair(ids[0], ids[1], { SraScheme() }, scope)
 
         val deck = (1..50).map { "card:$it".encodeToByteArray() }
 

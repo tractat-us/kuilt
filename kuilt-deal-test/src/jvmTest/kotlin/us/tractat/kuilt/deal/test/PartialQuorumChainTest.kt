@@ -32,7 +32,7 @@ class PartialQuorumChainTest {
         val dave = PeerId("dave")
         val sessions = fakeDealSessionGroup(
             playerIds = listOf(alice, bob, carol, dave),
-            scheme = SraScheme(),
+            newScheme = { SraScheme() },
             scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)),
         )
         val (aliceSession, bobSession, carolSession, daveSession) = sessions
