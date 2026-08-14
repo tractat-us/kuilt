@@ -120,8 +120,22 @@ public abstract class RaftStorageConformanceSuite {
      * | **Fixture:** drop the pin restore | [theEstablishedLeaderSurvivesAReopen] only |
      * | **Fixture:** drop the log restore | [theLogSurvivesAReopenWhole] only |
      * | **Fixture:** drop the snapshot restore | [theSnapshotSurvivesAReopen] only |
-     * | **Fixture:** resurrect a cleared vote (`storage.votedFor() ?: NodeId("node-a")`) | one assertion in [termAndVoteSurviveAReopen], one in [anUnwrittenMediumReopensEmpty] |
+     * | **Fixture, synthetic:** resurrect a cleared vote (`storage.votedFor() ?: NodeId("node-a")`) | one assertion in [termAndVoteSurviveAReopen], one in [anUnwrittenMediumReopensEmpty] |
      * | **Production:** drop `currentTerm = term` in `InMemoryRaftStorage.saveTermAndVotedFor` | [termAndVoteSurviveAReopen] **and four pre-existing properties** |
+     *
+     * **Scope of "and nothing else", which is two different claims here.** Rows 1–7 mutate the
+     * reference *subclass*, which nothing outside this one test class references, so their
+     * confinement is **structural** rather than measured — no other test could see them. Row 8
+     * mutates production `InMemoryRaftStorage`, which also backs `:kuilt-raft`, `:kuilt-raft-test`,
+     * `:kuilt-cluster`, `:kuilt-game` and `examples`; it was measured **only within
+     * `InMemoryRaftStorageConformanceTest`**, so its true blast radius is larger than the entry
+     * says, not smaller. That cuts the way the row already argues, and it is written down because
+     * "reds nothing else" is the kind of claim that gets read as measured when it was assumed.
+     *
+     * **Row 7 is synthetic** — `InMemoryRaftStorage` has no NULL column to omit, so the bug it
+     * models cannot exist in the reference; the mutation puts it in the reopen by hand. It stays in
+     * the table because it is the *only* thing measured that moves the cleared-vote assertion, and
+     * an assertion nothing has ever reddened is an assertion nobody has checked.
      *
      * **The fixture rows are the load-bearing ones, and that is the finding rather than a dodge.**
      * kuilt ships no durable [RaftStorage], so the reference's own `reopen` is the closest this tree
