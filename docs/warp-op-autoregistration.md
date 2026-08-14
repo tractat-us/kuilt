@@ -96,11 +96,17 @@ kotlin.sourceSets.commonMain {
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask<*>>().configureEach {
     if (name != "kspCommonMainKotlinMetadata") dependsOn("kspCommonMainKotlinMetadata")
 }
+tasks.matching { it.name.startsWith("ksp") && it.name != "kspCommonMainKotlinMetadata" }
+    .configureEach { dependsOn("kspCommonMainKotlinMetadata") }
 ```
 
 (KGP does not auto-wire generated metadata sources into the other compilations —
 the last two blocks are that standard plumbing; `kuilt.warp-ops` also covers the
-sources-jar/Dokka/detekt task-graph edges.)
+sources-jar/Dokka/detekt task-graph edges. The `srcDir` is a plain path on
+purpose: a `builtBy` collection would be a self-cycle, because KSP's metadata
+task takes the whole `commonMain` source set as an input. The per-target KSP
+tasks need the edge too — they used to inherit it from `KotlinCompilationTask`,
+which under KSP 2 they no longer are.)
 
 Known limits, by construction:
 
