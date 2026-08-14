@@ -43,6 +43,13 @@ package us.tractat.kuilt.conformance
  * and the core/ungated split is deliberate and meta-tested. A fabric that reorders frames is
  * non-conforming, full stop.
  *
+ * **Nothing was lost with the flag, and that is enforced rather than argued.** The order obligation
+ * is unchanged and still runs on every subclass; what the deletion removed was a declaration no
+ * property consulted. The receipt is a mutation: adding a bare `capabilities()` call to
+ * `SeamConformanceSuite.runIncomingPreservesSendOrder` reds `SeamConformanceUngatedCoreTest.coreObligationsNeverReadCapabilities`,
+ * whose harness makes reading the flags throw. So a future edit cannot quietly re-gate ordering on
+ * anything — which is also why re-adding this flag would land back in the same contradiction.
+ *
  * [securesTransport] is a **third** shape and is documented as such on its own declaration: a
  * standing declaration no property can read, because the suite has no wire tap.
  */
