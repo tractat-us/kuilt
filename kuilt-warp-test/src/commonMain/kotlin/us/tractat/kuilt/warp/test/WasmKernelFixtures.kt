@@ -11,10 +11,14 @@ package us.tractat.kuilt.warp.test
  *
  * All loadable vectors declare linear memory with an explicit bounded max (the uniform
  * contract — see [us.tractat.kuilt.warp.WasmRuntime]); the deliberate exceptions are the
- * guard vectors themselves ([NO_MAX_MEMORY], [OVERSIZE_INITIAL_MEMORY], [MISSING_MEMORY]).
+ * guard vectors themselves ([NO_MAX_MEMORY], [OVERSIZE_INITIAL_MEMORY], [MISSING_MEMORY]), plus
+ * [INITIAL_ABOVE_DECLARED_MAX], which declares a bounded max the WebAssembly spec would refuse
+ * to validate against its own initial — see its KDoc for why that is the only way to reach the
+ * guard it targets.
  *
- * The two vectors that carry a **descriptor** rather than bare bytes — [OOB_IN_RANGE_RESULT] and
- * [GROW_THEN_WRITE] — are `by lazy` rather than eager, and that is a diagnostic decision, not a
+ * The vectors that carry a **descriptor** rather than bare bytes — [OOB_IN_RANGE_RESULT],
+ * [GROW_THEN_WRITE], [INITIAL_ABOVE_DECLARED_MAX] and [INITIAL_AT_CAP] — are `by lazy` rather
+ * than eager, and that is a diagnostic decision, not a
  * performance one. Their descriptors validate themselves on construction, and an eager `val` runs
  * that validation in *this object's* initializer: measured, a fixture drifted back into the
  * high-bit region reddened 19 of 20 conformance tests as `ExceptionInInitializerError` /
@@ -91,9 +95,17 @@ public object WasmKernelFixtures {
     )
 
     /**
-     * `largeinit.wat` (81 bytes) — declares memory `32`: an INITIAL size of 32 pages, exceeding
-     * the default 16-page sandbox cap. Rejected on the initial size (checked before the
-     * max/no-max guards on every impl).
+     * `largeinit.wat` (81 bytes) — declares memory `32`: an INITIAL size of 32 pages exceeding the
+     * default 16-page sandbox cap, and **no explicit max**.
+     *
+     * It therefore breaks two rules at once, and a rejection cannot be attributed to either: the
+     * no-max guard rejects it just as readily, so an impl that never checks the initial size keeps
+     * every test using this vector green. That is not a fixture written carelessly — WebAssembly
+     * validates limits with `min <= max`, so no *spec-valid* module can carry an over-cap initial
+     * without also carrying an over-cap max or no max at all. See
+     * [INITIAL_ABOVE_DECLARED_MAX] for the vector that can reach the initial guard, and
+     * [WasmRuntimeConformanceSuite.loadRejectsModuleWithNoMaxAndOversizeInitialMemory] for what
+     * this one does and does not hold (#2315).
      */
     public val OVERSIZE_INITIAL_MEMORY: ByteArray = wasm(
         0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0c, 0x02, 0x60, 0x01, 0x7f, 0x01, 0x7f,
@@ -103,6 +115,62 @@ public object WasmKernelFixtures {
         0x75, 0x6e, 0x00, 0x01, 0x0a, 0x0b, 0x02, 0x04, 0x00, 0x41, 0x00, 0x0b, 0x04, 0x00, 0x42, 0x00,
         0x0b,
     )
+
+    /**
+     * `initovermax.wat` (82 bytes) — declares memory `32 16`: an initial of 32 pages above the
+     * default 16-page cap, with an explicit max sitting exactly **at** the cap.
+     *
+     * It is the only shape in which the oversize-initial guard could be the sole *sandbox* rule a
+     * module breaks: the max is present (so the no-max rule is satisfied) and within the cap (so
+     * the oversize-max rule is satisfied). Reaching it costs spec validity — `min <= max` is a
+     * WebAssembly validity condition, and `wat2wasm` needs `--no-check` to emit this — which is
+     * exactly the case the guard is for: an engine that does not check limits itself.
+     *
+     * Measured, all three shipped engines do check, by three different mechanisms, so the guard is
+     * unreachable-as-sole-cause everywhere today. That is worth an executable record rather than a
+     * comment, and this vector is it. See
+     * [WasmRuntimeConformanceSuite.loadRejectsOversizeInitialWhoseDeclaredMaxIsWithinTheCap] for the
+     * per-engine measurements and what the property therefore does and does not pin.
+     */
+    public val INITIAL_ABOVE_DECLARED_MAX: DeclaredLimitsVector by lazy {
+        DeclaredLimitsVector(
+            bytes = wasm(
+                0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0c, 0x02, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+                0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7e, 0x03, 0x03, 0x02, 0x00, 0x01, 0x05, 0x04, 0x01, 0x01, 0x20,
+                0x10, 0x07, 0x22, 0x03, 0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x02, 0x00, 0x0a, 0x77, 0x61,
+                0x72, 0x70, 0x5f, 0x61, 0x6c, 0x6c, 0x6f, 0x63, 0x00, 0x00, 0x08, 0x77, 0x61, 0x72, 0x70, 0x5f,
+                0x72, 0x75, 0x6e, 0x00, 0x01, 0x0a, 0x0b, 0x02, 0x04, 0x00, 0x41, 0x00, 0x0b, 0x04, 0x00, 0x42,
+                0x00, 0x0b,
+            ),
+            initialPages = 32,
+            maxPages = 16,
+        )
+    }
+
+    /**
+     * `capinit.wat` (82 bytes) — declares memory `16 16`: an initial *and* a max sitting exactly on
+     * the default 16-page cap. Wholly legal, so it must load and run.
+     *
+     * It is the only vector whose **initial** touches the boundary, and so the only one that can
+     * tell `initial > cap` from `initial >= cap`. [REVERSE] declares `1 16`, which pins the *max*
+     * boundary (an impl rejecting `max >= cap` reds every happy-path property) and pins nothing
+     * about the initial one — its initial is 1, sixteen pages clear of the edge. See
+     * [WasmRuntimeConformanceSuite.loadAcceptsInitialMemoryExactlyAtTheCap].
+     */
+    public val INITIAL_AT_CAP: DeclaredLimitsVector by lazy {
+        DeclaredLimitsVector(
+            bytes = wasm(
+                0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0c, 0x02, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+                0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7e, 0x03, 0x03, 0x02, 0x00, 0x01, 0x05, 0x04, 0x01, 0x01, 0x10,
+                0x10, 0x07, 0x22, 0x03, 0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x02, 0x00, 0x0a, 0x77, 0x61,
+                0x72, 0x70, 0x5f, 0x61, 0x6c, 0x6c, 0x6f, 0x63, 0x00, 0x00, 0x08, 0x77, 0x61, 0x72, 0x70, 0x5f,
+                0x72, 0x75, 0x6e, 0x00, 0x01, 0x0a, 0x0b, 0x02, 0x04, 0x00, 0x41, 0x00, 0x0b, 0x04, 0x00, 0x42,
+                0x00, 0x0b,
+            ),
+            initialPages = 16,
+            maxPages = 16,
+        )
+    }
 
     /**
      * `noabi.wat` (26 bytes) — well-formed (no imports, bounded memory `1 1`) but omits the
@@ -301,6 +369,43 @@ public const val WASM_PAGE_BYTES: Long = 65_536L
  * the number: a suite-local constant and a fixture-local one are exactly the pair that drifts.
  */
 public const val ABI_WORD_SIGN_BIT: Long = 0x8000_0000L
+
+/**
+ * A complete, well-behaved warp kernel whose **declared linear-memory limits** are the whole point
+ * of the vector: nothing else about it can trip a load guard, so a property over it is reasoning
+ * about [initialPages] and [maxPages] alone.
+ *
+ * ### What is checked here, and what is deliberately left to the property
+ *
+ * The two page counts are *claims about a byte literal*, and a regenerated literal with a stale
+ * descriptor beside it is the defect one level up — so [init] reads the module's memory section and
+ * requires it to declare exactly these limits, **with an explicit max** (the encoder emits the
+ * limits flag `0x01`, so a fixture that quietly lost its max is not a value this constructor can be
+ * handed, and the no-max rule is ruled out structurally rather than by assertion).
+ *
+ * What is *not* checked here is every relation involving the sandbox cap — whether the initial is
+ * over it, whether the max is under it, whether either sits exactly on it. The cap is a
+ * [us.tractat.kuilt.warp.WasmSandboxConfig] value, not a property of the module, and a descriptor
+ * that hardcoded one would answer a question the property is supposed to ask of the config it
+ * actually runs under. Each property therefore asserts its own cap relations against the config it
+ * hands [WasmRuntimeConformanceSuite.newRuntime], which is also what makes a change to the default
+ * cap red the affected properties instead of silently retargeting them.
+ *
+ * @property initialPages the module's declared initial linear memory, in pages.
+ * @property maxPages the module's declared max, in pages — always explicit.
+ */
+public class DeclaredLimitsVector internal constructor(
+    public val bytes: ByteArray,
+    public val initialPages: Int,
+    public val maxPages: Int,
+) {
+    init {
+        check(bytes.containsSequence(memorySection(initialPages, maxPages))) {
+            "the module must declare memory `$initialPages $maxPages` with an explicit max, or " +
+                "both page counts this fixture reports are claims about a different module"
+        }
+    }
+}
 
 /**
  * A kernel whose `warp_run` returns a result window that is **in range and past the end**: both

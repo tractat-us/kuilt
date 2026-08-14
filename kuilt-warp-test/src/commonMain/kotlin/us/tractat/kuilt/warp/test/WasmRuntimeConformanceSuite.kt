@@ -40,7 +40,10 @@ import kotlin.time.Duration.Companion.seconds
  * kernel — a remotely-triggerable DoS):
  * - a declared import (capability violation);
  * - linear memory with no explicit max (the memory-bomb: unbounded `memory.grow`);
- * - a declared max or initial size exceeding [WasmSandboxConfig.maxMemoryPages];
+ * - a declared max or initial size exceeding [WasmSandboxConfig.maxMemoryPages] — two arms of one
+ *   rule, and only the max arm is reachable by a spec-valid module (see
+ *   [loadRejectsOversizeInitialWhoseDeclaredMaxIsWithinTheCap] for the algebra and for the vector
+ *   that reaches the other one);
  * - malformed bytes; missing `warp_alloc`/`warp_run` ABI exports; no linear memory at all.
  *
  * **Run-time guards** — each fault is a [WasmExecutionException], never a hang or a raw error:
@@ -129,14 +132,202 @@ public abstract class WasmRuntimeConformanceSuite {
         assertFailsWith<WasmLoadException> { newRuntime().load(WasmKernelFixtures.NO_MAX_MEMORY) }
     }
 
+    /**
+     * The oversize-**max** arm of the size-cap rule, isolated: `bigmem.wat` declares `memory 1 64`,
+     * so its max is over the cap while its initial (1 page) and its explicit max satisfy the other
+     * two rules. The oversize-max guard is the only thing that can reject it, which is why this
+     * property needs no message assertion — structure does the attributing.
+     */
     @Test
     public fun loadRejectsModuleWithOversizeDeclaredMax() {
         assertFailsWith<WasmLoadException> { newRuntime().load(WasmKernelFixtures.OVERSIZE_MAX_MEMORY) }
     }
 
+    /**
+     * A module that breaks the no-max rule **and** the size-cap rule at once is still one clean
+     * [WasmLoadException] — and that is the entire claim, because this vector cannot say which
+     * rule rejected it.
+     *
+     * [WasmKernelFixtures.OVERSIZE_INITIAL_MEMORY] declares `memory 32`: 32 initial pages, no max.
+     * An impl that dropped the initial check entirely still rejects it on the no-max guard, so this
+     * property is green either way — measured, not argued (#2315). It is named for what it holds
+     * rather than for the guard it was once thought to pin, because an unisolatable property that
+     * reads as isolated is worse than no property: a reader stops checking.
+     *
+     * What actually pins the two rules is elsewhere, one vector each:
+     * [loadRejectsModuleDeclaringMemoryWithNoMax] (`memory 1` — in-cap initial, so only the no-max
+     * rule can fire) and [loadRejectsModuleWithOversizeDeclaredMax] (`memory 1 64`). The initial
+     * arm is the awkward one, and [loadRejectsOversizeInitialWhoseDeclaredMaxIsWithinTheCap]
+     * explains why.
+     */
     @Test
-    public fun loadRejectsModuleWithOversizeInitialMemory() {
+    public fun loadRejectsModuleWithNoMaxAndOversizeInitialMemory() {
         assertFailsWith<WasmLoadException> { newRuntime().load(WasmKernelFixtures.OVERSIZE_INITIAL_MEMORY) }
+    }
+
+    /**
+     * The oversize-**initial** arm, on the only input that can reach it.
+     *
+     * ### Why no spec-valid module can isolate this guard
+     *
+     * WebAssembly validates limits with `min <= max`. So in any valid module `initial > cap`
+     * forces `max > cap` when a max is declared, and forces the no-max rule when it is not: the
+     * initial arm is **subsumed** by its two neighbours, and every valid fixture that trips it
+     * trips one of them too. That is not a fixture-authoring mistake to be corrected — it is
+     * arithmetic, and it is why [loadRejectsModuleWithNoMaxAndOversizeInitialMemory] cannot
+     * attribute its rejection however carefully it is written.
+     *
+     * ### So the vector is deliberately spec-invalid, and that is the case the guard is *for*
+     *
+     * [WasmKernelFixtures.INITIAL_ABOVE_DECLARED_MAX] declares `memory 32 16`: an explicit max
+     * (no-max rule satisfied) sitting exactly at the cap (size-cap max arm satisfied) under an
+     * initial of 32. Of the sandbox's three memory rules only the initial one is broken. The whole
+     * reason a sandbox re-derives limits from the bytes is that it must not rest on the engine
+     * doing so, and this is the input on which those two differ.
+     *
+     * ### The measurement, and why it makes this a tripwire rather than a live guard
+     *
+     * **No mutation of any shipped runtime reds this property**, and that is stated first because
+     * an all-green cell read as an absence would be read as a gap. Deleting the `initial > cap`
+     * check from all three impls leaves all four backends green, because each engine refuses this
+     * module on its own and by a different mechanism:
+     *
+     * - **Chicory** — `Parser.parse` throws *"size minimum must not be greater than maximum"*;
+     * - **browser** — `WebAssembly.Module()` throws *"maximum memory size (16 pages) is less than
+     *   initial (32 pages)"*;
+     * - **wasm3** — `m3_ParseModule` **accepts** `min > max`, and unmutated it is the sandbox's own
+     *   guard that speaks (*"module initial memory 32 pages exceeds sandbox cap 16 pages"*); with
+     *   the guard deleted, `m3_LoadModule` then fails to size the memory past the declared max
+     *   (*"runtime ran out of memory"*). Two independent refusals, so still green.
+     *
+     * So the oversize-initial guard is defence in depth on every engine shipped today: subsumed
+     * arithmetically for valid modules, and beaten to the punch by the engine for the one invalid
+     * shape that could reach it. What this property holds is the **outcome** — a spec-invalid
+     * limits pair is a terminal [WasmLoadException], never a raw engine error escaping the sealed
+     * hierarchy, an input class no other vector here covers — and it reds the day a backend both
+     * accepts `min > max` and sizes the initial from it. A future engine is exactly where that is
+     * plausible; it is already true of one of the two wasm3 layers.
+     *
+     * **No message assertion**, for the same measurement: the three mechanisms word themselves
+     * differently, and asserting `"initial"` would fail two conforming impls for checking limits
+     * *earlier* than the sandbox does. The three preconditions below say what the vector is,
+     * against the config actually used, so a drifted fixture or a changed default cap reds here
+     * instead of quietly retargeting the property.
+     *
+     * **Mutation receipts**, measured on this branch — each applied alone and reverted, read out of
+     * the results XML, tasks confirmed `EXECUTED`. Backends: `ChicoryWasmRuntimeConformanceTest`
+     * (`jvmTest`), `Wasm3WasmRuntimeConformanceTest` (`macosArm64Test` and
+     * `iosSimulatorArm64Test`), `BrowserWasmRuntimeConformanceTest` (`wasmJsBrowserTest`).
+     *
+     * | Mutation | Reds here | Reds elsewhere |
+     * |---|---|---|
+     * | Drop `initial > cap` from all three runtimes | **green on all four backends** — see above | nothing: 22 of 22 green on each |
+     * | `initial > cap` → `initial >= cap`, all three | green — the module is refused either way | **[loadAcceptsInitialMemoryExactlyAtTheCap] on all four**, alone |
+     * | **Fixture:** page count edited without the bytes (32 → 31) | [DeclaredLimitsVector]'s artefact check, at construction | nothing — the `by lazy` keeps it to this property |
+     * | **Fixture:** vector regenerated coherently at `16 16` | preconditions 2 **and** 3, before the claim; precondition 1 correctly stays green | nothing |
+     *
+     * Row 1 is why this KDoc leads with the measurement. Row 2 is the honest limit of the property:
+     * an off-by-one that *widens* the guard is invisible here, and only the boundary-acceptance
+     * vector notices — the two together pin the threshold from both sides, and neither does alone.
+     */
+    @Test
+    public fun loadRejectsOversizeInitialWhoseDeclaredMaxIsWithinTheCap() {
+        // One config, used both to configure the runtime and to state the preconditions — a second
+        // copy of the cap is exactly the pair that drifts.
+        val config = WasmSandboxConfig()
+        val vector = WasmKernelFixtures.INITIAL_ABOVE_DECLARED_MAX
+        assertAll(
+            {
+                assertTrue(
+                    vector.maxPages <= config.maxMemoryPages,
+                    "the declared max must be within the cap, or the oversize-max guard rejects this " +
+                        "vector too and it restates loadRejectsModuleWithOversizeDeclaredMax — " +
+                        "${vector.maxPages} against ${config.maxMemoryPages}",
+                )
+            },
+            {
+                assertTrue(
+                    vector.initialPages > vector.maxPages,
+                    "and the initial must exceed that max, or this is an ordinary valid module and " +
+                        "no rule is broken at all — ${vector.initialPages} against ${vector.maxPages}",
+                )
+            },
+            {
+                assertTrue(
+                    vector.initialPages > config.maxMemoryPages,
+                    "the initial must exceed the cap, or the guard under test never fires — " +
+                        "${vector.initialPages} against ${config.maxMemoryPages}",
+                )
+            },
+        )
+        assertFailsWith<WasmLoadException>(
+            "an over-cap initial is a memory-ceiling violation whether or not the engine also " +
+                "objects to the limits, and must surface as a terminal load failure",
+        ) { newRuntime(config).load(vector.bytes) }
+    }
+
+    /**
+     * The size-cap rule's boundary, from below: a module declaring `memory 16 16` under a 16-page
+     * cap is entirely legal and must load *and run*.
+     *
+     * ### Why the happy path does not already cover this
+     *
+     * [WasmKernelFixtures.REVERSE] declares `1 16`. Its **max** sits on the boundary, so an impl
+     * that wrote `max >= cap` reds every happy-path property here — but its initial is 1, sixteen
+     * pages clear of the edge, so `initial >= cap` is invisible to the entire suite. The two arms
+     * of one rule are not symmetric in what the existing vectors pin, and this is the missing half:
+     * the only vector whose initial touches the cap.
+     *
+     * It asserts a completed round trip rather than merely that `load` did not throw. On the
+     * browser the guest is instantiated lazily in a worker at first invoke, so a property that
+     * stopped at `load` would never allocate the 16 pages it is nominally about; the kernel's
+     * `warp_run` returns a zero-length window, so the round trip is the smallest thing that proves
+     * the module was really stood up at the cap.
+     *
+     * **What it cannot detect:** anything about *rejection*. A backend that deleted the initial
+     * guard outright passes this happily — that direction belongs to
+     * [loadRejectsOversizeInitialWhoseDeclaredMaxIsWithinTheCap], and the two together are what
+     * pin the threshold from both sides.
+     *
+     * **Mutation receipts**, backends as above.
+     *
+     * | Mutation | Reds here | Reds elsewhere |
+     * |---|---|---|
+     * | `initial > cap` → `initial >= cap` — all three runtimes | **RED on all four backends**, and the red is the escaping *"module initial memory 16 pages exceeds sandbox cap 16 pages"* — the guard naming itself and both numbers | nothing: the sole failure of 22, 22, 22 and 41 |
+     * | Drop `initial > cap` entirely — all three | green, correctly — this property is about over-rejection | see the sibling's table |
+     * | **Fixture:** vector regenerated at `1 16` | precondition 1, before the claim | nothing |
+     *
+     * Row 2 is green on purpose and is the reason the pair exists: this property cannot see a guard
+     * that has been deleted, and its sibling cannot see one that has been widened.
+     */
+    @Test
+    public fun loadAcceptsInitialMemoryExactlyAtTheCap(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val config = WasmSandboxConfig()
+        val vector = WasmKernelFixtures.INITIAL_AT_CAP
+        assertAll(
+            {
+                assertEquals(
+                    config.maxMemoryPages,
+                    vector.initialPages,
+                    "the initial must sit exactly ON the cap, or this vector pins no boundary and " +
+                        "restates the happy path",
+                )
+            },
+            {
+                assertEquals(
+                    config.maxMemoryPages,
+                    vector.maxPages,
+                    "and so must the max, or the module is not the largest one the sandbox permits",
+                )
+            },
+        )
+        val op = newRuntime(config).load(vector.bytes)
+        assertContentEquals(
+            byteArrayOf(),
+            op.invoke(ByteArray(0)),
+            "a module declaring the largest memory the sandbox permits must instantiate and run, " +
+                "not merely survive load — the browser stands the guest up at first invoke",
+        )
     }
 
     @Test
