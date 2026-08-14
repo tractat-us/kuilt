@@ -32,9 +32,9 @@ class EntitlementLedgerConservationTest {
 
     private fun topology(): EntitlementLedger = EntitlementLedger.of(
         records = mapOf(
-            e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE, 0L)),
-            e2 to setOf(AttachmentRecord(e2, root, g2, Weight.ONE, 0L)),
-            e3 to setOf(AttachmentRecord(e3, g1, g3, Weight.ONE, 0L)),
+            e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE)),
+            e2 to setOf(AttachmentRecord(e2, root, g2, Weight.ONE)),
+            e3 to setOf(AttachmentRecord(e3, g1, g3, Weight.ONE)),
         ),
     )
 
@@ -249,7 +249,7 @@ class EntitlementLedgerConservationTest {
             val fresh = rung(++generation)
             var out = l.applying(l.close(from))
             out = out.piece(EntitlementLedger.of(lifecycle = mapOf(from to Lifecycle.RETIRED)))
-            out = out.applying(out.prepare(AttachmentRecord(fresh, g1, g3, Weight.ONE, 0L)))
+            out = out.applying(out.prepare(AttachmentRecord(fresh, g1, g3, Weight.ONE)))
             return out.applying(out.activate(fresh)) to fresh
         }
 

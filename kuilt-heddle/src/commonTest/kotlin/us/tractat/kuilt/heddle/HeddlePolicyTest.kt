@@ -16,24 +16,29 @@ import kotlin.test.assertTrue
 class HeddlePolicyTest {
 
     /**
-     * A mutable child edge for the closed-loop simulation. Weight and virtual-time
-     * origin are immutable; the counters and wake offset mutate as the harness applies
-     * grants, spends, and returns.
+     * A mutable child edge for the closed-loop simulation. Weight and [seat] are immutable;
+     * the counters and wake offset mutate as the harness applies grants, spends, and returns.
+     *
+     * [seat] is the edge's virtual-time origin, carried the way production carries it since
+     * issue #1752 — a [Gauge] floor with the fold at `0`, so the whole of the edge's issuance
+     * is advanced over it. `null` models an edge nothing has seated yet, which reads from its
+     * own origin. An exact [Rational] rather than the `Long` the retired
+     * `AttachmentRecord.initialVirtualTime` was: a gauge floor never has to be rounded.
      */
     private class Sim(
         val id: String,
         val weight: Weight,
-        val initialVirtualTime: Long = 0L,
+        val seat: Rational? = Rational.ZERO,
         var issued: Long = 0L,
         var returned: Long = 0L,
         var spent: Long = 0L,
         var demand: Demand = Demand(targetOutstanding = 1_000_000L, maximumUsefulGrant = 1_000_000L),
         var offset: Rational = Rational.ZERO,
     ) {
-        val record get() = AttachmentRecord(AttachmentId(id), GroupId("root"), GroupId(id), weight, initialVirtualTime)
+        val record get() = AttachmentRecord(AttachmentId(id), GroupId("root"), GroupId(id), weight)
         val summary get() = EdgeSummary(AttachmentId(id), issued, returned, spent)
-        fun edge() = PolicyEdge(record, summary, demand, offset)
-        fun virtualService() = HeddlePolicy.virtualService(record, summary)
+        fun edge() = PolicyEdge(record, summary, demand, seat?.let { Gauge(it, folded = 0L) }, issued, offset)
+        fun virtualService() = HeddlePolicy.virtualService(edge())
 
         /** `ev` as the policy sees it — the raw virtual service plus the wake clamp. */
         fun effectiveVirtualService() = virtualService() + offset
@@ -113,7 +118,7 @@ class HeddlePolicyTest {
     @Test
     fun theLoneCandidateIsEligibleByExactEquality() {
         // ev = 5 + 11/(3/7) = 92/3 — deliberately non-integral, so equality is not free.
-        val only = Sim("o", Weight.of(3L, 7L), initialVirtualTime = 5L, issued = 11L, spent = 11L)
+        val only = Sim("o", Weight.of(3L, 7L), seat = Rational.of(5L), issued = 11L, spent = 11L)
         assertAll(
             { assertEquals(Rational.of(92L, 3L), only.virtualService()) },
             { assertEquals(only.virtualService(), front(listOf(only))) },
@@ -147,7 +152,7 @@ class HeddlePolicyTest {
                 Sim(
                     id = ('a' + i).toString(),
                     weight = Weight.of(1L + rng.nextInt(9), 1L + rng.nextInt(4)),
-                    initialVirtualTime = rng.nextInt(40).toLong(),
+                    seat = Rational.of(rng.nextInt(40).toLong()),
                     offset = Rational.of(rng.nextInt(30).toLong()),
                 )
             }
@@ -332,9 +337,9 @@ class HeddlePolicyTest {
     }
 
     /**
-     * Neutral creation (design §7.2, §10.5): a newborn whose `initialVirtualTime` is the
-     * parent's current virtual time starts level with its sibling — no head start for the
-     * parent's whole past. Contrasted with a (wrong) zero baseline, which would burst.
+     * Neutral creation (design §7.2, §10.5): a newborn seated at the parent's current virtual
+     * time starts level with its sibling — no head start for the parent's whole past.
+     * Contrasted with a (wrong) zero baseline, which would burst.
      */
     @Test
     fun neutralCreationGivesNoHeadStart() {
@@ -346,8 +351,8 @@ class HeddlePolicyTest {
             incumbent.spent += g.amount
         }
         val parentVt = incumbent.virtualService() // 30
-        // Newborn created neutrally: its baseline is the parent's current virtual time.
-        val newborn = Sim("n", Weight.ONE, initialVirtualTime = AttachmentRecord.neutralInitialVirtualTime(parentVt))
+        // Newborn created neutrally: its seat is the parent's current virtual time.
+        val newborn = Sim("n", Weight.ONE, seat = parentVt)
         assertEquals(incumbent.virtualService(), newborn.virtualService(), "newborn should start level")
 
         var newbornGrants = 0
@@ -361,21 +366,35 @@ class HeddlePolicyTest {
     }
 
     /**
-     * Neutral creation at a **genuinely fractional** parent virtual time (design §7.2, §10.5).
+     * Neutral creation at a **genuinely fractional** parent virtual time (design §7.2, §10.5) —
+     * and the receipt that moving the seat into the [Gauge] retired a rounding rule rather than
+     * merely relocating it (issue #1752).
      *
-     * `V = Σ w·ev / Σ w` is a [Rational] and is almost never integral, while
-     * [AttachmentRecord.initialVirtualTime] is a `Long` — so creation must round, and the
-     * direction carries a fairness sign. Rounding *down* seats the newborn **behind** the
-     * front, which is exactly the "lifetime credit" §10.5 forbids; rounding *up* is
-     * conservative. [neutralCreationGivesNoHeadStart] cannot see this: it creates at `V = 30/1`,
-     * where every rounding rule agrees.
+     * `V = Σ w·ev / Σ w` is a [Rational] and is almost never integral. While the seat lived on
+     * `AttachmentRecord` it was a `Long`, so creation had to round, and the direction carried a
+     * fairness sign: rounding *down* seated the newborn **behind** the front — the "lifetime
+     * credit" §10.5 forbids — so the rule was the ceiling, accepting a bounded sliver of penalty
+     * (`0 ≤ ⌈V⌉ − V < 1`) as the conservative side. A [Gauge.floor] is a `Rational`, so there is
+     * no side to pick: the newborn lands on the front **exactly**, and both the credit and the
+     * sliver of penalty are gone. [neutralCreationGivesNoHeadStart] cannot see any of this — it
+     * creates at `V = 30/1`, where every rounding rule and the exact seat all agree.
      *
-     * Here two near-converged siblings put the parent at `V = 109/10`, and the floor (`10`)
-     * versus the ceiling (`11`) is the whole difference between the newborn taking the very
-     * next grant and waiting its turn.
+     * Here two near-converged siblings put the parent at `V = 109/10`, where the old floor (`10`)
+     * and ceiling (`11`) sat either side of the answer.
+     *
+     * **What this test does and does not prove.** Asserting `newborn.virtualService() == v` would
+     * be worthless here — the fixture *sets* the seat to `v` and the read is `v + (0−0)/w`, so it
+     * restates itself. The seating decision lives in [EntitlementLedger.seat], and
+     * `HeddleControlPlaneTest.theSchedulerSeatsAJoinerAtTheFrontAndSchedulesItFromThere` and
+     * `HeddleNodeTest.aNewbornAndAWakerInOneRoundAreSeatedOnTheSameFront` are what pin it. What is
+     * observable *here*, at the policy, is the consequence the rounding rule used to cost: a
+     * newborn seated exactly on the front is **eligible** in the round it was created in, where the
+     * old `⌈V⌉ = 11` put it at `11 > V' = 120/11` and therefore outside the eligible set — a
+     * penalty, bounded but real. It is eligible and still does not win, which is the whole of what
+     * §10.5 asks for in both directions.
      */
     @Test
-    fun neutralCreationAtFractionalVirtualTimeGivesNoHeadStart() {
+    fun neutralCreationAtFractionalVirtualTimeLandsExactlyOnTheFront() {
         // ev(l) = 11/1 and ev(h) = 98/9, so V = (1·11 + 9·(98/9)) / (1 + 9) = 109/10.
         val light = Sim("l", Weight.ONE, issued = 11L, spent = 11L)
         val heavy = Sim("h", Weight.of(9), issued = 98L, spent = 98L)
@@ -383,29 +402,25 @@ class HeddlePolicyTest {
         val v = parentVirtualTime(listOf(light, heavy))
         assertEquals(Rational.of(109, 10), v, "the fixture must put the parent at a fractional V")
 
-        val newborn = Sim("n", Weight.ONE, initialVirtualTime = AttachmentRecord.neutralInitialVirtualTime(v))
+        val newborn = Sim("n", Weight.ONE, seat = v)
+        val round = listOf(light, heavy, newborn)
 
         assertAll(
-            // §10.5: a newborn never starts behind the front — that is lifetime credit.
+            // No penalty: seated on the front it is eligible immediately. Seating at the retired
+            // ceiling (11) would put it above the round's V and out of the eligible set entirely.
             {
                 assertTrue(
-                    newborn.virtualService() >= v,
-                    "newborn at ${newborn.virtualService()} starts behind the front $v — a head start",
+                    newborn.effectiveVirtualService() <= effectiveParentVirtualTime(round),
+                    "a newborn seated on the front must be eligible in its creation round: " +
+                        "ev=${newborn.effectiveVirtualService()} vs V=${effectiveParentVirtualTime(round)}",
                 )
             },
-            // ...and the rounding is a bounded sliver forward, never an arbitrary penalty.
-            {
-                assertTrue(
-                    newborn.virtualService() - v < Rational.ONE,
-                    "newborn at ${newborn.virtualService()} is more than one virtual unit past the front $v",
-                )
-            },
-            // Behaviourally: it does not take the round it was created in. Seated at the floor
-            // it is the only eligible candidate and wins the grant outright.
+            // No credit either: it still does not take the round it was created in. The heavier
+            // sibling's deadline (98/9 + 1/9 = 11) beats the newborn's (109/10 + 1 = 119/10).
             {
                 assertEquals(
                     "h",
-                    pick(listOf(light, heavy, newborn), config)?.attachment?.value,
+                    pick(round, config)?.attachment?.value,
                     "the newborn must not win the round it was created in",
                 )
             },
@@ -508,8 +523,8 @@ class HeddlePolicyTest {
      * competing set* — puts a **newborn** and a **waking sibling** on exactly the same effective
      * virtual time. Under the "all ACTIVE children" definition the newborn is seated at the
      * mean instead, which hands it precisely the idle credit the §10.6 clamp denies the idler
-     * itself — and *permanently*, since `initialVirtualTime` is immutable while the clamp is a
-     * recomputed local offset.
+     * itself — and durably, since a [Gauge] floor only ever moves *up* under the join while the
+     * clamp is a recomputed local offset.
      */
     @Test
     fun newbornAndWakerLandOnTheSameFront() {
@@ -524,7 +539,7 @@ class HeddlePolicyTest {
 
         // A newborn arrives under the same parent, seated at the same front.
         val creationFront = assertNotNull(front(listOf(runner, sleeper)))
-        val newborn = Sim("n", Weight.ONE, initialVirtualTime = AttachmentRecord.neutralInitialVirtualTime(creationFront))
+        val newborn = Sim("n", Weight.ONE, seat = creationFront)
 
         assertAll(
             { assertEquals(Rational.of(20L), wakeFront, "the waker is clamped to the runner, not to the mean") },

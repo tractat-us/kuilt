@@ -93,8 +93,8 @@ class EligibilityLedgerOrthogonalityTest {
     )
 
     private fun threeToOneTopology() = listOf(
-        AttachmentRecord(eA, root, laneA, Weight.of(3), 0L),
-        AttachmentRecord(eB, root, laneB, Weight.of(1), 0L),
+        AttachmentRecord(eA, root, laneA, Weight.of(3)),
+        AttachmentRecord(eB, root, laneB, Weight.of(1)),
     )
 
     private class Recorder {

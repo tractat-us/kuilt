@@ -77,3 +77,36 @@ public data class Gauge(
     public fun join(other: Gauge): Gauge =
         Gauge(Rational.max(floor, other.floor), maxOf(folded, other.folded))
 }
+
+/**
+ * [units] of service converted to virtual time at weight [w]: `units / w = units * den / num`.
+ * The one place that division happens, so the gauge read and [HeddlePolicy.virtualService] cannot
+ * drift in how they weight a quantity. Overflow-checked (§10.12).
+ */
+internal fun perWeight(units: Long, w: Weight): Rational =
+    Rational.of(checkedMul(units, w.denominator), w.numerator)
+
+/**
+ * The **gross** virtual service an edge of weight [weight] reads at base issuance [baseIssued] —
+ * `floor + (baseIssued − folded) / weight`, or `baseIssued / weight` when the receiver is `null`
+ * and the edge therefore reads from its own origin.
+ *
+ * This is the **one** copy of the gauge read, and it is shared on purpose across the two layers
+ * that must agree on it:
+ *  - [EntitlementLedger.grossVirtualService] evaluates it on stored state, and `delegate` evaluates
+ *    it at a *hypothetical* issuance to compute the checkpoint it writes;
+ *  - [HeddlePolicy.virtualService] evaluates it on a [PolicyEdge] the scheduler assembled.
+ *
+ * A second copy of the expression could drift from the checkpoint that has to agree with it — the
+ * checkpoint asserts a value the read has to reproduce, so the two are one function or they are a
+ * bug waiting.
+ *
+ * @throws ArithmeticException if the exact arithmetic would exceed `Long` (§10.12 — a deterministic
+ *   throw, never a silent wrap; see [CheckedMath]).
+ */
+internal fun Gauge?.grossVirtualServiceAt(baseIssued: Long, weight: Weight): Rational =
+    if (this == null) {
+        perWeight(baseIssued, weight)
+    } else {
+        floor + perWeight(checkedSub(baseIssued, folded), weight)
+    }

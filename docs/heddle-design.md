@@ -205,7 +205,6 @@ public class AttachmentRecord(
     public val parent: GroupId,
     public val child: GroupId,
     public val weight: Long,               // > 0
-    public val initialVirtualTime: VirtualTime,
 )
 ```
 
@@ -463,9 +462,11 @@ agreement with the source.)
 All topology changes are low-frequency control-plane operations (§9) built
 from one primitive — *close, drain, retire, re-generate*:
 
-- **Create** a group under a parent: new record, new PREPARED edge,
-  `initialVirtualTime` = parent's current virtual time (§7.2), ACTIVATE. No
-  ancestor above the parent needs to know. Creating a child mints nothing.
+- **Create** a group under a parent: new record, new PREPARED edge, ACTIVATE.
+  The edge's virtual-time seat is *not* part of the record — the scheduler's seat
+  bump writes it into the replicated gauge at the parent's current virtual time on
+  its next round (§7.2). No ancestor above the parent needs to know. Creating a
+  child mints nothing.
 - **Close** an edge: CLOSING → let reservations finish, entitlement return →
   `outstanding == 0` → RETIRED. History stays queryable forever.
 - **Reparent** `C` from `A` to `B`: prepare `B→C`, close-drain-retire `A→C`,
@@ -526,21 +527,28 @@ deadline distinction; the insight that a group is both schedulable and a
 scheduler) — not a reproduction of any kernel's internals.
 
 It is a **pure function**. Inputs: the immediate children's `EdgeSummary`s,
-the folded live `Demand`, immutable attachment policy (weight,
-`initialVirtualTime`), scheduler-local wake state, and locally available
-holdings. It inspects nothing else — no global queues, no descendants. Purity
+the folded live `Demand`, immutable attachment policy (weight), the replicated
+virtual-time seat (the edge's `Gauge` paired with its base issuance),
+scheduler-local wake state, and locally available holdings. It inspects nothing else — no global queues, no descendants. Purity
 is what makes it testable at virtual time and safe to run divergently on
 partitioned peers: a bad local decision misplaces entitlement; it cannot
 create any.
 
 ### 7.1 Virtual service
 
-For active edge `e` with weight `w(e)` and baseline `b(e) = initialVirtualTime`:
+For active edge `e` with weight `w(e)`, the baseline `b(e)` is read off the edge's
+replicated `Gauge` rather than off its record — a floor paired with the base issuance
+the writer had observed when it asserted that floor:
 
 ```text
-v_raw(e) = b(e) + committedService(e) / w(e)
-         = b(e) + (issued(e) − returned(e)) / w(e)
+gross(e) = floor(e) + (baseIssued(e) − folded(e)) / w(e)     (no gauge ⇒ baseIssued(e) / w(e))
+v_raw(e) = gross(e) − returned(e) / w(e)
 ```
+
+Which is design §7.1's `b(e) + committedService(e) / w(e)` with `b` supplied by the
+gauge — and with the **base** issuance as the fold axis, deliberately not the effective
+one, so relocation credit restores a re-homed child's spendable holdings without also
+advancing its virtual clock.
 
 Because the numerator is *committed* service, a grant advances the child's
 virtual position the moment it is issued — hoarding is charged (the
@@ -551,24 +559,27 @@ rounding.
 
 ### 7.2 Neutral creation and no idle credit
 
-- **Neutral creation:** a new generation's `initialVirtualTime` is the
-  parent's current virtual time — its **front**, defined below — recorded
-  immutably in the record. A newborn starts level with its siblings — no
-  credit for the parent's whole past.
+- **Neutral creation:** a new generation is seated at the parent's current
+  virtual time — its **front**, defined below — so a newborn starts level with
+  its siblings, with no credit for the parent's whole past.
 
-  The parent's virtual time `V = Σ w·ev / Σ w` is a rational and almost never
-  integral, while `initialVirtualTime` is a `Long`, so creation must round.
-  **The rule is the exact ceiling — `initialVirtualTime = ⌈V⌉`** — and the
-  direction is normative, not a matter of taste. Flooring would seat the
-  newborn *behind* the front, and lower virtual service reads as "has had less
-  than its share", so the newborn would be eligible ahead of every sibling and
-  take the next grants outright: a sliver of lifetime credit, which §10.5
-  forbids, accrued systematically by any subtree that churns generations. The
-  ceiling can only ever give up a fraction of a service unit, never claim one,
-  and the deviation is bounded by `0 ≤ ⌈V⌉ − V < 1` virtual unit. It is exact
-  and deterministic, so every replica re-deriving a record from the same `V`
-  lands on the same `Long`. `AttachmentRecord.neutral` / `neutralInitialVirtualTime`
-  are the single implementation of the rule.
+  The seat is **published, not carried** (issue #1752). It is not in the record;
+  it is a `Gauge` in the replicated ledger, written by the scheduler's seat bump
+  on every peer that still sees the edge unseated, and the gauge's componentwise
+  join resolves those readings by `max` on the floor. That matters because `V` is
+  a *local* reading — demand ages out by local receive time and wake clamps are not
+  replicated — so a proposer that froze its own reading into the record made one
+  peer's guess everyone's permanent fact, and a proposer reading a partial view
+  froze a wrong one irrecoverably (issue #1713). A published reading is corrected
+  by a better-informed one instead.
+
+  A gauge floor is an exact `Rational`, so **there is no rounding rule**. The
+  earlier design seated at `⌈V⌉` because the record's seat was a `Long` and the
+  direction carried a fairness sign — flooring would have seated the newborn
+  *behind* the front, the lifetime credit §10.5 forbids, so the ceiling was chosen
+  as the side that can only give a turn up, at a bounded `0 ≤ ⌈V⌉ − V < 1` cost.
+  Neither the credit nor that sliver of penalty exists now: the newborn lands on
+  the front exactly. `EntitlementLedger.seat` is the single implementation.
 - **No unlimited idle credit:** when a child goes from not-demanding to
   demanding, a local wake offset clamps it forward:
 
@@ -631,23 +642,27 @@ rounding.
   sitting *ahead* of everyone pins the front at its own position for every
   newborn seated while nothing competes.
 
-  **An empty surviving set has no front at all, and the answer is not zero.**
-  When no active child survives the exclusion the front is undefined and must
-  be reported as such — `null`, never quietly the origin. Two different
-  situations wear that one face: the legitimate **first** generation under a
-  parent, whose origin seat is genuinely correct, and a peer whose view has
-  simply not applied the siblings yet, for which the origin seat is
-  permanently wrong — the seat is frozen into the committed record, and every
-  peer then applies the same lifetime credit forever. A caller must therefore
-  fence before treating an undefined front as the origin: confirm leader
-  authority (§9 #3 `readIndex()`), confirm this peer's applied prefix has
-  caught up to the fenced index, and fail closed — nothing written, retryable
-  — if either check fails. `GovernedHeddleNode.prepareNeutral` is that fenced
-  compute-and-record; a node with no control plane cannot tell the two apart
-  at all, and must not seat at the origin unless it *knows* the generation is
-  the first. The fence closes the stale-*records* case only: a view that has
-  merged some siblings but not all computes a plausible front over those and
-  freezes it, with nothing anomalous to see (#1713).
+  **An empty surviving set has no front at all, and the front read reports that
+  as `null` rather than quietly as the origin.** Two different situations wear
+  that one face: the legitimate **first** generation under a parent, whose origin
+  seat is genuinely correct, and a peer whose view has simply not applied the
+  siblings yet, for which the origin seat is wrong.
+
+  While the seat was frozen into the committed record that ambiguity was
+  load-bearing and unfixable from inside — one peer's guess became everyone's
+  permanent fact — so creation had to fence on leader authority (§9 #3
+  `readIndex()`) *and* on this peer's applied prefix having caught up, and fail
+  closed otherwise. That fence closed the stale-*records* case only; a view that
+  had merged some siblings but not all computed a plausible front over those and
+  froze it, with nothing anomalous to see (#1713).
+
+  **Publishing the seat dissolves the ambiguity rather than fencing it** (#1752).
+  The seat bump writes `max(front, baseIssued / w)` into the edge's `Gauge`, so a
+  peer with no front seats at the origin — where the edge already reads, pinning
+  it without moving it — and any better-informed peer's higher floor wins the
+  join's `max`. A low reading is absorbed instead of frozen, so the fence and both
+  of its residuals are gone, and a node with no control plane no longer needs to
+  tell the two situations apart.
 
 ### 7.3 Selection
 

@@ -29,14 +29,15 @@ import kotlin.test.assertTrue
  * case. What can go missing is the per-edge counter and gauge traffic, which is exactly the
  * unfenced partial-view case this issue tracks.
  *
- * ## The scheduler here stands in for [HeddlePolicy], and only until it reads the gauge
+ * ## The scheduler here is the real one
  *
- * [scheduleOneRound] reimplements §7.3's front/eligibility/deadline arithmetic over
- * [EntitlementLedger.grossVirtualService]. It has to, for now: [HeddlePolicy.virtualService] still
- * reads `AttachmentRecord.initialVirtualTime`, so the real policy cannot yet see a gauge. **When
- * the policy is rewired, re-point these tests at it and delete this stand-in** — a test shaped like
- * a production call sequence keeps passing after that sequence changes, and no single PR's build
- * notices. The write rules under test are the real ones either way.
+ * [Peer.serve] drives [HeddlePolicy.pick] and [HeddlePolicy.front] against the peer's own view,
+ * with `HeddleNode.seatUnseated`'s bump-before-grant rule in front of them. It used to be a
+ * stand-in that reimplemented §7.3's front/eligibility/deadline arithmetic over
+ * [EntitlementLedger.grossVirtualService], because the policy still read the record's retired
+ * `initialVirtualTime` and could not see a gauge at all; the debt was recorded here and discharged
+ * when the read path was rewired (#1752). What remains modelled is only the *transport* — [World]'s
+ * patch-granular delivery — which is the point of the suite.
  */
 class GaugeWriteRulesTest {
 
@@ -481,7 +482,7 @@ class GaugeWriteRulesTest {
                 nonce = "1752",
             )
             for (name in edges) {
-                val record = AttachmentRecord(id(name), root, GroupId(name), Weight.ONE, initialVirtualTime = 0L)
+                val record = AttachmentRecord(id(name), root, GroupId(name), Weight.ONE)
                 base = base.piece(checkNotNull(base.prepare(record)).delta)
                 base = base.piece(checkNotNull(base.activate(id(name))).delta)
             }
@@ -542,50 +543,72 @@ class GaugeWriteRulesTest {
             return true
         }
 
-        /** `Σ w·ev / Σ w` over [edges] — §7.3 step 2, at unit weights. */
-        fun front(edges: List<String>): Rational {
-            var sum = Rational.ZERO
-            for (e in edges) sum += grossEv(e)
-            return sum / Rational.of(edges.size.toLong())
+        /**
+         * This peer's view assembled as [HeddlePolicy]'s own input — one [PolicyEdge] per name,
+         * everyone demanding, carrying the gauge and the base issuance the real policy reads.
+         */
+        private fun policyEdges(edges: List<String>): List<PolicyEdge> = edges.map { name ->
+            val id = sim.id(name)
+            PolicyEdge(
+                record = checkNotNull(state.record(id)) { "$name has no single record in $this's view" },
+                summary = checkNotNull(state.edge(id)) { "$name is unknown to $this's view" },
+                demand = DEMANDING,
+                gauge = state.gauge(id),
+                baseIssued = state.baseIssuance(id),
+            )
         }
 
+        /** [HeddlePolicy.front] over [edges] as this peer sees them — §7.3 step 2. */
+        fun front(edges: List<String>): Rational =
+            checkNotNull(HeddlePolicy.front(policyEdges(edges))) { "front over a non-empty set is never null" }
+
         /**
-         * §7.3 steps 1–4 for [rounds] rounds with everyone demanding, and the design's
-         * bump-before-grant rule: any gauge-absent candidate is seated from this peer's view before
-         * the round's arithmetic runs, mirroring `refreshWakeClamps`' position at the top of
-         * `schedule`. Stands in for [HeddlePolicy] until the policy reads the gauge.
+         * [rounds] rounds of the **real** [HeddlePolicy.pick] against this peer's view, preceded by
+         * the design's bump-before-grant rule: every gauge-absent edge is seated from this peer's
+         * front before the round's arithmetic runs — all of them excluded from that front together,
+         * exactly as `HeddleNode.seatUnseated` does at the top of `schedule`.
+         *
+         * This used to be a stand-in that reimplemented §7.3 over
+         * [EntitlementLedger.grossVirtualService], because the policy could not yet see a gauge.
+         * It can now (#1752), so these attacks run against the production selection path rather
+         * than a model of it.
          */
         fun serve(edges: List<String>, rounds: Int): Map<String, Int> {
             val tally = HashMap<String, Int>()
             repeat(rounds) {
-                for (e in edges) {
-                    if (gauge(e) == null) {
-                        val rest = edges.filter { it != e }
-                        seatIfAbsent(e, if (rest.isEmpty()) Rational.ZERO else front(rest))
-                    }
+                val unseated = edges.filter { gauge(it) == null }
+                if (unseated.isNotEmpty()) {
+                    val joining = edges.filterNot { it in unseated }
+                    val front = if (joining.isEmpty()) Rational.ZERO else front(joining)
+                    for (e in unseated) seatIfAbsent(e, front)
                 }
-                val winner = scheduleOneRound(edges)
+                val picked = checkNotNull(HeddlePolicy.pick(policyEdges(edges), POLICY, holdings())) {
+                    "$name has supply and every edge demands, so a grant is always due"
+                }
+                val winner = picked.attachment.value
                 grant(winner)
                 tally[winner] = (tally[winner] ?: 0) + 1
             }
             return tally
         }
 
-        /** Eligibility (`ev ≤ V`) then earliest virtual deadline, stable id tie-break. */
-        private fun scheduleOneRound(edges: List<String>): String {
-            val v = front(edges)
-            val eligible = edges.filter { grossEv(it) <= v }.ifEmpty { listOf(edges.minBy { grossEv(it) }) }
-            return eligible.reduce { a, b ->
-                val da = grossEv(a) + Rational.of(QUANTUM)
-                val db = grossEv(b) + Rational.of(QUANTUM)
-                val cmp = da.compareTo(db)
-                if (cmp < 0 || (cmp == 0 && a <= b)) a else b
-            }
-        }
+        /** This peer's own delegable supply at the root — [HeddlePolicy.pick]'s quantum trim. */
+        private fun holdings(): Long = state.holdings(sim.root, ReplicaId(name))
+
+        override fun toString(): String = name
     }
 
     private companion object {
         const val QUANTUM = 1L
+
+        val POLICY = PolicyConfig(quantum = QUANTUM)
+
+        /**
+         * Everyone always competes. [Demand.maximumUsefulGrant] is the quantum, so a grant is
+         * exactly one unit; [Demand.targetOutstanding] is far past anything [serve]'s round counts
+         * can reach, so the candidate gate never closes on its own.
+         */
+        val DEMANDING = Demand(targetOutstanding = 1_000_000L, maximumUsefulGrant = QUANTUM)
 
         /** Ample supply — these tests probe fairness arithmetic, never the holdings gate. */
         const val MINT = 1_000_000L

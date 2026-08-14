@@ -241,8 +241,8 @@ class GaugeTest {
     /** A divergent record leaves no single weight to divide by, so the reads refuse. */
     @Test
     fun aDivergentRecordHasNoVirtualService() {
-        val a = AttachmentRecord(EDGE, PARENT, CHILD, Weight.ONE, initialVirtualTime = 0L)
-        val b = AttachmentRecord(EDGE, PARENT, GroupId("other"), Weight.ONE, initialVirtualTime = 0L)
+        val a = AttachmentRecord(EDGE, PARENT, CHILD, Weight.ONE)
+        val b = AttachmentRecord(EDGE, PARENT, GroupId("other"), Weight.ONE)
         val s = EntitlementLedger.of(records = mapOf(EDGE to setOf(a, b)), gauges = mapOf(EDGE to Gauge(Rational.ONE, 0L)))
         assertAll(
             { assertNull(s.grossVirtualService(EDGE)) },
@@ -384,7 +384,7 @@ class GaugeTest {
         issuedRelocIn: Long = 0L,
         gauge: Gauge? = null,
     ): EntitlementLedger = EntitlementLedger.of(
-        records = mapOf(EDGE to setOf(AttachmentRecord(EDGE, PARENT, CHILD, weight, initialVirtualTime = 0L))),
+        records = mapOf(EDGE to setOf(AttachmentRecord(EDGE, PARENT, CHILD, weight))),
         issued = counter(issued),
         returned = counter(returned),
         issuedRelocIn = counter(issuedRelocIn),

@@ -26,7 +26,7 @@ class EntitlementLedgerLifecycleTest {
 
     private fun edge(id: String) = AttachmentId(id)
     private fun record(id: String, parent: GroupId, child: GroupId, weight: Weight = Weight.ONE) =
-        AttachmentRecord(edge(id), parent, child, weight, 0L)
+        AttachmentRecord(edge(id), parent, child, weight)
 
     /** Apply a (necessarily non-null) mutator patch onto a ledger. */
     private fun EntitlementLedger.applying(patch: Patch<EntitlementLedger>?): EntitlementLedger {

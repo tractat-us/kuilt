@@ -980,7 +980,7 @@ quantifies over (`enrolledReplicas()` reads it back); only a peer may depart its
 
     // Mint and reshape are serialized through the Raft log — each returns a structured outcome.
     check(node.mint(self, 100L) is ControlOutcome.Applied)
-    node.prepare(AttachmentRecord(edge, root, leaf, Weight.ONE, initialVirtualTime = 0L))
+    node.prepare(AttachmentRecord(edge, root, leaf, Weight.ONE))
     node.activate(edge)
 
     // The spend path is coordination-free — it issues no consensus messages.

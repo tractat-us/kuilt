@@ -261,8 +261,8 @@ public class EntitlementLedger private constructor(
             .mapNotNull { edge(it) }
 
     /**
-     * The single [AttachmentRecord] for [id] — its parent, child, weight, and virtual-time
-     * origin — or `null` if [id] is unknown *or divergent* (two conflicting records under
+     * The single [AttachmentRecord] for [id] — its parent, child and weight — or `null` if
+     * [id] is unknown *or divergent* (two conflicting records under
      * one id, which a healthy ledger never has; see [validate]). The parent-facing read a
      * scheduler pairs with [edge]'s [EdgeSummary] to build a policy input.
      */
@@ -337,10 +337,8 @@ public class EntitlementLedger private constructor(
      * lands. Sharing the arithmetic is deliberate — a checkpoint computed by a second copy of this
      * expression could drift from the read that has to agree with it.
      */
-    private fun grossVirtualServiceAt(id: AttachmentId, w: Weight, issuance: Long): Rational {
-        val g = gauges[id] ?: return perWeight(issuance, w)
-        return g.floor + perWeight(checkedSub(issuance, g.folded), w)
-    }
+    private fun grossVirtualServiceAt(id: AttachmentId, w: Weight, issuance: Long): Rational =
+        gauges[id].grossVirtualServiceAt(issuance, w)
 
     /**
      * The [Lifecycle] of [id], or `null` if [id] is entirely unknown to this ledger.
@@ -932,6 +930,16 @@ public class EntitlementLedger private constructor(
      * `GaugeWriteRulesTest` shows reintroducing the full double count. That is why [drainWitness]
      * co-carries the gauge, and it is the standing constraint on any future boot-time republish of
      * authored base slots (see #1783).
+     *
+     * ## Seat before you delegate — this method will not do it for you
+     *
+     * Delegating down an edge that carries **no** gauge silently seats it at its own origin: the
+     * checkpoint written here is `grossEv(issuedAfter)`, which for an unseated edge is
+     * `issuedAfter / w`, and [seat] refuses forever afterwards because a gauge now exists. The join
+     * cannot repair it either — `max` on a floor that is already the minimum is a no-op. So a
+     * caller driving this must seat first; `HeddleNode.settleJoiners` does, and `HeddleNode.pickOne`
+     * additionally refuses a gauge-absent edge as a candidate so a mid-round `Activate` cannot slip
+     * through the gap.
      */
     public fun delegate(r: ReplicaId, edge: AttachmentId, amount: Long): Patch<EntitlementLedger>? {
         require(amount >= 1L) { "delegate amount must be positive, was $amount" }
@@ -1547,14 +1555,6 @@ private fun counterValue(counters: Map<AttachmentId, GCounter>, id: AttachmentId
 /** The single `(id, r)` slot value, or 0. */
 private fun slot(counters: Map<AttachmentId, GCounter>, id: AttachmentId, r: ReplicaId): Long =
     counters[id]?.count(r) ?: 0L
-
-/**
- * [units] of service converted to virtual time at weight [w]: `units / w = units * den / num`.
- * The one place that division happens, so the gauge read and [HeddlePolicy.virtualService] cannot
- * drift in how they weight a quantity. Overflow-checked (§10.12).
- */
-private fun perWeight(units: Long, w: Weight): Rational =
-    Rational.of(checkedMul(units, w.denominator), w.numerator)
 
 /** A `GCounter` carrying just the `(id, r)` slot bumped to its new absolute value (overflow-checked). */
 private fun bumpedSlot(counters: Map<AttachmentId, GCounter>, id: AttachmentId, r: ReplicaId, by: Long): GCounter =

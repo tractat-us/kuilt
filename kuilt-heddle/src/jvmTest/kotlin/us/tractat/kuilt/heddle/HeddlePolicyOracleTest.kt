@@ -69,9 +69,11 @@ class HeddlePolicyOracleTest {
             val holdings = (rng.nextInt(20) + 1).toLong()
             val edges = children.map { c ->
                 PolicyEdge(
-                    AttachmentRecord(AttachmentId(c.id), GroupId("root"), GroupId(c.id), c.weight, c.ivt),
+                    AttachmentRecord(AttachmentId(c.id), GroupId("root"), GroupId(c.id), c.weight),
                     EdgeSummary(AttachmentId(c.id), c.issued, c.returned, c.spent),
                     if (c.demanding) Demand(targetOutstanding = 30L, maximumUsefulGrant = 15L) else Demand.NONE,
+                    gauge = Gauge(Rational.of(c.ivt), folded = 0L),
+                    baseIssued = c.issued,
                 )
             }
 
@@ -113,10 +115,20 @@ class HeddlePolicyOracleTest {
             val capRoom = if (config.perChildOutstandingCap == Long.MAX_VALUE) Long.MAX_VALUE else config.perChildOutstandingCap - outstanding
             val q = listOf(config.quantum, need, e.demand.maximumUsefulGrant, holdings, capRoom).min()
             if (q <= 0L) return@mapNotNull null
-            val committed = e.summary.committedService
             val w = e.record.weight
-            // ev = ivt + committed * den / num  (offset is ZERO in this scenario)
-            val ev = Rat.of(e.record.initialVirtualTime) + Rat.of(committed * w.denominator, w.numerator)
+            // ev = grossEv − returned/w, with grossEv = floor + (baseIssued − folded)/w (issue #1752);
+            // an absent gauge means the edge reads from its own origin. Offset is ZERO in this scenario.
+            // Re-derived here from the gauge's own fields rather than from any kuilt-heddle helper, so
+            // the oracle stays an independent second implementation of the read.
+            val gross = e.gauge.let { g ->
+                if (g == null) {
+                    Rat.of(e.baseIssued * w.denominator, w.numerator)
+                } else {
+                    Rat.of(g.floor.numerator, g.floor.denominator) +
+                        Rat.of((e.baseIssued - g.folded) * w.denominator, w.numerator)
+                }
+            }
+            val ev = gross + Rat.of(-e.summary.returned * w.denominator, w.numerator)
             Cand(e.record.id, q, ev, w)
         }
         if (cands.isEmpty()) return null

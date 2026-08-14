@@ -42,7 +42,7 @@ internal fun sampleEntitlementLedgerLifecycle() {
 
     var ledger = EntitlementLedger.bootstrap(root, mapOf(alice to 100L), nonce = "genesis")
     // prepare then activate the edge, then delegate 10 units down it.
-    ledger = ledger.piece(checkNotNull(ledger.prepare(AttachmentRecord(e, root, leaf, Weight.ONE, 0L))))
+    ledger = ledger.piece(checkNotNull(ledger.prepare(AttachmentRecord(e, root, leaf, Weight.ONE))))
     ledger = ledger.piece(checkNotNull(ledger.activate(e)))
     ledger = ledger.piece(checkNotNull(ledger.delegate(alice, e, 10L)))
 
@@ -67,7 +67,7 @@ internal fun CoroutineScope.sampleHeddleNode(seam: Seam) {
     val root = GroupId("root")
     val leaf = GroupId("leaf")
     val self = ReplicaId(seam.selfId.value)
-    val e = AttachmentRecord(AttachmentId("root→leaf"), root, leaf, Weight.ONE, initialVirtualTime = 0L)
+    val e = AttachmentRecord(AttachmentId("root→leaf"), root, leaf, Weight.ONE)
 
     val node = heddleStatic(
         seam = seam,
@@ -123,7 +123,7 @@ internal suspend fun CoroutineScope.sampleHeddleGoverned(seam: Seam, raft: us.tr
 
     // Mint and reshape are serialized through the Raft log — each returns a structured outcome.
     check(node.mint(self, 100L) is ControlOutcome.Applied)
-    node.prepare(AttachmentRecord(edge, root, leaf, Weight.ONE, initialVirtualTime = 0L))
+    node.prepare(AttachmentRecord(edge, root, leaf, Weight.ONE))
     node.activate(edge)
 
     // The spend path is coordination-free — it issues no consensus messages.
@@ -148,9 +148,11 @@ internal fun sampleWeightOrdering() {
 @Suppress("unused")
 internal fun samplePolicyPick() {
     fun edge(id: String, weight: Weight, issued: Long) = PolicyEdge(
-        record = AttachmentRecord(AttachmentId(id), GroupId("root"), GroupId(id), weight, initialVirtualTime = 0L),
+        record = AttachmentRecord(AttachmentId(id), GroupId("root"), GroupId(id), weight),
         summary = EdgeSummary(AttachmentId(id), issued = issued, returned = 0L, spent = issued),
         demand = Demand(targetOutstanding = 100L, maximumUsefulGrant = 100L),
+        gauge = null,                      // nothing has seated it yet, so it reads from its own origin
+        baseIssued = issued,               // the gauge's fold axis — the base counter, not the effective one
     )
 
     // Both start level (no service yet); the heavier-weighted child has the earliest
@@ -166,9 +168,11 @@ internal fun samplePolicyPick() {
     val idle = HeddlePolicy.pick(
         edges = listOf(
             PolicyEdge(
-                AttachmentRecord(AttachmentId("idle"), GroupId("root"), GroupId("idle"), Weight.ONE, 0L),
+                AttachmentRecord(AttachmentId("idle"), GroupId("root"), GroupId("idle"), Weight.ONE),
                 EdgeSummary(AttachmentId("idle"), 0L, 0L, 0L),
                 Demand.NONE,
+                gauge = null,
+                baseIssued = 0L,
             ),
         ),
         config = PolicyConfig(quantum = 6L),

@@ -108,8 +108,8 @@ class HeddleAdmissionControlTest {
 
     /** root → {laneA weight 3 (leaf), laneB weight 1 (leaf)}. */
     private fun threeToOneTopology() = listOf(
-        AttachmentRecord(eA, root, laneA, Weight.of(3), 0L),
-        AttachmentRecord(eB, root, laneB, Weight.of(1), 0L),
+        AttachmentRecord(eA, root, laneA, Weight.of(3)),
+        AttachmentRecord(eB, root, laneB, Weight.of(1)),
     )
 
     /** Thread-safe tally of completed task ids (an Op may complete off the test thread). */
@@ -389,8 +389,8 @@ class HeddleAdmissionControlTest {
 
         // Mint + build the 3:1 tree through the governed control plane, then delegate down.
         assertIs<ControlOutcome.Applied>(governed.mint(self, 40L))
-        assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(eA, root, laneA, Weight.of(3), 0L)))
-        assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(eB, root, laneB, Weight.of(1), 0L)))
+        assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(eA, root, laneA, Weight.of(3))))
+        assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(eB, root, laneB, Weight.of(1))))
         assertIs<ControlOutcome.Applied>(governed.activate(eA))
         assertIs<ControlOutcome.Applied>(governed.activate(eB))
         governed.advertise(eA, hungry)

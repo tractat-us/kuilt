@@ -48,7 +48,7 @@ class EntitlementLedgerRelocationTest {
     private val e3 = AttachmentId("e3") // root → g  (the legal reparent generation)
 
     private fun rec(id: AttachmentId, parent: GroupId, child: GroupId) =
-        AttachmentRecord(id, parent, child, Weight.ONE, 0L)
+        AttachmentRecord(id, parent, child, Weight.ONE)
 
     /**
      * The D1 strand **without** through-service: `e1` retired by a lagged proposer while
