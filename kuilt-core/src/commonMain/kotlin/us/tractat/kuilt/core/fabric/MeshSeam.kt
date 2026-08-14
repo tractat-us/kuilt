@@ -191,30 +191,6 @@ private class Link(
 )
 
 /**
- * The winner of a duplicate-link contest, carrying forward an attestation [displaced] had and this
- * link does not — so an **unattested** link never erases an attestation the host already verified,
- * merely by winning the dedup tiebreak (#2357).
- *
- * The tiebreak itself is deliberately untouched. It is a pure function of the two nonces precisely
- * so that **both ends derive the same survivor with no coordination**, and vetoing a displacement on
- * attestation would break that: on a duplicate dial where one end accepted (and stamped a principal)
- * and the other dialed (and did not), each end would veto in favour of a *different* link and close
- * the one its peer kept — the half-open failure the nonce rule exists to prevent, in both directions
- * at once. Carrying the principal onto the survivor changes only what the roster reports, so the two
- * ends still agree on which connection lives.
- *
- * It is also the more honest answer for two *honest* ends. The verification really happened; nothing
- * about the peer changed because a coin landed the other way. Before this, whether a peer showed as
- * attested could turn on that coin.
- *
- * An attested incoming link still supersedes — `principal != null` short-circuits — so a genuine
- * reconnect that re-verifies to a new subject updates the roster exactly as before.
- */
-private fun Link.carryingAttestationOf(displaced: Link): Link =
-    if (principal != null || displaced.principal == null) this
-    else Link(remoteId, conn, linkNonce, displaced.principal)
-
-/**
  * Build a fully-connected N-peer mesh [Seam] from a set of raw point-to-point connections.
  *
  * For each [Connection] in [connections], [meshSeam] exchanges a [MeshHello] preamble (this peer's id plus a
@@ -373,12 +349,7 @@ private suspend fun buildMesh(
         val existing = winners[link.remoteId]
         when {
             existing == null -> winners[link.remoteId] = link
-            // Same rule as `admitOrReject`'s displacement branch (#2357): the survivor inherits an
-            // attestation the loser had. Routed through one helper so the two paths cannot drift.
-            link.linkNonce < existing.linkNonce -> {
-                losers += existing
-                winners[link.remoteId] = link.carryingAttestationOf(existing)
-            }
+            link.linkNonce < existing.linkNonce -> { losers += existing; winners[link.remoteId] = link }
             else -> losers += link
         }
     }
@@ -622,14 +593,23 @@ private class MeshSeam(
         val existing = links[link.remoteId]
         when {
             existing == null -> { links[link.remoteId] = link; publishRosters(); null }
-            // Displacement keeps the peer set identical, and may REFRESH the peer's attestation —
-            // but never clear it. An incoming link the host verified as nothing inherits the
-            // displaced link's principal rather than dropping it (#2357, [carryingAttestationOf]).
-            link.linkNonce < existing.linkNonce -> {
-                links[link.remoteId] = link.carryingAttestationOf(existing)
-                publishRosters()
-                existing.conn
-            }
+            // Displacement keeps the peer set identical but may change the peer's attestation —
+            // including to NONE, and that is deliberate (#2357). The displaced conn is closed, so
+            // after this there is exactly one live link for the id; the roster is derived from that
+            // link and must describe IT. Having the survivor inherit the loser's principal was tried
+            // and reverted: it keeps the entry alive at the price of asserting a verification for a
+            // connection the host verified as nothing, while routing follows the survivor — a
+            // fail-open for any consumer that gates a send on the roster.
+            //
+            // Refusing the displacement instead is not available here. The tiebreak is a pure
+            // function of the two nonces precisely so both ends derive the same survivor with no
+            // coordination; a veto on local attestation would have each end keep a different link
+            // and close the one its peer kept, which is the half-open failure the nonce rule exists
+            // to prevent, in both directions at once. So an unattested link CAN still take an
+            // attested peer's id here, and the defence is deployment policy — unlike `RoomAuthorizer`,
+            // `LinkAdmission` receives the principal and runs BEFORE this lottery. `RoomHubSeam`
+            // refuses in code instead, because it holds both links live and can.
+            link.linkNonce < existing.linkNonce -> { links[link.remoteId] = link; publishRosters(); existing.conn }
             else -> link.conn
         }
     }
@@ -788,13 +768,7 @@ private class MeshSeam(
             addAll(links.keys)
         }
 
-    /**
-     * Attested principals of the live links. MUST be called with [lock] held (reads [links]).
-     *
-     * A live link's principal is the one the host verified on *that* connection, or — when it
-     * displaced a duplicate that was attested and it is not — the one carried forward from the link
-     * it displaced ([carryingAttestationOf], #2357).
-     */
+    /** Attested principals of the live links. MUST be called with [lock] held (reads [links]). */
     private fun buildRoster(): Map<PeerId, Principal> =
         buildMap {
             links.values.forEach { link -> link.principal?.let { put(link.remoteId, it) } }
