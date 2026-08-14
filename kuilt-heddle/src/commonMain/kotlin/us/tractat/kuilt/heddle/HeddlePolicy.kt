@@ -2,16 +2,25 @@ package us.tractat.kuilt.heddle
 
 /**
  * One immediate child, as the policy sees it: the immutable attachment metadata
- * ([record] — weight and virtual-time origin), the parent-facing accounting
- * ([summary] — issued/returned/spent), the child's advertised [demand], and the
- * scheduler-local wake clamp ([virtualOffset]).
+ * ([record] — parent, child and weight), the parent-facing accounting ([summary] —
+ * issued/returned/spent), the child's advertised [demand], the replicated virtual-time seat
+ * ([gauge] paired with [baseIssued]), and the scheduler-local wake clamp ([virtualOffset]).
  *
  * The record and summary must describe the **same** edge; [HeddlePolicy] rejects a
  * mismatch rather than schedule against inconsistent inputs.
  *
- * @property record the edge's weight and `initialVirtualTime` (design §7.1).
+ * @property record the edge's parent, child and weight (design §7.1).
  * @property summary the edge's cumulative issued/returned/spent (design §4.5).
  * @property demand how much more the child could usefully take (design §6).
+ * @property gauge the edge's replicated virtual-time seat, or `null` when nothing has seated it
+ *   yet — in which case the edge reads from its own origin, exactly as an unseated edge should.
+ *   Absence is meaningful (it is the seat-bump predicate, see [EntitlementLedger.seat]), so it is
+ *   a required parameter: a caller assembling a policy input has to say which it holds.
+ * @property baseIssued the edge's **base** issuance — the [Gauge]'s fold axis, and deliberately
+ *   *not* [EdgeSummary.issued], which is the effective value and adds relocation credit. Reading
+ *   the effective value here would make a relocation-receiving edge appear to have consumed its
+ *   whole re-homed strand the instant it arrived (issue #1752, F2); it is also what makes the seat
+ *   arrival-order independent. Necessarily `0 ≤ baseIssued ≤ summary.issued`.
  * @property virtualOffset scheduler-local forward clamp applied on wake so an idle
  *   child cannot bank a backlog of virtual time (design §7.2). `ZERO` for a child
  *   that never slept; computed by [HeddlePolicy.wakeOffset] on an idle→demand edge —
@@ -24,11 +33,19 @@ public data class PolicyEdge(
     public val record: AttachmentRecord,
     public val summary: EdgeSummary,
     public val demand: Demand,
+    public val gauge: Gauge?,
+    public val baseIssued: Long,
     public val virtualOffset: Rational = Rational.ZERO,
 ) {
     init {
         require(record.id == summary.attachment) {
             "PolicyEdge record ${record.id} and summary ${summary.attachment} describe different edges"
+        }
+        require(baseIssued >= 0L) { "PolicyEdge baseIssued must be non-negative, was $baseIssued" }
+        require(baseIssued <= summary.issued) {
+            "PolicyEdge baseIssued $baseIssued exceeds effective issued ${summary.issued} on ${record.id} — " +
+                "the effective value is the base plus non-negative relocation credit, so this pair cannot " +
+                "have come from one ledger view"
         }
     }
 }
@@ -151,18 +168,31 @@ public object HeddlePolicy {
     }
 
     /**
-     * Raw virtual service of an edge, `b + committedService / weight` (design §7.1),
-     * where `b = initialVirtualTime` and `committedService = issued − returned`.
-     * Because the numerator is *committed* (not merely spent) service, a grant advances
-     * the child the instant it is issued — hoarding is charged — and a return walks it
-     * back. Exact rational; never rounded.
+     * Raw virtual service of an edge, design §7.1's `b + committedService / weight` — read off the
+     * replicated [Gauge] rather than off any field of the record (issue #1752):
+     *
+     * ```
+     * grossEv = floor + (baseIssued − folded) / w      (no gauge ⇒ baseIssued / w)
+     * ev      = grossEv − returned / w
+     * ```
+     *
+     * `b` is the gauge's [floor][Gauge.floor], carried with the issuance the writer had actually
+     * observed when it asserted it, so a stale seat is self-limiting rather than a permanent lie;
+     * an edge nothing has seated yet reads from its own origin. The numerator stays *committed*
+     * (not merely spent) service, so a grant advances the child the instant it is issued —
+     * hoarding is charged — and a return walks it back. Exact rational; never rounded, at either
+     * end: the seat is a [Rational] too, which is why the old `⌈V⌉` creation rule is gone.
+     *
+     * **This is the whole of the policy's virtual-time input.** It shares
+     * [grossVirtualServiceAt] with [EntitlementLedger.grossVirtualService] and with the checkpoint
+     * `delegate` writes, so the value the writer asserted and the value the scheduler reads are
+     * one expression.
+     *
+     * @throws ArithmeticException if the exact arithmetic would exceed `Long` (§10.12).
      */
-    public fun virtualService(record: AttachmentRecord, summary: EdgeSummary): Rational {
-        val committed = summary.committedService
-        val weight = record.weight
-        // committed / (num/den) = committed * den / num
-        return Rational.of(record.initialVirtualTime) +
-            Rational.of(checkedMul(committed, weight.denominator), weight.numerator)
+    public fun virtualService(edge: PolicyEdge): Rational {
+        val weight = edge.record.weight
+        return edge.gauge.grossVirtualServiceAt(edge.baseIssued, weight) - perWeight(edge.summary.returned, weight)
     }
 
     /**
@@ -182,8 +212,8 @@ public object HeddlePolicy {
     /**
      * The parent's **current virtual time** — the front of the set of children competing under
      * it right now (design §7.2, §7.3 step 2). This is the value a *joiner* is seated at, under
-     * one rule for both kinds of joiner: [AttachmentRecord.neutral] rounds it into a newborn's
-     * `initialVirtualTime`, and [wakeOffset] clamps a waking child up to it.
+     * one rule for both kinds of joiner: [EntitlementLedger.seat] writes it into a newborn's
+     * [Gauge] floor, and [wakeOffset] clamps a waking child up to it.
      *
      * The set is the **demanding candidates** ([isDemanding]), not every ACTIVE child. The two
      * differ the moment a sibling idles, and the difference has a fairness sign in *both*
@@ -194,28 +224,33 @@ public object HeddlePolicy {
      * mean past the real front and the newborn takes an arbitrary penalty. The mean over the set
      * the joiner will actually compete in is neutral by construction.
      *
-     * [excluding] names edges that must not count toward the front. A newborn is excluded for
-     * free — it is not an edge yet — but a waker is already ACTIVE and already demanding by the
-     * time the clamp is computed, so it has to be named, or it drags the front back toward its
-     * own stale virtual service and banks the credit anyway. Co-wakers must be named for the
-     * same reason: two siblings waking together would otherwise average each other's staleness
-     * into the front and both keep it.
+     * [excluding] names edges that must not count toward the front. **Both** kinds of joiner have
+     * to be named now (issue #1752): a waker is already ACTIVE and already demanding by the time
+     * the clamp is computed, and since the seat moved out of the record into the [Gauge] an
+     * unseated newborn is an ordinary ACTIVE edge too — reading from its own origin, which is the
+     * furthest back anything can read, so leaving it in would drag the front down to meet it and
+     * hand it exactly the lifetime credit the seat exists to deny. Co-joiners must be named for
+     * the same reason: two siblings joining together would otherwise average each other's
+     * origin-or-stale reading into the front and both keep it.
      *
      * When nothing in the surviving set is demanding, the fallback is the **maximum** effective
      * virtual service rather than the mean. §10.5 is one-directional — credit is forbidden, a
      * sliver of penalty is merely undesirable — so the conservative choice is the bound that can
      * only ever give up.
      *
-     * **Not derivable from replicated state, by design.** Demand ages out by *local* receive
-     * time and [PolicyEdge.virtualOffset] is deliberately not replicated, so two peers can and
-     * do compute different fronts. That is safe only because creation agrees by **carriage, not
-     * derivation**: the finished record travels in the log entry and every peer applies the same
-     * bytes. Which peer's reading wins is then a question of who proposes: the consensus log
-     * orders concurrent proposals first-wins and refuses the loser
-     * ([GovernedHeddleNode.prepareNeutral]), while the ungoverned [HeddleNode.prepare] has no
-     * serializer and leaves the id bound to a divergent record *set*, starving the child. Drive a
-     * generation from one proposer either way — a race between two legitimate fronts is not a seat
-     * anyone can predict.
+     * **Not derivable from replicated state, by design — and no longer required to be.** Demand
+     * ages out by *local* receive time and [PolicyEdge.virtualOffset] is deliberately not
+     * replicated, so two peers can and do compute different fronts. That used to be safe only by
+     * **carriage**: the finished record travelled in the log entry, one proposer's reading became
+     * everyone's permanent fact, and a proposer reading a partial view froze a wrong one for good
+     * (issue #1713). The seat now goes into the [Gauge], whose join resolves by `max` on the floor
+     * rather than preserving the reading — so every peer that still sees the edge unseated may
+     * publish its own front and the readings converge instead of racing (issue #1752). A stale
+     * peer's low reading is absorbed; a peer that has seen more wins.
+     *
+     * What that does *not* dissolve is intent divergence: two ungoverned [HeddleNode.prepare]
+     * calls supplying different *weights* still union to a divergent record set and starve the
+     * child. Drive a generation from one proposer for that reason — not for the seat's sake.
      *
      * @param edges the parent's immediate children.
      * @param excluding edges that must not count toward the front — the joiner, plus any
@@ -252,7 +287,7 @@ public object HeddlePolicy {
 
     /** Effective virtual service: [virtualService] plus the scheduler-local wake clamp. */
     private fun effectiveVirtualService(edge: PolicyEdge): Rational =
-        virtualService(edge.record, edge.summary) + edge.virtualOffset
+        virtualService(edge) + edge.virtualOffset
 
     /**
      * The trimmed quantum for [edge] this round: the smallest of the configured quantum,

@@ -319,7 +319,7 @@ class HeddleFenceTest {
     fun aStragglerReleaseOnAFencedEdgeHasNoDataPlaneWriterAtAll() {
         val p3 = ReplicaId("p3")
         var l = EntitlementLedger.ZERO.piece(EntitlementLedger.bootstrap(root, mapOf(p3 to 10L), nonce = "genesis"))
-        l = l.piece(l.prepare(AttachmentRecord(e1, root, g, Weight.ONE, 0L))!!.delta)
+        l = l.piece(l.prepare(AttachmentRecord(e1, root, g, Weight.ONE))!!.delta)
         l = l.piece(l.activate(e1)!!.delta)
         l = l.piece(l.delegate(p3, e1, 10L)!!.delta)
         assertNotNull(l.release(p3, e1, 1L), "while e1 is live, release across it is legal")
@@ -444,11 +444,11 @@ class HeddleFenceTest {
             applied(sim, backgroundScope) { planes.getValue(id).submit(ControlCommand.Enroll(ReplicaId(id.value))) }
         }
         applied(sim, backgroundScope) { opener.submit(ControlCommand.Mint(p3, 10L)) }
-        applied(sim, backgroundScope) { opener.submit(ControlCommand.Prepare(AttachmentRecord(e1, root, g, Weight.ONE, 0L))) }
+        applied(sim, backgroundScope) { opener.submit(ControlCommand.Prepare(AttachmentRecord(e1, root, g, Weight.ONE))) }
         applied(sim, backgroundScope) { opener.submit(ControlCommand.Activate(e1)) }
         applied(sim, backgroundScope) { opener.submit(ControlCommand.Close(e1)) }
         applied(sim, backgroundScope) { opener.submit(ControlCommand.Retire(e1, witness = null)) }
-        applied(sim, backgroundScope) { opener.submit(ControlCommand.Prepare(AttachmentRecord(e3, root, g, Weight.ONE, 0L))) }
+        applied(sim, backgroundScope) { opener.submit(ControlCommand.Prepare(AttachmentRecord(e3, root, g, Weight.ONE))) }
         applied(sim, backgroundScope) { opener.submit(ControlCommand.Activate(e3)) }
         sinks.values.forEach { it.forceMerge(EntitlementLedger.of(issued = mapOf(e1 to GCounter.of(p3 to 10L)))) }
 
@@ -494,7 +494,7 @@ class HeddleFenceTest {
         )
         val leaf = GroupId("leaf")
         assertIs<ControlOutcome.Applied>(governed.mint(self, 1_000L))
-        assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(e1, root, leaf, Weight.ONE, 0L)))
+        assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(e1, root, leaf, Weight.ONE)))
         assertIs<ControlOutcome.Applied>(governed.activate(e1))
         governed.advertise(e1, Demand(targetOutstanding = 500L, maximumUsefulGrant = 500L))
 
@@ -614,7 +614,7 @@ class HeddleFenceTest {
             incarnation = "cross-parent",
         )
         fun rec(id: AttachmentId, parent: GroupId, child: GroupId) =
-            AttachmentRecord(id, parent, child, Weight.ONE, 0L)
+            AttachmentRecord(id, parent, child, Weight.ONE)
         suspend fun commit(command: ControlCommand) =
             assertIs<ControlOutcome.Applied>(plane.submit(command), "expected Applied for $command")
 
@@ -687,7 +687,7 @@ class HeddleFenceTest {
         private val e3: AttachmentId,
     ) {
         fun rec(id: AttachmentId, parent: GroupId, child: GroupId) =
-            AttachmentRecord(id, parent, child, Weight.ONE, 0L)
+            AttachmentRecord(id, parent, child, Weight.ONE)
 
         /**
          * A **second peer** on the same committed log: its own control plane, its own data-plane view,

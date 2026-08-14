@@ -221,9 +221,9 @@ public class GovernedHeddleNode internal constructor(
 
     /**
      * [parent]'s current virtual time on this peer ([HeddleNode.parentVirtualTime]) — an
-     * **unfenced** read of the gossip-merged view, for diagnostics and for a caller building its own
-     * record. To *create* a generation at it, use [prepareNeutral], which fences the origin case
-     * (issue #1713); a `null` here is not by itself evidence that [parent] has no children.
+     * **unfenced** read of the gossip-merged view, for diagnostics. A `null` is not by itself
+     * evidence that [parent] has no children, and nothing needs it to be: seating is the
+     * scheduler's [Gauge] bump, not something a caller carries into a record (issue #1752).
      */
     public fun parentVirtualTime(parent: GroupId): Rational? = node.parentVirtualTime(parent)
 
@@ -247,62 +247,27 @@ public class GovernedHeddleNode internal constructor(
         control.submit(ControlCommand.Prepare(record), timeout)
 
     /**
-     * Introduce a generation seated **neutrally** — at [parent]'s current virtual time, read here
-     * and rounded by the one documented rule `initialVirtualTime = ⌈V⌉`
-     * ([AttachmentRecord.neutral]) — and serialize it through the log. This is the supported way
-     * to create a generation under a parent that has already run (design §7.2, §10.5; issue
-     * #1688): building the record by hand at a literal `0` hands the newborn the parent's entire
-     * past as lifetime credit, and it takes the next grants outright.
+     * Introduce a new attachment generation from its parts, serialized through the log — the same
+     * act as [prepare], spelled without making the caller build the record.
      *
-     * **An origin seat is fenced, never simply trusted (issue #1713).** [HeddlePolicy.front]
-     * returns `null` exactly when no active child survives, and that is *two* situations wearing
-     * one face: the legitimate **first generation** under a parent — whose origin seat `0` is
-     * correct, it *is* that parent's virtual-time origin — and a view that has not yet applied the
-     * siblings' `Prepare`/`Activate` entries. Guessing wrong is unrecoverable, because the seat is
-     * frozen into the committed bytes and every peer then applies the same wrong lifetime credit
-     * permanently. So before seating at the origin this checks two things, in order:
-     *  1. the §9 #3 [readIndex()][HeddleControlPlane.fenceReadIndex] leader-authority fence — the
-     *     same one [reconcile] uses; a deposed or partitioned proposer is refused; then
-     *  2. this peer's **applied prefix** must have caught up to the fenced index. `applyEntry`
-     *     advances it for every entry the log *delivers* — decodable or not — so within the
-     *     application-visible stream it tracks the prefix faithfully; behind ⇒ the empty view is
-     *     *stale*, not a first generation ⇒ refused. (It does **not** see entries Raft withholds from
-     *     [RaftNode.committedFrom]; that is the second residual below, and it is why this gate can
-     *     refuse conservatively rather than wrongly admit.)
+     * **No seat is proposed, and none is fenced** (issue #1752). This method used to read
+     * [parentVirtualTime] here and freeze `⌈V⌉` into the committed bytes, which is why it carried
+     * a `readIndex()` authority fence and an applied-prefix freshness gate: a proposer reading a
+     * view that had not yet applied its siblings would otherwise have frozen an origin seat that
+     * every peer then applied permanently (issue #1713). A record no longer carries a seat, so a
+     * stale proposer's `Prepare` is inert, there is nothing left to fence, and both of that
+     * fence's documented residuals — the unfenced *partial*-view case, and the false refusal right
+     * after an election, when a withheld internal entry legitimately leaves the applied prefix
+     * behind the fenced index — go with it.
      *
-     * Both are [ControlConflict.Refused] at [ControlOutcome.NOT_COMMITTED] — fail-closed, nothing
-     * is written, and the caller may retry. A **non-null** front is used as read: it is fenced by
-     * nothing, which is the first residual below.
+     * Where the child starts competing is decided afterwards and by everybody: [schedule]'s seat
+     * bump writes the [Gauge] at the front the edge is actually joining, on every peer that still
+     * sees it unseated, and the componentwise join resolves those readings by `max` instead of
+     * preserving one of them.
      *
-     * **What the fence does not cover — two residuals, stated honestly (issue #1713).**
-     *  - **A partial, non-empty view is not fenced at all.** The front is a weighted mean over
-     *    *demanding* children, and both demand and the service counters ride the Quilter/gossip
-     *    transport, which `readIndex()` does not fence — the same Wall A residual as #1665's
-     *    `reconcile` magnitude. A view that has merged three of five siblings computes a plausible
-     *    front over three and freezes *that*: no `null`, no error, nothing anomalous. This fence
-     *    closes only the stale-**records** case. Only #1713's fix A (stop freezing the seat and
-     *    materialise it as a locally-recomputed wake offset) or B (a stored monotone front in the
-     *    replicated ledger) closes the class.
-     *  - **A withheld internal entry can cause a false refusal.** The §5.4.2 election no-op and
-     *    configuration entries advance Raft's commit index but are deliberately withheld from
-     *    [RaftNode.committedFrom], so the applied prefix can sit legitimately one or more indices
-     *    below the fenced index right after an election or a membership change — and the fence then
-     *    refuses a *genuine* first generation. That trade is deliberate: a refusal is retryable, a
-     *    frozen wrong seat is not. It clears as soon as any application entry commits (a bootstrap
-     *    [mint] or [enroll] is enough), so order those before the tree's first `prepareNeutral`.
-     *
-     * **Compute-and-record is deliberately one act, and the log serializes concurrent proposers.**
-     * `V` is read from this peer's view — demand ages out by local receive time and wake clamps are
-     * not replicated — so peers legitimately disagree on it. What makes creation deterministic is
-     * that the *finished* record travels in the log entry and every peer applies the same bytes.
-     * Two peers calling this for the same [id] therefore propose two different records, and the log
-     * orders them **first-wins**: the first commits and applies, the second is answered with
-     * [ControlOutcome.Conflict] carrying a [ControlConflict.Refused] that names the already-bound
-     * id — identically on every peer. The loser is *told*, and the child is **not** starved: it is
-     * seated at the winner's front. (That holds on this governed path only. The ungoverned
-     * [HeddleNode.prepare] has no serializer and does starve the child — see its KDoc.) One
-     * proposer per generation is still the right habit, because it makes the seat predictable
-     * rather than a race between two legitimate readings.
+     * The log still orders two concurrent proposals for one id **first-wins**, answering the loser
+     * with a [ControlConflict.Refused] naming the bound id — that is about the record's *intent*
+     * (its parent, child and weight), which two honest proposers can still disagree on.
      */
     public suspend fun prepareNeutral(
         id: AttachmentId,
@@ -310,46 +275,7 @@ public class GovernedHeddleNode internal constructor(
         child: GroupId,
         weight: Weight,
         timeout: Duration? = null,
-    ): ControlOutcome {
-        val front = node.parentVirtualTime(parent)
-        val seat = if (front != null) {
-            front
-        } else {
-            // No front: either a genuine first generation (the origin seat is right) or a view that
-            // has not applied the siblings yet (the origin seat is permanently wrong). Fence before
-            // freezing the origin into the log — §9 #3 authority, then applied-prefix freshness.
-            val fenced = runCatchingCancellable { control.fenceReadIndex() }.getOrNull()
-                ?: return ControlOutcome.Conflict(
-                    ControlOutcome.NOT_COMMITTED,
-                    ControlConflict.Refused(
-                        "prepareNeutral refused: ${parent.value} shows no front and the readIndex fence failed — " +
-                            "an origin seat must be proposed by the current leader (§9 #3)",
-                    ),
-                )
-            val applied = control.rosterSnapshot().appliedIndex
-            if (applied < fenced) {
-                return ControlOutcome.Conflict(
-                    ControlOutcome.NOT_COMMITTED,
-                    ControlConflict.Refused(
-                        "prepareNeutral refused: ${parent.value} shows no front but this peer's applied prefix " +
-                            "($applied) is behind the fenced committed index ($fenced) — the empty view is stale, " +
-                            "not a first generation (#1713)",
-                    ),
-                )
-            }
-            Rational.ZERO
-        }
-        return prepare(
-            AttachmentRecord.neutral(
-                id = id,
-                parent = parent,
-                child = child,
-                weight = weight,
-                parentVirtualTime = seat,
-            ),
-            timeout,
-        )
-    }
+    ): ControlOutcome = prepare(AttachmentRecord(id, parent, child, weight), timeout)
 
     /**
      * Open delegation across [edge], serialized through the log (design §9 #2). The **reshape

@@ -38,7 +38,6 @@ class EntitlementLedgerLawsTest {
             parent = groups.random(rnd),
             child = groups.random(rnd),
             weight = Weight.of(rnd.nextLong(1L, 8L), rnd.nextLong(1L, 8L)),
-            initialVirtualTime = rnd.nextLong(0L, 1_000L),
         )
 
     private fun randomLedger(rnd: Random): EntitlementLedger =

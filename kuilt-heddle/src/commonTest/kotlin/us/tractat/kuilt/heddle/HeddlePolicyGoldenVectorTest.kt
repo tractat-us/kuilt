@@ -161,7 +161,7 @@ private const val SEED: Long = 0x4845_44_4C45 // "HEDLE"
 /**
  * The canonical, fully-deterministic scheduling scenario. Kept top-level (not in the
  * test class) so the scratch generator can call it too. Four children with fixed
- * weights and virtual-time origins; each round perturbs demand/spends/returns from the
+ * weights and virtual-time seats; each round perturbs demand/spends/returns from the
  * seeded RNG, picks, and applies the grant. Returns the ordered `id:amount` (or `none`)
  * decisions.
  */
@@ -205,9 +205,15 @@ internal fun canonicalPicks(): List<String> {
 
         val edges = children.map { c ->
             PolicyEdge(
-                record = AttachmentRecord(AttachmentId(c.id), GroupId("root"), GroupId(c.id), c.weight, c.ivt),
+                record = AttachmentRecord(AttachmentId(c.id), GroupId("root"), GroupId(c.id), c.weight),
                 summary = EdgeSummary(AttachmentId(c.id), c.issued, c.returned, c.spent),
                 demand = if (c.demanding) Demand(targetOutstanding = 25L, maximumUsefulGrant = 12L) else Demand.NONE,
+                // The seat that used to be `AttachmentRecord.initialVirtualTime = ivt` (issue #1752).
+                // `Gauge(ivt, folded = 0)` with the base issuance as the fold axis reads
+                // `ivt + (issued − 0)/w − returned/w`, which is the retired field's formula term for
+                // term — which is why [GOLDEN] did not move when the read path was rewired.
+                gauge = Gauge(Rational.of(c.ivt), folded = 0L),
+                baseIssued = c.issued,
             )
         }
         val holdings = 100L

@@ -49,7 +49,7 @@ class EntitlementLedgerReconcileTest {
     private val e7 = AttachmentId("e7") // a → la, a leaf for `a` to spend its phantom credit through
 
     private fun rec(id: AttachmentId, parent: GroupId, child: GroupId) =
-        AttachmentRecord(id, parent, child, Weight.ONE, 0L)
+        AttachmentRecord(id, parent, child, Weight.ONE)
 
     /**
      * The converged post-race, post-reparent, post-spend state, built with the real mutators plus the

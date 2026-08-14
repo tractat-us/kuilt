@@ -59,8 +59,8 @@ class HeddleNodeTest {
     private val e1 = AttachmentId("e1")
     private val e2 = AttachmentId("e2")
     private fun flatTopology(): List<AttachmentRecord> = listOf(
-        AttachmentRecord(e1, root, g1, Weight.ONE, 0L),
-        AttachmentRecord(e2, root, g2, Weight.ONE, 0L),
+        AttachmentRecord(e1, root, g1, Weight.ONE),
+        AttachmentRecord(e2, root, g2, Weight.ONE),
     )
 
     private fun config(seed: Int, quantum: Long = 10L, cap: Long = 1_000L) = HeddleConfig(
@@ -255,7 +255,7 @@ class HeddleNodeTest {
             assertNotNull(id)
 
             // A second inbound generation into g1 → DualActiveInbound quarantines g1's lineage.
-            val e1b = AttachmentRecord(AttachmentId("e1b"), root, g1, Weight.ONE, 0L)
+            val e1b = AttachmentRecord(AttachmentId("e1b"), root, g1, Weight.ONE)
             assertTrue(node.prepare(e1b) && node.activate(e1b.id))
             h.pump()
             assertEquals(0L, node.ledger.value.holdings(g1, node.self), "g1 quarantined: holdings collapse")
@@ -280,7 +280,7 @@ class HeddleNodeTest {
             assertNotNull(id)
 
             // g1 gains a PREPARED child concurrently → isLeaf(g1) becomes false.
-            val child = AttachmentRecord(AttachmentId("g1-child"), g1, GroupId("gc"), Weight.ONE, 0L)
+            val child = AttachmentRecord(AttachmentId("g1-child"), g1, GroupId("gc"), Weight.ONE)
             assertTrue(node.prepare(child))
             h.pump()
 
@@ -350,7 +350,7 @@ class HeddleNodeTest {
 
         // 3. g1 gains an ACTIVE child e3 — the exact reshape captured-path charging supports.
         val g3 = GroupId("g3")
-        val e3 = AttachmentRecord(AttachmentId("e3"), g1, g3, Weight.ONE, 0L)
+        val e3 = AttachmentRecord(AttachmentId("e3"), g1, g3, Weight.ONE)
         assertTrue(node.prepare(e3) && node.activate(e3.id))
         h.pump()
 
@@ -596,8 +596,8 @@ class HeddleNodeTest {
             val eA = AttachmentId("root->a")
             val eB = AttachmentId("root->b")
             val base = listOf(
-                AttachmentRecord(eA, root, tenantA, Weight.ONE, 0L),
-                AttachmentRecord(eB, root, tenantB, Weight.ONE, 0L),
+                AttachmentRecord(eA, root, tenantA, Weight.ONE),
+                AttachmentRecord(eB, root, tenantB, Weight.ONE),
             )
             val h = harness(peers = 2, mint = mapOf(0 to 120L, 1 to 120L), topology = base)
             h.pump()
@@ -605,8 +605,8 @@ class HeddleNodeTest {
             // Dynamically add tenant-a → {interactive w3, batch w1} via H2 prepare/activate.
             val interactive = GroupId("interactive")
             val batch = GroupId("batch")
-            val eInt = AttachmentRecord(AttachmentId("a->interactive"), tenantA, interactive, Weight.of(3), 0L)
-            val eBatch = AttachmentRecord(AttachmentId("a->batch"), tenantA, batch, Weight.ONE, 0L)
+            val eInt = AttachmentRecord(AttachmentId("a->interactive"), tenantA, interactive, Weight.of(3))
+            val eBatch = AttachmentRecord(AttachmentId("a->batch"), tenantA, batch, Weight.ONE)
             for (p in h.peers) {
                 assertTrue(p.node.prepare(eInt) && p.node.activate(eInt.id))
                 assertTrue(p.node.prepare(eBatch) && p.node.activate(eBatch.id))
@@ -723,7 +723,7 @@ class HeddleNodeTest {
         val node = h.peers[0].node
 
         // g1 is handed a deficit out of band — it is behind, and has never been observed idle.
-        val behind = AttachmentRecord(AttachmentId("e3"), root, GroupId("g3"), Weight.ONE, 100L)
+        val behind = AttachmentRecord(AttachmentId("e3"), root, GroupId("g3"), Weight.ONE)
         assertTrue(node.prepare(behind) && node.activate(behind.id))
         val hungrier = Demand(targetOutstanding = 10_000L, maximumUsefulGrant = 10L)
         node.advertise(e1, hungrier)
@@ -774,7 +774,7 @@ class HeddleNodeTest {
 
         // A third child that competes from its first observation — so it is never a waker and
         // never carries a clamp — but can never absorb a grant, so it stays parked at 0.
-        val starved = AttachmentRecord(AttachmentId("e3"), root, GroupId("g3"), Weight.ONE, 0L)
+        val starved = AttachmentRecord(AttachmentId("e3"), root, GroupId("g3"), Weight.ONE)
         assertTrue(node.prepare(starved) && node.activate(starved.id))
         val competingUnservable = Demand(targetOutstanding = 10_000L, maximumUsefulGrant = 0L)
 

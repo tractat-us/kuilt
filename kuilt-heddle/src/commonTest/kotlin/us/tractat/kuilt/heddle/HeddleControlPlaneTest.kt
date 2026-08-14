@@ -78,8 +78,8 @@ class HeddleControlPlaneTest {
         val eA = AttachmentId("eA")
         val eB = AttachmentId("eB")
 
-        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(AttachmentRecord(eA, GroupId("pA"), c, Weight.ONE, 0L))))
-        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(AttachmentRecord(eB, GroupId("pB"), c, Weight.ONE, 0L))))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(AttachmentRecord(eA, GroupId("pA"), c, Weight.ONE))))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(AttachmentRecord(eB, GroupId("pB"), c, Weight.ONE))))
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Activate(eA)))
 
         // Simulate the data plane having gossip-merged the CONVERGED state ahead of the log: eA
@@ -156,8 +156,8 @@ class HeddleControlPlaneTest {
         val eB = AttachmentId("eB")
         val v1 = planes.getValue(NodeId("v1"))
         val v2 = planes.getValue(NodeId("v2"))
-        awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Prepare(AttachmentRecord(eA, GroupId("pA"), c, Weight.ONE, 0L))) }
-        awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Prepare(AttachmentRecord(eB, GroupId("pB"), c, Weight.ONE, 0L))) }
+        awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Prepare(AttachmentRecord(eA, GroupId("pA"), c, Weight.ONE))) }
+        awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Prepare(AttachmentRecord(eB, GroupId("pB"), c, Weight.ONE))) }
 
         val actA = async { v1.submit(ControlCommand.Activate(eA)) }
         val actB = async { v2.submit(ControlCommand.Activate(eB)) }
@@ -198,8 +198,8 @@ class HeddleControlPlaneTest {
         val e2 = AttachmentId("e2")
         val v1 = planes.getValue(NodeId("v1"))
         val v2 = planes.getValue(NodeId("v2"))
-        awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Prepare(AttachmentRecord(e1, root, c1, Weight.ONE, 0L))) }
-        awaitOutcome(sim, backgroundScope) { v2.submit(ControlCommand.Prepare(AttachmentRecord(e2, root, c2, Weight.ONE, 0L))) }
+        awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Prepare(AttachmentRecord(e1, root, c1, Weight.ONE))) }
+        awaitOutcome(sim, backgroundScope) { v2.submit(ControlCommand.Prepare(AttachmentRecord(e2, root, c2, Weight.ONE))) }
 
         val a1 = async { v1.submit(ControlCommand.Activate(e1)) }
         val a2 = async { v2.submit(ControlCommand.Activate(e2)) }
@@ -301,7 +301,7 @@ class HeddleControlPlaneTest {
         assertIs<ControlOutcome.Applied>(governed.enroll(self))
         assertTrue(governed.isWritable, "the applied self-enroll opens the boot gate")
         assertIs<ControlOutcome.Applied>(governed.mint(self, 1_000L))
-        assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(eLeaf, root, leaf, Weight.ONE, 0L)))
+        assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(eLeaf, root, leaf, Weight.ONE)))
         assertIs<ControlOutcome.Applied>(governed.activate(eLeaf))
         assertTrue(counting.consensusCalls > 0, "control-plane setup must issue consensus messages")
         governed.advertise(eLeaf, Demand(targetOutstanding = 1_000L, maximumUsefulGrant = 1_000L))
@@ -352,8 +352,8 @@ class HeddleControlPlaneTest {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, RecordingSink(), NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-prep")
         val id = AttachmentId("e")
-        val rec = AttachmentRecord(id, root, GroupId("c"), Weight.ONE, 0L)
-        val differentRec = AttachmentRecord(id, GroupId("otherParent"), GroupId("c"), Weight.ONE, 0L)
+        val rec = AttachmentRecord(id, root, GroupId("c"), Weight.ONE)
+        val differentRec = AttachmentRecord(id, GroupId("otherParent"), GroupId("c"), Weight.ONE)
 
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(rec)))
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(rec))) // idempotent: same record
@@ -386,7 +386,7 @@ class HeddleControlPlaneTest {
         // Drive an edge all the way to RETIRED, then re-activating it is refused (retired/divergent) —
         // a closed generation can never be resurrected (design §5.4.3 / module.md closure-wins rule).
         val e = AttachmentId("e")
-        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(AttachmentRecord(e, root, GroupId("c"), Weight.ONE, 0L))))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(AttachmentRecord(e, root, GroupId("c"), Weight.ONE))))
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Activate(e)))
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Close(e)))
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Retire(e))) // projection has no outstanding
@@ -417,7 +417,7 @@ class HeddleControlPlaneTest {
 
         // A drained edge (activated, never delegated → outstanding 0) retires once CLOSING.
         val drained = AttachmentId("drained")
-        assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(drained, root, GroupId("d"), Weight.ONE, 0L)))
+        assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(drained, root, GroupId("d"), Weight.ONE)))
         assertIs<ControlOutcome.Applied>(governed.activate(drained))
         assertIs<ControlOutcome.Applied>(governed.close(drained))
         assertIs<ControlOutcome.Applied>(governed.retire(drained))
@@ -426,7 +426,7 @@ class HeddleControlPlaneTest {
         // A non-drained edge (delegated down via schedule → outstanding > 0) is refused locally.
         val live = AttachmentId("live")
         val leaf = GroupId("leaf")
-        assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(live, root, leaf, Weight.ONE, 0L)))
+        assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(live, root, leaf, Weight.ONE)))
         assertIs<ControlOutcome.Applied>(governed.activate(live))
         governed.advertise(live, Demand(targetOutstanding = 500L, maximumUsefulGrant = 500L))
         governed.schedule(root)
@@ -466,7 +466,7 @@ class HeddleControlPlaneTest {
         val e2 = AttachmentId("e2") // g    → h
         val e3 = AttachmentId("e3") // root → g (the legal reparent generation)
         val v1 = planes.getValue(NodeId("p1"))
-        fun rec(id: AttachmentId, parent: GroupId, child: GroupId) = AttachmentRecord(id, parent, child, Weight.ONE, 0L)
+        fun rec(id: AttachmentId, parent: GroupId, child: GroupId) = AttachmentRecord(id, parent, child, Weight.ONE)
 
         // Every peer enrolls: the fence's ack set is exactly the enrolled set at the barrier's index.
         for (id in ids) {
@@ -570,11 +570,11 @@ class HeddleControlPlaneTest {
         val live = AttachmentId("eNew") // root → g, the reparent generation
 
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Enroll(p3)))
-        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(AttachmentRecord(old, root, child, Weight.ONE, 0L))))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(AttachmentRecord(old, root, child, Weight.ONE))))
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Activate(old)))
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Close(old)))
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Retire(old, witness = null)))
-        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(AttachmentRecord(live, root, child, Weight.ONE, 0L))))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(AttachmentRecord(live, root, child, Weight.ONE))))
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Activate(live)))
         // The data plane: p3 delegated 10 down the old edge and charged 3 of service through it.
         sink.forceMerge(
@@ -629,7 +629,7 @@ class HeddleControlPlaneTest {
         val edge = AttachmentId("e")
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Enroll(solo)))
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Enroll(absent)))
-        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(AttachmentRecord(edge, root, GroupId("c"), Weight.ONE, 0L))))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(AttachmentRecord(edge, root, GroupId("c"), Weight.ONE))))
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Activate(edge)))
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Close(edge)))
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Retire(edge, witness = null)))
@@ -637,7 +637,7 @@ class HeddleControlPlaneTest {
         // A barrier over a LIVE edge is refused outright — a peer cannot promise never to write an
         // edge the data plane may still legitimately use.
         val live = AttachmentId("live")
-        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(AttachmentRecord(live, root, GroupId("c2"), Weight.ONE, 0L))))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(AttachmentRecord(live, root, GroupId("c2"), Weight.ONE))))
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Activate(live)))
         val onLive = plane.submit(ControlCommand.Quiesce(live))
         assertIs<ControlOutcome.Conflict>(onLive)
@@ -687,18 +687,17 @@ class HeddleControlPlaneTest {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // #1713 (the defect): prepareNeutral's ORIGIN seat is fenced, not trusted.
-    // A null front means "no active child survives", which is a genuine first
-    // generation OR a view whose applied prefix is behind the committed log. Seating
-    // the stale case at the origin hands the newborn the parent's entire past as
-    // lifetime credit (§10.5) — and the seat is frozen into the committed bytes, so
-    // every peer applies the same wrong value permanently. So a null front must clear
-    // the §9 #3 readIndex fence AND a caught-up applied prefix.
+    // #1752: the #1713 defect is gone by construction, so its fence is gone too.
+    // A null front used to be ambiguous in a way that mattered — a genuine first
+    // generation OR a view whose applied prefix is behind the committed log — because
+    // the seat was frozen into the committed bytes and every peer applied the same
+    // wrong value permanently. A record carries no seat now: a stale proposer's
+    // Prepare is inert, so the act is admitted and nothing is left to be wrong about.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun prepareNeutralRefusesAnOriginSeatOnAStaleEmptyView() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+    fun prepareOnAStaleEmptyViewIsAdmittedBecauseNoSeatIsFrozen() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
-        // Model the #1713 stale-view shape: the committed log is AHEAD of what this peer has folded.
+        // The #1713 stale-view shape: the committed log is AHEAD of what this peer has folded.
         // readIndex fences at 42 while the control plane's applied prefix is still 0, i.e. the
         // siblings' Prepare/Activate entries are committed but not yet applied here — so `front`
         // reads null for a parent that, in log order, already has children.
@@ -715,32 +714,35 @@ class HeddleControlPlaneTest {
         val newborn = AttachmentId("newborn")
         assertNull(governed.parentVirtualTime(root), "the stale view must show no front at all")
 
-        val outcome = governed.prepareNeutral(newborn, root, GroupId("child"), Weight.ONE)
-        assertIs<ControlOutcome.Conflict>(outcome)
-        val conflict = outcome.conflict
-        assertIs<ControlConflict.Refused>(conflict)
+        assertIs<ControlOutcome.Applied>(governed.prepareNeutral(newborn, root, GroupId("child"), Weight.ONE))
+        val record = governed.ledger.value.record(newborn)
+        assertNotNull(record)
         assertAll(
-            { assertEquals(ControlOutcome.NOT_COMMITTED, outcome.index, "a fenced refusal never commits") },
             {
-                assertTrue(
-                    conflict.reason.contains("stale"),
-                    "the refusal must say the empty view is stale, was: ${conflict.reason}",
+                assertEquals(
+                    AttachmentRecord(newborn, root, GroupId("child"), Weight.ONE),
+                    record,
+                    "the committed record is the caller's intent and nothing else — no seat rode along",
                 )
             },
-            { assertNull(governed.ledger.value.record(newborn), "a refused prepareNeutral writes no record") },
-            { assertNull(governed.ledger.value.lifecycle(newborn), "the edge must stay entirely unknown") },
+            {
+                assertNull(
+                    governed.ledger.value.gauge(newborn),
+                    "and no seat was written either: the edge stays unseated until a scheduler bumps it " +
+                        "at the front it is actually joining",
+                )
+            },
         )
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // #1713: the fence must NOT wedge bootstrap. A caught-up view that genuinely has
-    // no active children under the parent is the first generation, and the origin IS
-    // that parent's virtual-time origin — Applied at initialVirtualTime 0. The
-    // non-origin path is unaffected: once the parent has rendered service the front is
-    // non-null and the joiner is seated at ⌈V⌉ with no fence involved (§7.2, #1688).
+    // #1752: the scheduler's seat bump, end to end. The first generation under a
+    // parent that has never run is seated at the origin, which IS that parent's
+    // virtual-time origin. A LATER joiner is seated at the front it is joining — as an
+    // exact Rational, since a Gauge floor never has to be rounded to ⌈V⌉ (§7.2, #1688).
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun prepareNeutralSeatsAGenuineFirstGenerationAtTheOrigin() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+    fun theSchedulerSeatsAJoinerAtTheFrontItIsJoining() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         val loom = InMemoryLoom()
         val seam: Seam = loom.host(Pattern("heddle-h5-neutral-origin"))
@@ -750,41 +752,59 @@ class HeddleControlPlaneTest {
             clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }, config = config(seed = 19),
             incarnation = "boot-neutral-origin", epoch = 0L,
         )
-        // A real committed act first, so the applied prefix is genuinely level with the fence
-        // (FakeRaftNode's readIndex returns its commitIndex) — and so the tree has supply to render.
         assertIs<ControlOutcome.Applied>(governed.enroll(self))
         assertIs<ControlOutcome.Applied>(governed.mint(self, 1_000L))
 
         val first = AttachmentId("first")
         assertNull(governed.parentVirtualTime(root), "a parent with no active children has no front")
         assertIs<ControlOutcome.Applied>(governed.prepareNeutral(first, root, GroupId("leaf"), Weight.ONE))
-        val firstRecord = governed.ledger.value.record(first)
-        assertNotNull(firstRecord)
-        assertEquals(0L, firstRecord.initialVirtualTime, "the first generation is seated at the parent's origin")
-
-        // Render service through it, so the parent's front advances past the origin.
         assertIs<ControlOutcome.Applied>(governed.activate(first))
         governed.advertise(first, Demand(targetOutstanding = 100L, maximumUsefulGrant = 100L))
         governed.schedule(root)
-        val front = governed.parentVirtualTime(root)
-        assertNotNull(front)
+        assertEquals(
+            Rational.ZERO,
+            assertNotNull(governed.ledger.value.gauge(first)).floor,
+            "the first generation is seated at the parent's origin — there was no front to join",
+        )
+
+        // The parent has now rendered service, so its front has advanced past the origin.
+        val front = assertNotNull(governed.parentVirtualTime(root))
         assertTrue(front > Rational.ZERO, "the parent has rendered service, so its front has advanced, was $front")
 
-        // A second generation takes the non-origin path: a non-null front, no fence, seated at ⌈V⌉.
+        // A second generation joins. It is unseated until the scheduler bumps it, and the bump takes
+        // the front with the joiner itself excluded — which, `first` being the only other active
+        // edge, is exactly `first`'s virtual service at that moment.
         val second = AttachmentId("second")
         assertIs<ControlOutcome.Applied>(governed.prepareNeutral(second, root, GroupId("leaf2"), Weight.ONE))
-        val secondRecord = governed.ledger.value.record(second)
-        assertNotNull(secondRecord)
-        assertEquals(front.ceil(), secondRecord.initialVirtualTime, "a joiner is seated at ⌈V⌉, never at 0")
+        assertIs<ControlOutcome.Applied>(governed.activate(second))
+        assertNull(governed.ledger.value.gauge(second), "a freshly activated edge carries no seat yet")
+        governed.advertise(second, Demand(targetOutstanding = 100L, maximumUsefulGrant = 100L))
+
+        val joiningFront = assertNotNull(governed.ledger.value.virtualService(first))
+        governed.schedule(root)
+        assertEquals(
+            joiningFront,
+            assertNotNull(governed.ledger.value.gauge(second)).floor,
+            "a joiner is seated at the front it is joining, exactly — never at 0, and never at a rounded ⌈V⌉",
+        )
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // #1713 / #1700 doc correction: two proposers reading different fronts for one id
-    // do NOT starve the child on the governed path. The log orders them first-wins and
-    // answers the loser with a structured Refused ("refuse, don't lie Applied"), so the
-    // id resolves — deterministically, on every peer. Starvation is real only on the
-    // UNGOVERNED path, where the per-id set union retains both records; that contrast
-    // is asserted here because it is where the warning belongs (HeddleNode.prepare).
+    // #1713 / #1700 doc correction: two proposers of one id do NOT starve the child on
+    // the governed path. The log orders them first-wins and answers the loser with a
+    // structured Refused ("refuse, don't lie Applied"), so the id resolves —
+    // deterministically, on every peer. Starvation is real only on the UNGOVERNED path,
+    // where the per-id set union retains both records; that contrast is asserted here
+    // because it is where the warning belongs (HeddleNode.prepare).
+    //
+    // #1752 narrowed what two honest proposers can even disagree about. Two peers whose
+    // views disagreed on V used to produce records differing ONLY in the seat, and that
+    // was the *unavoidable* half of the hazard — a seat is a reading, and two readings
+    // of a moving front are legitimately different. With the seat out of the record,
+    // that half dissolves: identical intent now yields byte-identical records, which
+    // union to a set of one. What survives is divergent INTENT — a different weight —
+    // which is a caller error rather than an artefact of distribution, and that is what
+    // this test now contests over.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
     fun twoProposersOfOneIdAreOrderedFirstWinsAndDoNotStarveTheChild() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
@@ -794,10 +814,9 @@ class HeddleControlPlaneTest {
         )
         val id = AttachmentId("contested")
         val child = GroupId("c")
-        // Two peers whose views disagree on V produce records differing ONLY in the seat — exactly
-        // what two concurrent prepareNeutral calls for one id propose.
-        val fromPeerA = AttachmentRecord.neutral(id, root, child, Weight.ONE, Rational.of(10L))
-        val fromPeerB = AttachmentRecord.neutral(id, root, child, Weight.ONE, Rational.of(25L))
+        // Divergent intent — the surviving hazard. Same id and edge, different weight.
+        val fromPeerA = AttachmentRecord(id, root, child, Weight.ONE)
+        val fromPeerB = AttachmentRecord(id, root, child, Weight.of(3))
 
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(fromPeerA)))
         val loser = plane.submit(ControlCommand.Prepare(fromPeerB))
@@ -821,11 +840,23 @@ class HeddleControlPlaneTest {
                     "first-wins: the id resolves to the first proposal, so the child is NOT starved",
                 )
             },
-            { assertEquals(10L, plane.projectionSnapshot().record(id)?.initialVirtualTime, "the winner's seat stands") },
             {
                 assertNull(
                     ungoverned.record(id),
                     "ungoverned: the per-id set union retains both records and the id resolves to nothing",
+                )
+            },
+            {
+                // The half #1752 dissolved: two proposers agreeing on intent now agree byte for
+                // byte, so even the ungoverned union resolves. Under the frozen seat these two
+                // carried different fronts and starved the child.
+                val sameIntent = EntitlementLedger.ZERO
+                    .piece(assertNotNull(EntitlementLedger.ZERO.prepare(fromPeerA)).delta)
+                    .piece(assertNotNull(EntitlementLedger.ZERO.prepare(AttachmentRecord(id, root, child, Weight.ONE))).delta)
+                assertEquals(
+                    fromPeerA,
+                    sameIntent.record(id),
+                    "two proposers with the same intent can no longer diverge on a seat, so the union is a set of one",
                 )
             },
         )

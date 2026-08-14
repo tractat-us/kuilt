@@ -481,7 +481,7 @@ class GaugeWriteRulesTest {
                 nonce = "1752",
             )
             for (name in edges) {
-                val record = AttachmentRecord(id(name), root, GroupId(name), Weight.ONE, initialVirtualTime = 0L)
+                val record = AttachmentRecord(id(name), root, GroupId(name), Weight.ONE)
                 base = base.piece(checkNotNull(base.prepare(record)).delta)
                 base = base.piece(checkNotNull(base.activate(id(name))).delta)
             }

@@ -51,7 +51,7 @@ class EntitlementLedgerTest {
     @Test
     fun edgeReturnsNullForUnknownAndSummaryForKnown() {
         val ledger = EntitlementLedger.of(
-            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, GroupId("child"), Weight.ONE, 0L))),
+            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, GroupId("child"), Weight.ONE))),
             issued = mapOf(e1 to GCounter.of(alice to 10L)),
             returned = mapOf(e1 to GCounter.of(alice to 3L)),
             leafSpent = mapOf(e1 to GCounter.of(alice to 2L)),
@@ -72,8 +72,8 @@ class EntitlementLedgerTest {
         val eA = AttachmentId("a")
         val ledger = EntitlementLedger.of(
             records = mapOf(
-                eB to setOf(AttachmentRecord(eB, root, child, Weight.ONE, 0L)),
-                eA to setOf(AttachmentRecord(eA, root, child, Weight.ONE, 0L)),
+                eB to setOf(AttachmentRecord(eB, root, child, Weight.ONE)),
+                eA to setOf(AttachmentRecord(eA, root, child, Weight.ONE)),
             ),
             issued = mapOf(eA to GCounter.of(alice to 5L), eB to GCounter.of(alice to 7L)),
         )
@@ -91,10 +91,10 @@ class EntitlementLedgerTest {
         val leftParent = GroupId("left")
         val rightParent = GroupId("right")
         val onLeft = EntitlementLedger.of(
-            records = mapOf(e1 to setOf(AttachmentRecord(e1, leftParent, GroupId("c"), Weight.ONE, 0L))),
+            records = mapOf(e1 to setOf(AttachmentRecord(e1, leftParent, GroupId("c"), Weight.ONE))),
         )
         val onRight = EntitlementLedger.of(
-            records = mapOf(e1 to setOf(AttachmentRecord(e1, rightParent, GroupId("c"), Weight.ONE, 0L))),
+            records = mapOf(e1 to setOf(AttachmentRecord(e1, rightParent, GroupId("c"), Weight.ONE))),
         )
         val merged = onLeft.piece(onRight)
         assertEquals(listOf(e1), merged.activeChildren(leftParent).map { it.attachment })
@@ -116,7 +116,7 @@ class EntitlementLedgerTest {
     fun roundTripsThroughJson() {
         val ledger = EntitlementLedger.bootstrap(root, mapOf(alice to 100L), nonce = "genesis").piece(
             EntitlementLedger.of(
-                records = mapOf(e1 to setOf(AttachmentRecord(e1, root, GroupId("child"), Weight.of(3, 1), 12L))),
+                records = mapOf(e1 to setOf(AttachmentRecord(e1, root, GroupId("child"), Weight.of(3, 1)))),
                 issued = mapOf(e1 to GCounter.of(alice to 40L)),
                 transfers = mapOf(PathKey.of(e1) to mapOf(alice to GCounter.of(bob to 5L))),
             ),

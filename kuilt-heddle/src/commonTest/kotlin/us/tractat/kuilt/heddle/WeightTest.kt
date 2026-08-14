@@ -100,14 +100,14 @@ class WeightTest {
         // replicated in EntitlementLedger and in the Raft control command Prepare.
         val record = Json.decodeFromString(
             AttachmentRecord.serializer(),
-            """{"id":"a","parent":"root","child":"c","weight":{"numerator":-2,"denominator":-4},"initialVirtualTime":0}""",
+            """{"id":"a","parent":"root","child":"c","weight":{"numerator":-2,"denominator":-4}}""",
         )
         assertAll(
             { assertEquals(Weight.of(1, 2), record.weight) },
             { assertTrue(record.weight < Weight.ONE, "decoded sibling weight must order below 1/1") },
             {
                 assertEquals(
-                    AttachmentRecord(AttachmentId("a"), GroupId("root"), GroupId("c"), Weight.of(1, 2), 0L),
+                    AttachmentRecord(AttachmentId("a"), GroupId("root"), GroupId("c"), Weight.of(1, 2)),
                     record,
                 )
             },

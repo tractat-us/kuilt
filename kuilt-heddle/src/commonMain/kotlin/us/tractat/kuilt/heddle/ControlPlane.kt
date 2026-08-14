@@ -536,8 +536,10 @@ internal class HeddleControlPlane(
             // It therefore tracks the *application-visible* prefix, NOT Raft's commit index: the §5.4.2
             // election no-op and configuration entries advance commitIndex but are deliberately withheld
             // from `committedFrom`, so they never arrive here and this index can sit legitimately below
-            // `readIndex()`. Any caller comparing the two must expect that gap — see
-            // `GovernedHeddleNode.prepareNeutral`, which refuses conservatively because of it.
+            // `readIndex()`. Any caller comparing the two must expect that gap: "behind" does not
+            // imply "stale", so treating the difference as evidence costs a false refusal on a
+            // perfectly fresh view. Nothing compares them today — the one gate that did was
+            // `GovernedHeddleNode.prepareNeutral`'s, retired with the frozen seat (#1752).
             roster = roster.advancedTo(entry.index)
             // Undecodable — no outcome, no projection change. Already logged at `warn` above.
             if (envelope == null) return

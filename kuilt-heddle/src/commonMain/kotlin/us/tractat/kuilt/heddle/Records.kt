@@ -5,9 +5,16 @@ import kotlinx.serialization.Serializable
 
 /**
  * The immutable fact of one **attachment generation** — a parent→child edge in the
- * fairness tree, together with the child's [weight] among its siblings and the
- * [initialVirtualTime] a fresh generation starts at (never with lifetime credit;
- * design §10.5).
+ * fairness tree, together with the child's [weight] among its siblings.
+ *
+ * **A record carries no seat** (issue #1752). A generation's virtual-time origin used to be
+ * frozen into this record as an `initialVirtualTime`, which meant one proposer's local reading of
+ * the front became every peer's permanent fact — and a proposer reading a partial view froze a
+ * wrong one irrecoverably (#1713). The origin now lives in the replicated [Gauge] register, which
+ * every peer may write from its own view and whose componentwise join resolves the readings by
+ * `max` instead of preserving them. Two consequences worth knowing: the seat is an exact
+ * [Rational] rather than a rounded `Long`, so the old `⌈V⌉` rounding rule is simply gone; and a
+ * record built by hand can no longer express a seat at all, so there is nothing to get wrong.
  *
  * Records are immutable and grow-only. In a healthy ledger one [AttachmentId] maps
  * to exactly one record, but the merge **never collapses divergent records under
@@ -22,8 +29,6 @@ import kotlinx.serialization.Serializable
  * @property parent the parent group the entitlement flows from.
  * @property child the child group the entitlement flows to.
  * @property weight the child's fairness share among its siblings; always positive.
- * @property initialVirtualTime the virtual-time origin a fresh generation starts at;
- *   for a runtime creation, derive it with [neutralInitialVirtualTime] rather than by hand.
  */
 @Serializable
 public data class AttachmentRecord(
@@ -31,53 +36,7 @@ public data class AttachmentRecord(
     public val parent: GroupId,
     public val child: GroupId,
     public val weight: Weight,
-    public val initialVirtualTime: Long,
-) {
-    public companion object {
-        /**
-         * The one rounding rule for seating a newborn generation: **`initialVirtualTime = ⌈V⌉`**,
-         * the exact ceiling of the parent's current virtual time [parentVirtualTime].
-         *
-         * Design §7.2 says a new generation starts at the parent's current virtual time, and
-         * §10.5 makes it normative — "never with lifetime credit". But
-         * `V = Σ w·ev / Σ w` is a [Rational] and almost never integral, while
-         * [AttachmentRecord.initialVirtualTime] is a `Long`, so creation *must* round. The
-         * direction is not a matter of taste — it carries a fairness sign:
-         *
-         * - **Floor** seats the newborn *behind* the front. Lower virtual service reads as
-         *   "has had less than its share", so the newborn is eligible ahead of every sibling
-         *   and takes the next grants outright — a sliver of unearned lifetime credit, which
-         *   §10.5 forbids. A subtree that churns generations accrues the bias systematically,
-         *   each newborn marginally ahead of its siblings.
-         * - **Ceiling** seats it at or just ahead of the front. It can only ever *give up* a
-         *   fraction of a service unit, never claim one, so §10.5 holds by construction, and
-         *   the deviation is bounded: `0 <= ⌈V⌉ − V < 1` virtual unit — one quantum's worth
-         *   of patience at unit weight, which the very next round erases.
-         *
-         * Ceiling is therefore the conservative, invariant-preserving choice, and it is
-         * exact and deterministic, so every replica that re-derives a record from the same
-         * `V` lands on the same `Long`.
-         */
-        public fun neutralInitialVirtualTime(parentVirtualTime: Rational): Long =
-            parentVirtualTime.ceil()
-
-        /**
-         * A generation created **neutrally** under a parent whose current virtual time is
-         * [parentVirtualTime] — the correct-by-construction alternative to computing
-         * [initialVirtualTime] at the call site and rounding it the wrong way.
-         *
-         * @see neutralInitialVirtualTime for the rounding rule and why it is the ceiling.
-         */
-        public fun neutral(
-            id: AttachmentId,
-            parent: GroupId,
-            child: GroupId,
-            weight: Weight,
-            parentVirtualTime: Rational,
-        ): AttachmentRecord =
-            AttachmentRecord(id, parent, child, weight, neutralInitialVirtualTime(parentVirtualTime))
-    }
-}
+)
 
 /**
  * One act of introducing root supply: [holder] is credited [amount] units at the

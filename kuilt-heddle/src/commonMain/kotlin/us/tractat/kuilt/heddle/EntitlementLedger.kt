@@ -337,10 +337,8 @@ public class EntitlementLedger private constructor(
      * lands. Sharing the arithmetic is deliberate — a checkpoint computed by a second copy of this
      * expression could drift from the read that has to agree with it.
      */
-    private fun grossVirtualServiceAt(id: AttachmentId, w: Weight, issuance: Long): Rational {
-        val g = gauges[id] ?: return perWeight(issuance, w)
-        return g.floor + perWeight(checkedSub(issuance, g.folded), w)
-    }
+    private fun grossVirtualServiceAt(id: AttachmentId, w: Weight, issuance: Long): Rational =
+        gauges[id].grossVirtualServiceAt(issuance, w)
 
     /**
      * The [Lifecycle] of [id], or `null` if [id] is entirely unknown to this ledger.
@@ -1547,14 +1545,6 @@ private fun counterValue(counters: Map<AttachmentId, GCounter>, id: AttachmentId
 /** The single `(id, r)` slot value, or 0. */
 private fun slot(counters: Map<AttachmentId, GCounter>, id: AttachmentId, r: ReplicaId): Long =
     counters[id]?.count(r) ?: 0L
-
-/**
- * [units] of service converted to virtual time at weight [w]: `units / w = units * den / num`.
- * The one place that division happens, so the gauge read and [HeddlePolicy.virtualService] cannot
- * drift in how they weight a quantity. Overflow-checked (§10.12).
- */
-private fun perWeight(units: Long, w: Weight): Rational =
-    Rational.of(checkedMul(units, w.denominator), w.numerator)
 
 /** A `GCounter` carrying just the `(id, r)` slot bumped to its new absolute value (overflow-checked). */
 private fun bumpedSlot(counters: Map<AttachmentId, GCounter>, id: AttachmentId, r: ReplicaId, by: Long): GCounter =

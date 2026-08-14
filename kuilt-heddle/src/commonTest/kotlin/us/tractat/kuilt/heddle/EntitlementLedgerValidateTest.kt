@@ -29,8 +29,8 @@ class EntitlementLedgerValidateTest {
 
     private fun twoDeepTree(): EntitlementLedger = EntitlementLedger.of(
         records = mapOf(
-            e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE, 0L)),
-            e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.ONE, 0L)),
+            e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE)),
+            e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.ONE)),
         ),
     )
 
@@ -79,7 +79,7 @@ class EntitlementLedgerValidateTest {
     fun perEdgeSafetyFiresWhenChargeExceedsIssued() {
         // Manually construct an edge charged beyond what was issued (a bug/equivocation).
         val broken = EntitlementLedger.of(
-            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE, 0L))),
+            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE))),
             issued = mapOf(e1 to GCounter.of(alice to 5L)),
             leafSpent = mapOf(e1 to GCounter.of(alice to 8L)), // 8 > 5
         )
@@ -95,7 +95,7 @@ class EntitlementLedgerValidateTest {
     fun perSlotReturnedAboveIssuedIsNotAConflict() {
         // bob returns across e1 what he received by transfer; alice issued it. Sum-wise safe.
         val ledger = EntitlementLedger.of(
-            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE, 0L))),
+            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE))),
             issued = mapOf(e1 to GCounter.of(alice to 10L)),
             returned = mapOf(e1 to GCounter.of(bob to 4L)), // per-slot bob 4 > issued bob 0, but sum 4 <= 10
         )
@@ -108,7 +108,7 @@ class EntitlementLedgerValidateTest {
         // alice issued 10 down e1, but bob spent 6 at g1 while holding nothing there:
         // edge sum 6 <= 10 passes PerEdgeSafety, yet holdings(g1, bob) = -6.
         val leaf = EntitlementLedger.of(
-            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE, 0L))),
+            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE))),
             issued = mapOf(e1 to GCounter.of(alice to 10L)),
             leafSpent = mapOf(e1 to GCounter.of(bob to 6L)),
         )
@@ -121,12 +121,12 @@ class EntitlementLedgerValidateTest {
     @Test
     fun recordDivergenceIsReportedAndQuarantinesHoldings() {
         val left = EntitlementLedger.of(
-            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE, 0L))),
+            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE))),
             minted = mapOf(MintId("m") to MintRecord(alice, 10L)), // funded, so root is not itself negative
             issued = mapOf(e1 to GCounter.of(alice to 10L)),
         )
         val right = EntitlementLedger.of(
-            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.of(3, 1), 0L))),
+            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.of(3, 1)))),
         )
         val merged = left.piece(right)
         assertTrue(LedgerConflict.RecordDivergence(e1) in merged.validate())
@@ -140,7 +140,7 @@ class EntitlementLedgerValidateTest {
     @Test
     fun projectionIsAMergeHomomorphism() {
         val a = EntitlementLedger.of(
-            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE, 0L))),
+            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE))),
             issued = mapOf(e1 to GCounter.of(alice to 10L), e2 to GCounter.of(alice to 3L)),
             leafSpent = mapOf(e1 to GCounter.of(alice to 2L)),
             transfers = mapOf(PathKey.of(e1) to mapOf(alice to GCounter.of(bob to 4L))),
@@ -160,10 +160,10 @@ class EntitlementLedgerValidateTest {
     fun validateReportIsCanonicallyOrdered() {
         val ledger = EntitlementLedger.of(
             records = mapOf(
-                e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE, 0L)),
+                e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE)),
                 e2 to setOf(
-                    AttachmentRecord(e2, g1, g2, Weight.ONE, 0L),
-                    AttachmentRecord(e2, root, g2, Weight.ONE, 0L), // divergent
+                    AttachmentRecord(e2, g1, g2, Weight.ONE),
+                    AttachmentRecord(e2, root, g2, Weight.ONE), // divergent
                 ),
             ),
             issued = mapOf(e1 to GCounter.of(alice to 2L)),
@@ -186,8 +186,8 @@ class EntitlementLedgerValidateTest {
     fun divergentChildEdgeDeflatesNeverInflatesParentHoldings() {
         val healthy = EntitlementLedger.of(
             records = mapOf(
-                e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE, 0L)),
-                e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.ONE, 0L)),
+                e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE)),
+                e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.ONE)),
             ),
             minted = mapOf(MintId("m") to MintRecord(alice, 50L)),
             issued = mapOf(e1 to GCounter.of(alice to 50L), e2 to GCounter.of(alice to 20L)),
@@ -196,7 +196,7 @@ class EntitlementLedgerValidateTest {
 
         // e2 forks (a second, differently-weighted record under the same id).
         val divergent = healthy.piece(
-            EntitlementLedger.of(records = mapOf(e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.of(3, 1), 0L)))),
+            EntitlementLedger.of(records = mapOf(e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.of(3, 1))))),
         )
         assertTrue(LedgerConflict.RecordDivergence(e2) in divergent.validate())
         assertEquals(30L, divergent.holdings(g1, alice), "divergent child must NOT inflate the parent")
@@ -216,7 +216,7 @@ class EntitlementLedgerValidateTest {
     @Test
     fun singleHopTransferFundedSpendDoesNotFalseFireOnLaggingReplica() {
         val leafTree = EntitlementLedger.of(
-            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE, 0L))),
+            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE))),
         ) // root → g1, g1 is a leaf (no prefix edges → no roll-up)
         var full = leafTree.piece(EntitlementLedger.bootstrap(root, mapOf(alice to 100L), nonce = "g"))
         full = full.piece(full.delegate(alice, e1, 50L)!!) // alice funds g1
@@ -242,7 +242,7 @@ class EntitlementLedgerValidateTest {
     fun multiHopTransferFundedChargeIsCleanOnceFullyDelivered() {
         val carol = ReplicaId("carol")
         val leafTree = EntitlementLedger.of(
-            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE, 0L))),
+            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE))),
         )
         var full = leafTree.piece(EntitlementLedger.bootstrap(root, mapOf(alice to 100L), nonce = "g"))
         full = full.piece(full.delegate(alice, e1, 60L)!!)
@@ -264,7 +264,7 @@ class EntitlementLedgerValidateTest {
     @Test
     fun conservationViolationBackstopsServiceChargedBeyondMintedSupply() {
         val overcharged = EntitlementLedger.of(
-            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE, 0L))),
+            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE))),
             minted = mapOf(MintId("m") to MintRecord(alice, 10L)), // only 10 ever minted
             issued = mapOf(e1 to GCounter.of(alice to 25L)),
             leafSpent = mapOf(e1 to GCounter.of(alice to 25L)), // yet 25 charged
@@ -308,9 +308,9 @@ class EntitlementLedgerValidateTest {
         val below = AttachmentId("below") // g2 → g3, hanging under the loop
         val looped = EntitlementLedger.of(
             records = mapOf(
-                up to setOf(AttachmentRecord(up, g1, g2, Weight.ONE, 0L)),
-                back to setOf(AttachmentRecord(back, g2, g1, Weight.ONE, 0L)),
-                below to setOf(AttachmentRecord(below, g2, g3, Weight.ONE, 0L)),
+                up to setOf(AttachmentRecord(up, g1, g2, Weight.ONE)),
+                back to setOf(AttachmentRecord(back, g2, g1, Weight.ONE)),
+                below to setOf(AttachmentRecord(below, g2, g3, Weight.ONE)),
             ),
         )
         assertAll(
@@ -336,7 +336,7 @@ class EntitlementLedgerValidateTest {
     @Test
     fun anAggregateThatWouldWrapThrowsRatherThanReadingNegative() {
         val wrapping = EntitlementLedger.of(
-            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE, 0L))),
+            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE))),
             issued = mapOf(e1 to GCounter.of(alice to Long.MAX_VALUE, bob to 1L)),
         )
         assertAll(
@@ -359,10 +359,10 @@ class EntitlementLedgerValidateTest {
         val g4 = GroupId("g4")
         val e4 = AttachmentId("e4") // otherRoot → g4
         val left = EntitlementLedger
-            .of(records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE, 0L))))
+            .of(records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE))))
             .piece(EntitlementLedger.bootstrap(root, mapOf(alice to 10L), nonce = "left"))
         val right = EntitlementLedger
-            .of(records = mapOf(e4 to setOf(AttachmentRecord(e4, otherRoot, g4, Weight.ONE, 0L))))
+            .of(records = mapOf(e4 to setOf(AttachmentRecord(e4, otherRoot, g4, Weight.ONE))))
             .piece(EntitlementLedger.bootstrap(otherRoot, mapOf(alice to 10L), nonce = "right"))
         val merged = left.piece(right)
         assertAll(
