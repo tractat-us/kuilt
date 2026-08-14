@@ -23,9 +23,10 @@ The contract must not bake in either topology:
 
 - **Far** — client → server relay (`kuilt-websocket`, whether the server is
   on-LAN or remote).
-- **Near** — peer ↔ peer (Multipeer, WebRTC data channel, Android Nearby).
+- **Near** — peer ↔ peer (`kuilt-nw` on Apple platforms, WebRTC data channel,
+  Android Nearby).
 
-**Discovery is orthogonal** to the Near/Far cut. mDNS, Multipeer browsing, and
+**Discovery is orthogonal** to the Near/Far cut. mDNS, Apple peer browsing, and
 WebRTC signaling are *rendezvous* — they tell you who is out there and how to
 reach them; they feed any fabric. An mDNS-discovered game still connects over
 WebSocket (Far), so `kuilt-mdns` depends on `kuilt-websocket`, not the reverse.
@@ -36,12 +37,13 @@ A recurring question: should kuilt expose Bluetooth/BLE directly? Today the
 answer is **no**, for reasons that are worth recording so the question doesn't
 get re-litigated from scratch.
 
-- **Bluetooth is already present, at the right altitude.** The Near meta-fabrics
-  ride it transparently: Multipeer multiplexes Bluetooth + infra-WiFi +
-  peer-to-peer WiFi (and hands off between them), and Android Nearby does the
-  same over BLE + Bluetooth Classic + WiFi. Both present a *connection-oriented,
-  multi-peer* surface that maps cleanly onto `Seam`. A raw fabric would mostly
-  duplicate — worse — what they already do.
+- **The radios are already present, at the right altitude.** The Near
+  meta-fabrics ride them transparently: Android Nearby spans BLE + Bluetooth
+  Classic + WiFi and hands off between them, and on Apple platforms `kuilt-nw`
+  spans peer-to-peer WiFi and infra-WiFi (its Multipeer predecessor multiplexed
+  Bluetooth as well). Both present a *connection-oriented, multi-peer* surface
+  that maps cleanly onto `Seam`. A raw fabric would mostly duplicate — worse —
+  what they already do.
 - **Raw BLE fights the contract in three places.** (1) GATT is central/peripheral
   — *asymmetric* — whereas `Seam` is peer-symmetric, so you'd need a symmetry shim
   over an inherently asymmetric link. (2) `Swatch` is an arbitrary opaque blob, but
@@ -51,8 +53,8 @@ get re-litigated from scratch.
   `BluetoothGatt`, Chrome-only Web Bluetooth (gesture-gated), and nothing standard
   on desktop JVM — so the `expect`/`actual` spread is the widest of any fabric, for
   the worst transport.
-- **The one genuine gap it would close** is *cross-ecosystem* proximity: Multipeer
-  is Apple-only and Nearby is Android-only, and they don't interoperate. A raw
+- **The one genuine gap it would close** is *cross-ecosystem* proximity:
+  `kuilt-nw` is Apple-only and Nearby is Android-only, and they don't interoperate. A raw
   BLE/L2CAP fabric is the only way an iPhone and an Android phone connect with no
   AP, router, or internet — but it's a narrow niche, viable only for small,
   low-rate payloads given BLE's throughput.
@@ -634,7 +636,8 @@ kuilt-core         the contract + InMemoryLoom + MuxSeam + NamedMux + CompositeL
   │     └── kuilt-deal  fair card dealing + fair-random (SRA / commit-reveal)  → depends on kuilt-crdt + kuilt-core
   ├── kuilt-session     membership/room layer (admit, roster, roles, resume)  → depends on kuilt-core
   ├── kuilt-websocket   Ktor WebSocket fabric (Far)            → depends on kuilt-core
-  ├── kuilt-multipeer   Apple Multipeer fabric (Near, iOS/macOS)  → depends on kuilt-core
+  ├── kuilt-nw          Apple Network.framework fabric (Near, iOS/macOS)  → depends on kuilt-core
+  ├── kuilt-multipeer   Apple Multipeer fabric (Near, superseded by kuilt-nw)  → depends on kuilt-core
   ├── kuilt-nearby      Google Nearby fabric (Android)         → depends on kuilt-core
   ├── kuilt-webrtc      WebRTC data-channel fabric (wasmJs)    → depends on kuilt-core
   └── kuilt-mdns        Bonjour discovery → WebSocket session  → depends on kuilt-core + kuilt-websocket
