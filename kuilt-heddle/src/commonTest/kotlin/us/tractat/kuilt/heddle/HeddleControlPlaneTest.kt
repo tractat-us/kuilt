@@ -736,13 +736,15 @@ class HeddleControlPlaneTest {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // #1752: the scheduler's seat bump, end to end. The first generation under a
-    // parent that has never run is seated at the origin, which IS that parent's
-    // virtual-time origin. A LATER joiner is seated at the front it is joining — as an
-    // exact Rational, since a Gauge floor never has to be rounded to ⌈V⌉ (§7.2, #1688).
+    // #1752: the scheduler's seat bump, end to end, and the policy actually reading
+    // what it wrote. The first generation under a parent that has never run is seated
+    // at the origin, which IS that parent's virtual-time origin. A LATER joiner is
+    // seated at the front it is joining — as an exact Rational, since a Gauge floor
+    // never has to be rounded to ⌈V⌉ (§7.2, #1688) — and is then *scheduled* from
+    // there, which is the half a gauge-blind read path would get wrong.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun theSchedulerSeatsAJoinerAtTheFrontItIsJoining() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+    fun theSchedulerSeatsAJoinerAtTheFrontAndSchedulesItFromThere() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         val loom = InMemoryLoom()
         val seam: Seam = loom.host(Pattern("heddle-h5-neutral-origin"))
@@ -753,7 +755,9 @@ class HeddleControlPlaneTest {
             incarnation = "boot-neutral-origin", epoch = 0L,
         )
         assertIs<ControlOutcome.Applied>(governed.enroll(self))
-        assertIs<ControlOutcome.Applied>(governed.mint(self, 1_000L))
+        // 200 exactly: 100 for `first`'s run, and 100 left — which is precisely the deficit an
+        // origin-read joiner would claim, so the last phase below can tell the two reads apart.
+        assertIs<ControlOutcome.Applied>(governed.mint(self, 200L))
 
         // The first generation. Scheduled with nothing advertised, so the seat bump runs but no
         // grant does — the stored gauge is the seat itself, not a later `delegate` checkpoint.
@@ -771,6 +775,7 @@ class HeddleControlPlaneTest {
         // Now let it render service, so the parent's front advances past the origin.
         governed.advertise(first, Demand(targetOutstanding = 100L, maximumUsefulGrant = 100L))
         governed.schedule(root)
+        assertEquals(100L, governed.ledger.value.edge(first)?.issued, "first runs to its target")
         val front = assertNotNull(governed.parentVirtualTime(root))
         assertTrue(front > Rational.ZERO, "the parent has rendered service, so its front has advanced, was $front")
 
@@ -789,6 +794,20 @@ class HeddleControlPlaneTest {
             Gauge(joiningFront, folded = 0L),
             governed.ledger.value.gauge(second),
             "a joiner is seated at the front it is joining, exactly — never at 0, and never at a rounded ⌈V⌉",
+        )
+
+        // And the policy reads that seat. Both siblings now compete at equal weight for the last
+        // 100 units. Seated level they interleave and `first` takes about half; a read path blind
+        // to the gauge would place `second` at its own origin, 100 behind, and hand it every
+        // remaining unit as catch-up — the §10.5 lifetime credit the seat exists to deny.
+        val hungrier = Demand(targetOutstanding = 10_000L, maximumUsefulGrant = 10L)
+        governed.advertise(first, hungrier)
+        governed.advertise(second, hungrier)
+        governed.schedule(root)
+        assertTrue(
+            assertNotNull(governed.ledger.value.edge(first)).issued > 100L,
+            "first must win some of the last round — a gauge-blind read would give it all to second " +
+                "(first=${governed.ledger.value.edge(first)?.issued}, second=${governed.ledger.value.edge(second)?.issued})",
         )
     }
 
