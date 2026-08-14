@@ -8,6 +8,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
@@ -90,6 +91,16 @@ import kotlin.test.fail
  *  - [sendOnTornSeamThrows] ↔ [SeamCapabilities.throwsOnSendToTorn]
  *  - [sendToDeliversToNamedPeer] ↔ [SeamCapabilities.supportsSendTo]
  *  - [peersCollapseToSelfIdWhenTorn] ↔ [SeamCapabilities.collapsesPeersOnTear]
+ *  - [survivorStopsAdvertisingADepartedPeer] ↔ [SeamCapabilities.reportsPeerLoss]
+ *
+ * Every flag on [SeamCapabilities] now appears in that list or is a selector ([SeamCapabilities.reportsLiveCapability],
+ * above) — with one deliberate exception, [SeamCapabilities.securesTransport], which is a standing
+ * *declaration* no property can read because the suite has no wire tap. Its own KDoc argues that and
+ * names what holds a fabric to it instead. Keeping the set closed is the point: publishing a
+ * capability value subscribes a fabric to every case selected on it, so a flag with **zero** cases
+ * charges the [everyFalseCapabilityDeclaresAGap] toll, delivers no coverage, and invites a reader
+ * auditing the matrix to infer coverage that does not exist. That is what #2304 found on three flags,
+ * one of which ([SeamCapabilities] no longer declares it) was actively contradicted by ungated core.
  *
  * There is a **third** gating mechanism alongside *core (ungated)* and *capability-gated*:
  * **harness-hook-gated**. [incomingCompletesOnInjectedMidSessionDeath] runs only when a harness
@@ -868,6 +879,103 @@ public abstract class SeamConformanceSuite {
                         )
                     },
                 )
+            }
+        }
+
+    // ── (13f) a survivor stops advertising a peer that has departed ──────────
+    //
+    // The obligation `SeamCapabilities.reportsPeerLoss` names ("peer-drop reflected in peers/state"),
+    // which until #2303/#2304 no property read — the flag was a free declaration every fabric set
+    // `true` while nothing held anyone to it. It is also the one departure event **every** harness can
+    // reach with no injection at all: `peersDrainWithoutTearOnInjectedMembershipDrain` needs the
+    // `injectMembershipDrain` hook, which 3 of 19 subclasses override — all three of them in-process
+    // shared-roster harnesses — so every real fabric skipped the only neighbouring obligation.
+    // `peersCollapseToSelfIdWhenTorn` does not cover it either: that closes the seam **being
+    // inspected**. Nothing closed one end and then looked at the other while it was still live.
+    //
+    // **The assertion is a disjunction, and the naive form is wrong.** Three conforming shapes exist:
+    // an N-peer mesh drops the peer and stays Woven; a strictly-2-peer link latches Torn (losing its
+    // only link IS a tear); `NwSeam` treats peer loss as *recoverable* and re-forms Woven→Weaving
+    // rather than tearing (see `connectedPair`'s teardown comment). "Drops the peer **or** latches
+    // Torn" would red-light the third for behaving correctly. What all three share is the negative,
+    // and it is what `Seam.peers`' own KDoc already requires — *a peer in `peers` must be addressable
+    // by `sendTo`* — so a survivor must not sit at Woven advertising a peer `sendTo` would refuse.
+    //
+    // **The precondition is what stops the disjunction being satisfied by the state it started in.**
+    // A fabric whose host never had the joiner in `peers` would satisfy the roster arm from the first
+    // instant, and one that was never Woven would satisfy the state arm — in both cases green without
+    // the departure having caused anything. Asserting both up front makes the only way to satisfy the
+    // disjunction a transition the departure produced.
+    //
+    // **Unbounded, and that is the shape of its red.** Like every other delivery obligation here
+    // (`payloadOfExactlyTheBudgetIsCarried`, `wovenSeamCapabilityIsHonest`'s live arm), the await IS
+    // the assertion and `runTest`'s ceiling is the backstop. An inner `withTimeout` would be measured
+    // in VIRTUAL time, which a real-IO fabric does not advance: the clock would jump the whole bound
+    // while the socket was still carrying the disconnect, failing a fabric that was working fine.
+    //
+    // **What it cannot detect,** stated because the arms hide different things:
+    //  - it is an *eventual* obligation, so it cannot bound how long a survivor may advertise a
+    //    departed peer — only that it must stop;
+    //  - the state arm accepts *any* departure from Woven, so a fabric that leaves Woven and keeps the
+    //    departed peer in `peers` forever would pass. That is the price of not red-lighting a
+    //    recoverable re-form, and it is narrow rather than free: all three conforming shapes reach a
+    //    STABLE satisfying value (the two mesh shapes drop the peer, the 2-peer shape latches Torn), so
+    //    the `combine` below cannot lose the verdict to StateFlow conflation either.
+    //
+    // Gated on `reportsPeerLoss`; every `false` is a tracked bug, not a by-design gap — a fabric that
+    // keeps a departed peer reachable-looking is lying to every consumer that reads `peers`.
+
+    @Test
+    public fun survivorStopsAdvertisingADepartedPeer(): TestResult =
+        runTest {
+            if (!capabilities().reportsPeerLoss) return@runTest
+            connectedPair { host, joiner ->
+                val departing = joiner.selfId
+                assertAll(
+                    {
+                        assertTrue(
+                            departing in host.peers.value,
+                            "precondition: the survivor must advertise the peer BEFORE it departs, or the " +
+                                "roster arm below is satisfied from the first instant and asserts nothing " +
+                                "(host peers: ${host.peers.value.map { it.value }}, departing: ${departing.value})",
+                        )
+                    },
+                    {
+                        assertIs<SeamState.Woven>(
+                            host.state.value,
+                            "precondition: the survivor must be Woven BEFORE the departure, or the state arm " +
+                                "below is satisfied from the first instant and asserts nothing",
+                        )
+                    },
+                )
+
+                joiner.close()
+
+                // The THIRD precondition, and the one that turns this obligation's worst red — an
+                // unbounded wedge — into a named diagnosis. The two above establish the survivor's
+                // starting state; this establishes that the event under test actually happened. A seam
+                // whose `close()` is a purely local unsubscribe never reaches the transport, so no peer
+                // departs, and the survivor is then *correctly* still advertising it — the await below
+                // would hang to `runTest`'s ceiling reporting nothing but a timeout. A mux CHANNEL VIEW
+                // is exactly that seam (`MuxBase.ChannelView.close` closes its own spool while `state`
+                // and `peers` keep delegating to the live base), which is why the mux-hub harness
+                // declares this obligation a gap rather than passing it.
+                //
+                // It is an assertion rather than an early-return on purpose: "did the joiner tear?" is
+                // precisely the condition a fabric could use to opt out of the whole property, and
+                // `closeDrivesStateTornNormal` already makes it UNGATED CORE — so a joiner that does not
+                // latch Torn here is non-conforming twice over, not exempt.
+                assertIs<SeamState.Torn>(
+                    joiner.state.value,
+                    "precondition: the departing peer must genuinely have left — close() latches Torn " +
+                        "(ungated core, closeDrivesStateTornNormal). This joiner did not, so its close() " +
+                        "was a local unsubscribe the survivor could never observe and nothing below " +
+                        "would be testing the survivor's reaction to a departure",
+                )
+
+                host.peers.combine(host.state) { peers, state ->
+                    departing !in peers || state !is SeamState.Woven
+                }.first { it }
             }
         }
 

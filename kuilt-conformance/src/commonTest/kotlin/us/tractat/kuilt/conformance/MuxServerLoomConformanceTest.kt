@@ -75,17 +75,37 @@ class MuxServerLoomConformanceTest : SeamConformanceSuite() {
      *
      * `collapsesPeersOnTear = true` is the obligation this harness exists to pin — it was untrue
      * of `RoomHubSeam` until #1869, and nothing in the suite could see it.
+     *
+     * `reportsPeerLoss = false` is a **harness** gap, and unusually it understates the fabric —
+     * `RoomHubSeam` reports peer loss correctly, and this very harness proves it: its
+     * [injectMembershipDrain] closes the client's underlying connection and
+     * [SeamConformanceSuite.peersDrainWithoutTearOnInjectedMembershipDrain] then observes the hub
+     * deregister the peer while staying Woven. What cannot be shown is
+     * [SeamConformanceSuite.survivorStopsAdvertisingADepartedPeer], because that obligation departs
+     * by closing the **joiner seam this harness hands back**, which is a `NamedMux` *channel view*:
+     * `MuxBase.ChannelView.close` closes its own delivery spool and returns, while `state` and `peers`
+     * keep delegating to a base connection that is still very much alive. So no peer departs, the hub
+     * is right to keep advertising it, and the obligation's Torn precondition names that rather than
+     * wedging. Declaring the gap here is the honest record; #2372 tracks the underlying question —
+     * whether a channel view that never reaches [us.tractat.kuilt.core.SeamState.Torn] on `close()`
+     * satisfies `Seam` at all, given `closeDrivesStateTornNormal` is ungated core.
+     *
+     * (Precedent for a flag describing the *harness* rather than the fabric: `NwConformanceTest`
+     * declares `securesTransport = false` for a fabric whose real transport is TLS-PSK, because the
+     * radio under its harness is a plaintext fake.)
      */
     override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL.copy(
         securesTransport = false,
         meshDelivery = false,
         reportsLiveCapability = false,
+        reportsPeerLoss = false,
     )
 
     override fun capabilityGaps(): Map<String, String> = mapOf(
         "securesTransport" to CapabilityGaps.SECURES_TRANSPORT,
         "meshDelivery" to CapabilityGaps.MESH_DELIVERY,
         "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
+        "reportsPeerLoss" to "https://github.com/tractat-us/kuilt/issues/2372",
     )
 
     /**
