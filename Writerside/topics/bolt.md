@@ -275,18 +275,21 @@ recent handful of failures. The complete channel is the `AppendResult` that `Bol
 returns. A consumer that must not lose an identity calls `publish` itself rather than routing
 through a sink that returns nothing.
 
-## Adding your own backend
+## Adding another backend
 
-Subclass `BoltConformanceSuite` and implement its five fixture hooks — a fresh archive, one already
-out of room, one damaged inside a frame, one missing a whole region out of the middle, and one that
-cannot flush. It pins seven properties, and the second is the reason the module exists: a bolt fed a
-record of forgetting keeps the edits that record suppresses and never replays the record itself.
+A new archive backend is proved correct the same way a new [fabric](fabric-kit.md) is: by
+subclassing a shared suite rather than writing its own tests. `BoltConformanceSuite` asks for six
+fixtures — a fresh archive, one already out of room, one damaged inside a frame, one missing a whole
+region out of the middle, one whose segments run backwards, and one that cannot flush — and runs
+every property against all of them. Chief among those properties is the reason the module exists: a
+bolt fed a record of forgetting keeps the edits that record suppresses, and never replays the record
+itself.
 
-No hook is optional, and for the three damage fixtures that is the point of them. An "I cannot reach
-this state" opt-out moves the hole one level up, where it is harder to see: the suite would go green
+No fixture is optional, and for the damaged ones that is the point of them. An "I cannot reach this
+state" opt-out moves the hole one level up, where it is harder to see: the suite would go green
 for a backend that never exercised the path at all. See [Testing](testing.md) for how the other
 conformance suites in kuilt are used, and `kuilt-bolt/module.md` in the repository for the archive's
-byte format and the full contract of each hook.
+byte format and the full contract of each fixture.
 
 ## When to use
 
