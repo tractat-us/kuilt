@@ -2,6 +2,10 @@ package us.tractat.kuilt.conformance
 
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.raft.ClientId
+import us.tractat.kuilt.raft.ClusterConfig
+import us.tractat.kuilt.raft.ConfigPayload
+import us.tractat.kuilt.raft.DedupKey
 import us.tractat.kuilt.raft.LeaderForTerm
 import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.NodeId
@@ -838,8 +842,9 @@ public abstract class RaftStorageConformanceSuite {
      * a lossy column across the restart makes the node unbeatable while carrying a log it cannot
      * justify.
      *
-     * [SnapshotMeta.config] is deliberately **not** exercised here — that round trip is #2302's, on
-     * this same suite, and pinning it in two places would leave two things to keep in step.
+     * [SnapshotMeta.config] is deliberately **not** exercised here — that round trip is
+     * [theSnapshotConfigSurvivesAReopen]'s (#2302), and pinning it in two places would leave two
+     * things to keep in step.
      */
     @Test
     public fun theSnapshotSurvivesAReopen(): TestResult = runTest {
@@ -896,6 +901,226 @@ public abstract class RaftStorageConformanceSuite {
         )
     }
 
+    // ── Fields the records carry beyond the obvious ones (#2302) ─────────────
+
+    /**
+     * [LogEntry] has six fields; every property above constructs entries from three.
+     *
+     * That is not an omission with a cosmetic cost. [LogEntry.isNoOp] left unset is `false`,
+     * [LogEntry.config] is `null` and [LogEntry.dedupKey] is `null` — **exactly the values a dropped
+     * field decodes to**. So a storage with the obvious `(index, term, command)` schema, which
+     * silently defaults the other three, is green on every property above; the suite writes the
+     * defaults and reads the defaults back and cannot tell the two apart. `assertEquals(written,
+     * read)` was already a full six-field check ([LogEntry.equals] is hand-written and compares all
+     * of them) — what was missing was a single entry whose internal fields were not their defaults.
+     *
+     * What each dropped field costs the node that restarts on it:
+     *
+     * - **[LogEntry.isNoOp]** — the §5.4.2 election no-op restores as application data and is
+     *   delivered on `RaftNode.committed`: the application applies a command nobody proposed.
+     * - **[LogEntry.config]** — a §6 membership entry restores as an ordinary one, so it is not
+     *   adopted on append (the cardinal §6 rule) and the node comes back under the wrong cluster
+     *   membership. This one is consensus-critical: the restored voter set decides quorum.
+     * - **[LogEntry.dedupKey]** — §8 client-serial dedup is lost, and a client command that already
+     *   committed is applied a second time after the restart.
+     *
+     * **Three entries rather than one, which is what makes this more than a second spelling of the
+     * defaults.** A single entry carrying all three fields is satisfied by a storage that
+     * *hardcodes* them — `isNoOp = true` on every read passes it, and so does a decoder that
+     * fabricates a config. Here each field is non-default in **exactly one** entry and default in
+     * the other two, mirroring the three shapes `RaftEngine` actually writes (the no-op it appends
+     * on winning an election, the config entry `appendConfigEntry` writes, the `dedupKey`-stamped
+     * application entry `propose` writes). A constant therefore fails on the two entries where the
+     * field must be absent, and a drop fails on the one where it must be present. Neither direction
+     * has a green.
+     *
+     * **What this cannot detect:** anything about durability. Every read here is off the handle that
+     * took the write, so a storage holding these fields in a live object and persisting none of them
+     * passes. [logEntryInternalFields_surviveAReopen] is that half.
+     */
+    @Test
+    public fun logEntryInternalFields_roundTripPerEntry(): TestResult = runTest {
+        val storage = newStorage()
+        val written = internalFieldEntries()
+        storage.appendEntries(written)
+        val read = storage.entries()
+        assertAll(
+            { assertInternalFieldsAreNonDefault(written) },
+            { assertEquals(3, read.size, "all three entries must be readable") },
+            { assertEquals(written, read, "every entry whole — all six fields, in order") },
+            { assertEquals(listOf(true, false, false), read.map { it.isNoOp }, "isNoOp must be per-entry, not a constant") },
+            { assertEquals(listOf(null, JOINT_CONFIG, null), read.map { it.config }, "config must be per-entry, not a constant") },
+            { assertEquals(listOf(null, null, DEDUP_KEY), read.map { it.dedupKey }, "dedupKey must be per-entry, not a constant") },
+        )
+    }
+
+    /**
+     * [logEntryInternalFields_roundTripPerEntry] on the far side of a restart — the boundary these
+     * three fields are actually lost at.
+     *
+     * The two are not one property counted twice: they fail for **different adapters**. A storage
+     * whose schema has no column for `is_no_op` / `config` / `dedup_key` fails both. A storage that
+     * appends the `LogEntry` objects to a live list and serves `entries()` from it while persisting
+     * only three columns — the write-through cache, an entirely ordinary shape — passes the
+     * same-handle property and fails only here. And the restart is where the cost lands: the
+     * fields matter to a node that is *rebuilding* its state, not to one that never lost it.
+     */
+    @Test
+    public fun logEntryInternalFields_surviveAReopen(): TestResult = runTest {
+        val storage = newStorage()
+        val written = internalFieldEntries()
+        storage.appendEntries(written)
+        val restored = reopened(storage).entries()
+        assertAll(
+            { assertInternalFieldsAreNonDefault(written) },
+            { assertEquals(3, restored.size, "every appended entry must survive the restart") },
+            { assertEquals(written, restored, "whole and in order — the internal fields with the rest") },
+            { assertEquals(listOf(true, false, false), restored.map { it.isNoOp }, "the §5.4.2 no-op flag must survive, and only on the no-op") },
+            { assertEquals(listOf(null, JOINT_CONFIG, null), restored.map { it.config }, "the §6 membership payload must survive, and only on the config entry") },
+            { assertEquals(listOf(null, null, DEDUP_KEY), restored.map { it.dedupKey }, "the §8 dedup identity must survive, and only on the stamped entry") },
+        )
+    }
+
+    /**
+     * [SnapshotMeta] has three fields and the suite asserted two — and the third is the one the
+     * suite's own KDoc already named as the failure.
+     * [snapshotAtZeroBaseline_roundTrips] argues that an adapter with nullable-with-default metadata
+     * columns *"loses that config and comes back under the wrong cluster configuration"*, and then
+     * does not assert it: every snapshot above is built `SnapshotMeta(index, term)`, leaving
+     * [SnapshotMeta.config] at its `null` default, which is precisely what a dropped column decodes
+     * to.
+     *
+     * The value is load-bearing and it is the **only** carrier of its fact. `RaftEngine` seeds
+     * `state.snapshotConfig` from it on restore, and compaction discards the config log entries that
+     * produced it — so a node that compacted past a membership change has nothing else to recover
+     * the voter set from. A dropped config there is not a lost optimisation; it is a node rejoining
+     * under a cluster membership that no longer exists.
+     *
+     * **Joint (`old != null`), with a learner in the `new` half — both are knob settings that would
+     * switch detection off if taken the comfortable way.** A *simple* payload leaves `old` at `null`,
+     * so an adapter persisting only `new` would round-trip it perfectly; a `new` with no learners
+     * leaves [ClusterConfig.learners] at its `emptySet()` default, so an adapter persisting only
+     * `voters` would too. Both halves and both collections are non-default here, so neither shortcut
+     * has anywhere to hide.
+     *
+     * **What this cannot detect:** a config that is stored but *fabricated* on the absent path — an
+     * adapter decoding a missing config to a non-null empty `ClusterConfig`. [anUnwrittenMediumReopensEmpty]
+     * is the only property that opens that door, and it opens it for the snapshot as a whole rather
+     * than for this field.
+     */
+    @Test
+    public fun snapshotConfig_roundTrips(): TestResult = runTest {
+        val storage = newStorage()
+        val meta = SnapshotMeta(lastIncludedIndex = 4L, lastIncludedTerm = 2L, config = JOINT_CONFIG)
+        storage.saveSnapshot(meta, byteArrayOf(7, 8, 9))
+        val stored = storage.loadSnapshot()
+        assertAll(
+            { assertJointConfigFixture() },
+            { assertNotNull(stored, "the snapshot must be present") },
+            { assertEquals(meta, stored?.meta, "the metadata must round-trip whole — all THREE fields") },
+            { assertEquals(JOINT_CONFIG.old, stored?.meta?.config?.old, "the OLD half of a joint config must survive") },
+            { assertEquals(JOINT_CONFIG.new, stored?.meta?.config?.new, "and the NEW half, learners included") },
+        )
+    }
+
+    /**
+     * The snapshot config on the far side of a restart, which is the only side it is ever read on.
+     *
+     * `RaftEngine` reads `meta.config` in exactly one place on the load path — seeding
+     * `state.snapshotConfig` during start-up restore — so an adapter that keeps the metadata in a
+     * live field and persists only `lastIncludedIndex` / `lastIncludedTerm` is green on
+     * [snapshotConfig_roundTrips] and loses the membership baseline on every restart, silently:
+     * `null` is a legal value here (the covered prefix carried no config change), so the engine has
+     * nothing to refuse. The node comes back under its bootstrap configuration.
+     *
+     * Same fixture as [snapshotConfig_roundTrips] for the reason its KDoc gives; the interesting
+     * difference is only the boundary it crosses.
+     */
+    @Test
+    public fun theSnapshotConfigSurvivesAReopen(): TestResult = runTest {
+        val storage = newStorage()
+        val meta = SnapshotMeta(lastIncludedIndex = 4L, lastIncludedTerm = 2L, config = JOINT_CONFIG)
+        storage.saveSnapshot(meta, byteArrayOf(7, 8, 9))
+        val stored = reopened(storage).loadSnapshot()
+        assertAll(
+            { assertJointConfigFixture() },
+            { assertNotNull(stored, "a saved snapshot must still be there after a restart") },
+            { assertEquals(meta, stored?.meta, "and its metadata whole — the membership baseline included") },
+            { assertEquals(JOINT_CONFIG, stored?.meta?.config, "the config a compacted node has no other way to recover") },
+        )
+    }
+
+    /**
+     * An **empty** application state is a real snapshot, not an absent one.
+     *
+     * Every snapshot above carries one to three bytes, so the suite never distinguished "no
+     * snapshot" from "a snapshot of nothing" — and the encoding that conflates them is the ordinary
+     * one: a `BLOB` column whose empty value is written as `NULL`, a key-value store that treats a
+     * zero-length value as a delete, a JSON field omitted when empty. `loadSnapshot()` then returns
+     * `null`, which the engine reads as *no snapshot at all*: it restores `snapshotIndex = 0` and
+     * looks for a log starting at index 1 that compaction already discarded, so start-up fails the
+     * contiguity check (`CorruptDurableStateException`) if it is lucky and silently mis-resolves
+     * membership if it is not.
+     *
+     * `byteArrayOf()` is reachable: the application's `snapshotProvider` returns whatever bytes the
+     * state serialises to, and a state machine whose state is empty at the cut serialises to none.
+     * The config is non-null here for the same reason — it is the field most likely to be lost
+     * *along with* the state under a "the row is empty, drop it" encoding.
+     */
+    @Test
+    public fun snapshotWithEmptyState_isStillASnapshot(): TestResult = runTest {
+        val storage = newStorage()
+        val meta = SnapshotMeta(lastIncludedIndex = 3L, lastIncludedTerm = 1L, config = SIMPLE_CONFIG)
+        storage.saveSnapshot(meta, byteArrayOf())
+        val stored = storage.loadSnapshot()
+        assertAll(
+            { assertNotNull(stored, "an empty application state is a snapshot, not an absent one") },
+            { assertContentEquals(byteArrayOf(), stored?.state, "the empty state must come back empty, not null and not fabricated") },
+            { assertEquals(meta, stored?.meta, "and the metadata beside it, config included") },
+        )
+    }
+
+    /**
+     * [RaftStorage.saveSnapshot]'s contract says it *"overwrites any previously stored snapshot"*,
+     * and until this property no test saved two.
+     *
+     * Overwriting is not an edge case — it is what compaction does every time it runs, so a storage
+     * that gets it wrong gets it wrong on its **second** snapshot and every one after. The adapter
+     * shape is the obvious one: a snapshots table with an `INSERT`, read back by a `SELECT … LIMIT 1`
+     * with no `ORDER BY … DESC`, which restores the *oldest* baseline. That node comes back believing
+     * its log was compacted to an earlier cut than it was, so `entries(snapshotIndex + 1)` selects
+     * entries that were discarded and returns a log with a hole.
+     *
+     * **Every field of the second differs from the first, and the config differs in the direction
+     * that matters.** The superseded snapshot carries a joint config; the surviving one carries
+     * `null`. So a non-null config in the result is *attributable* — it can only have come from the
+     * snapshot that was supposed to be gone. Written the other way round (`null` first, config
+     * second) a storage that merged the two records field-by-field, keeping whichever half was
+     * non-null, would pass. It cannot pass this.
+     *
+     * The restart arms are here rather than in a property of their own because the write-through
+     * cache passes the same-handle half by construction: it serves the latest snapshot from a live
+     * field and appends rows underneath, so only the reopen sees which row the `SELECT` picks.
+     */
+    @Test
+    public fun saveSnapshot_overwritesThePriorSnapshotWhole(): TestResult = runTest {
+        val storage = newStorage()
+        storage.saveSnapshot(SUPERSEDED_META, byteArrayOf(1, 1, 1))
+        storage.saveSnapshot(SURVIVING_META, byteArrayOf(2, 2))
+        val stored = storage.loadSnapshot()
+        val afterRestart = reopened(storage).loadSnapshot()
+        assertAll(
+            { assertOverwriteFixtureIsAttributable() },
+            { assertNotNull(stored, "a snapshot must be present after two saves") },
+            { assertEquals(SURVIVING_META, stored?.meta, "the LATER snapshot's metadata must win, whole") },
+            { assertContentEquals(byteArrayOf(2, 2), stored?.state, "and its state bytes with it") },
+            { assertNull(stored?.meta?.config, "NO field of the superseded snapshot may survive — its config least of all") },
+            { assertNotNull(afterRestart, "and the surviving snapshot must still be there after a restart") },
+            { assertEquals(SURVIVING_META, afterRestart?.meta, "a restart must restore the LATER snapshot, not the one it replaced") },
+            { assertContentEquals(byteArrayOf(2, 2), afterRestart?.state, "with the later state bytes") },
+        )
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     /**
@@ -921,6 +1146,66 @@ public abstract class RaftStorageConformanceSuite {
                 "rebuilds one from its own public read surface.",
         )
         return restarted
+    }
+
+    /**
+     * The three entry shapes `RaftEngine` writes, one per internal field, each field non-default in
+     * exactly one of them. [logEntryInternalFields_roundTripPerEntry] argues why that arrangement
+     * rather than a single entry carrying all three.
+     *
+     * Fresh arrays on every call: a shared `ByteArray` in a companion constant would be a mutable
+     * value handed to a storage under test, and an adapter that retains and mutates it would corrupt
+     * the *next* test's expectation instead of failing its own.
+     */
+    private fun internalFieldEntries(): List<LogEntry> = listOf(
+        LogEntry(index = 1L, term = 1L, command = byteArrayOf(), isNoOp = true),
+        LogEntry(index = 2L, term = 1L, command = byteArrayOf(), config = JOINT_CONFIG),
+        LogEntry(index = 3L, term = 2L, command = byteArrayOf(9), dedupKey = DEDUP_KEY),
+    )
+
+    /**
+     * Asserts the rig fired: the fixture really does carry non-default values in all three internal
+     * fields.
+     *
+     * Without this the two log properties would still be *green* against a correct storage while
+     * asserting nothing at all — `isNoOp = false`, `config = null` and `dedupKey = null` round-trip
+     * through a storage that has never heard of any of them. This is the assertion that fails, loudly
+     * and by name, if a later edit "simplifies" the fixture back toward the defaults; it is checked
+     * inside each property rather than at construction so it appears in that property's failure.
+     */
+    private fun assertInternalFieldsAreNonDefault(entries: List<LogEntry>) {
+        assertAll(
+            { assertEquals(3, entries.size, "fixture: three entries, one per internal field") },
+            { assertTrue(entries[0].isNoOp, "fixture: entry 1 must carry isNoOp = TRUE — false is what a dropped field decodes to") },
+            { assertNotNull(entries[1].config?.old, "fixture: entry 2's config must be JOINT (old != null), or only its new half is probed") },
+            { assertTrue(entries[1].config?.new?.learners?.isNotEmpty() == true, "fixture: the new half must carry a learner — emptySet() is ClusterConfig's default") },
+            { assertNotNull(entries[2].dedupKey, "fixture: entry 3 must carry a dedupKey — null is what a dropped field decodes to") },
+            { assertEquals(listOf(false, false), entries.drop(1).map { it.isNoOp }, "fixture: isNoOp must be non-default on exactly ONE entry, or a constant passes") },
+            { assertEquals(listOf(null, null), listOf(entries[0].config, entries[2].config), "fixture: config non-default on exactly ONE entry") },
+            { assertEquals(listOf(null, null), listOf(entries[0].dedupKey, entries[1].dedupKey), "fixture: dedupKey non-default on exactly ONE entry") },
+        )
+    }
+
+    /** The [JOINT_CONFIG] half of [assertInternalFieldsAreNonDefault], for the snapshot properties. */
+    private fun assertJointConfigFixture() {
+        assertAll(
+            { assertNotNull(JOINT_CONFIG.old, "fixture: the config must be JOINT (old != null), or only its new half is probed") },
+            { assertTrue(JOINT_CONFIG.new.learners.isNotEmpty(), "fixture: the new half must carry a learner — emptySet() is ClusterConfig's default") },
+        )
+    }
+
+    /**
+     * Asserts the overwrite rig fired: the two snapshots differ in **every** field, and the config
+     * differs in the direction that makes a survivor attributable.
+     * [saveSnapshot_overwritesThePriorSnapshotWhole] carries the argument.
+     */
+    private fun assertOverwriteFixtureIsAttributable() {
+        assertAll(
+            { assertNotNull(SUPERSEDED_META.config, "fixture: the SUPERSEDED snapshot must carry a config, or 'no field of it survives' asserts nothing") },
+            { assertNull(SURVIVING_META.config, "fixture: the SURVIVING one must not, so any config in the result is attributable to the superseded one") },
+            { assertTrue(SUPERSEDED_META.lastIncludedIndex != SURVIVING_META.lastIncludedIndex, "fixture: the baselines must differ") },
+            { assertTrue(SUPERSEDED_META.lastIncludedTerm != SURVIVING_META.lastIncludedTerm, "fixture: the terms must differ") },
+        )
     }
 
     /** Asserts [entries] step by exactly one index at a time, in ascending order. */
@@ -956,6 +1241,57 @@ public abstract class RaftStorageConformanceSuite {
          * left free for that, which is why this is the ceiling minus one rather than the ceiling.
          */
         const val DURABLE_TERM = MAX_PLAUSIBLE - 1L
+
+        /**
+         * A **joint** §6 payload (`old != null`) whose `new` half also carries a learner.
+         *
+         * Both of those are knobs, and both defaults are the setting at which the property they
+         * appear in cannot fail: a *simple* payload leaves `old` at `null`, so a storage persisting
+         * only `new` round-trips it exactly; a voters-only `new` leaves [ClusterConfig.learners] at
+         * its `emptySet()` default, so a storage persisting only `voters` does too. The voter sets
+         * of the two halves also **differ** — a storage keying the whole payload off one set would
+         * otherwise reconstruct the other for free.
+         */
+        val JOINT_CONFIG = ConfigPayload(
+            old = ClusterConfig(voters = setOf(NodeId("node-a"), NodeId("node-b"), NodeId("node-c"))),
+            new = ClusterConfig(
+                voters = setOf(NodeId("node-b"), NodeId("node-c"), NodeId("node-d")),
+                learners = setOf(NodeId("node-e")),
+            ),
+        )
+
+        /**
+         * A **simple** §6 payload — the shape a cluster that has finished a transition sits in, and
+         * the one [snapshotWithEmptyState_isStillASnapshot] carries.
+         *
+         * `old == null` here is deliberate rather than lazy: that property is about the *state*
+         * column swallowing the row, so its config exists to prove the metadata survived alongside
+         * an empty state, and the joint-vs-simple discrimination is [JOINT_CONFIG]'s job elsewhere.
+         * The learner is kept for the reason above.
+         */
+        val SIMPLE_CONFIG = ConfigPayload(
+            old = null,
+            new = ClusterConfig(voters = setOf(NodeId("node-a"), NodeId("node-b")), learners = setOf(NodeId("node-f"))),
+        )
+
+        /**
+         * A §8 client-serial identity with a **non-auto** [ClientId] and a `requestId` that is
+         * neither `0` nor `1`.
+         *
+         * Both are the same knob argument as [JOINT_CONFIG]'s: a `requestId` of `0` is what a
+         * dropped numeric column reads back as, and an `auto:`-shaped id is the one a storage could
+         * plausibly re-mint rather than persist.
+         */
+        val DEDUP_KEY = DedupKey(ClientId("client-durable-7"), requestId = 42L)
+
+        /** The snapshot [saveSnapshot_overwritesThePriorSnapshotWhole] expects to be gone. */
+        val SUPERSEDED_META = SnapshotMeta(lastIncludedIndex = 4L, lastIncludedTerm = 2L, config = JOINT_CONFIG)
+
+        /**
+         * The snapshot that replaces [SUPERSEDED_META] — every field different, and `config = null`
+         * so a config in the result can only have come from the record that was supposed to be gone.
+         */
+        val SURVIVING_META = SnapshotMeta(lastIncludedIndex = 9L, lastIncludedTerm = 3L, config = null)
     }
 }
 
