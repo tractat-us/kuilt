@@ -7,12 +7,12 @@
 A Kotlin Multiplatform networking library — one codebase, every domain.
 
 Kotlin Multiplatform lets you share application logic across servers, browsers,
-and phones. kuilt extends that to the three parts of a connected app that are
-usually different on every platform:
+and phones. kuilt extends that to the parts of a connected app that are usually
+different on every platform:
 
 ### One network fabric — server, web, and phone
 
-WebSocket on a server, WebRTC in a browser, Multipeer Connectivity on iPhone,
+WebSocket on a server, WebRTC in a browser, Network.framework on iPhone,
 Nearby on Android: four different APIs for the same idea. kuilt replaces them
 with a single interface — host a session, join a session, send a frame, watch
 who's connected. Swap the underlying transport without changing your application
@@ -27,7 +27,7 @@ automatically to the same result on every device — no custom merge logic, no
 
 The CRDT types (`LWWMap`, `ORSet`, `Rga`, `JsonCrdt`, …) are plain serializable
 value objects. You can use them with any transport you already have — or without
-any network at all. Live propagation via `SeamReplicator` is optional.
+any network at all. Live propagation via `Quilter` is optional.
 
 [crdt]: https://tractat-us.github.io/kuilt/guide/crdt-overview.html
 
@@ -43,6 +43,19 @@ your own messaging layer (gRPC, a queue, anything) without using any kuilt
 fabric module.
 
 [raft-guide]: https://tractat-us.github.io/kuilt/guide/
+
+### Logs and metrics that outlive being offline
+
+When something goes wrong on a phone with no signal, the evidence is usually
+gone by the time anyone looks. kuilt records traces, metrics and logs on the
+device and reconciles them across devices once the network returns — nothing
+lost, nothing counted twice.
+
+It's [OpenTelemetry][otel], so collectors and dashboards you already run read it
+unchanged. Tests and CI can also pull the logs off a live device by joining it
+as a peer, without the device ever talking to a server.
+
+[otel]: https://tractat-us.github.io/kuilt/guide/observability.html
 
 ---
 

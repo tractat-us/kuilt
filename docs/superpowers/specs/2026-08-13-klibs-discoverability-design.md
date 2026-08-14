@@ -73,4 +73,4 @@ Two PRs off `origin/main`, no overlap, no stacking: build-logic (Part 2), docs-o
 
 ## Out of scope
 
-README's module table still omits `kuilt-nw`; `docs/architecture.md` has nine stale Multipeer mentions. Both separate.
+`docs/architecture.md` has nine stale Multipeer mentions. Separate concern.
