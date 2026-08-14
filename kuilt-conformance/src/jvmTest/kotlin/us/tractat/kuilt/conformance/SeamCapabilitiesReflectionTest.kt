@@ -35,7 +35,6 @@ class SeamCapabilitiesReflectionTest {
     @Test
     fun flagListCoversEveryDeclaredBooleanProperty() {
         val allFalse = SeamCapabilities(
-            ordersDelivery = false,
             reportsPeerLoss = false,
             terminatesIncomingOnClose = false,
             staysTornAfterClose = false,

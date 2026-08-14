@@ -60,7 +60,17 @@ class SeamConformanceUngatedCoreTest {
 
     @Test
     fun coreObligationsRunUnderAllFalseCapabilities(): TestResult = runTest {
-        assertEquals(10, allFalseHarness().capabilities().falseFlags().size, "harness must declare every flag false")
+        // The rig asserts it fired, and it is DERIVED from the flag list rather than counted by hand:
+        // a literal `10` here silently degrades to "some flags are false" the moment a flag is added
+        // (the harness would compile — its named arguments are complete — while quietly exempting the
+        // new one from the hostility this test exists to apply). Comparing the NAMES also beats
+        // comparing a size: two flags could be swapped without the count moving.
+        assertEquals(
+            SeamCapabilities.FLAGS.map { it.first }.toSet(),
+            allFalseHarness().capabilities().falseFlags(),
+            "the all-false harness must declare EVERY flag false — otherwise a core obligation that " +
+                "reads the flag it forgot would pass this meta-test while still being gated",
+        )
         runAllCore(::allFalseHarness, this)
     }
 
@@ -86,7 +96,6 @@ class SeamConformanceUngatedCoreTest {
 
     private companion object {
         private val ALL_FALSE = SeamCapabilities(
-            ordersDelivery = false,
             reportsPeerLoss = false,
             terminatesIncomingOnClose = false,
             staysTornAfterClose = false,

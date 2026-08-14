@@ -435,6 +435,18 @@ public abstract class SeamConformanceSuite {
         runTest { runBroadcastDeliversToJoinedPeer(this) }
 
     // ── (3) incoming preserves send order to a single collector ─────────────
+    //
+    // UNGATED CORE, and there is deliberately **no capability flag** for it (#2304). There used to be
+    // one — `SeamCapabilities.ordersDelivery`, "FIFO to a single collector" — read by nothing, while
+    // this obligation sat here in the ungated block. The contradiction was not merely cosmetic: a
+    // fabric that declared `ordersDelivery = false` and supplied a gap URL, the whole documented
+    // workflow for a shortfall, was still held to this property and still failed — so the flag's only
+    // legitimate value was unreachable, and declaring it bought a permanently-open tracking issue and
+    // nothing else. The flag was deleted rather than this obligation moved out of core, because
+    // ordering is a property of the `Seam.incoming` CONTRACT rather than a transport-shaped
+    // limitation a fabric may honestly lack: `incoming` is one flow of frames from one session, and a
+    // consumer that must reorder them has been handed a different data structure. No in-tree fabric
+    // declared it `false`. A fabric that cannot deliver in order is non-conforming, full stop.
 
     internal suspend fun runIncomingPreservesSendOrder(scope: TestScope): Unit =
         scope.connectedPair { host, joiner ->

@@ -10,19 +10,54 @@ package us.tractat.kuilt.conformance
  * consults it to skip only the specific assertions that don't apply — everything
  * else still runs.
  *
- * The ten flags cover the **historical** `@Ignore` escape hatches
+ * The nine flags cover the **historical** `@Ignore` escape hatches
  * ([terminatesIncomingOnClose], [staysTornAfterClose], [throwsOnSendToTorn]) — WebRTC
  * #335 and Multipeer/Gossip #1390, both since fixed — that motivated making
  * capabilities explicit, so a *future* fabric with a real gap in one of those
  * dimensions can declare it without inventing a bespoke `@Ignore`, plus the
- * remaining dimensions ([ordersDelivery], [reportsPeerLoss], [supportsSendTo],
- * [securesTransport], [meshDelivery], [reportsLiveCapability], [collapsesPeersOnTear])
- * fabrics already vary on.
+ * remaining dimensions ([reportsPeerLoss], [supportsSendTo], [securesTransport],
+ * [meshDelivery], [reportsLiveCapability], [collapsesPeersOnTear]) fabrics already
+ * vary on.
+ *
+ * ## Two kinds of flag, and the one that was neither (#2304)
+ *
+ * Publishing a value here **subscribes the fabric to every suite case selected on it**, so a flag
+ * earns its place only if some property reads it. Two shapes qualify:
+ *  - a **gated obligation** — a property early-returns on `false`, and the shortfall is made loud by
+ *    [SeamConformanceSuite.everyFalseCapabilityDeclaresAGap] demanding a tracking URL. All of
+ *    [terminatesIncomingOnClose], [staysTornAfterClose], [throwsOnSendToTorn], [supportsSendTo],
+ *    [reportsPeerLoss] and [collapsesPeersOnTear] are this;
+ *  - a **selector** — the flag picks *which* assertion applies and never skips ([reportsLiveCapability]).
+ *
+ * `ordersDelivery` ("FIFO to a single collector") was **neither**, and was deleted here. No property
+ * read it, while the obligation it named —
+ * [SeamConformanceSuite.incomingPreservesSendOrderToSingleCollector] — sat in the *ungated core*
+ * block, whose defining guarantee (pinned by `SeamConformanceUngatedCoreTest`'s hostile harness,
+ * which made reading `capabilities()` throw) is that no flag can suppress it. So the one value the
+ * flag existed to express was unreachable: a fabric declaring `ordersDelivery = false` and supplying
+ * a gap URL — the whole documented workflow for a shortfall — was still held to the order property
+ * and still failed, while paying the permanently-open-issue toll for the privilege. Of #2304's two
+ * options (delete the flag, or move ordering out of core and gate it), deletion is the one that keeps
+ * a decision already made: ordering is a *contract* property of [us.tractat.kuilt.core.Seam.incoming],
+ * not a transport-shaped limitation a fabric may honestly lack, no in-tree fabric declared it `false`,
+ * and the core/ungated split is deliberate and meta-tested. A fabric that reorders frames is
+ * non-conforming, full stop.
+ *
+ * [securesTransport] is a **third** shape and is documented as such on its own declaration: a
+ * standing declaration no property can read, because the suite has no wire tap.
  */
 public data class SeamCapabilities(
-    /** FIFO to a single collector. */
-    val ordersDelivery: Boolean,
-    /** Peer-drop reflected in peers/state. */
+    /**
+     * Peer-drop reflected in peers/state — a peer that leaves the session must stop being advertised
+     * as reachable by the peers that stay.
+     *
+     * Read by [SeamConformanceSuite.survivorStopsAdvertisingADepartedPeer], which is what makes this
+     * a gated obligation rather than a free declaration (#2303/#2304). `false` means the survivor may
+     * keep a departed peer in [us.tractat.kuilt.core.Seam.peers] while staying
+     * [us.tractat.kuilt.core.SeamState.Woven] — i.e. it advertises a peer
+     * [us.tractat.kuilt.core.Seam.sendTo] would refuse, which `Seam.peers`' own KDoc forbids. Every
+     * `false` here is therefore a tracked bug, not a by-design gap.
+     */
     val reportsPeerLoss: Boolean,
     /** `incoming` completes when the seam goes [us.tractat.kuilt.core.SeamState.Torn] (was WebRTC's hatch, #335, since fixed). */
     val terminatesIncomingOnClose: Boolean,
@@ -32,7 +67,26 @@ public data class SeamCapabilities(
     val throwsOnSendToTorn: Boolean,
     /** Directed send DELIVERS; an absent peer throws [us.tractat.kuilt.core.PeerNotConnected]. */
     val supportsSendTo: Boolean,
-    /** Encrypted on the wire (honest — see the fabric's own TLS-PSK threat model). */
+    /**
+     * Encrypted on the wire (honest — see the fabric's own TLS-PSK threat model).
+     *
+     * **A standing declaration, not a gated obligation — no suite property reads this, and none can
+     * (#2304).** Proving a fabric is encrypted takes a tap on the wire between the two seams;
+     * [SeamConformanceSuite] holds only the two [us.tractat.kuilt.core.Seam] handles and has no such
+     * access, and a property that inspected bytes at either endpoint would be reading plaintext by
+     * construction on a conforming and a lying fabric alike. So this is the [SeamConformanceSuite.payloadBudgetGap]
+     * shape — something written down so it is *declared* rather than assumed — and the next reader
+     * should not go looking for the property that holds a fabric to it.
+     *
+     * What holds a fabric to it instead is **fabric-owned**: a harness that runs the suite over a link
+     * that is genuinely encrypted, so the whole suite passing IS the evidence. `NwLoopbackConformanceTest`
+     * is the in-tree example — it declares `securesTransport = true` because its loopback runs real
+     * TLS-PSK, while the fake-radio `NwConformanceTest` declares `false` for the same fabric. That
+     * split is the honest one, and it is a property of the *harness*, which is exactly why the suite
+     * cannot decide it. `false` still costs a tracking URL via
+     * [SeamConformanceSuite.everyFalseCapabilityDeclaresAGap] ([CapabilityGaps.SECURES_TRANSPORT] for
+     * the by-design plaintext fabrics), so the declaration is never silent.
+     */
     val securesTransport: Boolean,
     /**
      * Peer-to-peer delivery with no relay hop.
@@ -96,7 +150,6 @@ public data class SeamCapabilities(
          * these names equal the data class's declared boolean properties.
          */
         internal val FLAGS: List<Pair<String, (SeamCapabilities) -> Boolean>> = listOf(
-            "ordersDelivery" to SeamCapabilities::ordersDelivery,
             "reportsPeerLoss" to SeamCapabilities::reportsPeerLoss,
             "terminatesIncomingOnClose" to SeamCapabilities::terminatesIncomingOnClose,
             "staysTornAfterClose" to SeamCapabilities::staysTornAfterClose,
@@ -113,7 +166,6 @@ public data class SeamCapabilities(
          * individual flags off to describe where they fall short of the contract.
          */
         public val FULL: SeamCapabilities = SeamCapabilities(
-            ordersDelivery = true,
             reportsPeerLoss = true,
             terminatesIncomingOnClose = true,
             staysTornAfterClose = true,
