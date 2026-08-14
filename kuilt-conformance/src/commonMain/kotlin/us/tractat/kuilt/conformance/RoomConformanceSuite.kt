@@ -29,6 +29,8 @@ import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.ResumeResult
+import us.tractat.kuilt.session.partition.ResumeToken
+import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -59,9 +61,10 @@ import kotlin.time.Instant
  * `backgroundScope` from [runTest]) so [FaultyLoom] and [SeamRoomFactory] are
  * correctly structured under the test's virtual-time scheduler.
  *
- * **Fault injection:** tests that require partition behaviour check
- * [RoomHarness.faultyLoom] — when null the test is skipped so subclasses backed
- * by fabrics that do not support fault injection still pass the suite.
+ * **Fault injection:** tests that require partition behaviour go through [RoomHarness.faults], a
+ * two-armed [FaultInjection] fixture. A harness that cannot break its own links declares
+ * [FaultInjection.Unsupported] **with a tracking URL** — it cannot decline silently, because the
+ * arm has nowhere to put a refusal that is not also a declaration (#2306).
  *
  * **Every wait is bounded, and names what it saw.** The population running this suite is by
  * definition implementors whose fabric does *not* work yet, so no obligation here may be guarded by
@@ -70,6 +73,40 @@ import kotlin.time.Instant
  * [AssertionError] that prints the roster (or the events) actually observed — see #2284, where a
  * fabric that never admitted burned the whole `runTest` ceiling and then reported
  * `UncompletedCoroutinesError`, naming neither the room nor its roster.
+ *
+ * ## No obligation here returns silently — #2306
+ *
+ * There is no skip API in common `kotlin-test`, so an obligation that early-returns reports **PASS**
+ * — worse than a JVM-visible `@Ignore`, because nothing anywhere records that it did not run. This
+ * suite had four such returns and, until #2306, exactly one subclass: the reference. Every escape
+ * hatch had therefore fired zero times in its life, and nothing had ever checked that a harness
+ * taking one survives the suite at all.
+ *
+ * They are closed by three different mechanisms, and which one applies is a judgement about *whose*
+ * limitation the missing state is:
+ *
+ *  - **`resumeToken` — a loud precondition.** [Room.resumeToken] is documented non-null on an
+ *    admitted joiner, so a null there is a contract violation by the room, not a limitation of the
+ *    harness, and [requireResumeToken] fails naming the room. The early return was not even
+ *    protecting anyone: [joinerLearnsHostRoomIdOnAdmission] already compares
+ *    `resumeToken?.roomId` against a non-null host id, so the same room was *already* failing one
+ *    test of this suite while silently skipping another. Two tests, one fabric, opposite verdicts.
+ *  - **Fault injection — a two-armed sealed fixture** ([FaultInjection]). Here the missing state
+ *    genuinely belongs to the harness: a room over a fabric whose links the test cannot reach
+ *    cannot be partitioned by anyone. A nullable hook was the wrong shape for it — `null` moves the
+ *    vacuity one level up, where it is a value nobody has to justify. The sealed arm makes
+ *    declining *representable only together with its declaration*, so the pairing is the compiler's
+ *    job rather than a meta-test's, and the arm that declines still ends in an assertion
+ *    ([injectorOrDeclaredGap]) rather than in a bare `return`.
+ *  - **The refusal branch — a property that needed no hatch at all.**
+ *    [aTokenMintedForAnotherRoomIsRefused] was simply never written; see its KDoc for what the
+ *    `Room.resume` surface can and cannot observe.
+ *
+ * **What the fixture still cannot detect, said plainly.** A harness that *could* fault-inject and
+ * declares [FaultInjection.Unsupported] anyway is invisible here — there is no capability on
+ * [RoomFactory] to check the claim against, and inventing one would put a knob in the contract no
+ * consumer asked for. What the arm does buy is that the claim now exists, is attributable, and
+ * carries a URL somebody has to keep alive. The residual is narrower, not gone.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 public abstract class RoomConformanceSuite {
@@ -115,16 +152,47 @@ public abstract class RoomConformanceSuite {
     public open val awaitBudget: Duration? = 5.seconds
 
     /**
-     * A harness that bundles host and joiner [RoomFactory]s plus optional
-     * [FaultyLoom] for partition tests.
+     * Whether this harness can break and heal the links under the rooms it builds — and, when it
+     * cannot, **where that is written down**.
      *
-     * [faultyLoom] wraps the same [InMemoryLoom] that both factories use.
-     * [setFaultProfileOnAll][FaultyLoom.setFaultProfileOnAll] partitions all links atomically.
-     * When null the suite treats this fabric as non-faultable and skips partition tests.
+     * Two arms rather than a nullable `FaultyLoom?`, because the two carry different claims and only
+     * one of them is a limitation anybody has to justify. `null` said "no fault injection" in a value
+     * that costs nothing to write and that no reader has to defend; the second arm below cannot be
+     * constructed without naming an issue. That is the difference between a gap that is *declared*
+     * and a gap that is merely *taken* — and the whole of #2306, whose four silent returns had never
+     * once been exercised because the only subclass is the reference, which takes the first arm.
      *
-     * Per-side fault injection: access individual [FaultySeam] instances via
-     * [faultyLoom.links][FaultyLoom.links] — index 0 is the host's seam (created by
-     * the first `host()` call), index 1 is the joiner's seam (created by `join()`).
+     * Modelled on `BoltConformanceSuite`'s `DurabilityFixture`, with one deliberate difference:
+     * there, both arms are *correct* states a backend may legitimately be in, so both assert
+     * behaviour. Here the second arm is a shortfall, so what it asserts is its own accountability
+     * ([injectorOrDeclaredGap] fails a blank URL) and the obligation stays unproven. That is the
+     * honest shape — inventing an assertion for a state the harness cannot reach would be the
+     * vacuity this fixture exists to remove, one level down.
+     */
+    public sealed interface FaultInjection {
+
+        /**
+         * The harness can partition and heal: [loom] wraps the fabric **both** factories weave over,
+         * so [setFaultProfileOnAll][FaultyLoom.setFaultProfileOnAll] breaks every link atomically and
+         * [links][FaultyLoom.links] reaches one side at a time — index 0 is the host's seam (created
+         * by the first `host()` call), index 1 the joiner's (created by `join()`).
+         */
+        public data class Supported(val loom: FaultyLoom) : FaultInjection
+
+        /**
+         * The harness cannot reach the links under its rooms, so this suite's partition, resume and
+         * host-loss obligations are **unproven** on it.
+         *
+         * [trackingUrl] is not optional and not defaulted: an umbrella constant would let every
+         * subclass point at the same permanently-open issue, which is how a declaration decays back
+         * into a skip. Point it at the harness's *own* blocking issue — the thing that would have to
+         * change for this arm to become [Supported].
+         */
+        public data class Unsupported(val trackingUrl: String) : FaultInjection
+    }
+
+    /**
+     * A harness that bundles host and joiner [RoomFactory]s plus its [FaultInjection] fixture.
      *
      * [clock] and [advanceClock] are shared across the harness so the injected
      * clock stays in sync with virtual-time advancement.
@@ -132,7 +200,7 @@ public abstract class RoomConformanceSuite {
     public data class RoomHarness(
         val hostFactory: RoomFactory,
         val joinerFactory: RoomFactory,
-        val faultyLoom: FaultyLoom?,
+        val faults: FaultInjection,
         val clock: () -> Instant,
         val advanceClock: (Long) -> Unit,
     )
@@ -376,7 +444,8 @@ public abstract class RoomConformanceSuite {
     public fun partitionedAndRecoveredFireOnLivenessTransitions(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            val faultyLoom = h.faultyLoom ?: return@runTest
+            val faultyLoom = h.faults.injectorOrDeclaredGap("Partitioned/Recovered fire on liveness transitions")
+                ?: return@runTest
 
             val hostRoom = h.hostFactory.host(Pattern("Alice"))
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
@@ -423,7 +492,8 @@ public abstract class RoomConformanceSuite {
     public fun resumeWithinWindowFiresResumed(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            val faultyLoom = h.faultyLoom ?: return@runTest
+            val faultyLoom = h.faults.injectorOrDeclaredGap("Resumed fires on resume() within the window")
+                ?: return@runTest
 
             val hostRoom = h.hostFactory.host(Pattern("Alice"))
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
@@ -431,7 +501,7 @@ public abstract class RoomConformanceSuite {
             hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }
             joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
 
-            val token = joinerRoom.resumeToken ?: return@runTest
+            val token = joinerRoom.requireResumeToken()
 
             faultyLoom.setFaultProfileOnAll(FaultProfile.DropAll(Direction.Both))
             repeat(4) { h.advanceClock(100L); advanceTimeBy(100L) }
@@ -455,13 +525,117 @@ public abstract class RoomConformanceSuite {
             joinerRoom.leave()
         }
 
+    // ── (8a) a resume token minted for another room is refused ───────────────
+
+    /**
+     * **The negative half of [joinerLearnsHostRoomIdOnAdmission].** That test asserts a joiner's
+     * token names the host's room, and its own comment reasons about a room that would "refuse its
+     * own members' resumes" — but nothing ever presented a room with a token naming a *different*
+     * room and checked that it said no. Only [ResumeResult.Success] had a property in this suite;
+     * every refusal branch was covered by the reference implementation's private tests
+     * (`RoomResumeTest`, `JoinerReconnectControllerTest`), which a second [RoomFactory] inherits
+     * nothing from.
+     *
+     * ### The contrast pair is the property, not the refusal alone
+     *
+     * A lone "the foreign token is refused" would be satisfied by a room that refuses *everything* —
+     * a dead host, a window that never opened, a resume path that silently drops. So the two resumes
+     * happen against the **same host at the same instant**, one with a token whose [RoomId] has been
+     * tampered with and one with the genuine token, and the property is that they get different
+     * answers. That contrast is what pins the refusal to the *token* rather than to the moment; it
+     * is also what proves the refused attempt did not spend the single-use window, which is the
+     * denial-of-service shape a room that consumed a window on an invalid token would have.
+     *
+     * ### What the `Room.resume` surface can and cannot observe — read before strengthening this
+     *
+     * #2306 asked for [ResumeResult.TokenInvalid] here. **It is not observable through
+     * [Room.resume].** The reference host does produce it (`DefaultJoinerReconnectController`
+     * checks the room id before it touches any window, which is why this test needs no window state
+     * of its own for the *refusal* half), but it travels the wire as an
+     * `AdmitMessage.Reject(RejectCode.ResumeTokenInvalid)` and the joiner's resume machine completes
+     * **every** reject as [ResumeResult.WindowClosed] — deliberately, so its retry loop survives the
+     * transient window-not-yet-open race. So `Room.resume`'s reachable range on the reference is
+     * `{Success, WindowClosed, TimedOut}`; [ResumeResult.TokenInvalid] and
+     * [ResumeResult.WindowNotYetOpen] are host-internal verdicts. Asserting `TokenInvalid` here
+     * would have pinned a value no implementation can return.
+     *
+     * This test therefore asserts the strongest thing the surface admits — a **terminal refusal**,
+     * either spelling — and deliberately excludes [ResumeResult.TimedOut], which is the rig receipt:
+     * `TimedOut` means no verdict arrived at all, so a host that never saw the frame reds here
+     * instead of passing as a refusal it never made.
+     *
+     * ### Mutation receipt
+     *
+     * Deleting the `token.roomId != roomId` guard in
+     * [us.tractat.kuilt.session.partition.DefaultJoinerReconnectController.tryResume] makes the
+     * foreign token indistinguishable from the genuine one: it consumes the window, so the first
+     * resume returns [ResumeResult.Success] (reddening the refusal assertions) and the second
+     * returns [ResumeResult.WindowClosed] (reddening the positive control). Every pre-existing test
+     * of this suite stays green.
+     */
+    @Test
+    public fun aTokenMintedForAnotherRoomIsRefused(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newHarness(backgroundScope)
+            val faultyLoom = h.faults.injectorOrDeclaredGap("a resume token minted for another room is refused")
+                ?: return@runTest
+
+            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
+
+            hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }
+            joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
+
+            val token = joinerRoom.requireResumeToken()
+            // Same peer, same issue time, one room id away — so the only thing that can distinguish
+            // the two attempts below is the claim the host is supposed to be checking.
+            val foreign = token.copy(roomId = RoomId("${token.roomId.value}-a-different-room"))
+
+            // Open the window: partition long enough for the host's detector to fire, then heal, so
+            // both resumes below are presented to a host that WOULD accept a valid one.
+            faultyLoom.setFaultProfileOnAll(FaultProfile.DropAll(Direction.Both))
+            repeat(4) { h.advanceClock(100L); advanceTimeBy(100L) }
+            faultyLoom.setFaultProfileOnAll(FaultProfile.Healthy)
+            advanceTimeBy(50L)
+
+            val refused = joinerRoom.resume(foreign)
+            val accepted = joinerRoom.resume(token)
+
+            assertAll(
+                {
+                    assertFalse(
+                        refused is ResumeResult.Success,
+                        "a room must not resume a token minted for a different room; got $refused",
+                    )
+                },
+                {
+                    assertTrue(
+                        refused is ResumeResult.WindowClosed || refused is ResumeResult.TokenInvalid,
+                        "the refusal must be a VERDICT, not silence: ResumeResult.TimedOut means no reply " +
+                            "arrived, which would make the assertion above vacuous. Got $refused",
+                    )
+                },
+                {
+                    assertIs<ResumeResult.Success>(
+                        accepted,
+                        "the genuine token must still resume: a refused token must not spend the window, " +
+                            "and this is also what proves the host was reachable when it refused",
+                    )
+                },
+            )
+
+            joinerRoom.leave()
+            hostRoom.leave()
+        }
+
     // ── (9) HostLost is terminal — broadcast after HostLost is a no-op ──────
 
     @Test
     public fun hostLostIsTerminalBroadcastIsNoOp(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            val faultyLoom = h.faultyLoom ?: return@runTest
+            val faultyLoom = h.faults.injectorOrDeclaredGap("HostLost is terminal and broadcast after it is a no-op")
+                ?: return@runTest
 
             h.hostFactory.host(Pattern("Alice"))
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
@@ -504,6 +678,63 @@ public abstract class RoomConformanceSuite {
 
             hostRoom.leave()
         }
+
+    // ── Declared gaps ─────────────────────────────────────────────────────────
+
+    /**
+     * The [FaultyLoom] to partition with, or `null` after **asserting** that the harness declared
+     * why it has none.
+     *
+     * This is what stops the three partition obligations from returning silently. On
+     * [FaultInjection.Unsupported] the caller still skips — nobody can partition links they cannot
+     * reach — but it skips *through an assertion that can fail*, so the weakest thing this suite
+     * says about such a harness is "its gap is on record", never nothing at all.
+     *
+     * The blank check is the only runtime part left: the sealed arm already makes "declined without
+     * declaring" unrepresentable, and `""` is the one remaining way to write a declaration that
+     * declares nothing. `RoomConformanceGapDeclarationTest` pins both directions against
+     * purpose-built harnesses — the first time in this suite's life that the skip path has been
+     * executed at all.
+     */
+    private fun FaultInjection.injectorOrDeclaredGap(obligation: String): FaultyLoom? =
+        when (this) {
+            is FaultInjection.Supported -> loom
+            is FaultInjection.Unsupported -> {
+                assertTrue(
+                    trackingUrl.isNotBlank(),
+                    "RoomConformanceSuite: \"$obligation\" is unproven on this harness, and an unproven " +
+                        "obligation must be tracked — FaultInjection.Unsupported was declared with a blank " +
+                        "trackingUrl. Point it at the issue that would have to close for this harness to " +
+                        "return FaultInjection.Supported, or return Supported and prove the obligation.",
+                )
+                null
+            }
+        }
+
+    /**
+     * This joiner's [Room.resumeToken], or fail naming the room.
+     *
+     * A **loud precondition**, not a skip, because the missing state is the *room's* fault and not
+     * the harness's: [Room.resumeToken] is documented non-null on a [SessionRole.Joiner] room once
+     * the host's Welcome has landed, and every caller here has already awaited a non-empty roster.
+     * A `null` at that point is a room opting out of the entire resume/reconnect obligation with no
+     * assertion and no declaration — the "optional ≠ tuning" shape, one nullable gating a whole
+     * functional path.
+     *
+     * The early return this replaces was not even load-bearing: [joinerLearnsHostRoomIdOnAdmission]
+     * compares `resumeToken?.roomId` against a non-null host [RoomId], so a room with no token was
+     * *already* failing that test while silently skipping this one.
+     */
+    private fun Room.requireResumeToken(): ResumeToken =
+        resumeToken ?: throw AssertionError(
+            "RoomConformanceSuite: an admitted joiner has no resumeToken.\n" +
+                "  room: role=${role.value} selfId=${selfId.value} roomId=${roomId.value} " +
+                "roster=${roster.value.size} member(s)\n" +
+                "  Room.resumeToken is non-null on a Joiner room once the host's Welcome has landed, and " +
+                "this room's roster is already non-empty. A room that answers null here opts out of the " +
+                "whole resume/reconnect obligation; there is no gap hook for it because it is a contract " +
+                "violation, not a harness limitation.",
+        )
 
     // ── Bounded waits ─────────────────────────────────────────────────────────
     //
@@ -628,7 +859,7 @@ public abstract class RoomConformanceSuite {
         return RoomHarness(
             hostFactory = factory,
             joinerFactory = factory,
-            faultyLoom = faultyLoom,
+            faults = FaultInjection.Supported(faultyLoom),
             clock = clock,
             advanceClock = { ms -> clockMs += ms },
         )
