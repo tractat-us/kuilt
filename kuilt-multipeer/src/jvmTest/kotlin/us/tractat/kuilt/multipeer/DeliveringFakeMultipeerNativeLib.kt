@@ -61,7 +61,34 @@ internal class DeliveringFakeMultipeerNativeLib(
     /** Joiner joins a discovered peer → returns JOINER_SESSION. */
     override fun mc_runtime_join(runtime: Pointer?, peerHandle: String): Pointer = JOINER_SESSION
 
-    override fun mc_session_close(session: Pointer?) = Unit
+    /**
+     * Closing a session **tells the other side**, by firing `isConnected = 0` for the departing peer
+     * on the surviving session's [MultipeerNativeLib.PeerStateCallback].
+     *
+     * Real MultipeerConnectivity does exactly this: a peer whose `MCSession` goes away surfaces on
+     * every other member as `.notConnected` for that `MCPeerID`, which is the only signal
+     * [us.tractat.kuilt.multipeer.internal.BridgePeerLink] has that a peer left — it drops the peer
+     * from `peers` and, when the last remote is gone, tears the seam down.
+     *
+     * This was `= Unit` until #2304, and the omission was invisible: a permissive fake cannot fail a
+     * property nobody had written. `SeamConformanceSuite.survivorStopsAdvertisingADepartedPeer` is
+     * that property, and against the no-op it wedged — the joiner tore down correctly while the host
+     * was never told anything had happened, so the host went on advertising a peer that was gone. The
+     * fake, not the fabric, was what could not represent a departure. Anything that models a
+     * *transport* must be able to model the transport **failing**, or every obligation about failure
+     * is declared away as a harness gap.
+     *
+     * Synchronous, like every other route in this fake (see [mc_session_broadcast]): the callback runs
+     * on the closing coroutine, before `closeNow` returns. There is no re-entrancy — the survivor's
+     * teardown never issues its own `mc_session_close` (only an explicit consumer close does), so the
+     * call does not bounce back.
+     */
+    override fun mc_session_close(session: Pointer?) {
+        when (session) {
+            HOST_SESSION -> joinerPeerStateCallback?.invoke(hostPeerId, /* isConnected = */ 0)
+            JOINER_SESSION -> hostPeerStateCallback?.invoke(joinerPeerId, /* isConnected = */ 0)
+        }
+    }
 
     /**
      * Routes broadcast from [session] to the other session's data callback.
