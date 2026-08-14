@@ -685,6 +685,22 @@ public class EntitlementLedger private constructor(
      *  - `lsp ≥ 0`, `rsp ≥ 0` — an acked base below what has already been relocated out is
      *    protocol-impossible, so it fails closed rather than moving a negative quantity.
      *
+     * ## …and one checked on the whole strand, against `this` rather than the acks (#2366)
+     *
+     * `transfers` is keyed by `PathKey.of(edge)`, so a move would leave the rows on the dead
+     * generation's key where [holdings] no longer reads them — silently reassigning a recipient's
+     * entitlement to the donor, with conservation intact and [validate] empty. The `n < 0`
+     * precondition above is the *loud* half of that tangle: it needs the recipient to have also
+     * spent or released across `s`. So a fenced edge carrying **any** transfer row is refused,
+     * which is what the first bullet's "out of scope" has always promised.
+     *
+     * This one reads `this`, and `this` is the caller's choice — so it fires wherever the receiver
+     * carries the rows and **not** on the H5 control-plane path, whose receiver ([FenceState.relocations])
+     * is log-pure and never carries a transfer at all. That path stays blind until the rows become a
+     * consensus fact carried in the [ControlCommand.QuiesceAck] (issue #2377). Determinism is
+     * untouched either way: every peer passes the same log-pure receiver, so every peer still derives
+     * the identical outcome.
+     *
      * The live edge needs **no** data-plane read: the move adds `sp` to `t`'s effective spend and
      * `n ≥ sp` to its effective issuance, so per-edge safety on `t` survives by increment.
      *
@@ -755,6 +771,35 @@ public class EntitlementLedger private constructor(
             }
         }
         if (drainable.isEmpty()) return Relocation.Nothing
+
+        // ── the transfer-row precondition (#2366), checked once the move is known to be non-empty.
+        //
+        // `transfers` is keyed by `PathKey.of(edge)` — the GENERATION's id, not the child group — so a
+        // move re-homes the counter families onto `t` and leaves the rows on `s`, where `holdings` no
+        // longer reads them. The recipient's credit and the donor's debit both vanish and the donor
+        // silently recovers what it gave away, with NOTHING objecting: `Σ_r transferNet(pathKey, r) = 0`,
+        // so abandoning a whole path key is sum-preserving and conservation is structurally blind;
+        // `validate()` is silent because the recipient lands on 0, not below.
+        //
+        // The `n < 0` guard above is the same tangle's LOUD half — it needs the recipient to have also
+        // spent or released across `s`. A recipient who merely HOLDS transferred credit has no slot on
+        // the edge at all, is absent from `replicasOnEdge`/`baseFinalsOn`, and reaches here unseen. So
+        // this widens the refusal the KDoc already promises rather than adding a new one.
+        //
+        // Checked AFTER the per-slot preconditions so each keeps its own pin: an edge that is both
+        // net-negative and transfer-tangled still refuses on `n < 0`, the guard that owns that case.
+        // Checked after the `drainable.isEmpty()` return so an already-drained strand still reads
+        // `Nothing` — nothing moves there, so there is no abandonment to prevent.
+        for (s in finals.keys.sorted()) {
+            val donors = transfers[PathKey.of(s)]?.keys.orEmpty()
+            if (donors.isNotEmpty()) {
+                return Relocation.Refused(
+                    "relocate refused: ${s.value} carries transfer rows (donors " +
+                        "${donors.map { it.value }.sorted()}) that the move would abandon on its path key — " +
+                        "a transfer-tangled strand needs its transfer rows moved too (out of scope)",
+                )
+            }
+        }
 
         // ── the `n ≥ sp` precondition, quantified per (child, replica) over the WHOLE derivation
         // rather than per edge (#1895). The re-home lands a charge on the live edge at charge time
@@ -1243,6 +1288,14 @@ public class EntitlementLedger private constructor(
 
     /** The edge ids carrying an `issuedRelocIn` slot — where a re-home's credit legally lands. */
     internal fun issuedRelocInEdges(): Set<AttachmentId> = issuedRelocIn.keys
+
+    /**
+     * The donors holding a transfer row at [edge]'s path key — the rows a generation move off [edge]
+     * would abandon (#2366). Empty for an edge nobody has handed entitlement across.
+     * `internal` — the [relocationPatch] precondition reads the same map; test support.
+     */
+    internal fun transferDonorsOn(edge: AttachmentId): Set<ReplicaId> =
+        transfers[PathKey.of(edge)]?.keys ?: emptySet()
 
     /** Every group named as a parent or child by any (singleton or divergent) record. */
     internal fun allGroups(): Set<GroupId> =
