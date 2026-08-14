@@ -5,8 +5,8 @@ wider. Each module is published independently, so you depend only on the ones yo
 use.
 
 There are more in the build than are listed here — a test-support module for
-several of the libraries below, the `kuilt-bom` version-alignment platform, and
-the experimental [Warp](warp.md) and [Heddle](heddle.md) families. The
+several of the libraries below, the `kuilt-bom` version-alignment platform,
+[Heddle](heddle.md), and the [Warp](warp.md) family. The
 [API reference](https://tractat-us.github.io/kuilt/api/) covers every published
 module.
 
