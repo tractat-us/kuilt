@@ -261,16 +261,33 @@ public sealed interface LedgerConflict : Comparable<LedgerConflict> {
      * ## What it takes to fire — all three, together
      *
      *  1. **The key is no longer read.** Its edge's child group has a live lineage whose
-     *     final key is a *different* one (or the key names no generation this ledger knows).
-     *  2. **The rows were not carried across.** Some `(donor, recipient)` cumulative at this
-     *     key exceeds the same pair's cumulative at the group's live key. A fix that moves
-     *     the rows with the generation clears the report by satisfying exactly this.
+     *     final key is a *different* one.
+     *  2. **The live key does not already cover the rows.** Some `(donor, recipient)` cumulative
+     *     at this key exceeds the same pair's cumulative at the group's live key.
+     *
+     *     This is a **magnitude** test and so a **necessary condition for abandonment** — *not*
+     *     evidence that a move carried the rows across, and the state cannot support that
+     *     stronger reading. `EntitlementLedger.transfer` accumulates onto the very same
+     *     `(path, donor, recipient)` slot this compares, so "the move carried these rows" and
+     *     "the same pair independently transferred at least as much again at the live key" are
+     *     *byte-identical* states. The consequence is a real, permanent blind spot: a later
+     *     ordinary transfer between those two peers at the live key **masks** a report that had
+     *     been firing, and rows are grow-only, so the live cumulative never falls back to unmask
+     *     it. If the eventual fix re-keys `transfers` by group rather than by generation, this
+     *     clause disappears along with the key it compares against.
      *  3. **It is consequential.** Some party to those rows still has a non-zero balance
      *     stranded on the dead generation — `netInflow + transferNet − effLeafSpent ≠ 0`,
      *     the inbound half of [EntitlementLedger.holdings] evaluated where it is no longer
      *     evaluated. Without this clause every honestly drained-and-retired generation that
      *     ever carried a hand-off would be reported forever, since the rows are grow-only
      *     and its books have already closed at zero.
+     *
+     * **One arm fires on two clauses, not three.** Rows keyed on a generation this ledger does
+     * not know are unreadable by construction: clause 1 has no liveness question left to ask and
+     * clause 2 has no live key to compare against. That arm keeps the half of clause 3 that
+     * survives without an edge — some party's net at the key is non-zero — so that it agrees with
+     * the three-clause arm about rows that merely *cancel*, rather than reporting there what the
+     * main arm deliberately does not.
      *
      * **Deliberately silent** where the group has *no* live lineage at all: that is the
      * normal window of an honest reshape (old generation retired, new one not yet active)

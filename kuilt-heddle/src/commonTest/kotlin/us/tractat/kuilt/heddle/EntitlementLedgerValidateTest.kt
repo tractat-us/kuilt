@@ -494,6 +494,43 @@ class EntitlementLedgerValidateTest {
     }
 
     /**
+     * The **strengthened** acceptance arm, and the fix this oracle exists to reject.
+     *
+     * A move onto a live key that **already carries its own hand-off** between the same pair must
+     * **sum**: 40 abandoned on `e2` plus 15 already standing at `e3` is 55, so the truth after a
+     * correct fix is `alice 5 / bob 55`. But `transfers` rows join by per-recipient **max**
+     * (`mergeRows`) while the counter families a move re-homes deliberately accumulate — so the
+     * natural one-liner `transfers[t] = transfers[t].mergeRows(transfers[s])` yields
+     * `max(15, 40) = 40`, silently losing 15.
+     *
+     * Both arms are asserted because **clause 2 is green either way** — `40 <= 40` reads as covered —
+     * so `validate()` alone cannot tell a correct carry from a lossy one. What rejects the lossy fix
+     * is the holdings assertion, and that is the whole reason this test states the arithmetic rather
+     * than just checking the report is empty.
+     */
+    @Test
+    fun aCarryOntoALiveKeyThatAlreadyHasItsOwnMustSumRatherThanMaxJoin() {
+        val summed = reHomedAwayFromTheRows(movedRows = mapOf(alice to GCounter.of(bob to 55L)))
+        val maxJoined = reHomedAwayFromTheRows(movedRows = mapOf(alice to GCounter.of(bob to 40L)))
+        assertAll(
+            // ── the correct carry: 15 already there + 40 abandoned = 55.
+            { assertEquals(5L, summed.holdings(g2, alice), "a summing carry leaves the donor 60 − 55") },
+            { assertEquals(55L, summed.holdings(g2, bob), "…and the recipient its own 15 plus the moved 40") },
+            { assertTrue(summed.validate().isEmpty(), "a correct carry is not orphaned: ${summed.validate()}") },
+            // ── the lossy carry: max(15, 40) = 40. Clause 2 cannot see it; the arithmetic can.
+            {
+                assertTrue(
+                    maxJoined.validate().isEmpty(),
+                    "clause 2 reads a max-join as covered — this is what makes it insufficient ALONE: " +
+                        "${maxJoined.validate()}",
+                )
+            },
+            { assertEquals(20L, maxJoined.holdings(g2, alice), "…yet the donor keeps 15 that is not hers") },
+            { assertEquals(40L, maxJoined.holdings(g2, bob), "…and the recipient is 15 short of the truth (55)") },
+        )
+    }
+
+    /**
      * Clause 2 again, one row short: a move that carried **part** of the hand-off across is still
      * an abandonment of the rest. Without the per-`(donor, recipient)` comparison — comparing nets,
      * say — a partial carry would net out on some other row and read as complete.
@@ -510,6 +547,49 @@ class EntitlementLedgerValidateTest {
                     "a partial carry is still an abandonment: ${partial.validate()}",
                 )
             },
+        )
+    }
+
+    /**
+     * The **masking hole**, pinned as a documented limitation rather than as desired behaviour.
+     *
+     * Clause 2 compares magnitudes on a slot that `transfer` *accumulates* onto, so it cannot tell
+     * "the move carried these rows across" from "the same pair transferred at least as much again,
+     * independently, at the live key" — the two are byte-identical states. Here the corrupt ledger
+     * is left to run: alice, apparently holding 60, hands bob 40 through the ordinary mutator. The
+     * live key's cumulative reaches 40, clause 2 reads the dead key's 40 as covered, and the report
+     * that had been firing **goes quiet — permanently**, because rows are grow-only and the live
+     * cumulative never falls back.
+     *
+     * The numbers even come out looking right, which is the trap: the true history is alice `−20`
+     * (she has now given away 40 she never had, on top of the 40 already abandoned) and bob `80`.
+     * The abandonment has been laundered into a state that reads as legitimate.
+     *
+     * Closing this needs provenance the lattice does not carry. If the eventual #2366 fix re-keys
+     * `transfers` by group, the clause and its hole disappear together.
+     */
+    @Test
+    fun aLaterTransferBetweenTheSamePairMasksTheReport() {
+        val orphaned = reHomedAwayFromTheRows()
+        val masked = orphaned.piece(orphaned.transfer(g2, alice, bob, 40L)!!)
+        assertAll(
+            {
+                assertEquals(
+                    listOf(LedgerConflict.OrphanedTransferPath(PathKey.of(e2))),
+                    orphaned.validate(),
+                    "rig: the report really was firing before the masking transfer",
+                )
+            },
+            {
+                assertEquals(
+                    40L,
+                    masked.transfersAt(PathKey.of(e3))[alice]?.count(bob),
+                    "rig: the ordinary mutator brought the live key's cumulative up to the abandoned 40",
+                )
+            },
+            { assertTrue(masked.validate().isEmpty(), "…and the report goes quiet: ${masked.validate()}") },
+            { assertEquals(20L, masked.holdings(g2, alice), "the numbers even look right — truth is −20") },
+            { assertEquals(40L, masked.holdings(g2, bob), "…and 40 rather than the true 80") },
         )
     }
 
@@ -609,6 +689,39 @@ class EntitlementLedgerValidateTest {
             listOf(LedgerConflict.OrphanedTransferPath(PathKey.of(AttachmentId("nowhere")))),
             dangling.validate(),
             "rows keyed on an unknown generation can never be read",
+        )
+    }
+
+    /**
+     * The dangling arm fires on **two** clauses, and this is the second one.
+     *
+     * A key naming no known generation has no liveness question left to ask and no live key to
+     * compare against, so clauses 1 and 2 are vacuous there — but the derivable half of clause 3 is
+     * not, and dropping it would make the two arms disagree about the identical fact. These rows
+     * cancel (`alice → bob 30`, `bob → alice 30`), costing nobody anything, exactly as in
+     * [rowsThatNetToNothingAreNotOrphanedByAStrandedCounterResidue]; a dangling key must not be
+     * reported for what a known-but-dead key is deliberately forgiven.
+     */
+    @Test
+    fun aDanglingKeyWhoseRowsCancelIsNotReported() {
+        val cancelling = EntitlementLedger.of(
+            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE))),
+            minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+            transfers = mapOf(
+                PathKey.of(AttachmentId("nowhere")) to mapOf(
+                    alice to GCounter.of(bob to 30L),
+                    bob to GCounter.of(alice to 30L),
+                ),
+            ),
+        )
+        assertAll(
+            {
+                assertTrue(
+                    cancelling.transfersAt(PathKey.of(AttachmentId("nowhere"))).isNotEmpty(),
+                    "rig: the dangling key really does carry rows",
+                )
+            },
+            { assertTrue(cancelling.validate().isEmpty(), "cancelling rows lost nobody anything: ${cancelling.validate()}") },
         )
     }
 

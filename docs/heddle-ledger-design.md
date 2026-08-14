@@ -276,10 +276,16 @@ list a false conflict that self-heals on anti-entropy. The checks:
   can see it:** `Σ_r transferNet(k, r) = 0` on every key identically, so abandoning a key is
   sum-preserving and conservation is *structurally* blind, and the recipient lands on `0` rather
   than below it, so `PersistentNegativeHoldings` stays silent. Fires only when all three hold — the
-  key is no longer read, a move did not carry its rows to the group's live key, and some party still
-  has a non-zero balance stranded on the dead generation. Deliberately silent while the group has no
-  live inbound at all (the honest-reshape window) and where the generation's record is divergent
-  (`RecordDivergence` owns that state).
+  key is no longer read, the group's live key does not already cover its rows, and some party still
+  has a non-zero balance stranded on the dead generation. Clause 2 is a **magnitude** test and so a
+  *necessary condition for abandonment*, never evidence of a carry: `transfer` accumulates onto the
+  same `(path, donor, recipient)` slot, so a carried row and an independent later transfer of the
+  same size between the same pair are byte-identical — meaning a later transfer between those peers
+  at the live key permanently **masks** the report. One arm is two-clause rather than three: rows
+  keyed on a generation the ledger does not know are unreadable by construction, so only the
+  derivable half of clause 3 (some party's net at the key is non-zero) applies there. Deliberately
+  silent while the group has no live inbound at all (the honest-reshape window) and where the
+  generation's record is divergent (`RecordDivergence` owns that state).
 - **`LineageCycle(group)`** — the live inbound edges loop back instead of reaching a root.
   Reported once per loop member, never for a group merely below the loop. Records are
   grow-only, so a loop seen on any state is real; it can still be *transient* in the honest
