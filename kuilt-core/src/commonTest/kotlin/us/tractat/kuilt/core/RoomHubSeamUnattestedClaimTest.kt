@@ -204,6 +204,127 @@ class RoomHubSeamUnattestedClaimTest {
         }
 
     /**
+     * The invariant the dispossession guard rests on, checked after **every** step of a
+     * representative lifecycle: `principals.keys ⊆ registered.keys`.
+     *
+     * The guard reads `connPeerId in principals` and treats a hit as "a live attested link exists for
+     * this id". That is only sound while the containment holds. Break it and the guard fails in both
+     * directions silently: a **stale** entry refuses a legitimate rejoin (see
+     * [theGuardDoesNotOutliveTheConnectionItProtects], which pins that half behaviourally), and a
+     * **missing** one lets a dispossession through. Neither shows up as a roster or membership
+     * failure — the maps simply drift apart — so it needs its own assertion.
+     *
+     * It is checked over a *sequence* rather than at one point, because the failure mode is a future
+     * edit adding a `principals` write on a path that does not register (or dropping a removal on a
+     * path that deregisters). A single-point assertion would only cover the path it happened to run.
+     *
+     * **No internals are exposed to test this.** `_peers` is mutated in lockstep with `registered` at
+     * all three sites — added together in the registration block, removed together in `deregister`,
+     * cleared together in `close` — so `peers - selfId` *is* `registered.keys`, and the containment
+     * is observable through the public [PrincipalRoster] and [Seam.peers] surfaces alone. That the
+     * check is public-surface-only is also its one limitation: drift confined to the private map and
+     * never published (a `principals.clear()` dropped from `close`, say) is invisible here.
+     */
+    @Test
+    fun theRosterNeverNamesAPeerThatIsNotRegistered() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val room = RoomHubSeam(ROOM, PeerId("server"), RoomAuthorizer.AllowAll)
+            // Drain the inbound spool: it is bounded, and a sequence of delivers with no consumer
+            // would backpressure into a wedge rather than a failure.
+            backgroundScope.launch { room.incoming.collect { } }
+
+            val alice = PeerId("alice")
+            val bob = PeerId("bob")
+            val aliceLink = OutboundSender { }
+            val aliceRelink = OutboundSender { }
+            val aliceRejoin = OutboundSender { }
+            val bobLink = OutboundSender { }
+            val claimantLink = OutboundSender { }
+            var everAttested = false
+
+            fun invariant(step: String) {
+                val roster = room.attestedPrincipals.value.keys
+                val registered = room.peers.value - room.selfId
+                if (roster.isNotEmpty()) everAttested = true
+                assertTrue(
+                    registered.containsAll(roster),
+                    "$step: the roster names ${roster - registered}, which is not registered — " +
+                        "an entry in `principals` must mean a LIVE attested link, because that is " +
+                        "exactly what the dispossession guard reads (#2357)",
+                )
+            }
+
+            invariant("fresh hub")
+            room.deliver(alice, frame(), aliceLink, Principal("verified-alice"))
+            invariant("attested peer joins")
+            room.deliver(bob, frame(), bobLink, null)
+            invariant("unattested peer joins")
+            room.deliver(alice, frame(), claimantLink, null)
+            invariant("unattested claim on the attested id is refused")
+            room.deliver(alice, frame(), aliceRelink, Principal("verified-alice-2"))
+            invariant("attested peer re-registers, attested")
+            room.deregister(bob, bobLink)
+            invariant("unattested peer leaves")
+            room.deregister(alice, aliceRelink)
+            invariant("attested peer leaves")
+            room.deliver(alice, frame(), aliceRejoin, Principal("verified-alice-3"))
+            invariant("attested peer rejoins")
+            room.close()
+            invariant("hub closed")
+
+            assertTrue(everAttested, "rig: the sequence really did put someone on the roster")
+        }
+
+    /**
+     * The guard protects a **live** attested link, never an id in perpetuity. Once alice's link
+     * tears, her id is free again — including to an unattested link, which is simply her returning
+     * over a connection the host did not verify.
+     *
+     * This is the behavioural half of the containment invariant, and the failure it guards against is
+     * the one that hurts a *legitimate* user rather than an attacker: a `principals` entry that
+     * outlives its registration turns the guard into a permanent lockout, and the peer's only symptom
+     * is that rejoining silently stops working. Adding a refusal to a hot path is exactly the change
+     * that risks this, so it is asserted rather than reasoned about.
+     */
+    @Test
+    fun theGuardDoesNotOutliveTheConnectionItProtects() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val room = RoomHubSeam(ROOM, PeerId("server"), RoomAuthorizer.AllowAll)
+            backgroundScope.launch { room.incoming.collect { } }
+            val alice = PeerId("alice")
+            val attestedLink = OutboundSender { }
+            val plainLink = OutboundSender { }
+
+            room.deliver(alice, frame(), attestedLink, Principal("verified-alice"))
+            assertEquals(
+                Principal("verified-alice"),
+                room.attestedPrincipals.value[alice],
+                "rig: alice is attested, so the guard is armed for her id",
+            )
+
+            room.deregister(alice, attestedLink) // her link tears
+            room.deliver(alice, frame(), plainLink, null) // she comes back, unattested this time
+
+            assertAll(
+                {
+                    assertTrue(
+                        alice in room.peers.value,
+                        "a peer whose link dropped must be able to rejoin unattested — the guard " +
+                            "defends a live attested link, not the id forever",
+                    )
+                },
+                {
+                    assertTrue(
+                        room.attestedPrincipals.value.isEmpty(),
+                        "…and rejoining unattested leaves her unattested, with nothing carried over",
+                    )
+                },
+            )
+        }
+
+    private fun frame() = Swatch(byteArrayOf(1))
+
+    /**
      * Collect [seam]'s inbound frame bodies into a growing, observable set.
      *
      * Deliberately not `async { seam.incoming.first() }`: an await on the end that is *supposed* to
