@@ -998,7 +998,23 @@ gradle.projectsEvaluated {
             if (target is org.jetbrains.kotlin.gradle.plugin.mpp.KotlinMetadataTarget) return@forEach
             if (target.platformType == org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType.common) return@forEach
             val main = target.compilations.findByName("main") ?: return@forEach
+            // DECLARED source only — anything under the module's `build/` is dropped (#2374).
+            // `kuilt.warp-ops` puts `build/generated/ksp/metadata/commonMain/kotlin` in commonMain,
+            // and scanning it cost two things: Gradle 9 failed a module-scoped
+            // `:kuilt-warp-test:build` on an implicit dependency on `kspCommonMainKotlinMetadata`
+            // (`srcDirs` is a `Set<File>` — nowhere to carry a producer), and, measured rather than
+            // theorised, a genuinely source-less target went GREEN as soon as one file sat under
+            // `build/`. What the filter costs, stated as a cost: a target whose only Kotlin is
+            // generated now reads as source-less — a FALSE POSITIVE, since its compilation would
+            // produce a klib and publish fine. Acceptable today because no target here is in that
+            // position (the filtered probe going green across every declared target is the proof)
+            // and it is unreachable for `kuilt.warp-ops`, whose KSP run generates from `@WarpOp`
+            // declarations in hand-written `commonMain`. A judgement call — scanning generated dirs
+            // and adding a `dependsOn` on the generator has no false positive, but puts the verdict
+            // back at the mercy of whether the generator ran, the dishonesty #2374 exists to end.
+            val buildRoot = sub.layout.buildDirectory.get().asFile.toPath()
             val srcDirs = main.allKotlinSourceSets.flatMap { it.kotlin.srcDirs }
+                .filterNot { it.toPath().startsWith(buildRoot) }
             val label = "${sub.path} target '${target.targetName}' (${target.platformType})"
             srclessTargetProbes += label to kotlinSourcesIn(srcDirs)
         }
