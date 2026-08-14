@@ -44,7 +44,7 @@ import kotlin.time.Duration.Companion.seconds
  * - The player relay transport over the [ManagedSeam] wraps every send as a
  *   `RaftRelay(dest = leader)` addressed to the single relay peer.
  * - Endpoint rotation follows [ServerClusterReconnect]'s round-robin policy.
- * - [us.tractat.kuilt.session.partition.ResumeResult.WindowClosed] is treated as a
+ * - A terminal [us.tractat.kuilt.session.partition.ResumeResult.Refused] is treated as a
  *   fresh-join signal, not an error (proven by #532).
  * - Exactly-once `requestId` semantics survive a simulated failover.
  *
@@ -173,16 +173,16 @@ class ClusterClientFailoverTest {
             assertTrue(peersAfterB.isNotEmpty(), "peers non-empty after installing seam-B")
         }
 
-    // ── WindowClosed → fresh-join is not an error ─────────────────────────────
+    // ── a terminal refusal → fresh-join is not an error ───────────────────────
 
     @Test
-    fun `WindowClosed on cross-server resume is treated as fresh-join signal not error`(): TestResult =
+    fun `a terminal cross-server refusal is treated as fresh-join signal not error`(): TestResult =
         runTest(StandardTestDispatcher(), timeout = 5.seconds) {
-            // Per #532: cross-server resume always returns WindowClosed because each
-            // server's JoinerReconnectController is in-memory and per-room-instance.
-            // The correct policy: treat WindowClosed as a signal to do a fresh join.
+            // Per #532: a cross-server resume is always terminally refused, because each server
+            // mints its own RoomId and keeps its reconnect windows in memory.
+            // The correct policy: treat that refusal as a signal to do a fresh join.
             // This test verifies the ClusterClient contract: no exception is thrown,
-            // and the client continues functioning after a WindowClosed response.
+            // and the client continues functioning after such a response.
 
             val fakeNode = FakeRaftNode(initialRole = RaftRole.Leader)
             val client = clusterClientWithNode(fakeNode)
