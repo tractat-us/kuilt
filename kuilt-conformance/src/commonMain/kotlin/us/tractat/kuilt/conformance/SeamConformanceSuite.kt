@@ -902,10 +902,31 @@ public abstract class SeamConformanceSuite {
     // by `sendTo`* — so a survivor must not sit at Woven advertising a peer `sendTo` would refuse.
     //
     // **The precondition is what stops the disjunction being satisfied by the state it started in.**
-    // A fabric whose host never had the joiner in `peers` would satisfy the roster arm from the first
-    // instant, and one that was never Woven would satisfy the state arm — in both cases green without
-    // the departure having caused anything. Asserting both up front makes the only way to satisfy the
+    // A survivor advertising no remote peer at all would satisfy the roster arm from the first instant,
+    // and one that was never Woven would satisfy the state arm — in both cases green without the
+    // departure having caused anything. Asserting both up front makes the only way to satisfy the
     // disjunction a transition the departure produced.
+    //
+    // **Which peer must leave is decided from the survivor's own roster, and two naive answers are
+    // both wrong.** Keying the arm to `joiner.selfId` red-lights a fabric that labels a peer
+    // provisionally and reconciles the real id asynchronously: `WebRTC`'s host advertises a
+    // locally-minted `peer-…` until the ID exchange completes, so `joiner.selfId in host.peers` is
+    // simply false at the instant the pair connects. Keying it instead to "the survivor advertises no
+    // remote at all" red-lights a fabric whose roster is legitimately wider than the joiner:
+    // `TieredSeam`'s union spans two disjoint tiers, so its host keeps a sibling server after the
+    // joiner departs, and must.
+    //
+    // So the target is the strongest statement the survivor's own roster supports — `{joiner.selfId}`
+    // when the survivor names the joiner by that id, and otherwise the whole set of remotes it was
+    // advertising, of which at least one must go. That conditional can only *tighten* the obligation,
+    // never loosen it, which is why it is not a knob choosing the vacuous case: the weak arm is taken
+    // exactly when the strong arm is unstatable. Every in-tree harness lands on an exact obligation —
+    // the multi-remote one (tiered) names the joiner, and the provisionally-labelling one (webrtc) has
+    // exactly one remote, so "some remote left" *is* "the joiner left".
+    //
+    // The residual hole is a fabric that is BOTH provisionally-labelling AND multi-remote: it could
+    // satisfy the arm by dropping the wrong peer. None exists in tree, and N-peer peer-leave is
+    // `MeshConformanceSuite`'s coverage rather than this suite's, which ADR-001 fixes at two Looms.
     //
     // **Unbounded, and that is the shape of its red.** Like every other delivery obligation here
     // (`payloadOfExactlyTheBudgetIsCarried`, `wovenSeamCapabilityIsHonest`'s live arm), the await IS
@@ -930,14 +951,15 @@ public abstract class SeamConformanceSuite {
         runTest {
             if (!capabilities().reportsPeerLoss) return@runTest
             connectedPair { host, joiner ->
-                val departing = joiner.selfId
+                val remotesBefore = host.peers.value - host.selfId
                 assertAll(
                     {
                         assertTrue(
-                            departing in host.peers.value,
-                            "precondition: the survivor must advertise the peer BEFORE it departs, or the " +
-                                "roster arm below is satisfied from the first instant and asserts nothing " +
-                                "(host peers: ${host.peers.value.map { it.value }}, departing: ${departing.value})",
+                            remotesBefore.isNotEmpty(),
+                            "precondition: the survivor must advertise a remote peer BEFORE the departure, " +
+                                "or the roster arm below is satisfied from the first instant and asserts " +
+                                "nothing (host peers: ${host.peers.value.map { it.value }}, " +
+                                "host selfId: ${host.selfId.value})",
                         )
                     },
                     {
@@ -973,8 +995,15 @@ public abstract class SeamConformanceSuite {
                         "would be testing the survivor's reaction to a departure",
                 )
 
+                // `{joiner.selfId}` when the survivor names the departing peer by that id, otherwise
+                // every remote it was advertising — see the block comment: the conditional takes the
+                // weaker target only where the stronger one is unstatable, so it can never loosen the
+                // obligation for a fabric that could have met the stronger one.
+                val mustLeave =
+                    if (joiner.selfId in remotesBefore) setOf(joiner.selfId) else remotesBefore
+
                 host.peers.combine(host.state) { peers, state ->
-                    departing !in peers || state !is SeamState.Woven
+                    mustLeave.any { it !in peers } || state !is SeamState.Woven
                 }.first { it }
             }
         }
