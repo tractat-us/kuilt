@@ -12,7 +12,7 @@ mavenPublishing {
     configure(JavaPlatform())
     pom {
         name.set("kuilt-bom")
-        description.set("Bill of Materials for kuilt — import once to align all module versions.")
+        // description comes from moduleDescription() in kuilt.publish, like every other module.
     }
 }
 
