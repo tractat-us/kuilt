@@ -1374,6 +1374,9 @@ public class EntitlementLedger private constructor(
     internal fun transferDonorsOn(edge: AttachmentId): Set<ReplicaId> =
         transfers[PathKey.of(edge)]?.keys ?: emptySet()
 
+    /** The donor rows recorded at [path] (empty if none) — `internal`, test support. */
+    internal fun transfersAt(path: PathKey): Map<ReplicaId, GCounter> = transfers[path] ?: emptyMap()
+
     /** Every group named as a parent or child by any (singleton or divergent) record. */
     internal fun allGroups(): Set<GroupId> =
         records.values.flatten().flatMapTo(HashSet()) { listOf(it.parent, it.child) }
