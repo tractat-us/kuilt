@@ -115,6 +115,33 @@ public abstract class LatticeLawSuite<S : Quilted<S>> {
     }
 
     /**
+     * The one seam every test above skips: a state that has been through the **codec** must be
+     * interchangeable with the one that has not. Seeds `0..15`.
+     *
+     * Replicas in this harness hand each other in-process objects. `Quilter` does not — it encodes a
+     * delta, puts the bytes on a `Seam`, and the receiver joins what it decodes. So a binding whose
+     * serializer is **lossy but deterministic** satisfies every law above, including both byte laws:
+     * each of their comparisons is between two encodings produced by the same lossy path, so the
+     * loss cancels on both sides. On the wire it does not cancel, and a removed element resurrects
+     * on the next merge.
+     *
+     * **This is an obligation the suite hands the next binding, more than a hole in today's.** The
+     * shipped types are covered by hand — per-type round-trip tests in `:kuilt-crdt`'s `commonTest`
+     * and `CanonicalGoldenVectorTest`, which is a hand-maintained list a new type joins only if
+     * someone remembers. Without this test, subclassing `LatticeLawSuite` carried zero wire
+     * requirement, and every author had to reinvent the check (#2317, part of #2247).
+     *
+     * Three arms — round-trip value, round-trip bytes, and join-through-the-wire — each catching
+     * what the one before it cannot, and three rig receipts asserting the pool was not vacuous. See
+     * [LatticeLawHarness.runCodecLaws], which argues all six.
+     */
+    @Test
+    public fun decodedStateJoinsIdenticallyToTheOriginal() {
+        val report = newHarness().runCodecLawsSeeds(0L..15L)
+        println("${this::class.simpleName} — codec laws over seeds 0..15\n$report")
+    }
+
+    /**
      * The generator searched enough for the tests above to mean anything — see [VacuityFloors].
      *
      * **This is not a test of the type; it is a test of the evidence.** A lattice law over a pool
