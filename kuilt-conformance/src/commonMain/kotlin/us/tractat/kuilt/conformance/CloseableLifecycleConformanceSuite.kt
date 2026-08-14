@@ -193,6 +193,21 @@ public abstract class CloseableLifecycleConformanceSuite {
      * *after* the cancel would very often be a `none { }` over an empty sequence — green by absence,
      * which is the defect this suite was audited for. Captured first and asserted non-empty, the
      * quantifier has something to quantify over.
+     *
+     * **The capture is a snapshot, and what that does and does not expose it to.** It is *not* a
+     * race: this suite closes on a single-threaded virtual-time dispatcher, from the test body,
+     * after the capture — there is no second closer, so the lock-free [Job.children] traversal has
+     * nothing mutating underneath it. (A genuinely concurrent `close()` is a different property
+     * with a different mechanism, and it lives in `:kuilt-core`'s real-threaded
+     * `ScopedCloseableCloseOnceCapabilityConcurrencyTest`, which cannot be a subclass here —
+     * `:kuilt-conformance` depends on `:kuilt-core`, so the reverse edge would be a cycle.)
+     *
+     * What the snapshot genuinely cannot see is a coroutine attached to the caller's scope
+     * **after** construction — a coordinator that launches lazily on first use rather than in its
+     * constructor escapes this assertion, because there was nothing to capture when the capture
+     * happened. That residual is inherent to the shape rather than an oversight of it: capturing
+     * *after* the close instead is strictly worse, since it reintroduces exactly the green-by-
+     * absence hole this test exists to close.
      */
     @Test
     public fun closeCancelsTheJobTheInstanceOwnsInTheGivenScope(): TestResult = runTest(
