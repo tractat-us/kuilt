@@ -126,10 +126,26 @@ public abstract class CommutativeSchemeConformanceSuite {
      *    sibling, and a count is what notices; a passing `assertEquals` on the ciphertexts would
      *    not, since that mutation makes the law *more* true.
      *
-     * [SchemePeer] is what makes assertion 4 an assertion rather than a convention: a peer owns
-     * its key privately and exposes only `encrypt`/`strip`, so applying one peer's key through
-     * another peer's scheme — a mis-crossing that would pass on any stateless scheme and hide a
-     * per-instance one — is not something this test body can express.
+     * [SchemePeer] carries the other half: a peer owns its key privately and exposes only
+     * `encrypt`/`strip`, so applying one peer's key through another peer's scheme — a mis-crossing
+     * that would pass on any stateless scheme and hide a per-instance one — is not something this
+     * test body can express at all.
+     *
+     * **Mutation receipts**, measured on this branch (JVM, `--rerun-tasks`), each applied alone and
+     * reverted, the verdict read out of the results XML:
+     *
+     * | Mutation | Reds |
+     * |---|---|
+     * | `SraScheme` given a **per-instance modulus** — textbook SRA | 3, here and in the sibling below — **and nothing else in the suite** |
+     * | Fixture: `newPeerScheme()` hands back a cached instance | 1 |
+     * | Fixture: two distinct instances seeded identically | 2 |
+     * | …that one again, with assertion 2 removed | **nothing** — which is why 2 exists |
+     * | Body: compute the *same* crossing twice, so the law is trivially true | **4 only — 3 stays green** |
+     * | Fixture: `validPlaintexts()` overridden to empty | the non-empty check |
+     *
+     * The fifth row is the one worth reading twice: that mutation makes assertion 3 *more* likely
+     * to pass, so no ciphertext comparison can notice it, and assertion 4 is the whole of what
+     * stands between this property and its single-instance sibling.
      */
     @Test
     public fun encryptionIsCommutativeAcrossPeerInstances() {
@@ -199,9 +215,23 @@ public abstract class CommutativeSchemeConformanceSuite {
      *    that happen to share a key cannot make the deranged strip trivially unwind;
      * 3. **the law** — the deranged strip recovers the plaintext;
      * 4. **the rig fired** — every peer encrypted twice (its solo layer for assertion 2, then its
-     *    layer in the chain) and stripped exactly once. A body that let one peer strip another's
-     *    layer would still recover the plaintext on any stateless scheme; the counts are what
-     *    refuse it, together with [SchemePeer] making it inexpressible in the first place.
+     *    layer in the chain) and stripped exactly once. This is what pins assertion 2 *in place*:
+     *    dropping the precondition call is a one-line edit that leaves the law passing, and the
+     *    counts are the only thing that reds on it.
+     *
+     * **Mutation receipts**, measured as for the sibling property above:
+     *
+     * | Mutation | Reds |
+     * |---|---|
+     * | `SraScheme` given a **per-instance modulus** — textbook SRA | 3, and nothing pre-existing |
+     * | Fixture: `newPeerScheme()` hands back a cached instance | 1 |
+     * | Fixture: two distinct instances seeded identically | 2 |
+     * | Body: delete the assertion-2 call | **4 only — 3 stays green**, both subclasses |
+     *
+     * **What this cannot reach.** It drives one deranged order out of the six; a scheme that
+     * commuted for some permutations and not others would need the full sweep, and no scheme that
+     * satisfies [encryptionIsCommutativeAcrossPeerInstances] can be one. And three peers is the
+     * sibling's number, not a proof that four would not break something a three-cycle cannot.
      */
     @Test
     public fun multiLayerDealAcrossPeerInstancesRecoversPlaintextRegardlessOfStripOrder() {
