@@ -185,9 +185,9 @@ public abstract class MeshConformanceSuite {
     // ## The idiom, and what makes each part load-bearing
     //
     // [sendToRoutesToExactlyOnePeer] already uses a sentinel broadcast to prove a frame did NOT arrive;
-    // this uses one to prove a frame arrived exactly once. The sender broadcasts [PAYLOADS] and then
-    // [SENTINEL]; each receiver takes `PAYLOADS.size + 1` frames and must see precisely
-    // `PAYLOADS + SENTINEL`.
+    // this uses one to prove a frame arrived exactly once. The sender broadcasts `PAYLOADS + SENTINEL`;
+    // each receiver takes exactly that many frames and must see precisely that sequence. The window and
+    // the expectation are the same value, so neither can be narrowed without the other.
     //
     //  - **The sentinel is the window's closing brace, and its arrival is the proof the rig fired.**
     //    A bare "collect until the sentinel and check what preceded it" cannot tell "stopped at the
@@ -296,9 +296,10 @@ public abstract class MeshConformanceSuite {
             "rig: the sentinel must be distinguishable from every payload, or the window closes on the " +
                 "first payload and the property asserts nothing",
         )
-        // Rows 5/6 of the receipt below: with ONE payload the same defect goes green, because the only
-        // duplicate a two-frame window can hold is a duplicate of the very first frame. Nothing else
-        // fails when this floor is lowered, so it is asserted rather than left to a reader of the KDoc.
+        // Rows 5/6 of the receipt above: with ONE payload the same defect goes green, because the only
+        // duplicate a two-frame window can hold is a duplicate of the very first frame. Nothing else in
+        // the suite fails when this floor is lowered, so it is asserted here rather than left as prose
+        // for a future editor to re-derive.
         assertTrue(
             PAYLOADS.size >= 2,
             "rig: at least two payloads are required — with one, a defect that starts duplicating after " +
