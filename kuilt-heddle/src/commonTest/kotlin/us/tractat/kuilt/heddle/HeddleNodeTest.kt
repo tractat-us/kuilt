@@ -710,34 +710,70 @@ class HeddleNodeTest {
      * The clamp fires on an observed idle→demand **transition**, never on the first sight of an
      * edge: a first observation carries no evidence the child was ever idle, and forfeiting a
      * real deficit accrued under some *other* peer's scheduling would be a penalty this peer has
-     * no standing to impose. Seating a genuinely new generation is the creation rule's job
-     * ([AttachmentRecord.neutral], #1688), not the clamp's.
+     * no standing to impose. Seating a genuinely new generation is the seat bump's job
+     * ([EntitlementLedger.seat], #1688/#1752), not the clamp's.
+     *
+     * **Two peers are load-bearing here, not scenery** (issue #1752). Since the seat moved into
+     * the replicated [Gauge], a *locally* first-sighted edge is seated by this peer's own bump at
+     * the front it is joining, so it can never be behind — the deficit under test is only
+     * reachable when the seat was written **elsewhere**, at a time when the front was lower. So
+     * peer B seats `e3` at the origin and then runs `e1` up to 200 on its own holdings; peer A
+     * merges that and meets `e3` for the first time already 200 behind. If A treated first sight
+     * as a wake it would clamp `e3` forward to A's front — level with `e1` — and A's grants would
+     * then alternate between them instead of going to the child that is actually owed them.
      */
     @Test
     fun firstObservationOfADemandingEdgeIsNotTreatedAsAWake() = runTest(
         StandardTestDispatcher(),
         timeout = TEST_WEDGE_BACKSTOP,
     ) {
-        val h = harness(peers = 1, mint = mapOf(0 to 200L), topology = flatTopology())
+        val h = harness(peers = 2, mint = mapOf(0 to 100L, 1 to 200L), topology = flatTopology())
         h.pump()
-        val node = h.peers[0].node
-
-        // g1 is handed a deficit out of band — it is behind, and has never been observed idle.
-        val behind = AttachmentRecord(AttachmentId("e3"), root, GroupId("g3"), Weight.ONE)
-        assertTrue(node.prepare(behind) && node.activate(behind.id))
+        val a = h.peers[0].node
+        val b = h.peers[1].node
         val hungrier = Demand(targetOutstanding = 10_000L, maximumUsefulGrant = 10L)
-        node.advertise(e1, hungrier)
-        node.advertise(behind.id, hungrier)
-        node.schedule(root)
+
+        // B introduces e3 and schedules: the bump seats e1, e2 and e3 together at the origin (no
+        // front yet), and B then spends its own 200 on e1 alone. A never sees this round.
+        val behind = AttachmentRecord(AttachmentId("e3"), root, GroupId("g3"), Weight.ONE)
+        assertTrue(b.prepare(behind) && b.activate(behind.id))
+        b.advertise(e1, hungrier)
+        b.schedule(root)
+        h.pump()
+        assertAll(
+            { assertEquals(200L, a.ledger.value.edge(e1)!!.issued, "A merged e1's run") },
+            {
+                assertEquals(
+                    Rational.ZERO,
+                    assertNotNull(a.ledger.value.gauge(behind.id)).floor,
+                    "…and merged e3's seat at the origin, written when B's front was still there",
+                )
+            },
+        )
+
+        // A's first sight of e3, 200 behind. Unclamped, every one of A's 100 units is owed to it.
+        a.advertise(e1, hungrier)
+        a.advertise(behind.id, hungrier)
+        a.schedule(root)
         h.pump()
 
-        // e1 starts at 0 and e3 at 100, so e1 is eligible first and stays ahead on grants; the
-        // clamp must not have levelled them.
-        val ledger = node.ledger.value
-        assertTrue(
-            ledger.edge(e1)!!.issued > ledger.edge(behind.id)!!.issued,
-            "an unclamped first observation must keep e1's real advantage " +
-                "(e1=${ledger.edge(e1)!!.issued}, e3=${ledger.edge(behind.id)!!.issued})",
+        val ledger = a.ledger.value
+        assertAll(
+            {
+                assertEquals(
+                    100L,
+                    ledger.edge(behind.id)!!.issued,
+                    "an unclamped first observation must honour e3's real deficit in full",
+                )
+            },
+            {
+                assertEquals(
+                    200L,
+                    ledger.edge(e1)!!.issued,
+                    "…and e1, 200 ahead, takes none of A's grants — a clamp would have levelled them " +
+                        "and split the round",
+                )
+            },
         )
     }
 

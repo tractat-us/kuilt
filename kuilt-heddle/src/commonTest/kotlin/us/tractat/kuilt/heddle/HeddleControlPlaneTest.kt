@@ -755,36 +755,39 @@ class HeddleControlPlaneTest {
         assertIs<ControlOutcome.Applied>(governed.enroll(self))
         assertIs<ControlOutcome.Applied>(governed.mint(self, 1_000L))
 
+        // The first generation. Scheduled with nothing advertised, so the seat bump runs but no
+        // grant does — the stored gauge is the seat itself, not a later `delegate` checkpoint.
         val first = AttachmentId("first")
         assertNull(governed.parentVirtualTime(root), "a parent with no active children has no front")
         assertIs<ControlOutcome.Applied>(governed.prepareNeutral(first, root, GroupId("leaf"), Weight.ONE))
         assertIs<ControlOutcome.Applied>(governed.activate(first))
-        governed.advertise(first, Demand(targetOutstanding = 100L, maximumUsefulGrant = 100L))
         governed.schedule(root)
         assertEquals(
-            Rational.ZERO,
-            assertNotNull(governed.ledger.value.gauge(first)).floor,
+            Gauge(Rational.ZERO, folded = 0L),
+            governed.ledger.value.gauge(first),
             "the first generation is seated at the parent's origin — there was no front to join",
         )
 
-        // The parent has now rendered service, so its front has advanced past the origin.
+        // Now let it render service, so the parent's front advances past the origin.
+        governed.advertise(first, Demand(targetOutstanding = 100L, maximumUsefulGrant = 100L))
+        governed.schedule(root)
         val front = assertNotNull(governed.parentVirtualTime(root))
         assertTrue(front > Rational.ZERO, "the parent has rendered service, so its front has advanced, was $front")
 
         // A second generation joins. It is unseated until the scheduler bumps it, and the bump takes
         // the front with the joiner itself excluded — which, `first` being the only other active
-        // edge, is exactly `first`'s virtual service at that moment.
+        // edge, is exactly `first`'s virtual service at that moment. Again scheduled with nothing
+        // newly advertised for it, so the gauge read back is the seat and not a checkpoint.
         val second = AttachmentId("second")
         assertIs<ControlOutcome.Applied>(governed.prepareNeutral(second, root, GroupId("leaf2"), Weight.ONE))
         assertIs<ControlOutcome.Applied>(governed.activate(second))
         assertNull(governed.ledger.value.gauge(second), "a freshly activated edge carries no seat yet")
-        governed.advertise(second, Demand(targetOutstanding = 100L, maximumUsefulGrant = 100L))
 
         val joiningFront = assertNotNull(governed.ledger.value.virtualService(first))
         governed.schedule(root)
         assertEquals(
-            joiningFront,
-            assertNotNull(governed.ledger.value.gauge(second)).floor,
+            Gauge(joiningFront, folded = 0L),
+            governed.ledger.value.gauge(second),
             "a joiner is seated at the front it is joining, exactly — never at 0, and never at a rounded ⌈V⌉",
         )
     }
