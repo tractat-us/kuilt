@@ -178,26 +178,30 @@ internal class SampleEvidenceFloorSelfTest {
      * proposed — does not agree with `==`, and does not even agree with itself across targets.**
      *
      * `hashCode` is not part of the [Quilted] contract. [EqualButUnhashed] overrides equality and
-     * leaves `hashCode` at identity, which breaks the `equals`/`hashCode` contract a hash container
-     * relies on — so what a `Set` makes of three equal instances is **unspecified**, and measurably
-     * so. Three of them read as *three* distinct on JVM, Android, `macosArm64` and
-     * `iosSimulatorArm64`, and as *two* on `wasmJs`, where two of the identity hashes shared a
-     * bucket and `equals` collapsed them there. The type is not a contrivance: nothing in `Quilted`
-     * asks for `hashCode`, so a binding author who writes none has broken no rule — and under a
-     * `toSet()` floor would have got an evidence count that varies by target for their trouble.
-     * A floor whose verdict depends on identity-hash allocation is not a floor.
+     * leaves `hashCode` at identity, which breaks the `equals`/`hashCode` contract every hash
+     * container relies on — so what a `Set` makes of three equal instances is **unspecified**, and
+     * observably so: three of them read as *three* distinct on most runs and as *two* on a `wasmJs`
+     * run where two identity hashes shared a bucket and `equals` collapsed them there. A later
+     * `wasmJs` run read three again. **The number is not stable across targets and not stable across
+     * runs of one target**, which is the whole argument — a floor whose verdict depends on
+     * identity-hash allocation is not a floor. The type is not a contrivance either: nothing in
+     * `Quilted` asks for `hashCode`, so a binding author who writes none has broken no rule, and
+     * under a `toSet()` floor would have got a non-reproducible evidence count for their trouble.
      *
-     * **So the assertion is on `==`, and the `Set` number is printed rather than pinned.** An
-     * earlier draft asserted `toSet().size == 3`; it passed on four targets and reddened on
-     * `wasmJs` — the rig's own precondition was the platform-dependent thing, which is the finding
-     * rather than a flake. What is deterministic on every target is that
+     * **So the assertion is on `==`, and the `Set` number is printed rather than pinned** — no
+     * number for it appears in an assertion or, deliberately, anywhere in this KDoc as a claim about
+     * what a given target *will* read. An earlier draft asserted `toSet().size == 3` and reddened
+     * the `wasmJs` run above; the rig's own precondition was the unspecified thing, which is the
+     * finding rather than a flake. What is deterministic on every target and every run is that
      * [checkSampleEvidenceFloor] consults no hash and reads **one**.
      *
-     * That is enough to red a `toSet()` mutation wherever the two disagree: at a `Set` count of 3
-     * the floor stops raising at all and [assertFailsWith] reds; at 2 it raises with the wrong
-     * count and the message check reds. **What it cannot detect** is a hypothetical target whose
-     * `Set` collapses all three into one bucket — there the two spellings agree on this input, and
-     * no assertion over it could separate them.
+     * That is enough to red a `toSet()` mutation on any run where the two spellings disagree: at a
+     * `Set` count of 3 the floor stops raising at all and [assertFailsWith] reds; at 2 it raises
+     * with the wrong count and the message check reds. **What it cannot detect** is a run whose
+     * `Set` happens to collapse all three into one bucket — there the two spellings agree on this
+     * input and nothing over it could separate them. So this arm's red is *probabilistic in the
+     * mutant*, which is worth knowing and is not a reason to weaken it: the shipped code is
+     * deterministic, and it is only the `toSet()` counterfactual whose detection is not.
      */
     @Test
     fun equalValuesWithoutAHashCodeStillCollapse() {
