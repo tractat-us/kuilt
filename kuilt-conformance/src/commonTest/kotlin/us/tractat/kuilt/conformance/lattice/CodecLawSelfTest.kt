@@ -22,18 +22,19 @@ import kotlin.test.assertTrue
  * half a receipt; a rig that reds the arm it was built for is the whole one.
  *
  * **One type for every arm, so the arms are the only variable.** [TaggedCell] is a last-writer-wins
- * cell with three fields and one deliberate property: its `equals` compares the **value only**. That
+ * cell with four fields and one deliberate property: its `equals` compares the **value only**. That
  * is not a contrivance to make an arm fire — it is the ordinary shape of a CRDT's equality, which
  * compares what an application observes and ignores the causal bookkeeping underneath, and it is
  * exactly the shape that makes arms 2 and 3 more than restatements of arm 1.
  *
- * **What this file cannot show.** The byte half of arm 3 — `a ⊔ b` and `a ⊔ decode(encode(b))`
- * comparing equal and encoding differently — has no rig here, and not for want of trying: a codec
- * whose decoded state re-encodes identically hands `piece` an operand indistinguishable on the wire
- * from the original, so on a *selecting* join like [TaggedCell]'s the two joins cannot differ in
- * bytes alone. Every codec that reds it also reds arm 2 one step earlier. It is checked, and it is
- * **not proven by this file**; see the PR receipt for the arm-2-deleted mutation that shows it is
- * live code rather than decoration.
+ * **Its join has to *combine*, not merely select, and that is why it has a fourth field.** A join
+ * that returns one of its two operands cannot distinguish `a ⊔ b` from `a ⊔ decode(encode(b))` in
+ * bytes alone: the result is either `a`, or a state the codec has already been shown (by arm 2) to
+ * re-encode identically. So over a purely selecting join the byte half of arm 3 is unreachable, and
+ * an earlier draft of this file left it unproven — a mutation deleting it reddened **nothing**.
+ * [TaggedCell.derived] accumulates the other operand's [TaggedCell.mark] on every join, which is the
+ * cheapest honest way to make the join read something rather than pick something, and
+ * [aCodecThatNeverCarriesTheMarkRedsTheJoinCanonicalityArm] is the rig that then reaches it.
  */
 internal class CodecLawSelfTest {
 
@@ -81,7 +82,10 @@ internal class CodecLawSelfTest {
     @Test
     fun aCodecThatZeroesAFieldEqualityIgnoresRedsTheStabilityArm() {
         assertRaises(
-            codec = CellCodec(onWrite = { Wire(it.value, it.tag, it.mark) }, onRead = { TaggedCell(it.v, it.t, 0) }),
+            codec = CellCodec(
+                onWrite = { Wire(it.value, it.tag, it.mark, it.derived) },
+                onRead = { TaggedCell(it.v, it.t, 0, it.d) },
+            ),
             expected = "Codec stability failure",
             notAlso = listOf("Codec round-trip failure", "Codec join failure"),
         )
@@ -102,6 +106,30 @@ internal class CodecLawSelfTest {
             codec = dropping { it.copy(t = 0L) },
             expected = "Codec join failure",
             notAlso = listOf("Codec round-trip failure", "Codec stability failure"),
+        )
+    }
+
+    /**
+     * **Arm 3, byte half.** A codec that carries the mark in *neither* direction round-trips to an
+     * equal state, re-encodes to identical bytes, and still makes every later join encode
+     * differently — because the join reads the mark and writes what it read into a field the
+     * encoding does carry.
+     *
+     * This is the one arm a *selecting* join puts out of reach, and the reason [TaggedCell.piece]
+     * combines. The failure it produces is the harness's own distinct wording — *EQUAL but encode to
+     * DIFFERENT bytes* — because the two states a receiver and a sender hold here agree on
+     * everything an application can observe and disagree on their digest, which is precisely what
+     * #1955's root-hash gate compares.
+     */
+    @Test
+    fun aCodecThatNeverCarriesTheMarkRedsTheJoinCanonicalityArm() {
+        assertRaises(
+            codec = CellCodec(
+                onWrite = { Wire(it.value, it.tag, 0, it.derived) },
+                onRead = { TaggedCell(it.v, it.t, 0, it.d) },
+            ),
+            expected = "Codec join canonicality failure",
+            notAlso = listOf("Codec round-trip failure", "Codec stability failure", "Codec join failure"),
         )
     }
 
@@ -132,7 +160,7 @@ internal class CodecLawSelfTest {
     @Test
     fun aConstantCodecRedsTheEncodingReceipt() {
         val failure = assertFailsWith<IllegalStateException> {
-            harness(dropping { Wire("", 0L, 0) }).runCodecLawsSeeds(seeds)
+            harness(dropping { Wire("", 0L, 0, 0) }).runCodecLawsSeeds(seeds)
         }
         assertNames(failure.message.orEmpty(), "distinct encoding", "distinct states produced only")
     }
@@ -151,7 +179,7 @@ internal class CodecLawSelfTest {
     @Test
     fun aGeneratorWhoseTagNeverAdvancesRedsTheAbsorptionReceipt() {
         val failure = assertFailsWith<IllegalStateException> {
-            harness(FAITHFUL, op = { _, _, random -> TaggedCell("v-${random.nextInt(0, 3)}", 0L, 0) })
+            harness(FAITHFUL, op = { _, _, random -> TaggedCell("v-${random.nextInt(0, 3)}", 0L, 0, 0) })
                 .runCodecLawsSeeds(seeds)
         }
         assertNames(failure.message.orEmpty(), "Codec join arm is vacuous", "read anything out of the")
@@ -187,10 +215,10 @@ internal class CodecLawSelfTest {
         codec: KSerializer<TaggedCell>,
         op: (TaggedCell, Int, kotlin.random.Random) -> TaggedCell = { state, _, random ->
             val next = state.tag + 1
-            TaggedCell("v-${random.nextInt(0, 3)}", next, next.toInt())
+            TaggedCell("v-${random.nextInt(0, 3)}", next, next.toInt(), state.derived)
         },
     ): LatticeLawHarness<TaggedCell> = LatticeLawHarness(
-        initial = TaggedCell("", 0L, 0),
+        initial = TaggedCell("", 0L, 0, 0),
         alphabet = listOf(LatticeOp("set", OpKind.ASSERT, op)),
         serializer = codec,
         floors = VacuityFloors.NOTHING_TO_RETIRE,
@@ -199,16 +227,16 @@ internal class CodecLawSelfTest {
     )
 
     private companion object {
-        /** Writes and reads all three fields — the control. */
+        /** Writes and reads all four fields — the control. */
         val FAITHFUL = CellCodec(
-            onWrite = { Wire(it.value, it.tag, it.mark) },
-            onRead = { TaggedCell(it.v, it.t, it.m) },
+            onWrite = { Wire(it.value, it.tag, it.mark, it.derived) },
+            onRead = { TaggedCell(it.v, it.t, it.m, it.d) },
         )
 
         /** A codec faithful on the read side, whose write side is bent by [bend]. */
         fun dropping(bend: (Wire) -> Wire) = CellCodec(
-            onWrite = { bend(Wire(it.value, it.tag, it.mark)) },
-            onRead = { TaggedCell(it.v, it.t, it.m) },
+            onWrite = { bend(Wire(it.value, it.tag, it.mark, it.derived)) },
+            onRead = { TaggedCell(it.v, it.t, it.m, it.d) },
         )
     }
 }
@@ -216,26 +244,38 @@ internal class CodecLawSelfTest {
 /**
  * A last-writer-wins cell whose `equals` compares the **value only**.
  *
- * Three fields, each reached by a different arm of the codec pass: [value] is what equality sees,
- * [tag] is what the join reads and equality does not, and [mark] is what the encoding carries and
- * neither of the other two consults. A codec can drop exactly one of them and be caught by exactly
- * one arm — which is what makes this a self-test rather than three restatements of the same rig.
+ * Four fields, each reached by a different arm of the codec pass: [value] is what equality sees,
+ * [tag] is what the join *selects* on and equality does not, [mark] is what the join *reads* and
+ * neither equality nor a reader ever sees directly, and [derived] is where the join writes what it
+ * read, so the encoding carries it. A codec can drop exactly one of them and be caught by exactly
+ * one arm — which is what makes this a self-test rather than four restatements of the same rig.
  *
  * The coarse `equals` is the ordinary shape, not the rigged one: a CRDT's equality compares what an
  * application observes and ignores the causal bookkeeping underneath. It is *because* real types are
  * built this way that a lossy codec can pass a round-trip.
+ *
+ * @property mark the operand contribution [piece] folds into the winner's [derived]. Never consulted
+ *   by `equals`, so a codec may drop it and still round-trip.
+ * @property derived the running fold of every operand's [mark] this state has absorbed. What makes
+ *   the join *combine* rather than *select*, and the only reason the byte half of arm 3 is
+ *   reachable at all.
  */
-internal class TaggedCell(val value: String, val tag: Long, val mark: Int) : Quilted<TaggedCell> {
-    override fun piece(other: TaggedCell): TaggedCell = if (other.tag > tag) other else this
+internal class TaggedCell(val value: String, val tag: Long, val mark: Int, val derived: Int) :
+    Quilted<TaggedCell> {
+    override fun piece(other: TaggedCell): TaggedCell {
+        val winner = if (other.tag > tag) other else this
+        return TaggedCell(winner.value, winner.tag, winner.mark, derived + other.mark)
+    }
+
     override fun equals(other: Any?): Boolean = other is TaggedCell && other.value == value
     override fun hashCode(): Int = value.hashCode()
-    override fun toString(): String = "TaggedCell(value=$value, tag=$tag, mark=$mark)"
+    override fun toString(): String = "TaggedCell(value=$value, tag=$tag, mark=$mark, derived=$derived)"
 }
 
 /** The wire form of a [TaggedCell] — a surrogate, so each rig is one lambda rather than one codec. */
 @Serializable
-internal class Wire(val v: String, val t: Long, val m: Int) {
-    fun copy(v: String = this.v, t: Long = this.t, m: Int = this.m): Wire = Wire(v, t, m)
+internal class Wire(val v: String, val t: Long, val m: Int, val d: Int) {
+    fun copy(v: String = this.v, t: Long = this.t, m: Int = this.m, d: Int = this.d): Wire = Wire(v, t, m, d)
 }
 
 /** A [TaggedCell] codec assembled from a write-side and a read-side transform over [Wire]. */
