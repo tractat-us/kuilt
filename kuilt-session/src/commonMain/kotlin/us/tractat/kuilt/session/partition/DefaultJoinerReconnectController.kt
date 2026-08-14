@@ -56,11 +56,11 @@ public class DefaultJoinerReconnectController(
     override suspend fun tryResume(
         token: ResumeToken,
         at: Long,
-    ): ResumeResult {
+    ): ResumeResult.HostVerdict {
         if (token.roomId != roomId) {
             return ResumeResult.TokenInvalid("session-mismatch")
         }
-        val result =
+        val result: ResumeResult.HostVerdict =
             mutex.withLock {
                 val state = windows[token.peerId]
                 when {

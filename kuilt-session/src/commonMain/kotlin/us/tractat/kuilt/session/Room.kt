@@ -279,8 +279,16 @@ public interface Room {
      * Attempt to resume this room from a [ResumeToken] after a transport drop.
      *
      * Wired via [us.tractat.kuilt.session.partition.JoinerReconnectController] (1D).
+     *
+     * Returns a [ResumeResult.JoinerOutcome], never the whole [ResumeResult] hierarchy: the host's
+     * own verdicts ([ResumeResult.WindowNotYetOpen], [ResumeResult.TokenInvalid]) do not travel as
+     * values — they arrive as the [us.tractat.kuilt.session.admit.RejectCode] on
+     * [ResumeResult.Refused] (#2364). Branching on a value this surface cannot return is therefore
+     * a compile error rather than a dead arm.
+     *
+     * @sample us.tractat.kuilt.session.resumeAfterDropSample
      */
-    public suspend fun resume(token: ResumeToken): ResumeResult
+    public suspend fun resume(token: ResumeToken): ResumeResult.JoinerOutcome
 
     /**
      * Returns a [Seam] view scoped to this channel [id].

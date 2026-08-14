@@ -181,8 +181,15 @@ public class FakeRoom(
     /** All (peer, payload) pairs passed to [sendTo], in call order. */
     public val directed: List<Pair<PeerId, ByteArray>> get() = _directed.toList()
 
-    /** Configurable result returned by [resume]. Defaults to [ResumeResult.Success]. */
-    public var resumeResult: ResumeResult = ResumeResult.Success
+    /**
+     * Configurable result returned by [resume]. Defaults to [ResumeResult.Success].
+     *
+     * Typed [ResumeResult.JoinerOutcome], the half of the hierarchy a real `Room.resume` can
+     * produce (#2364) — so a fake cannot hand a consumer a host-side verdict no room would ever
+     * return, and a test that wants a *refusal* has to state the
+     * [us.tractat.kuilt.session.admit.RejectCode] it is refusing with.
+     */
+    public var resumeResult: ResumeResult.JoinerOutcome = ResumeResult.Success
 
     /**
      * Optional hook invoked after [broadcast] is recorded (and the left-check passes).
@@ -203,7 +210,7 @@ public class FakeRoom(
         _directed.add(peer to bytes)
     }
 
-    override suspend fun resume(token: ResumeToken): ResumeResult = resumeResult
+    override suspend fun resume(token: ResumeToken): ResumeResult.JoinerOutcome = resumeResult
 
     override suspend fun leave(reason: LeaveReason) {
         if (left) return

@@ -211,7 +211,7 @@ internal class JoinerResumeMachine(
      * (failure); the room's admit-frame handler resolves it via [takePendingFlight] /
      * [rejectFlight].
      */
-    private var pendingResume: CompletableDeferred<ResumeResult>? = null
+    private var pendingResume: CompletableDeferred<ResumeResult.JoinerOutcome>? = null
 
     /**
      * The most recent host `Reject` for a resume in this episode, or null. Set by [rejectFlight]
@@ -307,33 +307,39 @@ internal class JoinerResumeMachine(
      * completes it as [ResumeResult.WindowClosed] — the room is terminal, so its reply can
      * never arrive; without this, every caller awaiting the flight (#1280) hangs forever).
      */
-    fun takePendingFlight(): CompletableDeferred<ResumeResult>? = lock.withLock {
+    fun takePendingFlight(): CompletableDeferred<ResumeResult.JoinerOutcome>? = lock.withLock {
         val d = pendingResume
         pendingResume = null
         d
     }
 
     /**
-     * Resolves the pending flight as [ResumeResult.WindowClosed] in response to a host
-     * `Reject`, returning whether a flight was actually in flight — `false` means the Reject
-     * arrived during the initial join (no resume pending), which the room fails loudly as an
-     * admission rejection instead (#1178).
+     * Resolves the pending flight as [ResumeResult.Refused], carrying the host's [message] and
+     * [code] verbatim, and returns whether a flight was actually in flight — `false` means the
+     * Reject arrived during the initial join (no resume pending), which the room fails loudly as
+     * an admission rejection instead (#1178).
      *
      * The [message] is **recorded, not obeyed as authoritative**, and so is [code] — with one
      * exception. A `Reject` is usually not terminal (a window that has not opened yet also
-     * rejects — the fast-reconnect race), so the flight completes as [ResumeResult.WindowClosed]
-     * and [runReconnect]'s retry loop runs unchanged; the recorded [refusal] then only refines the
-     * terminal label to [FailureReason.Refused] if the window ultimately expires. Only when [code]
-     * declares itself non-[RejectCode.retryable] does [runReconnect] stop early — and a host that
-     * sends no code decodes as [RejectCode.Unknown], which is retryable, so old hosts keep the
-     * pre-#1572 behaviour exactly.
+     * rejects — the fast-reconnect race), so the flight completes and [runReconnect]'s retry loop
+     * runs unchanged; the recorded [refusal] then only refines the terminal label to
+     * [FailureReason.Refused] if the window ultimately expires. Only when [code] declares itself
+     * non-[RejectCode.retryable] does [runReconnect] stop early — and a host that sends no code
+     * decodes as [RejectCode.Unknown], which is retryable, so old hosts keep the pre-#1572
+     * behaviour exactly.
+     *
+     * **The value handed to the caller is [ResumeResult.Refused], not [ResumeResult.WindowClosed]
+     * (#2364).** It used to be the latter, unconditionally, whatever the host said — so an
+     * elapsed window, a token for another room and a not-yet-open window were one value at the
+     * public surface, and the last of those is the *transient* one. Nothing about the retry loop
+     * changes: it has always decided on `refusal.code`, never on the value returned here.
      */
     fun rejectFlight(message: String, code: RejectCode): Boolean = lock.withLock {
         val d = pendingResume
         pendingResume = null
         // Count within the episode, so runReconnect can report each reject exactly once.
         if (d != null) refusal = Refusal(message, code, attempt = (refusal?.attempt ?: 0) + 1)
-        d?.complete(ResumeResult.WindowClosed)
+        d?.complete(ResumeResult.Refused(message, code))
         d != null
     }
 
@@ -541,13 +547,18 @@ internal class JoinerResumeMachine(
                     // WindowOpened arc this machine already emitted would stay open forever.
                     //
                     // WindowNotYetOpen is unambiguous, so this can never mask a real loss: an OPEN
-                    // window returns Success and an EXPIRED one returns WindowClosed. The dwell is
-                    // additionally gated on the attempt having actually been *answered* — a reject
-                    // resolves the flight as [ResumeResult.WindowClosed], whereas a host that has
-                    // gone silent yields [ResumeResult.TimedOut] (#1587) and must NOT keep a stale
-                    // refusal's dwell running.
+                    // window returns Success and an EXPIRED one is refused with
+                    // RejectCode.ResumeWindowExpired. The dwell is additionally gated on the
+                    // attempt having actually been *answered* — a reject resolves the flight as
+                    // [ResumeResult.Refused], whereas a host that has gone silent yields
+                    // [ResumeResult.TimedOut] (#1587) and must NOT keep a stale refusal's dwell
+                    // running. Reading THIS attempt's code off the result (rather than off the
+                    // sticky [refusal], as before #2364) says the same thing for an answered
+                    // attempt — rejectFlight writes both from one Reject — and additionally stops
+                    // an unanswered attempt (a send failure, a terminal room) from riding a
+                    // previous attempt's code.
                     val refusedNotYetOpen =
-                        result is ResumeResult.WindowClosed && code == RejectCode.ResumeWindowNotYetOpen
+                        result is ResumeResult.Refused && result.code == RejectCode.ResumeWindowNotYetOpen
                     // Dwell bookkeeping is hoisted above the terminal short-circuit and the refusal
                     // report so a report can say how far into the dwell it landed. Nothing observable
                     // moves: a terminal code is never ResumeWindowNotYetOpen, so the short-circuit
@@ -671,7 +682,7 @@ internal class JoinerResumeMachine(
      * orphaned. The room's `leave()` resolves any still-pending attempt the same way (via
      * [takePendingFlight]), so no caller's `await` outlives the room.
      */
-    suspend fun resume(token: ResumeToken): ResumeResult {
+    suspend fun resume(token: ResumeToken): ResumeResult.JoinerOutcome {
         // Install (or join) the deferred under lock; check terminal flags first.
         val (deferred, ownsFlight) = lock.withLock {
             if (host.isTerminal()) return ResumeResult.WindowClosed
@@ -679,7 +690,7 @@ internal class JoinerResumeMachine(
             if (inFlight != null) {
                 inFlight to false
             } else {
-                CompletableDeferred<ResumeResult>().also { pendingResume = it } to true
+                CompletableDeferred<ResumeResult.JoinerOutcome>().also { pendingResume = it } to true
             }
         }
         // A resume is already in flight — join it (bounded) rather than orphaning its reply slot.
@@ -728,7 +739,9 @@ internal class JoinerResumeMachine(
      * the auto-reconnect window elapsing around an internal [resume]) propagates through
      * unchanged, preserving cancellation discipline.
      */
-    private suspend fun awaitFlightBounded(deferred: CompletableDeferred<ResumeResult>): ResumeResult =
+    private suspend fun awaitFlightBounded(
+        deferred: CompletableDeferred<ResumeResult.JoinerOutcome>,
+    ): ResumeResult.JoinerOutcome =
         withTimeoutOrNull(heartbeatConfig.resumeTimeout) { deferred.await() }
             ?: ResumeResult.TimedOut.also { completeFlight(deferred, it) }
 
@@ -737,7 +750,7 @@ internal class JoinerResumeMachine(
      * broadcast-cancellation paths): see [completeFlight] for the slot-clear + completion
      * semantics.
      */
-    private fun abandonFlight(deferred: CompletableDeferred<ResumeResult>) =
+    private fun abandonFlight(deferred: CompletableDeferred<ResumeResult.JoinerOutcome>) =
         completeFlight(deferred, ResumeResult.WindowClosed)
 
     /**
@@ -746,7 +759,10 @@ internal class JoinerResumeMachine(
      * runs outside [lock]; it is a no-op on the deferred when a raced ResumeAck/Reject already
      * completed it.
      */
-    private fun completeFlight(deferred: CompletableDeferred<ResumeResult>, result: ResumeResult) {
+    private fun completeFlight(
+        deferred: CompletableDeferred<ResumeResult.JoinerOutcome>,
+        result: ResumeResult.JoinerOutcome,
+    ) {
         lock.withLock { if (pendingResume === deferred) pendingResume = null }
         deferred.complete(result)
     }
