@@ -320,7 +320,7 @@ class StarTopologyPresenceFanoutTest {
             _events.tryEmit(JoinerReconnectEvent.WindowOpened(peerId, expiresAt = expiresAt))
         }
 
-        override suspend fun tryResume(token: ResumeToken, at: Long): ResumeResult =
+        override suspend fun tryResume(token: ResumeToken, at: Long): ResumeResult.HostVerdict =
             ResumeResult.WindowNotYetOpen
 
         override fun expire(peerId: us.tractat.kuilt.core.PeerId, at: Long) = Unit
