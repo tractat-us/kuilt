@@ -72,6 +72,61 @@ internal fun percent(rate: Double): String {
 }
 
 /**
+ * What one binding's codec pass actually put through the wire, measured by
+ * [LatticeLawHarness.runCodecLaws].
+ *
+ * The counts are the pass's own **rig receipt**. Every law the pass asserts is a statement about a
+ * codec, and every one of them holds vacuously over a pool that degenerated to a single value: a
+ * round-trip of `initial` against itself is green on a serializer that drops every field it has.
+ * So the pass reports what it searched, and [LatticeLawHarness.runCodecLaws] refuses to pass on a
+ * pool that searched nothing. The rates are absent on purpose — there is no denominator here worth
+ * dividing by, and a count of one is exactly the number a reader needs to see.
+ *
+ * @param seeds how many pools were walked.
+ * @param states pool states round-tripped, summed over [seeds].
+ * @param distinctStates states no other pool state equalled, summed within each seed. Counted by
+ *   `==` rather than by set membership: `hashCode` is not part of the
+ *   [us.tractat.kuilt.crdt.Quilted] contract, and a type with equality and no hash would silently
+ *   read every state as distinct.
+ * @param distinctEncodings the same count over the encoded forms, by `contentEquals`. Below
+ *   [distinctStates] the codec cannot tell two reachable states apart; above it, two equal states
+ *   encode differently.
+ * @param joinPairs ordered pairs of pool positions joined through the codec. Includes `i == j`,
+ *   which is the idempotent case and the cheapest place a decoded operand can go wrong.
+ * @param absorbingJoinPairs pairs where `a ⊔ b != a` — the join had to take something from the
+ *   decoded operand. A pass whose every join already dominated its second operand never read the
+ *   decoded state at all.
+ */
+public class CodecReport(
+    public val seeds: Int,
+    public val states: Long,
+    public val distinctStates: Long,
+    public val distinctEncodings: Long,
+    public val joinPairs: Long,
+    public val absorbingJoinPairs: Long,
+) {
+    /** Sum two per-seed reports. Associative and commutative, so a seed range folds in any order. */
+    public operator fun plus(other: CodecReport): CodecReport = CodecReport(
+        seeds = seeds + other.seeds,
+        states = states + other.states,
+        distinctStates = distinctStates + other.distinctStates,
+        distinctEncodings = distinctEncodings + other.distinctEncodings,
+        joinPairs = joinPairs + other.joinPairs,
+        absorbingJoinPairs = absorbingJoinPairs + other.absorbingJoinPairs,
+    )
+
+    override fun toString(): String =
+        "  seeds walked           $seeds\n" +
+            "  states round-tripped   $states  ($distinctStates distinct, " +
+            "$distinctEncodings distinct encodings)\n" +
+            "  joins through the wire $joinPairs  ($absorbingJoinPairs absorbing)"
+
+    internal companion object {
+        val EMPTY = CodecReport(0, 0L, 0L, 0L, 0L, 0L)
+    }
+}
+
+/**
  * Drives [replicaCount] replicas (default 3) through [opsPerReplica] random operations distributed
  * across them, then merges in every possible pairwise order and asserts all replicas converge to
  * the same value.
@@ -163,6 +218,18 @@ public class LatticeLawHarness<S : Quilted<S>>(
     private val cbor = Cbor {}
 
     private fun encoded(state: S): ByteArray = cbor.encodeToByteArray(serializer, state)
+
+    /**
+     * The other half of [encoded] — and, until #2317, the half this harness never called.
+     *
+     * Every replica exchange the rest of this file performs hands one in-process object to another.
+     * `Quilter` does not: it encodes a delta, puts the bytes on a `Seam`, and the receiver joins
+     * whatever comes back out here. A serializer that is **lossy but deterministic** — drops a
+     * field, collapses a dot context, omits tombstones — satisfies every other law in this file,
+     * including the byte laws, because both sides of every comparison go through the same lossy
+     * path. It fails only against a decode.
+     */
+    private fun decoded(bytes: ByteArray): S = cbor.decodeFromByteArray(serializer, bytes)
 
     /** Run with a single [seed]; assert convergence. Returns the converged state. */
     public fun run(seed: Long): S {
@@ -272,6 +339,119 @@ public class LatticeLawHarness<S : Quilted<S>>(
 
     /** Run [runOtherJoinLaws] over every seed in [seeds]. */
     public fun runOtherJoinLawsSeeds(seeds: LongRange): Unit = seeds.forEach(::runOtherJoinLaws)
+
+    /**
+     * The **codec** laws: a state that has been through `encode`/`decode` is interchangeable with
+     * the one that has not — over [causalPool], `O(pool²)`.
+     *
+     * This is the seam every other law in this file skips. Replicas here hand each other in-process
+     * objects; `Quilter` encodes a delta, sends the bytes over a `Seam`, and the receiver joins what
+     * it decodes. So a `Quilted` whose serializer is **lossy but deterministic** passes
+     * associativity, commutativity, idempotence, least-upper-bound *and* both byte laws — every
+     * comparison those make is between two encodings produced by the same lossy path, so the loss
+     * cancels. On the wire the receiver holds a state missing the omitted part, and a removed
+     * element resurrects on the next merge.
+     *
+     * **Three arms, in the order they are checked, because each one catches what the one before it
+     * cannot.** They are not three spellings of one property:
+     *
+     * 1. **`decode(encode(s)) == s`** — the codec preserves the *value*. The strongest arm and the
+     *    one that reds on ordinary field loss. It is strong enough that the two below are, on a
+     *    healthy type, implied by it; they exist for the two ways a type can be unhealthy that it
+     *    is structurally blind to.
+     * 2. **`encode(decode(encode(s)))` is byte-identical to `encode(s)`** — the codec is *stable*.
+     *    Arm 1 is blind here whenever the loss is invisible to `equals` (a field equality ignores),
+     *    and so is every existing byte law, which only ever compares two *built* states. This is
+     *    the arm that sees a state whose encoding depends on how the object was **constructed**
+     *    rather than on what it holds — parsed versus built — which is a live hazard for any type
+     *    whose merge yields an insertion-ordered collection. It matters because #1955's root-hash
+     *    gate compares digests: a receiver whose decoded state hashes differently from the sender's
+     *    reads as diverged and skips the fast path, while comparing perfectly equal.
+     * 3. **`a ⊔ decode(encode(b))` equals `a ⊔ b`, and encodes to the same bytes** — equality is a
+     *    congruence for the join *through the codec*. Arms 1 and 2 are both blind to a field that
+     *    `equals` ignores and `encode` also drops, but that `piece` reads: round-trip and re-encode
+     *    are then both green, and the join lands somewhere else. `LWWRegister`'s
+     *    `(timestamp, replica)` tag is the shape — drop it, and every join afterwards picks a
+     *    different winner while every state still compares equal to itself.
+     *
+     * **The counts in [CodecReport] are the rig receipt, and two of them are asserted.** All three
+     * laws hold vacuously over a pool that degenerated to one value; arm 1 would stay green on a
+     * serializer that encodes nothing at all. So the pass refuses a pool with fewer than two
+     * distinct states, refuses a codec that emitted fewer than two distinct encodings over it, and
+     * refuses an arm-3 loop in which no join ever had to absorb its decoded operand. On a healthy
+     * codec every one of those is implied by arm 1 — they are there to red when the **pool**
+     * degenerates, which arm 1 cannot notice.
+     *
+     * `O(pool²)` joins and encodes, against the associativity pass's `O(pool³)`: this costs a
+     * rounding error beside it, and roughly what [runOtherJoinLaws] costs.
+     */
+    public fun runCodecLaws(seed: Long): CodecReport {
+        val pool = causalPool(Random(seed)).states
+        val encodings = pool.map { encoded(it.state) }
+        val distinctStates = distinctStateCount(pool)
+        val distinctEncodings = distinctEncodingCount(encodings)
+        check(distinctStates >= 2) { poolTooThin(seed, pool, distinctStates) }
+        check(distinctEncodings >= 2) { encodingsTooThin(seed, pool, distinctStates, distinctEncodings) }
+        val decodedPool = pool.indices.map { decoded(encodings[it]) }
+        for (i in pool.indices) {
+            val original = pool[i]
+            val roundTripped = decodedPool[i]
+            check(roundTripped == original.state) { roundTripValueFailure(seed, original, roundTripped) }
+            val reEncoded = encoded(roundTripped)
+            check(reEncoded.contentEquals(encodings[i])) {
+                roundTripByteFailure(seed, original, encodings[i], reEncoded)
+            }
+        }
+        var absorbing = 0L
+        for (i in pool.indices) {
+            for (j in pool.indices) {
+                val a = pool[i]
+                val b = pool[j]
+                val direct = a.state.piece(b.state)
+                if (direct != a.state) absorbing++
+                val throughWire = a.state.piece(decodedPool[j])
+                check(throughWire == direct) { wireJoinValueFailure(seed, a, b, direct, throughWire) }
+                val directBytes = encoded(direct)
+                val wireBytes = encoded(throughWire)
+                check(wireBytes.contentEquals(directBytes)) {
+                    wireJoinByteFailure(seed, a, b, directBytes, wireBytes, direct)
+                }
+            }
+        }
+        val pairs = pool.size.toLong() * pool.size.toLong()
+        check(absorbing > 0L) { noAbsorbingJoin(seed, pool, pairs) }
+        return CodecReport(
+            seeds = 1,
+            states = pool.size.toLong(),
+            distinctStates = distinctStates.toLong(),
+            distinctEncodings = distinctEncodings.toLong(),
+            joinPairs = pairs,
+            absorbingJoinPairs = absorbing,
+        )
+    }
+
+    /** Run [runCodecLaws] over every seed in [seeds], summing what each pool searched. */
+    public fun runCodecLawsSeeds(seeds: LongRange): CodecReport =
+        seeds.fold(CodecReport.EMPTY) { acc, seed -> acc + runCodecLaws(seed) }
+
+    /**
+     * Distinct pool states by `==`, in `O(pool²)` — deliberately not a `Set`.
+     *
+     * `hashCode` is not part of the [Quilted] contract, and a type that overrides equality without
+     * it would read every state as distinct here, turning the thinness guard into decoration.
+     */
+    private fun distinctStateCount(pool: List<Tracked<S>>): Int {
+        val seen = ArrayList<S>(pool.size)
+        for (entry in pool) if (seen.none { it == entry.state }) seen += entry.state
+        return seen.size
+    }
+
+    /** Distinct encodings by `contentEquals` — `ByteArray` has reference equality, so no `Set`. */
+    private fun distinctEncodingCount(encodings: List<ByteArray>): Int {
+        val seen = ArrayList<ByteArray>(encodings.size)
+        for (bytes in encodings) if (seen.none { it.contentEquals(bytes) }) seen += bytes
+        return seen.size
+    }
 
     /**
      * Both bracketing laws over **every word of length `1..L`** the alphabet can spell, on one
@@ -424,6 +604,79 @@ public class LatticeLawHarness<S : Quilted<S>>(
             "  A join that is not above its own operands is not a join. Expect this to come with " +
             "an associativity failure; if it does not, the defect is in `piece` itself rather than " +
             "in how contributions are combined."
+
+    private fun roundTripValueFailure(seed: Long, a: Tracked<S>, roundTripped: S): String =
+        "Codec round-trip failure at seed $seed — decode(encode(s)) is NOT EQUAL to s. The " +
+            "serializer is lossy; every other law in this suite is blind to it, because both sides " +
+            "of each of their comparisons go through the same lossy path:\n" +
+            "  s           = ${a.state}\n" +
+            "    built by  ${a.provenance}\n" +
+            "  decoded     = $roundTripped\n" +
+            "  bytes       ${encoded(a.state).toHexString()}\n" +
+            "  A peer that receives this state over a `Seam` holds the decoded value, not `s`."
+
+    private fun roundTripByteFailure(seed: Long, a: Tracked<S>, first: ByteArray, second: ByteArray): String =
+        "Codec stability failure at seed $seed — decode(encode(s)) is EQUAL to s but does not " +
+            "RE-ENCODE to the same bytes. This is not a lossy serializer; the encoding depends on " +
+            "how the object was constructed (parsed rather than built) rather than on what it " +
+            "holds:\n" +
+            "  s           = ${a.state}\n" +
+            "    built by  ${a.provenance}\n" +
+            "  encode(s)               ${first.toHexString()}\n" +
+            "  encode(decode(encode(s))) ${second.toHexString()}\n" +
+            "  #1955's root-hash gate compares digests, so a receiver in this state reads as " +
+            "diverged from the sender it agrees with. An insertion-ordered collection whose merge " +
+            "and whose decode disagree on order is the usual cause."
+
+    @Suppress("LongParameterList")
+    private fun wireJoinValueFailure(seed: Long, a: Tracked<S>, b: Tracked<S>, direct: S, throughWire: S): String =
+        "Codec join failure at seed $seed — a ⊔ b and a ⊔ decode(encode(b)) are NOT EQUAL, though " +
+            "b round-tripped to something that compares equal to itself. Equality is not a " +
+            "congruence for the join through this codec: the serializer drops a field `equals` " +
+            "ignores and `piece` reads — a last-writer-wins tag is the usual one:\n" +
+            pairLog(a, b) +
+            "  a⊔b                  = $direct\n" +
+            "  a⊔decode(encode(b))  = $throughWire"
+
+    @Suppress("LongParameterList")
+    private fun wireJoinByteFailure(
+        seed: Long,
+        a: Tracked<S>,
+        b: Tracked<S>,
+        directBytes: ByteArray,
+        wireBytes: ByteArray,
+        state: S,
+    ): String =
+        "Codec join canonicality failure at seed $seed — a ⊔ b and a ⊔ decode(encode(b)) are EQUAL " +
+            "but encode to DIFFERENT bytes. The value survived the wire and its digest did not:\n" +
+            pairLog(a, b) +
+            "  a⊔b bytes                 ${directBytes.toHexString()}\n" +
+            "  a⊔decode(encode(b)) bytes ${wireBytes.toHexString()}\n" +
+            "  state                     $state"
+
+    private fun poolTooThin(seed: Long, pool: List<Tracked<S>>, distinctStates: Int): String =
+        "Codec-law pool is vacuous at seed $seed — ${pool.size} states hold only $distinctStates " +
+            "distinct value(s), so the round-trip arm compared one value with itself and would " +
+            "stay green on a serializer that encodes nothing at all.\n" +
+            "  This is a defect in the generator, not in the codec. Widen the alphabet or point " +
+            "its roaming ops at what the state actually holds; `generatorIsNotVacuous` measures " +
+            "the same pool and will say which way it collapsed.\n" +
+            "  pool ${pool.joinToString("\n       ") { it.provenance }}"
+
+    private fun encodingsTooThin(seed: Long, pool: List<Tracked<S>>, states: Int, encodings: Int): String =
+        "Codec-law pool is vacuous at seed $seed — its $states distinct states produced only " +
+            "$encodings distinct encoding(s) over ${pool.size} pool entries.\n" +
+            "  Below the state count the serializer cannot tell two reachable states apart, which " +
+            "is the lossy-codec defect itself arriving one arm early; at 1 it emits a constant and " +
+            "there is nothing for a decode to get wrong. Either way the arms below prove nothing " +
+            "until it is fixed."
+
+    private fun noAbsorbingJoin(seed: Long, pool: List<Tracked<S>>, pairs: Long): String =
+        "Codec join arm is vacuous at seed $seed — none of $pairs ordered pairs over " +
+            "${pool.size} states had `a ⊔ b != a`, so no join ever read anything out of the " +
+            "decoded operand and the arm holds for any codec whatsoever.\n" +
+            "  A pool in which every join already dominates its second operand is a pool of one " +
+            "value under a different name; see the round-trip guard's message."
 
     private fun pairLog(a: Tracked<S>, b: Tracked<S>): String =
         "  a           = ${a.state}\n" +
