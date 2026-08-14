@@ -138,6 +138,38 @@ internal class FakeNwRadio {
     /** Per-device monotonic connection-handle counter (deterministic ids, no RNG). */
     private val connCounters = mutableMapOf<String, Int>()
 
+    /**
+     * Links the radio has EVER opened — one per successful [connect], never decremented (#2390).
+     *
+     * The rig receipt for any [liveLinkCount] assertion. A settled mesh that never double-dialled
+     * would satisfy "one live link per pair" vacuously, so a test that asserts the live count must
+     * also assert that MORE links than that were opened in the first place: on a full mesh built by
+     * dialling every ordered pair, `openedLinkCount == 2 * liveLinkCount` is the double-dial firing.
+     */
+    var openedLinkCount: Int = 0
+        private set
+
+    /**
+     * Links currently open on the switchboard — the fake's stand-in for live sockets/file
+     * descriptors (#2390).
+     *
+     * This is the ONLY place a surviving duplicate link is observable. `NwSeam.broadcast`/`sendTo`
+     * fan out over its `registry`, one connection per peer, so a duplicate link that dedup failed
+     * to disconnect is a *wasted* socket rather than a *duplicating* one: it changes no frame any
+     * receiver sees, and it cannot change `Seam.peers`, which is a `Set<PeerId>`. Deleting
+     * `NwSeam.resolveIdentity`'s dedup outright therefore reddened nothing in this module until a
+     * test read this counter.
+     *
+     * [links] holds both ends of every link under their own connId, so the count is half its size;
+     * the parity [check] fails loudly rather than silently halving an odd map if that ever stops
+     * holding.
+     */
+    val liveLinkCount: Int
+        get() {
+            check(links.size % 2 == 0) { "links map holds ${links.size} ends — every link must have exactly two" }
+            return links.size / 2
+        }
+
     /** Register a device on construction. Ids must be distinct. */
     fun register(api: FakeNwApi) {
         require(api.deviceId !in devices) { "device '${api.deviceId}' already registered" }
@@ -316,6 +348,7 @@ internal class FakeNwRadio {
         // manually-constructed endpoint that was never advertised (the direct-connect seam tests).
         val accepterId = endpointOwners[endpoint.id] ?: listenerDeviceIdOf(endpoint.id)
         require(accepterId in devices) { "no device for endpoint '${endpoint.id}'" }
+        openedLinkCount += 1
         val connIdDialer = nextConnId(dialerDeviceId)
         val connIdAccepter = nextConnId(accepterId)
 

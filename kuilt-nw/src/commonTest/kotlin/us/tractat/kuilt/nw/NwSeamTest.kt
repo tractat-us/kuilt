@@ -54,6 +54,33 @@ class NwSeamTest {
         }
 
         /**
+         * Bounded pump until [read] STOPS MOVING for [stableFor] consecutive pumps; returns the
+         * settled value. Never hangs (capped at [maxPumps]).
+         *
+         * Deliberately quiesces rather than waiting for an expected value: a wait keyed to the
+         * number the caller is about to assert makes its failing arm an uninformative timeout,
+         * whereas this returns whatever the mesh actually settled on and lets `assertEquals` print
+         * both sides. Advances no virtual time — `runCurrent` only drains the current instant — so
+         * what it observes is the settled handshake state, not a later timer's doing.
+         */
+        fun TestScope.pumpUntilStable(stableFor: Int = 5, maxPumps: Int = 500, read: () -> Int): Int {
+            var last = read()
+            var stable = 0
+            repeat(maxPumps) {
+                testScheduler.runCurrent()
+                val now = read()
+                if (now == last) {
+                    stable += 1
+                    if (stable >= stableFor) return now
+                } else {
+                    stable = 0
+                    last = now
+                }
+            }
+            return read()
+        }
+
+        /**
          * A dedicated child scope per seam: still a child of [TestScope.backgroundScope] (so it is
          * cancelled at test teardown) but with its OWN [Job], so one seam's teardown — which cancels
          * the scope it was given via `latchTorn` — does NOT cancel the other seams' loops or the
@@ -88,9 +115,17 @@ class NwSeamTest {
     /**
      * Build an N-node full mesh over one radio and wait for every node's `peers` to converge to
      * all N ids. Each unordered pair is dialled from BOTH ends (a double-dial), so dedup runs.
+     *
+     * [radio] is supplied only by the tests that need to read the switchboard's link accounting
+     * afterwards ([FakeNwRadio.liveLinkCount] / [FakeNwRadio.openedLinkCount]); every other caller
+     * takes a fresh one. Exactly `n * (n - 1)` dials are issued here and the seam itself never
+     * dials, so `openedLinkCount` is a closed-form receipt that the double-dial happened.
      */
-    private fun TestScope.buildMesh(n: Int, policy: DeliveryPolicy = DeliveryPolicy.Reliable): List<Device> {
-        val radio = FakeNwRadio()
+    private fun TestScope.buildMesh(
+        n: Int,
+        policy: DeliveryPolicy = DeliveryPolicy.Reliable,
+        radio: FakeNwRadio = FakeNwRadio(),
+    ): List<Device> {
         val devices = (0 until n).map { i ->
             val api = FakeNwApi(radio, deviceId = "dev-$i", serviceName = "svc-$i")
             // Each seam gets its OWN scope so one seam's teardown doesn't cancel the others. A
@@ -166,13 +201,27 @@ class NwSeamTest {
     fun doubleDialCollapsesToOneConnectionWithExactlyOnceDelivery() = runTest(StandardTestDispatcher()) {
         // A 2-node mesh double-dials (A→B and B→A). Dedup must keep exactly ONE connection so
         // a broadcast is delivered exactly once — not duplicated over both underlying links.
-        val (a, b) = buildMesh(2)
+        //
+        // #2390: until this test read [FakeNwRadio.liveLinkCount] it proved only the exactly-once
+        // half of its own name. Delivery cannot see the collapse: broadcast/sendTo fan out over
+        // NwSeam's `registry`, one connection per peer, so a duplicate link dedup FAILED to close
+        // carries no frames — it is a wasted socket, not a duplicating one — and `peers` is a Set,
+        // which a second link cannot change either. Deleting resolveIdentity's dedup outright left
+        // all 186 tests in this module green.
+        val radio = FakeNwRadio()
+        val (a, b) = buildMesh(2, radio = radio)
 
         a.seam.broadcast("a-says".encodeToByteArray())
         b.seam.broadcast("b-says".encodeToByteArray())
         pumpUntil { a.received.isNotEmpty() && b.received.isNotEmpty() }
+        val liveLinks = pumpUntilStable { radio.liveLinkCount }
 
         assertAll(
+            // The rig fired: BOTH ends dialled, so the pair really did produce two links for dedup
+            // to choose between. Without this the live-link assertion below would be satisfied by a
+            // mesh that never double-dialled at all.
+            { assertEquals(2, radio.openedLinkCount, "the one pair was dialled from both ends") },
+            { assertEquals(1, liveLinks, "dedup disconnected the loser, leaving one live link") },
             { assertEquals(setOf(a.peerId, b.peerId), a.seam.peers.value) },
             { assertEquals(setOf(a.peerId, b.peerId), b.seam.peers.value) },
             // Exactly-once each way over the single surviving connection.
@@ -182,6 +231,35 @@ class NwSeamTest {
             { assertEquals(1, a.received.size, "A received B's broadcast exactly once") },
             { assertEquals("b-says", a.received.single().decodeToString()) },
             { assertEquals(b.peerId, a.received.single().sender) },
+        )
+    }
+
+    @Test
+    fun everyMeshSizeSettlesAtExactlyOneLiveLinkPerPeerPair() = runTest(StandardTestDispatcher()) {
+        // The #2390 property at the sizes that can distinguish it. A 2-node mesh alone cannot: it
+        // settles at 1 link, and `n - 1`, `n / 2` and the constant 1 all yield 1 there too, so a
+        // wrong formula reads as correct. Sweeping n = 2, 3, 4 pins the count to 1, 3, 6 — the
+        // quadratic n*(n-1)/2 and nothing else of lower degree — and at n = 4 the deduped and
+        // un-deduped counts are 6 against 12 rather than 1 against 2.
+        //
+        // Each size is measured on its OWN radio, so the counters describe that mesh only.
+        val observed = (2..4).map { n ->
+            val radio = FakeNwRadio()
+            buildMesh(n, radio = radio)
+            Triple(n, pumpUntilStable { radio.liveLinkCount }, radio.openedLinkCount)
+        }
+
+        assertAll(
+            *observed.flatMap { (n, live, opened) ->
+                val pairs = n * (n - 1) / 2
+                listOf(
+                    // Rig receipt per size: every unordered pair was dialled from both ends, so
+                    // twice the settled count was opened. A mesh whose links all survived would
+                    // report `live == opened`; one that never double-dialled, `opened == pairs`.
+                    { assertEquals(2 * pairs, opened, "n=$n: every one of $pairs pairs double-dialled") },
+                    { assertEquals(pairs, live, "n=$n: settles at one live link per pair") },
+                )
+            }.toTypedArray(),
         )
     }
 
