@@ -1102,25 +1102,35 @@ abstract class BoltConformanceSuite {
      *
      * **Mutation receipts** — each applied alone, reverted, and read out of the results XML.
      *
-     * | Mutation | Reds here | Reds in the one-segment properties |
+     * | Mutation | Reds here | Reds elsewhere in `:kuilt-bolt` |
      * |---|---|---|
-     * | Report a gap only while it is no wider than one lost frame — `InMemoryBolt` | 2, 4, 5 | nothing |
-     * | The same in `MappedBolt.emitSegment` | 2, 4, 5 | nothing |
-     * | The same in `PosixMappedBolt.emitFrames` | 2, 4, 5 | nothing |
-     * | Delete the continuity check outright | 2, 4, 5 | all three |
-     * | **Fixture:** lose one segment however many were asked for | **1 only** | nothing |
+     * | Report a gap only while it is at most one lost frame wide — `InMemoryBolt.emitFrames` | 2, 3, 4 | **nothing at all** |
+     * | The same in `MappedBolt.emitSegment` | 2, 3, 4 | **nothing at all** |
+     * | The same in `PosixMappedBolt.emitFrames` | 2, 3, 4 | **nothing at all** |
+     * | Delete the continuity check outright — `InMemoryBolt` | 2, 3, 4 | all three one-segment properties |
+     * | **Fixture:** ignore `lostSegments` and destroy one | **1 only** | nothing |
      *
-     * **Row 1 is synthetic and is labelled so rather than dressed up.** No *natural* mutation of the
-     * three shipped backends distinguishes a wide hole from a narrow one, because all three compare a
-     * **parsed** resume offset against the successor header's absolute base, and that comparison
-     * cannot see how far apart the two are. That is the honest measurement, and it is the argument for
-     * the property rather than against it: the check being width-blind is a property of *these three*
-     * implementations, held by nothing, and the first backend to derive its expectation instead of
-     * parsing it inherits the gap silently. The rows show the property has the discriminating power
-     * the argument needs — a check that recovers across a double gap reds here and **nowhere else**.
+     * **The first three rows are synthetic, and are labelled so rather than dressed up.** No *natural*
+     * mutation of the three shipped backends distinguishes a wide hole from a narrow one: all three
+     * compare a **parsed** resume offset against the successor header's absolute base, and that
+     * comparison cannot see how far apart the two are. That is the honest measurement, and it is the
+     * argument *for* the property rather than against it — the check being width-blind is a property of
+     * these three implementations, held by nothing, and the first backend to derive its expectation
+     * instead of parsing it inherits the gap in silence. What the rows establish is that the property
+     * has the discriminating power the argument needs: a check that recovers across a double gap reds
+     * here and **nowhere else in the module**, measured over the whole of `jvmTest` and
+     * `macosArm64Test`.
+     *
+     * **Assertion 5 was green under every production mutation, and that is worth saying out loud
+     * rather than leaving as an absence.** It compares two replays of the same archive, so a mutant
+     * that answers the same *wrong* verdict to both satisfies it — which is exactly what a
+     * width-tolerant check does, handing [CleanTail] to `All` and to the resume alike. It is kept
+     * because it is the only assertion here that would catch the two scopes *disagreeing*, which is the
+     * shape [resumingFromBeyondTheHoleReachesTheSameVerdictRatherThanACleanTail] exists for one width
+     * down, and there is no reason a wider hole would be pinned by a different accident.
      *
      * The last row is the vacuity guard, and it is the one that matters day to day: it is the mutation
-     * a fixture author commits by accident.
+     * a fixture author commits by accident, by adding the parameter and forgetting to use it.
      */
     @Test
     fun aHoleSpanningSeveralLostSegmentsIsReportedAtItsStartLikeAnyOther() =
@@ -1215,22 +1225,34 @@ abstract class BoltConformanceSuite {
      *
      * | Mutation | Reds here | Reds elsewhere in `:kuilt-bolt` |
      * |---|---|---|
-     * | `header.baseOffset != resumeOffset` → `>` — `InMemoryBolt.emitFrames` | 1, 3, 4, 5 | **nothing** |
-     * | The same in `MappedBolt.emitSegment` | 1, 3, 4, 5 | **nothing** |
-     * | The same in `PosixMappedBolt.emitFrames` | 1, 3, 4, 5 | **nothing** |
-     * | Delete the continuity check outright | 1, 3, 4, 5 | the three hole properties |
-     * | **Fixture:** restore the stale segment over the newest one instead | the fixture's own `check` | — |
+     * | `header.baseOffset != resumeOffset` → `>` — `InMemoryBolt.emitFrames` | 3, 4 | **nothing at all** |
+     * | The same in `MappedBolt.emitSegment` | 3, 4 | **nothing at all** |
+     * | The same in `PosixMappedBolt.emitFrames` | 3, 4 | **nothing at all** |
+     * | Delete the continuity check outright — `InMemoryBolt` | 1, 3, 4 | the three one-segment hole properties |
+     * | **Fixture:** hand back a healthy archive (skip the restore) | 1, 3, 4 | — |
+     * | **Fixture:** name a frame from BEHIND the jump as the revisited one | the `init` check, before any assertion | — |
      *
      * **The first three rows are the finding, and their right-hand column is the whole of it.**
      * Narrowing the comparison to a forward gap is a real defect on all three backends and, before
-     * this property, reddened *nothing anywhere in the module* — the unpinned state #2240 shipped out
-     * of twice, in a second dimension nobody had looked at. Row 4 is what keeps assertions 1 and 3
-     * from riding on the hole properties: deleting the check reds those too, so it says nothing about
-     * this shape on its own.
+     * this property, reddened *nothing anywhere in the module* — measured over the whole of `jvmTest`
+     * and `macosArm64Test`. That is the unpinned state #2240 shipped out of twice, in a dimension
+     * nobody had looked at. Row 4 is what keeps assertions 3 and 4 from riding on the hole properties:
+     * deleting the check reds those too, so on its own it says nothing about this shape.
      *
-     * **The green assertions, said plainly.** Assertions 2 and 6 were green under every mutation
-     * above. Assertion 2 is a *precondition* rather than a claim about the backend — its job is to red
-     * when the fixture drifts, and the last row is that measurement. Assertion 6 inherits its
+     * **Read the shape of rows 1–3, because assertion 1 stays GREEN there and a reader scanning for
+     * "did it red" would mis-file it.** The mutant does not answer [CleanTail]: it steps over the jump,
+     * re-emits the duplicated frame, and *then* meets the forward gap between the stale segment's end
+     * and the next real one — which its narrowed check does catch. So a `Truncated` is still the last
+     * event, and the damage surfaces instead as **a fourth frame where three were owed** (assertion 4)
+     * and **a verdict naming an offset the replay had already read past** (assertion 3: `atOffset=136`
+     * against a readable history ending at `402`). That is the harm stated exactly: a consumer is
+     * handed a record twice and then told its history ends before the second copy.
+     *
+     * **The other green assertions, said plainly.** Assertions 2, 5 and 6 were green under every
+     * mutation above. Assertion 2 is a *precondition* rather than a claim about the backend — its job
+     * is to red when the fixture drifts, and the last row is that measurement. Assertion 5 is the pair
+     * [aTruncatedArchiveStopsAtTheDamageAndSaysSo] pins one level down; no mutation of the current code
+     * emits frames after a verdict, because the verdict is a `return`. Assertion 6 inherits its
      * justification from [anArchiveMissingAMiddleRegionStopsAtTheHoleAndSaysSo], where the same pair of
      * scopes closed a real gap: a continuity check hung off the offset predicate is invisible to every
      * other property, and there is no reason to believe a backwards jump would be pinned by a

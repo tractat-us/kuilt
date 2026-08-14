@@ -244,11 +244,11 @@ example adapts the decorator as `{ ops -> publish(ops) }` — deliberately does 
 
 ## Adding a backend
 
-Subclass `BoltConformanceSuite` and implement its five fixture hooks. It pins seven properties, and
+Subclass `BoltConformanceSuite` and implement its six fixture hooks. It pins seven properties, and
 the second is the reason the module exists: a bolt fed a `Compact` keeps the ops that `Compact`
 suppresses and never replays the `Compact` itself.
 
-**No hook is nullable**, and for the three damage fixtures that is the point of them: an "I cannot
+**No hook is nullable**, and for the four damage fixtures that is the point of them: an "I cannot
 reach this state" opt-out moves the vacuity one level up, where it is harder to see — the suite would
 go green for a backend that never exercised the path at all. Each asserts its own precondition too,
 so a backend handing back a healthy bolt fails loudly rather than passing quietly. The durability
@@ -259,10 +259,15 @@ fixture could not be made non-nullable the same way, and its row says what it do
 | `newBolt(clock)` | A fresh, empty archive. The clock is a parameter because one property scopes a replay by arrival time, which a backend reaching for the wall clock could not be asked about deterministically. |
 | `newExhaustedBolt(clock)` | One that is **already out of room**, however this backend runs out. |
 | `newTruncatedBolt(clock, intactFrames)` | One damaged *within* a frame after `intactFrames` good ones — and the damage must be followed by a **healthy** region, or "stop at the damage" and "skip to the next region" emit identical events and the property stops discriminating. |
-| `newDiscontinuousBolt(clock, intactFrames)` | One missing a whole region out of the **middle**, with frames surviving behind the hole — **and the offset the first of those surviving frames starts at**. Two disk-backed backends independently replayed a hole as a `CleanTail` before this hook existed (#2240) — the in-memory reference's segments are a list that cannot lose an element, so it satisfied the older suite's silence for free. The offset is the one thing the suite cannot work out for itself: every scope scans forward and stops at the hole, so nothing a conformance test can call names its far side, and the far side is where a *retention sweep* leaves a consumer's cursor. |
+| `newDiscontinuousBolt(clock, intactFrames, lostSegments)` | One missing a whole region out of the **middle**, with frames surviving behind the hole — **and the appends that produced both its edges**. Two disk-backed backends independently replayed a hole as a `CleanTail` before this hook existed (#2240) — the in-memory reference's segments are a list that cannot lose an element, so it satisfied the older suite's silence for free. The far edge is the one thing the suite cannot work out for itself: every scope scans forward and stops at the hole, so nothing a conformance test can call names its far side, and the far side is where a *retention sweep* leaves a consumer's cursor. `lostSegments` is a parameter because a hole is two offsets through this contract, so no assertion can tell one destroyed segment from four — a fixture left to choose picks one, and a check that recovers across a wider gap passes (#2331). |
+| `newBackwardsJumpBolt(clock, intactFrames)` | One whose segment sequence runs **backwards**: a header claiming an absolute `baseOffset` *below* where its predecessor's frames ended. Losing a segment can widen a gap without limit and can never make it negative, so every other fixture agrees with a backend spelling its continuity check `header.baseOffset > resumeOffset` — which reads perfectly and lets this archive replay as a `CleanTail`, handing a consumer the same records twice at offsets it has already consumed. Narrowing that comparison on any of the three backends reddens this property and nothing else in the module (#2331). |
 | `newBoltThatCannotFlush(clock)` | A `DurabilityFixture` declaring which of three cases this backend is: promised per-record durability and cannot deliver it; promised nothing but still flushes; or promised nothing and never flushes. Nullable would hand every backend a silent skip, and non-nullable would demand a degraded bolt from a backend for which none can correctly exist. |
 
 The general lesson `newDiscontinuousBolt` encodes is worth carrying to any new property here: **a
 conformance property is only as strong as the weakest failure the reference implementation can
 reach.** And a fixture free to choose its own configuration will, left alone, choose the one in which
-the failure cannot occur — so say in the hook's contract which configurations are legitimate.
+the failure cannot occur — so say in the hook's contract which configurations are legitimate, and
+where the suite can *check* the configuration rather than describe it, take the fixture's **inputs**
+and derive the answer instead of accepting a derived one: `DiscontinuousFixture` and
+`BackwardsJumpFixture` both take `AppendResult.Written` evidence, so a mid-hole cursor and a forward
+"backwards" jump are values their constructors cannot be handed.
