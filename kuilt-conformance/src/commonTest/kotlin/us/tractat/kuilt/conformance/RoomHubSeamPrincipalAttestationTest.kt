@@ -47,13 +47,6 @@ class RoomHubSeamPrincipalAttestationTest : PrincipalAttestationConformanceSuite
 
         /** Client seams, one per admitted peer — kept so [drop] can tear the link. */
         private val clientByPeer = mutableMapOf<PeerId, Seam>()
-
-        /**
-         * Second, concurrent client seams claiming an already-live peer id. Held apart from
-         * [clientByPeer] so an impostor never becomes the seam [drop] tears — the whole point of
-         * [admitConcurrentClaim] is that the *legitimate* link stays up.
-         */
-        private val impostors = mutableListOf<Seam>()
         private var seed = 200
 
         override suspend fun admit(peer: PeerId, principal: Principal?): Unit =
@@ -68,24 +61,6 @@ class RoomHubSeamPrincipalAttestationTest : PrincipalAttestationConformanceSuite
          */
         override suspend fun admitClaiming(peer: PeerId, verified: Principal?, claimed: Principal): Unit =
             connect(peer, verified, firstFrame = claimed.value.encodeToByteArray())
-
-        /**
-         * A *second* client connection for the same [peer], carrying no attestation — [peer]'s
-         * existing client seam stays open and is deliberately not recorded over, so the room holds
-         * two live connections announcing one id. The impostor's registering frame is its claim, the
-         * same channel [admitClaiming] uses; delivering it is what runs `RoomHubSeam.deliver`'s
-         * registration block for an already-registered id.
-         *
-         * There is nothing to await here beyond the send: the peer is already in `room.peers`, so
-         * membership cannot signal the impostor's arrival. The suite's own precondition — hearing
-         * the claim on the room's inbound stream — is the observation that the hub processed it, and
-         * `deliver` spools the frame strictly after the registration critical section.
-         */
-        override suspend fun admitConcurrentClaim(peer: PeerId, claimed: Principal) {
-            val impostor = fabric.clientSeam(peer, Random((seed++).toLong()), principal = null)
-            impostors += impostor
-            NamedMux(impostor, scope).channel(ROOM).broadcast(claimed.value.encodeToByteArray())
-        }
 
         private suspend fun connect(peer: PeerId, verified: Principal?, firstFrame: ByteArray) {
             if (peer in room.peers.value) drop(peer) // a repeat admit is a reconnect: replace the link

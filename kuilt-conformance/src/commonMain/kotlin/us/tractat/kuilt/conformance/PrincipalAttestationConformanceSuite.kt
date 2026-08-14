@@ -56,9 +56,6 @@ import kotlin.test.assertTrue
  *  - **Per-peer keying** — distinct peers' principals are keyed independently, and an unattested
  *    peer is simply absent, not `null`-valued ([distinctPrincipalsAreKeyedByPeer],
  *    [unattestedPeerIsAbsentFromRoster]).
- *  - **No unattested erasure** — a second, concurrent link that claims a live attested peer's id
- *    while presenting no credential of its own cannot erase that peer's attestation
- *    ([unattestedClaimCannotEraseAnAttestation]).
  *  - **Reconnect refresh** — a peer that reconnects with a new principal supersedes the old
  *    ([rosterUpdatesPrincipalOnReconnect]).
  *  - **Drop / close cleanup** — a dropped peer leaves the roster; a closed seam empties it
@@ -96,11 +93,33 @@ import kotlin.test.assertTrue
  * host's verification was any good: `verified` is taken on trust, as the fabric's accept handler
  * takes `call.principal()` on trust.
  *
+ * ## What is deliberately NOT here: dispossession (#2357)
+ *
+ * "A live, host-verified link cannot be dispossessed of its peer identity by a second link the host
+ * verified as nothing" is a real obligation, and it is **not** in this suite, because the two
+ * reference seams honestly differ on it and enshrining an arm for the one that fails would make the
+ * defect conformant.
+ *
+ * The difference is *how many live links one peer id can have*. A mux hub holds two at once — the
+ * claimant registers alongside the peer, both connections stay open — so it can, and now must,
+ * refuse the claimant (`RoomHubSeamUnattestedClaimTest`). A mesh cannot: duplicate links to one id
+ * are collapsed by a canonical-nonce tiebreak and the loser is **closed**, so exactly one link
+ * survives and the roster, being derived from the live link set, describes it accurately either way.
+ * When a claimant wins there, the peer really is gone; reporting it unattested is correct, not an
+ * erasure. What the mesh cannot do is *refuse* the claimant on attestation grounds — the tiebreak is
+ * a pure function of the two nonces precisely so both ends derive the same survivor with no
+ * coordination, and a local veto would have each end keep a different link and close the one its
+ * peer kept. Its defence is deployment policy instead, and unlike [us.tractat.kuilt.core.RoomAuthorizer]
+ * it *can* express one: `LinkAdmission` receives the principal
+ * (`MeshAdmissionTest.bindingMismatchIsRejectedBeforeDedupLottery`).
+ *
+ * So the obligation lives with the seam that can meet it. A future hub seam that also holds
+ * concurrent links for one id should be held to `RoomHubSeamUnattestedClaimTest`'s shape; the day
+ * there are two such seams, that is the moment to lift it in here.
+ *
  * ## Mutation receipt (#2316)
  *
- * Baseline and the reverted control arm are 16/16 green (the 8 properties this suite had at #2316,
- * × 2 subclasses; [unattestedClaimCannotEraseAnAttestation] arrived later and carries its own
- * receipt on #2357).
+ * Baseline and the reverted control arm are 16/16 green (8 properties × 2 subclasses).
  *
  * | Mutation | Reds | Stays green |
  * |---|---|---|
@@ -183,34 +202,6 @@ public abstract class PrincipalAttestationConformanceSuite {
          * harness that silently dropped the claim wedges rather than passing.
          */
         public suspend fun admitClaiming(peer: PeerId, verified: Principal?, claimed: Principal)
-
-        /**
-         * Attach a **second, concurrent** link that self-asserts [peer]'s id over a connection the
-         * host verified as **nothing at all**, and have that link utter [claimed] as the first thing
-         * it says. [peer]'s existing link is **not** torn first.
-         *
-         * This is the state [admit] and [admitClaiming] cannot reach. There, a repeat call for a
-         * live peer is a *reconnect* — the prior link is torn and replaced — so the attested link is
-         * already gone before the unattested one arrives and there is no live attestation left to
-         * erase. The impostor of #2357 does not wait for the peer to leave: it dials alongside, and
-         * the only thing it needs is the peer id, which is the self-asserted preamble field every
-         * peer broadcasts.
-         *
-         * Route [claimed] exactly as [admitClaiming] does — the channel the fabric gives a joiner to
-         * say who it is, spelled into the first frame the impostor puts on the wire — and do not
-         * return until that frame has been sent. The suite then waits to hear it arrive on [seam]
-         * before it judges the roster, so a harness that honoured this hook by doing nothing wedges
-         * rather than passing.
-         *
-         * **Non-nullable, no default, no opt-out arm**, for the reason [admitClaiming] gives: a "my
-         * fabric cannot hold two links for one id" escape hatch would move the vacuity one level up,
-         * where it is harder to see. The honest limitation runs the other way — a fabric that
-         * **refuses** the duplicate claim outright at the transport (the strongest defence there is)
-         * can never deliver the frame, so it would wedge here rather than pass. Neither reference
-         * hub does that. The day one does, this wants a two-armed outcome (admitted / refused) with
-         * *both* arms asserting, not a nullable hook.
-         */
-        public suspend fun admitConcurrentClaim(peer: PeerId, claimed: Principal)
 
         /** Drop [peer]'s current link (a transport drop), leaving the seam open. */
         public suspend fun drop(peer: PeerId)
@@ -373,78 +364,28 @@ public abstract class PrincipalAttestationConformanceSuite {
             )
         }
 
-    // ── no unattested erasure ─────────────────────────────────────────────────
-
-    /**
-     * **Security (#2357).** A link the host verified as **nothing** cannot **erase** an attestation
-     * the host already verified, merely by self-asserting the attested peer's id alongside it.
-     *
-     * The impostor presents no credential — it does not need one. It dials a *second, concurrent*
-     * link (alice's is never torn) and announces alice's id, which is public: it is the preamble
-     * field every peer broadcasts. What it must not be able to do is make the hub forget that it
-     * verified alice.
-     *
-     * **What this does and does not pin.** It pins the `null` half only: an *unattested* link may
-     * not erase an attestation. It says nothing about attested → attested supersession, which
-     * [rosterUpdatesPrincipalOnReconnect] still mandates, and nothing about which link the fabric
-     * chooses to *route* to afterwards — a hub that lets the impostor capture `sendTo(alice, …)`
-     * while keeping alice's roster entry passes this. The roster is the only surface under test, and
-     * that residual is #2357's own recorded caveat, not an oversight here.
-     *
-     * The `first { it[alice] == aliceKey }` before the claim is the rig: the attestation is proven
-     * *established* first, so a roster that never filled cannot pass this by being empty at both
-     * ends. The `heard.first { … }` after it is the precondition: the impostor's claim is proven to
-     * have crossed the wire — which for both reference hubs also proves its link won whatever
-     * duplicate-link contest the fabric runs, since a loser's connection is closed and can never
-     * utter anything. A harness that dropped the claim, or one whose impostor lost, wedges at
-     * [TEST_WEDGE_BACKSTOP] rather than passing on a displacement that never happened.
-     *
-     * The final read is `.value`, deliberately not `first { … }`: this property asserts that a value
-     * did **not** change, and awaiting that predicate would turn a real regression into a wedge
-     * instead of a legible red.
-     */
-    @Test
-    public fun unattestedClaimCannotEraseAnAttestation(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
-            val harness = newHarness(backgroundScope, dispatcher(), Random(9L))
-            val heard = backgroundScope.utterances(harness.seam)
-            val alice = PeerId("alice")
-            val aliceKey = Principal("verified-alice")
-            val claimed = Principal("verified-mallory")
-
-            harness.admit(alice, aliceKey)
-            harness.roster.attestedPrincipals.first { it[alice] == aliceKey } // rig: alice IS attested
-
-            harness.admitConcurrentClaim(alice, claimed)
-            heard.first { claimed.value in it } // precondition: the impostor's link is live and spoke
-            testScheduler.runCurrent()
-            val roster = harness.roster.attestedPrincipals.value
-
-            assertAll(
-                { assertEquals(aliceKey, roster[alice], "an unattested claim must not erase the host's attestation") },
-                { assertFalse(claimed in roster.values, "the impostor's claim must not be attributed to any peer") },
-            )
-        }
-
     // ── reconnect refresh ─────────────────────────────────────────────────────
 
     /**
      * A peer that reconnects with a **new principal** supersedes its prior roster entry.
      *
      * **What this still mandates, after #2357: attested → attested supersession only.** Both
-     * principals here are non-null, so this property obliges the hub to let a link the host verified
-     * as `verified-alice-2` replace one it verified as `verified-alice-1`. Since the peer id is
-     * self-asserted, the harness cannot distinguish "alice reconnecting" from "someone else the host
-     * also verified, claiming alice's id", so that displacement remains reachable by an impostor who
-     * holds *some* valid credential. Whether a hub should bind an id to an attestation is a
-     * behaviour decision with consumer impact and stays open — `RoomAuthorizer` cannot even express
-     * it today (#2357).
+     * principals here are non-null, so this property obliges the seam to let a link the host
+     * verified as `verified-alice-2` replace one it verified as `verified-alice-1`. Since the peer id
+     * is self-asserted, the harness cannot distinguish "alice reconnecting" from "someone else the
+     * host also verified, claiming alice's id", so that displacement stays reachable by an impostor
+     * holding *some* valid credential. Whether a seam should bind an id to an attestation is a
+     * behaviour decision with consumer impact and remains open — `RoomAuthorizer` cannot express it
+     * at all today, and `LinkAdmission` can express only a static binding (#2357).
      *
-     * **What it no longer mandates: unattested displacement.** It used to be read as also obliging a
-     * hub to let a link the host verified as *nothing* erase an attestation, because a second link
-     * always won. It never actually exercised that case — both principals are non-null — and
-     * [unattestedClaimCannotEraseAnAttestation] now forbids it outright. The two properties are
-     * complementary, not in tension.
+     * **What it never mandated: unattested displacement.** It used to carry a note reading it as
+     * *also* obliging a seam to let a link the host verified as **nothing** erase an attestation,
+     * because a second link always won. That was over-read: both principals here are non-null, so
+     * this property has never exercised the unattested case in either direction. What happens there
+     * is now settled per seam rather than by this property — the mux hub refuses the claimant
+     * outright (`RoomHubSeamUnattestedClaimTest`), the mesh lets its nonce tiebreak decide and
+     * reports the survivor honestly (`MeshAdmissionTest`). See "What is deliberately NOT here" above
+     * for why that asymmetry is not smoothed over with an arm in this suite.
      */
     @Test
     public fun rosterUpdatesPrincipalOnReconnect(): TestResult =

@@ -218,19 +218,35 @@ class MeshAdmissionTest {
         )
     }
 
-    // ── #2357: an unattested duplicate may win dedup, but never erases the attestation ──
+    // ── #2357: the roster reports the SURVIVING link, and never inherits an attestation ──
 
     /**
-     * Construction-time dedup obeys the same rule [Mesh.addLink] does: the link that survives
-     * carries forward an attestation the duplicate it displaced had and it does not (#2357).
+     * **Security (#2357).** The roster never reports an attestation for a link the host verified as
+     * nothing. When an unattested duplicate wins the canonical-nonce tiebreak, it takes the peer id
+     * *and* the peer is reported **unattested** — the losing link is closed, so there is no verified
+     * connection left for the id and saying otherwise would be a lie.
      *
-     * Two connections in one construction batch resolve to the same peer — one the host verified,
-     * one it verified as nothing — and the unattested one carries the all-zero nonce that wins the
-     * canonical tiebreak. It wins; the host's verification of that peer must survive anyway. Without
-     * the carry, whether a peer is attested would turn on a coin flip between two links to it.
+     * This is the mesh's honest answer to #2357, and it is deliberately **not** the mux hub's.
+     * A hub holds two live links for one id and can refuse the claimant, so it does
+     * (`RoomHubSeamUnattestedClaimTest`). A mesh collapses duplicates to one link, so its roster is
+     * derived from a single live connection and is accurate either way; what it *cannot* do is
+     * refuse on attestation grounds, because the tiebreak is a pure function of the two nonces
+     * precisely so both ends derive the same survivor with no coordination — a local veto would have
+     * each end keep a different link and close the one its peer kept, the half-open failure the
+     * nonce rule exists to prevent, in both directions at once.
+     *
+     * So a *displacement* by an unattested link is still reachable here, and the defence is
+     * deployment policy: unlike [us.tractat.kuilt.core.RoomAuthorizer], [LinkAdmission] receives the
+     * principal, and [bindingMismatchIsRejectedBeforeDedupLottery] proves the check runs before the
+     * lottery. What this test forbids is the *tempting* half-fix — having the survivor inherit the
+     * displaced link's principal. That would keep the entry alive at the cost of making the roster
+     * assert a verification for a connection the host verified as nothing: a fail-open, and strictly
+     * worse than reporting the downgrade truthfully.
+     *
+     * Written against the construction-time dedup path, which shares the rule with [Mesh.addLink].
      */
     @Test
-    fun constructionDedupLetsNoUnattestedDuplicateEraseAnAttestation() = runTest {
+    fun unattestedDuplicateWinningDedupIsReportedUnattested() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val hub = PeerId("hub")
         val victim = PeerId("victim")
@@ -259,12 +275,13 @@ class MeshAdmissionTest {
 
         assertAll(
             { assertEquals(setOf(hub, victim), mesh.peers.value) },
-            { assertContentEquals(payload, plainGot, "rig: the unattested duplicate won dedup") },
+            { assertContentEquals(payload, plainGot, "rig: the unattested duplicate won dedup and owns the peer id") },
             {
-                assertEquals(
-                    mapOf(victim to Principal("victim")),
-                    mesh.attestedPrincipals.value,
-                    "the displaced link's attestation must survive an unattested duplicate winning dedup",
+                assertTrue(
+                    mesh.attestedPrincipals.value.isEmpty(),
+                    "the surviving link was verified as nothing, so the peer must be reported unattested — " +
+                        "inheriting the displaced link's principal would make the roster assert a " +
+                        "verification for a connection the host never verified (#2357)",
                 )
             },
         )
