@@ -126,6 +126,44 @@ class FakeNwRadioTest {
     }
 
     @Test
+    fun linkAccountingCountsEveryOpenAndOnlyTheLinksStillOpen() = runTest(StandardTestDispatcher()) {
+        // #2390: NwSeamTest's dedup properties rest entirely on these two counters, so pin what each
+        // one means here. A counter that never rose would red those properties immediately, but one
+        // that fell too eagerly would make them pass with the dedup deleted — the failure mode that
+        // has to be excluded directly rather than inferred.
+        val radio = FakeNwRadio()
+        val a = FakeNwApi(radio, deviceId = "A", serviceName = "svc-A")
+        val b = FakeNwApi(radio, deviceId = "B", serviceName = "svc-B")
+
+        val openedByA = mutableListOf<NwConnectionOpened>()
+        backgroundScope.collectInto(a.connectionOpened, openedByA)
+        testScheduler.runCurrent()
+
+        a.startListening("svc-A", TYPE)
+        b.startListening("svc-B", TYPE)
+        testScheduler.runCurrent()
+        val beforeAnyDial = radio.liveLinkCount to radio.openedLinkCount
+
+        // The double dial — A→B and B→A — the shape a full mesh produces for every unordered pair.
+        a.connect(NwEndpoint(id = "ep-B", serviceName = "svc-B"))
+        b.connect(NwEndpoint(id = "ep-A", serviceName = "svc-A"))
+        testScheduler.runCurrent()
+        val afterDoubleDial = radio.liveLinkCount to radio.openedLinkCount
+
+        // Closing one is exactly what NwSeam's dedup does to the loser: the live count falls, the
+        // cumulative count does not — which is what keeps the rig receipt honest after a dedup.
+        a.disconnect(openedByA.first().connectionId)
+        testScheduler.runCurrent()
+        val afterClosingOne = radio.liveLinkCount to radio.openedLinkCount
+
+        assertAll(
+            { assertEquals(0 to 0, beforeAnyDial, "advertising alone opens nothing") },
+            { assertEquals(2 to 2, afterDoubleDial, "one pair, dialled both ways, holds two live links") },
+            { assertEquals(1 to 2, afterClosingOne, "one live link left; the cumulative count never falls") },
+        )
+    }
+
+    @Test
     fun disconnectClosesOnlyTheOtherSide() = runTest(StandardTestDispatcher()) {
         val radio = FakeNwRadio()
         val a = FakeNwApi(radio, deviceId = "A", serviceName = "svc-A")
