@@ -201,8 +201,8 @@ public abstract class CloseableLifecycleConformanceSuite {
     ) {
         val parentJob = Job()
         val parentScope = CoroutineScope(coroutineContext + parentJob)
+        val instance = create(parentScope)
         try {
-            val instance = create(parentScope)
             val owned = parentJob.children.toList()
             assertTrue(
                 owned.isNotEmpty(),
@@ -220,6 +220,7 @@ public abstract class CloseableLifecycleConformanceSuite {
                     "still-active child is a coroutine that escaped ScopedCloseable.ownJob",
             )
         } finally {
+            instance.close()
             parentJob.cancel()
         }
     }
@@ -244,8 +245,8 @@ public abstract class CloseableLifecycleConformanceSuite {
     ) {
         val parentJob = Job()
         val parentScope = CoroutineScope(coroutineContext + parentJob)
+        val instance = create(parentScope)
         try {
-            val instance = create(parentScope)
             val jobs = backgroundJobsOrFail(instance)
             assertTrue(
                 jobs.all { it.isActive },
@@ -260,6 +261,14 @@ public abstract class CloseableLifecycleConformanceSuite {
                     "ScopedCloseable.ownJob is a structural child of the scope handed to create()",
             )
         } finally {
+            // Both of these, and in this order. A binding that FAILS this property has, by
+            // definition, a coordinator that its scope's cancellation does not stop — so the
+            // `parentJob.cancel()` that would normally clean up is exactly the thing that does
+            // not work here, and without the close() the failing binding leaks a live coordinator
+            // into `runTest` teardown. Measured: a timer-driven coordinator left running that way
+            // spins the test scheduler and the run WEDGES instead of reporting the failure, which
+            // is the least useful shape a conformance red can take.
+            instance.close()
             parentJob.cancel()
         }
     }
