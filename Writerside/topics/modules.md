@@ -5,8 +5,8 @@ wider. Each module is published independently, so you depend only on the ones yo
 use.
 
 There are more in the build than are listed here — a test-support module for
-several of the libraries below, the `kuilt-bom` version-alignment platform,
-[Heddle](heddle.md), and the [Warp](warp.md) family. The
+several of the libraries below, the `kuilt-bom` version-alignment platform, and
+the pieces that only run at build time or on a benchmark. The
 [API reference](https://tractat-us.github.io/kuilt/api/) covers every published
 module.
 
@@ -23,10 +23,14 @@ module.
 | `kuilt-cluster` | Server-cluster overlay: `ServerCluster` (voter mesh + relay accept loop) + `ClusterClient` (propose + observe) |
 | `kuilt-liveness` | Peer-liveness detection: `HeartbeatPartitionDetector` emits `PartitionEvent` (Unresponsive/Recovered/Lost) |
 | `kuilt-session` | Membership-aware `Room`: admit/identify handshake, roster, reconnect tokens |
+| `kuilt-heddle` | Fair shares of one pooled resource, with nobody in charge: each group gets the slice it was promised, an idle group lends its share to a busy one, and it keeps working through a network split — see [Fair Share](heddle.md) |
 | `kuilt-websocket` | Ktor WebSocket fabric (`KtorClientLoom` + `KtorServerLoom`) |
+| `kuilt-tcp` | Plain TCP sockets as a fabric (`tcpLoomHost`/`tcpLoomJoin`, JVM/Android) — the worked example in the [fabric kit](fabric-kit.md) |
 | `kuilt-mdns` | Bonjour/mDNS local-network discovery feeding a WebSocket connection |
 | `kuilt-multipeer` | Apple Multipeer Connectivity fabric (iOS/macOS) |
 | `kuilt-nearby` | Google Nearby Connections fabric (Android) |
 | `kuilt-webrtc` | WebRTC data-channel fabric (wasmJs) |
+| `kuilt-stream` | Turns any ordered pipe of bytes — a socket, your own in-house protocol — into a fabric: `framed()` puts the message boundaries back and rejects an oversized frame before allocating for it |
 | `kuilt-conformance` | `SeamConformanceSuite` + `RoomConformanceSuite` — prove any fabric or room implementation correct |
-| `kuilt-otel` | Offline-first telemetry: record logs, metrics, and traces on any device; they sync up when the network returns, with no duplicates |
+| `kuilt-otel` | Offline-first telemetry: record logs, metrics, and traces on any device; they sync up when the network returns, with no duplicates. Companion modules pick up what your app and its libraries already log and carry it to your dashboard — see [Device to dashboard](observability.md) |
+| `kuilt-warp` | Spreads a pile of work across whoever is connected — no central boss, and no peer doing the same job twice (`WarpNode`). It and the modules around it are a preview, not a foundation — see [Warp](warp.md) |
