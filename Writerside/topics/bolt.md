@@ -27,10 +27,10 @@ types enforce it rather than a comment: there is no method to call.
 | `InMemoryBolt` | The reference archive — real bytes, real segments, bounded memory. Available on every platform, and in the browser it is the only one there is. |
 | `MappedBolt` | The archive that survives a restart, on JVM and Android: one memory-mapped file per segment, in a directory you name. This is the server's backend — the machine keeping a year while the phone keeps an hour. |
 | `PosixMappedBolt` | The same thing on iOS and macOS. Not the default on a phone; the server is its customer here too. |
-| `BoltDecorator` | The wiring. A replica's owner hands it the edits it applied; it archives them and suppresses the ones it has kept before. Reach for this rather than calling `append` by hand. |
+| `BoltDecorator` | The wiring. Whatever owns the live copy hands it the edits it applied; it archives them and suppresses the ones it has kept before. Reach for this rather than calling `append` by hand. |
 
 Starting one takes a format and an archive. What you hand it afterwards is **operations** — the
-edits a replica applied — never a snapshot of the replica's value:
+edits the live copy applied — never a snapshot of that copy's value:
 
 <!-- verbatim from kuilt-bolt/src/commonSamples/kotlin/us/tractat/kuilt/bolt/BoltSamples.kt#sampleBoltArchiveFormat -->
 
