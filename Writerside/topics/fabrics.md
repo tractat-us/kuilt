@@ -74,11 +74,21 @@ keeps emitting.
 
 ## Direct device links
 
-If you want direct device-to-device links, use these peer-to-peer fabrics.
-`kuilt-multipeer` (iOS/macOS) and `kuilt-nearby` (Android) are peer-to-peer
-with no relay server. They both implement `Loom` and use the same instance for
-host and join (one in-process mesh). Replace `InMemoryLoom` with one of these
-and your app code is unchanged.
+If you want direct device-to-device links — nearby phones talking to each other
+with no server in the middle — use one of the peer-to-peer fabrics. They
+implement `Loom` like any other fabric, so replacing `InMemoryLoom` with one of
+these leaves your app code unchanged. Each uses the same instance for host and
+join, because every peer both advertises and looks for others (one in-process
+mesh).
+
+- **`kuilt-nw`** (iOS/macOS) — Apple's Network.framework. This is the Apple
+  fabric to reach for. Every peer advertises, browses, and dials, and the
+  redundant double-dial is folded into one link. It needs a `Pattern.roomKey`:
+  the key becomes the shared secret that encrypts the link, and a session
+  opened without one is refused.
+- **`kuilt-nearby`** (Android) — Google Nearby Connections.
+- **`kuilt-multipeer`** (iOS/macOS) — Apple Multipeer Connectivity. Superseded
+  by `kuilt-nw`; prefer that for new code.
 
 `kuilt-webrtc` (wasmJs) provides a WebRTC data-channel fabric. WebRTC sessions
 need signaling, but that stays inside the fabric implementation — callers only

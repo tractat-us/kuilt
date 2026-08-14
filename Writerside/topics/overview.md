@@ -35,7 +35,7 @@ Start with the weakest guarantee that keeps your product correct. Add stronger g
 
 ## How it fits together
 
-Think of a quilt: a **loom** creates sessions, a **seam** is one peer's view of a live session, and a **swatch** is one frame of bytes. Every fabric (WebSocket, Multipeer, Nearby, WebRTC) implements these three types. Your app code never deals with socket APIs, Bluetooth internals, or peer-connection objects directly.
+Think of a quilt: a **loom** creates sessions, a **seam** is one peer's view of a live session, and a **swatch** is one frame of bytes. Every fabric — WebSocket, TCP, Network.framework on Apple devices, Nearby on Android, WebRTC in the browser — implements these three types. Your app code never deals with socket APIs, Bluetooth internals, or peer-connection objects directly.
 
 Every peer in a session uses the same `Seam` interface — there is no client/server split at this layer. The same app code runs with two peers or twenty, and over relay or direct links.
 
@@ -51,7 +51,7 @@ Every peer in a session uses the same `Seam` interface — there is no client/se
 | `kuilt-websocket` | Ktor WebSocket fabric (`KtorClientLoom` + `KtorServerLoom`) |
 | `kuilt-otel` | Offline-first telemetry: record logs, metrics, and traces on any device; they sync up when the network returns, with no duplicates |
 
-→ [All modules](modules.md) — the full set, including the other fabrics (mDNS, Multipeer, Nearby, WebRTC), gossip, dealing, clustering, liveness, and sessions.
+→ [All modules](modules.md) — the wider list, including the other fabrics (mDNS, Network.framework, Nearby, WebRTC), gossip, dealing, clustering, liveness, and sessions.
 
 **Beyond the core:** the [Observability](observability.md) page walks the whole
 telemetry path — record on any device, survive being offline, and deliver to your
