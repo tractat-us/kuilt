@@ -1015,6 +1015,12 @@ public abstract class RaftStorageConformanceSuite {
      * **Almost every cell in the right column is "none", and that is the finding rather than a
      * suspiciously clean table** — it is the literal statement of #2302. The one row that is not
      * "none" is in the table because it disproves a claim this KDoc made before it was measured.
+     *
+     * **Unmeasured, and named rather than left to look covered:** two arms of
+     * [assertOverwriteFixtureIsAttributable] — that the two snapshots' indices differ, and that their
+     * terms differ — are reddened by nothing above. They guard a future fixture edit that collapses
+     * the two records onto one baseline, which no mutation here models; they are assertions written
+     * against a drift, not against a bug, and no measurement has moved them.
      */
     @Test
     public fun logEntryInternalFields_roundTripPerEntry(): TestResult = runTest {
