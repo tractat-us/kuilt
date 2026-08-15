@@ -559,10 +559,37 @@ internal class NwSeam(
         if (remoteId == selfId) {
             // Remember this endpoint resolved to self so NwLoom stops redialing it (#1513); the self-dial
             // via Rendezvous.New is otherwise indistinguishable from a real peer at the loom's name check.
-            cs.endpoint?.let { selfEndpointIds += it.id; refreshSettledLocked() }
+            //
+            // But settle it ONLY when the dialled id can actually BE ours (#2416). Identity and dial target
+            // are keyed on different things: the id comes from the TXT record, while the dial goes to a
+            // Bonjour NAME that mDNS re-resolves at connect time — and under `Rendezvous.New` every peer
+            // advertises the same name, so inside the window before conflict-resolution renames one
+            // advertiser, a dial armed FOR a real peer can land here. `identityResolved` is exactly the
+            // provenance flag that tells the two apart (`RealNwApi.onBrowseResult`: it is `true` iff the id
+            // came from a TXT record):
+            //   - NOT resolved  → the id is the fallback serviceName, which under Rendezvous.New is the
+            //     shared name and may well be ours. Settling is the #1709/#1513 behaviour and is safe: the
+            //     key is a name, not a peer identity, and a later resolved sighting arms a fresh redialer.
+            //   - resolved      → the id is a real PeerId. Ours only if it equals `selfId`; anything else is
+            //     ANOTHER peer's stable id, reached by a misresolved dial.
+            // Recording another peer's id here is not untidy, it is fatal: `selfEndpointIds` feeds
+            // `settledEndpoints`, `NwLoom.redialLoop` parks on a settled endpoint until it un-settles, and
+            // this set is cleared only on full teardown — never per entry. So one mDNS race would blacklist
+            // a reachable peer for the seam's entire lifetime. Observed on hardware 2026-08-15: two phones
+            // 30 cm apart at -27 dBm, mutually discovered, that could never form a session.
+            val dialled = cs.endpoint
+            val dialledIsOurs = dialled != null && (!dialled.identityResolved || dialled.id == selfId.value)
+            if (dialled != null && dialledIsOurs) {
+                selfEndpointIds += dialled.id
+                refreshSettledLocked()
+            }
             conns.remove(connId)
             tombstoneLocked(connId) // #1528: a late frame on the dropped self-conn must not resurrect it
-            log.info { "nw.seam.self-connection connId=${connId.value} self=${selfId.value} → dropped (dialed own endpoint)" }
+            log.info {
+                "nw.seam.self-connection connId=${connId.value} self=${selfId.value} " +
+                    "dialled=${dialled?.id} resolved=${dialled?.identityResolved} settled-as-self=$dialledIsOurs " +
+                    "→ dropped (dialed own endpoint)"
+            }
             return connId
         }
         cs.resolvedPeerId = remoteId
