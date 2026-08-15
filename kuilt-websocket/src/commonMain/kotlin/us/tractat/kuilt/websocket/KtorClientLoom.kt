@@ -9,7 +9,6 @@ import kotlinx.coroutines.Dispatchers
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.TransportCapability
-import us.tractat.kuilt.core.TransportRole
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
@@ -59,6 +58,12 @@ import kotlin.uuid.Uuid
  *   cluster-client identity across reconnects.
  * @param weft Supplies a [WebSocketDialContext] fresh on every dial. Defaults to an empty
  *   context (no extra query params/headers).
+ * @param connectivity Live device-reachability observer driving every woven [Seam]'s
+ *   [Seam.capability] (#1725). Defaults to [UnobservedConnectivity] — the identity element, under
+ *   which a seam reports the honest [FabricAvailability.Unknown] floor exactly as before. Supply
+ *   `androidConnectivityObserver(context)` on Android or `browserConnectivityObserver()` on wasmJs;
+ *   the desktop JVM has no portable observer and is meant to be left unwired (see
+ *   [ConnectivityObserver]).
  */
 @OptIn(ExperimentalUuidApi::class)
 public class KtorClientLoom(
@@ -66,10 +71,17 @@ public class KtorClientLoom(
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
     public val selfPeerId: PeerId = PeerId(Uuid.random().toString()),
     private val weft: Weft<WebSocketDialContext> = { WebSocketDialContext() },
+    private val connectivity: ConnectivityObserver = UnobservedConnectivity,
 ) : Loom {
+    /**
+     * The **pre-connect** report, deliberately unchanged by #1725: it answers "can this fabric be
+     * attempted on this runtime" — a Ktor WebSocket client exists on every target — not "is the
+     * device's path up right now", which is the live per-session [Seam.capability]'s job. Keeping
+     * the two apart is the #1712 distinction; [connectivity] therefore feeds the seam, not this.
+     */
     override fun capability(): TransportCapability =
         TransportCapability(
-            roles = setOf(TransportRole.ServerRelay, TransportRole.Data),
+            roles = RELAY_ROLES,
             availability = FabricAvailability.Available,
         )
 
@@ -110,6 +122,8 @@ public class KtorClientLoom(
                     remoteId = advertisement.serverPeerId,
                     session = wsSession,
                     dispatcher = dispatcher.limitedParallelism(1),
+                    roles = RELAY_ROLES,
+                    connectivity = connectivity,
                 )
             }
         }

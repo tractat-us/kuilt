@@ -810,18 +810,29 @@ public suspend fun localFabricBannerSample(room: Room) {
 }
 ```
 
-Four things to know before you bind this to a UI:
+Five things to know before you bind this to a UI:
 
+- **On `:kuilt-websocket` you have to wire the observer — it is off by default.** Pass one to the
+  loom: `KtorClientLoom(httpClient, connectivity = androidConnectivityObserver(context))` on Android,
+  `browserConnectivityObserver()` on wasmJs. Without it the loom uses `UnobservedConnectivity` and
+  every room over it reads `Unknown` forever, which is honest but useless for a banner. You own the
+  observer's lifetime — `close()` it when the looms built from it are done. On the desktop JVM there
+  is deliberately nothing to wire; don't synthesise reachability from socket state, because that
+  reports the **relay's** health as the **device's** and those are different questions (the second is
+  peer liveness — see the entry above).
 - **It is session-scoped, never device-scoped.** A `Room` rides exactly one fabric, so this only ever
   means *"my end of **this room's** fabric."* A peer in two rooms over two fabrics has two independent
   values and neither speaks for the other; kuilt has no device-level registry. A room over a bonded
   `CompositeSeam` reports `Unavailable` only when **every** woven ply is down.
-- **`Unknown` is a real third answer, and today it is the usual one.** Only a fabric wired to an
+- **`Unknown` is a real third answer, and it is still a common one.** Only a fabric wired to an
   observer that watches its own reachability can give you a live yes or no; the lanes without one
   honestly report `Unknown`, meaning *kuilt cannot tell on this fabric*. Treat it as no information,
-  never as either answer, and expect it rather than treat it as an error. Which lanes have an observer
-  changes as they are wired up one at a time, so read the flag rather than a list: a fabric's
-  conformance test declares `reportsLiveCapability`, and
+  never as either answer, and expect it rather than treat it as an error. It is also **per target,
+  not per fabric**: `kuilt-websocket` watches Android's `ConnectivityManager` and the browser's
+  `navigator.onLine`, while the desktop JVM has no portable observer and honestly says nothing — so
+  one lane can answer on one platform and shrug on another. Which lanes have an observer changes as
+  they are wired up one at a time, so read the flag rather than a list: a fabric's conformance test
+  declares `reportsLiveCapability`, and
   [architecture.md](architecture.md#reportslivecapability--fabrics-without-a-path-observer) explains
   what earns a `true`.
 - **`Partitioned` and `HostLost` carry the same value as a tag**, captured at the instant they were

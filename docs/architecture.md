@@ -330,11 +330,25 @@ Ask a device "is the network up?" and there are three honest answers: yes, no,
 and *I don't know*. Most fabrics can only give the third one. A connection that
 opened a moment ago proves the network was reachable *then*; it says nothing
 about whether the Wi-Fi has since dropped, the phone has gone into a tunnel, or
-the user has revoked the local-network permission. Only a fabric wired to an observer that watches the
-connection itself — `kuilt-nw`, via `NWPathMonitor`; `kuilt-nearby`, via
-Android's Bluetooth and Wi-Fi radio-state broadcasts; and `kuilt-webrtc`, via
-the browser's ICE connection state — can actually watch that and report a live
-answer.
+the user has revoked the local-network permission. Only a fabric wired to an
+observer that watches the connection itself can actually watch that and report a
+live answer — `kuilt-nw` via `NWPathMonitor`, `kuilt-nearby` via Android's
+Bluetooth and Wi-Fi radio-state broadcasts, `kuilt-webrtc` via the browser's ICE
+connection state, and `kuilt-websocket` via Android's `ConnectivityManager` or
+the browser's `navigator.onLine`.
+
+Each fabric watches what *it* depends on, which is why those answers do not
+converge on one mechanism. `kuilt-nearby` deliberately refuses the very
+`ConnectivityManager` that `kuilt-websocket` reaches for: Nearby bootstraps over
+Bluetooth and upgrades onto Wi-Fi Direct, so it needs no network at all and
+would be called unusable by a network observer, while a relay fabric needs
+exactly a routable network and nothing else.
+
+And an observer is only as good as its signal. The browser's is the weakest —
+`navigator.onLine` is `true` behind a captive portal and on a LAN with no uplink
+— so that lane reports a definite "offline" but never a confident "online",
+landing on *I don't know* instead. A weaker observer buys a narrower answer, not
+a louder one.
 
 So `Seam.capability` starts at "I don't know" and a fabric has to earn anything
 stronger. A fabric with no observer declares `reportsLiveCapability = false`

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The WebSocket fabric's Android manifest. It exists for exactly one declaration.
+
+  ACCESS_NETWORK_STATE is what `AndroidConnectivityObserver` needs to register a
+  ConnectivityManager.NetworkCallback and read the active network — the live signal behind
+  Seam.capability (#1725). It is a NORMAL, install-time permission: granted automatically, no
+  runtime prompt, and not shown to users as a sensitive capability. It grants no access to any
+  user data — only to whether a network exists.
+
+  Declared here rather than pushed onto consumers because a permission the library's own code
+  requires is the library's to state; a consumer cannot be expected to discover it from a
+  SecurityException at runtime. Manifest merging folds it into the app.
+
+  A consumer that never calls androidConnectivityObserver() and wants a minimal manifest can
+  remove it:
+
+      <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"
+                       tools:node="remove" />
+
+  That is supported rather than merely tolerated: the observer degrades to reporting "cannot
+  tell" instead of throwing, so the fabric keeps working and only the live capability is lost.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+</manifest>
