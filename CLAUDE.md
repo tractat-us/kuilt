@@ -381,6 +381,25 @@ still compiles but self-skips at runtime, so `./gradlew build` doesn't run it.
   unshielded the two cancellations really are lexically ambiguous, and one helper hop defeats both
   guards. `ensureActive()` remains the only thing that decides it at runtime.
 
+- **Keep the throwable on a log line. Drop it only where the failure is *routine* and the
+  exception's type and message are the whole diagnosis.** The qualifying cases are narrow — an
+  unreachable telemetry collector on a best-effort drain, an entry that was never meant to decode —
+  and there the trace under it is the same framework frames every time
+  (`WarpOtlpBridge.drain`, `HeddleControlPlane.applyEntry` are the two in-tree examples, #1596).
+  Where the failure is unexpected, or the throwable came out of the **consumer's own** code, the
+  trace *is* the diagnostic: keep it. Interpolate (`"… : ${r.exceptionOrNull()}"`) rather than
+  attach when you do drop it — type and message survive, and it stays inside the lazy lambda.
+
+  The cost, recorded so nobody re-derives it as an argument for a broad sweep: on Apple targets the
+  **first** stack trace a process materializes pays a one-time symbolizer init that collapses under
+  load (~65 ms idle, ~6 s saturated; later traces ~2–3 ms either way, and a throwable-free
+  `logger.warn { … }` never symbolizes at all). Because it is **one-time**, no single site can be
+  "the expensive one" — trimming a handful removes nothing, and only a near-total sweep would, at
+  the price of stack traces everywhere. The real lever is not in this codebase: it is the consuming
+  app's `sourceInfoType=libbacktrace` (flat under load, `file:line` preserved), documented in
+  `docs/usage.md`. Measured on a debug `.kexe` on a dev Mac under synthetic saturation; unverified
+  on a real device in a release build.
+
 - **Debugging bugs a local suite can't see** (hardware/network/contention-only) follows the
   process rules in [`docs/debugging-process.md`](docs/debugging-process.md): don't `closes #N` a
   hardware-reproduced bug until validated against the reproducer (a `FakeSeam`-injected test proves
