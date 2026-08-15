@@ -60,7 +60,17 @@ public class MDNSServiceDiscoverer(
                 object : ServiceListener {
                     override fun serviceAdded(event: ServiceEvent) {
                         // Request resolution — serviceResolved will fire with full info.
-                        jmdns.requestServiceInfo(event.type, event.name)
+                        //
+                        // The explicit 0 ms timeout is load-bearing, for the reason set out at
+                        // length on departures() below: the convenience arity blocks the caller for
+                        // DNSConstants.SERVICE_INFO_TIMEOUT — 6 s — and JmDNS dispatches every
+                        // asynchronous listener's callbacks on ONE shared single-thread executor.
+                        // That makes a 6 s block taken *here* head-of-line blocking on the SIBLING
+                        // feed: one arrival that never resolves stalls every goodbye queued behind
+                        // it, and `discoveryRoster` collects both feeds off one discoverer. 0 ms
+                        // leaves the query dispatch untouched and only shortens a wait whose return
+                        // value is ignored either way.
+                        jmdns.requestServiceInfo(event.type, event.name, false, 0L)
                     }
 
                     override fun serviceResolved(event: ServiceEvent) {
