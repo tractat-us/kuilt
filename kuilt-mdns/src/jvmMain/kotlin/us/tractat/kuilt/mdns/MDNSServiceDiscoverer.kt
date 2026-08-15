@@ -10,6 +10,7 @@ import javax.jmdns.JmDNS
 import javax.jmdns.ServiceEvent
 import javax.jmdns.ServiceInfo
 import javax.jmdns.ServiceListener
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Discovers peers on the local network via Bonjour / mDNS.
@@ -85,21 +86,52 @@ public class MDNSServiceDiscoverer(
      * Returns a [Flow] that emits a peer key for each peer that
      * de-registers from the local network.
      *
-     * The peer key is the TXT `peerId` from the removed service record. Records
-     * without a `peerId` TXT entry are silently dropped (they could never have
-     * been emitted by [discoveries] either).
+     * The peer key is the TXT `peerId` **remembered from that service's own resolution**, keyed by
+     * the mDNS service name. It is not read from the removal event, which cannot supply it: JmDNS
+     * fills `serviceRemoved`'s `ServiceInfo` with the qualified service name (the PTR rdata) rather
+     * than the advertised TXT map, so `getPropertyString("peerId")` there is always null and this
+     * flow emitted nothing, ever (#1917).
+     *
+     * This listener is also **self-sufficient**: it drives its own [JmDNS.requestServiceInfo] on
+     * `serviceAdded` rather than relying on [discoveries] to have done it. Collecting `departures()`
+     * alone is the ordinary case, not a contrived one — `discoveryRoster` merges the two feeds, and
+     * `merge` subscribes to inner flows in separately launched coroutines — and a feed that only
+     * works while a sibling collector holds a session open is not a leave signal.
+     *
+     * On this fabric that request is belt-and-braces rather than the whole story: an advertiser's
+     * announcement usually carries SRV and TXT alongside the PTR, so JmDNS resolves from the
+     * announcement and would fill the map unprompted. Asking removes the dependence on that — on a
+     * partial or lost announcement it is the only thing that resolves — and it is what the
+     * `PeerDiscoverySource` contract requires of every backend, most of which have no such
+     * fallback.
+     *
+     * A service name that never resolved emits nothing — it could never have been emitted by
+     * [discoveries] either.
      */
     override fun departures(): Flow<String> =
         callbackFlow {
+            // Flow-local: one map per collection, created inside the callbackFlow block and
+            // reachable only from this collection's own listener, so nothing is shared with another
+            // collection or with discoveries(). Concurrent all the same — flow-locality removes the
+            // sharing, not the concurrency, and JmDNS delivers these callbacks on its own threads.
+            // The atomic `remove` also makes a duplicated goodbye emit exactly once.
+            val peerIdsByServiceName = ConcurrentHashMap<String, String>()
             val listener =
                 object : ServiceListener {
-                    override fun serviceAdded(event: ServiceEvent) = Unit
+                    override fun serviceAdded(event: ServiceEvent) {
+                        // Resolve on our own account — a lone departures() collector has nobody
+                        // else to request resolution on its behalf. See the KDoc.
+                        jmdns.requestServiceInfo(event.type, event.name)
+                    }
 
-                    override fun serviceResolved(event: ServiceEvent) = Unit
+                    override fun serviceResolved(event: ServiceEvent) {
+                        val peerId =
+                            event.info?.getPropertyString(MDNSAdvertisement.TXT_KEY_PEER_ID) ?: return
+                        peerIdsByServiceName[event.name] = peerId
+                    }
 
                     override fun serviceRemoved(event: ServiceEvent) {
-                        val peerId = event.info?.getPropertyString(MDNSAdvertisement.TXT_KEY_PEER_ID)
-                        if (peerId != null) trySend(peerId)
+                        peerIdsByServiceName.remove(event.name)?.let { trySend(it) }
                     }
                 }
 
