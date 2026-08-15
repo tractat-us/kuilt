@@ -6,6 +6,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -91,6 +92,55 @@ class NearbySeamCapabilityTest {
                     BOTH_RADIOS_ON.radioRoles(),
                     BOTH_RADIOS_OFF.radioRoles(),
                     "the two fixtures must fold to DIFFERENT medium roles",
+                )
+            },
+        )
+    }
+
+    /**
+     * The [NearbyApi.radioState] **interface default** reports `null`, and a seam over a binding
+     * that inherits it therefore sits on the honest floor.
+     *
+     * Deliberately uses a double that overrides *nothing* — [FakeNearbyApi] supplies its own
+     * (null-initialised) flow, so every other test here reads the fake's state, not the default's.
+     * Four in-tree test doubles inherit it, and a default that ever became a non-null "Available"
+     * would hand all four a fabricated verdict with no test noticing. This is the assertion that
+     * would notice.
+     */
+    @Test
+    fun theInterfaceDefaultReportsNoObservation() = runTest(StandardTestDispatcher()) {
+        val inheriting = object : NearbyApi {
+            override fun availability() = FabricAvailability.Available
+            override suspend fun startAdvertising(displayName: String, serviceId: String) {}
+            override suspend fun stopAdvertising() {}
+            override suspend fun startDiscovery(serviceId: String) {}
+            override suspend fun stopDiscovery() {}
+            override suspend fun requestConnection(displayName: String, endpointId: String) {}
+            override suspend fun acceptConnection(endpointId: String) {}
+            override suspend fun disconnect(endpointId: String) {}
+            override suspend fun sendBytesPayload(endpointId: String, bytes: ByteArray) {}
+            override val endpointFound = emptyFlow<EndpointFound>()
+            override val connectionInitiated = emptyFlow<ConnectionInitiated>()
+            override val connectionResult = emptyFlow<ConnectionResult>()
+            override val payloadReceived = emptyFlow<PayloadReceived>()
+            override val endpointDisconnected = emptyFlow<EndpointDisconnected>()
+        }
+        val seam = NearbySeam(
+            selfId = PeerId("self"),
+            endpointPeers = mutableMapOf(),
+            endpointPeersMutex = Mutex(),
+            api = inheriting,
+            sharedPeers = MutableStateFlow(emptySet()),
+            scope = seamScope(),
+            msgIdCounter = MsgIdCounter(),
+        )
+        testScheduler.runCurrent()
+        assertAll(
+            { assertEquals(null, inheriting.radioState.value, "the inherited default must observe nothing") },
+            {
+                assertIs<FabricAvailability.Unknown>(
+                    seam.capability.value.availability,
+                    "so a seam over it must report Unknown, NOT the api's Available platform verdict",
                 )
             },
         )
