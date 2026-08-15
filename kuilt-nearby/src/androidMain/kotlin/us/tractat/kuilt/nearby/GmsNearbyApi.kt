@@ -18,6 +18,7 @@ import com.google.android.gms.nearby.connection.PayloadTransferUpdate
 import com.google.android.gms.nearby.connection.Strategy
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.tasks.await
 import us.tractat.kuilt.core.DeliveryPolicy
@@ -37,6 +38,12 @@ import com.google.android.gms.common.ConnectionResult as GmsConnectionResult
  * Runtime permissions (Bluetooth / Wi-Fi / location / `NEARBY_WIFI_DEVICES`) are the
  * **consuming app's** responsibility — they're out of scope for this conformance spike.
  * Hence the class-level `@SuppressLint("MissingPermission")`.
+ *
+ * It also carries the fabric's **live** capability signal ([radioState], #1543): an
+ * [AndroidRadioObserver] watching the Bluetooth and Wi-Fi state broadcasts, started at construction
+ * and folded by [NearbySeam] into [us.tractat.kuilt.core.Seam.capability]. That observer — not
+ * [availability], which answers the *static* platform-support question — is what takes a woven
+ * Nearby seam off the [FabricAvailability.Unknown] floor.
  */
 @SuppressLint("MissingPermission")
 public class GmsNearbyApi(context: Context) : NearbyApi {
@@ -56,6 +63,27 @@ public class GmsNearbyApi(context: Context) : NearbyApi {
     override val connectionResult: Flow<ConnectionResult> = _connectionResult.asSharedFlow()
     override val payloadReceived: Flow<PayloadReceived> = _payloadReceived.asSharedFlow()
     override val endpointDisconnected: Flow<EndpointDisconnected> = _endpointDisconnected.asSharedFlow()
+
+    // The #1543 live-capability observer. Started eagerly so a seam woven immediately after
+    // construction already has a verdict to fold rather than the unobserved floor; see
+    // [AndroidRadioObserver] for why this watches the radio-power broadcasts rather than a
+    // ConnectivityManager.NetworkCallback, and why the Play-services half is polled.
+    private val radioObserver = AndroidRadioObserver(appContext).also { it.start() }
+
+    override val radioState: StateFlow<NearbyRadioState?> = radioObserver.radioState
+
+    /**
+     * Release the radio observer's broadcast receiver. Idempotent.
+     *
+     * Reachable only if you construct this class yourself and pass it to [NearbyLoom]: [nearbyLoom]
+     * builds a [GmsNearbyApi] internally and [NearbyLoom] has no `close()` to forward, so through
+     * that entry point the receiver is held for the process lifetime. One instance registered on the
+     * application context leaks into nothing, but N calls to [nearbyLoom] register N receivers
+     * against ActivityManager's 1000-per-process cap. Giving the loom a real lifecycle is #2397.
+     */
+    public fun close() {
+        radioObserver.close()
+    }
 
     private val lifecycleCallback =
         object : ConnectionLifecycleCallback() {
@@ -159,6 +187,13 @@ public class GmsNearbyApi(context: Context) : NearbyApi {
  *   per weave and a loom-level id would collide the two seams. See [NearbyLoom].
  * - **`weaveTimeout`** — nothing here bounds a rendezvous; [handshakeTimeout] bounds a
  *   single connection instead. See [NearbyLoom.DEFAULT_HANDSHAKE_TIMEOUT].
+ *
+ * ⚠ **No release path.** This builds a [GmsNearbyApi] internally, which registers a radio-state
+ * broadcast receiver for the live [NearbyApi.radioState] signal, and [NearbyLoom] exposes no
+ * `close()` to forward to [GmsNearbyApi.close]. One loom is fine; calling this repeatedly registers
+ * a receiver each time, against ActivityManager's 1000-per-process cap. A consumer that needs to
+ * release must construct [GmsNearbyApi] itself and pass it to [NearbyLoom]. Giving the loom a real
+ * lifecycle is #2397.
  *
  * @param context           Android [Context]; only its `applicationContext` is retained.
  * @param serviceId         Nearby Connections service ID. Must match on both devices.

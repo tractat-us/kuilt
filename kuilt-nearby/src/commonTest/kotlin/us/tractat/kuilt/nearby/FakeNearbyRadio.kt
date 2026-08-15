@@ -2,7 +2,10 @@ package us.tractat.kuilt.nearby
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
 import us.tractat.kuilt.core.FabricAvailability
 
 /**
@@ -149,6 +152,11 @@ internal class FakeNearbyApi(radio: FakeNearbyRadio) : NearbyApi {
     override val payloadReceived: Flow<PayloadReceived> = _payloadReceived.asSharedFlow()
     override val endpointDisconnected: Flow<EndpointDisconnected> = _endpointDisconnected.asSharedFlow()
 
+    // Starts `null` ("no observer has reported"), exactly as a binding with no radio observer does,
+    // so a test that never calls [emitRadioState] exercises the seam's honest-Unknown branch.
+    private val _radioState = MutableStateFlow<NearbyRadioState?>(null)
+    override val radioState: StateFlow<NearbyRadioState?> = _radioState.asStateFlow()
+
     override fun availability(): FabricAvailability = FabricAvailability.Available
 
     override suspend fun startAdvertising(displayName: String, serviceId: String) {
@@ -177,6 +185,17 @@ internal class FakeNearbyApi(radio: FakeNearbyRadio) : NearbyApi {
 
     override suspend fun sendBytesPayload(endpointId: String, bytes: ByteArray) {
         _radio.onSendBytesPayload(endpointId, bytes)
+    }
+
+    /**
+     * Test hook for #1543: drive a live radio transition (Bluetooth toggled, Wi-Fi returning, the
+     * Play services runtime disappearing) directly under virtual time. Sets the latest-value radio
+     * STATE; the seam folds it into its live [us.tractat.kuilt.core.Seam.capability]. `null`
+     * restores "unknown". The fake twin of `GmsNearbyApi`'s broadcast observer — the real emission
+     * is only provable on an Android device.
+     */
+    internal fun emitRadioState(state: NearbyRadioState?) {
+        _radioState.value = state
     }
 
     // ── emit router (called by the radio) ─────────────────────────────────────

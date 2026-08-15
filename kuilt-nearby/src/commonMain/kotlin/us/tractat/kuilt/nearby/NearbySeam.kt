@@ -17,12 +17,15 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
+import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.core.TransportCapability
+import us.tractat.kuilt.core.TransportRole
 
 private val log = KotlinLogging.logger("us.tractat.kuilt.nearby.NearbySeam")
 
@@ -59,6 +62,12 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nearby.NearbySeam")
  * @param msgIdCounter        Shared monotonic counter for message IDs (use one per seam).
  * @param policy              Delivery policy for the inbound [Spool]. Defaults to
  *                            [DeliveryPolicy.Reliable] (bounded, backpressured).
+ * @param staticRoles         The roles this seam holds no matter what the radios are doing
+ *                            ([NearbyLoom.NEARBY_BASE_ROLES]). The live MEDIUM roles are folded on
+ *                            top per reading from [NearbyApi.radioState] — see [radioStateLoop].
+ *                            Deliberately carries **no** availability: a role set answers a
+ *                            platform-support question, and reusing it as a live verdict is the
+ *                            #1712 defect.
  */
 internal class NearbySeam(
     override val selfId: PeerId,
@@ -70,6 +79,7 @@ internal class NearbySeam(
     private val maxChunkPayload: Int = ChunkCodec.MAX_CHUNK_PAYLOAD,
     private val msgIdCounter: MsgIdCounter,
     private val policy: DeliveryPolicy = DeliveryPolicy.Reliable,
+    private val staticRoles: Set<TransportRole> = NearbyLoom.NEARBY_BASE_ROLES,
 ) : Seam {
 
     // Guards the _peers write (roster mirror) against the tear-time collapse, with the collapse
@@ -102,6 +112,19 @@ internal class NearbySeam(
     private val _state = MutableStateFlow<SeamState>(SeamState.Weaving)
     override val state: StateFlow<SeamState> = _state.asStateFlow()
 
+    // Live capability (#1543): ROLES seeded from [staticRoles] and thereafter driven by the injected
+    // radio observer ([NearbyApi.radioState]). The observer moves [TransportCapability.availability]
+    // as Bluetooth/Wi-Fi are toggled or the Play services runtime goes away, AND folds the live media
+    // into the ROLES — an on Bluetooth radio adds [TransportRole.Bluetooth], an on Wi-Fi radio adds
+    // [TransportRole.WifiDirect], atop the fabric's base Data role. A MutableStateFlow so the write
+    // from the single [radioStateLoop] collector is thread-safe (CAS) under any dispatcher.
+    //
+    // AVAILABILITY starts at [unobservedCapability]'s Unknown and is ONLY ever set from an observed
+    // radio reading (#1712): nothing here can report a verdict the observer has not supplied.
+    // [staticRoles] carries no availability to fall back on, by construction.
+    private val _capability = MutableStateFlow(unobservedCapability)
+    override val capability: StateFlow<TransportCapability> = _capability.asStateFlow()
+
     private val spool = Spool<Swatch>(policy)
     override val incoming: Flow<Swatch> = spool.incoming
 
@@ -117,6 +140,11 @@ internal class NearbySeam(
     // construction — before any handshake/data events can be emitted.
     private val receiveJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { receiveLoop() }
     private val disconnectJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { disconnectLoop() }
+
+    // UNDISPATCHED for the same reason, plus one specific to a StateFlow: subscribing synchronously
+    // means the observer's CURRENT value is folded in before construction returns, so a seam woven
+    // onto an already-reporting binding never transiently publishes the unobserved floor.
+    private val radioStateJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { radioStateLoop() }
 
     // Mirror the loom-wide roster into this seam's own [_peers], and transition Weaving → Woven when
     // the first remote peer appears. UNDISPATCHED so the mirror is subscribed (and StateFlow's
@@ -185,6 +213,55 @@ internal class NearbySeam(
             }
         }
     }
+
+    // ── live capability — the #1543 reactive-capability driver ────────────────
+
+    /**
+     * Fold the transport's live [NearbyApi.radioState] (the Bluetooth/Wi-Fi state broadcasts on
+     * `GmsNearbyApi`) into [capability].
+     *
+     * A `null` radio state means "unknown" — the binding has wired no observer (or the default
+     * fake) — so we publish [unobservedCapability]: the fabric's base role with an honest
+     * [FabricAvailability.Unknown], never a guessed verdict (#1712). A non-null state supplies the
+     * availability via [NearbyRadioState.toAvailability] AND drives the ROLES: the base role
+     * ([staticRoles] = [NearbyLoom.NEARBY_BASE_ROLES] = Data) plus whichever media are actually
+     * powered ([NearbyRadioState.radioRoles]). A device with both radios off adds no medium role, so
+     * the roles narrow back to the base set. The write goes to the seam-owned [_capability]
+     * MutableStateFlow, so this single collector is the sole writer — no lock needed. Terminates
+     * with [scope] on close (this loop holds no per-endpoint state).
+     */
+    private suspend fun radioStateLoop() {
+        api.radioState.collect { radios ->
+            _capability.value =
+                if (radios == null) {
+                    unobservedCapability
+                } else {
+                    TransportCapability(
+                        roles = staticRoles + radios.radioRoles(),
+                        availability = radios.toAvailability(),
+                    )
+                }
+        }
+    }
+
+    /**
+     * The capability of a seam with **no live radio reading**: the fabric's base role, but an honest
+     * [FabricAvailability.Unknown] availability.
+     *
+     * A `null` [NearbyApi.radioState] means the binding wired no observer, or none has reported yet.
+     * Either way this seam does not know whether its radios are up and must say so. It cannot fall
+     * back on [NearbyApi.availability] even by accident: [staticRoles] carries roles only, because
+     * that value answers a *platform-support* question ("is there a Nearby runtime here") and
+     * reusing it as a live verdict was the #1712 defect. Note the file already answers the
+     * equivalent question this way one level down: [NearbyRadioState.toAvailability] maps an
+     * unreadable radio to `Unknown`, and a `null` radio state is strictly less informative than
+     * that.
+     */
+    private val unobservedCapability: TransportCapability
+        get() = TransportCapability(
+            roles = staticRoles,
+            availability = FabricAvailability.Unknown("no radio observer has reported on this binding"),
+        )
 
     // ── send ──────────────────────────────────────────────────────────────────
 
