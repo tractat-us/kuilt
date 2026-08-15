@@ -7,6 +7,7 @@ import platform.Foundation.NSNetServiceBrowser
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -24,8 +25,8 @@ private const val DETACH_PORT = 19500
  * reads back `delegate` to see who still points at whom.
  *
  * **What it can and cannot show.** It shows the bookkeeping: that attaching records the service,
- * that terminal callbacks and teardown both give the pointer back, and that nothing attaches after a
- * detach. It does **not** show the half that matters most — that a delegate held only by a dead
+ * that reporting an address and teardown both give the pointer back, and that nothing attaches
+ * after a detach. It does **not** show the half that matters most — that a delegate held only by a dead
  * session is collected, and that a live `NSNetService` calling into it would crash. That is a
  * property of Kotlin/Native's GC and Objective-C's `assign` semantics, argued in
  * [NetServiceBrowseSession]'s KDoc, and no unit test can produce it on demand. Read a green here as
@@ -38,7 +39,7 @@ private const val DETACH_PORT = 19500
 class BonjourServiceDetachTest {
 
     @Test
-    fun aResolvedServiceGivesItsDelegatePointerBackWithoutWaitingForTeardown() {
+    fun aServiceThatReportsAnAddressGivesItsDelegatePointerBackWithoutWaitingForTeardown() {
         val delegate = ServiceDelegate(ResolvingSink)
         val service = netService("peer-a")
 
@@ -52,8 +53,9 @@ class BonjourServiceDetachTest {
             {
                 assertNull(
                     service.delegate,
-                    "a service that has reached a terminal callback will not call back again, so " +
-                        "its pointer is given back then rather than accumulating until teardown",
+                    "a service that has reported an address gives its pointer back then, rather " +
+                        "than accumulating until teardown — which also makes the repeatable " +
+                        "netServiceDidResolveAddress: effectively single-shot",
                 )
             },
         )
@@ -101,7 +103,7 @@ class BonjourServiceDetachTest {
      * at all.
      *
      * A sink that never asked would attach nothing, and every assertion above would hold vacuously —
-     * so [aResolvedServiceGivesItsDelegatePointerBackWithoutWaitingForTeardown] and
+     * so [aServiceThatReportsAnAddressGivesItsDelegatePointerBackWithoutWaitingForTeardown] and
      * [teardownDetachesEveryServiceStillResolving] both assert the attachment happened first.
      */
     private object ResolvingSink : BonjourBrowseSink {
@@ -156,6 +158,25 @@ class BonjourEmptyTxtRecordTest {
         // Deliberately no setTXTRecordData: that absence IS the rig.
         val service =
             NSNetService(domain = "local.", type = DETACH_SERVICE_TYPE, name = "peer-no-txt", port = DETACH_PORT)
+
+        // The rig's own precondition, asserted rather than assumed. `txtDictionary()` is reached
+        // only through `TXTRecordData()?.` — so if this service ever returned nil (which Apple
+        // documents for an *unresolved* service) the guard under test would never be entered and
+        // every assertion below would hold identically, carried by the `?.` alone. What makes the
+        // defect reachable is precisely that a synthetic service hands back a NON-nil, zero-length
+        // NSData. Nothing else states that, so it is checked here: if a future SDK changes it, this
+        // reds instead of going quietly vacuous.
+        val txt = assertNotNull(
+            service.TXTRecordData(),
+            "rig precondition: the service must return a non-nil TXT record, or txtDictionary() is " +
+                "never entered and this test passes without exercising the guard it exists for",
+        )
+        assertEquals(
+            0UL,
+            txt.length,
+            "rig precondition: the TXT record must be EMPTY — that is the input for which " +
+                "dictionaryFromTXTRecordData: returns nil and the interop not-null check fires",
+        )
 
         delegate.netServiceDidResolveAddress(service)
 

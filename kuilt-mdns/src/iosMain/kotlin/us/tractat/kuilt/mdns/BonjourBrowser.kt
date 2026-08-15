@@ -9,6 +9,8 @@ import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.ObjCSignatureOverride
 import kotlinx.cinterop.readBytes
 import kotlinx.cinterop.reinterpret
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
 import platform.Foundation.NSData
 import platform.Foundation.NSNetService
 import platform.Foundation.NSNetServiceBrowser
@@ -16,6 +18,7 @@ import platform.Foundation.NSNetServiceBrowserDelegateProtocol
 import platform.Foundation.NSNetServiceDelegateProtocol
 import platform.Foundation.NSRunLoop
 import platform.Foundation.NSRunLoopCommonModes
+import platform.Foundation.NSThread
 import platform.darwin.NSObject
 
 // NSNetServiceBrowser is deprecated since iOS 15 in favour of NWBrowser (Network.framework).
@@ -135,6 +138,19 @@ internal object NetServiceBonjourBrowser : BonjourBrowser {
         serviceType: String,
         sink: BonjourBrowseSink,
     ): BonjourBrowseHandle {
+        // Fail fast on the one pairing the internal constructor makes writable and nothing else
+        // catches: the real browser with a non-main `browseContext`. Foundation's browser and
+        // services are not documented thread-safe and their callbacks are delivered on the main run
+        // loop, so driving them from elsewhere is API misuse rather than a data race this module can
+        // lock its way out of. The likely author is a #2407 test — MDNSServiceDiscoverer's own KDoc
+        // records that Dispatchers.Main deadlocks under runTest on K/N, which pushes exactly that
+        // person toward exactly this mistake. Loud here beats subtle later.
+        check(NSThread.isMainThread()) {
+            "NetServiceBonjourBrowser must be driven from the main run loop, but browse() ran on " +
+                "${NSThread.currentThread}. MDNSServiceDiscoverer's public constructor pairs this " +
+                "browser with Dispatchers.Main; the internal constructor's browseContext exists for " +
+                "tests, which must supply a fake browser rather than this one."
+        }
         val delegate = ServiceDelegate(sink)
         val browser = NSNetServiceBrowser()
         browser.setDelegate(delegate)
@@ -229,13 +245,17 @@ private inline fun guarded(
  * That is a use-after-free, not a missing peer, and its trigger is ordinary: a collector cancelled
  * within five seconds of a peer appearing.
  *
- * **Threading.** [attached] and [detached] are plain, unguarded state, and that is sound only
- * because every path that touches them runs on the main run loop: Bonjour delivers its callbacks
- * there, and [detachAll] is reached from `awaitClose` inside `MDNSServiceDiscoverer`'s
- * `flowOn(browseContext)`, whose production value is `Dispatchers.Main`. None of these methods
- * suspends, so no callback can interleave with [detachAll]. **That pairing is an assumption, not an
- * enforcement** — the internal constructor lets a caller supply the real browser with some other
- * context, and nothing would red if one did. See the report's residual note.
+ * **Threading.** [attached] and [detached] are guarded by an explicit [lock], not by an assumption
+ * about which thread runs what. The earlier version relied on Bonjour's callbacks and the teardown
+ * sharing the main run loop — true in production, where `browseContext` is `Dispatchers.Main`, but
+ * an *emergent* property of where coroutines happen to run rather than a local property of the
+ * fields. This repo forbids that trade explicitly, and the failure it hides is not hypothetical: an
+ * `add` racing `toList()`/`clear()` leaves a service attached past teardown with a collectable
+ * delegate, which is #2409 resurrected, and an unsynchronised `detached` can be missed entirely.
+ * Guarded, both are correct under any dispatcher. No call inside a locked section suspends.
+ *
+ * The main run loop still matters for a different reason — Foundation's own thread affinity — and
+ * that is enforced where it belongs, by the precondition in [NetServiceBonjourBrowser.browse].
  */
 internal class ServiceDelegate(
     private val sink: BonjourBrowseSink,
@@ -243,10 +263,13 @@ internal class ServiceDelegate(
     NSNetServiceBrowserDelegateProtocol,
     NSNetServiceDelegateProtocol {
 
+    /** Guards [attached] and [detached]. Held only across non-suspending platform calls. */
+    private val lock = reentrantLock()
+
     /**
      * Services this delegate has pointed at itself and not yet detached.
      *
-     * Entries are removed on a service's terminal callback as well as by [detachAll], so a
+     * Entries are removed when a service reports an address as well as by [detachAll], so a
      * long-running browse over a busy network does not accumulate one reference per peer ever seen.
      */
     private val attached = mutableListOf<NSNetService>()
@@ -261,12 +284,18 @@ internal class ServiceDelegate(
         moreComing: Boolean,
     ) {
         sink.onFound(didFindService.name()) {
-            // Refused after teardown: attaching here would hand out exactly the unowned pointer
-            // detachAll just finished reclaiming, and nothing would ever come back for it.
-            if (detached) return@onFound
-            didFindService.setDelegate(this)
-            attached += didFindService
-            didFindService.resolveWithTimeout(RESOLVE_TIMEOUT_S)
+            lock.withLock {
+                // Refused after teardown: attaching here would hand out exactly the unowned pointer
+                // detachAll just finished reclaiming, and nothing would ever come back for it.
+                if (detached) return@withLock
+                // Inside the lock with the bookkeeping, deliberately. Setting the delegate outside
+                // it would leave a window where the service is listed but not yet pointed at us —
+                // a concurrent detachAll would clear a delegate that is not set, and we would then
+                // set it, stranding exactly one attachment past teardown.
+                didFindService.setDelegate(this)
+                attached += didFindService
+                didFindService.resolveWithTimeout(RESOLVE_TIMEOUT_S)
+            }
         }
     }
 
@@ -283,9 +312,15 @@ internal class ServiceDelegate(
      * this is a theoretical arm rather than a live one.
      */
     fun detachAll() {
-        detached = true
-        val services = attached.toList()
-        attached.clear()
+        // Latch and snapshot under one lock. Ordering inside it is what makes the two exhaustive: an
+        // attach that got the lock first is in `services`; one that arrives after sees `detached`.
+        val services =
+            lock.withLock {
+                detached = true
+                val snapshot = attached.toList()
+                attached.clear()
+                snapshot
+            }
         services.forEach { service ->
             guarded("stopping an in-flight Bonjour resolution") { service.stop() }
             guarded("clearing a Bonjour service delegate") { service.setDelegate(null) }
@@ -325,12 +360,23 @@ internal class ServiceDelegate(
     }
 
     /**
-     * A service has reached a terminal callback, so it will not call back again: stop tracking it
-     * and give back the pointer now rather than at teardown.
+     * A service has reported an address: give its pointer back now rather than at teardown.
+     *
+     * `netServiceDidResolveAddress:` is **not** terminal — Apple documents it as repeatable, once
+     * per batch of addresses resolved. Clearing the delegate here is what makes it effectively
+     * single-shot: later batches find no delegate and are dropped, which is harmless because only
+     * `hostName` is read and it does not change between batches.
+     *
+     * The real cost is an **early detach**: the service leaves [attached], so [detachAll] will not
+     * `stop()` it, and an unfinished resolution runs to its [RESOLVE_TIMEOUT_S] timeout still holding
+     * a run-loop source. That is a bounded resource cost, not a dangling pointer — the delegate is
+     * already cleared, so nothing can call back into this object.
      */
     private fun release(service: NSNetService) {
-        if (!attached.remove(service)) return
-        guarded("clearing a resolved Bonjour service delegate") { service.setDelegate(null) }
+        lock.withLock {
+            if (!attached.remove(service)) return@withLock
+            guarded("clearing a resolved Bonjour service delegate") { service.setDelegate(null) }
+        }
     }
 }
 

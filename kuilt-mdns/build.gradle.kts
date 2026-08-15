@@ -49,6 +49,11 @@ kotlin {
         }
         iosMain.dependencies {
             implementation(libs.kotlin.logging)
+            // Real mutual exclusion for ServiceDelegate's attachment bookkeeping and departures()'
+            // name->peerId map. Both were previously correct only if every Bonjour callback and the
+            // teardown shared one thread — an emergent property of `browseContext`, which this repo
+            // forbids leaning on (CLAUDE.md: correctness must be a local property of each field).
+            implementation(libs.kotlinx.atomicfu)
         }
         // iosMain's MDNSServiceDiscoverer is bound to the same suite (#2400), against a fake
         // Bonjour browser — NSNetServiceBrowser only delivers callbacks while the main run loop is

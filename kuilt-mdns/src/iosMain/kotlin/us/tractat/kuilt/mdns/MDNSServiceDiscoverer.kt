@@ -1,6 +1,8 @@
 package us.tractat.kuilt.mdns
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -111,11 +113,14 @@ public class MDNSServiceDiscoverer internal constructor(
         callbackFlow {
             // Flow-local: one map per collection, created inside the callbackFlow block and
             // reachable only from this collection's own sink, so nothing is shared with another
-            // collection or with discoveries(). Unlike the JVM and Android backends this one needs
-            // no concurrent map: every Bonjour callback for this session is delivered on the main
-            // run loop, the same place `browseContext` opens and closes the session, so the map has
-            // exactly one accessing thread. That is a property of the run loop, not of the flow —
-            // flow-locality removes the sharing, never the concurrency.
+            // collection or with discoveries(). Flow-locality removes the sharing, never the
+            // concurrency, so the map is guarded by an explicit lock rather than by an argument
+            // about which thread Bonjour happens to call back on. It previously rested on
+            // `browseContext` being Dispatchers.Main — true in production and emergent rather than
+            // local, which is the trade this repo forbids. Guarded, it is correct under any
+            // dispatcher, and the guarded `remove` also makes a duplicated goodbye emit exactly
+            // once. No suspending call runs inside the locked sections.
+            val lock = reentrantLock()
             val peerIdsByServiceName = mutableMapOf<String, String>()
             val handle =
                 browser.browse(
@@ -133,11 +138,15 @@ public class MDNSServiceDiscoverer internal constructor(
 
                         override fun onResolved(record: BonjourRecord) {
                             val peerId = record.txt[MDNSAdvertisement.TXT_KEY_PEER_ID] ?: return
-                            peerIdsByServiceName[record.serviceName] = peerId
+                            lock.withLock { peerIdsByServiceName[record.serviceName] = peerId }
                         }
 
                         override fun onLost(serviceName: String) {
-                            peerIdsByServiceName.remove(serviceName)?.let { trySend(it) }
+                            // trySend outside the lock: nothing else here needs the map, and a send
+                            // is the one call that could reach unrelated machinery.
+                            val peerId =
+                                lock.withLock { peerIdsByServiceName.remove(serviceName) } ?: return
+                            trySend(peerId)
                         }
                     },
                 )
