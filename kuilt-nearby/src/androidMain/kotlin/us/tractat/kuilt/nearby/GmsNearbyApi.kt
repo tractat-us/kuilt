@@ -73,10 +73,13 @@ public class GmsNearbyApi(context: Context) : NearbyApi {
     override val radioState: StateFlow<NearbyRadioState?> = radioObserver.radioState
 
     /**
-     * Release the radio observer's broadcast receiver. Optional: it is registered against the
-     * application context, so leaving it for the process lifetime leaks nothing. Provided for a
-     * consumer that constructs this class directly (rather than via [nearbyLoom]) and wants to stop
-     * observing early. Idempotent.
+     * Release the radio observer's broadcast receiver. Idempotent.
+     *
+     * Reachable only if you construct this class yourself and pass it to [NearbyLoom]: [nearbyLoom]
+     * builds a [GmsNearbyApi] internally and [NearbyLoom] has no `close()` to forward, so through
+     * that entry point the receiver is held for the process lifetime. One instance registered on the
+     * application context leaks into nothing, but N calls to [nearbyLoom] register N receivers
+     * against ActivityManager's 1000-per-process cap. Giving the loom a real lifecycle is #2397.
      */
     public fun close() {
         radioObserver.close()
@@ -184,6 +187,13 @@ public class GmsNearbyApi(context: Context) : NearbyApi {
  *   per weave and a loom-level id would collide the two seams. See [NearbyLoom].
  * - **`weaveTimeout`** — nothing here bounds a rendezvous; [handshakeTimeout] bounds a
  *   single connection instead. See [NearbyLoom.DEFAULT_HANDSHAKE_TIMEOUT].
+ *
+ * ⚠ **No release path.** This builds a [GmsNearbyApi] internally, which registers a radio-state
+ * broadcast receiver for the live [NearbyApi.radioState] signal, and [NearbyLoom] exposes no
+ * `close()` to forward to [GmsNearbyApi.close]. One loom is fine; calling this repeatedly registers
+ * a receiver each time, against ActivityManager's 1000-per-process cap. A consumer that needs to
+ * release must construct [GmsNearbyApi] itself and pass it to [NearbyLoom]. Giving the loom a real
+ * lifecycle is #2397.
  *
  * @param context           Android [Context]; only its `applicationContext` is retained.
  * @param serviceId         Nearby Connections service ID. Must match on both devices.

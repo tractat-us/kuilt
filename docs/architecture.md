@@ -331,8 +331,9 @@ and *I don't know*. Most fabrics can only give the third one. A connection that
 opened a moment ago proves the network was reachable *then*; it says nothing
 about whether the Wi-Fi has since dropped, the phone has gone into a tunnel, or
 the user has revoked the local-network permission. Only a fabric wired to the
-operating system's own path monitor — today just `kuilt-nw`, via
-`NWPathMonitor` — can actually watch that and report a live answer.
+operating system's own observers — `kuilt-nw`, via `NWPathMonitor`, and
+`kuilt-nearby`, via Android's Bluetooth and Wi-Fi radio-state broadcasts — can
+actually watch that and report a live answer.
 
 So `Seam.capability` starts at "I don't know" and a fabric has to earn anything
 stronger. A fabric with no observer declares `reportsLiveCapability = false`

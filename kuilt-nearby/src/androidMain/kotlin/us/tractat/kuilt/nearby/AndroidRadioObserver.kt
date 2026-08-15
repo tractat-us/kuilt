@@ -7,8 +7,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.net.wifi.WifiManager
-import android.os.Build
 import com.google.android.gms.common.GoogleApiAvailability
+import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -46,10 +46,13 @@ import com.google.android.gms.common.ConnectionResult as GmsConnectionResult
  * [us.tractat.kuilt.core.FabricAvailability.Unknown], never a definite `Unavailable`. A radio we
  * were not permitted to read may well be on.
  *
- * ## Lifecycle
- * Registered against the **application** context, so it is a process-lifetime subscription rather
- * than a leak — there is no shorter-lived object to leak into. [close] unregisters it and is
- * idempotent, for a consumer that constructs [GmsNearbyApi] directly and wants to drop it early.
+ * ## Lifecycle — bounded per instance, NOT per process (see #2397)
+ * Registered against the **application** context, so a single instance holds one process-lifetime
+ * subscription and leaks into no shorter-lived object. That is only safe *per instance*: every
+ * [nearbyLoom] call constructs a fresh [GmsNearbyApi] and therefore registers another receiver, and
+ * ActivityManager caps a process at 1000. [close] unregisters and is idempotent, but [nearbyLoom]
+ * exposes no route to it — a consumer that needs release must construct [GmsNearbyApi] itself and
+ * hand it to [NearbyLoom]. Giving the loom a real lifecycle is #2397.
  */
 internal class AndroidRadioObserver(private val appContext: Context) {
 
@@ -58,7 +61,11 @@ internal class AndroidRadioObserver(private val appContext: Context) {
     /** Latest-value radio state; `null` until [start] takes the first reading. */
     val radioState: StateFlow<NearbyRadioState?> = _radioState.asStateFlow()
 
-    private var registered = false
+    // Atomic, not a plain `var`: [start] runs on the constructing thread while [close] is public and
+    // callable from any, so an unguarded check-then-set is a data race (the #2328 shape). CAS makes
+    // both idempotent AND makes the double-unregister unreachable — see [close]. Mirrors
+    // `NearbySeam.closed`.
+    private val registered = atomic(false)
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) = publish()
@@ -69,32 +76,40 @@ internal class AndroidRadioObserver(private val appContext: Context) {
      * woven before any transition still gets a verdict rather than sitting on the floor.
      */
     fun start() {
-        if (registered) return
+        if (!registered.compareAndSet(expect = false, update = true)) return
         val filter = IntentFilter().apply {
             addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
             addAction(WifiManager.WIFI_STATE_CHANGED_ACTION)
         }
-        // Both actions are protected system broadcasts, which Android 14's export-flag requirement
-        // exempts; the flag is passed anyway where it exists so the receiver is never inadvertently
-        // exported to other apps.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            appContext.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            appContext.registerReceiver(receiver, filter)
-        }
-        registered = true
+        // NO export flag, deliberately — and specifically NOT `RECEIVER_NOT_EXPORTED`.
+        //
+        // Android 14's flag requirement applies only when a receiver is NOT registered exclusively
+        // for system broadcasts; both actions here are `<protected-broadcast>` entries, so the
+        // exemption genuinely holds and there is nothing a flag could protect (a protected broadcast
+        // cannot be sent by another app).
+        //
+        // `RECEIVER_NOT_EXPORTED` would be actively WRONG: it is a delivery filter, not
+        // belt-and-braces. Some system broadcasts come from highly privileged apps that are part of
+        // the framework but do NOT run under the system UID — Bluetooth is the documented example
+        // (`com.android.bluetooth`, UID 1002, not system_server). AMS drops those for a
+        // NOT_EXPORTED receiver, so on API 33+ we would silently stop seeing
+        // ACTION_STATE_CHANGED while WIFI_STATE_CHANGED_ACTION (from system_server) kept arriving.
+        // That asymmetry is invisible to casual testing and would freeze `Seam.capability` at a
+        // stale `Available` after the user switches Bluetooth off — precisely the fabricated verdict
+        // #1712 exists to prevent, and one this fabric's `reportsLiveCapability = true` now vouches
+        // for. Receiving all system broadcasts requires the flag to be absent or EXPORTED.
+        appContext.registerReceiver(receiver, filter)
         publish()
     }
 
     /** Unregister the receiver. Idempotent; safe to call without a preceding [start]. */
     fun close() {
-        if (!registered) return
-        registered = false
-        try {
-            appContext.unregisterReceiver(receiver)
-        } catch (_: IllegalArgumentException) {
-            // Already unregistered by the platform (e.g. the context was torn down). Nothing owed.
-        }
+        if (!registered.compareAndSet(expect = true, update = false)) return
+        // No try/catch: `unregisterReceiver` throws only for a receiver that was never registered,
+        // which the CAS above makes unreachable. The platform does not reclaim receivers held on the
+        // APPLICATION context either (that applies to Activity/Service contexts), so there is no
+        // second path to an already-unregistered state.
+        appContext.unregisterReceiver(receiver)
     }
 
     private fun publish() {
