@@ -1,5 +1,6 @@
 package us.tractat.kuilt.conformance
 
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.emitAll
@@ -12,6 +13,8 @@ import us.tractat.kuilt.core.discovery.PeerDiscoverySource
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Proves [DiscoverySourceConformanceSuite]'s properties actually go **red**, by running them
@@ -34,7 +37,7 @@ import kotlin.test.assertTrue
  * The rig suites below are `abstract`, instantiated here as anonymous subclasses. That is not
  * style: a concrete subclass of [DiscoverySourceConformanceSuite] inherits four `@Test` methods, so
  * the test runner collects it as a test class of its own and then fails to build it (it is
- * private). `@Ignore` would silence that at the cost of three permanently-skipped rows in every
+ * private). `@Ignore` would silence that at the cost of a permanently-skipped row per rig in every
  * report — a skip nobody reads, which is the thing this whole suite is against. Abstract is
  * invisible to collection and still instantiable right here.
  */
@@ -68,6 +71,41 @@ class DiscoverySourceConformanceSuiteRigTest {
         (object : ParasiticSuite() {}).departureKeyEqualsThePeerKeyThatWasDiscovered()
     }
 
+    /**
+     * The negative window is a real window: a source that stays quiet through `causeArrival` and
+     * only emits a moment later is still caught.
+     *
+     * This is the receipt for [DiscoverySourceConformanceSuite.awaitQuiescence]'s default. Without
+     * it the hook is unpinned — and a zero-length wait would pass this rig, which is exactly what
+     * the previous `awaitBudget?.let { … }` implementation did whenever a harness took the `null`
+     * its own KDoc prescribes.
+     */
+    @Test
+    fun aSpuriousDepartureEmittedAMomentAfterAnArrivalReds() {
+        val failure = assertFailsWith<AssertionError> {
+            (object : LateSpuriousDepartureSuite() {}).anArrivalIsNeverReportedAsADeparture()
+        }
+        assertTrue(
+            failure.message.orEmpty().contains("An arrival is never a departure"),
+            "expected the silence window to catch the late emission, got: ${failure.message}",
+        )
+    }
+
+    /**
+     * …and a harness with no virtual clock to burn cannot end up with a zero-length window by
+     * omission: it is told to declare one.
+     */
+    @Test
+    fun aRealIoHarnessThatDeclaresNoSilenceWindowReds() {
+        val failure = assertFailsWith<AssertionError> {
+            (object : RealIoWithoutQuiescenceSuite() {}).anArrivalIsNeverReportedAsADeparture()
+        }
+        assertTrue(
+            failure.message.orEmpty().contains("override awaitQuiescence()"),
+            "expected awaitBudget = null to demand a declared silence window, got: ${failure.message}",
+        )
+    }
+
     @Test
     fun aSourceDeclaringNoLeaveSignalWhileEmittingReds() {
         val failure = assertFailsWith<AssertionError> {
@@ -80,6 +118,17 @@ class DiscoverySourceConformanceSuiteRigTest {
     }
 
     // ── rigs ─────────────────────────────────────────────────────────────────
+
+    private companion object {
+        /**
+         * How long [LateSpuriousDepartureSource] stays quiet before misbehaving.
+         *
+         * Comfortably inside the suite's default virtual window, and strictly outside a
+         * zero-length one — being the discriminator between those two is the whole job of that rig,
+         * so this value is load-bearing rather than arbitrary.
+         */
+        val SPURIOUS_DEPARTURE_DELAY: Duration = 1.seconds
+    }
 
     /** Emits the peer's *session name* on departure — plausible in a log, useless to `discoveryRoster`. */
     private class WrongKeySource : PeerDiscoverySource {
@@ -127,6 +176,30 @@ class DiscoverySourceConformanceSuiteRigTest {
         }
     }
 
+    /**
+     * Declares no leave signal, and stays quiet long enough that only a real window catches it.
+     *
+     * The delay is the point: it is silent at the instant `causeArrival` returns, so a
+     * zero-length negative window sees nothing and the suite goes green.
+     */
+    private class LateSpuriousDepartureSource : PeerDiscoverySource {
+        override val kind: DiscoveryKind = DiscoveryKind.Mdns
+        private val arrivals = MutableSharedFlow<Tag>(extraBufferCapacity = 8)
+
+        override fun discoveries(): Flow<Tag> = arrivals
+
+        override fun departures(): Flow<String> = flow {
+            arrivals.collect { tag ->
+                delay(SPURIOUS_DEPARTURE_DELAY)
+                emit(tag.peerKey)
+            }
+        }
+
+        suspend fun advertise() {
+            arrivals.emit(InMemoryTag(sessionName = REFERENCE_SESSION_NAME, peerKey = REFERENCE_PEER_KEY))
+        }
+    }
+
     /** Declares no leave signal, then reports every arrival as one. */
     private class DishonestNoLeaveSignalSource : PeerDiscoverySource {
         override val kind: DiscoveryKind = DiscoveryKind.Mdns
@@ -161,6 +234,35 @@ class DiscoverySourceConformanceSuiteRigTest {
 
         override fun departureFixture(source: PeerDiscoverySource): DepartureFixture =
             DepartureFixture.Emits { (source as ParasiticSource).withdraw() }
+    }
+
+    private abstract class LateSpuriousDepartureSuite : DiscoverySourceConformanceSuite() {
+        override fun newSource(): PeerDiscoverySource = LateSpuriousDepartureSource()
+
+        override suspend fun causeArrival(source: PeerDiscoverySource) {
+            (source as LateSpuriousDepartureSource).advertise()
+        }
+
+        override fun departureFixture(source: PeerDiscoverySource): DepartureFixture =
+            DepartureFixture.NoLeaveSignal
+    }
+
+    /**
+     * A stand-in for a real-I/O harness: it takes the `awaitBudget = null` its KDoc prescribes and
+     * stops there, declaring no silence window of its own. Its source is irrelevant — the point is
+     * that the omission fails rather than passing.
+     */
+    private abstract class RealIoWithoutQuiescenceSuite : DiscoverySourceConformanceSuite() {
+        override val awaitBudget: Duration? = null
+
+        override fun newSource(): PeerDiscoverySource = NoLeaveSignalDiscoverySource()
+
+        override suspend fun causeArrival(source: PeerDiscoverySource) {
+            (source as NoLeaveSignalDiscoverySource).advertise()
+        }
+
+        override fun departureFixture(source: PeerDiscoverySource): DepartureFixture =
+            DepartureFixture.NoLeaveSignal
     }
 
     private abstract class DishonestNoLeaveSignalSuite : DiscoverySourceConformanceSuite() {

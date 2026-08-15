@@ -5,6 +5,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
@@ -48,8 +49,16 @@ public sealed interface DepartureFixture {
      * arrival and departure are different peers would fail it for a reason that has nothing to do
      * with the source under test.
      *
-     * [cause] is called **after** the suite has observed the arrival, so it may close over
-     * whatever that arrival produced.
+     * [cause] is called after [DiscoverySourceConformanceSuite.causeArrival] **returns**, and must
+     * rest only on state `causeArrival` itself established.
+     *
+     * It must **not** rest on the arrival having been *observed*. It is tempting to think it can —
+     * `departureKeyEqualsThePeerKeyThatWasDiscovered` does hold a `discoveries()` collector open
+     * across the call — but `departuresEmitsWithNoConcurrentDiscoveriesCollector` deliberately
+     * collects nothing else, so there the discovered [Tag] never exists. A fixture that reaches for
+     * a handle only the arrival *callback* produces reds that property for a reason unrelated to
+     * the defect it tests, with a message blaming the source. A binding that needs a peer handle to
+     * withdraw one should have [DiscoverySourceConformanceSuite.causeArrival] capture it.
      */
     public class Emits(public val cause: suspend () -> Unit) : DepartureFixture
 
@@ -140,7 +149,13 @@ public abstract class DiscoverySourceConformanceSuite {
      * Make one peer appear to [source], such that its `discoveries()` emits a [Tag] for it.
      *
      * Called **after** the suite has begun collecting, so a hot source never has to replay.
-     * Suspending, so a real backend can await its own advertising machinery rather than sleep.
+     *
+     * Suspending because it must not return until the peer is genuinely visible to [source] —
+     * a real-I/O binding has to await its own advertising machinery here, not fire-and-forget.
+     * [DepartureFixture.Emits.cause] runs immediately afterwards, and in
+     * [departuresEmitsWithNoConcurrentDiscoveriesCollector] nothing else is watching, so an
+     * arrival still in flight when this returns means the withdrawal races it: the property reds
+     * on the fixture's own timing while reading as a fault in the source's leave signal.
      *
      * Non-nullable for the same reason as [newSource]: every property here starts from an arrival,
      * so a source that cannot be made to discover anything makes all of them vacuous — and would
@@ -171,11 +186,52 @@ public abstract class DiscoverySourceConformanceSuite {
      * real radio does not advance the virtual clock, so `runTest` fast-forwards the whole budget
      * while the packet is still in flight and a working backend fails — kuilt #2069 / #2115. Such
      * a harness takes `runTest`'s own [TEST_WEDGE_BACKSTOP] as its backstop, losing the named
-     * failure, which is the honest trade. Note `null` also disarms the negative window in
-     * [anArrivalIsNeverReportedAsADeparture]: with no bound there is nothing to wait *through*, so
-     * that property degrades to a best-effort check on a real-I/O harness.
+     * failure, which is the honest trade.
+     *
+     * That trade is sound for waits that end when the thing arrives — the backstop still bounds
+     * them. It is **not** sound for the one wait that ends only when nothing arrives, so setting
+     * this to `null` does not silently shorten that wait to zero: it makes [awaitQuiescence] fail
+     * until you override it. See that hook.
      */
     public open val awaitBudget: Duration? = 5.seconds
+
+    /**
+     * Wait long enough that a source which was going to emit a spurious departure would have.
+     *
+     * This is the negative window behind [anArrivalIsNeverReportedAsADeparture], and it is a hook
+     * of its own rather than a use of [awaitBudget] because the two waits fail in opposite
+     * directions. A positive wait that is too short *reds* a working source — annoying, loud,
+     * self-correcting. A **negative** wait that is too short *greens* a broken one, and a
+     * zero-length one greens every source there is. That is the same "obligation that returns
+     * silently reports PASS" shape `RoomConformanceSuite`'s #2306 closed, and it would have
+     * re-entered here through a tuning knob instead of an early return: the default implementation
+     * used to be `awaitBudget?.let { … }`, so the very setting this suite *prescribes* for real-I/O
+     * harnesses removed the whole obligation of the [DepartureFixture.NoLeaveSignal] arm without
+     * anything anywhere saying so.
+     *
+     * So the degradation has to be **declared**. With a virtual budget the default is right and
+     * costs no wall-clock time; with [awaitBudget] `null` there is no virtual clock to burn and
+     * this fails, telling the harness to supply a real one. A real-I/O override must use a
+     * genuinely real-time wait — a bare `delay` under `runTest` is virtual whatever dispatcher it
+     * runs on, so it would reintroduce the zero-length window it was overridden to fix:
+     *
+     * ```kotlin
+     * // ALLOW-realDispatcher: a negative window must be real time; virtual time is fast-forwarded.
+     * override suspend fun awaitQuiescence() {
+     *     withContext(Dispatchers.Default) { delay(2.seconds) }
+     * }
+     * ```
+     */
+    protected open suspend fun awaitQuiescence() {
+        val budget = awaitBudget ?: fail(
+            "DiscoverySourceConformanceSuite: override awaitQuiescence() — a real-I/O harness " +
+                "(awaitBudget == null) must supply a real-time silence window. Without one the " +
+                "negative window in anArrivalIsNeverReportedAsADeparture is zero-length, and that " +
+                "property — the whole obligation of the DepartureFixture.NoLeaveSignal arm — would " +
+                "pass for every source, including one emitting a spurious departure a moment later.",
+        )
+        delay(budget)
+    }
 
     // ── (1) the key must be the one `discoveries()` published ────────────────
 
@@ -293,8 +349,9 @@ public abstract class DiscoverySourceConformanceSuite {
      * arm's obligation: a source declaring it has no leave signal must emit nothing, including
      * while something is happening.
      *
-     * The negative window is [awaitBudget] of **virtual** time — cheap, deterministic, and
-     * disarmed when a real-I/O harness sets [awaitBudget] to `null`, as that KDoc says.
+     * The negative window is [awaitQuiescence] — by default [awaitBudget] of **virtual** time,
+     * which is cheap and deterministic. A harness that has no virtual clock to burn must override
+     * that hook with a real one; it cannot end up with a zero-length window by omission.
      */
     @Test
     public fun anArrivalIsNeverReportedAsADeparture(): TestResult =
@@ -322,9 +379,8 @@ public abstract class DiscoverySourceConformanceSuite {
             "The flow suspended or threw before its first collection, so nothing below could run.",
         )
         causeArrival(source)
-        // Give the source the whole budget to misbehave in. `join()` returns at once for an
-        // emptyFlow() source (there is nothing to wait for) and burns the virtual budget otherwise.
-        awaitBudget?.let { budget -> withTimeoutOrNull(budget) { collecting.join() } }
+        // The window the source has to misbehave in. Non-optional by construction — see the hook.
+        awaitQuiescence()
         scope.cancel()
         collecting.join()
         assertTrue(
