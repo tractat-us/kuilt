@@ -1,6 +1,5 @@
 package us.tractat.kuilt.webrtc
 
-import us.tractat.kuilt.conformance.CapabilityGaps
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.Loom
@@ -17,14 +16,39 @@ import us.tractat.kuilt.core.Tag
  * Per ADR-001 §Real-loopback-first: a real RTCPeerConnection loopback is possible only
  * if the wasmJs test runner provides WebRTC. The existing paired-fake harness is the
  * correct CI path and is used here.
+ *
+ * **The [ICE_CONNECTED] emissions in [newLoomPair] are load-bearing — do not delete them.** The
+ * `reportsLiveCapability = true` flag selects the AWAITING branch of
+ * [SeamConformanceSuite.wovenSeamCapabilityIsHonest], which blocks on
+ * `capability.first { it.availability !is Unknown }`, and the ICE observer is the ONLY thing that
+ * can satisfy it — there is no static availability seed ([WebRTCPeerLinkFactory]'s static report
+ * supplies the ROLES only). [PairedFacadeFactory] starts from a `null` ICE state, so an unseeded
+ * seam publishes `Unknown` forever: the await would never complete and the test would die on
+ * `runTest`'s wall-clock backstop. [WebRTCPeerLinkCapabilityTest] pins that unseeded-floor
+ * behaviour directly, so the claim this comment rests on is asserted rather than merely
+ * asserted-about.
  */
 class WebRTCConformanceTest : SeamConformanceSuite() {
+
+    private companion object {
+        /**
+         * An ICE agent with a working candidate pair — the reading that folds to
+         * [us.tractat.kuilt.core.FabricAvailability.Available]. Published on both paired fakes in
+         * [newLoomPair] to drive the #1544 observer loop. Required setup, not decoration.
+         */
+        val ICE_CONNECTED = IceConnectionState.Connected
+    }
 
     private val room = "conformance-room"
 
     override fun newLoomPair(): Pair<Loom, Loom> {
         val (hostFacFactory, joinerFacFactory) = PairedFacadeFactory.pair()
         val (hostSig, joinerSig) = PairedSignalingChannels.pair()
+        // LOAD-BEARING (#1544/#1712): the ICE observer is the only source of a non-Unknown
+        // availability, and the suite's reportsLiveCapability branch AWAITS one. Delete these and
+        // the suite hangs to timeout.
+        hostFacFactory.emitIceConnectionState(ICE_CONNECTED)
+        joinerFacFactory.emitIceConnectionState(ICE_CONNECTED)
         val host = WebRTCPeerLinkFactory(
             signaling = hostSig,
             room = room,
@@ -58,14 +82,15 @@ class WebRTCConformanceTest : SeamConformanceSuite() {
      * the roster once the ID-exchange completes, and `sendTo` awaits that resolution,
      * so `sendTo(actualPeerId)` delivers to the named peer.
      *
-     * `reportsLiveCapability = false`: nothing folds the browser's connectivity signals
-     * (`RTCPeerConnection.connectionState`, `navigator.onLine`) into
-     * [us.tractat.kuilt.core.Seam.capability], so it sits on the honest
-     * [us.tractat.kuilt.core.FabricAvailability.Unknown] floor (#1712/#1544).
+     * `reportsLiveCapability = true` (#1544): [WebRTCPeerLink] drives its
+     * [us.tractat.kuilt.core.Seam.capability] from the peer connection's ICE connection state,
+     * whose browser binding is a real `oniceconnectionstatechange` observer in `BrowserRtcFacade` —
+     * so this fabric is off the [us.tractat.kuilt.core.FabricAvailability.Unknown] floor. What this
+     * harness proves is the seam's *reaction* to a signal; that a real `RTCPeerConnection` actually
+     * *emits* one is provable only against real ICE.
      */
     override fun capabilities(): SeamCapabilities =
         SeamCapabilities.FULL.copy(
-            reportsLiveCapability = false,
             // `WebRTCPeerLink.close()` does not collapse `_peers`, so a locally-closed data channel
             // reports its pre-close roster forever. The remote-tear path already collapses correctly,
             // so the fix is to hoist it. Obligation from #1816, tracked in #1853.
@@ -73,7 +98,6 @@ class WebRTCConformanceTest : SeamConformanceSuite() {
         )
 
     override fun capabilityGaps(): Map<String, String> = mapOf(
-        "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
         "collapsesPeersOnTear" to "https://github.com/tractat-us/kuilt/issues/1853",
     )
 }
