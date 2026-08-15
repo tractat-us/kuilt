@@ -71,6 +71,23 @@ public actual class MultipeerServiceBrowser actual constructor(
     /**
      * Peer keys for peers that have left the network since [discoveries] started
      * collecting. Only emits while the [discoveries] flow is being collected.
+     *
+     * The key is the dylib's peer handle, which is also
+     * [MultipeerAdvertisement.peerKey] — so a departure names the peer [discoveries] published,
+     * as `PeerDiscoverySource.departures` requires.
+     *
+     * The collection coupling is a **known contract violation**, not a caveat, and it is the same
+     * one the appleMain actual carries: `mc_browser_set_peer_lost_callback` is invoked inside
+     * [discoveries]' `callbackFlow`, so with no `discoveries()` collector there is no browse
+     * session, no peer-lost callback, and nothing this flow could ever emit.
+     * `DiscoverySourceConformanceSuite.departuresEmitsWithNoConcurrentDiscoveriesCollector` fails
+     * against this class; `MultipeerDiscoverySourceConformanceTest` pins the failure so a fix flips
+     * it loudly. It matters because `discoveryRoster` merges the two feeds and `merge` subscribes
+     * to inner flows in separately-launched coroutines, so even a consumer collecting *both* can
+     * attach here first and lose every departure until the arrival feed opens its session. Fixing
+     * it means giving the browse session a lifetime of its own, ref-counted across both feeds —
+     * the dylib permits one browse session at a time, so `departures()` cannot simply open a
+     * second.
      */
     public actual override fun departures(): Flow<String> = departuresFlow.asSharedFlow()
 

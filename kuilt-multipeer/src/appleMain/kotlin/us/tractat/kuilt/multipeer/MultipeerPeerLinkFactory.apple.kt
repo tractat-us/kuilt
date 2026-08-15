@@ -236,6 +236,26 @@ public actual class MultipeerPeerLinkFactory actual constructor(
     }
 
     /**
+     * The `MCNearbyServiceBrowserDelegateProtocol` the live browse session installed, or `null`
+     * when [startBrowsing] has not run (or [stopBrowsing] has since torn it down).
+     *
+     * Read-only and `internal`, alongside [knownPeers] / [lostPeerHandles] / [startBrowsing] — the
+     * rest of the browse surface this module's own tests already reach. It exists because
+     * `BrowserDelegate` is the *only* producer of an arrival or a departure on this platform, and
+     * nothing else can synthesise one: a `foundPeer` comes from Apple's framework, which needs a
+     * second physical device on the same Wi-Fi. `MultipeerAppleDiscoverySourceConformanceTest`
+     * drives this delegate directly to bind `MultipeerServiceBrowser` to
+     * `DiscoverySourceConformanceSuite`; without the handle that class could not be held to the
+     * contract at all, which is the state #2401 found every non-mDNS source in.
+     *
+     * Being `null` is itself the observation that matters most: it is exactly what a lone
+     * `departures()` collector sees, because the delegate is installed by [startBrowsing] and
+     * nothing but `MultipeerServiceBrowser.discoveries()` calls that.
+     */
+    internal val activeBrowserDelegate: MCNearbyServiceBrowserDelegateProtocol?
+        get() = browserDelegate
+
+    /**
      * Stops the shared browser and clears the discovered-peer cache.
      * Idempotent — safe to call after [close]. Any in-flight [join] that
      * relied on the browser must already have queued its `invitePeer` call

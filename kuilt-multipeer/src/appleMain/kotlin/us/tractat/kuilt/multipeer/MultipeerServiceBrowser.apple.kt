@@ -46,9 +46,27 @@ public actual class MultipeerServiceBrowser actual constructor(
      * `MultipeerPeerLinkFactory.lostPeerHandles` which is fed by the
      * `MCNearbyServiceBrowserDelegate.browser(_:lostPeer:)` callback.
      *
-     * Only emits while [discoveries] is being collected (the factory's browser
-     * delegate is only active during that window). Any departure that fires
-     * before [discoveries] is collected is dropped.
+     * The key is `MCPeerID.displayName`, which is also
+     * [MultipeerAdvertisement.peerKey] — so a departure names the peer
+     * [discoveries] published, as `PeerDiscoverySource.departures` requires.
+     *
+     * **Only emits while [discoveries] is being collected**, because the
+     * factory's browser delegate — the sole producer of a `lostPeer` — is
+     * installed by `startBrowsing`, and `discoveries()` is the only caller.
+     * Any departure that fires outside that window is dropped.
+     *
+     * That coupling is a **known contract violation**, not a caveat:
+     * `DiscoverySourceConformanceSuite.departuresEmitsWithNoConcurrentDiscoveriesCollector`
+     * fails against this class, and
+     * `MultipeerAppleDiscoverySourceConformanceTest` pins the failure so a fix
+     * flips it loudly. It matters because `discoveryRoster` merges the two
+     * feeds, and `merge` subscribes to inner flows in separately-launched
+     * coroutines: a consumer collecting *both* can still attach here before
+     * the arrival feed has opened a session, and lose every departure until it
+     * does. Fixing it means giving the browse session a lifetime of its own —
+     * ref-counted across both feeds — rather than tying it to one collector;
+     * `startBrowsing`'s `check(browser == null)` is what currently forbids
+     * `departures()` from simply opening its own.
      */
     public actual override fun departures(): Flow<String> = factory.lostPeerHandles
 

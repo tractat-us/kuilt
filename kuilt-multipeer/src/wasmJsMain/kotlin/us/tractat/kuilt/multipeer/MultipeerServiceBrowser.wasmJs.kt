@@ -18,9 +18,19 @@ public actual class MultipeerServiceBrowser actual constructor(
     public actual override fun discoveries(): Flow<Tag> =
         throw UnsupportedOperationException("MultipeerConnectivity is unavailable on wasmJs")
 
-    // No leave signal: this platform has no MultipeerConnectivity at all, so nothing can ever be
-    // discovered here and nothing can ever depart. Empty rather than throwing, so a consumer that
-    // folds a list of sources through discoveryRoster fails on the one call that is genuinely
-    // unsupported ([discoveries]) instead of on two.
+    /**
+     * **No leave signal, and none discarded** — the same verdict, for the same reason, as the
+     * androidMain stub's `departures()`. A browser has to browse before it can lose anybody, and
+     * [discoveries] here refuses.
+     *
+     * Empty rather than throwing, so a consumer that folds a list of sources through
+     * `discoveryRoster` fails on the one call that is genuinely unsupported ([discoveries]) instead
+     * of on two.
+     *
+     * No `DiscoverySourceConformanceSuite` binds this class either: a `causeArrival` for a source
+     * whose [discoveries] throws could only be a no-op, and a suite driven by an untrue hook passes
+     * by not running. `MultipeerWasmJsStubTest` pins the stronger statement — [discoveries]
+     * refuses, and this flow completes at once having emitted nothing.
+     */
     public actual override fun departures(): Flow<String> = emptyFlow()
 }
