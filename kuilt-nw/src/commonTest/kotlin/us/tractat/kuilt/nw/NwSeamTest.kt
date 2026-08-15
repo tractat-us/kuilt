@@ -398,6 +398,92 @@ class NwSeamTest {
     }
 
     @Test
+    fun aMisresolvedDialNeverMarksTheDialledPeersEndpointAsSelf() = runTest(StandardTestDispatcher()) {
+        // #2416, observed on hardware 2026-08-15 (two iPhone 17 Pro, kuilt 0.7.0-dev.1248). Under
+        // Rendezvous.New identity comes from the TXT PeerId but the DIAL goes to a shared Bonjour name
+        // that mDNS re-resolves at connect time — so a dial armed FOR a real peer can land on the local
+        // device. The self-connection guard correctly drops that link (its `remoteId == selfId` operand
+        // is the id the far end asserts in its own hello, so it cannot false-positive). What it must NOT
+        // do is record the DIALLED endpoint id as a self endpoint: here that id is the REAL peer's.
+        //
+        // Why that is fatal rather than untidy: selfEndpointIds feeds settledEndpoints, and
+        // NwLoom.redialLoop parks on a settled endpoint (`settledEndpoints.first { id !in it }`) until it
+        // un-settles — but selfEndpointIds is cleared ONLY on full seam teardown, never per entry. So
+        // poisoning the real peer's id blacklists that peer for the seam's whole lifetime, turning a
+        // one-shot mDNS race into permanent formation failure. On hardware this read as "the two phones
+        // never saw each other" with a perfectly healthy radio at -27 dBm.
+        val radio = FakeNwRadio()
+        val api = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val self = PeerId("peer-self")
+        val seam = NwSeam(self, api, seamScope(), Random(0))
+        testScheduler.runCurrent()
+
+        // The id the browse result carried — the REAL peer's TXT PeerId, not this device's endpoint.
+        val realPeerEndpointId = "peer-remote"
+        radio.injectDialLandingOnSelf("dev-0", realPeerEndpointId, identityResolved = true)
+        repeat(50) { testScheduler.runCurrent() }
+
+        assertAll(
+            { assertEquals(setOf(self), seam.peers.value, "self must never join its own roster as a remote") },
+            {
+                assertFalse(
+                    realPeerEndpointId in seam.settledEndpoints.value,
+                    "the dialled REAL peer's endpoint was marked settled-as-self — NwLoom.redialLoop then " +
+                        "parks on it forever (selfEndpointIds is never pruned), starving reconnection to " +
+                        "that peer for the seam's lifetime",
+                )
+            },
+        )
+    }
+
+    @Test
+    fun aGenuineSelfDialStillSettlesSoTheLoomStopsRedialingIt() = runTest(StandardTestDispatcher()) {
+        // POSITIVE CONTROL for the #2416 guard above. That fix narrows WHEN a self-resolved connection
+        // settles its dialled endpoint, and before it no test pinned the settling at all — the only other
+        // `settledEndpoints` assertions in this file concern a PEER's endpoint (#1513 departure). An
+        // un-pinned branch is how the poisoning shipped, so both surviving settle-cases are pinned here.
+        //
+        // Settling must still happen when the dialled endpoint CAN be ours, in both provenances:
+        //  - identityResolved=true  and id == selfId  → our own TXT-resolved advertisement.
+        //  - identityResolved=false                   → the fallback id is the serviceName, which under
+        //    Rendezvous.New is the shared name and may be ours (#1709). Safe to settle: the key is a name,
+        //    not a peer identity, so a later resolved sighting arms a fresh redialer under a different key.
+        // Without this, NwLoom.redialLoop would spin on its own advertisement forever (#1513).
+        val self = PeerId("peer-self")
+
+        val txtRadio = FakeNwRadio()
+        val txtApi = FakeNwApi(txtRadio, deviceId = "dev-0", serviceName = "svc-0")
+        val txtSeam = NwSeam(self, txtApi, seamScope(), Random(0))
+        testScheduler.runCurrent()
+        txtRadio.injectDialLandingOnSelf("dev-0", self.value, identityResolved = true)
+        repeat(50) { testScheduler.runCurrent() }
+
+        val fallbackRadio = FakeNwRadio()
+        val fallbackApi = FakeNwApi(fallbackRadio, deviceId = "dev-0", serviceName = "svc-0")
+        val fallbackSeam = NwSeam(self, fallbackApi, seamScope(), Random(0))
+        testScheduler.runCurrent()
+        fallbackRadio.injectDialLandingOnSelf("dev-0", "shared-session-name", identityResolved = false)
+        repeat(50) { testScheduler.runCurrent() }
+
+        assertAll(
+            {
+                assertTrue(
+                    self.value in txtSeam.settledEndpoints.value,
+                    "our OWN TXT-resolved endpoint must settle, or NwLoom redials its own advertisement forever",
+                )
+            },
+            {
+                assertTrue(
+                    "shared-session-name" in fallbackSeam.settledEndpoints.value,
+                    "an unresolved fallback id must still settle (#1709) — it is a name key, not a peer identity",
+                )
+            },
+            { assertEquals(setOf(self), txtSeam.peers.value, "self never joins its own roster") },
+            { assertEquals(setOf(self), fallbackSeam.peers.value, "self never joins its own roster") },
+        )
+    }
+
+    @Test
     fun sendFailureOnLastPeerReformsToWeavingNotTorn() = runTest(StandardTestDispatcher()) {
         // #1513: a send failure that evicts the LAST remote re-forms the seam to Weaving (recoverable) —
         // NOT Torn — and keeps incoming OPEN, so NwLoom can redial. (Pre-#1513 this tore to

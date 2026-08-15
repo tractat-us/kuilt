@@ -375,6 +375,45 @@ internal class FakeNwRadio {
         connect(deviceId, NwEndpoint(id = endpointIdFor(deviceId), serviceName = deviceId))
     }
 
+    /**
+     * Inject a **misresolved dial**: a dial that carries the REMOTE peer's endpoint id but lands on the
+     * LOCAL device. This is the connect-time hazard of #2416, and it is distinct from [injectSelfDial],
+     * where the dialled id is the device's own.
+     *
+     * Under `Rendezvous.New` every peer advertises the SAME Bonjour instance name, so identity and dial
+     * target are keyed on different things: the browse result identifies the peer by its TXT `PeerId`,
+     * while the dial goes to that shared NAME, which mDNS re-resolves at connect time. Inside the window
+     * before mDNS conflict-resolution renames one advertiser to `… (2)`, resolving that name can land on
+     * the local device — so the connection carries `endpoint.id == <the real peer's id>` while both ends
+     * resolve to this device's own `selfId`.
+     *
+     * [connect] cannot express this: it routes strictly by `endpoint.id` (via `endpointOwners`), so the
+     * dialled id and the accepting device always agree. That disagreement IS the bug, which is why the
+     * fake has to model it explicitly — a fake that only reproduces the substrate's happy path stops
+     * testing every failure the real substrate can produce (the lesson of #1485, where omitting
+     * self-discovery is exactly why the #1466 self-dial shipped uncaught).
+     */
+    suspend fun injectDialLandingOnSelf(
+        deviceId: String,
+        dialledEndpointId: String,
+        identityResolved: Boolean = true,
+    ) {
+        require(deviceId in devices) { "no device '$deviceId' to dial from" }
+        openedLinkCount += 1
+        val connIdDialer = nextConnId(deviceId)
+        val connIdAccepter = nextConnId(deviceId)
+        links[connIdDialer.value] = LinkEnd(deviceId, connIdAccepter)
+        links[connIdAccepter.value] = LinkEnd(deviceId, connIdDialer)
+        // Dialler carries the dialled endpoint — the REAL peer's id; accepter has none (inbound).
+        devices.getValue(deviceId).emitConnectionOpened(
+            NwConnectionOpened(
+                connIdDialer,
+                NwEndpoint(id = dialledEndpointId, serviceName = deviceId, identityResolved = identityResolved),
+            ),
+        )
+        devices.getValue(deviceId).emitConnectionOpened(NwConnectionOpened(connIdAccepter, endpoint = null))
+    }
+
     suspend fun send(fromDeviceId: String, connectionId: NwConnectionId, bytes: ByteArray) {
         val other = links[connectionId.value] ?: return // link already gone; drop
         devices.getValue(other.deviceId)
