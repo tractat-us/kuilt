@@ -31,6 +31,36 @@ kotlin {
             implementation(libs.kotlin.test)
             implementation(libs.kotlinx.coroutines.test)
         }
+        androidMain.dependencies {
+            implementation(libs.kotlin.logging)
+        }
+        // Android's MDNSServiceDiscoverer is bound to DiscoverySourceConformanceSuite here (#1903).
+        // It runs as a plain JVM unit test against a fake NsdBrowser — NsdManager is a final class
+        // with a package-private constructor, so the seam is the only way to reach this code at all.
+        //
+        // logback is the SLF4J backend kotlin-logging needs on the Android unit-test variant: the
+        // discoverer holds a file-level logger, so class-init would otherwise throw
+        // NoClassDefFoundError: org/slf4j/LoggerFactory. Mirrors :kuilt-liveness / :kuilt-session.
+        androidUnitTest.dependencies {
+            implementation(project(":kuilt-conformance"))
+            implementation(libs.kotlin.testJunit)
+            implementation(libs.kotlinx.coroutines.test)
+            runtimeOnly(libs.logback)
+        }
+        iosMain.dependencies {
+            implementation(libs.kotlin.logging)
+            // Real mutual exclusion for ServiceDelegate's attachment bookkeeping and departures()'
+            // name->peerId map. Both were previously correct only if every Bonjour callback and the
+            // teardown shared one thread — an emergent property of `browseContext`, which this repo
+            // forbids leaning on (CLAUDE.md: correctness must be a local property of each field).
+            implementation(libs.kotlinx.atomicfu)
+        }
+        // iosMain's MDNSServiceDiscoverer is bound to the same suite (#2400), against a fake
+        // Bonjour browser — NSNetServiceBrowser only delivers callbacks while the main run loop is
+        // pumped, and a runTest body on Kotlin/Native occupies the thread that would pump it.
+        iosTest.dependencies {
+            implementation(project(":kuilt-conformance"))
+        }
         jvmMain.dependencies {
             implementation(project(":kuilt-websocket"))
             implementation(libs.jmdns)

@@ -2,6 +2,7 @@ package us.tractat.kuilt.mdns
 
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -9,27 +10,36 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.discovery.DiscoveryKind
 import us.tractat.kuilt.core.discovery.PeerDiscoverySource
 import us.tractat.kuilt.core.runCatchingCancellable
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Discovers peers on the local network via mDNS / Bonjour using Android's [NsdManager].
  *
  * Browse-only: hosting remains JVM-only via [MDNSServiceAdvertiser] / JmDNS.
  *
- * [NsdManager.resolveService] can only handle one resolution at a time; this
- * implementation serialises resolution requests through an in-memory queue.
+ * [NsdManager.resolveService] can only handle one resolution at a time; resolution requests are
+ * serialised through an in-memory queue inside [NsdManagerBrowser].
  *
  * @param serviceType The mDNS service type. Supply the canonical base form
  *   (e.g. `MDNSServiceType("_myapp._tcp")`) — the NsdManager-required trailing
  *   `.` suffix is appended internally. Must match the type used by
  *   [MDNSServiceAdvertiser].
- * @param nsdManager The system NSD manager — obtain via
- *   `context.getSystemService(NsdManager::class.java)` and inject via your
- *   dependency injection container.
  */
-public class MDNSServiceDiscoverer(
+public class MDNSServiceDiscoverer internal constructor(
     private val serviceType: MDNSServiceType,
-    private val nsdManager: NsdManager,
+    private val browser: NsdBrowser,
 ) : PeerDiscoverySource {
+
+    /**
+     * @param nsdManager The system NSD manager — obtain via
+     *   `context.getSystemService(NsdManager::class.java)` and inject via your
+     *   dependency injection container.
+     */
+    public constructor(
+        serviceType: MDNSServiceType,
+        nsdManager: NsdManager,
+    ) : this(serviceType, NsdManagerBrowser(nsdManager))
+
     override val kind: DiscoveryKind = DiscoveryKind.Mdns
 
     /**
@@ -45,109 +55,134 @@ public class MDNSServiceDiscoverer(
      */
     override fun discoveries(): Flow<MDNSAdvertisement> =
         callbackFlow {
-            val lock = Any()
-            val queue = ArrayDeque<NsdServiceInfo>()
-            var resolving = false
-
-            fun resolveNext() {
-                val next =
-                    synchronized(lock) {
-                        if (resolving || queue.isEmpty()) return
-                        resolving = true
-                        queue.removeFirst()
-                    }
-                nsdManager.resolveService(
-                    next,
-                    object : NsdManager.ResolveListener {
-                        override fun onResolveFailed(
-                            info: NsdServiceInfo,
-                            errorCode: Int,
+            val handle =
+                browser.browse(
+                    serviceType.forNsd(),
+                    object : NsdBrowseSink {
+                        override fun onFound(
+                            serviceName: String,
+                            requestResolve: () -> Unit,
                         ) {
-                            synchronized(lock) { resolving = false }
-                            resolveNext()
+                            // Resolve on this registration's own account — see NsdBrowseSink.onFound.
+                            requestResolve()
                         }
 
-                        override fun onServiceResolved(info: NsdServiceInfo) {
-                            synchronized(lock) { resolving = false }
-                            val attrs = info.attributes
-                            val peerId = attrs[MDNSAdvertisement.TXT_KEY_PEER_ID]?.decodeToString()
-                            if (peerId != null) {
-                                val wsPath =
-                                    attrs[MDNSAdvertisement.TXT_KEY_WS_PATH]?.decodeToString()
-                                        ?: MDNSAdvertisement.DEFAULT_WS_PATH
-                                val host = info.host?.hostAddress
-                                if (host != null) {
-                                    trySend(
-                                        MDNSAdvertisement(
-                                            host = host,
-                                            port = info.port,
-                                            serverPeerId = PeerId(peerId),
-                                            sessionName = info.serviceName,
-                                            wsPath = wsPath,
-                                            hostOs =
-                                                attrs[MDNSAdvertisement.TXT_KEY_HOST_OS]
-                                                    ?.decodeToString()
-                                                    ?.let { MDNSAdvertisement.HostOs.fromTxt(it) },
-                                            fabrics =
-                                                attrs[MDNSAdvertisement.TXT_KEY_FABRICS]
-                                                    ?.decodeToString(),
-                                            mcPeer =
-                                                attrs[MDNSAdvertisement.TXT_KEY_MC_PEER]
-                                                    ?.decodeToString(),
-                                            txtExtensions = extractExtensions(attrs),
-                                            roomKey =
-                                                attrs[MDNSAdvertisement.TXT_KEY_ROOM]
-                                                    ?.decodeToString(),
-                                        ),
-                                    )
-                                }
-                            }
-                            resolveNext()
+                        override fun onResolved(record: NsdRecord) {
+                            record.toAdvertisement()?.let { trySend(it) }
+                        }
+
+                        // Handled by departures(), which opens a registration of its own.
+                        override fun onLost(serviceName: String) {}
+
+                        override fun onFailed(cause: Throwable) {
+                            close(cause)
                         }
                     },
                 )
-            }
-
-            val listener =
-                object : NsdManager.DiscoveryListener {
-                    override fun onDiscoveryStarted(type: String) {}
-
-                    override fun onDiscoveryStopped(type: String) {}
-
-                    override fun onStartDiscoveryFailed(
-                        type: String,
-                        code: Int,
-                    ) {
-                        close(Exception("NSD discovery failed: $code"))
-                    }
-
-                    override fun onStopDiscoveryFailed(
-                        type: String,
-                        code: Int,
-                    ) {}
-
-                    override fun onServiceFound(info: NsdServiceInfo) {
-                        synchronized(lock) { queue += info }
-                        resolveNext()
-                    }
-
-                    override fun onServiceLost(info: NsdServiceInfo) {}
-                }
-
-            nsdManager.discoverServices(
-                serviceType.forNsd(),
-                NsdManager.PROTOCOL_DNS_SD,
-                listener,
-            )
 
             awaitClose {
-                runCatchingCancellable { nsdManager.stopServiceDiscovery(listener) }
+                runCatchingCancellable { handle.stop() }
+                    .onFailure { logger.debug(it) { "stopping NSD discovery failed" } }
+            }
+        }
+
+    /**
+     * Returns a [Flow] that emits a peer key for each peer that de-registers from the local network.
+     *
+     * The peer key is the TXT `peerId` **remembered from that service's own resolution**, keyed by
+     * the mDNS service name. It cannot be read from the removal event:
+     * [NsdManager.DiscoveryListener.onServiceLost] hands back an unresolved [NsdServiceInfo] whose
+     * `attributes` map is empty, so the name is the only thing a departure carries and the resolve
+     * path is the only place the peer id is ever visible. Before #1903 this class discarded
+     * `onServiceLost` outright and returned `emptyFlow()`, making every peer it discovered a
+     * permanent ghost in `discoveryRoster`.
+     *
+     * This flow opens its **own** browse registration, which resolves on its own account (see
+     * [NsdBrowser]). Collecting `departures()` alone is the ordinary case, not a contrived one —
+     * `discoveryRoster` merges the two feeds, and `merge` subscribes to inner flows in separately
+     * launched coroutines — and a feed that only works while a sibling collector holds a session
+     * open is not a leave signal.
+     *
+     * A service name that never resolved emits nothing: it could never have been emitted by
+     * [discoveries] either.
+     *
+     * The cost of that independence is one extra `NsdManager.discoverServices` registration per
+     * collected feed, so a consumer collecting both — which is what `discoveryRoster` does — holds
+     * two. NSD caps concurrent discovery requests ([NsdManager.FAILURE_MAX_LIMIT]); the cap is
+     * per-process and generous, but a consumer standing up many discoverers at once is the shape
+     * that would reach it.
+     */
+    override fun departures(): Flow<String> =
+        callbackFlow {
+            // Flow-local: one map per collection, created inside the callbackFlow block and
+            // reachable only from this collection's own sink, so nothing is shared with another
+            // collection or with discoveries(). Concurrent all the same — flow-locality removes the
+            // sharing, not the concurrency, and NsdManager delivers its callbacks on a platform
+            // thread. The atomic `remove` also makes a duplicated goodbye emit exactly once.
+            val peerIdsByServiceName = ConcurrentHashMap<String, String>()
+            val handle =
+                browser.browse(
+                    serviceType.forNsd(),
+                    object : NsdBrowseSink {
+                        override fun onFound(
+                            serviceName: String,
+                            requestResolve: () -> Unit,
+                        ) {
+                            // Resolve on our own account: a lone departures() collector has nobody
+                            // else to request resolution on its behalf, and the peer id exists
+                            // nowhere but the resolved record. See NsdBrowseSink.onFound.
+                            requestResolve()
+                        }
+
+                        override fun onResolved(record: NsdRecord) {
+                            val peerId =
+                                record.attributes[MDNSAdvertisement.TXT_KEY_PEER_ID] ?: return
+                            peerIdsByServiceName[record.serviceName] = peerId
+                        }
+
+                        override fun onLost(serviceName: String) {
+                            peerIdsByServiceName.remove(serviceName)?.let { trySend(it) }
+                        }
+
+                        override fun onFailed(cause: Throwable) {
+                            close(cause)
+                        }
+                    },
+                )
+
+            awaitClose {
+                runCatchingCancellable { handle.stop() }
+                    .onFailure { logger.debug(it) { "stopping NSD discovery failed" } }
             }
         }
 }
 
-private fun extractExtensions(attrs: Map<String, ByteArray?>): Map<String, String> =
-    attrs
-        .filterKeys { it !in kuiltReservedTxtKeys }
-        .mapNotNull { (key, value) -> value?.decodeToString()?.let { key to it } }
-        .toMap()
+private val logger = KotlinLogging.logger("us.tractat.kuilt.mdns.MDNSServiceDiscoverer")
+
+/**
+ * Parses a resolved [NsdRecord] into an [MDNSAdvertisement].
+ *
+ * Returns `null` when the record carries no [MDNSAdvertisement.TXT_KEY_PEER_ID] or no host address
+ * — in either case there is no peer to list or nowhere to dial it.
+ */
+private fun NsdRecord.toAdvertisement(): MDNSAdvertisement? {
+    val peerId = attributes[MDNSAdvertisement.TXT_KEY_PEER_ID] ?: return null
+    val host = host ?: return null
+    return MDNSAdvertisement(
+        host = host,
+        port = port,
+        serverPeerId = PeerId(peerId),
+        sessionName = serviceName,
+        wsPath = attributes[MDNSAdvertisement.TXT_KEY_WS_PATH] ?: MDNSAdvertisement.DEFAULT_WS_PATH,
+        hostOs =
+            attributes[MDNSAdvertisement.TXT_KEY_HOST_OS]
+                ?.let { MDNSAdvertisement.HostOs.fromTxt(it) },
+        fabrics = attributes[MDNSAdvertisement.TXT_KEY_FABRICS],
+        mcPeer = attributes[MDNSAdvertisement.TXT_KEY_MC_PEER],
+        txtExtensions = extractExtensions(attributes),
+        roomKey = attributes[MDNSAdvertisement.TXT_KEY_ROOM],
+    )
+}
+
+private fun extractExtensions(attrs: Map<String, String>): Map<String, String> =
+    attrs.filterKeys { it !in kuiltReservedTxtKeys }

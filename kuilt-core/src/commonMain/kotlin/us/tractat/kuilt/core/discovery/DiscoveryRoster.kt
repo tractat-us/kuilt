@@ -26,12 +26,13 @@ import us.tractat.kuilt.core.Tag
  * safe election input. Pick a host from [us.tractat.kuilt.core.Seam.peers] once connected — never
  * from a discovery roster. See `docs/discovery-bootstrap.md`.
  *
- * **Ghost caveat — the roster is add-only over a source without departures.**
- * [PeerDiscoverySource.departures] defaults to `emptyFlow()`. Over any source that does not
- * implement it (many test fakes, and transports with no leave signal), a discovered peer is
- * **never removed** — it lingers as a *ghost* long after it is gone, and the set only grows.
- * This is a real limitation of what the underlying feeds can tell you, not a bug in the fold:
- * treat a stale roster as expected whenever a source's `departures()` is the default.
+ * **Ghost caveat — the roster is add-only over a source that returns `emptyFlow()`.**
+ * [PeerDiscoverySource.departures] has no default: a source with no leave signal (a fixed-roster
+ * test fake, a platform stub, a browse API that only reports arrivals) must return `emptyFlow()`
+ * explicitly. Over such a source a discovered peer is **never removed** — it lingers as a *ghost*
+ * long after it is gone, and the set only grows. This is a real limitation of what that feed can
+ * tell you, not a bug in the fold. The caveat applies to **exactly** those sources: read a
+ * source's `departures()` body, and if it is `emptyFlow()`, expect a stale roster from it.
  *
  * The fold runs on [scope]: its backing coroutine is launched eagerly there and is cancelled when
  * [scope] is cancelled. [scope] is required — pass the caller's scope (in a test, a

@@ -29,6 +29,7 @@ internal fun sampleDiscoveryRoster() = runTest {
     val multipeer = object : PeerDiscoverySource {
         override val kind = DiscoveryKind.Multipeer
         override fun discoveries(): Flow<Tag> = emptyFlow() // idle in this sample
+        override fun departures(): Flow<String> = emptyFlow() // idle too — nothing to leave
     }
 
     // One StateFlow the lobby UI renders directly — no hand-rolled merge.

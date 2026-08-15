@@ -1,35 +1,20 @@
-@file:OptIn(ExperimentalForeignApi::class)
-@file:Suppress("DEPRECATION")
-
 package us.tractat.kuilt.mdns
 
-import kotlinx.cinterop.ByteVar
-import kotlinx.cinterop.ExperimentalForeignApi
-import kotlinx.cinterop.ObjCSignatureOverride
-import kotlinx.cinterop.readBytes
-import kotlinx.cinterop.reinterpret
+import io.github.oshai.kotlinlogging.KotlinLogging
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
-import platform.Foundation.NSData
-import platform.Foundation.NSNetService
 import platform.Foundation.NSNetServiceBrowser
-import platform.Foundation.NSNetServiceBrowserDelegateProtocol
-import platform.Foundation.NSNetServiceDelegateProtocol
 import platform.Foundation.NSRunLoop
-import platform.Foundation.NSRunLoopCommonModes
-import platform.darwin.NSObject
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.discovery.DiscoveryKind
 import us.tractat.kuilt.core.discovery.PeerDiscoverySource
-
-// NSNetServiceBrowser is deprecated since iOS 15 in favour of NWBrowser (Network.framework).
-// NWBrowser browsing is available in K/N 2.3.x but `nw_browse_result_enumerate` (required to
-// iterate over the result set) is missing from the generated platform bindings. NSNetServiceBrowser
-// has complete K/N Foundation bindings and is used as the practical alternative.
-private const val RESOLVE_TIMEOUT_S = 5.0
+import us.tractat.kuilt.core.runCatchingCancellable
+import kotlin.coroutines.CoroutineContext
 
 /**
  * Discovers peers on the local network via mDNS / Bonjour using [NSNetServiceBrowser] on iOS.
@@ -43,9 +28,26 @@ private const val RESOLVE_TIMEOUT_S = 5.0
  *   (e.g. `MDNSServiceType("_myapp._tcp")`) — [NSNetServiceBrowser] receives the
  *   type without the `local.` domain (which is passed separately to [NSNetServiceBrowser.searchForServicesOfType]).
  */
-public class MDNSServiceDiscoverer(
+public class MDNSServiceDiscoverer internal constructor(
     private val serviceType: MDNSServiceType,
+    private val browser: BonjourBrowser,
+    /**
+     * The context both feeds open and tear down their browse sessions in — [Dispatchers.Main] in
+     * production, because [NSNetServiceBrowser] must be created and scheduled on the main run loop.
+     *
+     * Injectable only so a test can pass `EmptyCoroutineContext` and let the browse session run in
+     * the collector's own context: a `runTest` body on Kotlin/Native occupies the main thread, so
+     * work dispatched to [Dispatchers.Main] would never run and the conformance suite could not
+     * observe this class at all. Production behaviour is unchanged — the public constructor pins
+     * the dispatcher.
+     */
+    private val browseContext: CoroutineContext,
 ) : PeerDiscoverySource {
+
+    public constructor(
+        serviceType: MDNSServiceType,
+    ) : this(serviceType, NetServiceBonjourBrowser, Dispatchers.Main)
+
     override val kind: DiscoveryKind = DiscoveryKind.Mdns
 
     /**
@@ -61,94 +63,122 @@ public class MDNSServiceDiscoverer(
      */
     override fun discoveries(): Flow<MDNSAdvertisement> =
         callbackFlow {
-            val delegate = ServiceDelegate(onDiscovered = { trySend(it) })
-            val browser = NSNetServiceBrowser()
-            browser.setDelegate(delegate)
-            browser.scheduleInRunLoop(NSRunLoop.mainRunLoop(), forMode = NSRunLoopCommonModes)
-            browser.searchForServicesOfType(serviceType.forNsNetServiceBrowser(), inDomain = "local.")
+            val handle =
+                browser.browse(
+                    serviceType.forNsNetServiceBrowser(),
+                    object : BonjourBrowseSink {
+                        override fun onFound(
+                            serviceName: String,
+                            requestResolve: () -> Unit,
+                        ) {
+                            // Resolve on this session's own account — see BonjourBrowseSink.onFound.
+                            requestResolve()
+                        }
+
+                        override fun onResolved(record: BonjourRecord) {
+                            record.toAdvertisement()?.let { trySend(it) }
+                        }
+
+                        // Handled by departures(), which opens a session of its own.
+                        override fun onLost(serviceName: String) {}
+                    },
+                )
 
             awaitClose {
-                browser.stop()
-                browser.removeFromRunLoop(NSRunLoop.mainRunLoop(), forMode = NSRunLoopCommonModes)
-                browser.setDelegate(null)
+                runCatchingCancellable { handle.stop() }
+                    .onFailure { logger.debug(it) { "stopping the Bonjour session failed" } }
             }
-        }.flowOn(Dispatchers.Main)
+        }.flowOn(browseContext)
+
+    /**
+     * Returns a [Flow] that emits a peer key for each peer that de-registers from the local network.
+     *
+     * The peer key is the TXT `peerId` **remembered from that service's own resolution**, keyed by
+     * the Bonjour service name. It cannot be read from the removal event: `didRemoveService` hands
+     * back an unresolved service whose `TXTRecordData()` is null, so the name is the only thing a
+     * departure carries and the resolve path is the only place the peer id is ever visible. Before
+     * #2400 this class discarded `didRemoveService` outright and returned `emptyFlow()`, making
+     * every peer it discovered a permanent ghost in `discoveryRoster`.
+     *
+     * This flow opens its **own** browse session, which resolves on its own account (see
+     * [BonjourBrowser]). Collecting `departures()` alone is the ordinary case, not a contrived
+     * one — `discoveryRoster` merges the two feeds, and `merge` subscribes to inner flows in
+     * separately launched coroutines — and a feed that only works while a sibling collector holds a
+     * session open is not a leave signal.
+     *
+     * A service name that never resolved emits nothing: it could never have been emitted by
+     * [discoveries] either.
+     */
+    override fun departures(): Flow<String> =
+        callbackFlow {
+            // Flow-local: one map per collection, created inside the callbackFlow block and
+            // reachable only from this collection's own sink, so nothing is shared with another
+            // collection or with discoveries(). Flow-locality removes the sharing, never the
+            // concurrency, so the map is guarded by an explicit lock rather than by an argument
+            // about which thread Bonjour happens to call back on. It previously rested on
+            // `browseContext` being Dispatchers.Main — true in production and emergent rather than
+            // local, which is the trade this repo forbids. Guarded, it is correct under any
+            // dispatcher, and the guarded `remove` also makes a duplicated goodbye emit exactly
+            // once. No suspending call runs inside the locked sections.
+            val lock = reentrantLock()
+            val peerIdsByServiceName = mutableMapOf<String, String>()
+            val handle =
+                browser.browse(
+                    serviceType.forNsNetServiceBrowser(),
+                    object : BonjourBrowseSink {
+                        override fun onFound(
+                            serviceName: String,
+                            requestResolve: () -> Unit,
+                        ) {
+                            // Resolve on our own account: a lone departures() collector has nobody
+                            // else to request resolution on its behalf, and the peer id exists
+                            // nowhere but the resolved record. See BonjourBrowseSink.onFound.
+                            requestResolve()
+                        }
+
+                        override fun onResolved(record: BonjourRecord) {
+                            val peerId = record.txt[MDNSAdvertisement.TXT_KEY_PEER_ID] ?: return
+                            lock.withLock { peerIdsByServiceName[record.serviceName] = peerId }
+                        }
+
+                        override fun onLost(serviceName: String) {
+                            // trySend outside the lock: nothing else here needs the map, and a send
+                            // is the one call that could reach unrelated machinery.
+                            val peerId =
+                                lock.withLock { peerIdsByServiceName.remove(serviceName) } ?: return
+                            trySend(peerId)
+                        }
+                    },
+                )
+
+            awaitClose {
+                runCatchingCancellable { handle.stop() }
+                    .onFailure { logger.debug(it) { "stopping the Bonjour session failed" } }
+            }
+        }.flowOn(browseContext)
 }
 
-private class ServiceDelegate(
-    private val onDiscovered: (MDNSAdvertisement) -> Unit,
-) : NSObject(),
-    NSNetServiceBrowserDelegateProtocol,
-    NSNetServiceDelegateProtocol {
-    @ObjCSignatureOverride
-    override fun netServiceBrowser(
-        browser: NSNetServiceBrowser,
-        didFindService: NSNetService,
-        moreComing: Boolean,
-    ) {
-        didFindService.setDelegate(this)
-        didFindService.resolveWithTimeout(RESOLVE_TIMEOUT_S)
-    }
+private val logger = KotlinLogging.logger("us.tractat.kuilt.mdns.MDNSServiceDiscoverer")
 
-    @ObjCSignatureOverride
-    override fun netServiceBrowser(
-        browser: NSNetServiceBrowser,
-        didRemoveService: NSNetService,
-        moreComing: Boolean,
-    ) {}
-
-    override fun netServiceDidResolveAddress(sender: NSNetService) {
-        val host = sender.hostName ?: return
-        val port = sender.port().toInt()
-        val txtData = sender.TXTRecordData() ?: return
-
-        @Suppress("UNCHECKED_CAST")
-        val dict = NSNetService.dictionaryFromTXTRecordData(txtData) as Map<Any?, NSData?>
-
-        val peerId = dict[MDNSAdvertisement.TXT_KEY_PEER_ID]?.toUtf8String() ?: return
-        val wsPath =
-            dict[MDNSAdvertisement.TXT_KEY_WS_PATH]?.toUtf8String()
-                ?: MDNSAdvertisement.DEFAULT_WS_PATH
-
-        val extensions = extractExtensions(dict)
-
-        onDiscovered(
-            MDNSAdvertisement(
-                host = host,
-                port = port,
-                serverPeerId = PeerId(peerId),
-                sessionName = sender.name(),
-                wsPath = wsPath,
-                hostOs =
-                    dict[MDNSAdvertisement.TXT_KEY_HOST_OS]
-                        ?.toUtf8String()
-                        ?.let { MDNSAdvertisement.HostOs.fromTxt(it) },
-                fabrics = dict[MDNSAdvertisement.TXT_KEY_FABRICS]?.toUtf8String(),
-                mcPeer = dict[MDNSAdvertisement.TXT_KEY_MC_PEER]?.toUtf8String(),
-                txtExtensions = extensions,
-                roomKey = dict[MDNSAdvertisement.TXT_KEY_ROOM]?.toUtf8String(),
-            ),
-        )
-    }
-
-    override fun netService(
-        sender: NSNetService,
-        didNotResolve: Map<Any?, *>,
-    ) {}
-}
-
-private fun extractExtensions(dict: Map<Any?, NSData?>): Map<String, String> =
-    dict
-        .entries
-        .mapNotNull { (key, value) ->
-            val k = key as? String ?: return@mapNotNull null
-            if (k in kuiltReservedTxtKeys) return@mapNotNull null
-            val v = value?.toUtf8String() ?: return@mapNotNull null
-            k to v
-        }
-        .toMap()
-
-private fun NSData.toUtf8String(): String? {
-    if (length == 0UL) return null
-    return bytes()?.reinterpret<ByteVar>()?.readBytes(length.toInt())?.decodeToString()
+/**
+ * Parses a resolved [BonjourRecord] into an [MDNSAdvertisement].
+ *
+ * Returns `null` when the record carries no [MDNSAdvertisement.TXT_KEY_PEER_ID] or no host name —
+ * in either case there is no peer to list or nowhere to dial it.
+ */
+private fun BonjourRecord.toAdvertisement(): MDNSAdvertisement? {
+    val peerId = txt[MDNSAdvertisement.TXT_KEY_PEER_ID] ?: return null
+    val host = host ?: return null
+    return MDNSAdvertisement(
+        host = host,
+        port = port,
+        serverPeerId = PeerId(peerId),
+        sessionName = serviceName,
+        wsPath = txt[MDNSAdvertisement.TXT_KEY_WS_PATH] ?: MDNSAdvertisement.DEFAULT_WS_PATH,
+        hostOs = txt[MDNSAdvertisement.TXT_KEY_HOST_OS]?.let { MDNSAdvertisement.HostOs.fromTxt(it) },
+        fabrics = txt[MDNSAdvertisement.TXT_KEY_FABRICS],
+        mcPeer = txt[MDNSAdvertisement.TXT_KEY_MC_PEER],
+        txtExtensions = txt.filterKeys { it !in kuiltReservedTxtKeys },
+        roomKey = txt[MDNSAdvertisement.TXT_KEY_ROOM],
+    )
 }

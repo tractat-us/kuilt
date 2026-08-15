@@ -21,4 +21,12 @@ public expect class MultipeerServiceBrowser(
     override val kind: DiscoveryKind
 
     override fun discoveries(): Flow<Tag>
+
+    /**
+     * Declared here, not left to the actuals, because [PeerDiscoverySource] no longer defaults it:
+     * an expect class must implement every abstract member it inherits, so each platform has to
+     * state what its leave signal is. The Apple and JVM actuals have one; the Android and wasmJs
+     * stubs return `emptyFlow()`, having no MultipeerConnectivity to hear it from.
+     */
+    override fun departures(): Flow<String>
 }

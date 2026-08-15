@@ -45,13 +45,13 @@ import kotlin.time.TimeSource
  * (The `:transport-mdns` build file forwards the Gradle property to an env var
  * so the K/N test binary can read it via `platform.posix.getenv`.)
  *
- * **Why not a fake-based test?** The JVM side ([MDNSServiceDiscovererFlowTest])
- * isolates the callback→flow mechanics via [FakeEventJmDNS] because [JmDNS] is
- * an abstract class with a replaceable interface. On iOS, [NSNetServiceBrowser]
- * is a sealed Foundation type — there is no seam to inject a fake browser, and
- * [ServiceDelegate] is private. The only way to exercise the
- * `NSNetServiceBrowser delegate → callbackFlow → MDNSAdvertisement` path is to
- * run the real Bonjour stack.
+ * **What this covers that the fake-based tests cannot.** A `BonjourBrowser` seam now exists, so
+ * `MDNSDiscoverySourceConformanceIosTest` drives the flow logic against a fake browser and
+ * `BonjourServiceDetachTest` drives the real `ServiceDelegate` with synthetic services. Neither
+ * runs a real [NSNetServiceBrowser]: only this test exercises live Bonjour end to end —
+ * `NSNetServiceBrowser → delegate → callbackFlow → MDNSAdvertisement` — and it covers
+ * `discoveries()` alone. Nothing yet drives a real `didRemoveService`, which is the departures path
+ * (#2407).
  *
  * **Run-loop discipline:** K/N iOS tests run on the **main thread**.
  * `runBlocking` on the main thread blocks the main `CFRunLoop`, which starves
