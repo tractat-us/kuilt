@@ -5,6 +5,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
@@ -211,6 +213,12 @@ private class NeverOpensFacade(
 ) : RtcPeerConnectionFacade {
     override val localIceCandidates: Flow<SignalingMessage.IceCandidate> = emptyFlow()
     override val incomingBytes: Flow<ByteArray> = emptyFlow()
+
+    // A connection that never opens has, by construction, nothing to report about ICE either — so
+    // this stays on the unobserved floor forever. These tests are about the handshake's timeout
+    // and failure paths and never read a capability; the #1544 fold is pinned by
+    // [WebRTCPeerLinkCapabilityTest], against a fake that can move.
+    override val iceConnectionState: StateFlow<IceConnectionState?> = MutableStateFlow(null)
 
     override suspend fun awaitDataChannelOpen() = awaitCancellation()
 

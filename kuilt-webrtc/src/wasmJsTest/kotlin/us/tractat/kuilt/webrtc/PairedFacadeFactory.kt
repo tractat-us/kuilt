@@ -3,6 +3,9 @@ package us.tractat.kuilt.webrtc
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.consumeAsFlow
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.Spool
@@ -34,6 +37,33 @@ internal class PairedFacadeFactory private constructor(
 ) : RtcPeerConnectionFacadeFactory {
     private enum class Side { Left, Right }
 
+    /**
+     * This side's live ICE state, shared by every facade this factory creates.
+     *
+     * Starts `null` — "nothing observed" — deliberately, and **not** at
+     * [IceConnectionState.Connected]. A fake pre-wired to a connected reading would hand every
+     * seam a live verdict for free: `WebRTCPeerLinkCapabilityTest`'s tracking assertions would
+     * pass against an implementation that only ever read the value once at construction, and
+     * `WebRTCConformanceTest`'s `reportsLiveCapability = true` branch would be satisfied by
+     * nothing at all. The unobserved floor is the only starting value at which those assertions
+     * can still fail. Drive it with [emitIceConnectionState].
+     */
+    private val _iceConnectionState = MutableStateFlow<IceConnectionState?>(null)
+
+    /**
+     * Test hook for #1544: drive a live ICE transition (checks starting, a candidate pair
+     * succeeding, connectivity dropping, the agent giving up) directly, under virtual time. Sets
+     * the latest-value ICE STATE for every facade this factory has created or will create; the
+     * seam folds it into its live [us.tractat.kuilt.core.Seam.capability]. `null` restores
+     * "nothing observed".
+     *
+     * The fake twin of `BrowserRtcFacade`'s `oniceconnectionstatechange` handler — that the
+     * browser actually *emits* is provable only in a real `RTCPeerConnection`, never here.
+     */
+    fun emitIceConnectionState(state: IceConnectionState?) {
+        _iceConnectionState.value = state
+    }
+
     override fun create(
         iceConfig: IceConfig,
         hostInitiated: Boolean,
@@ -55,7 +85,15 @@ internal class PairedFacadeFactory private constructor(
                 Side.Left -> remoteClose.first to remoteClose.second
                 Side.Right -> remoteClose.second to remoteClose.first
             }
-        return FakeFacade(outboundSpool, inboundSpool, localOpen, remoteOpen, localClose, remoteClosePeer)
+        return FakeFacade(
+            outboundSpool,
+            inboundSpool,
+            localOpen,
+            remoteOpen,
+            localClose,
+            remoteClosePeer,
+            _iceConnectionState.asStateFlow(),
+        )
     }
 
     companion object {
@@ -94,6 +132,7 @@ private class FakeFacade(
     private val remoteOpen: CompletableDeferred<Unit>,
     private val localClose: CompletableDeferred<Unit>,
     private val remoteClose: CompletableDeferred<Unit>,
+    override val iceConnectionState: StateFlow<IceConnectionState?>,
 ) : RtcPeerConnectionFacade {
     private val iceCandidates = Channel<SignalingMessage.IceCandidate>(Channel.UNLIMITED)
     private val failure = CompletableDeferred<Throwable>()

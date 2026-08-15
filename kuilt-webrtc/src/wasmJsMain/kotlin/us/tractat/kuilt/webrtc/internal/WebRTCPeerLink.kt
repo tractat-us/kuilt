@@ -4,6 +4,7 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -11,6 +12,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
@@ -21,6 +23,10 @@ import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.core.TransportCapability
+import us.tractat.kuilt.webrtc.UNOBSERVED_ICE_AVAILABILITY
+import us.tractat.kuilt.webrtc.WEBRTC_ROLES
+import us.tractat.kuilt.webrtc.toAvailability
 
 private val log = KotlinLogging.logger("us.tractat.kuilt.webrtc.internal.WebRTCPeerLink")
 
@@ -61,6 +67,20 @@ internal class WebRTCPeerLink(
     private val _state = MutableStateFlow<SeamState>(SeamState.Woven)
     override val state: StateFlow<SeamState> get() = _state
 
+    // Live capability (#1544): the ROLES are constant (a WebRTC data channel does not stop being
+    // one when ICE drops — see [WEBRTC_ROLES]) and the AVAILABILITY is driven by the facade's ICE
+    // observer, whose browser binding is `BrowserRtcFacade`'s `oniceconnectionstatechange` handler.
+    //
+    // The availability is ONLY ever set from an observed ICE reading (#1712): it starts at
+    // [UNOBSERVED_ICE_AVAILABILITY] and there is no static value anywhere for it to fall back on,
+    // by construction — [WEBRTC_ROLES] carries roles only, and the loom's own
+    // `capability()` answers the *platform-support* question rather than a live one.
+    //
+    // A MutableStateFlow so the write from the single [iceConnectionStateLoop] collector is
+    // thread-safe under any dispatcher.
+    private val _capability = MutableStateFlow(unobservedCapability)
+    override val capability: StateFlow<TransportCapability> = _capability.asStateFlow()
+
     override val incoming: Flow<Swatch> = channelFlow {
         val frames = launch {
             userFrames.collect { bytes ->
@@ -94,7 +114,43 @@ internal class WebRTCPeerLink(
             _peers.value = setOf(selfId)
             _state.value = SeamState.Torn(CloseReason.RemoteRequested)
         }
+        // UNDISPATCHED, and specifically for a StateFlow reason: subscribing synchronously means
+        // the observer's CURRENT value is folded in before construction returns, so a seam woven
+        // onto a connection that is already up never transiently publishes the unobserved floor.
+        scope.launch(start = CoroutineStart.UNDISPATCHED) { iceConnectionStateLoop() }
     }
+
+    /**
+     * Fold the connection's live [RtcPeerConnectionFacade.iceConnectionState] into [capability].
+     *
+     * A `null` reading means "nothing observed" — the binding wired no observer, or the browser
+     * reported a state outside the W3C vocabulary — so we publish [unobservedCapability]: the
+     * fabric's roles with an honest [us.tractat.kuilt.core.FabricAvailability.Unknown], never a
+     * guessed verdict (#1712). A non-null reading supplies the availability via
+     * [toAvailability]; the roles are unchanged either way, because ICE failing does not make this
+     * a different kind of transport.
+     *
+     * The write goes to the seam-owned [_capability], so this single collector is the sole writer
+     * and no lock is needed. Terminates with [scope] on close — this loop holds no state to unwind.
+     */
+    private suspend fun iceConnectionStateLoop() {
+        facade.iceConnectionState.collect { ice ->
+            _capability.value =
+                if (ice == null) {
+                    unobservedCapability
+                } else {
+                    TransportCapability(roles = WEBRTC_ROLES, availability = ice.toAvailability())
+                }
+        }
+    }
+
+    /**
+     * The capability of a seam with **no live ICE reading**: the fabric's roles, but an honest
+     * `Unknown` availability. See [UNOBSERVED_ICE_AVAILABILITY] for why this cannot fall back on
+     * anything stronger.
+     */
+    private val unobservedCapability: TransportCapability
+        get() = TransportCapability(roles = WEBRTC_ROLES, availability = UNOBSERVED_ICE_AVAILABILITY)
 
     private val closedMessage get() = "WebRTC seam for $selfId is Torn"
 

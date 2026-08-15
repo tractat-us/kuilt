@@ -790,12 +790,14 @@ Four things to know before you bind this to a UI:
   means *"my end of **this room's** fabric."* A peer in two rooms over two fabrics has two independent
   values and neither speaks for the other; kuilt has no device-level registry. A room over a bonded
   `CompositeSeam` reports `Unavailable` only when **every** woven ply is down.
-- **`Unknown` is a real third answer, and today it is the usual one.** Only a fabric wired to the
-  operating system's own path monitor can watch its own reachability — that is `kuilt-nw`, and nothing
-  else so far — so every other lane honestly reports `Unknown`, meaning *kuilt cannot tell on this
-  fabric*. Treat it as no information, never as either answer, and expect it as the common case rather
-  than an error. The per-fabric flag is `reportsLiveCapability`; see
-  [architecture.md](architecture.md#reportslivecapability--fabrics-without-a-path-observer).
+- **`Unknown` is a real third answer, and today it is the usual one.** Only a fabric wired to an
+  observer that watches its own reachability can give you a live yes or no; the lanes without one
+  honestly report `Unknown`, meaning *kuilt cannot tell on this fabric*. Treat it as no information,
+  never as either answer, and expect it rather than treat it as an error. Which lanes have an observer
+  changes as they are wired up one at a time, so read the flag rather than a list: a fabric's
+  conformance test declares `reportsLiveCapability`, and
+  [architecture.md](architecture.md#reportslivecapability--fabrics-without-a-path-observer) explains
+  what earns a `true`.
 - **`Partitioned` and `HostLost` carry the same value as a tag**, captured at the instant they were
   emitted, which is what makes precedence readable from the stream. When the tag is `Unavailable` for
   silence *you* observed, that event is not evidence about the peer it names. `HostLost` always is

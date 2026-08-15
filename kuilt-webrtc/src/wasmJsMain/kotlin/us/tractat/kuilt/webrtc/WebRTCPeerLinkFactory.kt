@@ -17,7 +17,6 @@ import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.TransportCapability
-import us.tractat.kuilt.core.TransportRole
 import kotlin.random.Random
 
 /**
@@ -41,11 +40,13 @@ public class WebRTCPeerLinkFactory
         private val facadeFactory: RtcPeerConnectionFacadeFactory,
         private val random: Random = Random.Default,
     ) : Loom {
+        /**
+         * The fabric's **static** self-report: what a WebRTC data channel can do on this runtime.
+         * Deliberately not the live signal — that is a woven seam's
+         * [Seam.capability], driven from the peer connection's ICE state (#1544).
+         */
         override fun capability(): TransportCapability =
-            TransportCapability(
-                roles = setOf(TransportRole.WebRtc, TransportRole.Data),
-                availability = FabricAvailability.Available,
-            )
+            TransportCapability(roles = WEBRTC_ROLES, availability = FabricAvailability.Available)
 
         public constructor(
             signaling: SignalingChannel,
