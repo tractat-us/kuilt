@@ -91,6 +91,14 @@ public sealed interface DepartureFixture {
  * | cancelling the collector's scope completes the collection, and the source stays re-collectable | both | [cancellingTheCollectorScopeCompletesDepartures] |
  * | an arrival is never reported as a departure — for a [DepartureFixture.NoLeaveSignal] source, nothing ever is | both | [anArrivalIsNeverReportedAsADeparture] |
  *
+ * **Adding a property here is an edit to this file *and* to two others.** Most bindings subclass
+ * this suite concretely and pick a new `@Test` up for free. The two in `:kuilt-multipeer` —
+ * `kuilt-multipeer/src/jvmTest/…/MultipeerDiscoverySourceConformanceTest.kt` and
+ * `kuilt-multipeer/src/appleTest/…/MultipeerAppleDiscoverySourceConformanceTest.kt` — subclass it
+ * *abstractly* and invoke each property by hand, which is what lets them pin the ones they fail (see
+ * below). A property added here therefore runs on neither of them, **silently, with nothing red**.
+ * Add the call to both in the same change.
+ *
  * The first two are the ones with teeth, and each was written against a real defect:
  *
  * - **Emitting *something* is not enough.** `discoveryRoster` removes by exact key, so a source
