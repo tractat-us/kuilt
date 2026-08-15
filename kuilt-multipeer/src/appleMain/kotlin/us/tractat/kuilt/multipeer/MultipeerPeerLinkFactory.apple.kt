@@ -246,7 +246,8 @@ public actual class MultipeerPeerLinkFactory actual constructor(
      * second physical device on the same Wi-Fi. `MultipeerAppleDiscoverySourceConformanceTest`
      * drives this delegate directly to bind `MultipeerServiceBrowser` to
      * `DiscoverySourceConformanceSuite`; without the handle that class could not be held to the
-     * contract at all, which is the state #2401 found every non-mDNS source in.
+     * contract at all, which is the state the discovery survey found every non-mDNS source in — see
+     * kuilt #2410 for what holding it to the contract then exposed.
      *
      * Being `null` is itself the observation that matters most: it is exactly what a lone
      * `departures()` collector sees, because the delegate is installed by [startBrowsing] and

@@ -76,8 +76,8 @@ public actual class MultipeerServiceBrowser actual constructor(
      * [MultipeerAdvertisement.peerKey] — so a departure names the peer [discoveries] published,
      * as `PeerDiscoverySource.departures` requires.
      *
-     * The collection coupling is a **known contract violation**, not a caveat, and it is the same
-     * one the appleMain actual carries: `mc_browser_set_peer_lost_callback` is invoked inside
+     * The collection coupling is a **known contract violation, tracked by kuilt #2410**, not a
+     * caveat, and it is the same one the appleMain actual carries: `mc_browser_set_peer_lost_callback` is invoked inside
      * [discoveries]' `callbackFlow`, so with no `discoveries()` collector there is no browse
      * session, no peer-lost callback, and nothing this flow could ever emit.
      * `DiscoverySourceConformanceSuite.departuresEmitsWithNoConcurrentDiscoveriesCollector` fails

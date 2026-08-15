@@ -36,7 +36,7 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
-private const val CONFORMANCE_SERVICE_TYPE = "kuilt-conf2401"
+private const val CONFORMANCE_SERVICE_TYPE = "kuilt-conf2410"
 private const val CONFORMANCE_DEVICE = "conformance-device"
 
 /**
@@ -51,6 +51,16 @@ private const val ARRIVING_DISPLAY_NAME = "conformance-peer"
 
 /** How long a rig waits, in **real** time, for production's browse session to reach the fake. */
 private const val BROWSE_WAIT_MILLIS = 2_000L
+
+/**
+ * The substring the two #2410 pins match on.
+ *
+ * Carries the refusing class's name, not the bare phrase "no browse session": that phrase is not
+ * unique in this repo — `:kuilt-mdns`'s `RegistryBonjourBrowser` raises a differently-caused
+ * `IllegalStateException` containing it — so matching the phrase alone would make the pins accept a
+ * red they were not written for the moment such a rig came within reach of this classpath.
+ */
+private const val NO_SESSION_RED = "ConformanceNativeLib: no browse session"
 
 /** The runtime handle every source in this file is built against. */
 private val RUNTIME_HANDLE = Pointer(0x42L)
@@ -78,8 +88,9 @@ private val SPURIOUS_DEPARTURE_DELAY = 200.milliseconds
  *
  * A concrete subclass of [DiscoverySourceConformanceSuite] contributes all four `@Test` methods at
  * once, and two of them red here. `@Ignore` would hide that behind a skip nobody reads; leaving the
- * binding unwritten would leave this backend exactly where #2401 found every non-mDNS source —
- * unchecked. So the suite is subclassed *abstractly* (invisible to test collection, for the reason
+ * binding unwritten would leave this backend exactly where the survey that removed
+ * `PeerDiscoverySource.departures`' inherited default found it — unchecked. So the suite is
+ * subclassed *abstractly* (invisible to test collection, for the reason
  * `DiscoverySourceConformanceSuiteRigTest` records) and every property invoked explicitly: the two
  * that hold are asserted to hold, and the two that do not are asserted to fail **with the message
  * that names the cause**. Fixing the backend therefore reds those two, loudly, rather than passing
@@ -122,13 +133,17 @@ class MultipeerDiscoverySourceConformanceTest {
     }
 
     /**
-     * **KNOWN FAILURE — the JVM browser violates `PeerDiscoverySource.departures`.**
+     * **KNOWN FAILURE — the JVM browser violates `PeerDiscoverySource.departures`. Tracked by kuilt
+     * #2410; delete this pin there.**
      *
      * Pinned rather than skipped, so the day somebody gives the browse session a lifetime of its own
      * this test reds and names the pin to delete. The assertion is on the *shape* of the failure,
-     * not merely that something threw: the red must come from the rig refusing to pretend a peer
-     * arrived (see [ConformanceNativeLib.awaitBrowseSession]), because a red for any other reason
-     * would be a harness bug wearing this finding's clothes.
+     * not merely that something threw: the red must come from **this file's own fake** refusing to
+     * pretend a peer arrived (see [ConformanceNativeLib.awaitBrowseSession]), because a red for any
+     * other reason would be a harness bug wearing this finding's clothes. Matching the fake's class
+     * prefix and not the bare phrase is what keeps that true — `RegistryBonjourBrowser` in
+     * `:kuilt-mdns` raises a differently-caused failure carrying the same words, and a sibling could
+     * yet do so here.
      */
     @Test
     fun theLoneCollectorObligationFailsBecauseTheBrowseSessionBelongsToDiscoveries() {
@@ -136,19 +151,19 @@ class MultipeerDiscoverySourceConformanceTest {
             (object : MultipeerJvmSuite() {}).departuresEmitsWithNoConcurrentDiscoveriesCollector()
         }
         assertTrue(
-            failure.message.orEmpty().contains("no browse session"),
+            failure.message.orEmpty().contains(NO_SESSION_RED),
             "expected the rig to refuse to stage an arrival with no discoveries() collector, got: ${failure.message}",
         )
     }
 
-    /** **KNOWN FAILURE**, same root cause — this obligation stages an arrival too. */
+    /** **KNOWN FAILURE**, same root cause and same issue (#2410) — this obligation stages an arrival too. */
     @Test
     fun theArrivalIsNotADepartureObligationCannotEvenStageAnArrival() {
         val failure = assertFailsWith<IllegalStateException> {
             (object : MultipeerJvmSuite() {}).anArrivalIsNeverReportedAsADeparture()
         }
         assertTrue(
-            failure.message.orEmpty().contains("no browse session"),
+            failure.message.orEmpty().contains(NO_SESSION_RED),
             "expected the rig to refuse to stage an arrival with no discoveries() collector, got: ${failure.message}",
         )
     }
@@ -526,7 +541,7 @@ private class LateSpuriousDepartureSource(
 
 /**
  * A [MultipeerNativeLib] modelling the browse half of `libkuilt.dylib` faithfully enough to reach
- * the #2401 finding, and refusing — loudly — every state in which it would otherwise lie.
+ * the kuilt #2410 finding, and refusing — loudly — every state in which it would otherwise lie.
  *
  * Three behaviours are load-bearing:
  *

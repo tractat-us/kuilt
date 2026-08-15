@@ -27,7 +27,7 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-private const val CONFORMANCE_SERVICE_TYPE = "kuilt-conf2401"
+private const val CONFORMANCE_SERVICE_TYPE = "kuilt-conf2410"
 private const val CONFORMANCE_DEVICE = "conformance-device"
 
 /**
@@ -45,9 +45,19 @@ private const val ARRIVING_HANDLE = "conformance-peer#a1b2c3d4"
 private const val BROWSE_DELEGATE_YIELDS = 64
 
 /**
+ * The substring the two #2410 pins match on.
+ *
+ * Carries the refusing class's name, not the bare phrase "no browse session": that phrase is not
+ * unique in this repo — `:kuilt-mdns`'s `RegistryBonjourBrowser` raises a differently-caused
+ * `IllegalStateException` containing it — so matching the phrase alone would make the pins accept a
+ * red they were not written for the moment such a rig came within reach of this classpath.
+ */
+private const val NO_SESSION_RED = "MultipeerAppleSuite: no browse session"
+
+/**
  * Binds appleMain's [MultipeerServiceBrowser] to [DiscoverySourceConformanceSuite] — the
- * implementation #2401 found believed-correct and unchecked — and records that **two of the four
- * obligations fail**.
+ * implementation the discovery survey recorded as believed-correct and never checked — and records
+ * that **two of the four obligations fail**. The defect is kuilt #2410.
  *
  * ## What is real here, and what is driven by hand
  *
@@ -87,42 +97,45 @@ private const val BROWSE_DELEGATE_YIELDS = 64
 class MultipeerAppleDiscoverySourceConformanceTest {
 
     @Test
-    fun departureKeyEqualsThePeerKeyThatWasDiscovered() {
-        (object : MultipeerAppleSuite() {}).departureKeyEqualsThePeerKeyThatWasDiscovered()
-    }
+    fun departureKeyEqualsThePeerKeyThatWasDiscovered() =
+        onSuite(object : MultipeerAppleSuite() {}) { departureKeyEqualsThePeerKeyThatWasDiscovered() }
 
     @Test
-    fun cancellingTheCollectorScopeCompletesDepartures() {
-        (object : MultipeerAppleSuite() {}).cancellingTheCollectorScopeCompletesDepartures()
-    }
+    fun cancellingTheCollectorScopeCompletesDepartures() =
+        onSuite(object : MultipeerAppleSuite() {}) { cancellingTheCollectorScopeCompletesDepartures() }
 
     /**
-     * **KNOWN FAILURE — the Apple browser violates `PeerDiscoverySource.departures`.**
+     * **KNOWN FAILURE — the Apple browser violates `PeerDiscoverySource.departures`. Tracked by
+     * kuilt #2410; delete this pin there.**
      *
      * Pinned rather than skipped, so a fix reds this test and names the pin to delete. The assertion
-     * is on the *shape* of the red: it must come from the rig refusing to pretend a peer arrived
-     * with no browse session, because a red for any other reason would be a harness bug wearing this
-     * finding's clothes.
+     * is on the *shape* of the red: it must come from **this suite's own rig** refusing to pretend a
+     * peer arrived with no browse session, because a red for any other reason would be a harness bug
+     * wearing this finding's clothes. Matching the rig's class prefix and not the bare phrase is
+     * what keeps that true — `RegistryBonjourBrowser` in `:kuilt-mdns` raises a
+     * differently-caused failure carrying the same words, and a sibling could yet do so here.
      */
     @Test
     fun theLoneCollectorObligationFailsBecauseTheBrowseSessionBelongsToDiscoveries() {
+        val suite = object : MultipeerAppleSuite() {}
         val failure = assertFailsWith<IllegalStateException> {
-            (object : MultipeerAppleSuite() {}).departuresEmitsWithNoConcurrentDiscoveriesCollector()
+            onSuite(suite) { departuresEmitsWithNoConcurrentDiscoveriesCollector() }
         }
         assertTrue(
-            failure.message.orEmpty().contains("no browse session"),
+            failure.message.orEmpty().contains(NO_SESSION_RED),
             "expected the rig to refuse to stage an arrival with no discoveries() collector, got: ${failure.message}",
         )
     }
 
-    /** **KNOWN FAILURE**, same root cause — this obligation stages an arrival too. */
+    /** **KNOWN FAILURE**, same root cause and same issue (#2410) — this obligation stages an arrival too. */
     @Test
     fun theArrivalIsNotADepartureObligationCannotEvenStageAnArrival() {
+        val suite = object : MultipeerAppleSuite() {}
         val failure = assertFailsWith<IllegalStateException> {
-            (object : MultipeerAppleSuite() {}).anArrivalIsNeverReportedAsADeparture()
+            onSuite(suite) { anArrivalIsNeverReportedAsADeparture() }
         }
         assertTrue(
-            failure.message.orEmpty().contains("no browse session"),
+            failure.message.orEmpty().contains(NO_SESSION_RED),
             "expected the rig to refuse to stage an arrival with no discoveries() collector, got: ${failure.message}",
         )
     }
@@ -130,19 +143,16 @@ class MultipeerAppleDiscoverySourceConformanceTest {
     // ── the control: this harness DOES admit a conforming source ─────────────
 
     @Test
-    fun aSharedBrowseSessionPassesTheLoneCollectorObligation() {
-        (object : SharedBrowseSuite() {}).departuresEmitsWithNoConcurrentDiscoveriesCollector()
-    }
+    fun aSharedBrowseSessionPassesTheLoneCollectorObligation() =
+        onSuite(object : SharedBrowseSuite() {}) { departuresEmitsWithNoConcurrentDiscoveriesCollector() }
 
     @Test
-    fun aSharedBrowseSessionPassesTheArrivalIsNotADepartureObligation() {
-        (object : SharedBrowseSuite() {}).anArrivalIsNeverReportedAsADeparture()
-    }
+    fun aSharedBrowseSessionPassesTheArrivalIsNotADepartureObligation() =
+        onSuite(object : SharedBrowseSuite() {}) { anArrivalIsNeverReportedAsADeparture() }
 
     @Test
-    fun aSharedBrowseSessionPassesTheKeyEqualityObligation() {
-        (object : SharedBrowseSuite() {}).departureKeyEqualsThePeerKeyThatWasDiscovered()
-    }
+    fun aSharedBrowseSessionPassesTheKeyEqualityObligation() =
+        onSuite(object : SharedBrowseSuite() {}) { departureKeyEqualsThePeerKeyThatWasDiscovered() }
 }
 
 /**
@@ -207,7 +217,7 @@ class MultipeerAppleDepartureRigTest {
     @Test
     fun aDepartureCarryingTheHumanNameRedsTheKeyEqualityObligation() {
         val failure = assertFailsWith<AssertionError> {
-            (object : WrongKeySuite() {}).departureKeyEqualsThePeerKeyThatWasDiscovered()
+            onSuite(object : WrongKeySuite() {}) { departureKeyEqualsThePeerKeyThatWasDiscovered() }
         }
         assertTrue(
             failure.message.orEmpty().contains("SAME key"),
@@ -215,6 +225,26 @@ class MultipeerAppleDepartureRigTest {
         )
     }
 }
+
+/**
+ * Run [property] against [suite], then close every factory it built.
+ *
+ * Each factory owns a real `MCPeerID` and, once `discoveries()` has been collected, a real
+ * `MCNearbyServiceBrowser`. `awaitClose { stopBrowsing() }` already tears the browser down on the
+ * paths that opened one, so this is belt-and-braces rather than a leak fix — but a property that
+ * fails part-way (the two #2410 pins do, by design) has no such guarantee, and a test binary that
+ * leaves browsers advertising their interest is a poor neighbour on a shared CI host.
+ */
+@OptIn(ExperimentalForeignApi::class)
+private fun <T> onSuite(
+    suite: MultipeerAppleSuite,
+    property: MultipeerAppleSuite.() -> T,
+): T =
+    try {
+        suite.property()
+    } finally {
+        suite.closeFactories()
+    }
 
 // ── the bindings ──────────────────────────────────────────────────────────────
 
@@ -226,6 +256,13 @@ class MultipeerAppleDepartureRigTest {
 @OptIn(ExperimentalForeignApi::class)
 private abstract class MultipeerAppleSuite : DiscoverySourceConformanceSuite() {
 
+    /**
+     * A plain map, where the JVM twin uses a `ConcurrentHashMap`: Kotlin/Native has no such class,
+     * and it would buy nothing here anyway. Every write ([newSource]) and every read ([factoryFor])
+     * happens on the test coroutine itself — the hooks the suite calls are all invoked from the test
+     * body, never from a source's callback — so the map is confined to one coroutine rather than
+     * merely to one dispatcher, which is a local property and not an emergent one.
+     */
     private val factories = mutableMapOf<PeerDiscoverySource, MultipeerPeerLinkFactory>()
 
     /**
@@ -285,6 +322,12 @@ private abstract class MultipeerAppleSuite : DiscoverySourceConformanceSuite() {
         source: PeerDiscoverySource,
         factory: MultipeerPeerLinkFactory,
     ): PeerDiscoverySource = source.also { factories[it] = factory }
+
+    /** Tear down every factory this binding built — see [onSuite]. `close()` is idempotent. */
+    fun closeFactories() {
+        factories.values.forEach { it.close() }
+        factories.clear()
+    }
 
     /**
      * Drain the scheduler until the browse session's delegate appears, or fail with what that

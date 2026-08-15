@@ -20,7 +20,7 @@ public actual class MultipeerServiceBrowser actual constructor(
 
     /**
      * **No leave signal, and none discarded.** This platform has no MultipeerConnectivity at all,
-     * so nothing can ever be discovered here and nothing can ever depart. The survey behind #2401
+     * so nothing can ever be discovered here and nothing can ever depart. The discovery survey
      * checked for one: there is no Android-side browse API in this class to hear a `lostPeer` from,
      * because [discoveries] itself refuses.
      *

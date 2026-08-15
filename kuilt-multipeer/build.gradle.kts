@@ -33,7 +33,7 @@ kotlin {
         val appleTest by creating {
             dependsOn(commonTest.get())
             // appleMain's MultipeerServiceBrowser is bound to DiscoverySourceConformanceSuite here
-            // (#2401). It runs against the real MCNearbyServiceBrowser with its delegate driven by
+            // (kuilt #2410). It runs against the real MCNearbyServiceBrowser with its delegate driven by
             // hand — a real foundPeer needs a second physical device, so the delegate is the only
             // place this platform's arrivals and departures can be staged at all.
             dependencies { implementation(project(":kuilt-conformance")) }
@@ -43,11 +43,10 @@ kotlin {
         val macosArm64Test by getting { dependsOn(appleTest) }
         // The android stub is asserted directly rather than through
         // DiscoverySourceConformanceSuite: its discoveries() throws, so no honest causeArrival
-        // exists and a binding could only pass by not running (#2401). See MultipeerAndroidStubTest.
-        androidUnitTest.dependencies {
-            implementation(libs.kotlin.testJunit)
-            implementation(libs.kotlinx.coroutines.test)
-        }
+        // exists and a binding could only pass by not running. See MultipeerAndroidStubTest.
+        // kotlin-test resolves via a JUnit typealias on the Android unit-test variant, so that one
+        // artifact has to be named here; coroutines-test already arrives through commonTest.
+        androidUnitTest.dependencies { implementation(libs.kotlin.testJunit) }
         jvmTest.dependencies {
             implementation(project(":kuilt-conformance"))
             implementation(libs.kotlin.testJunit)

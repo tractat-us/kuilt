@@ -55,7 +55,7 @@ public actual class MultipeerServiceBrowser actual constructor(
      * installed by `startBrowsing`, and `discoveries()` is the only caller.
      * Any departure that fires outside that window is dropped.
      *
-     * That coupling is a **known contract violation**, not a caveat:
+     * That coupling is a **known contract violation, tracked by kuilt #2410**, not a caveat:
      * `DiscoverySourceConformanceSuite.departuresEmitsWithNoConcurrentDiscoveriesCollector`
      * fails against this class, and
      * `MultipeerAppleDiscoverySourceConformanceTest` pins the failure so a fix
