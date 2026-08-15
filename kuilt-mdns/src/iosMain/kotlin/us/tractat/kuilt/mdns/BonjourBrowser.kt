@@ -8,6 +8,7 @@ import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.ObjCSignatureOverride
 import kotlinx.cinterop.readBytes
 import kotlinx.cinterop.reinterpret
+import io.github.oshai.kotlinlogging.KotlinLogging
 import platform.Foundation.NSData
 import platform.Foundation.NSNetService
 import platform.Foundation.NSNetServiceBrowser
@@ -16,12 +17,15 @@ import platform.Foundation.NSNetServiceDelegateProtocol
 import platform.Foundation.NSRunLoop
 import platform.Foundation.NSRunLoopCommonModes
 import platform.darwin.NSObject
+import us.tractat.kuilt.core.runCatchingCancellable
 
 // NSNetServiceBrowser is deprecated since iOS 15 in favour of NWBrowser (Network.framework).
 // NWBrowser browsing is available in K/N 2.3.x but `nw_browse_result_enumerate` (required to
 // iterate over the result set) is missing from the generated platform bindings. NSNetServiceBrowser
 // has complete K/N Foundation bindings and is used as the practical alternative.
 private const val RESOLVE_TIMEOUT_S = 5.0
+
+private val logger = KotlinLogging.logger("us.tractat.kuilt.mdns.BonjourBrowser")
 
 /**
  * One Bonjour service, **resolved**, in plain Kotlin types.
@@ -41,7 +45,13 @@ internal class BonjourRecord(
     val txt: Map<String, String>,
 )
 
-/** A live browse session. [stop] tears it down; calling it twice must be harmless. */
+/**
+ * A live browse session.
+ *
+ * [stop] is called exactly once, from the owning flow's `awaitClose`. It is deliberately **not**
+ * documented as idempotent — no caller here calls it twice, and promising more than the real
+ * implementation delivers is how a doc starts lying.
+ */
 internal fun interface BonjourBrowseHandle {
     fun stop()
 }
@@ -49,7 +59,26 @@ internal fun interface BonjourBrowseHandle {
 /** What one browse session reports back to whoever opened it. */
 internal interface BonjourBrowseSink {
 
-    /** A service was found **and resolved** — see [BonjourBrowser] on why the seam bundles the two. */
+    /**
+     * A service was found, and is **unresolved**: only [serviceName] is known, because that is all
+     * Bonjour's browse callback carries.
+     *
+     * Call [requestResolve] to ask for its TXT — the seam deliberately does *not* resolve on the
+     * sink's behalf, and a sink that never calls it never learns anything but names. That placement
+     * is the point: `departures()` must request its own resolutions rather than free-ride on the
+     * ones a concurrent `discoveries()` collector triggered, and keeping the request on this side of
+     * the seam is what makes the free-riding shape both *representable* and *red-able* under
+     * `DiscoverySourceConformanceSuite.departuresEmitsWithNoConcurrentDiscoveriesCollector`.
+     *
+     * [requestResolve] is scoped to this callback because that is how the platform works: you
+     * resolve the exact [NSNetService] the browser handed you, not a name looked up later.
+     */
+    fun onFound(
+        serviceName: String,
+        requestResolve: () -> Unit,
+    )
+
+    /** A resolution requested via [onFound] completed. */
     fun onResolved(record: BonjourRecord)
 
     /**
@@ -72,14 +101,12 @@ internal interface BonjourBrowseSink {
  * unverified as the bug it replaces. The real binding against live Bonjour stays covered by the
  * `-P`-gated `MDNSServiceDiscovererIosTest`.
  *
- * **[browse] resolves on the session's own account.** Each call opens an independent browser *and*
- * asks each service it finds to resolve, so a caller never has to hope somebody else asked. That is
- * deliberate placement rather than convenience: the `PeerDiscoverySource` contract requires
- * `departures()` to work when it is the only thing being collected, and the defect that requirement
- * exists to catch — a departure feed free-riding on the resolutions a concurrent `discoveries()`
- * collector triggered — is *unrepresentable* once every session resolves for itself.
- * `DiscoverySourceConformanceSuite`'s `departuresEmitsWithNoConcurrentDiscoveriesCollector` still
- * holds the remaining half of it: that `departures()` opens a session at all.
+ * The seam is drawn **below** the decision to resolve, not above it: [browse] reports a bare name
+ * and hands back a request, so "each feed asks for its own resolutions" stays a property of
+ * [MDNSServiceDiscoverer], where the conformance suite can see it fail. What remains untested is
+ * only what any seam leaves untested — that [NetServiceBonjourBrowser] itself honours this contract
+ * against live Bonjour. The `-P`-gated [MDNSServiceDiscovererIosTest] covers `discoveries()` only,
+ * and nothing yet drives a real `didRemoveService`; **#2407** tracks closing that.
  */
 internal fun interface BonjourBrowser {
 
@@ -114,12 +141,45 @@ internal object NetServiceBonjourBrowser : BonjourBrowser {
         browser.setDelegate(delegate)
         browser.scheduleInRunLoop(NSRunLoop.mainRunLoop(), forMode = NSRunLoopCommonModes)
         browser.searchForServicesOfType(serviceType, inDomain = "local.")
+        return NetServiceBrowseSession(browser, delegate)
+    }
+}
 
-        return BonjourBrowseHandle {
-            browser.stop()
+/**
+ * One live [NSNetServiceBrowser], and **the Kotlin object that must outlive `browse`'s return**.
+ *
+ * Holding [delegate] here is the whole reason this is a class rather than a lambda.
+ * `NSNetServiceBrowser.delegate` and `NSNetService.delegate` are `weak`/`assign` properties, so
+ * Objective-C takes no strong reference to a Kotlin delegate: its lifetime is decided entirely by
+ * Kotlin/Native's GC. With the delegate reachable only from a local of a function that has already
+ * returned, it may be collected mid-session — after which callbacks silently stop, or the unowned
+ * pointer dangles. Naming it as a field ties it to the session, and the session is reachable from
+ * the owning flow's `awaitClose` for as long as the flow is collected.
+ *
+ * No test here can show this: every test drives a fake browser, so the real delegate is never
+ * constructed. It rests on Kotlin/Native's interop rules, not on a green suite.
+ */
+private class NetServiceBrowseSession(
+    private val browser: NSNetServiceBrowser,
+    @Suppress("unused") private val delegate: ServiceDelegate,
+) : BonjourBrowseHandle {
+
+    /**
+     * One guard per step, deliberately.
+     *
+     * Under a single `try` a throw from `stop()` would skip both `removeFromRunLoop` and
+     * `setDelegate(null)`, leaking a run-loop source and leaving an unowned delegate pointer live —
+     * exactly the "an obligation behind the guard is skipped" shape the repo's exception discipline
+     * is about. Each step is independently owed, so each gets its own guard.
+     */
+    override fun stop() {
+        runCatchingCancellable { browser.stop() }
+            .onFailure { logger.debug(it) { "stopping the Bonjour browser failed" } }
+        runCatchingCancellable {
             browser.removeFromRunLoop(NSRunLoop.mainRunLoop(), forMode = NSRunLoopCommonModes)
-            browser.setDelegate(null)
-        }
+        }.onFailure { logger.debug(it) { "removing the Bonjour browser from the run loop failed" } }
+        runCatchingCancellable { browser.setDelegate(null) }
+            .onFailure { logger.debug(it) { "clearing the Bonjour browser delegate failed" } }
     }
 }
 
@@ -140,8 +200,10 @@ private class ServiceDelegate(
         didFindService: NSNetService,
         moreComing: Boolean,
     ) {
-        didFindService.setDelegate(this)
-        didFindService.resolveWithTimeout(RESOLVE_TIMEOUT_S)
+        sink.onFound(didFindService.name()) {
+            didFindService.setDelegate(this)
+            didFindService.resolveWithTimeout(RESOLVE_TIMEOUT_S)
+        }
     }
 
     @ObjCSignatureOverride

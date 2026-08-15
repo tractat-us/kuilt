@@ -1,5 +1,6 @@
 package us.tractat.kuilt.mdns
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -64,6 +65,14 @@ public class MDNSServiceDiscoverer internal constructor(
                 browser.browse(
                     serviceType.forNsNetServiceBrowser(),
                     object : BonjourBrowseSink {
+                        override fun onFound(
+                            serviceName: String,
+                            requestResolve: () -> Unit,
+                        ) {
+                            // Resolve on this session's own account — see BonjourBrowseSink.onFound.
+                            requestResolve()
+                        }
+
                         override fun onResolved(record: BonjourRecord) {
                             record.toAdvertisement()?.let { trySend(it) }
                         }
@@ -73,7 +82,10 @@ public class MDNSServiceDiscoverer internal constructor(
                     },
                 )
 
-            awaitClose { runCatchingCancellable { handle.stop() } }
+            awaitClose {
+                runCatchingCancellable { handle.stop() }
+                    .onFailure { logger.debug(it) { "stopping the Bonjour session failed" } }
+            }
         }.flowOn(browseContext)
 
     /**
@@ -109,6 +121,16 @@ public class MDNSServiceDiscoverer internal constructor(
                 browser.browse(
                     serviceType.forNsNetServiceBrowser(),
                     object : BonjourBrowseSink {
+                        override fun onFound(
+                            serviceName: String,
+                            requestResolve: () -> Unit,
+                        ) {
+                            // Resolve on our own account: a lone departures() collector has nobody
+                            // else to request resolution on its behalf, and the peer id exists
+                            // nowhere but the resolved record. See BonjourBrowseSink.onFound.
+                            requestResolve()
+                        }
+
                         override fun onResolved(record: BonjourRecord) {
                             val peerId = record.txt[MDNSAdvertisement.TXT_KEY_PEER_ID] ?: return
                             peerIdsByServiceName[record.serviceName] = peerId
@@ -120,9 +142,14 @@ public class MDNSServiceDiscoverer internal constructor(
                     },
                 )
 
-            awaitClose { runCatchingCancellable { handle.stop() } }
+            awaitClose {
+                runCatchingCancellable { handle.stop() }
+                    .onFailure { logger.debug(it) { "stopping the Bonjour session failed" } }
+            }
         }.flowOn(browseContext)
 }
+
+private val logger = KotlinLogging.logger("us.tractat.kuilt.mdns.MDNSServiceDiscoverer")
 
 /**
  * Parses a resolved [BonjourRecord] into an [MDNSAdvertisement].
