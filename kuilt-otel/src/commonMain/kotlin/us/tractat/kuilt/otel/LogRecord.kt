@@ -54,12 +54,22 @@ public data class LogRecord(
     public val attributes: Map<String, String> = emptyMap(),
     /**
      * Epoch-nanosecond timestamp at which the event occurred, from the producer's
-     * local clock. `null` if the event time is unknown.
+     * local clock — OTLP's `timeUnixNano`. `null` if the event time is unknown.
+     *
+     * Distinct from [observedEpochNanos], and the field to sort or print a timeline
+     * by: it is stamped where the line was logged, so it survives however long the
+     * record then waits to be written. The difference between the two is capture
+     * latency.
      */
     public val timestampEpochNanos: Long? = null,
     /**
      * Epoch-nanosecond timestamp at which the record was observed by the SDK,
-     * from the producer's local clock.
+     * from the producer's local clock — OTLP's `observedTimeUnixNano`.
+     *
+     * On a queueing capture edge this is the *flush* instant, not the event instant;
+     * a consumer that reads it as event time sees drain cadence rather than when
+     * anything happened. Use [timestampEpochNanos] for that, and fall back to this
+     * only when it is `null`.
      */
     public val observedEpochNanos: Long? = null,
     /**

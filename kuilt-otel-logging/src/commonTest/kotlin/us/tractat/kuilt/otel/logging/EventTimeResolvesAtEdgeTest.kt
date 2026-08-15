@@ -96,6 +96,36 @@ class EventTimeResolvesAtEdgeTest {
         )
     }
 
+    /**
+     * An edge whose platform event already carries a true emit time (logback's
+     * `ILoggingEvent.timeStamp`, log4j2's `LogEvent.instant`) may pre-fill
+     * [NormalizedLogEvent.emittedEpochNanos]; [LogCapture.resolveAtEdge] must then
+     * leave it alone rather than overwrite it with its own reading. A public field a
+     * caller sets and the library silently discards would be worse than no field.
+     */
+    @Test
+    fun anEdgeSuppliedEmitTimeSurvivesResolution() = runTest {
+        val exporter = WarpLogRecordExporter(ReplicaId("device-1"), InMemoryDurableStore())
+        val capture = LogCapture(exporter, CaptureConfig(), SettableClock(DRAINED_AT), Random(0))
+
+        val resolved = capture.resolveAtEdge(
+            NormalizedLogEvent(
+                level = LogLevel.INFO,
+                loggerName = "com.example.Edge",
+                message = "the platform knew when this happened",
+                emittedEpochNanos = EMITTED_AT.toEpochNanos(),
+            ),
+        )
+        assertEquals(EMITTED_AT.toEpochNanos(), resolved?.emittedEpochNanos)
+
+        capture.capture(checkNotNull(resolved))
+        val record = exporter.snapshot().toList().single()
+        assertAll(
+            { assertEquals(EMITTED_AT.toEpochNanos(), record.timestampEpochNanos) },
+            { assertEquals(DRAINED_AT.toEpochNanos(), record.observedEpochNanos) },
+        )
+    }
+
     private companion object {
         private const val NANOS_PER_SECOND = 1_000_000_000L
 
