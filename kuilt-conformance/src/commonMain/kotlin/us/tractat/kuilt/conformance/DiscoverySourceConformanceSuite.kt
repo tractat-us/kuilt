@@ -126,6 +126,28 @@ public sealed interface DepartureFixture {
  * bug, and the one every silent `emptyFlow()` in this repo actually is. Read that arm as "declared,
  * and not lying", never as "covered".
  *
+ * ## Pinning a property a backend genuinely fails
+ *
+ * A backend that fails one of these is a finding, and the finding is worth keeping. Record it by
+ * **pinning** the failure — `assertFailsWith` around the property, asserting the red — rather than
+ * `@Ignore`ing it, so that fixing the backend reds the pin and names itself instead of turning a
+ * skip nobody reads into a pass nobody notices. Three things a pin needs, none of them optional:
+ *
+ * - **A control source that passes every obligation on the same fixture.** Without one a red says
+ *   only "something failed": it cannot distinguish a broken backend from a harness that could never
+ *   have satisfied the property, and the pin then freezes the harness's own limitation as if it were
+ *   the backend's defect. The control is also the smallest sketch of the fix, so it has to be
+ *   something production could actually be made to do.
+ * - **A red matched on a *class-prefixed* constant, never a bare phrase.** The rig must refuse
+ *   loudly rather than return quietly, and the pin must match that specific refusal — a phrase like
+ *   "no browse session" is already raised for unrelated reasons elsewhere in this repo, so matching
+ *   the words alone lets a pin silently accept a red it was not written for.
+ * - **A tracking issue named in the test's own KDoc**, together with the instruction to delete the
+ *   pin there — the pin is a record of an open defect, and it must say where its own end is decided.
+ *
+ * A pin also means the binding enumerates the properties by hand rather than inheriting them, which
+ * is the lockstep obligation noted above the table.
+ *
  * ## Wiring
  *
  * ```kotlin
