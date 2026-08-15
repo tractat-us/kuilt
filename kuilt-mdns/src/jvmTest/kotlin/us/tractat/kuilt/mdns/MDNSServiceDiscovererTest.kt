@@ -31,7 +31,7 @@ import kotlin.test.assertTrue
  * [MDNSServiceDiscovererFlowTest] tests the [Flow] mechanics using [FakeEventJmDNS].
  */
 private val TEST_SERVICE_TYPE = MDNSServiceType("_kuilt-test._tcp")
-private const val TEST_SERVICE_TYPE_JVM = "_kuilt-test._tcp.local."
+internal const val TEST_SERVICE_TYPE_JVM = "_kuilt-test._tcp.local."
 
 class MDNSServiceDiscovererParserTest {
     private val discoverer = MDNSServiceDiscoverer(TEST_SERVICE_TYPE, CapturingJmDNS())
@@ -271,8 +271,8 @@ class MDNSServiceDiscovererFlowTest {
  * A [JmDNS] stub that captures [ServiceListener]s and lets tests inject
  * [ServiceEvent]s directly — no network I/O.
  */
-internal class FakeEventJmDNS : JmDNS() {
-    private val listeners = mutableListOf<ServiceListener>()
+internal open class FakeEventJmDNS : JmDNS() {
+    protected val listeners: MutableList<ServiceListener> = mutableListOf()
     private val listenerAddedChannel = kotlinx.coroutines.channels.Channel<Unit>(capacity = 1)
 
     val listenerCount: Int get() = listeners.size
@@ -422,7 +422,7 @@ private fun serviceInfoWithTxt(
  * Builds a [ServiceInfo] that returns [host] from [getInetAddresses] and
  * uses map-based TXT properties for reliable [getPropertyString] lookups.
  */
-private fun serviceInfoWithHost(
+internal fun serviceInfoWithHost(
     name: String,
     port: Int,
     host: String,
@@ -530,7 +530,7 @@ private fun serviceInfoWithHost(
     }
 }
 
-private class FakeServiceEvent(
+internal class FakeServiceEvent(
     private val info: ServiceInfo,
 ) : ServiceEvent(info) {
     override fun getDNS(): JmDNS? = null
