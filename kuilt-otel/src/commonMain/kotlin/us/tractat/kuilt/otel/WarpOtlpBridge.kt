@@ -79,7 +79,13 @@ public class WarpOtlpBridge(
                     spansSent = delta.size
                 }
             }
-            if (r.isFailure) { anyFailed = true; logger.debug(r.exceptionOrNull()) { "WarpOtlpBridge: span drain failed" } }
+            // Interpolated rather than attached: an unreachable collector is this bridge's NORMAL
+            // state, not an anomaly — the failure is a transport exception whose type and message
+            // ("Connection refused", "Unresolved address") carry the whole diagnosis, while the
+            // trace is the same HTTP-client frames every time. Attaching it also makes a routine
+            // offline drain a candidate for the process's first symbolication, which on an Apple
+            // target is a one-time cost that collapses under load (#1596; see docs/usage.md).
+            if (r.isFailure) { anyFailed = true; logger.debug { "WarpOtlpBridge: span drain failed: ${r.exceptionOrNull()}" } }
         }
 
         // ── Logs ─────────────────────────────────────────────────────────────
@@ -92,7 +98,7 @@ public class WarpOtlpBridge(
                 val delta = logSnapshot.filterTo(mutableSetOf()) { it.recordId !in digest.recordIds }
                 if (delta.isNotEmpty()) { edge.sendLogs(delta); logsSent = delta.size }
             }
-            if (r.isFailure) { anyFailed = true; logger.debug(r.exceptionOrNull()) { "WarpOtlpBridge: log drain failed" } }
+            if (r.isFailure) { anyFailed = true; logger.debug { "WarpOtlpBridge: log drain failed: ${r.exceptionOrNull()}" } }
         }
 
         // ── Metrics ──────────────────────────────────────────────────────────
@@ -105,7 +111,7 @@ public class WarpOtlpBridge(
                 val delta = points.filterTo(mutableSetOf()) { digest.versions[it.key] != it.valueHash() }
                 if (delta.isNotEmpty()) { edge.sendMetrics(delta); metricsSent = delta.size }
             }
-            if (r.isFailure) { anyFailed = true; logger.debug(r.exceptionOrNull()) { "WarpOtlpBridge: metric drain failed" } }
+            if (r.isFailure) { anyFailed = true; logger.debug { "WarpOtlpBridge: metric drain failed: ${r.exceptionOrNull()}" } }
         }
 
         return if (anyAttempted && anyFailed && spansSent == 0 && logsSent == 0 && metricsSent == 0) {
