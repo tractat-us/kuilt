@@ -31,6 +31,14 @@ kotlin {
             implementation(libs.kotlin.test)
             implementation(libs.kotlinx.coroutines.test)
         }
+        // Android's MDNSServiceDiscoverer is bound to DiscoverySourceConformanceSuite here (#1903).
+        // It runs as a plain JVM unit test against a fake NsdBrowser — NsdManager is a final class
+        // with a package-private constructor, so the seam is the only way to reach this code at all.
+        androidUnitTest.dependencies {
+            implementation(project(":kuilt-conformance"))
+            implementation(libs.kotlin.testJunit)
+            implementation(libs.kotlinx.coroutines.test)
+        }
         jvmMain.dependencies {
             implementation(project(":kuilt-websocket"))
             implementation(libs.jmdns)
