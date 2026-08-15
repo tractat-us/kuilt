@@ -1,7 +1,9 @@
 package us.tractat.kuilt.webrtc.internal
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.StateFlow
 import us.tractat.kuilt.webrtc.IceConfig
+import us.tractat.kuilt.webrtc.IceConnectionState
 import us.tractat.kuilt.webrtc.SignalingMessage
 
 /**
@@ -33,6 +35,23 @@ internal interface RtcPeerConnectionFacade {
      * collector would fail). [WebRTCPeerLink] is the sole collector.
      */
     val incomingBytes: Flow<ByteArray>
+
+    /**
+     * The peer connection's live ICE reachability, or `null` while nothing has been observed.
+     * This is what makes a woven seam's [us.tractat.kuilt.core.Seam.capability] reactive (#1544):
+     * [WebRTCPeerLink] collects it and folds each reading through
+     * [us.tractat.kuilt.webrtc.toAvailability] into the availability it publishes.
+     *
+     * Modelled as latest-value **[StateFlow] state**, not a lossy event stream — the current ICE
+     * state is a level, and a seam constructed after the connection came up must see the latest
+     * value rather than miss it.
+     *
+     * **Deliberately abstract, with no interface default.** A default of "nothing observed" would
+     * let a new binding inherit silence and publish an honest-but-permanently-`Unknown` capability
+     * with nothing failing, which is exactly how this fabric's `reportsLiveCapability = true`
+     * promise would rot. Every implementation is made to answer.
+     */
+    val iceConnectionState: StateFlow<IceConnectionState?>
 
     /** Suspends until the data channel transitions to `open`. */
     suspend fun awaitDataChannelOpen()

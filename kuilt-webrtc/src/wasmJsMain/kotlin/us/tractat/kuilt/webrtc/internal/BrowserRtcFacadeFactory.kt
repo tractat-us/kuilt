@@ -9,14 +9,19 @@ import kotlinx.coroutines.await
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.consumeAsFlow
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.webrtc.IceConfig
+import us.tractat.kuilt.webrtc.IceConnectionState
 import us.tractat.kuilt.webrtc.IceServer
 import us.tractat.kuilt.webrtc.IceTransportPolicy
 import us.tractat.kuilt.webrtc.SignalingMessage
+import us.tractat.kuilt.webrtc.iceConnectionStateOf
 import kotlin.coroutines.CoroutineContext
 
 private val log = KotlinLogging.logger("us.tractat.kuilt.webrtc.internal.BrowserRtcFacadeFactory")
@@ -108,6 +113,14 @@ private class BrowserRtcFacade(
         iceCandidatesChan.consumeAsFlow()
     override val incomingBytes: Flow<ByteArray> = spool.incoming
 
+    // The #1544 live-capability observer. Seeded from the peer connection's CURRENT
+    // `iceConnectionState` rather than from `null`: the property is readable synchronously and is
+    // always populated (it starts at "new"), so a seam woven here has a real reading immediately
+    // and only falls back to the unobserved floor if the browser reports a state outside the W3C
+    // vocabulary. `oniceconnectionstatechange` below keeps it live from then on.
+    private val _iceConnectionState = MutableStateFlow(iceConnectionStateOf(pc.iceConnectionState))
+    override val iceConnectionState: StateFlow<IceConnectionState?> = _iceConnectionState.asStateFlow()
+
     init {
         // Single drain coroutine: forwards frames from the JS-callback bridge to the spool in
         // FIFO order. A single coroutine (not one per frame) preserves delivery ordering.
@@ -129,6 +142,13 @@ private class BrowserRtcFacade(
         }
         pcSetOnIceConnectionStateChange(pc) { state ->
             log.debug { "rtc iceConnectionState=$state dataChannelOpenCompleted=${dataChannelOpen.isCompleted}" }
+            // Publish EVERY transition, including one we cannot name: `iceConnectionStateOf`
+            // returns null for a string outside the W3C vocabulary, which the seam folds back to
+            // the honest Unknown floor. Freezing the previous reading instead would leave a stale
+            // verdict standing on a connection whose state we have demonstrably lost track of.
+            val parsed = iceConnectionStateOf(state)
+            if (parsed == null) log.warn { "rtc unrecognised iceConnectionState=$state — reporting Unknown" }
+            _iceConnectionState.value = parsed
             if (state == "failed" && !dataChannelOpen.isCompleted) {
                 connectionFailed.complete(IllegalStateException("ICE failed before data channel opened"))
             }
