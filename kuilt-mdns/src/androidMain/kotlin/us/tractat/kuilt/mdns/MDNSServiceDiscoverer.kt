@@ -2,6 +2,7 @@ package us.tractat.kuilt.mdns
 
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -58,6 +59,14 @@ public class MDNSServiceDiscoverer internal constructor(
                 browser.browse(
                     serviceType.forNsd(),
                     object : NsdBrowseSink {
+                        override fun onFound(
+                            serviceName: String,
+                            requestResolve: () -> Unit,
+                        ) {
+                            // Resolve on this registration's own account — see NsdBrowseSink.onFound.
+                            requestResolve()
+                        }
+
                         override fun onResolved(record: NsdRecord) {
                             record.toAdvertisement()?.let { trySend(it) }
                         }
@@ -71,7 +80,10 @@ public class MDNSServiceDiscoverer internal constructor(
                     },
                 )
 
-            awaitClose { runCatchingCancellable { handle.stop() } }
+            awaitClose {
+                runCatchingCancellable { handle.stop() }
+                    .onFailure { logger.debug(it) { "stopping NSD discovery failed" } }
+            }
         }
 
     /**
@@ -112,6 +124,16 @@ public class MDNSServiceDiscoverer internal constructor(
                 browser.browse(
                     serviceType.forNsd(),
                     object : NsdBrowseSink {
+                        override fun onFound(
+                            serviceName: String,
+                            requestResolve: () -> Unit,
+                        ) {
+                            // Resolve on our own account: a lone departures() collector has nobody
+                            // else to request resolution on its behalf, and the peer id exists
+                            // nowhere but the resolved record. See NsdBrowseSink.onFound.
+                            requestResolve()
+                        }
+
                         override fun onResolved(record: NsdRecord) {
                             val peerId =
                                 record.attributes[MDNSAdvertisement.TXT_KEY_PEER_ID] ?: return
@@ -128,9 +150,14 @@ public class MDNSServiceDiscoverer internal constructor(
                     },
                 )
 
-            awaitClose { runCatchingCancellable { handle.stop() } }
+            awaitClose {
+                runCatchingCancellable { handle.stop() }
+                    .onFailure { logger.debug(it) { "stopping NSD discovery failed" } }
+            }
         }
 }
+
+private val logger = KotlinLogging.logger("us.tractat.kuilt.mdns.MDNSServiceDiscoverer")
 
 /**
  * Parses a resolved [NsdRecord] into an [MDNSAdvertisement].

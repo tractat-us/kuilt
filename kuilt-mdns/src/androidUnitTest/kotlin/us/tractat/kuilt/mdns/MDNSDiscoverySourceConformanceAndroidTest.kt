@@ -8,9 +8,11 @@ import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.yield
 import us.tractat.kuilt.conformance.DepartureFixture
 import us.tractat.kuilt.conformance.DiscoverySourceConformanceSuite
+import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.core.discovery.DiscoveryKind
 import us.tractat.kuilt.core.discovery.PeerDiscoverySource
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -120,17 +122,48 @@ class MDNSAndroidDepartureRigTest {
         browser.register(ARRIVING_SERVICE_NAME, ARRIVING_PEER_ID, ARRIVING_PORT, ARRIVING_HOST)
         browser.unregister(ARRIVING_SERVICE_NAME)
 
-        val resolved = seen.resolved ?: error("register must resolve to every live registration")
-        assertEquals(ARRIVING_SERVICE_NAME, seen.lost, "a removal is keyed by service name")
-        assertEquals(
-            ARRIVING_PEER_ID,
-            resolved.attributes[MDNSAdvertisement.TXT_KEY_PEER_ID],
-            "resolution is the only place the peer id is ever visible",
+        val resolved = seen.resolved ?: error("a registration that asks must be resolved")
+        assertAll(
+            { assertEquals(ARRIVING_SERVICE_NAME, seen.lost, "a removal is keyed by service name") },
+            {
+                assertEquals(
+                    ARRIVING_PEER_ID,
+                    resolved.attributes[MDNSAdvertisement.TXT_KEY_PEER_ID],
+                    "resolution is the only place the peer id is ever visible",
+                )
+            },
+            {
+                assertTrue(
+                    ARRIVING_SERVICE_NAME != ARRIVING_PEER_ID,
+                    "the harness's service name and peer id must differ, or the key-equality " +
+                        "obligation cannot tell a correct departure from a wrongly-keyed one",
+                )
+            },
         )
-        assertTrue(
-            ARRIVING_SERVICE_NAME != ARRIVING_PEER_ID,
-            "the harness's service name and peer id must differ, or the key-equality obligation " +
-                "cannot tell a correct departure from a wrongly-keyed one",
+    }
+
+    /**
+     * A registration that never calls `requestResolve` is never resolved, however many siblings do.
+     *
+     * This is the fixture setting that keeps the lone-collector obligation from being vacuous. Were
+     * the fake to resolve unprompted, a `departures()` that free-rides on a concurrent
+     * `discoveries()` collector's resolutions would pass every property here — the exact shape
+     * #1917 named on the JVM.
+     */
+    @Test
+    fun aRegistrationThatNeverAsksIsNeverResolvedEvenWhileASiblingAsks() {
+        val browser = RegistryNsdBrowser()
+        val asks = RecordingSink()
+        val neverAsks = RecordingSink(resolves = false)
+        browser.browse(CONFORMANCE_SERVICE_TYPE.forNsd(), asks)
+        browser.browse(CONFORMANCE_SERVICE_TYPE.forNsd(), neverAsks)
+
+        browser.register(ARRIVING_SERVICE_NAME, ARRIVING_PEER_ID, ARRIVING_PORT, ARRIVING_HOST)
+
+        assertAll(
+            { assertEquals(ARRIVING_SERVICE_NAME, neverAsks.found, "every registration is told the name") },
+            { assertNull(neverAsks.resolved, "a registration that never asks must never be resolved") },
+            { assertEquals(ARRIVING_PEER_ID, asks.resolved?.attributes?.get(MDNSAdvertisement.TXT_KEY_PEER_ID)) },
         )
     }
 
@@ -193,14 +226,52 @@ class MDNSAndroidDepartureRigTest {
     fun theParasiticSourceStillPassesTheObligationThatCollectsBothFeeds() {
         (object : ParasiticSuite() {}).departureKeyEqualsThePeerKeyThatWasDiscovered()
     }
+
+    /**
+     * The canonical free-riding shape reds the lone-collector obligation: a peer-id map hoisted to a
+     * field that only `discoveries()`' sink ever writes.
+     *
+     * This is the rig that pins the sub-property the seam boundary was chosen to keep testable — a
+     * `departures()` that opens its own registration but never requests its own resolutions. Under a
+     * seam that resolved on the caller's behalf this source would be unwritable, and the obligation
+     * would be discharged by construction rather than by test.
+     */
+    @Test
+    fun aDeparturesFeedThatNeverRequestsItsOwnResolutionsRedsTheLoneCollectorObligation() {
+        val failure = assertFailsWith<AssertionError> {
+            (object : FreeRidingSuite() {}).departuresEmitsWithNoConcurrentDiscoveriesCollector()
+        }
+        assertTrue(
+            failure.message.orEmpty().contains("collected on its own"),
+            "expected the lone-collector obligation to red, got: ${failure.message}",
+        )
+    }
+
+    /** …and it too passes the obligation that collects both feeds, so that red is specific. */
+    @Test
+    fun theFreeRidingSourceStillPassesTheObligationThatCollectsBothFeeds() {
+        (object : FreeRidingSuite() {}).departureKeyEqualsThePeerKeyThatWasDiscovered()
+    }
 }
 
 // ── rig sources ───────────────────────────────────────────────────────────────
 
 /** Captures the last of each callback, for the fake-honesty assertions. */
-private class RecordingSink : NsdBrowseSink {
+private class RecordingSink(
+    /** Whether to ask for resolution, so a rig can model a listener that never does. */
+    private val resolves: Boolean = true,
+) : NsdBrowseSink {
+    var found: String? = null
     var resolved: NsdRecord? = null
     var lost: String? = null
+
+    override fun onFound(
+        serviceName: String,
+        requestResolve: () -> Unit,
+    ) {
+        found = serviceName
+        if (resolves) requestResolve()
+    }
 
     override fun onResolved(record: NsdRecord) {
         resolved = record
@@ -232,6 +303,13 @@ private class WrongKeySource(
                 browser.browse(
                     CONFORMANCE_SERVICE_TYPE.forNsd(),
                     object : NsdBrowseSink {
+                        // Asks, like a correct listener: this rig is broken in the KEY it emits,
+                        // not in whether it resolves, so it must red property 1 and not property 2.
+                        override fun onFound(
+                            serviceName: String,
+                            requestResolve: () -> Unit,
+                        ) = requestResolve()
+
                         override fun onResolved(record: NsdRecord) = Unit
 
                         override fun onLost(serviceName: String) {
@@ -270,6 +348,14 @@ private class ParasiticSource(
                 browser.browse(
                     CONFORMANCE_SERVICE_TYPE.forNsd(),
                     object : NsdBrowseSink {
+                        // Asks on its own account: this rig free-rides on the discoveries()
+                        // COLLECTOR being live, not on its resolutions — a distinct defect from
+                        // FreeRidingSource, and both must red the same obligation.
+                        override fun onFound(
+                            serviceName: String,
+                            requestResolve: () -> Unit,
+                        ) = requestResolve()
+
                         override fun onResolved(record: NsdRecord) {
                             record.attributes[MDNSAdvertisement.TXT_KEY_PEER_ID]
                                 ?.let { peerIdsByServiceName[record.serviceName] = it }
@@ -285,6 +371,99 @@ private class ParasiticSource(
                 )
             awaitClose { handle.stop() }
         }
+}
+
+/**
+ * The canonical free-riding source: its `departures()` opens a browse registration of its own, but
+ * never asks for a resolution — it reads a peer-id map that only `discoveries()`' sink ever fills.
+ *
+ * With both feeds collected it looks perfect. Collected alone, the map is empty and it emits
+ * nothing, which is precisely what `discoveryRoster` produces: `merge` subscribes to the two feeds
+ * in separately-launched coroutines, so the departure feed can attach without the arrival feed
+ * having resolved anything yet.
+ */
+private class FreeRidingSource(
+    private val browser: RegistryNsdBrowser,
+) : PeerDiscoverySource {
+    // Hoisted to a field, written only by discoveries()' sink. This is the defect.
+    private val peerIdsByServiceName = mutableMapOf<String, String>()
+
+    override val kind: DiscoveryKind = DiscoveryKind.Mdns
+
+    override fun discoveries(): Flow<Tag> =
+        callbackFlow {
+            val handle =
+                browser.browse(
+                    CONFORMANCE_SERVICE_TYPE.forNsd(),
+                    object : NsdBrowseSink {
+                        override fun onFound(
+                            serviceName: String,
+                            requestResolve: () -> Unit,
+                        ) = requestResolve()
+
+                        override fun onResolved(record: NsdRecord) {
+                            val peerId =
+                                record.attributes[MDNSAdvertisement.TXT_KEY_PEER_ID] ?: return
+                            peerIdsByServiceName[record.serviceName] = peerId
+                            trySend(
+                                MDNSAdvertisement(
+                                    host = record.host ?: return,
+                                    port = record.port,
+                                    serverPeerId = PeerId(peerId),
+                                    sessionName = record.serviceName,
+                                ),
+                            )
+                        }
+
+                        override fun onLost(serviceName: String) = Unit
+
+                        override fun onFailed(cause: Throwable) = Unit
+                    },
+                )
+            awaitClose { handle.stop() }
+        }
+
+    override fun departures(): Flow<String> =
+        callbackFlow {
+            val handle =
+                browser.browse(
+                    CONFORMANCE_SERVICE_TYPE.forNsd(),
+                    object : NsdBrowseSink {
+                        // Never asks. Whatever it knows, a sibling collector taught it.
+                        override fun onFound(
+                            serviceName: String,
+                            requestResolve: () -> Unit,
+                        ) = Unit
+
+                        override fun onResolved(record: NsdRecord) = Unit
+
+                        override fun onLost(serviceName: String) {
+                            peerIdsByServiceName.remove(serviceName)?.let { trySend(it) }
+                        }
+
+                        override fun onFailed(cause: Throwable) = Unit
+                    },
+                )
+            awaitClose { handle.stop() }
+        }
+}
+
+private abstract class FreeRidingSuite : DiscoverySourceConformanceSuite() {
+    private val browsers = mutableMapOf<PeerDiscoverySource, RegistryNsdBrowser>()
+
+    override fun newSource(): PeerDiscoverySource {
+        val browser = RegistryNsdBrowser()
+        return FreeRidingSource(browser).also { browsers[it] = browser }
+    }
+
+    override suspend fun causeArrival(source: PeerDiscoverySource) {
+        val browser = browsers.getValue(source)
+        browser.awaitRegistrations()
+        browser.register(ARRIVING_SERVICE_NAME, ARRIVING_PEER_ID, ARRIVING_PORT, ARRIVING_HOST)
+    }
+
+    override fun departureFixture(source: PeerDiscoverySource): DepartureFixture =
+        DepartureFixture.Emits { browsers.getValue(source).unregister(ARRIVING_SERVICE_NAME) }
 }
 
 private abstract class WrongKeySuite : DiscoverySourceConformanceSuite() {
@@ -328,15 +507,19 @@ private abstract class ParasiticSuite : DiscoverySourceConformanceSuite() {
 /**
  * A fake [NsdBrowser] that models the NSD lifecycle faithfully enough to reach #1903.
  *
- * Three behaviours are load-bearing, each read off the platform contract:
+ * Four behaviours are load-bearing, each read off the platform contract:
  *
  *  1. **A removal carries only the service name.** `NsdManager` hands `onServiceLost` an
  *     *unresolved* `NsdServiceInfo` whose `attributes` map is empty, so a source that never
  *     remembered the peer id at resolution time has no way to produce one. That is the defect.
  *  2. **Nothing is replayed.** [register] fans out only to registrations open at that instant, so a
- *     `departures()` that opened none — the pre-fix `emptyFlow()` — learns nothing, and a source
- *     free-riding on a sibling collector's registration is visible as such.
- *  3. **Each [browse] call is independent.** Stopping one registration leaves the others hearing,
+ *     `departures()` that opened none — the pre-fix `emptyFlow()` — learns nothing.
+ *  3. **Resolution happens only on request**, and only for the registration that asked. This is what
+ *     makes free-riding *visible*: a `departures()` that opens a registration but never calls
+ *     `requestResolve` never learns a peer id, however busy a concurrent `discoveries()` collector
+ *     is. Relaxing this to resolve automatically would green that source, which is exactly the
+ *     fixture-configuration vacuity this repo keeps rediscovering.
+ *  4. **Each [browse] call is independent.** Stopping one registration leaves the others hearing,
  *     mirroring one `NsdManager.discoverServices` call per listener.
  *
  * Callbacks fire synchronously on the caller's thread, so the whole harness runs in virtual time —
@@ -384,10 +567,13 @@ internal class RegistryNsdBrowser : NsdBrowser {
     }
 
     /**
-     * Announce a service and resolve it, to every registration open right now.
+     * Announce a service to every registration open right now, delivering the resolved record only
+     * to those that ask for it.
      *
-     * NSD's found-then-resolve handshake is collapsed into one step because [NsdBrowser.browse] owns
-     * it: the seam hands its caller resolved records only.
+     * NSD's found-then-resolve handshake is modelled rather than collapsed: `onFound` carries the
+     * name alone, and the TXT map arrives only through the `requestResolve` the sink chose to call.
+     * A sink that never calls it can never learn a peer id — which is the free-riding shape the
+     * lone-collector obligation exists to catch.
      */
     fun register(
         serviceName: String,
@@ -407,7 +593,7 @@ internal class RegistryNsdBrowser : NsdBrowser {
                         MDNSAdvertisement.TXT_KEY_WS_PATH to MDNSAdvertisement.DEFAULT_WS_PATH,
                     ),
             )
-        sinks.toList().forEach { it.onResolved(record) }
+        sinks.toList().forEach { sink -> sink.onFound(serviceName) { sink.onResolved(record) } }
     }
 
     /**

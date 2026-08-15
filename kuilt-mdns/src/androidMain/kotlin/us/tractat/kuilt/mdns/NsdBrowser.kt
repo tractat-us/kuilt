@@ -21,7 +21,13 @@ internal class NsdRecord(
     val attributes: Map<String, String>,
 )
 
-/** A live browse registration. [stop] tears it down; calling it twice must be harmless. */
+/**
+ * A live browse registration.
+ *
+ * [stop] is called exactly once, from the owning flow's `awaitClose`. It is deliberately **not**
+ * documented as idempotent: [NsdManager.stopServiceDiscovery] throws on a listener it does not know,
+ * so a second call would not be harmless and no caller here makes one.
+ */
 internal fun interface NsdBrowseHandle {
     fun stop()
 }
@@ -29,7 +35,26 @@ internal fun interface NsdBrowseHandle {
 /** What one browse registration reports back to whoever opened it. */
 internal interface NsdBrowseSink {
 
-    /** A service was found **and resolved** — see [NsdBrowser] on why the seam bundles the two. */
+    /**
+     * A service was found, and is **unresolved**: only [serviceName] is known, because that is all
+     * NSD's browse callback carries.
+     *
+     * Call [requestResolve] to ask for its TXT — the seam deliberately does *not* resolve on the
+     * sink's behalf, and a sink that never calls it never learns anything but names. That placement
+     * is the point: `departures()` must request its own resolutions rather than free-ride on the
+     * ones a concurrent `discoveries()` collector triggered, and keeping the request on this side of
+     * the seam is what makes the free-riding shape both *representable* and *red-able* under
+     * `DiscoverySourceConformanceSuite.departuresEmitsWithNoConcurrentDiscoveriesCollector`.
+     *
+     * [requestResolve] is scoped to this callback because that is how the platform works: NSD
+     * resolves the exact [NsdServiceInfo] it handed you, not a name looked up later.
+     */
+    fun onFound(
+        serviceName: String,
+        requestResolve: () -> Unit,
+    )
+
+    /** A resolution requested via [onFound] completed. */
     fun onResolved(record: NsdRecord)
 
     /**
@@ -56,15 +81,12 @@ internal interface NsdBrowseSink {
  * replaces. It is the same shape `:kuilt-nearby` already uses for Google Nearby (`NearbyApi` /
  * `GmsNearbyApi`).
  *
- * **[browse] resolves on the registration's own account.** Each call opens an independent NSD
- * discovery registration *and* drives its own resolutions, so a caller never has to hope somebody
- * else asked. That is deliberate placement rather than convenience: the `PeerDiscoverySource`
- * contract requires `departures()` to work when it is the only thing being collected, and the
- * defect that requirement exists to catch — a departure feed that free-rides on the resolutions a
- * concurrent `discoveries()` collector triggered — is *unrepresentable* once every registration
- * resolves for itself. `DiscoverySourceConformanceSuite`'s
- * `departuresEmitsWithNoConcurrentDiscoveriesCollector` still holds the remaining half of it: that
- * `departures()` opens a registration at all.
+ * The seam is drawn **below** the decision to resolve, not above it: [browse] reports a bare name
+ * and hands back a request, so "each feed asks for its own resolutions" stays a property of
+ * [MDNSServiceDiscoverer], where the conformance suite can see it fail. What remains untested is
+ * only what any seam leaves untested — that [NsdManagerBrowser] itself honours this contract
+ * against the real platform. Nothing in this repo can drive Android's NSD stack in a unit test;
+ * **#2407** tracks closing that.
  */
 internal fun interface NsdBrowser {
 
@@ -81,52 +103,34 @@ internal fun interface NsdBrowser {
 /**
  * The real [NsdBrowser], backed by the platform [NsdManager].
  *
- * All state is local to a [browse] call, so two registrations never share a queue, a listener, or a
- * resolution — which is what makes two concurrently-collected feeds independent.
+ * Registration state — the listener — is local to a [browse] call, so two registrations never share
+ * a listener and each feed hears the platform independently.
  *
- * [NsdManager.resolveService] can only handle one resolution at a time, so requests are serialised
- * through an in-memory queue. That queue and its `synchronized` guarding are moved verbatim from
- * `MDNSServiceDiscoverer.discoveries()`, where they used to live.
+ * **Resolution state is per-manager, not per-registration.** [NsdManager.resolveService] can only
+ * handle one resolution at a time, and that is a property of the manager rather than of any one
+ * listener, so the serialising queue is a field here. It has to be: `discoveries()` and
+ * `departures()` are separate registrations over the *same* manager, so a per-registration queue
+ * would let two resolutions run concurrently and the second would fail
+ * ([NsdManager.FAILURE_ALREADY_ACTIVE]) on every API level below 31 — this module's `minSdk` is 24.
+ * Each queued entry carries the sink that asked, so results still route back to the right feed.
  */
 internal class NsdManagerBrowser(
     private val nsdManager: NsdManager,
 ) : NsdBrowser {
 
+    private class PendingResolution(
+        val info: NsdServiceInfo,
+        val sink: NsdBrowseSink,
+    )
+
+    private val lock = Any()
+    private val queue = ArrayDeque<PendingResolution>()
+    private var resolving = false
+
     override fun browse(
         serviceType: String,
         sink: NsdBrowseSink,
     ): NsdBrowseHandle {
-        val lock = Any()
-        val queue = ArrayDeque<NsdServiceInfo>()
-        var resolving = false
-
-        fun resolveNext() {
-            val next =
-                synchronized(lock) {
-                    if (resolving || queue.isEmpty()) return
-                    resolving = true
-                    queue.removeFirst()
-                }
-            nsdManager.resolveService(
-                next,
-                object : NsdManager.ResolveListener {
-                    override fun onResolveFailed(
-                        info: NsdServiceInfo,
-                        errorCode: Int,
-                    ) {
-                        synchronized(lock) { resolving = false }
-                        resolveNext()
-                    }
-
-                    override fun onServiceResolved(info: NsdServiceInfo) {
-                        synchronized(lock) { resolving = false }
-                        sink.onResolved(info.toRecord())
-                        resolveNext()
-                    }
-                },
-            )
-        }
-
         val listener =
             object : NsdManager.DiscoveryListener {
                 override fun onDiscoveryStarted(type: String) {}
@@ -146,8 +150,7 @@ internal class NsdManagerBrowser(
                 ) {}
 
                 override fun onServiceFound(info: NsdServiceInfo) {
-                    synchronized(lock) { queue += info }
-                    resolveNext()
+                    sink.onFound(info.serviceName) { enqueue(PendingResolution(info, sink)) }
                 }
 
                 override fun onServiceLost(info: NsdServiceInfo) {
@@ -158,6 +161,38 @@ internal class NsdManagerBrowser(
         nsdManager.discoverServices(serviceType, NsdManager.PROTOCOL_DNS_SD, listener)
 
         return NsdBrowseHandle { nsdManager.stopServiceDiscovery(listener) }
+    }
+
+    private fun enqueue(pending: PendingResolution) {
+        synchronized(lock) { queue += pending }
+        resolveNext()
+    }
+
+    private fun resolveNext() {
+        val next =
+            synchronized(lock) {
+                if (resolving || queue.isEmpty()) return
+                resolving = true
+                queue.removeFirst()
+            }
+        nsdManager.resolveService(
+            next.info,
+            object : NsdManager.ResolveListener {
+                override fun onResolveFailed(
+                    info: NsdServiceInfo,
+                    errorCode: Int,
+                ) {
+                    synchronized(lock) { resolving = false }
+                    resolveNext()
+                }
+
+                override fun onServiceResolved(info: NsdServiceInfo) {
+                    synchronized(lock) { resolving = false }
+                    next.sink.onResolved(info.toRecord())
+                    resolveNext()
+                }
+            },
+        )
     }
 }
 
