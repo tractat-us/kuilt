@@ -126,7 +126,7 @@ internal class AndroidRadioObserver(private val appContext: Context) {
 
     private fun bluetoothStatus(): NearbyRadioStatus {
         val manager = appContext.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
-        val adapter = manager!!.adapter ?: return NearbyRadioStatus.Unsupported
+        val adapter = manager?.adapter ?: return NearbyRadioStatus.Unsupported
         return try {
             when (adapter.state) {
                 BluetoothAdapter.STATE_ON -> NearbyRadioStatus.On
