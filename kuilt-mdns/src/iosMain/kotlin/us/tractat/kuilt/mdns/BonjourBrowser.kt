@@ -4,13 +4,13 @@
 package us.tractat.kuilt.mdns
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
 import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.ObjCSignatureOverride
 import kotlinx.cinterop.readBytes
 import kotlinx.cinterop.reinterpret
-import kotlinx.atomicfu.locks.reentrantLock
-import kotlinx.atomicfu.locks.withLock
 import platform.Foundation.NSData
 import platform.Foundation.NSNetService
 import platform.Foundation.NSNetServiceBrowser
@@ -338,18 +338,23 @@ internal class ServiceDelegate(
     }
 
     override fun netServiceDidResolveAddress(sender: NSNetService) {
-        release(sender)
-
-        val dict = sender.TXTRecordData()?.txtDictionary().orEmpty()
-
-        sink.onResolved(
+        // Read the record BEFORE release(), which now stops the service. Read-then-stop is Apple's
+        // own documented pattern, and nothing says a stopped service keeps its resolved `hostName`
+        // and TXT — so reading afterwards would rest on undocumented behaviour, and a nulled
+        // `hostName` would empty discoveries() on real Bonjour and nowhere else, which is precisely
+        // the class of defect no test here can see.
+        val record =
             BonjourRecord(
                 serviceName = sender.name(),
                 host = sender.hostName,
                 port = sender.port().toInt(),
-                txt = dict.decodeUtf8Values(),
-            ),
-        )
+                txt = sender.TXTRecordData()?.txtDictionary().orEmpty().decodeUtf8Values(),
+            )
+
+        // Before onResolved, keeping the lock ordering one-directional: this releases the delegate's
+        // lock before the sink takes the departures map's.
+        release(sender)
+        sink.onResolved(record)
     }
 
     override fun netService(
@@ -360,21 +365,27 @@ internal class ServiceDelegate(
     }
 
     /**
-     * A service has reported an address: give its pointer back now rather than at teardown.
+     * A service will not be resolved further through this delegate: stop it and give its pointer
+     * back now, rather than at teardown.
      *
-     * `netServiceDidResolveAddress:` is **not** terminal — Apple documents it as repeatable, once
-     * per batch of addresses resolved. Clearing the delegate here is what makes it effectively
-     * single-shot: later batches find no delegate and are dropped, which is harmless because only
-     * `hostName` is read and it does not change between batches.
+     * Both callers reach a point of no further interest, by different routes. From
+     * `netServiceDidResolveAddress:` an address *was* reported — and that callback is **not**
+     * terminal, Apple documents it as repeatable once per batch of addresses, so clearing the
+     * delegate is what makes it effectively single-shot; later batches find no delegate and are
+     * dropped, which is harmless because only `hostName` is read and it does not change between
+     * batches. From `netService:didNotResolve:` no address was reported at all, and there is nothing
+     * left to wait for.
      *
-     * The real cost is an **early detach**: the service leaves [attached], so [detachAll] will not
-     * `stop()` it, and an unfinished resolution runs to its [RESOLVE_TIMEOUT_S] timeout still holding
-     * a run-loop source. That is a bounded resource cost, not a dangling pointer — the delegate is
-     * already cleared, so nothing can call back into this object.
+     * `stop()` first, then `setDelegate(null)` — the order [detachAll] uses, and Apple's own pattern
+     * for a service you are finished with. Stopping *here* is what makes the early detach free: the
+     * service leaves [attached] and so is never stopped by [detachAll], and without this an
+     * unfinished resolution would sit until its [RESOLVE_TIMEOUT_S] timeout still holding a run-loop
+     * source.
      */
     private fun release(service: NSNetService) {
         lock.withLock {
             if (!attached.remove(service)) return@withLock
+            guarded("stopping a resolved Bonjour service") { service.stop() }
             guarded("clearing a resolved Bonjour service delegate") { service.setDelegate(null) }
         }
     }
