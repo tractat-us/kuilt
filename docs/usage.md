@@ -580,6 +580,86 @@ deduplicates retries transparently.
 See `docs/architecture.md#server-cluster-topology` for the topology design and
 safety rationale.
 
+## On iPhone and Mac: keeping the first error log cheap
+
+The first time your app logs an error with a stack trace attached, something has
+to turn a list of raw memory addresses into function names and line numbers you
+can read. On Apple platforms the default way of doing that asks a shared system
+service, off in another process. When the machine is quiet the answer comes back
+in a few hundredths of a second. When the machine is busy, that service is
+competing for the same CPU as everything else, and the answer can take **seconds**.
+
+It happens once per app launch — every later stack trace is fast either way. But
+"the machine is busy and the network is misbehaving" is one situation, not two,
+so the once is reasonably likely to land at the worst moment.
+
+There is a one-line build setting that removes the variability, and it costs you
+nothing: your traces still have function names and `file:line`, they are just
+resolved inside your own process instead of by asking a neighbour.
+
+```kotlin
+// The APP's build.gradle.kts. This configures a final binary, so it belongs in
+// the application module — a library like kuilt ships klibs and cannot set it
+// for you.
+kotlin {
+    targets.withType<org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget>().configureEach {
+        binaries.all {
+            binaryOptions["sourceInfoType"] = "libbacktrace"
+        }
+    }
+}
+```
+
+### What was measured
+
+`coresymbolication` is the Apple-target default and does the cross-process call;
+`libbacktrace` resolves in-process. Cost of the **first** stack trace materialized
+in a process — `Throwable.stackTrace`, `stackTraceToString()`, or any
+`logger.warn(e) { … }` that gets rendered:
+
+| `sourceInfoType` | first trace, idle box | first trace, saturated box |
+|---|---|---|
+| `coresymbolication` (default) | ~65 ms (~356 ms cold) | **~6.0–6.5 s** |
+| `libbacktrace` | ~7 ms | **~7 ms — flat** |
+
+Every subsequent trace is ~2–3 ms either way, and a `logger.warn { … }` with no
+throwable never resolves anything at all (~2.5 µs). The ~100× gap under load is
+the whole effect: idle, this is not worth thinking about.
+
+### What has *not* been confirmed
+
+This is a measured effect with a known lever, **not a confirmed shipped defect** —
+be sceptical of it in the following ways:
+
+- The numbers are from a **debug `.kexe` on a development Mac** (macosArm64,
+  16-core). A release build for a real device may behave differently.
+- The "saturated" column used **synthetic CPU saturation** (`yes > /dev/null` ×32).
+  Whether a real iOS device under realistic load starves the same system service
+  comparably is **unverified**.
+- kuilt ships **klibs**, so nothing here is a property of kuilt's artifacts — the
+  consuming application picks `sourceInfoType` for the binary it builds, and this
+  section is telling you the choice exists.
+
+kuilt sets `libbacktrace` for its **own test binaries** (see
+[`build-logic/src/main/kotlin/kuilt.kmp-library.gradle.kts`](../build-logic/src/main/kotlin/kuilt.kmp-library.gradle.kts)),
+where the same one-time cost was landing inside whichever test happened to log a
+throwable first and reading as a load-dependent flake.
+
+### Why kuilt does not just stop logging traces
+
+The obvious alternative is for kuilt to stop attaching throwables to its own log
+lines. It is the wrong trade, because the cost is **one-time per process**: any
+one of the ~40 throwable-attached log sites in the library could be the one that
+pays it, so removing the exposure would mean converting essentially *all* of them.
+That trades away stack traces everywhere, permanently, to avoid a single
+tens-of-milliseconds cost — and it only helps a consumer who has not already set
+`libbacktrace`, which is flat under load anyway.
+
+So kuilt drops the trace only where the failure is routine and the exception's
+type and message say everything the trace would (an unreachable telemetry
+collector; a log entry that was never meant to decode). Everywhere the failure is
+genuinely unexpected, the trace stays.
+
 ## For coding agents
 
 If you develop against kuilt with a coding agent (Claude Code, Cursor, …), install

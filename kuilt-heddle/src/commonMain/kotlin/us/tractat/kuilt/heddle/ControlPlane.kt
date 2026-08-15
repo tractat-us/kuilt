@@ -504,8 +504,14 @@ internal class HeddleControlPlane(
      * An entry that does not decode as a [ControlEnvelope] is **skipped** — the intended case is a
      * genuine non-heddle entry sharing the log. The skip is unavoidable but not silent: it is logged
      * at `warn` with the entry's **index** (the identity — it names the exact log position a reader
-     * can go re-fetch) plus the term and byte length as supporting detail, and the decode failure as
-     * the cause. Reason (#1717): the decode cannot distinguish *"not mine"* from *"mine, but no
+     * can go re-fetch) plus the term and byte length as supporting detail, and the decode failure's
+     * **type and message** — interpolated, not attached as the cause, because this line is on the
+     * expected path for every non-heddle entry and a replay walks the whole log on every boot. What
+     * a reader needs from a CBOR failure is which kind it was (`"Unexpected CBOR major type"` vs
+     * `"Field 'x' is required"`); the trace under it is kotlinx-serialization's own frames, the same
+     * ones every time. Attaching it would also put a routine skip in line to be the process's first
+     * symbolication, a one-time cost on Apple targets that collapses under load (#1596).
+     * Reason (#1717): the decode cannot distinguish *"not mine"* from *"mine, but no
      * longer decodable"*, and governed nodes replay from index 1 on every boot — so a
      * [ControlEnvelope]/[ControlCommand] **schema change** that stranded an older entry would make
      * those acts vanish from the projection (a `Prepare` disappears, its edge is never known) while
@@ -522,10 +528,11 @@ internal class HeddleControlPlane(
         }
         val envelope = decoded.getOrNull()
         if (envelope == null) {
-            logger.warn(decoded.exceptionOrNull()) {
+            logger.warn {
                 "[heddle:${self.value}] skipping undecodable committed entry at index ${entry.index} " +
                     "(term ${entry.term}, ${entry.command.size} bytes) — expected for a non-heddle entry; " +
-                    "if this was a heddle act, its effect is now missing from the projection (#1717)."
+                    "if this was a heddle act, its effect is now missing from the projection (#1717). " +
+                    "Decode failure: ${decoded.exceptionOrNull()}"
             }
         }
         lock.withLock {

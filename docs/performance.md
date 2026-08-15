@@ -17,6 +17,12 @@ same scenarios over real TCP sockets on localhost to confirm the in-memory predi
 The harness was added to give the library an evidence base: not because the code was slow,
 but because without measurement it was impossible to know *when* a change made things worse.
 
+Everything below is about **message counts** — how much traffic a session generates as it
+grows. One latency effect that is not about message counts at all lives elsewhere: on iOS and
+macOS the first error log that carries a stack trace pays a one-time cost that gets much worse
+on a busy machine, and the consuming app has a one-line setting that removes it. See
+[usage.md](usage.md#on-iphone-and-mac-keeping-the-first-error-log-cheap).
+
 ## Consensus: how many messages does an agreement cost?
 
 When N peers need to agree on something in order — a game action, a configuration change —
