@@ -35,6 +35,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | a second, longer-retention copy of a replicated log — "keep a year on the server beside an hour on the phone", "gossiped records vanish when the peer forgets them", a hand-rolled tee of what a replica applied | `BoltDecorator` + `AppliedOpSink` | [Telemetry & log capture](#telemetry--log-capture) |
 | reading that archive back — "replay what the phone compacted away", "did I get the whole history or did it stop somewhere?", a resume cursor over an append-only log, a hand-rolled "is my archive intact" check | `Bolt.replay` + `ReplayScope` + the terminal verdict | [Telemetry & log capture](#telemetry--log-capture) |
 | merging several mDNS/Multipeer discovery feeds into one lobby roster | `discoveryRoster` | [Discovery](#discovery) |
+| a stale-peer sweeper over a discovery list that only ever grows — peers that left still on screen, "nobody is ever removed", a `lastSeen` timeout over *discovered* (not admitted) peers | `PeerDiscoverySource.departures()` — implement it, and hold it to `DiscoverySourceConformanceSuite` | [Peers pile up and are never removed](#peers-pile-up-and-are-never-removed) |
 | a weighted / fair-share scheduler — "give this group 3× the share", "who runs the next quantum", a hoarder-proof round-robin | `HeddlePolicy` + `HeddleNode` | [Fair share & placement](#fair-share--placement) |
 | an entitlement / quota ledger, "reserve a slot before running then charge once", a coordination-free budget that converges across peers | `EntitlementLedger` + `HeddleNode.reserve`/`complete` | [Fair share & placement](#fair-share--placement) |
 | minting new quota or re-parenting a group at runtime and needing everyone to agree on the order (no double-mint on a split) | `heddleGoverned` (`GovernedHeddleNode`) | [Fair share & placement](#fair-share--placement) |
@@ -66,6 +67,31 @@ mdnsGone.emit("alice")
 runCurrent()
 check(roster.value.map { it.peerKey }.toSet() == setOf("bob"))
 ```
+
+### Peers pile up and are never removed
+
+**Intent:** the list of nearby games only ever grows. Someone closes the app, walks out of the building, or turns their Wi-Fi off, and their name stays on the screen; tapping it connects to nothing. You are about to write a sweeper that quietly drops anyone you have not heard from in thirty seconds.
+**Primitive:** don't — the removal already exists. `discoveryRoster` drops a peer the instant one of its sources emits that peer's `Tag.peerKey` from `departures()`, so a roster that only grows means some source never emits. Read each source's `departures()` body: there is **no interface default**, so a source with no leave signal has the `emptyFlow()` written out where you can see it, and those sources — only those — are the ones the ghost caveat covers.
+
+If you own the source, `departures()` is the thing to fix and `DiscoverySourceConformanceSuite` (`:kuilt-conformance`) is how you find out whether it works — binding an existing backend to it is also how you learn what it does *not* yet do, since each backend's own conformance test is where its standing is recorded. Subclass, say how a peer arrives, and declare the leave signal: `DepartureFixture.Emits { … }` when there is one, `DepartureFixture.NoLeaveSignal` when there honestly isn't. The second arm is a claim the suite then checks, not an exemption — a source that declares it and emits anything at all fails.
+
+<!-- verbatim from kuilt-conformance/src/commonTest/kotlin/us/tractat/kuilt/conformance/ReferenceDiscoverySourceConformanceTest.kt#ReferenceDiscoverySourceConformanceTest -->
+```kotlin
+class ReferenceDiscoverySourceConformanceTest : DiscoverySourceConformanceSuite() {
+    override fun newSource(): PeerDiscoverySource = ReferenceDiscoverySource()
+
+    override suspend fun causeArrival(source: PeerDiscoverySource) {
+        (source as ReferenceDiscoverySource).advertise()
+    }
+
+    override fun departureFixture(source: PeerDiscoverySource): DepartureFixture =
+        DepartureFixture.Emits { (source as ReferenceDiscoverySource).withdraw() }
+}
+```
+
+Two traps that shipped here, and that the suite exists to catch. **Emitting *something* is not enough** — the roster removes by exact key, so a departure carrying a display name, a socket address, or another transport's handle leaves precisely the same ghost while looking correct in a log. And **a leave signal that only works while somebody is watching arrivals is not a leave signal** — `discoveryRoster` merges the two feeds, and `merge` subscribes to inner flows in separately launched coroutines, so a departure feed fed off the `discoveries()` session can lose the event to its own sibling.
+
+The reason this is more than a missing `override`: on every mDNS platform the goodbye carries only the service **name**, never the TXT map the peer id lives in. Read the id off the removal event and you get null, on all three backends. The peer id has to be remembered at resolution time and looked up when the name goes away — which also means a service that never resolved emits nothing, exactly as it emitted nothing on arrival.
 
 ## Rejoin & reconnect
 
