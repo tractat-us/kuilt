@@ -30,7 +30,14 @@ kotlin {
         // Mirror the manual appleMain wiring for the test compilations so the
         // apple-only unit tests (MCSessionLink / MultipeerPeerLinkFactory) share
         // one appleTest source set.
-        val appleTest by creating { dependsOn(commonTest.get()) }
+        val appleTest by creating {
+            dependsOn(commonTest.get())
+            // appleMain's MultipeerServiceBrowser is bound to DiscoverySourceConformanceSuite here
+            // (#2401). It runs against the real MCNearbyServiceBrowser with its delegate driven by
+            // hand — a real foundPeer needs a second physical device, so the delegate is the only
+            // place this platform's arrivals and departures can be staged at all.
+            dependencies { implementation(project(":kuilt-conformance")) }
+        }
         val iosArm64Test by getting { dependsOn(appleTest) }
         val iosSimulatorArm64Test by getting { dependsOn(appleTest) }
         val macosArm64Test by getting { dependsOn(appleTest) }
