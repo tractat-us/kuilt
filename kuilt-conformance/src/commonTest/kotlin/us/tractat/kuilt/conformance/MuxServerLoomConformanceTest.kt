@@ -71,7 +71,11 @@ class MuxServerLoomConformanceTest : SeamConformanceSuite() {
      * peer-to-peer path between two members of a room.
      *
      * `reportsLiveCapability = false`: `RoomHubSeam` wires no OS path observer, so it reports the
-     * honest `Unknown` floor rather than a fabricated verdict (#1712; the mux lane is #1546).
+     * honest `Unknown` floor rather than a fabricated verdict (#1712). The flag stays `false`
+     * because of *this harness's base*, not because of the mux: since #1546 a `NamedMux` channel
+     * view forwards its base seam's live capability verbatim, so a mux over an observing fabric
+     * reports that fabric's verdict. A mux over `RoomHubSeam` has no verdict to forward, and
+     * publishing `true` here would subscribe the harness to obligations its base cannot satisfy.
      *
      * `collapsesPeersOnTear = true` is the obligation this harness exists to pin — it was untrue
      * of `RoomHubSeam` until #1869, and nothing in the suite could see it.
