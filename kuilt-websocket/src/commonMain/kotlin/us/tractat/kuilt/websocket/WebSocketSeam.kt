@@ -49,13 +49,10 @@ internal fun WebSocketSeam(
     session: DefaultWebSocketSession,
     dispatcher: CoroutineContext,
     roles: Set<TransportRole>,
-    @Suppress("UNUSED_PARAMETER") connectivity: ConnectivityObserver,
+    connectivity: ConnectivityObserver,
 ): Seam = ObservedCapabilitySeam(
     inner = identified(WebSocketConnection(session), selfId, remoteId, dispatcher),
-    // STUB (#1725, first commit): ignores the injected observer and reads the never-updated
-    // no-observer flow, so every seam sits on the Unknown floor. Replaced in the next commit —
-    // this is the arm the capability tests are red against.
-    capability = ReachabilityCapability(UnobservedConnectivity.reachability, roles),
+    capability = ReachabilityCapability(connectivity.reachability, roles),
 )
 
 /**
