@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -52,6 +53,18 @@ import java.util.concurrent.atomic.AtomicBoolean
  * says nothing about whether the relay at the far end is alive, which is a peer-liveness question
  * for `:kuilt-liveness`; conflating them would tell a user with five bars that their network is
  * down (see [NetworkReachability]).
+ *
+ * ## Permission
+ * `android.permission.ACCESS_NETWORK_STATE` is declared by this module's own manifest and merges
+ * into the consuming app, so nothing is asked of a caller. It is a *normal*, install-time
+ * permission: granted automatically, no runtime prompt, and it reveals only whether a network
+ * exists — not what travels over it. This differs from `:kuilt-nearby`, which leaves its Bluetooth
+ * permissions to the app because those are **runtime** permissions needing a user prompt, and a
+ * library cannot decide when to interrupt a user.
+ *
+ * A consumer may still remove it (`tools:node="remove"`), so [start] degrades to `null` on a
+ * [SecurityException] rather than throwing out of loom construction — the fabric keeps working and
+ * only the live capability is lost.
  *
  * ## Thread safety
  * The platform delivers callbacks on its own thread while [start] seeds from the constructing one
@@ -114,8 +127,10 @@ public class AndroidConnectivityObserver internal constructor(
      * Subscribe, and publish an immediate first reading so a seam woven before any transition gets
      * a verdict instead of sitting on the floor. Idempotent.
      *
-     * A device exposing no [ConnectivityManager] keeps reporting `null`: unreadable is not
-     * unreachable, and a definite `Unavailable` we cannot substantiate is the #1712 defect.
+     * Reports `null` forever — never a fabricated `Unavailable` — on the two ways this can fail to
+     * observe anything: a device exposing no [ConnectivityManager], and a host app that has not
+     * declared `ACCESS_NETWORK_STATE`. Unreadable is not unreachable, and a definite verdict we
+     * cannot substantiate is the #1712 defect (see the permission note on the class).
      */
     internal fun start() {
         val manager = connectivityManager ?: return
@@ -123,14 +138,25 @@ public class AndroidConnectivityObserver internal constructor(
         val request = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
-        manager.registerNetworkCallback(request, callback)
-        // Seed from the active network. `registerNetworkCallback` does report already-connected
-        // networks, but asynchronously; seeding closes the window in which a seam woven in the same
-        // tick reads the floor on a device that is plainly online.
-        update {
-            val active = manager.activeNetwork
-            if (active != null && manager.getNetworkCapabilities(active).isUsable()) {
-                usable += active
+        try {
+            manager.registerNetworkCallback(request, callback)
+            // Seed from the active network. `registerNetworkCallback` does report already-connected
+            // networks, but asynchronously; seeding closes the window in which a seam woven in the
+            // same tick reads the floor on a device that is plainly online.
+            update {
+                val active = manager.activeNetwork
+                if (active != null && manager.getNetworkCapabilities(active).isUsable()) {
+                    usable += active
+                }
+            }
+        } catch (denied: SecurityException) {
+            // ACCESS_NETWORK_STATE not declared by the host app. Undo the CAS so `close` does not
+            // try to unregister a callback that was never accepted — which would throw in turn —
+            // and leave `reachability` at `null`, the honest "cannot tell".
+            registered.set(false)
+            logger.warn(denied) {
+                "kuilt-websocket connectivity observer disabled: the host app must declare " +
+                    "android.permission.ACCESS_NETWORK_STATE. Seam.capability stays Unknown."
             }
         }
     }
@@ -155,6 +181,10 @@ public class AndroidConnectivityObserver internal constructor(
         this != null &&
             hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
             hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+
+    private companion object {
+        private val logger = KotlinLogging.logger {}
+    }
 }
 
 /**
