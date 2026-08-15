@@ -186,13 +186,53 @@ internal class NsdManagerBrowser(
         resolveNext()
     }
 
+    /**
+     * Hand the head of the queue to the platform, or return having found nothing to do.
+     *
+     * The [nsdManager] call is guarded because a **throw** from it is the one failure that does not
+     * merely lose one resolution: `resolving` is set before the call and cleared only by a
+     * [NsdManager.ResolveListener] callback, so an exception on the way in would leave the flag true
+     * with no callback ever coming. Every later resolution — for **both** feeds of this browser,
+     * which share one queue — would then return at the guard above, and every peer would become a
+     * permanent ghost. That is the whole of the bug #1903 exists to fix, re-entering through the
+     * error path of its own fix.
+     *
+     * Iterative rather than re-entrant on the catch, because the likely throw is a *systemic* one —
+     * a manager in a bad state refuses every entry alike, not one unlucky one — so recovering by
+     * recursion would take a stack frame per queued service exactly when the queue is longest.
+     *
+     * `catch (Throwable)` swallows deliberately and no cancellation can reach it: this method runs
+     * only on platform callback threads ([NsdManager.DiscoveryListener.onServiceFound] via
+     * [NsdBrowseSink.onFound]'s `requestResolve`, and the two [NsdManager.ResolveListener] methods),
+     * never inside a coroutine, so there is no job whose cancellation could arrive here and none to
+     * propagate one to. Rethrowing would unwind onto a platform thread and strand the queue — the
+     * very wedge this guard exists to prevent.
+     */
     private fun resolveNext() {
-        val next =
-            synchronized(lock) {
-                if (resolving || queue.isEmpty()) return
-                resolving = true
-                queue.removeFirst()
+        while (true) {
+            val next =
+                synchronized(lock) {
+                    if (resolving || queue.isEmpty()) return
+                    resolving = true
+                    queue.removeFirst()
+                }
+            try {
+                startResolving(next)
+                return
+            } catch (failure: Throwable) {
+                // Flag first, log second: the log reads off the very NsdServiceInfo that just
+                // refused, so it is not the one statement here allowed to throw before the queue is
+                // released again.
+                synchronized(lock) { resolving = false }
+                logger.debug(failure) {
+                    "NSD resolution could not be started for ${next.info.serviceName}"
+                }
             }
+        }
+    }
+
+    /** Hand one entry to [NsdManager.resolveService]; every outcome after this returns is a callback. */
+    private fun startResolving(next: PendingResolution) {
         nsdManager.resolveService(
             next.info,
             object : NsdManager.ResolveListener {
