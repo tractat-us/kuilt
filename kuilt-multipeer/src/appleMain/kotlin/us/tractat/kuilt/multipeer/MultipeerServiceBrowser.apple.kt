@@ -50,7 +50,7 @@ public actual class MultipeerServiceBrowser actual constructor(
      * delegate is only active during that window). Any departure that fires
      * before [discoveries] is collected is dropped.
      */
-    override fun departures(): Flow<String> = factory.lostPeerHandles
+    public actual override fun departures(): Flow<String> = factory.lostPeerHandles
 
     public actual override fun discoveries(): Flow<Tag> =
         callbackFlow {

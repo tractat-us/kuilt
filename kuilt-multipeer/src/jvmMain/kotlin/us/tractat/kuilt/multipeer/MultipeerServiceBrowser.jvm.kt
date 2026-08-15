@@ -72,7 +72,7 @@ public actual class MultipeerServiceBrowser actual constructor(
      * Peer keys for peers that have left the network since [discoveries] started
      * collecting. Only emits while the [discoveries] flow is being collected.
      */
-    override fun departures(): Flow<String> = departuresFlow.asSharedFlow()
+    public actual override fun departures(): Flow<String> = departuresFlow.asSharedFlow()
 
     public actual override fun discoveries(): Flow<Tag> =
         flow {

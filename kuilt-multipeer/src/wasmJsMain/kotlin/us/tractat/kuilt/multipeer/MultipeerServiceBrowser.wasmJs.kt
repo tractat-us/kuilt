@@ -22,5 +22,5 @@ public actual class MultipeerServiceBrowser actual constructor(
     // discovered here and nothing can ever depart. Empty rather than throwing, so a consumer that
     // folds a list of sources through discoveryRoster fails on the one call that is genuinely
     // unsupported ([discoveries]) instead of on two.
-    override fun departures(): Flow<String> = emptyFlow()
+    public actual override fun departures(): Flow<String> = emptyFlow()
 }
