@@ -2,6 +2,9 @@ package us.tractat.kuilt.mdns
 
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import io.github.oshai.kotlinlogging.KotlinLogging
+
+private val logger = KotlinLogging.logger("us.tractat.kuilt.mdns.NsdManagerBrowser")
 
 /**
  * One mDNS service, **resolved**, in plain Kotlin types.
@@ -106,13 +109,28 @@ internal fun interface NsdBrowser {
  * Registration state — the listener — is local to a [browse] call, so two registrations never share
  * a listener and each feed hears the platform independently.
  *
- * **Resolution state is per-manager, not per-registration.** [NsdManager.resolveService] can only
- * handle one resolution at a time, and that is a property of the manager rather than of any one
- * listener, so the serialising queue is a field here. It has to be: `discoveries()` and
- * `departures()` are separate registrations over the *same* manager, so a per-registration queue
- * would let two resolutions run concurrently and the second would fail
- * ([NsdManager.FAILURE_ALREADY_ACTIVE]) on every API level below 31 — this module's `minSdk` is 24.
- * Each queued entry carries the sink that asked, so results still route back to the right feed.
+ * **Resolution state is per browser instance** — one instance per [MDNSServiceDiscoverer] — **not
+ * per registration and not per [NsdManager].** [NsdManager.resolveService] handles one resolution at
+ * a time, and below API 31 a second concurrent one fails with
+ * [NsdManager.FAILURE_ALREADY_ACTIVE]; this module's `minSdk` is 24. Both feeds of one discoverer
+ * are separate registrations over the same browser, so the serialising queue is a field here rather
+ * than a `browse`-local, and each queued entry carries the sink that asked so results still route
+ * back to the right feed.
+ *
+ * **What that leaves open, stated plainly:** two [MDNSServiceDiscoverer]s built over the *same*
+ * injected [NsdManager] — two service types is the obvious reason to have two — get two browsers,
+ * two queues, and no serialisation between them. Nothing here closes that, and the honest reason is
+ * that the alternative is worse: a process-global map keyed on the manager would retain it for the
+ * life of the process, and an Android system-service manager is obtained per-`Context` and holds
+ * one, so the map would be a `Context` leak with no eviction point. A weak-keyed variant avoids the
+ * leak but buys only one increment — it still cannot serialise against another *process*, and the
+ * exact scope of the platform's limit (per client, per process, or device-wide) is not something
+ * this module can verify, least of all with [NsdManagerBrowser] itself executed by no test (#2407).
+ *
+ * So the failure is made **observable** instead of silently assumed away: [NsdManager.ResolveListener
+ * .onResolveFailed] logs its error code. A resolution that fails and is not logged is
+ * indistinguishable from a peer that never arrived — which is a permanent ghost, the exact bug
+ * #1903 exists to fix. Tracked in #2408.
  */
 internal class NsdManagerBrowser(
     private val nsdManager: NsdManager,
@@ -182,6 +200,14 @@ internal class NsdManagerBrowser(
                     info: NsdServiceInfo,
                     errorCode: Int,
                 ) {
+                    // Logged, not swallowed: this service's peer id is now unknowable, so it can
+                    // never be emitted by discoveries() nor removed by departures() — a permanent
+                    // ghost. Silently dropped, that is indistinguishable from a peer that never
+                    // arrived. FAILURE_ALREADY_ACTIVE (3) here means a concurrent resolution won:
+                    // see the class KDoc on what this queue does and does not serialise.
+                    logger.debug {
+                        "NSD resolution failed for ${info.serviceName}: errorCode=$errorCode"
+                    }
                     synchronized(lock) { resolving = false }
                     resolveNext()
                 }

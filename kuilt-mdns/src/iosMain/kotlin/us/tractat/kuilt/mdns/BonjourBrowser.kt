@@ -171,6 +171,15 @@ private class NetServiceBrowseSession(
      * `setDelegate(null)`, leaking a run-loop source and leaving an unowned delegate pointer live —
      * exactly the "an obligation behind the guard is skipped" shape the repo's exception discipline
      * is about. Each step is independently owed, so each gets its own guard.
+     *
+     * **This clears the browser's delegate only, and that is not the whole of it.**
+     * [ServiceDelegate] also sets itself as the delegate of every [NSNetService] it asks to resolve,
+     * and nothing clears those or cancels a resolution already in flight. A resolve started just
+     * before teardown is retained by the run loop for up to [RESOLVE_TIMEOUT_S], so it can call back
+     * after this session — and hence the delegate — has become unreachable, through a pointer
+     * Objective-C does not own. That is a use-after-free rather than a missing peer. Pre-existing in
+     * kind and **not** fixed here; tracked in #2409, whose fix is to track the services this
+     * delegate attached to and `stop()` + `setDelegate(null)` each of them from here.
      */
     override fun stop() {
         runCatchingCancellable { browser.stop() }
