@@ -1,0 +1,425 @@
+package us.tractat.kuilt.mdns
+
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.onCompletion
+import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.yield
+import us.tractat.kuilt.conformance.DepartureFixture
+import us.tractat.kuilt.conformance.DiscoverySourceConformanceSuite
+import us.tractat.kuilt.core.Tag
+import us.tractat.kuilt.core.discovery.DiscoveryKind
+import us.tractat.kuilt.core.discovery.PeerDiscoverySource
+import kotlin.coroutines.EmptyCoroutineContext
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+private val CONFORMANCE_SERVICE_TYPE = MDNSServiceType("_kuilt-conformance._tcp")
+private const val ARRIVING_SERVICE_NAME = "conformance-peer"
+private const val ARRIVING_PEER_ID = "peer-conformance-1"
+private const val ARRIVING_PORT = 19500
+private const val ARRIVING_HOST = "192.168.9.9"
+
+/**
+ * Binds iosMain's [MDNSServiceDiscoverer] to [DiscoverySourceConformanceSuite] — the #2400
+ * regression harness.
+ *
+ * Before the fix this class discarded `didRemoveService` and returned `emptyFlow()` from
+ * `departures()`, so both of the suite's toothy properties red against it:
+ * `departureKeyEqualsThePeerKeyThatWasDiscovered` with "departures() emitted nothing after the
+ * fixture's cause ran", and `departuresEmitsWithNoConcurrentDiscoveriesCollector` earlier still, at
+ * [RegistryBonjourBrowser.awaitSessions] — a source whose departure feed is `emptyFlow()` opens no
+ * browse session to announce into.
+ *
+ * **Why a fake [BonjourBrowser], and why the source is built through the internal constructor.**
+ * [platform.Foundation.NSNetServiceBrowser] only delivers callbacks while the main run loop is
+ * being pumped, and a `runTest` body on Kotlin/Native occupies the main thread — so a real browser
+ * would go silent for the whole test, and `Dispatchers.Main` work would never run at all. The fake
+ * replaces the browser; `EmptyCoroutineContext` replaces the production `Dispatchers.Main` that the
+ * `callbackFlow` bodies are otherwise pinned to. Everything between those two — the session per
+ * collection, the name→peerId map, the key that gets emitted, the teardown — is production code.
+ *
+ * **What this harness cannot see.** `NetServiceBonjourBrowser` and its `ServiceDelegate` — the real
+ * Bonjour callbacks, the resolve request, the run-loop scheduling — are not exercised here. That
+ * path is covered, at the level of `discoveries()` only, by the `-P`-gated
+ * [MDNSServiceDiscovererIosTest] against live Bonjour; nothing yet drives a real `didRemoveService`.
+ *
+ * The fake delivers every callback synchronously on the calling thread, so the suite keeps its
+ * **virtual** [awaitBudget].
+ */
+class MDNSDiscoverySourceConformanceIosTest : DiscoverySourceConformanceSuite() {
+
+    private val browsersBySource = mutableMapOf<PeerDiscoverySource, RegistryBonjourBrowser>()
+
+    override fun newSource(): PeerDiscoverySource {
+        val browser = RegistryBonjourBrowser()
+        return MDNSServiceDiscoverer(CONFORMANCE_SERVICE_TYPE, browser, EmptyCoroutineContext)
+            .also { browsersBySource[it] = browser }
+    }
+
+    /**
+     * Waits for the collectors' browse sessions to be live, then announces one service.
+     *
+     * The wait is the whole reason this is `suspend`. `callbackFlow` opens its session inside a
+     * separately *launched* producer coroutine, so the suite's `onStart` handshake proves the
+     * collection began — not that [BonjourBrowser.browse] has run. Announcing into an empty session
+     * list looks exactly like a source that ignores arrivals, and
+     * [departuresEmitsWithNoConcurrentDiscoveriesCollector] would then red on the harness's own
+     * timing while blaming the source. That is precisely the failure `causeArrival`'s "must not
+     * return until the peer is genuinely visible" contract exists to forbid.
+     */
+    override suspend fun causeArrival(source: PeerDiscoverySource) {
+        val browser = browserFor(source)
+        browser.awaitSessions()
+        browser.register(ARRIVING_SERVICE_NAME, ARRIVING_PEER_ID, ARRIVING_PORT, ARRIVING_HOST)
+    }
+
+    /**
+     * Closes over the service *name* — a constant [causeArrival] itself established — and nothing
+     * the arrival emitted, as [DepartureFixture.Emits] requires: in
+     * [departuresEmitsWithNoConcurrentDiscoveriesCollector] no discovered [Tag] exists to reach for.
+     */
+    override fun departureFixture(source: PeerDiscoverySource): DepartureFixture =
+        DepartureFixture.Emits { browserFor(source).unregister(ARRIVING_SERVICE_NAME) }
+
+    private fun browserFor(source: PeerDiscoverySource): RegistryBonjourBrowser =
+        browsersBySource[source] ?: error("source was not built by newSource(): $source")
+}
+
+/**
+ * Proves the harness above is actually rigged for the defects it claims to catch.
+ *
+ * A green binding shows a property *can* pass; it cannot show the property would notice anything. A
+ * fake permissive in the wrong place — one that handed the peer id back on removal, or replayed to a
+ * session that was never open — would green a broken source while looking identical.
+ *
+ * The rig suites below are `abstract` and instantiated as anonymous subclasses for the reason
+ * `DiscoverySourceConformanceSuiteRigTest` records: a concrete subclass inherits four `@Test`
+ * methods, so the runner would collect it as a test class of its own.
+ */
+class MDNSIosDepartureRigTest {
+
+    // ── the fake is honest about what a removal carries ──────────────────────
+
+    /**
+     * The removal path carries the service **name**, never the peer id — the #2400 defect itself.
+     *
+     * [BonjourBrowseSink.onLost] takes only a `String`, so half of this is enforced by the compiler.
+     * What is pinned here is the other half: that the harness's name and peer id are *different
+     * values*. A fixture using one string for both would green a source emitting either, and the
+     * key-equality obligation would assert nothing.
+     */
+    @Test
+    fun theRemovalTheHarnessFiresCarriesTheServiceNameAndNotThePeerId() {
+        val browser = RegistryBonjourBrowser()
+        val seen = RecordingSink()
+        browser.browse(CONFORMANCE_SERVICE_TYPE.forNsNetServiceBrowser(), seen)
+
+        browser.register(ARRIVING_SERVICE_NAME, ARRIVING_PEER_ID, ARRIVING_PORT, ARRIVING_HOST)
+        browser.unregister(ARRIVING_SERVICE_NAME)
+
+        val resolved = seen.resolved ?: error("register must resolve to every live session")
+        assertEquals(ARRIVING_SERVICE_NAME, seen.lost, "a removal is keyed by service name")
+        assertEquals(
+            ARRIVING_PEER_ID,
+            resolved.txt[MDNSAdvertisement.TXT_KEY_PEER_ID],
+            "resolution is the only place the peer id is ever visible",
+        )
+        assertTrue(
+            ARRIVING_SERVICE_NAME != ARRIVING_PEER_ID,
+            "the harness's service name and peer id must differ, or the key-equality obligation " +
+                "cannot tell a correct departure from a wrongly-keyed one",
+        )
+    }
+
+    /**
+     * A session opened *after* an announcement sees nothing.
+     *
+     * This is what gives the lone-collector obligation its teeth on this harness: the fake never
+     * replays, so a `departures()` that opened no session of its own — or opened one late — has no
+     * way to learn anything.
+     */
+    @Test
+    fun aSessionOpenedAfterTheAnnouncementSeesNothing() {
+        val browser = RegistryBonjourBrowser()
+        browser.register(ARRIVING_SERVICE_NAME, ARRIVING_PEER_ID, ARRIVING_PORT, ARRIVING_HOST)
+
+        val late = RecordingSink()
+        browser.browse(CONFORMANCE_SERVICE_TYPE.forNsNetServiceBrowser(), late)
+
+        assertNull(late.resolved, "the fake must not replay to a session opened afterwards")
+    }
+
+    /** A stopped session stops hearing — the receipt behind `awaitClose { handle.stop() }`. */
+    @Test
+    fun aStoppedSessionHearsNothingFurther() {
+        val browser = RegistryBonjourBrowser()
+        val seen = RecordingSink()
+        browser.browse(CONFORMANCE_SERVICE_TYPE.forNsNetServiceBrowser(), seen).stop()
+
+        browser.register(ARRIVING_SERVICE_NAME, ARRIVING_PEER_ID, ARRIVING_PORT, ARRIVING_HOST)
+
+        assertNull(seen.resolved, "a stopped session must hear nothing further")
+    }
+
+    // ── the properties red against sources broken on this same fake ──────────
+
+    @Test
+    fun aDepartureCarryingTheServiceNameRedsTheKeyEqualityObligation() {
+        val failure = assertFailsWith<AssertionError> {
+            (object : WrongKeySuite() {}).departureKeyEqualsThePeerKeyThatWasDiscovered()
+        }
+        assertTrue(
+            failure.message.orEmpty().contains("SAME key"),
+            "expected the key-equality obligation to red, got: ${failure.message}",
+        )
+    }
+
+    @Test
+    fun aLeaveSignalOnlyRunningWhileDiscoveriesIsCollectedRedsTheLoneCollectorObligation() {
+        val failure = assertFailsWith<AssertionError> {
+            (object : ParasiticSuite() {}).departuresEmitsWithNoConcurrentDiscoveriesCollector()
+        }
+        assertTrue(
+            failure.message.orEmpty().contains("collected on its own"),
+            "expected the lone-collector obligation to red, got: ${failure.message}",
+        )
+    }
+
+    /** …and that same source passes the obligation collecting both feeds, so the red above is specific. */
+    @Test
+    fun theParasiticSourceStillPassesTheObligationThatCollectsBothFeeds() {
+        (object : ParasiticSuite() {}).departureKeyEqualsThePeerKeyThatWasDiscovered()
+    }
+}
+
+// ── rig sources ───────────────────────────────────────────────────────────────
+
+/** Captures the last of each callback, for the fake-honesty assertions. */
+private class RecordingSink : BonjourBrowseSink {
+    var resolved: BonjourRecord? = null
+    var lost: String? = null
+
+    override fun onResolved(record: BonjourRecord) {
+        resolved = record
+    }
+
+    override fun onLost(serviceName: String) {
+        lost = serviceName
+    }
+}
+
+/**
+ * Emits the Bonjour **service name** on departure — plausible in a log, useless to
+ * `discoveryRoster`, and exactly what a name-keyed feed produces when the peer id is never
+ * remembered at resolution.
+ */
+private class WrongKeySource(
+    private val browser: RegistryBonjourBrowser,
+) : PeerDiscoverySource {
+    private val real = MDNSServiceDiscoverer(CONFORMANCE_SERVICE_TYPE, browser, EmptyCoroutineContext)
+
+    override val kind: DiscoveryKind = DiscoveryKind.Mdns
+
+    override fun discoveries(): Flow<Tag> = real.discoveries()
+
+    override fun departures(): Flow<String> =
+        callbackFlow {
+            val handle =
+                browser.browse(
+                    CONFORMANCE_SERVICE_TYPE.forNsNetServiceBrowser(),
+                    object : BonjourBrowseSink {
+                        override fun onResolved(record: BonjourRecord) = Unit
+
+                        override fun onLost(serviceName: String) {
+                            trySend(serviceName)
+                        }
+                    },
+                )
+            awaitClose { handle.stop() }
+        }
+}
+
+/**
+ * Opens a browse session of its own — so the harness's own rig check passes — but only emits while
+ * a `discoveries()` collection happens to be live. The free-riding shape #1917 named, which every
+ * other property in the suite passes.
+ */
+private class ParasiticSource(
+    private val browser: RegistryBonjourBrowser,
+) : PeerDiscoverySource {
+    private val real = MDNSServiceDiscoverer(CONFORMANCE_SERVICE_TYPE, browser, EmptyCoroutineContext)
+    private var browsing = false
+
+    override val kind: DiscoveryKind = DiscoveryKind.Mdns
+
+    override fun discoveries(): Flow<Tag> =
+        real.discoveries()
+            .onStart { browsing = true }
+            .onCompletion { browsing = false }
+
+    override fun departures(): Flow<String> =
+        callbackFlow {
+            val peerIdsByServiceName = mutableMapOf<String, String>()
+            val handle =
+                browser.browse(
+                    CONFORMANCE_SERVICE_TYPE.forNsNetServiceBrowser(),
+                    object : BonjourBrowseSink {
+                        override fun onResolved(record: BonjourRecord) {
+                            record.txt[MDNSAdvertisement.TXT_KEY_PEER_ID]
+                                ?.let { peerIdsByServiceName[record.serviceName] = it }
+                        }
+
+                        override fun onLost(serviceName: String) {
+                            val peerId = peerIdsByServiceName.remove(serviceName) ?: return
+                            if (browsing) trySend(peerId)
+                        }
+                    },
+                )
+            awaitClose { handle.stop() }
+        }
+}
+
+private abstract class WrongKeySuite : DiscoverySourceConformanceSuite() {
+    private val browsers = mutableMapOf<PeerDiscoverySource, RegistryBonjourBrowser>()
+
+    override fun newSource(): PeerDiscoverySource {
+        val browser = RegistryBonjourBrowser()
+        return WrongKeySource(browser).also { browsers[it] = browser }
+    }
+
+    override suspend fun causeArrival(source: PeerDiscoverySource) {
+        val browser = browsers.getValue(source)
+        browser.awaitSessions()
+        browser.register(ARRIVING_SERVICE_NAME, ARRIVING_PEER_ID, ARRIVING_PORT, ARRIVING_HOST)
+    }
+
+    override fun departureFixture(source: PeerDiscoverySource): DepartureFixture =
+        DepartureFixture.Emits { browsers.getValue(source).unregister(ARRIVING_SERVICE_NAME) }
+}
+
+private abstract class ParasiticSuite : DiscoverySourceConformanceSuite() {
+    private val browsers = mutableMapOf<PeerDiscoverySource, RegistryBonjourBrowser>()
+
+    override fun newSource(): PeerDiscoverySource {
+        val browser = RegistryBonjourBrowser()
+        return ParasiticSource(browser).also { browsers[it] = browser }
+    }
+
+    override suspend fun causeArrival(source: PeerDiscoverySource) {
+        val browser = browsers.getValue(source)
+        browser.awaitSessions()
+        browser.register(ARRIVING_SERVICE_NAME, ARRIVING_PEER_ID, ARRIVING_PORT, ARRIVING_HOST)
+    }
+
+    override fun departureFixture(source: PeerDiscoverySource): DepartureFixture =
+        DepartureFixture.Emits { browsers.getValue(source).unregister(ARRIVING_SERVICE_NAME) }
+}
+
+// ── Harness ───────────────────────────────────────────────────────────────────
+
+/**
+ * A fake [BonjourBrowser] that models the Bonjour lifecycle faithfully enough to reach #2400.
+ *
+ * Three behaviours are load-bearing, each read off the platform contract:
+ *
+ *  1. **A removal carries only the service name.** `didRemoveService` hands back an unresolved
+ *     `NSNetService` whose `TXTRecordData()` is null, so a source that never remembered the peer id
+ *     at resolution time has no way to produce one. That is the defect.
+ *  2. **Nothing is replayed.** [register] fans out only to sessions open at that instant, so a
+ *     `departures()` that opened none — the pre-fix `emptyFlow()` — learns nothing, and a source
+ *     free-riding on a sibling collector's session is visible as such.
+ *  3. **Each [browse] call is independent.** Stopping one session leaves the others hearing,
+ *     mirroring one `NSNetServiceBrowser` per collection.
+ *
+ * Callbacks fire synchronously on the caller's thread, so the whole harness runs in virtual time.
+ * The real browser instead delivers on the main run loop, which is what the `-P`-gated
+ * [MDNSServiceDiscovererIosTest] exercises.
+ */
+internal class RegistryBonjourBrowser : BonjourBrowser {
+
+    private val sinks = mutableListOf<BonjourBrowseSink>()
+    private val registered = mutableSetOf<String>()
+
+    override fun browse(
+        serviceType: String,
+        sink: BonjourBrowseSink,
+    ): BonjourBrowseHandle {
+        sinks += sink
+        return BonjourBrowseHandle { sinks -= sink }
+    }
+
+    /**
+     * Suspend until every collection already under way has opened its browse session.
+     *
+     * `callbackFlow` calls [browse] from a separately launched producer coroutine, which under a
+     * `StandardTestDispatcher` is sitting in the scheduler's ready queue when the suite's `onStart`
+     * handshake completes. `yield()` drains that queue; the loop keeps draining until a pass opens
+     * nothing new, so it covers however many collectors a property opened without being told the
+     * number.
+     *
+     * The closing [check] is the rig assertion: announcing into an empty session list would make the
+     * arrival unobservable, and every property that starts from one would then pass or fail for
+     * reasons having nothing to do with the source. It also names the pre-#2400 defect directly — a
+     * `departures()` returning `emptyFlow()` opens no session at all.
+     */
+    suspend fun awaitSessions() {
+        var previous = -1
+        while (previous != sinks.size) {
+            previous = sinks.size
+            yield()
+        }
+        check(sinks.isNotEmpty()) {
+            "RegistryBonjourBrowser: no browse session had opened by the time causeArrival fired. " +
+                "An arrival nobody is browsing for is unobservable, so the property would report on " +
+                "the harness's timing rather than on the source — and a departures() that returns " +
+                "emptyFlow() (the pre-#2400 shape) opens no session at all."
+        }
+    }
+
+    /**
+     * Announce a service and resolve it, to every session open right now.
+     *
+     * Bonjour's find-then-resolve handshake is collapsed into one step because
+     * [BonjourBrowser.browse] owns it: the seam hands its caller resolved records only.
+     */
+    fun register(
+        serviceName: String,
+        peerId: String,
+        port: Int,
+        host: String,
+    ) {
+        registered += serviceName
+        val record =
+            BonjourRecord(
+                serviceName = serviceName,
+                host = host,
+                port = port,
+                txt =
+                    mapOf(
+                        MDNSAdvertisement.TXT_KEY_PEER_ID to peerId,
+                        MDNSAdvertisement.TXT_KEY_WS_PATH to MDNSAdvertisement.DEFAULT_WS_PATH,
+                    ),
+            )
+        sinks.toList().forEach { it.onResolved(record) }
+    }
+
+    /**
+     * Withdraw a service: `onLost` to every session, carrying the name and nothing else.
+     *
+     * Unknown names throw rather than returning quietly. A silent return fires no removal at all, so
+     * the property reds with "departures() emitted nothing" and blames the source for a typo in the
+     * fixture — the same rig-honesty failure [awaitSessions] exists to prevent, one method away.
+     */
+    fun unregister(serviceName: String) {
+        check(registered.remove(serviceName)) {
+            "RegistryBonjourBrowser: no service named $serviceName is registered; the departure " +
+                "fixture would fire nothing and the property would blame the source"
+        }
+        sinks.toList().forEach { it.onLost(serviceName) }
+    }
+}

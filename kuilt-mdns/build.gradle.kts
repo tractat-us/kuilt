@@ -39,6 +39,12 @@ kotlin {
             implementation(libs.kotlin.testJunit)
             implementation(libs.kotlinx.coroutines.test)
         }
+        // iosMain's MDNSServiceDiscoverer is bound to the same suite (#2400), against a fake
+        // Bonjour browser — NSNetServiceBrowser only delivers callbacks while the main run loop is
+        // pumped, and a runTest body on Kotlin/Native occupies the thread that would pump it.
+        iosTest.dependencies {
+            implementation(project(":kuilt-conformance"))
+        }
         jvmMain.dependencies {
             implementation(project(":kuilt-websocket"))
             implementation(libs.jmdns)
