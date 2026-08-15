@@ -13,7 +13,6 @@ import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Principal
 import us.tractat.kuilt.core.TransportCapability
-import us.tractat.kuilt.core.TransportRole
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.session.withPrincipal
@@ -53,6 +52,12 @@ import kotlin.uuid.Uuid
  *   the WebSocket accept handler, where auth has already run, and the result rides the
  *   connection through to the admitted [us.tractat.kuilt.session.Member.principal] — no
  *   out-of-band `peer → principal` map. Defaults to no attestation.
+ * @param connectivity Live device-reachability observer driving every accepted [Seam]'s
+ *   [Seam.capability] (#1725). Defaults to [UnobservedConnectivity], under which a seam reports the
+ *   honest [FabricAvailability.Unknown] floor exactly as before. A server loom runs on JVM or
+ *   Android only: on Android supply `androidConnectivityObserver(context)`; on the desktop JVM
+ *   there is no portable observer and this is meant to be left unwired (see [ConnectivityObserver]).
+ *   Note it reports **this host's** reachability, never a connected client's.
  */
 @OptIn(ExperimentalUuidApi::class)
 public class KtorServerLoom(
@@ -62,10 +67,15 @@ public class KtorServerLoom(
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val pingPeriod: Duration = DEFAULT_PING_PERIOD,
     private val principalExtractor: (ApplicationCall) -> Principal? = { null },
+    private val connectivity: ConnectivityObserver = UnobservedConnectivity,
 ) : Loom {
+    /**
+     * The **pre-connect** report — "can this fabric be attempted here", not "is the path up now".
+     * See [KtorClientLoom.capability] for why [connectivity] feeds the seam rather than this (#1712).
+     */
     override fun capability(): TransportCapability =
         TransportCapability(
-            roles = setOf(TransportRole.ServerRelay, TransportRole.Data),
+            roles = RELAY_ROLES,
             availability = FabricAvailability.Available,
         )
 
@@ -86,6 +96,8 @@ public class KtorServerLoom(
                         remoteId = clientPeerId,
                         session = this,
                         dispatcher = dispatcher.limitedParallelism(1),
+                        roles = RELAY_ROLES,
+                        connectivity = connectivity,
                     ).withPrincipal(principalExtractor(call))
                 connectionChannel.send(seam)
                 // Keep the WebSocket handler alive while the seam has the remote peer.

@@ -15,6 +15,12 @@ kotlin {
             implementation(libs.kotlin.logging)
         }
 
+        // The #1725 connectivity-observer fold and its fake are common code, so their tests are
+        // too — kuilt-test supplies assertAll for the multi-assert cases.
+        commonTest.dependencies {
+            implementation(project(":kuilt-test"))
+        }
+
         // jvmAndAndroidMain: Ktor server core ships only for JVM/Android targets —
         // there is no native (iOS/macOS) or wasmJs variant. KtorServerLoom lives here
         // so it compiles on both platforms without being visible to iOS/macOS/wasmJs
