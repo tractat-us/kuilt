@@ -6,11 +6,11 @@ import kotlinx.coroutines.flow.callbackFlow
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.discovery.DiscoveryKind
 import us.tractat.kuilt.core.discovery.PeerDiscoverySource
+import java.util.concurrent.ConcurrentHashMap
 import javax.jmdns.JmDNS
 import javax.jmdns.ServiceEvent
 import javax.jmdns.ServiceInfo
 import javax.jmdns.ServiceListener
-import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Discovers peers on the local network via Bonjour / mDNS.
@@ -121,7 +121,20 @@ public class MDNSServiceDiscoverer(
                     override fun serviceAdded(event: ServiceEvent) {
                         // Resolve on our own account — a lone departures() collector has nobody
                         // else to request resolution on its behalf. See the KDoc.
-                        jmdns.requestServiceInfo(event.type, event.name)
+                        //
+                        // The explicit 0 ms timeout is load-bearing. Every requestServiceInfo
+                        // overload runs `resolveServiceInfo` (which dispatches the query) and then
+                        // BLOCKS the caller in `waitForInfoData` until the answer lands; the
+                        // convenience arity defaults that wait to DNSConstants.SERVICE_INFO_TIMEOUT
+                        // — 6 s. JmDNS delivers serviceAdded and serviceRemoved to asynchronous
+                        // listeners on ONE shared single-thread executor, so a 6 s block here is
+                        // head-of-line blocking on the very departures this feed exists to report:
+                        // one cached-but-unresolvable arrival would stall every later goodbye behind
+                        // it. 0 ms clamps `waitForInfoData` to a single 200 ms poll while leaving
+                        // the query dispatch untouched, and we ignore the return value regardless —
+                        // what actually populates the map is the asynchronous serviceResolved
+                        // callback below, which is unaffected by how long the caller waits.
+                        jmdns.requestServiceInfo(event.type, event.name, false, 0L)
                     }
 
                     override fun serviceResolved(event: ServiceEvent) {

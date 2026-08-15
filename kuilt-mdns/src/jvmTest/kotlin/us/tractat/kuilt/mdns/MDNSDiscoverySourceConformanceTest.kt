@@ -212,17 +212,63 @@ internal class RegistryJmDNS : FakeEventJmDNS() {
         listeners.toList().forEach { it.serviceAdded(added) }
     }
 
-    /** Withdraw a service: `serviceRemoved` to every listener, with the TXT map gone (#1917). */
+    /**
+     * Withdraw a service: `serviceRemoved` to every listener, with the TXT map gone (#1917).
+     *
+     * Unknown names throw rather than returning quietly. A silent return fires no `serviceRemoved`
+     * at all, so the property reds with "departures() emitted nothing" and blames the source for a
+     * typo in the fixture — the same rig-honesty failure [awaitListenerRegistrations] exists to
+     * prevent, one method away.
+     */
     fun unregister(name: String) {
-        val info = registered.remove(name) ?: return
+        val info = registered.remove(name)
+            ?: error(
+                "RegistryJmDNS: no service named $name is registered; the departure fixture would " +
+                    "fire nothing and the property would blame the source",
+            )
         val removed = FakeServiceEvent(txtlessInfo(name, info.port))
         listeners.toList().forEach { it.serviceRemoved(removed) }
     }
 
+    // All four `requestServiceInfo` overloads land on one implementation, exactly as JmDNSImpl
+    // routes its three convenience forms into `requestServiceInfo(type, name, persistent, timeout)`.
+    // Overriding only the arity production happens to call today would leave the others inheriting
+    // FakeEventJmDNS's no-op, so a later change of overload — e.g. adopting the timeout-bounded form
+    // to stop blocking JmDNS's single dispatch thread — would silently stop resolving here and red
+    // `departuresEmitsWithNoConcurrentDiscoveriesCollector` as if the source had regressed.
+
     override fun requestServiceInfo(
         type: String,
         name: String,
-    ) {
+    ): Unit = resolve(name)
+
+    override fun requestServiceInfo(
+        type: String,
+        name: String,
+        persistent: Boolean,
+    ): Unit = resolve(name)
+
+    override fun requestServiceInfo(
+        type: String,
+        name: String,
+        timeout: Long,
+    ): Unit = resolve(name)
+
+    override fun requestServiceInfo(
+        type: String,
+        name: String,
+        persistent: Boolean,
+        timeout: Long,
+    ): Unit = resolve(name)
+
+    /**
+     * Deliver `serviceResolved` for [name] to every listener of the type, if it is registered.
+     *
+     * Unlike [unregister] this stays quiet on an unknown name: JmDNS resolves whatever the browser
+     * has seen announced, and a request for something that was never registered is a normal miss,
+     * not a rigging mistake.
+     */
+    private fun resolve(name: String) {
         val info = registered[name] ?: return
         val resolved = FakeServiceEvent(info)
         listeners.toList().forEach { it.serviceResolved(resolved) }
