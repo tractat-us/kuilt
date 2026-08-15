@@ -3254,6 +3254,125 @@ val forbidUnlintedModule by tasks.registering {
     }
 }
 
+// Guard: forbid Android PRODUCTION source that `detektAll` does not analyse (#2334).
+//
+// `forbidUnlintedModule` above asserts a module is linted; this asserts one SOURCE SET is, and it
+// exists because the module-level assertion was green throughout the whole life of the bug. Every
+// module with `src/androidMain` had detekt applied and a `detektAll` to schedule — and `detektAll`
+// analysed none of that directory. `detektJvmMain` folds in `commonMain` and any jvmAndAndroid
+// intermediate, then explicitly drops the `androidMain` leaf; the only other Android tasks wired in
+// were the two `androidUnitTest` ones. So Android TEST code was linted and Android PRODUCTION code
+// was not — the inversion nobody would choose, sitting under a green module-level guard. A
+// `BroadcastReceiver` registration defect shipped through it (#2395), caught by a human reviewer.
+//
+// The assertion is EMPIRICAL and per file, not a task-name checklist: every `**/*.kt` under an
+// Android production source root must appear in the `source` of some task `detektAll` actually
+// depends on. That shape is what makes it hard to fool. A name-based version would pass the moment
+// `detektAndroidRelease` was named anywhere, whether or not it reached the files — which is exactly
+// the "wired but unreachable" false green #2005 and #2039 are both about, and the one a reader of a
+// green `detektAll` cannot distinguish from clean. Reading `source` needs no detekt classes on this
+// script's classpath (they are `build-logic`'s, per `forbidUnlintedModule`'s note): every detekt
+// task is a plain Gradle `SourceTask`.
+//
+// It is also what PINS THE ONE CHOICE `kuilt.detekt-kmp` MAKES — release variant only, not both.
+// That choice rests on `androidMain` being the sole Android production source set, so debug and
+// release analyse identical files (measured: identical file counts, identical findings). Add
+// `src/androidDebug` and only the release task's source is in the union, so the new files are
+// uncovered and this reds — with a message naming the second task to wire. The premise is therefore
+// checked rather than described, which is the point: a comment saying "there is no debug-only
+// source today" is true until it isn't, and nothing tells you when.
+//
+// DELIBERATELY ANDROID-ONLY, and the restraint is the design. The general form — "fail on any
+// production source no detekt task covers" — would red the whole repo on gaps that are open on
+// purpose and already tracked: `appleMain` and every native/wasm source set have tasks, but
+// PARSE-ONLY ones in which none of the four type-resolution rules can fire (#2039), and `commonTest`
+// has no task at all (#1960). A guard that fails on known, filed, accepted debt gets an allowlist
+// covering most of the repo on day one, and an allowlist that large is indistinguishable from no
+// guard. Android is the case where the gap was neither known nor accepted.
+val androidCoverageProbes = mutableListOf<Triple<String, FileTree, FileCollection>>()
+gradle.projectsEvaluated {
+    // Android PRODUCTION roots only. `androidUnitTest`/`androidInstrumentedTest` are covered by the
+    // test tasks `kuilt.detekt-kmp` has always wired in, and holding them to this guard would
+    // re-import #1960's `commonTest` gap through the side door.
+    val androidProductionPatterns = listOf(
+        "androidMain/**/*.kt",
+        "androidDebug/**/*.kt",
+        "androidRelease/**/*.kt",
+    )
+    rootProject.subprojects.forEach { sub ->
+        val androidProduction = kotlinSourcesIn(listOf(sub.projectDir.resolve("src")), androidProductionPatterns)
+        val detektAll = sub.tasks.findByName("detektAll")
+        // The union of what `detektAll` actually schedules — resolved from the task graph, so a task
+        // that exists but is not a dependency contributes nothing, exactly as at build time.
+        val analysed = sub.files(
+            detektAll?.taskDependencies?.getDependencies(detektAll)
+                ?.filterIsInstance<SourceTask>()
+                ?.map { it.source }
+                .orEmpty(),
+        )
+        androidCoverageProbes += Triple(sub.path, androidProduction, analysed)
+    }
+    tasks.named("forbidUnlintedAndroidMain") {
+        androidCoverageProbes.forEach { (path, androidProduction, analysed) ->
+            val slug = path.replace(Regex("[^A-Za-z0-9]+"), "_")
+            // Per-module and separately named for the same reason as `forbidUnlintedModule`'s: the
+            // verdict depends on WHICH module a file sits in, so a pooled fingerprint would let a
+            // file move between modules invisibly.
+            inputs.files(androidProduction)
+                .withPropertyName("androidProductionSources_$slug")
+                .withPathSensitivity(PathSensitivity.RELATIVE)
+            // Only the Android-rooted slice of what `detektAll` analyses. The whole union would be
+            // every module's commonMain and jvmMain — an enormous fingerprint whose contents cannot
+            // change this verdict. The slice can: it empties out the moment `detektAll` stops
+            // depending on the Android task, which is the regression this guard exists to catch.
+            inputs.files(analysed.filter { file -> file.invariantSeparatorsPath.contains("/src/android") })
+                .withPropertyName("androidSourcesAnalysedByDetektAll_$slug")
+                .withPathSensitivity(PathSensitivity.RELATIVE)
+        }
+    }
+}
+
+val forbidUnlintedAndroidMain by tasks.registering {
+    group = "verification"
+    description = "Fails if a module has Android production Kotlin source that detektAll does not analyse (#2334)."
+    val probes = androidCoverageProbes
+    // See "Guard plumbing" above: stamp ⇒ UP-TO-DATE (#1827). Inputs are registered in the
+    // `projectsEvaluated` block above, once every module's detekt tasks exist and carry their source.
+    val stamp = layout.buildDirectory.file("verification/forbid-unlinted-android-main.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    val rootPath = rootDir
+    doLast {
+        var covered = 0
+        val offenders = probes.flatMap { (path, androidProduction, analysed) ->
+            val analysedFiles = analysed.files
+            val declared = androidProduction.files
+            covered += declared.count { it in analysedFiles }
+            (declared - analysedFiles).sorted().map { "$path — ${it.relativeTo(rootPath).invariantSeparatorsPath}" }
+        }
+        if (offenders.isNotEmpty()) {
+            error(
+                "Android production Kotlin source is not analysed by ANY task `detektAll` depends on. " +
+                    "It compiles, `./gradlew build` is green, and the lint job reports nothing about " +
+                    "it — indistinguishable from clean, which is how a BroadcastReceiver defect " +
+                    "reached review unlinted (#2334):\n  " + offenders.joinToString("\n  ") +
+                    "\n  THE FIX is in `build-logic/src/main/kotlin/kuilt.detekt-kmp.gradle.kts`: add " +
+                    "the detekt task that covers this source set to `detektAllTaskNames`. " +
+                    "`androidMain` is covered by `detektAndroidRelease`; a build-type-scoped source " +
+                    "set needs its own variant task (`src/androidDebug` ⇒ `detektAndroidDebug`), " +
+                    "which is the case that single-variant wiring deliberately does not cover.\n" +
+                    "  Do NOT fold Android source into `detektJvmMain` instead — it carries the JVM " +
+                    "compile classpath, where `android.*` does not resolve, and all four rules in " +
+                    "`config/detekt/detekt.yml` require type resolution. That is a false green, not " +
+                    "a fix.",
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText("ok — $covered Android production Kotlin file(s) confirmed analysed by detektAll\n")
+    }
+}
+
 // Guard: forbid `:kuilt-bolt` rejoining the CRDT lattice (#2212, epic #2210).
 //
 // A bolt is a WRITE-ONLY archive. Its whole reason to exist is that it consumes operations, never
@@ -3450,6 +3569,7 @@ allprojects {
         dependsOn(rootProject.tasks.named("forbidUnboundedSwatchDelivery"))
         dependsOn(rootProject.tasks.named("forbidBoltRejoiningTheLattice"))
         dependsOn(rootProject.tasks.named("forbidUnlintedModule"))
+        dependsOn(rootProject.tasks.named("forbidUnlintedAndroidMain"))
         dependsOn(rootProject.tasks.named("forbidSourcelessKmpTarget"))
         dependsOn(rootProject.tasks.named("forbidPortProbeRebind"))
         dependsOn(rootProject.tasks.named("verifyDocCitations"))
