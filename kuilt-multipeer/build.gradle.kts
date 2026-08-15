@@ -41,6 +41,13 @@ kotlin {
         val iosArm64Test by getting { dependsOn(appleTest) }
         val iosSimulatorArm64Test by getting { dependsOn(appleTest) }
         val macosArm64Test by getting { dependsOn(appleTest) }
+        // The android stub is asserted directly rather than through
+        // DiscoverySourceConformanceSuite: its discoveries() throws, so no honest causeArrival
+        // exists and a binding could only pass by not running (#2401). See MultipeerAndroidStubTest.
+        androidUnitTest.dependencies {
+            implementation(libs.kotlin.testJunit)
+            implementation(libs.kotlinx.coroutines.test)
+        }
         jvmTest.dependencies {
             implementation(project(":kuilt-conformance"))
             implementation(libs.kotlin.testJunit)
