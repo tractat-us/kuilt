@@ -77,6 +77,33 @@ default an independent UUID. A guard would there refuse to record a legitimate e
 redialer dialling at the backoff ceiling forever. Removing the ambiguity at the source fixes both
 sites without needing the guard at all.
 
+### Why no test caught this, and what that costs
+
+This bug needed two iPhones. It should have needed a `jvmTest`. The reason it did not is one line in
+the reference harness:
+
+```kotlin
+// FakeNwRadio.registerOwnership
+endpointOwners[l.serviceName] = deviceId   // last writer wins
+```
+
+A name collision is modelled as *"the second advertiser cleanly replaces the first"*, so a dial to a
+shared name always resolves deterministically and correctly. Reality is *"the name now resolves to
+either advertiser, and which one is a race"* — which is the entire defect. `FakeNwRadio.connect` then
+routes strictly by `endpoint.id`, so the dialled id and the accepting device could never disagree.
+
+This is the blind spot CLAUDE.md already names: *a conformance property is only as strong as the
+weakest failure the reference implementation can reach.* The reference could not reach it, so nobody
+wrote the property, the suite stayed green, and the failure surfaced on hardware at the worst
+possible cost. #2417's `injectDialLandingOnSelf` is a *point* fix — it reproduces the one divergence
+someone thought to inject, not the class.
+
+So this ADR carries a second obligation beyond the rename: **make the ambiguity expressible in the
+harness** (hold every owner of a name, and let a test choose which one a dial resolves to), and then
+**hold every fabric to it by conformance** rather than fixing `:kuilt-nw` alone. Any fabric that
+discovers peers by a consumer-chosen name can put two peers on one name; `:kuilt-nw` is simply where
+it was found first. Sweeping the other suites for the same shape is tracked as #2247.
+
 ## Decision
 
 **Advertise a per-peer instance name under `Rendezvous.New`: `"<sessionName>-<selfId>"`, truncated to
