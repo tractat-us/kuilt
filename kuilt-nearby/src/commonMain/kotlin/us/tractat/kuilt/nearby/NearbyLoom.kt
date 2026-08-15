@@ -85,10 +85,7 @@ public class NearbyLoom(
     private var hostLinkDeferred: CompletableDeferred<ConnectedLink>? = null
 
     override fun capability(): TransportCapability =
-        TransportCapability(
-            roles = setOf(TransportRole.Bluetooth, TransportRole.WifiDirect, TransportRole.Data),
-            availability = api.availability(),
-        )
+        TransportCapability(roles = NEARBY_ROLES, availability = api.availability())
 
     override suspend fun weave(rendezvous: Rendezvous): Seam =
         when (rendezvous) {
@@ -245,6 +242,25 @@ public class NearbyLoom(
     }
 
     public companion object {
+        /**
+         * The roles a woven [NearbySeam] holds regardless of what the radios are doing: it carries
+         * application frames, and that stays true whether the link came up over Bluetooth or Wi-Fi.
+         *
+         * The two MEDIUM roles are deliberately **not** here — they are live, folded on per reading
+         * from [NearbyRadioState.radioRoles] (#1543), so a seam on a device with Bluetooth switched
+         * off stops claiming [TransportRole.Bluetooth]. Contrast [NEARBY_ROLES], which keeps naming
+         * both media because [capability] answers "what can this fabric do", not "what is on now".
+         */
+        internal val NEARBY_BASE_ROLES: Set<TransportRole> = setOf(TransportRole.Data)
+
+        /**
+         * The fabric's full STATIC role set, as reported by [capability]: [NEARBY_BASE_ROLES] plus
+         * both media Nearby Connections can use. A capability answer about the *fabric*, not about
+         * this device right now — see [NEARBY_BASE_ROLES].
+         */
+        internal val NEARBY_ROLES: Set<TransportRole> =
+            NEARBY_BASE_ROLES + setOf(TransportRole.Bluetooth, TransportRole.WifiDirect)
+
         /** Default Nearby Connections service ID. */
         public const val DEFAULT_SERVICE_ID: String = "us.tractat.kuilt.nearby"
 
