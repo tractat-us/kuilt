@@ -48,7 +48,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 **Intent:** merge several `PeerDiscoverySource` feeds (mDNS, Multipeer, …) into one live roster for a lobby UI — "who can I currently see?"
 **Primitive:** `discoveryRoster(sources, scope)` (`us.tractat.kuilt.core.discovery`). Folds `discoveries()` minus `departures()`, keyed on `Tag.peerKey`, into one `StateFlow<Set<Tag>>`. Don't hand-roll the merge.
 
-It returns only **this peer's current best view** — not an agreement. It is **not** an election input: pick a host from `Seam.peers` once connected, never from this roster. And note the ghost caveat — a source whose `departures()` is the default (`emptyFlow()`) is add-only, so departed peers linger forever.
+It returns only **this peer's current best view** — not an agreement. It is **not** an election input: pick a host from `Seam.peers` once connected, never from this roster. And note the ghost caveat — a source whose `departures()` returns `emptyFlow()` is add-only, so departed peers linger forever. There is no interface default for `departures()`: a source with no leave signal has to write the `emptyFlow()` out, so you can tell which of your sources the caveat applies to by reading them.
 
 <!-- verbatim from kuilt-core/src/commonSamples/kotlin/us/tractat/kuilt/core/discovery/DiscoverySamples.kt#sampleDiscoveryRoster -->
 ```kotlin

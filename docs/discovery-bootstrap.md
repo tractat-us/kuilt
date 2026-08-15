@@ -22,8 +22,9 @@ kuilt's layer there is no correct version to ship.
    it yet elects someone else. Seconds of Bonjour latency is normal, not exotic.
 2. **Add-only rosters.** `NwLoom.visiblePeers` never removes — the design doc
    already calls this "ghosts forever" (`docs/host-election-design.md`).
-   `PeerDiscoverySource.departures()` defaults to `emptyFlow()`, so kuilt cannot
-   promise removal *at the interface level* even where a given source implements it.
+   `PeerDiscoverySource.departures()` may legitimately be `emptyFlow()` — a source
+   with no leave signal has to say so explicitly, but it is still allowed to — so kuilt
+   cannot promise removal *at the interface level* even where a given source implements it.
    Electing a ghost means dialling a dead advertisement and wedging until a
    consumer-owned timeout.
 3. **Transport-scoped identity.** `Tag.peerKey` is the `PeerId` value for mDNS and

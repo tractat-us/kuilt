@@ -5,6 +5,7 @@ import android.net.nsd.NsdServiceInfo
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.emptyFlow
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.discovery.DiscoveryKind
 import us.tractat.kuilt.core.discovery.PeerDiscoverySource
@@ -144,6 +145,11 @@ public class MDNSServiceDiscoverer(
                 runCatchingCancellable { nsdManager.stopServiceDiscovery(listener) }
             }
         }
+
+    // No leave signal yet: NsdManager DOES report one (`onServiceLost`) and this class discards it,
+    // so every peer it discovers is a permanent ghost in discoveryRoster. Written out rather than
+    // inherited so the shortfall is visible where the source is read.
+    override fun departures(): Flow<String> = emptyFlow()
 }
 
 private fun extractExtensions(attrs: Map<String, ByteArray?>): Map<String, String> =

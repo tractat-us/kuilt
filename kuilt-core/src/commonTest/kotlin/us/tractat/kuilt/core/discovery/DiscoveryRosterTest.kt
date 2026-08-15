@@ -10,6 +10,11 @@ import us.tractat.kuilt.core.Tag
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
+/**
+ * A fixed-roster fake. [departures] defaults to [emptyFlow] here — a *constructor* default, chosen
+ * per call site and visible in this file, not the interface default that used to let an
+ * implementation opt out of removal by saying nothing at all.
+ */
 private class FakeSource(
     override val kind: DiscoveryKind,
     private val discoveries: Flow<Tag>,
@@ -63,15 +68,15 @@ class DiscoveryRosterTest {
     }
 
     @Test
-    fun defaultDeparturesAccumulatesGhosts() = runTest {
-        // One source announces departures; the other uses the interface default (emptyFlow).
+    fun emptyDeparturesAccumulatesGhosts() = runTest {
+        // One source announces departures; the other has no leave signal at all (emptyFlow).
         val mdnsDisc = MutableSharedFlow<Tag>(extraBufferCapacity = 16)
         val mdnsDep = MutableSharedFlow<String>(extraBufferCapacity = 16)
         val mpcDisc = MutableSharedFlow<Tag>(extraBufferCapacity = 16)
         val roster = discoveryRoster(
             listOf(
                 FakeSource(DiscoveryKind.Mdns, mdnsDisc, mdnsDep),
-                FakeSource(DiscoveryKind.Multipeer, mpcDisc), // default no-op departures()
+                FakeSource(DiscoveryKind.Multipeer, mpcDisc), // no leave signal: departures() is empty
             ),
             backgroundScope,
         )
@@ -88,7 +93,7 @@ class DiscoveryRosterTest {
         runCurrent()
 
         // The mDNS key is gone; the Multipeer key lingers forever — the documented
-        // add-only ghost: a source without departures() never removes what it added.
+        // add-only ghost: a source whose departures() is empty never removes what it added.
         assertEquals(setOf("peer-mpc"), peerKeysOf(roster.value))
     }
 }

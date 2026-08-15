@@ -12,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flowOn
 import platform.Foundation.NSData
 import platform.Foundation.NSNetService
@@ -73,6 +74,12 @@ public class MDNSServiceDiscoverer(
                 browser.setDelegate(null)
             }
         }.flowOn(Dispatchers.Main)
+
+    // No leave signal yet: NSNetServiceBrowser DOES report one (`didRemoveService`) and
+    // ServiceDelegate discards it, so every peer this source discovers is a permanent ghost in
+    // discoveryRoster. Written out rather than inherited so the shortfall is visible where the
+    // source is read.
+    override fun departures(): Flow<String> = emptyFlow()
 }
 
 private class ServiceDelegate(
