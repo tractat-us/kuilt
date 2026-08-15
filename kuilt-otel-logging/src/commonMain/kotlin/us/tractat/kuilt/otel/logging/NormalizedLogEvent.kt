@@ -48,4 +48,22 @@ public data class NormalizedLogEvent(
      * exactly the #1630 bug.
      */
     public val resolvedAttributes: Map<String, String>? = null,
+    /**
+     * The epoch-nanosecond instant the line was logged, read at the **synchronous
+     * capture edge** on the caller — never on the drain coroutine (#1993). This is
+     * OTLP's `timeUnixNano`: *when the event occurred*. [LogCapture.capture] copies
+     * it to `LogRecord.timestampEpochNanos` and keeps its own drain-side reading for
+     * `LogRecord.observedEpochNanos`, which is `observedTimeUnixNano`: when capture
+     * saw it. Read on the drain, the two collapse into one number and every record
+     * carries flush cadence instead of event timing.
+     *
+     * [LogCapture.resolveAtEdge] fills this from the injected `Clock` when it is
+     * `null`, and leaves a value already present alone — an edge whose platform
+     * event carries a true emit time of its own may supply it.
+     *
+     * `null` means the event was never edge-resolved. [LogCapture.capture] then uses
+     * its own reading for both fields — correct for a caller that invokes `capture()`
+     * directly from its own log site, because that call *is* the synchronous edge.
+     */
+    public val emittedEpochNanos: Long? = null,
 )

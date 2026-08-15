@@ -41,7 +41,7 @@ import kotlin.time.Clock
  * ## Injected dependencies
  *
  * Both time and randomness are dependencies, never reached for directly:
- * - [clock] supplies the event timestamps. A test injects a virtual clock; a
+ * - [clock] supplies the record timestamps. A test injects a virtual clock; a
  *   production install passes `kotlin.time.Clock.System`.
  * - [random] supplies the fresh 8-byte `recordId` per record. A test injects a
  *   seeded [Random]; a production install passes `Random.Default`.
@@ -51,14 +51,17 @@ import kotlin.time.Clock
  * Anything that depends on *when and where the line was logged* is resolved at the
  * **synchronous capture edge**, on the caller, and carried on the queued
  * [NormalizedLogEvent] — never re-derived on the drain coroutine. That covers the
- * ambient trace context (#1034) and the [CaptureConfig.attributeMapper] (#1630).
- * A queueing edge calls [resolveAtEdge] once; [capture] then reads the snapshot.
- * Resolving either on the drain stamps records with whatever the ambient state has
- * become by then, which the consumer cannot detect or repair.
+ * ambient trace context (#1034), the [CaptureConfig.attributeMapper] (#1630) and
+ * the instant the line was logged (#1993). A queueing edge calls [resolveAtEdge]
+ * once; [capture] then reads the snapshot. Resolving any of them on the drain
+ * stamps records with whatever the ambient state has become by then, which the
+ * consumer cannot detect or repair.
  *
  * @param exporter the durable log buffer this capture writes into.
  * @param config which events to keep and how to shape their attributes.
- * @param clock source of the event timestamps (required — never the wall clock).
+ * @param clock source of the record timestamps (required — never the wall clock).
+ *   Read twice per record on a queueing edge: once by [resolveAtEdge] for the event
+ *   time, once by [capture] for the observed time.
  * @param random source of the per-record id bytes (required — never an unseeded
  *   default).
  * @param traceContextProvider optional trace/sampling gate. When `null` (the M1
@@ -79,7 +82,7 @@ public class LogCapture(
      * logged** onto [event], for a queueing capture edge to hand to the drain.
      *
      * This is the one call a capture edge makes, and it MUST run synchronously on
-     * the thread/coroutine that logged. It resolves both emit-time-sensitive
+     * the thread/coroutine that logged. It resolves all three emit-time-sensitive
      * inputs:
      * - the ambient trace ([resolveTrace] → [NormalizedLogEvent.activeTrace], #1034)
      *   — an ambient [TraceContextProvider] reads the caller's thread/coroutine-local
@@ -87,7 +90,11 @@ public class LogCapture(
      * - the [CaptureConfig.attributeMapper] ([NormalizedLogEvent.resolvedAttributes],
      *   #1630) — a mapper that folds ambient state (the session in progress, a request
      *   id) into attributes must see the state the line was emitted under, not
-     *   whatever it has become by drain time.
+     *   whatever it has become by drain time;
+     * - the instant itself ([NormalizedLogEvent.emittedEpochNanos], #1993) — the event
+     *   time is *now*, on this caller, and no later reading of the clock can recover
+     *   it. A value already on the event is left alone, so an edge whose platform
+     *   event carries its own emit time may supply it.
      *
      * Returns `null` when the event carries nothing to export — the edge should
      * then drop it rather than queue it. That is either because [capture] would
@@ -101,7 +108,11 @@ public class LogCapture(
     public fun resolveAtEdge(event: NormalizedLogEvent): NormalizedLogEvent? {
         if (droppedBeforeRecord(event)) return null
         val attributes = runCatchingCancellable { config.attributeMapper(event) }.getOrNull() ?: return null
-        return event.copy(activeTrace = resolveTrace(), resolvedAttributes = attributes)
+        return event.copy(
+            activeTrace = resolveTrace(),
+            resolvedAttributes = attributes,
+            emittedEpochNanos = event.emittedEpochNanos ?: nowEpochNanos(),
+        )
     }
 
     /**
@@ -196,8 +207,7 @@ public class LogCapture(
                 }
             }
         }
-        val now = clock.now()
-        val epochNanos = now.epochSeconds * NANOS_PER_SECOND + now.nanosecondsOfSecond
+        val observedEpochNanos = nowEpochNanos()
         return LogRecord(
             recordId = ByteString(random.nextBytes(RECORD_ID_BYTES)),
             severityNumber = event.level.severityNumber,
@@ -207,11 +217,26 @@ public class LogCapture(
             // that drives capture() straight from its log site — there this call IS
             // the edge, so applying the mapper here is still emit time.
             attributes = event.resolvedAttributes ?: config.attributeMapper(event),
-            timestampEpochNanos = epochNanos,
-            observedEpochNanos = epochNanos,
+            // OTLP's timeUnixNano: when the event occurred. Read at the synchronous
+            // edge (#1993). The fallback covers a caller that drives capture()
+            // straight from its log site — there this call IS the edge, so the two
+            // instants are genuinely the same, not a collapsed one.
+            timestampEpochNanos = event.emittedEpochNanos ?: observedEpochNanos,
+            // OTLP's observedTimeUnixNano: when capture saw the event. This is the
+            // drain instant, and it belongs on the drain.
+            observedEpochNanos = observedEpochNanos,
             traceId = traceId,
             spanId = spanId,
         )
+    }
+
+    /**
+     * The injected [clock] read as epoch nanoseconds — the one conversion, shared by
+     * the edge-side event time and the drain-side observed time so the two fields
+     * cannot come to be computed differently.
+     */
+    private fun nowEpochNanos(): Long = with(clock.now()) {
+        epochSeconds * NANOS_PER_SECOND + nanosecondsOfSecond
     }
 
     /**

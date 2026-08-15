@@ -60,6 +60,21 @@ per captured line (it is skipped for lines below `minLevel`, and for kuilt's own
 exporter loggers). And it should not throw — a mapper that throws loses that one
 record rather than surfacing an error inside your `log` call.
 
+## When the line happened, and when we wrote it down
+
+Your `log.info { … }` call does not write the record — it hands the line off and a
+drain writes it just behind you, sometimes much later. Every captured record
+therefore carries two times, and they mean different things:
+
+- **`timestampEpochNanos`** — when the line was logged. Taken on your thread, in
+  your `log` call, so it is the real event time however long the record then waits.
+  This is the one to sort or print a timeline by.
+- **`observedEpochNanos`** — when capture actually wrote the record down. Later, by
+  however long the queue was.
+
+The gap between them is capture latency, free of charge: if it is growing, the
+export path is falling behind the app.
+
 ## Where capture happens
 
 One uniform appender is installed in common code on every platform. It feeds each
@@ -131,6 +146,6 @@ by one per line once the queue fills.
 
 ## Determinism
 
-Time and randomness are injected: the event timestamps come from a `Clock` and the
+Time and randomness are injected: the record timestamps come from a `Clock` and the
 per-record id from a `Random`, both required parameters — never reached for
 directly. Tests inject a virtual clock and a seeded RNG.

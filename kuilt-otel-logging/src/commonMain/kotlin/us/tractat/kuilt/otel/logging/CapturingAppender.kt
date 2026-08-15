@@ -156,10 +156,11 @@ internal class CapturingAppender(
         delegate.log(loggingEvent)
         val normalized = loggingEvent.normalize() ?: return
         // Resolve HERE — synchronously, on the caller that logged — and snapshot the
-        // result onto the event. Both the ambient trace (#1034) and the configured
-        // attributeMapper (#1630) depend on state that only exists on this caller
-        // right now; by the time the drain coroutine runs capture() the ambient
-        // context is gone and ambient app state may have moved on. Resolving
+        // result onto the event. The ambient trace (#1034), the configured
+        // attributeMapper (#1630) and the instant itself (#1993) all depend on state
+        // that only exists on this caller right now; by the time the drain coroutine
+        // runs capture() the ambient context is gone, ambient app state may have moved
+        // on, and the clock reads the flush time rather than the event time. Resolving
         // off-thread on the drain is the bug; this edge resolution is the fix.
         val resolved = capture.resolveAtEdge(normalized) ?: return
         // Never fails: a DROP_OLDEST channel makes room by evicting its head, and

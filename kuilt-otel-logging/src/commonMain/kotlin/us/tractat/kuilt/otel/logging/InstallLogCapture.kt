@@ -77,7 +77,10 @@ public class LogCaptureInstallation internal constructor(
  *   [CaptureConfig.attributeMapper] is applied at the **synchronous `log()` edge**
  *   on the caller, so a mapper that folds ambient application state into attributes
  *   sees the state the line was emitted under (#1630).
- * @param clock source of event timestamps (required — never the wall clock).
+ * @param clock source of record timestamps (required — never the wall clock). Read
+ *   at the **synchronous `log()` edge** for the record's event time
+ *   (`timestampEpochNanos`) and again on the drain for its observed time
+ *   (`observedEpochNanos`), so the two OTLP fields mean what OTLP says (#1993).
  * @param random source of the per-record id bytes (required — never an unseeded
  *   default).
  * @param scope the [CoroutineScope] the capture edge drains events on. Inject a
