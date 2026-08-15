@@ -59,6 +59,34 @@ afterEvaluate {
         (task as Detekt).config.setFrom(testDetektConfig)
     }
 
+    // #2334: `androidMain` PRODUCTION source. Until this task was wired in, it was analysed by
+    // NOTHING — the two androidUnitTest tasks above cover Android TEST source, and the fold below
+    // walks the dependsOn closure UP from the jvm/android leaves and then explicitly drops the
+    // leaves themselves, so `androidMain`'s own srcDirs land in no type-resolved task. The result
+    // was the exact inversion nobody would choose deliberately: Android test code linted, Android
+    // production code — whole public entry points, everything that touches the Android SDK — not.
+    // It is not hypothetical; a `BroadcastReceiver` registration defect shipped into the blind spot
+    // in `kuilt-nearby/src/androidMain` and was caught by a human reviewer, detekt having analysed
+    // none of it.
+    //
+    // The fix is a REAL Android variant task, not a fold into `detektJvmMain`. Folding would analyse
+    // Android code against the JVM compile classpath, where `android.*` does not resolve — and since
+    // all four rules in `config/detekt/detekt.yml` need type resolution, unresolved receivers mean
+    // false negatives on precisely the Android-SDK-touching code this exists to cover.
+    //
+    // RELEASE, not debug, and not both. `androidMain` is a single source set compiled verbatim into
+    // both variants — measured, both tasks analyse the identical file set and report the identical
+    // findings — so wiring both would double Android compilation across every module in a job with
+    // a documented OOM history (see the comment above `afterEvaluate`) to buy nothing. Release is
+    // the principled half of the pair because it is the one that SHIPS: `kuilt.kmp-library` declares
+    // `publishLibraryVariants("release")`, so release is the variant consumers resolve. The repo has
+    // no `buildTypes`/`productFlavors` block and no build-type-scoped source dir or dependency
+    // configuration, so nothing debug-only escapes today — and that premise is not left to prose:
+    // `forbidUnlintedAndroidMain` in the root build asserts, empirically and per file, that every
+    // Kotlin file under an Android production source root is in the source set of a task `detektAll`
+    // actually schedules. Add `src/androidDebug` and it reds.
+    val androidMainTaskName = "detektAndroidRelease"
+
     // #1021: JVM/Android-only modules keep their production code in a manual
     // intermediate source set (e.g. `jvmAndAndroidMain`, created to disable KMP
     // hierarchy auto-wiring). detekt only generates a *metadata* task for such an
@@ -137,11 +165,12 @@ afterEvaluate {
     // unlinted by detektAll while detektJvmMain (registered earlier) is found. A
     // `tasks.matching { }` collection is resolved at task-graph time, after every
     // detekt task exists, and is robust to new source sets/modules.
-    val detektAllTaskNames = setOf("detektMetadataCommonMain", "detektJvmMain") + testSourceSetTaskNames
+    val detektAllTaskNames =
+        setOf("detektMetadataCommonMain", "detektJvmMain", androidMainTaskName) + testSourceSetTaskNames
     tasks.register("detektAll") {
         group = "verification"
         description = if (typeResolved) {
-            "Runs detekt on main sources (commonMain + jvmMain, incl. any jvmAndAndroidMain intermediate folded into the jvm task) and test sources (jvmTest, androidUnitTest) with type resolution. Not wired into check — CI runs it as a separate job to avoid OOM."
+            "Runs detekt with type resolution on main sources (commonMain + jvmMain, incl. any jvmAndAndroidMain intermediate folded into the jvm task, plus androidMain via the release variant — #2334) and test sources (jvmTest, androidUnitTest). Does NOT reach commonTest (#1960) or any apple/native/wasm source set (#2039). Not wired into check — CI runs it as a separate job to avoid OOM."
         } else {
             "Runs detekt on every source set of this jvm-less module WITHOUT type resolution (detekt resolves types only against a JVM classpath). Not wired into check — CI runs it as a separate job to avoid OOM."
         }
