@@ -11,6 +11,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.atomic.AtomicBoolean
 
+// Explicitly named, per `InternalLoggerNameGuardTest`: an empty-lambda logger takes its name from
+// the enclosing class, which the Native self-capture exclusion (#1003) cannot key on.
+private val logger = KotlinLogging.logger("us.tractat.kuilt.websocket.AndroidConnectivityObserver")
+
 /**
  * The live Android binding behind [ConnectivityObserver] (#1725) — a
  * [ConnectivityManager.NetworkCallback] watching whether this device currently has a network that
@@ -182,9 +186,6 @@ public class AndroidConnectivityObserver internal constructor(
             hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
             hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
 
-    private companion object {
-        private val logger = KotlinLogging.logger {}
-    }
 }
 
 /**
