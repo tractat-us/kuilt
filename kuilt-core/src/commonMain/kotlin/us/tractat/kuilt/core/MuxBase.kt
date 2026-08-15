@@ -90,6 +90,25 @@ internal class MuxBase<K>(
         override val peers: StateFlow<Set<PeerId>> get() = delegate.peers
         override val state: StateFlow<SeamState> get() = delegate.state
 
+        /**
+         * The base seam's live verdict, verbatim — the per-session counterpart to
+         * [MuxClientLoom.capability], which forwards the same way on the pre-connect surface.
+         *
+         * Multiplexing changes how many logical sessions share a link, not which medium carries it
+         * nor whether that medium is usable right now — so the base's capability *is* this view's
+         * capability, in both halves. Inheriting [Seam]'s roleless [FabricAvailability.Unknown]
+         * floor would be strictly worse than an un-established guess: it discards a verdict already
+         * established one layer down, so a channel over a fabric with a real OS path observer says
+         * "cannot tell" while the fabric underneath is answering confidently — including when that
+         * answer is [FabricAvailability.Unavailable], which the floor launders into silence. The
+         * [TransportCapability.roles] half matters just as much: a muxed ply defaulting to
+         * `emptySet()` under-reports what a `CompositeSeam` role rollup can do (#1546).
+         *
+         * Reactive by delegation rather than by snapshot — the base's own [StateFlow] is handed
+         * through, so a path change after this view was created is seen by the view's holders.
+         */
+        override val capability: StateFlow<TransportCapability> get() = delegate.capability
+
         override val incoming: Flow<Swatch> = spool.incoming
 
         override suspend fun broadcast(payload: ByteArray) {
