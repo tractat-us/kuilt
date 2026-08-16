@@ -106,19 +106,42 @@ it was found first. Sweeping the other suites for the same shape is tracked as #
 
 ## Decision
 
-**Advertise a per-peer instance name under `Rendezvous.New`: `"<sessionName>-<selfId>"`, truncated to
-Bonjour's 63-byte instance-name limit by trimming the *session-name prefix*, never the id suffix.**
+**Advertise `selfId.value` as the Bonjour instance name under `Rendezvous.New` — exactly what
+`Rendezvous.Existing` already advertises.** The two arms collapse into one:
 
 ```kotlin
-val serviceName = when (rendezvous) {
-    is Rendezvous.New -> advertisedInstanceName(rendezvous.pattern.sessionName, selfId)
-    is Rendezvous.Existing -> selfId.value
-}
+val serviceName = selfId.value
 ```
 
-Uniqueness is load-bearing and the label is cosmetic, so the truncation budget is spent on the id
-first. Names become unique, so a name resolves to exactly one device and the collision window — with
-it the `… (2)` rename and the whole race — ceases to exist.
+A name then resolves to exactly one device, so the collision window — and with it the `… (2)` rename
+and the whole race — ceases to exist.
+
+### Why not keep the session label in the name
+
+A composite `"<sessionName>-<selfId>"` was considered first, and rejected. It is equally unique, and
+it would have kept a human-readable label on the wire and made a future session prefix-filter
+possible. It also introduces a failure mode bare `selfId` cannot have.
+
+When TXT has not yet resolved, `RealNwApi` falls back to `id = serviceName`. So under a composite
+name a peer is sighted under **two different ids** across its lifetime — the fallback
+`"quickplay-<theirId>"` and the resolved `<theirId>` — and `NwLoom.redialers` is keyed by
+`endpoint.id`. That is two redial campaigns for one peer. `NwSeam.peerEndpoint` is single-valued, so
+only the most recently dialled id is in `settledEndpoints`: the parked redialer wakes, resets its
+backoff to the initial interval, dials, overwrites `peerEndpoint`, which un-settles the other, which
+wakes — a sustained connect → hello → dedup-disconnect churn for the seam's whole lifetime, in
+precisely the browse-add-before-TXT case #1709 exists for.
+
+Today the #1709 deferral incidentally prevents this by holding the unresolved sighting until the
+resolved one arrives. A per-peer name stops that deferral from matching a *remote* peer, so the
+composite form would have converted an incidental protection into a default-path defect.
+
+With bare `selfId.value` the fallback id **is** the resolved id, so there is exactly one id per peer
+and the bifurcation is unrepresentable rather than guarded. This is the real reason
+`Rendezvous.Existing` "already works", and it is worth more than a label on the wire.
+
+**If a lobby UI ever needs the session label, its home is the TXT record** — already read per-peer,
+already the identity channel, and under no uniqueness constraint. The Bonjour instance name is a
+routing key, not a display string; this ADR stops overloading it as both.
 
 ### Why not "dial an address, not a name" (#2416 option 1)
 
@@ -133,21 +156,32 @@ race, and it leaves the `peerEndpoint` sibling above untouched. Recovery, not re
 
 ## Consequences
 
-**`NwEndpoint.serviceName` changes meaning under `New`** — from "the shared session name" to "a
-per-peer name carrying the session name as a prefix". `NwLoom.visiblePeers` exposes it for a lobby
-view, so this is a pre-1.0 public-surface change and the reason this was a design decision rather
-than a drive-by. It is also what makes a session prefix filter *possible* for the first time: today
-every peer of the service type is armed regardless of session, and only the PSK handshake sorts them
-out. Adding that filter is deliberately **not** part of this decision — it is a separate optimisation
-against a cost that predates this ADR.
+**`NwEndpoint.serviceName` changes meaning under `New`** — from "the shared session name" to "this
+peer's `PeerId`", which is what it has always meant under `Existing`. `NwLoom.visiblePeers` exposes it
+for a lobby view, so this is a pre-1.0 public-surface change and the reason this was a design decision
+rather than a drive-by. A consumer that rendered `serviceName` as a session label must read the label
+from elsewhere; nothing in-tree does.
 
 **The pre-TXT window stops being dangerous.** When TXT has not resolved, `RealNwApi` falls back to
-`id = serviceName`. That fallback id is now per-device, so an unresolved sighting already names the
-right machine — it merely does not yet name its `PeerId`.
+`id = serviceName` — which is now the peer's `PeerId`, i.e. *the same id the resolved sighting
+carries*. An unresolved sighting therefore already names the right machine under the right key, and
+the resolved one does not introduce a second.
 
 **The JVM-bridge self-dial under `New` gets caught pre-dial.** Today neither self-filter clause fires
-there (`id` = dylib-selfId, `serviceName` = the shared name). With a per-peer name the `#1709`
-deferral recognises our own advertisement by name and holds it until TXT resolves.
+there (`id` = dylib-selfId, `serviceName` = the shared session name), so the bridge self-dials, the
+post-connect guard drops the link, and — since #2417 — refuses to settle it, leaving a permanent
+self-redial at the backoff ceiling. With `serviceName = selfId.value` the filter's
+`serviceName == selfId.value` clause fires and the dial never happens.
+
+Note this holds *only* for the bare form. The composite form rejected above would **not** fix it: the
+#1709 deferral requires `!identityResolved`, and `BridgeNwApi` hardcodes `identityResolved = true`
+because the ABI does not marshal it. The bridge does reach `Rendezvous.New` (`NwCrossProcessProbe`
+calls `nwHost`), contradicting `BridgeNwApi`'s own comment that it only uses `Existing`. The
+underlying ABI gaps are #2419.
+
+**Session filtering is unchanged, and still absent.** Every peer of the service type is armed
+regardless of session; only the PSK handshake sorts them out. That predates this ADR and is not
+addressed by it. A filter would now need the session label from the TXT record rather than the name.
 
 **Machinery this makes redundant, retired separately.** With unique names,
 `serviceName == advertisedServiceName` becomes a precise self-test, which likely collapses the #1709
