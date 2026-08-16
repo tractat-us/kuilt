@@ -745,9 +745,11 @@ internal class RealNwApi(
         if (loopback == null) {
             val descriptor = nw_advertise_descriptor_create_bonjour_service(serviceName, serviceType, null)
             // Publish this peer's stable [selfId] in the Bonjour TXT record so a browser recovers it as the
-            // discovered [NwEndpoint.id] (Option A, #1502). Under Rendezvous.New every peer advertises the
-            // SAME shared serviceName, so the service name alone cannot distinguish self from a real peer;
-            // the per-peer TXT id can. A null descriptor (create failed) simply advertises nothing here.
+            // discovered [NwEndpoint.id] (Option A, #1502) — a per-peer identity that survives mDNS
+            // renaming the instance name on a collision, which the name itself does not. This mattered most
+            // when Rendezvous.New made every peer advertise the SAME serviceName; ADR-005 (#2416) gives each
+            // peer its own name, and the TXT id remains the identity channel either way. A null descriptor
+            // (create failed) simply advertises nothing here.
             if (descriptor != null) advertisePeerIdInTxt(descriptor)
             nw_listener_set_advertise_descriptor(newListener, descriptor)
         }
@@ -816,10 +818,13 @@ internal class RealNwApi(
         // Opt in to TXT records. Network.framework's default is NOT to query them
         // ("by default, the browser will not automatically query for TXT records" —
         // browse_descriptor.h), so without this the per-peer PeerId we advertise is
-        // never delivered on browse: readPeerId() returns null, every endpoint falls
-        // back to `id = serviceName`, and under Rendezvous.New (one shared session
-        // serviceName) the pre-dial self-filter can never fire — the peer dials its
-        // own endpoint and is only caught post-connect by NwSeam (#1660 root 1).
+        // never delivered on browse: readPeerId() returns null and every endpoint falls
+        // back to `id = serviceName`. That was the #1660 root-1 self-dial while
+        // Rendezvous.New put one shared session serviceName on every peer, so the
+        // pre-dial self-filter could never fire. ADR-005 (#2416) makes the name per-peer,
+        // which removes that particular consequence — but the opt-in stays load-bearing:
+        // the backstop id is a NAME, and mDNS renames a colliding name to "… (2)", so
+        // without TXT a renamed peer reads as a second peer rather than the same one.
         nw_browse_descriptor_set_include_txt_record(descriptor, true)
         val newBrowser = nw_browser_create(descriptor, secureParams())
         nw_browser_set_queue(newBrowser, queue)

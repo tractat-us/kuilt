@@ -45,25 +45,31 @@ class NwTxtFidelityTest {
     }
 
     /**
-     * **The case that would have caught the shipped bug.** A browser that never requests TXT is handed
-     * no TXT, so identity falls back to `serviceName`; under [Rendezvous.New]'s shared session name that
-     * is the *same string* for self and every peer, so the pre-dial self-filter cannot distinguish self
-     * and the loom dials its own endpoint.
+     * **Re-premised by ADR-005 / #2416.** This test used to be "the case that would have caught the
+     * shipped bug": a browser that never requests TXT is handed no TXT, so identity fell back to
+     * `serviceName`, and under [Rendezvous.New]'s *shared session name* that was the same string for self
+     * and every peer — the pre-dial self-filter could not distinguish self, and the loom eventually
+     * self-dialled once [NwLoom.IDENTITY_GRACE] expired.
      *
-     * This is a characterization test: it asserts the broken behaviour that follows from omitting the
-     * opt-in, which is what makes `nw_browse_descriptor_set_include_txt_record` load-bearing rather than
-     * incidental. Its sibling [optedInBrowserResolvesTheTxtPeerIdAndFiltersSelf] asserts the fixed path.
-     * Together they say: the opt-in is the difference between self-dialling and not.
+     * ADR-005 makes [NwLoom] advertise `selfId.value` under [Rendezvous.New] too, and that deletes the
+     * state this test characterized: the `serviceName` backstop is now **the peer's own `PeerId`**, so an
+     * unresolved sighting already names the right machine under the right key. Self is filtered on the
+     * backstop id alone, with no TXT record and no grace — the ADR's "the pre-TXT window stops being
+     * dangerous" consequence, and the reason the rejected composite `"<sessionName>-<selfId>"` form would
+     * NOT have been equivalent.
      *
-     * Since #1709 the self-dial is *deferred*, not prevented, for a browser that never asks for TXT: no
-     * identity can ever arrive on this browser, so the deferral runs its full [NwLoom.IDENTITY_GRACE] and
-     * then dials the fallback id anyway — the deliberate liveness bound, since an advertiser that
-     * publishes no TXT is indistinguishable from one whose TXT is merely late. The claim is unchanged and
-     * the timing is the evidence: without the opt-in the loom still cannot recognise its own endpoint.
+     * So the pair with [optedInBrowserResolvesTheTxtPeerIdAndFiltersSelf] no longer reads "the opt-in is
+     * the difference between self-dialling and not" — on the `New` path the *name* is now that difference.
+     * What the opt-in still buys is a real per-peer identity when the name is NOT the id: a peer mDNS
+     * renamed to `"<id> (2)"`, or one still on a build that advertises a shared lobby name.
+     *
+     * The `identityResolved == false` precondition below is load-bearing: this test's claim is an
+     * absence (`opened.isEmpty()`), which a fixture that discovered nothing at all would satisfy
+     * vacuously. Asserting the unresolved sighting really arrived is what makes the absence evidence.
      */
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
-    fun aBrowserThatNeverRequestsTxtCannotFilterSelfUnderASharedServiceName() = runTest(StandardTestDispatcher()) {
+    fun aBrowserThatNeverRequestsTxtStillFiltersSelfBecauseTheNameIsNowTheIdentity() = runTest(StandardTestDispatcher()) {
         val radio = FakeNwRadio()
         val selfId = PeerId("self-uuid-1706")
         // browserIncludesTxtRecord = false — Network.framework's OWN default, i.e. the shipped omission.
@@ -78,28 +84,38 @@ class NwTxtFidelityTest {
 
         val opened = mutableListOf<NwConnectionOpened>()
         val spy = launch(start = CoroutineStart.UNDISPATCHED) { api.connectionOpened.collect { opened += it } }
+        // The rig receipt: prove the TXT-less sighting really was delivered AND really was unresolved.
+        val seen = mutableListOf<NwEndpoint>()
+        val browse = launch(start = CoroutineStart.UNDISPATCHED) { api.endpointFound.collect { seen += it } }
 
         val weave = launch(start = CoroutineStart.UNDISPATCHED) {
             runCatchingCancellable { loom.weave(Rendezvous.New(Pattern(sessionName = SHARED_LOBBY))) }
         }
-        testScheduler.advanceTimeBy(500)
+        // Past the identity grace, so this is "never dialled", not "not dialled yet".
+        testScheduler.advanceTimeBy(500 + NwLoom.IDENTITY_GRACE.inWholeMilliseconds)
         testScheduler.runCurrent()
 
-        // #1709 holds the possibly-self endpoint back while its identity might still arrive...
-        assertTrue(opened.isEmpty(), "the identity deferral holds the dial back during the grace, was $opened")
-
-        // ...but identity can NEVER arrive on a browser that never asked for TXT, so the bounded grace
-        // expires and the loom self-dials after all — the liveness bound, and the same failure as before.
-        testScheduler.advanceTimeBy(NwLoom.IDENTITY_GRACE.inWholeMilliseconds)
-        testScheduler.runCurrent()
-
-        assertTrue(
-            opened.isNotEmpty(),
-            "without the TXT opt-in the loom cannot recognise its own endpoint under a shared serviceName " +
-                "and self-dials once the identity grace expires — the #1660 root-1 failure the opt-in prevents",
+        assertAll(
+            {
+                assertTrue(
+                    seen.any { !it.identityResolved && it.id == selfId.value },
+                    "rig: a browser with no TXT opt-in must still have seen our own advert on the " +
+                        "serviceName backstop, which ADR-005 makes equal to selfId — saw $seen",
+                )
+            },
+            {
+                assertTrue(
+                    opened.isEmpty(),
+                    "ADR-005 makes the instance name the identity, so the backstop id IS selfId and the " +
+                        "pre-dial self-filter fires with no TXT record at all — no self-dial, not even " +
+                        "after the identity grace expires, was $opened",
+                )
+            },
+            { assertTrue(loom.visiblePeers.value.isEmpty(), "self never rostered, was ${loom.visiblePeers.value}") },
         )
 
         spy.cancel()
+        browse.cancel()
         weave.cancel()
     }
 
@@ -244,9 +260,13 @@ class NwTxtFidelityTest {
      * hardware (identical builds gave 4/4 self-dials in one formation and 0/0 in the next).
      *
      * Fixed by #1709: [NwLoom] defers the dial of an unresolved endpoint advertised under its OWN
-     * serviceName until identity arrives, bounded by [NwLoom.IDENTITY_GRACE]. Here the self endpoint's
-     * TXT resolves inside that grace, so the deferral is dropped and the resolved sighting is filtered
-     * on its PeerId — no dial ever happens.
+     * serviceName until identity arrives, bounded by [NwLoom.IDENTITY_GRACE].
+     *
+     * Since ADR-005 (#2416) the *outcome* asserted here is unchanged but the mechanism reaching it is
+     * earlier: the loom advertises `selfId.value`, so the unresolved sighting's `serviceName` backstop id
+     * already equals `selfId` and the pre-dial self-filter returns before any deferral is armed. The
+     * assertion is deliberately on the outcome — no dial, before OR after TXT resolves — so it holds
+     * across that move and would red if either mechanism stopped covering the window.
      */
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
@@ -289,19 +309,26 @@ class NwTxtFidelityTest {
     }
 
     /**
-     * The other half of #1709: the deferral is **bounded**, so an advertiser whose TXT never resolves is
-     * still dialled.
+     * **Re-premised by ADR-005 / #2416: this is now the MIXED-VERSION interop case.**
      *
-     * `RealNwApi.onBrowseResult` cannot tell "TXT is still in flight" from "this advertiser publishes no
-     * TXT at all" — a peer on a pre-#1673 build produces the identical `readPeerIdFromTxt() == null`. A
-     * hard gate on resolved identity would therefore never dial such a peer, trading the self-dial for a
-     * liveness cliff. Here neither device publishes a TXT PeerId, so every sighting stays on the
-     * `serviceName` backstop forever; the loom holds the dial for [NwLoom.IDENTITY_GRACE] and then makes
-     * it anyway, leaving the post-connect `NwSeam` self-connection guard as the backstop it already is.
+     * The fixture is unchanged — a peer advertising the bare shared lobby name and publishing no TXT
+     * PeerId — but since ADR-005 that is no longer "a peer sharing our name". It models a peer still
+     * running a build that advertises `pattern.sessionName`, met by this peer, which advertises
+     * `selfId.value`. A real fleet upgrades one device at a time, so this pairing is worth keeping.
+     *
+     * What changes is the timing, and it is the whole point of the ADR. The #1709 deferral fires only on
+     * a sighting under the name THIS loom advertises; the mixed-version peer's name is `"shared-lobby"`
+     * and ours is now our `PeerId`, so the sighting can no longer be our own advertisement and is armed
+     * **immediately** — no grace, no coin-flip dial. (That deferral is deliberately NOT retired here; it
+     * still guards a loom whose own advert arrives unresolved. ADR-005 leaves its retirement to its own
+     * PR so a revert-check can isolate either half.)
+     *
+     * The liveness claim #1709 exists for survives intact and is in fact stronger: a peer that publishes
+     * no TXT is still reached, and now without waiting out [NwLoom.IDENTITY_GRACE] first.
      */
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
-    fun anEndpointWhoseTxtNeverResolvesIsDialledOnceTheIdentityGraceExpires() = runTest(StandardTestDispatcher()) {
+    fun aMixedVersionPeerStillOnTheSharedLobbyNameIsDialledWithNoDeferral() = runTest(StandardTestDispatcher()) {
         val radio = FakeNwRadio()
         val selfId = PeerId("self-uuid-1709")
         // peerId = null on BOTH devices: no TXT record is ever advertised, so no sighting can resolve.
@@ -315,21 +342,38 @@ class NwTxtFidelityTest {
         val weave = launch(start = CoroutineStart.UNDISPATCHED) {
             runCatchingCancellable { loom.weave(Rendezvous.New(Pattern(sessionName = SHARED_LOBBY))) }
         }
-        // The peer advertises under the SAME shared session name — the collision that makes its
-        // unresolved id indistinguishable from ours, and so defers the dial.
+        // The peer advertises the bare session name — what a pre-ADR-005 build does. Ours is selfId, so
+        // the two no longer collide and this sighting cannot be mistaken for our own advertisement.
         peer.startListening(SHARED_LOBBY, TYPE)
-        testScheduler.advanceTimeBy(500)
+        // Well INSIDE the identity grace: if the deferral still fired here, no dial would have happened.
+        testScheduler.advanceTimeBy(200)
         testScheduler.runCurrent()
 
-        assertTrue(opened.isEmpty(), "held back while identity might still arrive, was $opened")
-
-        testScheduler.advanceTimeBy(NwLoom.IDENTITY_GRACE.inWholeMilliseconds)
-        testScheduler.runCurrent()
-
-        assertTrue(
-            opened.isNotEmpty(),
-            "a peer that publishes no TXT must still be dialled once the grace expires — a hard gate " +
-                "would trade the self-dial for never reaching a pre-#1673 peer at all",
+        assertAll(
+            {
+                assertTrue(
+                    opened.isNotEmpty(),
+                    "a mixed-version peer on the shared lobby name is armed immediately — its name is not " +
+                        "ours since ADR-005, so the #1709 deferral does not apply and it is never starved",
+                )
+            },
+            {
+                // The rig: the dialled sighting really is the UNRESOLVED kind the deferral used to hold.
+                // Without this the assertion above would pass just as well on a resolved endpoint, and the
+                // claim "unresolved, yet not deferred" would be vacuous.
+                assertEquals(
+                    false,
+                    opened.first().endpoint?.identityResolved,
+                    "rig: the dialled endpoint must be on the serviceName backstop, was ${opened.first().endpoint}",
+                )
+            },
+            {
+                assertEquals(
+                    setOf(NwEndpoint(id = SHARED_LOBBY, serviceName = SHARED_LOBBY)),
+                    loom.visiblePeers.value,
+                    "and it is rostered rather than held back, was ${loom.visiblePeers.value}",
+                )
+            },
         )
 
         spy.cancel()
