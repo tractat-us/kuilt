@@ -605,11 +605,21 @@ internal class NwSeam(
             // (the endpoint-id and PeerId spaces do not coincide on the JVM bridge, #2419, so a guard would
             // refuse a legitimate endpoint), and removes the ambiguity at the source instead. Bounded — at
             // most one line per connection resolution.
+            //
+            // KNOWN FALSE POSITIVE, stated in the message rather than suppressed: on the JVM bridge BOTH
+            // operands are wrong in the same direction — `BridgeNwApi` cannot marshal `identityResolved`
+            // across the ABI so it defaults to `true`, and the endpoint-id space is the dylib's selfId
+            // space while `remoteId` is the loom's — so EVERY healthy bridge connection trips this. There
+            // is no sound way to tell the two apart from here (that is exactly what #2419 would fix), and a
+            // heuristic that guessed could hide a REAL mismatch on the Apple path, where this line is the
+            // incident. So the caveat is carried in the text: a reader on the bridge sees at once that it
+            // is expected there, and a reader on a device sees a warning that means what it says.
             if (dialled.identityResolved && dialled.id != remoteId.value) {
                 log.warn {
                     "nw.seam.dialled-mismatch connId=${connId.value} self=${selfId.value} " +
                         "dialled=${dialled.id} answered=${remoteId.value} → recorded peerEndpoint" +
-                        "[${remoteId.value}]=${dialled.id}; the dial resolved to a different device (#2416)"
+                        "[${remoteId.value}]=${dialled.id}; the dial resolved to a different device " +
+                        "(#2416) — EXPECTED on the JVM bridge until #2419 threads one selfId across the ABI"
                 }
             }
         }
