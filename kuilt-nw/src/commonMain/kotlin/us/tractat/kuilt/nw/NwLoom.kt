@@ -363,6 +363,13 @@ private class RedialCoordinator(
      */
     private val deferrals = mutableMapOf<String, Job>()
 
+    /**
+     * Peer ids already reported by [reportNameCollision], so the warning fires **once per colliding
+     * peer** rather than on every browse re-emit. Guarded by [lock]; bounded by the number of distinct
+     * peers ever seen — the same bound [redialers] already carries.
+     */
+    private val reportedNameCollisions = mutableSetOf<String>()
+
     /** Subscribe to discovery UNDISPATCHED (before advertise/browse) so no sighting is missed. */
     fun start() {
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
@@ -419,7 +426,40 @@ private class RedialCoordinator(
             deferUntilIdentityResolves(endpoint)
             return
         }
+        reportNameCollision(endpoint)
         arm(endpoint)
+    }
+
+    /**
+     * Warn when ANOTHER peer's resolved advertisement occupies the Bonjour instance name THIS loom
+     * advertises — the root condition of #2416, named at the moment it becomes true and BEFORE any dial.
+     *
+     * Reaching here means the endpoint passed the self-filter, so its id is a real, foreign `PeerId`
+     * ([NwEndpoint.identityResolved]) yet its [NwEndpoint.serviceName] is the one we advertise. Two
+     * advertisers therefore hold one name, and mDNS re-resolves that name at connect time: a dial armed
+     * FOR this peer can land on the local device (or, with ≥3 peers, on a third one). Everything
+     * downstream — the pre-dial self-filter, the #1709 deferral, `NwSeam`'s settle guard — is recovery
+     * from this condition; nothing until now *stated* it, which is why the 2026-08-15 hardware diagnosis
+     * had to infer it from a `… (2)` rename that landed 6 s after the fatal dial.
+     *
+     * Diagnostic only: it changes no decision, and the endpoint is armed exactly as before. The fix is
+     * ADR-005 (per-peer instance names), which removes the collision rather than reporting it — this
+     * line is what makes a build that has *not* taken that fix, or a peer that has not, say so out loud.
+     *
+     * WARN, and once per colliding peer id ([reportedNameCollisions]): `RealNwApi` re-emits
+     * `endpointFound` on every browse results-changed callback, so an unguarded line would flood.
+     * Inert under [Rendezvous.Existing], where `advertisedServiceName` is `selfId` and any match
+     * already returned at the self-filter above.
+     */
+    private fun reportNameCollision(endpoint: NwEndpoint) {
+        if (!endpoint.identityResolved || endpoint.serviceName != advertisedServiceName) return
+        val firstReport = lock.withLock { reportedNameCollisions.add(endpoint.id) }
+        if (!firstReport) return
+        log.warn {
+            "nw.loom.name-collision serviceName=${endpoint.serviceName} self=${selfId.value} " +
+                "other=${endpoint.id} — two advertisers hold one Bonjour name, so a dial to it may " +
+                "resolve to EITHER device (#2416); fixed by per-peer instance names (ADR-005)"
+        }
     }
 
     /** Roster the endpoint and start (or leave running) its redial campaign. */
@@ -511,8 +551,19 @@ private class RedialCoordinator(
             val endpoint = lock.withLock { redialers[endpointId]?.endpoint } ?: return
             // Already settled (its peer is connected, or it resolved to self) → park until it un-settles,
             // then start a fresh campaign at the initial backoff.
+            //
+            // Both edges are logged at INFO because parking is TERMINAL-LOOKING and otherwise SILENT: a
+            // redialer that parks on a wrongly-settled endpoint (#2416/#2417) never dials again for the
+            // seam's lifetime and emits nothing at all, so a wedged device is indistinguishable from an
+            // idle one in a hardware capture. `nw.seam.settled` carries the provenance of each entry —
+            // read the two together to see WHICH endpoint parked this redialer and WHY it settled.
             if (endpointId in seam.settledEndpoints.value) {
+                log.info {
+                    "nw.loom.redial-parked endpoint=$endpointId self=${selfId.value} " +
+                        "settled=${seam.settledEndpoints.value} — no further dial until it un-settles"
+                }
                 seam.settledEndpoints.first { endpointId !in it }
+                log.info { "nw.loom.redial-resumed endpoint=$endpointId self=${selfId.value} → un-settled, redialing from the initial backoff" }
                 lock.withLock { redialers[endpointId]?.backoffMs = NwLoom.INITIAL_REDIAL_BACKOFF.inWholeMilliseconds }
                 continue
             }
