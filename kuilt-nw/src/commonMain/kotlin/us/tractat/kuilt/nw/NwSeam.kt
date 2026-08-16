@@ -595,13 +595,48 @@ internal class NwSeam(
         cs.resolvedPeerId = remoteId
         // Learn this peer's endpoint from ANY connection that carried one (winner OR dedup-loser), so the
         // peer's endpoint is known even when the surviving link is inbound (endpoint == null) — #1513.
-        cs.endpoint?.let { peerEndpoint[remoteId] = it.id }
+        cs.endpoint?.let { dialled ->
+            peerEndpoint[remoteId] = dialled.id
+            // The SUCCESS-path twin of the self-connection guard below: we dialled a name that mDNS
+            // re-resolved, and the peer that answered is not the one whose id we dialled. #2417 made the
+            // self case say so; this makes the general case say so too, which is ADR-005's `peerEndpoint[B]
+            // = C` sibling — B's endpoint is recorded under C, so C is reported settled while un-connected
+            // and its redialer parks. Deliberately a WARNING and NOT a guard: ADR-005 rejects guarding here
+            // (the endpoint-id and PeerId spaces do not coincide on the JVM bridge, #2419, so a guard would
+            // refuse a legitimate endpoint), and removes the ambiguity at the source instead. Bounded — at
+            // most one line per connection resolution.
+            //
+            // KNOWN FALSE POSITIVE, stated in the message rather than suppressed: on the JVM bridge BOTH
+            // operands are wrong in the same direction — `BridgeNwApi` cannot marshal `identityResolved`
+            // across the ABI so it defaults to `true`, and the endpoint-id space is the dylib's selfId
+            // space while `remoteId` is the loom's — so EVERY healthy bridge connection trips this. There
+            // is no sound way to tell the two apart from here (that is exactly what #2419 would fix), and a
+            // heuristic that guessed could hide a REAL mismatch on the Apple path, where this line is the
+            // incident. So the caveat is carried in the text: a reader on the bridge sees at once that it
+            // is expected there, and a reader on a device sees a warning that means what it says.
+            if (dialled.identityResolved && dialled.id != remoteId.value) {
+                log.warn {
+                    "nw.seam.dialled-mismatch connId=${connId.value} self=${selfId.value} " +
+                        "dialled=${dialled.id} answered=${remoteId.value} → recorded peerEndpoint" +
+                        "[${remoteId.value}]=${dialled.id}; the dial resolved to a different device " +
+                        "(#2416) — EXPECTED on the JVM bridge until #2419 threads one selfId across the ABI"
+                }
+            }
+        }
         val canonical = canonicalLinkNonce(cs.nonce, remoteNonce)
         val existing = registry[remoteId]
         if (existing == null) {
             registry[remoteId] = Winner(connId, canonical)
             addRemotePeer(remoteId) // refreshes settledEndpoints
-            log.debug { "nw.seam.resolved.first connId=${connId.value} remote=${remoteId.value} self=${selfId.value} nonce=$canonical" }
+            // INFO, and carrying the DIALLED endpoint next to the peer that answered. Every other verdict
+            // on this path is already INFO (self-connection, closed, torn), so leaving the SUCCESS verdict
+            // at debug meant a device capture recorded only bad news: "reached the wrong peer" and "reached
+            // nobody" looked identical. `dialled=<inbound>` marks a link the far end opened — for those the
+            // question does not arise, since we chose no target.
+            log.info {
+                "nw.seam.resolved.first connId=${connId.value} remote=${remoteId.value} self=${selfId.value} " +
+                    "dialled=${cs.endpoint?.id ?: "<inbound>"} resolved=${cs.endpoint?.identityResolved} nonce=$canonical"
+            }
             return null
         }
         // Peer already registered; we may have just learned its endpoint from this (possibly loser) link.
@@ -644,12 +679,41 @@ internal class NwSeam(
      * peer (via the sticky [peerEndpoint] map) plus every self-resolved endpoint. Called under [lock]
      * on every identity/membership change. Idempotent — writing an unchanged set to the [StateFlow]
      * emits nothing.
+     *
+     * Every CHANGE to the set is logged at INFO with per-entry provenance, because this set is what
+     * parks `NwLoom.redialLoop`: an entry here silences that endpoint's dials until it leaves again, so
+     * a wrong entry is a peer starved for the seam's lifetime (#2416/#2417). "Which endpoints are
+     * settled, and why each one settled" was unanswerable from a hardware capture — the set was written
+     * silently and only its *consequence* (a device that never forms a session) was observable.
+     * Comparing against the current value first keeps the line to real transitions; the write itself was
+     * already a no-op when unchanged, so nothing about the published flow changes.
      */
     private fun refreshSettledLocked() {
-        _settledEndpoints.value = buildSet {
+        val next = buildSet {
             addAll(selfEndpointIds)
             for (peer in registry.keys) peerEndpoint[peer]?.let { add(it) }
         }
+        val previous = _settledEndpoints.value
+        if (next == previous) return
+        _settledEndpoints.value = next
+        log.info {
+            "nw.seam.settled self=${selfId.value} " +
+                "added=${(next - previous).map { "$it(${settledProvenanceLocked(it)})" }} " +
+                "removed=${previous - next} " +
+                "now=${next.map { "$it(${settledProvenanceLocked(it)})" }}"
+        }
+    }
+
+    /**
+     * Why [endpointId] is in [settledEndpoints] — `self` (a dial that resolved to this peer, so it is our
+     * own advertisement) or `peer=<id>` (the endpoint a connected peer was reached on). The distinction is
+     * the whole diagnosis of a stuck formation: `self` on an endpoint that is really another device is the
+     * #2416 failure, while `peer=` on a peer that is not in [peers] is ADR-005's sibling. Called under
+     * [lock]; read-only.
+     */
+    private fun settledProvenanceLocked(endpointId: String): String = when {
+        endpointId in selfEndpointIds -> "self"
+        else -> registry.keys.firstOrNull { peerEndpoint[it] == endpointId }?.let { "peer=${it.value}" } ?: "?"
     }
 
     /**

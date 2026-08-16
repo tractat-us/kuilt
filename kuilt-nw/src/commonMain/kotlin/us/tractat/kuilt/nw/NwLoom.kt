@@ -363,6 +363,23 @@ private class RedialCoordinator(
      */
     private val deferrals = mutableMapOf<String, Job>()
 
+    /**
+     * Bonjour serviceName → the FIRST resolved peer id seen advertising under it, for
+     * [observeNameOwner]. Seeded with this loom's own advertisement, so a peer colliding with *our*
+     * name is caught as readily as two remote peers colliding with each other. Guarded by [lock];
+     * bounded by the number of distinct names seen, the same bound [deferrals] already carries.
+     *
+     * The incumbent is never overwritten: a second owner must keep comparing against the *same*
+     * reference for [reportedNameCollisions] to dedup it.
+     */
+    private val nameOwners = mutableMapOf(advertisedServiceName to selfId.value)
+
+    /**
+     * Collisions already reported, keyed by name plus the id pair in a canonical order, so the warning
+     * fires **once per colliding pair** rather than on every browse re-emit. Guarded by [lock].
+     */
+    private val reportedNameCollisions = mutableSetOf<String>()
+
     /** Subscribe to discovery UNDISPATCHED (before advertise/browse) so no sighting is missed. */
     fun start() {
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
@@ -379,6 +396,9 @@ private class RedialCoordinator(
     }
 
     private fun onEndpointFound(endpoint: NwEndpoint) {
+        // BEFORE any filtering: a sighting we are about to drop as self is still evidence about who holds
+        // which name, and under a shared name the colliding peer is exactly the one the self-filter drops.
+        observeNameOwner(endpoint)
         // Drop this loom's OWN endpoint. A device that advertises AND browses the same type is delivered
         // its own advertisement by real Bonjour/mDNS (and by FakeNwRadio, #1485). The self-filter keys on
         // the STABLE [NwEndpoint.id] — the peer's PeerId, published per-peer in the Bonjour TXT record
@@ -420,6 +440,62 @@ private class RedialCoordinator(
             return
         }
         arm(endpoint)
+    }
+
+    /**
+     * Warn when **two advertisers hold one Bonjour instance name** — the root condition of #2416, named
+     * at the moment it becomes observable and BEFORE any dial to the contested name.
+     *
+     * A name is the *dial target*, and mDNS re-resolves it at connect time; an id is the *identity*, read
+     * per-peer from the TXT record. When one name has two owners those two facts come apart, and a dial
+     * armed FOR one peer can land on another — including the local device. Everything downstream (the
+     * pre-dial self-filter, the #1709 deferral, `NwSeam`'s settle guard and #2417's settle rule) is
+     * recovery from this condition; nothing *stated* it, which is why the 2026-08-15 hardware diagnosis
+     * had to infer it from a `… (2)` rename that landed 6 s after the fatal dial.
+     *
+     * ## Why this is general, and not "is someone using MY name"
+     * The narrow form — compare against [advertisedServiceName] — would be **dead code** the moment
+     * ADR-005 lands: it makes both rendezvous arms advertise `selfId.value`, so a match on our own name
+     * always returns at the self-filter first. It would also miss the mixed-version fleet that actually
+     * matters, where two peers on an older build collide with each other on a shared session name while
+     * this peer, already renamed, is not party to it. Tracking one owner per name catches every pair,
+     * whether or not we are in it — [nameOwners] is seeded with our own advertisement precisely so that
+     * a peer colliding with *us* is one more case of the same rule rather than a special one.
+     *
+     * ## Only resolved sightings claim a name
+     * An unresolved sighting's id IS its serviceName (the `readPeerIdFromTxt() ?: name` fallback), so
+     * recording it would compare a name against itself and manufacture a collision on the pre-TXT window
+     * #1709 already handles. Ownership is claimed only by a real per-peer id.
+     *
+     * ## The one suppression, and why it is sound rather than a heuristic
+     * A sighting whose serviceName is literally `selfId.value` is skipped. That is not a guess: it is the
+     * premise the production self-filter above already rests on — *"a real peer never advertises OUR
+     * selfId as its serviceName"* — and the only thing that produces that shape is the JVM bridge, where
+     * loom and dylib each default an independent UUID so our own advertisement returns as
+     * `(id = dylib-selfId, serviceName = loom-selfId)` and would report itself as a rival owner (#2419).
+     * It costs nothing this line exists for: the #2416 collision is on the *shared session name*, which
+     * is not `selfId.value`, so it still fires; and a collision between two remote peers never matches.
+     *
+     * Diagnostic only — it changes no decision and the endpoint is filtered/deferred/armed exactly as
+     * before. WARN, once per (name, id-pair) via [reportedNameCollisions]: `RealNwApi` re-emits
+     * `endpointFound` on every browse results-changed callback, so an unguarded line would flood.
+     */
+    private fun observeNameOwner(endpoint: NwEndpoint) {
+        if (!endpoint.identityResolved || endpoint.serviceName == selfId.value) return
+        val incumbent = lock.withLock {
+            val held = nameOwners.getOrPut(endpoint.serviceName) { endpoint.id }
+            // Same owner re-sighted, or the pair is already reported → nothing to say.
+            if (held == endpoint.id) return
+            val pair = listOf(held, endpoint.id).sorted()
+            if (!reportedNameCollisions.add("${endpoint.serviceName}|${pair[0]}|${pair[1]}")) return
+            held
+        }
+        log.warn {
+            "nw.loom.name-collision serviceName=${endpoint.serviceName} self=${selfId.value} " +
+                "owners=[$incumbent, ${endpoint.id}]${if (incumbent == selfId.value) " (one of them is US)" else ""} " +
+                "— two advertisers hold one Bonjour name, so a dial to it may resolve to EITHER device " +
+                "(#2416); ADR-005 removes the collision for this peer's own advertisement"
+        }
     }
 
     /** Roster the endpoint and start (or leave running) its redial campaign. */
@@ -511,8 +587,19 @@ private class RedialCoordinator(
             val endpoint = lock.withLock { redialers[endpointId]?.endpoint } ?: return
             // Already settled (its peer is connected, or it resolved to self) → park until it un-settles,
             // then start a fresh campaign at the initial backoff.
+            //
+            // Both edges are logged at INFO because parking is TERMINAL-LOOKING and otherwise SILENT: a
+            // redialer that parks on a wrongly-settled endpoint (#2416/#2417) never dials again for the
+            // seam's lifetime and emits nothing at all, so a wedged device is indistinguishable from an
+            // idle one in a hardware capture. `nw.seam.settled` carries the provenance of each entry —
+            // read the two together to see WHICH endpoint parked this redialer and WHY it settled.
             if (endpointId in seam.settledEndpoints.value) {
+                log.info {
+                    "nw.loom.redial-parked endpoint=$endpointId self=${selfId.value} " +
+                        "settled=${seam.settledEndpoints.value} — no further dial until it un-settles"
+                }
                 seam.settledEndpoints.first { endpointId !in it }
+                log.info { "nw.loom.redial-resumed endpoint=$endpointId self=${selfId.value} → un-settled, redialing from the initial backoff" }
                 lock.withLock { redialers[endpointId]?.backoffMs = NwLoom.INITIAL_REDIAL_BACKOFF.inWholeMilliseconds }
                 continue
             }

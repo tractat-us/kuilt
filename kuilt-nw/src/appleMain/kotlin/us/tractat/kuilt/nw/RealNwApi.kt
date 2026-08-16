@@ -909,7 +909,18 @@ internal class RealNwApi(
     private fun retainAndStart(connection: nw_connection_t, endpoint: NwEndpoint?) {
         val id = NwConnectionId("nw-${connectionCounter.incrementAndGet()}")
         lock.withLock { connections[id] = ConnectionEntry(connection, endpoint) } // strong ref
-        log.debug { "nw.api.retain-start id=${id.value} endpoint=${endpoint?.id ?: "<inbound>"} dir=${if (endpoint == null) "inbound" else "outbound"}" }
+        // INFO, like `nw.api.browse-result` and for the same reason: this is the ONLY line that binds a
+        // dial to the connection id every later line is keyed on, and only INFO+ survives a device
+        // capture. At debug, diagnosing #2416 meant inferring which endpoint `nw-1`/`nw-2` had been armed
+        // for from the fact that they were the first ids the process ever minted — a manual step that is
+        // simply a missing log field. Carries the dialled endpoint's full identity (id, Bonjour name, and
+        // whether the id came from TXT or is the name backstop) so the dial's TARGET is on the record
+        // before mDNS re-resolves that name at connect time. One line per connection.
+        log.info {
+            "nw.api.retain-start id=${id.value} dir=${if (endpoint == null) "inbound" else "outbound"} " +
+                "dialled=${endpoint?.id ?: "<inbound>"} name=${endpoint?.serviceName ?: "-"} " +
+                "resolved=${endpoint?.identityResolved} self=${selfId.value}"
+        }
         nw_connection_set_queue(connection, queue)
         // Thread the second block param — the nw_error_t — into onState (previously dropped as `_`), so a
         // FAILED handshake's actual reason (TLS alert / OSStatus) is captured instead of thrown away (#1560).

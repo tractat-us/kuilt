@@ -69,6 +69,37 @@ This is **macOS-arm64 only**. On any other JVM (Linux, Windows, Intel Macs) the 
 use the mDNS/WebSocket fabrics for cross-platform LAN there. Probe `NwNativeLib.jvmAvailability()`
 first if you need to branch gracefully.
 
+## When two devices see each other but never connect
+
+Both phones are in the lobby, the signal is strong, and no session ever forms. Nothing crashes and
+nothing is logged as an error, because from each device's point of view it is simply still trying.
+
+Pull the log off **both** devices and read these lines, in this order. Every one of them is `INFO` or
+above, so they survive a normal on-device capture — but only if the app's logging backend is left at
+`INFO`; a backend pinned to `WARN` drops most of the trail. Note that the fabric identifies peers by
+the `PeerId` in the Bonjour TXT record while it *dials* a Bonjour **name**, and mDNS re-resolves that
+name at connect time — so "who we meant to reach" and "who answered" are separate facts, and the log
+prints both.
+
+| Line | What it settles |
+|---|---|
+| `nw.loom.name-collision` | Two devices are advertising the same Bonjour name — possibly including this one, possibly two others. This is the root condition of #2416: every dial to that name is a coin flip. If it appears, stop here; the rest is consequence. Per-peer instance names ([ADR-005](../docs/adr-005-per-peer-bonjour-instance-name.md)) *remove* the collision rather than reporting it, so on a fully-upgraded fleet this line should never appear; seeing it means some peer is still advertising a shared name. |
+| `nw.api.browse-result` | What discovery actually saw: the advertised `name`, the TXT id (`txt=ABSENT` means identity has not resolved yet), and the id the endpoint was keyed under. |
+| `nw.loom.self-skip` / `nw.loom.discovered` / `nw.loom.identity-deferred` | The verdict per sighting — filtered as self, armed for a dial, or held back until identity resolves. |
+| `nw.api.retain-start` | The dial itself: which connection id (`nw-N`) was minted **for which endpoint**. This is the join key between a dial and every later line about that connection. |
+| `nw.seam.resolved.first` / `nw.seam.self-connection` | Who answered. Compare `dialled=` against `remote=`: equal is healthy, different means the name resolved to another device. |
+| `nw.seam.dialled-mismatch` | Fired when they differ on the success path — a peer's endpoint has been recorded under another peer's id. **Expected on the macOS-JVM bridge and meaningless there:** the bridge cannot marshal identity provenance across the ABI and loom and dylib hold different ids (#2419), so every healthy bridge connection trips it. On a phone it means what it says. |
+| `nw.seam.settled` | The set of endpoints that need no further dial, with `(self)` or `(peer=…)` provenance for each. An endpoint listed `(self)` that is really another device is the failure. |
+| `nw.loom.redial-parked` | This endpoint's dials have stopped. Paired with the `nw.seam.settled` line above it, this says which peer is starved and why. A `redial-parked` with no matching `redial-resumed` is a peer that will never be dialled again for the seam's lifetime. |
+
+`nw.loom.weave-timeout` is the *symptom*, not the diagnosis — by the time it fires the decisive
+evidence is already minutes earlier in the trail above.
+
+Two related notes. If you are extracting these logs with `:kuilt-otel-tap`, host the tap on a
+**different** fabric from the one you are debugging (`installLogTapJoining` over a WebSocket loom,
+say) — tapping a broken fabric over itself cannot work. And a capture only contains what the app's
+logging backend admitted: turn the level down *before* reproducing, not after.
+
 ---
 
 **Source-set wiring note (maintainers).** This module hand-wires the
