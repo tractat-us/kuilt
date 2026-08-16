@@ -548,9 +548,13 @@ internal class NwSeam(
         remoteId: PeerId,
         remoteNonce: ByteArray,
     ): NwConnectionId? {
-        // Self-connection guard (#1466). In the election mesh both peers advertise the SAME
-        // `Rendezvous.New` service name, so a peer's own advertisement appears in its browse results and
-        // `NwLoom` dials it — a connection whose remote resolves to `selfId`. It must NEVER be registered:
+        // Self-connection guard (#1466). A peer's own advertisement appears in its own browse results
+        // (real mDNS returns it, #1485), so `NwLoom` can dial it — a connection whose remote resolves to
+        // `selfId`. Historically the election mesh made this routine, because every peer advertised the
+        // SAME `Rendezvous.New` service name; ADR-005 (#2416) gives each peer its own instance name, so
+        // the pre-dial filter now catches self even before TXT resolves and this guard is the backstop
+        // rather than the workhorse. It still fires where the loom's `selfId` and the advertiser's TXT id
+        // diverge (the JVM bridge, #2419). It must NEVER be registered:
         // registering self puts `selfId` in `registry`, and when that connection later fails,
         // `connectionClosedLoop` evicts its peer — self — dropping this peer from its own roster
         // (`peers → {theOtherPeer}`, `state` stays `Woven`, no `Torn`), which silently wedges every
@@ -562,14 +566,15 @@ internal class NwSeam(
             //
             // But settle it ONLY when the dialled id can actually BE ours (#2416). Identity and dial target
             // are keyed on different things: the id comes from the TXT record, while the dial goes to a
-            // Bonjour NAME that mDNS re-resolves at connect time — and under `Rendezvous.New` every peer
-            // advertises the same name, so inside the window before conflict-resolution renames one
-            // advertiser, a dial armed FOR a real peer can land here. `identityResolved` is exactly the
-            // provenance flag that tells the two apart (`RealNwApi.onBrowseResult`: it is `true` iff the id
-            // came from a TXT record):
-            //   - NOT resolved  → the id is the fallback serviceName, which under Rendezvous.New is the
-            //     shared name and may well be ours. Settling is the #1709/#1513 behaviour and is safe: the
-            //     key is a name, not a peer identity, and a later resolved sighting arms a fresh redialer.
+            // Bonjour NAME that mDNS re-resolves at connect time — so whenever two advertisers hold one
+            // name, a dial armed FOR a real peer can land here, until conflict resolution renames one of
+            // them. ADR-005 stops THIS peer from ever being one of those two advertisers, but not a pair of
+            // older-build peers on a shared session name, so the guard stays. `identityResolved` is exactly
+            // the provenance flag that tells the two apart (`RealNwApi.onBrowseResult`: it is `true` iff the
+            // id came from a TXT record):
+            //   - NOT resolved  → the id is the fallback serviceName, which may well be ours. Settling is
+            //     the #1709/#1513 behaviour and is safe: the key is a name, not a peer identity, and a
+            //     later resolved sighting arms a fresh redialer.
             //   - resolved      → the id is a real PeerId. Ours only if it equals `selfId`; anything else is
             //     ANOTHER peer's stable id, reached by a misresolved dial.
             // Recording another peer's id here is not untidy, it is fatal: `selfEndpointIds` feeds

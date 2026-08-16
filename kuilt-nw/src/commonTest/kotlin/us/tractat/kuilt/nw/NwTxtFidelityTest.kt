@@ -260,9 +260,13 @@ class NwTxtFidelityTest {
      * hardware (identical builds gave 4/4 self-dials in one formation and 0/0 in the next).
      *
      * Fixed by #1709: [NwLoom] defers the dial of an unresolved endpoint advertised under its OWN
-     * serviceName until identity arrives, bounded by [NwLoom.IDENTITY_GRACE]. Here the self endpoint's
-     * TXT resolves inside that grace, so the deferral is dropped and the resolved sighting is filtered
-     * on its PeerId — no dial ever happens.
+     * serviceName until identity arrives, bounded by [NwLoom.IDENTITY_GRACE].
+     *
+     * Since ADR-005 (#2416) the *outcome* asserted here is unchanged but the mechanism reaching it is
+     * earlier: the loom advertises `selfId.value`, so the unresolved sighting's `serviceName` backstop id
+     * already equals `selfId` and the pre-dial self-filter returns before any deferral is armed. The
+     * assertion is deliberately on the outcome — no dial, before OR after TXT resolves — so it holds
+     * across that move and would red if either mechanism stopped covering the window.
      */
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test

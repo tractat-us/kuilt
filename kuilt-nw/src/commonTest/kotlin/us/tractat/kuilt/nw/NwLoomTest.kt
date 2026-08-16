@@ -212,30 +212,31 @@ class NwLoomTest {
     }
 
     /**
-     * Root #1 of #1660 / the #1502 blind spot: under [Rendezvous.New] a peer must NOT self-dial even
-     * though every peer advertises the SAME shared Bonjour service name (the session name).
+     * Root #1 of #1660 / the #1502 blind spot: under [Rendezvous.New] a peer must NOT self-dial.
      *
-     * The symmetric election lobby ([Rendezvous.New]) has every peer advertise `serviceName =
-     * pattern.sessionName` — a value shared by all peers, NOT this peer's identity. Stable per-peer
-     * identity rides in the Bonjour **TXT record** (Option A): the advertised [NwEndpoint.id] is the
-     * peer's `PeerId`, distinct per peer, while `serviceName` stays the shared human-readable label.
-     * The pre-dial self-filter must therefore fire on [NwEndpoint.id] (== [NwLoom.selfId]), NOT on
-     * `serviceName` — under a shared `serviceName` an id-less filter can never recognise self, so the
-     * loom dials its own endpoint dozens of times per session (only caught post-connect by the
-     * `NwSeam` guard) — the AWDL-only symptom of #1502.
+     * The symmetric election lobby used to have every peer advertise `serviceName =
+     * pattern.sessionName` — a value shared by all peers, NOT this peer's identity — while stable
+     * per-peer identity rode in the Bonjour **TXT record** (Option A): the advertised [NwEndpoint.id]
+     * was the peer's `PeerId`, distinct per peer. The pre-dial self-filter therefore had to fire on
+     * [NwEndpoint.id] (== [NwLoom.selfId]) rather than on `serviceName` alone, because under a shared
+     * `serviceName` an id-less filter can never recognise self: the loom dialled its own endpoint dozens
+     * of times per session, caught only post-connect by the `NwSeam` guard — the AWDL-only symptom of
+     * #1502. ADR-005 (#2416) has since made the advertised name per-peer as well, so both clauses of the
+     * filter now agree here; the id clause is still the one that carries a divergent TXT id (#2419), and
+     * this test keeps it honest.
      *
-     * The harness now models the TXT PeerId ([FakeNwApi] `peerId` → the emitted endpoint id), so this
-     * collision is finally visible on the JVM. Against the pre-fix `serviceName`-keyed self-filter this
-     * test FAILS (self is rostered AND self-dialled); with the id-keyed filter it passes. A lone device
+     * The harness models the TXT PeerId ([FakeNwApi] `peerId` → the emitted endpoint id), so this
+     * collision is visible on the JVM. Against the pre-fix `serviceName`-keyed self-filter this test
+     * FAILS (self is rostered AND self-dialled); with the id-keyed filter it passes. A lone device
      * reaches no OTHER peer, so `weave` times out (harmless — we only assert the pre-timeout self-handling).
      */
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
-    fun newRendezvousNeitherDialsNorRostersItsOwnEndpointUnderASharedServiceName() = runTest(StandardTestDispatcher()) {
+    fun newRendezvousNeitherDialsNorRostersItsOwnEndpoint() = runTest(StandardTestDispatcher()) {
         val radio = FakeNwRadio()
         val selfId = PeerId("self-uuid-1502")
-        // Rendezvous.New advertises the SHARED session name as the Bonjour serviceName; the per-peer
-        // stable identity (selfId) rides in the TXT record → it is the advertised endpoint id (Option A).
+        // The per-peer stable identity (selfId) rides in the TXT record → it is the advertised endpoint
+        // id (Option A), independently of what the Bonjour instance name happens to be.
         val api = FakeNwApi(radio, deviceId = "solo", serviceName = "solo", peerId = selfId.value)
         val loom = NwLoom(api, serviceType = TYPE, selfId = selfId, random = Random(0), weaveTimeout = 1.seconds)
 
@@ -255,8 +256,8 @@ class NwLoomTest {
         testScheduler.runCurrent()
 
         assertAll(
-            { assertTrue(loom.visiblePeers.value.isEmpty(), "self-endpoint never rostered under Rendezvous.New's shared serviceName, was ${loom.visiblePeers.value}") },
-            { assertTrue(opened.isEmpty(), "no self-dial under Rendezvous.New's shared serviceName, was $opened") },
+            { assertTrue(loom.visiblePeers.value.isEmpty(), "self-endpoint never rostered under Rendezvous.New, was ${loom.visiblePeers.value}") },
+            { assertTrue(opened.isEmpty(), "no self-dial under Rendezvous.New, was $opened") },
         )
 
         spy.cancel()

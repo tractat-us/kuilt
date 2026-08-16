@@ -16,23 +16,29 @@ public value class NwConnectionId(public val value: String)
  *
  * [id] is the endpoint's **stable per-peer identity** — the remote's `PeerId`,
  * published in its Bonjour **TXT record** and read back at browse time (Option A,
- * #1502). It is the key the pre-dial self-filter and the redial coordinator key on:
- * because every peer under `Rendezvous.New` shares one [serviceName] (the session
- * name), only a per-peer id can distinguish this loom's own advertisement from a
- * real peer's. **Backstop:** if a browsed endpoint carries no TXT PeerId (absent or
- * malformed), the runtime falls back to `id = serviceName` (the pre-Option-A
- * behaviour); the post-connect `NwSeam` self-connection guard, which resolves the
- * `PeerId` from the [NwHello] handshake, remains the correctness backstop for that case.
+ * #1502). It is the key the pre-dial self-filter and the redial coordinator key on.
+ * **Backstop:** if a browsed endpoint carries no TXT PeerId (absent or malformed),
+ * the runtime falls back to `id = serviceName` (the pre-Option-A behaviour); the
+ * post-connect `NwSeam` self-connection guard, which resolves the `PeerId` from the
+ * [NwHello] handshake, remains the correctness backstop for that case.
  *
- * [serviceName] is the advertised Bonjour instance name of the remote endpoint —
- * a human-readable label, shared by all peers under `Rendezvous.New`.
+ * [serviceName] is the advertised Bonjour instance name of the remote endpoint, and it
+ * is the **dial target** — mDNS re-resolves it at connect time, so it must name exactly
+ * one device. Since ADR-005 (#2416) `NwLoom` advertises its own `PeerId` here under
+ * **both** rendezvous arms; it previously advertised the session name under
+ * `Rendezvous.New`, shared by every peer, which is what let a dial armed for one peer
+ * land on another. A peer running an older build may still advertise a shared label, and
+ * mDNS conflict resolution may still rename either to `"… (2)"` — so this is a routing
+ * key, never a stable identity. Read [id] for that.
  *
  * [identityResolved] says which of those two [id] actually is: `true` when it came from a
  * resolved TXT record (a real per-peer identity), `false` when it is the [serviceName]
  * backstop. Without it the two are the same `String` and a consumer cannot tell a peer's
- * identity from a placeholder — which is exactly the #1709 race: Network.framework can
- * deliver the browse `add` BEFORE TXT resolves, and in that window an endpoint under
- * `Rendezvous.New`'s shared session name is indistinguishable from this peer's own.
+ * identity from a placeholder — the #1709 race: Network.framework can deliver the browse
+ * `add` BEFORE TXT resolves. With a per-peer instance name the backstop id equals the
+ * `PeerId` that later resolves, so that window no longer hides a peer's identity behind a
+ * label — but the flag still records the provenance, and still tells the two apart for an
+ * advertiser whose name is not its id.
  */
 public data class NwEndpoint(
     public val id: String,

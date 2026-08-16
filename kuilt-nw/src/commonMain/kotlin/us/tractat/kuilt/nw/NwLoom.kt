@@ -58,9 +58,11 @@ public class NwUnreachableException(message: String) : Exception(message)
  * ([NwApi.startBrowsing]) to find other peers, and **auto-dial** ([NwApi.connect]) every
  * discovered endpoint. Each unordered pair therefore double-dials (both ends dial); the
  * redundant connection is deduplicated by [NwSeam] (lower-id dialer wins). Discovery is by
- * Bonjour [serviceType], so the advertised *service name* does not gate who connects — it is
- * only a human-readable label: [Rendezvous.New] advertises the session name, [Rendezvous.Existing]
- * advertises this peer's own [selfId].
+ * Bonjour [serviceType], so the advertised *service name* does not gate who connects — but it IS the
+ * dial target, which mDNS re-resolves at connect time, so it must name exactly one device: **both**
+ * rendezvous arms advertise this peer's own [selfId] (ADR-005 / #2416). Under [Rendezvous.New] that
+ * used to be the session name, shared by every peer, which made a dial armed for one peer able to land
+ * on another — or on self.
  *
  * ## Redial with unbounded backoff (#1513)
  * Dialling is not one-shot. A [RedialCoordinator] keeps an outstanding dial for every
@@ -75,13 +77,17 @@ public class NwUnreachableException(message: String) : Exception(message)
  *
  * ## Deferring the dial until identity resolves (#1709)
  * A browse `add` can arrive BEFORE the endpoint's TXT record does, so [NwEndpoint.id] is briefly the
- * [NwEndpoint.serviceName] backstop rather than the peer's `PeerId`. Under [Rendezvous.New] that
- * backstop is the shared session name — the same string this loom advertises for itself — so the
- * pre-dial self-filter cannot fire and the loom dials its OWN endpoint. When an endpoint arrives with
- * `identityResolved = false` under the serviceName this loom itself advertises, the dial is therefore
+ * [NwEndpoint.serviceName] backstop rather than the peer's `PeerId`. When an endpoint arrives with
+ * `identityResolved = false` under the serviceName this loom itself advertises, the dial is
  * **deferred**: the endpoint might be self, and there is no way to tell yet. It is neither dialled nor
  * rostered into [visiblePeers] until identity settles one way or the other. The deferral is **bounded**
  * by [IDENTITY_GRACE] so a peer that publishes no TXT at all is still reached — see that constant.
+ *
+ * Since ADR-005 (#2416) the advertised name IS `selfId.value`, so the backstop id equals the resolved
+ * TXT id and the pre-dial self-filter already fires on an unresolved *self* sighting. That makes this
+ * deferral near-redundant on both arms; it is retained deliberately (its retirement is its own PR, so a
+ * revert-check can isolate either half) and still covers a sighting whose id and serviceName diverge —
+ * the JVM bridge, where loom and dylib default independent UUIDs (#2419).
  *
  * ## UUID self-identity (#1405)
  * [selfId] defaults to a fresh random UUID via [freshPeerId], so two devices never mint the same
@@ -283,9 +289,15 @@ public class NwLoom(
          * **Residual, stated plainly.** The deferral is dropped early the moment this loom sees its OWN
          * advertisement resolve under the same serviceName, which is the common case and is what removes
          * the self-dial outright. When it is not dropped, the post-grace dial is a coin flip over the
-         * endpoints collapsed onto that shared name and may still land on self — once, not repeatedly,
-         * since the seam guard settles the endpoint and the redial loop parks. That is a large reduction
-         * of #1660 root 1, not its elimination; eliminating it needs identity that does not depend on TXT.
+         * endpoints collapsed onto that name and may still land on self — once, not repeatedly, since the
+         * seam guard settles the endpoint and the redial loop parks.
+         *
+         * **What ADR-005 (#2416) changed.** That residual needed two peers to share one instance name.
+         * Both rendezvous arms now advertise `selfId.value`, so no two peers collide on a name and the
+         * unresolved backstop id is already this peer's own `PeerId` — the self-filter fires without TXT
+         * and the coin flip has nothing to flip over. This grace therefore no longer guards the #1660
+         * root-1 self-dial on either arm; what remains is the liveness bound above, plus the JVM bridge's
+         * id/serviceName divergence (#2419). Retiring it is its own change.
          */
         internal val IDENTITY_GRACE: Duration = 750.milliseconds
     }
@@ -310,9 +322,9 @@ public class NwLoom(
  * ## Identity deferral (#1709)
  * A sighting whose identity has not resolved ([NwEndpoint.identityResolved] `false`) and whose
  * [NwEndpoint.serviceName] is the name THIS loom advertises ([advertisedServiceName]) *could be this
- * loom's own endpoint* — under [Rendezvous.New] every peer shares that name, so the fallback id is the
- * same string for self and peer. Such a sighting arms no redialer and is not rostered; instead a
- * [deferrals] entry holds it for [NwLoom.IDENTITY_GRACE]. Two things end the wait:
+ * loom's own endpoint*, since the fallback id is then the same string for self and the sighting. Such a
+ * sighting arms no redialer and is not rostered; instead a [deferrals] entry holds it for
+ * [NwLoom.IDENTITY_GRACE]. Two things end the wait:
  *  - **our own advertisement resolves under that name** — a resolved self sighting proves this loom
  *    occupies the name, so the pending fallback dial is dropped (it would be a coin flip that may hit
  *    self, which is the whole bug). A later unresolved sighting under the name re-arms a fresh
@@ -363,6 +375,10 @@ private class RedialCoordinator(
      * because that is the *collision set* the ambiguity lives in: an unresolved endpoint's id IS its
      * serviceName (the `readPeerIdFromTxt() ?: name` fallback), so every unresolved sighting under one
      * name shares a single entry, and the resolved self sighting that drops it is matched by name too.
+     *
+     * Since ADR-005 (#2416) an unresolved sighting under [advertisedServiceName] carries `id ==
+     * selfId.value` and is caught by the self-filter first, so this map is normally empty; it still
+     * holds the case where a sighting's id and serviceName diverge (the JVM bridge, #2419).
      */
     private val deferrals = mutableMapOf<String, Job>()
 
@@ -405,24 +421,25 @@ private class RedialCoordinator(
         // Drop this loom's OWN endpoint. A device that advertises AND browses the same type is delivered
         // its own advertisement by real Bonjour/mDNS (and by FakeNwRadio, #1485). The self-filter keys on
         // the STABLE [NwEndpoint.id] — the peer's PeerId, published per-peer in the Bonjour TXT record
-        // (Option A, #1502) — NOT on the human-readable serviceName. This matters under Rendezvous.New,
-        // where EVERY peer advertises the same shared session name as its serviceName: a serviceName-keyed
-        // filter could never recognise self there, so the loom dialled its own endpoint dozens of times
-        // per session (caught only post-connect by the NwSeam guard) — the AWDL-only symptom of #1502.
-        // For Rendezvous.Existing the id is still selfId (the loom advertises selfId as both name and TXT
-        // id), so this stays correct there too. Backstop: if a browsed endpoint carries no TXT PeerId,
-        // RealNwApi falls back to id = serviceName; under Rendezvous.New that is the shared name, so this
-        // filter cannot fire and the NwSeam self-connection guard resolves+settles it post-connect (#1466).
+        // (Option A, #1502) — rather than on the serviceName alone. That was load-bearing when
+        // Rendezvous.New made EVERY peer advertise one shared session name: a serviceName-keyed filter
+        // could never recognise self there, so the loom dialled its own endpoint dozens of times per
+        // session (caught only post-connect by the NwSeam guard) — the AWDL-only symptom of #1502.
         //
-        // The filter is an OR of id AND serviceName against selfId, because the two can DIVERGE when the
-        // advertiser and the loom don't share one selfId. On the JVM↔native bridge the loom defaults its
-        // selfId while the dylib's RealNwApi defaults its OWN (a distinct UUID) — until the bridge threads
-        // a single selfId across the ABI (#1539), self's own advertisement arrives as
+        // Since ADR-005 (#2416) BOTH rendezvous arms advertise selfId.value, so the two clauses now agree
+        // on the P2P path and the pre-TXT window stops being dangerous: when a browsed endpoint carries no
+        // TXT PeerId, RealNwApi falls back to id = serviceName — which is that peer's own PeerId — so this
+        // filter fires on an unresolved SELF sighting too, with no TXT record and no identity grace. The
+        // NwSeam self-connection guard (#1466) remains the post-connect backstop.
+        //
+        // The filter stays an OR of id AND serviceName against selfId, because the two can still DIVERGE
+        // when the advertiser and the loom don't share one selfId. On the JVM↔native bridge the loom
+        // defaults its selfId while the dylib's RealNwApi defaults its OWN (a distinct UUID) — until the
+        // bridge threads a single selfId across the ABI (#2419), self's own advertisement arrives as
         // (id = dylib-selfId, serviceName = loom-selfId). An id-only filter would miss it and reintroduce
-        // the #1502 self-dial under Rendezvous.Existing (where serviceName == loom-selfId). The serviceName
-        // clause is a safe backstop: a real peer never advertises OUR selfId as its serviceName, and under
-        // Rendezvous.New serviceName is the shared session name (never a PeerId), so the clause is inert
-        // there and the id clause does the real work.
+        // the #1502 self-dial — on BOTH arms now, since New advertises serviceName = loom-selfId too, which
+        // is precisely why ADR-005 also closes the bridge's New-path self-dial. The serviceName clause is a
+        // safe backstop: a real peer never advertises OUR selfId as its serviceName.
         if (endpoint.id == selfId.value || endpoint.serviceName == selfId.value) {
             // A RESOLVED self sighting proves our OWN advertisement occupies this serviceName. Any dial
             // still pending on that name's fallback id is therefore a coin flip that may land on self —
@@ -433,11 +450,11 @@ private class RedialCoordinator(
             return
         }
         // #1709: identity has not resolved AND the endpoint is advertised under the name THIS loom
-        // advertises — under Rendezvous.New that is the shared session name, so this could be our own
-        // endpoint with its TXT record still in flight. Dialling now is what reintroduced the #1660
-        // root-1 self-dial for as long as TXT took to resolve. Hold it, bounded, instead. Under
-        // Rendezvous.Existing this cannot fire for a REMOTE peer: there `advertisedServiceName` is
-        // selfId.value, so a match means the self-filter above already returned.
+        // advertises, so this could be our own endpoint with its TXT record still in flight. Dialling now
+        // is what reintroduced the #1660 root-1 self-dial for as long as TXT took to resolve. Hold it,
+        // bounded, instead. Since ADR-005 (#2416) `advertisedServiceName` is selfId.value on BOTH arms, so
+        // this cannot fire for a REMOTE peer on either — a match means the self-filter above already
+        // returned — and it is reached only where id and serviceName diverge (the JVM bridge, #2419).
         if (!endpoint.identityResolved && endpoint.serviceName == advertisedServiceName) {
             deferUntilIdentityResolves(endpoint)
             return
@@ -457,13 +474,13 @@ private class RedialCoordinator(
      * had to infer it from a `… (2)` rename that landed 6 s after the fatal dial.
      *
      * ## Why this is general, and not "is someone using MY name"
-     * The narrow form — compare against [advertisedServiceName] — would be **dead code** the moment
-     * ADR-005 lands: it makes both rendezvous arms advertise `selfId.value`, so a match on our own name
-     * always returns at the self-filter first. It would also miss the mixed-version fleet that actually
-     * matters, where two peers on an older build collide with each other on a shared session name while
-     * this peer, already renamed, is not party to it. Tracking one owner per name catches every pair,
-     * whether or not we are in it — [nameOwners] is seeded with our own advertisement precisely so that
-     * a peer colliding with *us* is one more case of the same rule rather than a special one.
+     * The narrow form — compare against [advertisedServiceName] — is **dead code** now that ADR-005 has
+     * landed: both rendezvous arms advertise `selfId.value`, so a match on our own name always returns at
+     * the self-filter first. It would also miss the mixed-version fleet that is what actually remains,
+     * where two peers on an older build collide with each other on a shared session name while this peer,
+     * already per-peer named, is not party to it. Tracking one owner per name catches every pair, whether
+     * or not we are in it — [nameOwners] is seeded with our own advertisement precisely so that a peer
+     * colliding with *us* is one more case of the same rule rather than a special one.
      *
      * ## Only resolved sightings claim a name
      * An unresolved sighting's id IS its serviceName (the `readPeerIdFromTxt() ?: name` fallback), so
@@ -476,8 +493,9 @@ private class RedialCoordinator(
      * selfId as its serviceName"* — and the only thing that produces that shape is the JVM bridge, where
      * loom and dylib each default an independent UUID so our own advertisement returns as
      * `(id = dylib-selfId, serviceName = loom-selfId)` and would report itself as a rival owner (#2419).
-     * It costs nothing this line exists for: the #2416 collision is on the *shared session name*, which
-     * is not `selfId.value`, so it still fires; and a collision between two remote peers never matches.
+     * It costs nothing this line exists for: the #2416 collision that remains is two older-build peers on
+     * a *shared session name*, which is not `selfId.value`, so it still fires; and a collision between two
+     * remote peers never matches.
      *
      * Diagnostic only — it changes no decision and the endpoint is filtered/deferred/armed exactly as
      * before. WARN, once per (name, id-pair) via [reportedNameCollisions]: `RealNwApi` re-emits
