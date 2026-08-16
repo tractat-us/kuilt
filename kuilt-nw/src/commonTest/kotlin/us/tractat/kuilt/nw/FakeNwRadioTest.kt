@@ -269,6 +269,12 @@ class FakeNwRadioTest {
         val radio = FakeNwRadio()
         val apiA = FakeNwApi(radio, deviceId = "dev-a", serviceName = "unused")
         val apiB = FakeNwApi(radio, deviceId = "dev-b", serviceName = "unused")
+        val openedByA = mutableListOf<NwConnectionOpened>()
+        val openedByB = mutableListOf<NwConnectionOpened>()
+        backgroundScope.collectInto(apiA.connectionOpened, openedByA)
+        backgroundScope.collectInto(apiB.connectionOpened, openedByB)
+        testScheduler.runCurrent()
+
         apiA.startListening("shared-lobby", TYPE)
         apiB.startListening("shared-lobby", TYPE)
 
@@ -279,11 +285,21 @@ class FakeNwRadioTest {
         radio.connect("dev-a", NwEndpoint(id = "shared-lobby", serviceName = "shared-lobby"))
         testScheduler.runCurrent()
 
-        assertEquals(
-            listOf("dev-a", "dev-b"),
-            landedOn,
-            "one shared name must be able to resolve to EITHER advertiser — a harness that always " +
-                "picks one cannot express the #2416 race, and no test written against it can fail",
+        assertAll(
+            {
+                assertEquals(
+                    listOf("dev-a", "dev-b"),
+                    landedOn,
+                    "one shared name must be able to resolve to EITHER advertiser — a harness that always " +
+                        "picks one cannot express the #2416 race, and no test written against it can fail",
+                )
+            },
+            // `landedOn` alone only proves the seam was CONSULTED: a `connect` that asked and then ignored
+            // the answer would record the same list. These two pin that the answer ROUTES the dial — the
+            // first dial resolved to dev-a, so dev-a accepted its own dial (both ends) and then dialled once
+            // more; only the second dial, biased to dev-b, may arrive there.
+            { assertEquals(3, openedByA.size, "dev-a: two ends of the self-resolved dial, then its own second dial") },
+            { assertEquals(1, openedByB.size, "dev-b accepts exactly the dial the bias sent to it — no more, no fewer") },
         )
     }
 
