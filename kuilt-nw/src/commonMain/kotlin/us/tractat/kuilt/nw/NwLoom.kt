@@ -146,10 +146,13 @@ public class NwLoom(
         // monitor and nowhere else — `capability().availability` is a platform-support answer (#1712).
         val seam = NwSeam(selfId, api, seamScope, random, policy, wovenPathGrace, NW_ROLES)
 
-        val serviceName = when (rendezvous) {
-            is Rendezvous.New -> rendezvous.pattern.sessionName
-            is Rendezvous.Existing -> selfId.value
-        }
+        // Per-peer, NOT the session name (ADR-005 / #2416). Every peer sharing one instance name made
+        // the dial target ambiguous: identity comes from the TXT record, but the dial goes to a NAME
+        // that mDNS re-resolves at connect time, so a dial armed for one peer could land on another —
+        // or on self. `Rendezvous.Existing` already advertised `selfId.value`; both arms now agree, and
+        // the pre-TXT fallback id (= serviceName) equals the resolved TXT id, so exactly one redialer
+        // is armed per peer.
+        val serviceName = selfId.value
         log.debug { "nw.loom.weave self=${selfId.value} serviceType=$serviceType serviceName=$serviceName rendezvous=${rendezvous::class.simpleName}" }
 
         // Subscribe to discovery BEFORE advertising/browsing (subscribe-before-trigger: the API's flows
