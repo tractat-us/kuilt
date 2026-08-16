@@ -348,4 +348,52 @@ class NwLoomTest {
 
         weave.cancel()
     }
+
+    /**
+     * #2416 / ADR-005: two peers weaving ONE [Rendezvous.New] session must advertise DISTINCT Bonjour
+     * instance names.
+     *
+     * The browse result identifies a peer by its TXT `PeerId`, but the DIAL goes to the instance NAME,
+     * which mDNS re-resolves at connect time. While two devices held the same name, resolving it could
+     * land on either — so a dial armed for peer X reached peer Y, or self. On hardware that read as two
+     * phones 30 cm apart, mutually discovered at -27 dBm, that could never form a session.
+     *
+     * Drives [NwLoom.weave] on both looms, so it pins the production naming decision rather than a helper.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun newRendezvousGivesEveryPeerItsOwnInstanceName() = runTest(StandardTestDispatcher()) {
+        val radio = FakeNwRadio()
+        val idA = PeerId("peer-a-2416")
+        val idB = PeerId("peer-b-2416")
+        val apiA = FakeNwApi(radio, deviceId = "dev-a", serviceName = "unused", peerId = idA.value)
+        val apiB = FakeNwApi(radio, deviceId = "dev-b", serviceName = "unused", peerId = idB.value)
+        val loomA = NwLoom(apiA, serviceType = TYPE, selfId = idA, random = Random(0), weaveTimeout = 5.seconds)
+        val loomB = NwLoom(apiB, serviceType = TYPE, selfId = idB, random = Random(1), weaveTimeout = 5.seconds)
+
+        // A's browser sees BOTH adverts (the radio returns self too, #1485).
+        val seen = mutableListOf<NwEndpoint>()
+        val spy = launch(start = CoroutineStart.UNDISPATCHED) { apiA.endpointFound.collect { seen += it } }
+
+        val weaveA = launch(start = CoroutineStart.UNDISPATCHED) {
+            runCatchingCancellable { loomA.weave(Rendezvous.New(Pattern(sessionName = "quickplay"))) }
+        }
+        val weaveB = launch(start = CoroutineStart.UNDISPATCHED) {
+            runCatchingCancellable { loomB.weave(Rendezvous.New(Pattern(sessionName = "quickplay"))) }
+        }
+        repeat(20) { testScheduler.advanceTimeBy(100); testScheduler.runCurrent() }
+        // Every advert has been delivered; unwind the collector and any still-awaiting weave so the
+        // assertion below is the only thing that can end this test.
+        spy.cancel()
+        weaveA.cancel()
+        weaveB.cancel()
+
+        val names = seen.map { it.serviceName }.toSet()
+        assertEquals(
+            setOf(idA.value, idB.value),
+            names,
+            "each peer must advertise its own PeerId as the instance name; a shared name makes the " +
+                "dial target ambiguous because mDNS re-resolves it at connect time",
+        )
+    }
 }
