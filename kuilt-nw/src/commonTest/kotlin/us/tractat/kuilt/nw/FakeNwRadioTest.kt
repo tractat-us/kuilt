@@ -256,6 +256,37 @@ class FakeNwRadioTest {
         )
     }
 
+    /**
+     * #2416: when two devices advertise the SAME Bonjour instance name the name is AMBIGUOUS — real
+     * mDNS re-resolves it at connect time and may land on either. The harness used to collapse that
+     * with `endpointOwners[serviceName] = deviceId` (last writer wins), making the dial deterministic
+     * and correct-looking, which is why this class of bug could only be found on hardware.
+     *
+     * The fake must be able to REACH the failure, or no property will ever be written for it.
+     */
+    @Test
+    fun aNameAdvertisedByTwoDevicesResolvesToEitherOfThem() = runTest(StandardTestDispatcher()) {
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-a", serviceName = "unused")
+        val apiB = FakeNwApi(radio, deviceId = "dev-b", serviceName = "unused")
+        apiA.startListening("shared-lobby", TYPE)
+        apiB.startListening("shared-lobby", TYPE)
+
+        val landedOn = mutableListOf<String>()
+        radio.resolutionBias = { _, candidates -> candidates.first().also { landedOn += it } }
+        radio.connect("dev-a", NwEndpoint(id = "shared-lobby", serviceName = "shared-lobby"))
+        radio.resolutionBias = { _, candidates -> candidates.last().also { landedOn += it } }
+        radio.connect("dev-a", NwEndpoint(id = "shared-lobby", serviceName = "shared-lobby"))
+        testScheduler.runCurrent()
+
+        assertEquals(
+            listOf("dev-a", "dev-b"),
+            landedOn,
+            "one shared name must be able to resolve to EITHER advertiser — a harness that always " +
+                "picks one cannot express the #2416 race, and no test written against it can fail",
+        )
+    }
+
     @Test
     fun threeDevicesEachDiscoverAllPeersIncludingThemselves() = runTest(StandardTestDispatcher()) {
         val radio = FakeNwRadio()

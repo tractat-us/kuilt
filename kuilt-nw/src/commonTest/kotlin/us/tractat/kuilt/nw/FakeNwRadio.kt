@@ -52,9 +52,11 @@ package us.tractat.kuilt.nw
  *    advertise the same `serviceName` (`"lobby"` → `"lobby (2)"`), so the SAME peer is seen under
  *    BOTH names across sightings. Identity must therefore key on the TXT `peerId`, never `serviceName`.
  *
- * [connect] maps an endpoint back to its listening device through [endpointOwners] (the id → device
+ * [connect] maps an endpoint back to its listening device through [endpointOwners] (the id → advertisers
  * registry populated on [markListening]); a manually-constructed endpoint that was never advertised
- * falls back to the `"ep-<deviceId>"` naming convention ([listenerDeviceIdOf]).
+ * falls back to the `"ep-<deviceId>"` naming convention ([listenerDeviceIdOf]). When SEVERAL devices
+ * advertise one id the name is ambiguous, as it is on real mDNS, and [resolutionBias] decides which
+ * advertiser this dial lands on (#2416).
  *
  * A device that both advertises AND browses type `T` is delivered its OWN endpoint — real
  * Bonjour/mDNS returns a device's own advertisement to its own browser, so the fake must too
@@ -119,18 +121,35 @@ internal class FakeNwRadio {
     private val browsing = mutableMapOf<String, Browsing>()
 
     /**
-     * Emitted-endpoint-id → owning device id, populated on [markListening] (#1502). This is the fake
-     * twin of `RealNwApi.endpointsById`: when two devices advertise the SAME id (a shared `serviceName`
-     * with no TXT `peerId`), the later registration OVERWRITES the earlier — the id collapse the Option A
-     * fix exists to prevent. [connect] resolves through this map first, then the `"ep-<deviceId>"` fallback.
+     * Emitted-endpoint-id → the device ids advertising it, in advertise order, populated on
+     * [markListening] (#1502/#2416). This is the fake twin of `RealNwApi.endpointsById`: when two devices
+     * advertise the SAME id (a shared `serviceName` with no TXT `peerId`) the id COLLIDES — the collapse
+     * the Option A fix exists to prevent. [connect] resolves through this map first, then the
+     * `"ep-<deviceId>"` fallback.
+     *
+     * The value is a LIST rather than a single owner because a collided name is genuinely **ambiguous**
+     * (#2416): real mDNS re-resolves an instance name at connect time and may land on any current
+     * advertiser. Storing one owner modelled a collision as "the second advertiser cleanly replaces the
+     * first" — deterministic, and always correct — so the divergence between the dialled id and the
+     * accepting device could not be expressed at all. [resolutionBias] picks among the candidates.
      *
      * BOTH candidate ids are registered per listener — the TXT `peerId` AND the `serviceName` (#1706) —
-     * because the id a browser sees now depends on whether IT requested TXT: an opted-in browser dials
-     * the `peerId`, a non-opted-in browser dials the `serviceName`, and both must resolve back to the same
-     * listening device. The shared-`serviceName` overwrite (and hence the self/peer collapse) is preserved
-     * exactly, since the `serviceName` key is still last-writer-wins.
+     * because the id a browser sees depends on whether IT requested TXT: an opted-in browser dials the
+     * `peerId`, a non-opted-in browser dials the `serviceName`, and both must resolve back to a listening
+     * device.
      */
-    private val endpointOwners = mutableMapOf<String, String>()
+    private val endpointOwners = mutableMapOf<String, MutableList<String>>()
+
+    /**
+     * Which advertiser a name resolves to when SEVERAL hold it (#2416). Real mDNS re-resolves a name
+     * at connect time and may land on any current advertiser; the default picks the first registered,
+     * so every existing single-advertiser test is unchanged and deterministic.
+     *
+     * This exists because `endpointOwners[name] = deviceId` silently collapsed a collision to
+     * last-writer-wins, making the ambiguity — the whole of #2416 — unreachable from a test. A
+     * reference harness that cannot reach a failure guarantees no property is written for it.
+     */
+    var resolutionBias: (name: String, candidates: List<String>) -> String = { _, c -> c.first() }
 
     /** connId string of one end -> the OTHER end. Populated for BOTH directions. */
     private val links = mutableMapOf<String, LinkEnd>()
@@ -205,18 +224,29 @@ internal class FakeNwRadio {
 
     /**
      * Register BOTH ids this listener can be dialled under — the TXT `peerId` and the `serviceName`
-     * (#1706) — so an opted-in and a non-opted-in browser both resolve back to [deviceId]. Last writer
-     * wins per key, preserving the shared-`serviceName` collapse.
+     * (#1706) — so an opted-in and a non-opted-in browser both resolve back to [deviceId]. A second
+     * advertiser of the same id JOINS the candidate list rather than replacing its predecessor (#2416),
+     * which is what makes the collision ambiguous instead of quietly deterministic. Re-registering an id
+     * this device already holds (e.g. [resolveTxt]) keeps its original position.
      */
     private fun registerOwnership(deviceId: String, l: Listening) {
-        endpointOwners[l.serviceName] = deviceId
-        l.txtPeerId?.let { endpointOwners[it] = deviceId }
+        fun claim(key: String) {
+            val owners = endpointOwners.getOrPut(key) { mutableListOf() }
+            if (deviceId !in owners) owners += deviceId
+        }
+        claim(l.serviceName)
+        l.txtPeerId?.let(::claim)
     }
 
-    /** Release only the ids this device still owns — a collided id may have been taken over by a later listener. */
+    /** Drop this device from the ids it advertised — a collided id survives while another advertiser holds it. */
     private fun releaseOwnership(deviceId: String, l: Listening) {
-        if (endpointOwners[l.serviceName] == deviceId) endpointOwners.remove(l.serviceName)
-        l.txtPeerId?.let { if (endpointOwners[it] == deviceId) endpointOwners.remove(it) }
+        fun release(key: String) {
+            val owners = endpointOwners[key] ?: return
+            owners -= deviceId
+            if (owners.isEmpty()) endpointOwners.remove(key)
+        }
+        release(l.serviceName)
+        l.txtPeerId?.let(::release)
     }
 
     private fun listenerDeviceIdOf(endpointId: String): String =
@@ -346,7 +376,13 @@ internal class FakeNwRadio {
         // Resolve the endpoint back to its listening device through the id → device registry
         // (populated on [markListening]); fall back to the `"ep-<deviceId>"` naming for a
         // manually-constructed endpoint that was never advertised (the direct-connect seam tests).
-        val accepterId = endpointOwners[endpoint.id] ?: listenerDeviceIdOf(endpoint.id)
+        val owners = endpointOwners[endpoint.id]
+        val accepterId = when {
+            owners.isNullOrEmpty() -> listenerDeviceIdOf(endpoint.id)
+            owners.size == 1 -> owners.single()
+            // AMBIGUOUS: several devices advertise this name. Real mDNS picks one at connect time.
+            else -> resolutionBias(endpoint.id, owners.toList())
+        }
         require(accepterId in devices) { "no device for endpoint '${endpoint.id}'" }
         openedLinkCount += 1
         val connIdDialer = nextConnId(dialerDeviceId)
@@ -387,9 +423,11 @@ internal class FakeNwRadio {
      * the local device — so the connection carries `endpoint.id == <the real peer's id>` while both ends
      * resolve to this device's own `selfId`.
      *
-     * [connect] cannot express this: it routes strictly by `endpoint.id` (via `endpointOwners`), so the
-     * dialled id and the accepting device always agree. That disagreement IS the bug, which is why the
-     * fake has to model it explicitly — a fake that only reproduces the substrate's happy path stops
+     * [connect] cannot express this: it routes by `endpoint.id` (via `endpointOwners`, with
+     * [resolutionBias] choosing among a contended name's advertisers), so the accepter is always a device
+     * that ACTUALLY advertises the dialled id. Landing on a device that never advertised it — which is what
+     * a name re-resolving mid-rename does — stays outside that. That disagreement IS the bug, which is why
+     * the fake has to model it explicitly — a fake that only reproduces the substrate's happy path stops
      * testing every failure the real substrate can produce (the lesson of #1485, where omitting
      * self-discovery is exactly why the #1466 self-dial shipped uncaught).
      */
