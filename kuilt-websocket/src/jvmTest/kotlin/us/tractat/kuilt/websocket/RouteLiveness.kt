@@ -104,7 +104,7 @@ private fun probe(host: String, port: Int, path: String): Observation =
                     ?: return Observation.Unreachable("the connection closed without a response")
             val code = statusLine.split(' ').getOrNull(1)?.toIntOrNull()
                 ?: return Observation.Unreachable("an unparseable status line \"$statusLine\"")
-            Observation.Status(code, "HTTP $statusLine")
+            Observation.Status(code, statusLine)
         }
     } catch (failure: IOException) {
         Observation.Unreachable("${failure::class.simpleName}: ${failure.message}")
