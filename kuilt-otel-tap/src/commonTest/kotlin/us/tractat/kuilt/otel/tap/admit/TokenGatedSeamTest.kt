@@ -15,6 +15,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Seam
 import kotlin.random.Random
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Clock
@@ -159,6 +160,31 @@ class TokenGatedSeamTest {
             hostSeam.incoming.first { TapAdmitMessage.decode(it.toByteArray()) is TapAdmitMessage.Proof }
         }
         assertTrue(hostProof != null, "a rejected challenge must not lock out the legitimate host")
+    }
+
+    /**
+     * `Seam.sendTo` refuses `sendTo(selfId)` with `IllegalArgumentException` (#2428), and the gate has
+     * to carry that ahead of its admission check rather than delegating it.
+     *
+     * `selfId` is never in `verified`, so the Verifier arm would classify a self-send as an
+     * unadmitted peer and **drop** it with a debug line — a silent success from the caller's view,
+     * and the inner seam that does carry the refusal is never reached. Asserted on the verifier
+     * *because* that is the dropping arm; the prover arm forwards and would inherit it either way.
+     */
+    @Test
+    fun selfSendIsRefusedByTheVerifierRatherThanDroppedAsUnadmitted() = runTest(UnconfinedTestDispatcher()) {
+        val token = LogTapJoinToken.issue(Random(1), clockAt(t0), ttl = 5.minutes)
+        val (hostGate, _) = gatedPair(token, presentedCode = token.code, verifierClock = clockAt(t0), scope = backgroundScope)
+
+        assertTrue(
+            hostGate.selfId !in hostGate.peers.value.filter { it != hostGate.selfId }.toSet(),
+            "precondition: selfId is never an ADMITTED peer, which is why the gate would drop it",
+        )
+        assertFailsWith<IllegalArgumentException>(
+            "the verifier must REFUSE a self-send, not drop it as an unadmitted peer",
+        ) {
+            hostGate.sendTo(hostGate.selfId, byteArrayOf(1))
+        }
     }
 
     /**

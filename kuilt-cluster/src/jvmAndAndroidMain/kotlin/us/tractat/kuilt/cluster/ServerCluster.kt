@@ -334,7 +334,16 @@ private class PeerlessSeam(override val selfId: PeerId) : Seam {
     override val state: StateFlow<SeamState> = MutableStateFlow(SeamState.Woven)
     override val incoming: Flow<Swatch> = MutableSharedFlow()
     override suspend fun broadcast(payload: ByteArray): Unit = Unit
-    override suspend fun sendTo(peer: PeerId, payload: ByteArray): Unit = Unit
+
+    /**
+     * A no-op for a remote — this placeholder has none — but a self-send is still REFUSED (#2428).
+     * `peers` here is exactly `{ selfId }`, so self is the only id a caller could plausibly address,
+     * and answering it with silence is how a caller's mistake becomes an invisible dropped frame.
+     */
+    override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+        require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
+    }
+
     override suspend fun close(reason: CloseReason): Unit = Unit
 }
 

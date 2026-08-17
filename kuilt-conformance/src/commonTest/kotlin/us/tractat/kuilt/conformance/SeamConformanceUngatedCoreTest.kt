@@ -11,7 +11,7 @@ import kotlin.test.assertEquals
 /**
  * Pins the **structural** guarantee of [SeamConformanceSuite]: the core obligations
  * (host-yields-usable-seam, broadcast delivery, order, peers≥2, close-idempotency,
- * availability, both Woven-state invariants, close→Torn, absent-peer-throw) are
+ * availability, both Woven-state invariants, close→Torn, absent-peer-throw, self-send-refused) are
  * **ungated** — no capability flag can suppress them.
  *
  * Two harnesses prove it, from complementary angles:
@@ -90,6 +90,7 @@ class SeamConformanceUngatedCoreTest {
         harness().runHostStateIsWovenEvenAlone(scope)
         harness().runCloseDrivesStateTornNormal(scope)
         harness().runSendToAbsentPeerThrows(scope)
+        harness().runSendToSelfIsRefused(scope)
         harness().runCloseDoesNotReportFailureAsCancellation(scope)
         harness().runAvailabilityReturnsAKnownVariant()
     }

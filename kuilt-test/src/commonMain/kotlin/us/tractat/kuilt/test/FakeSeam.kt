@@ -81,6 +81,10 @@ public class FakeSeam(
 
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
         checkNotTorn()
+        // A fake that accepts what production refuses makes every consumer test that exercises the
+        // refusal vacuous — `_peers` includes selfId, so without this a self-send was recorded in
+        // `directed` and the consumer's mistake read back as a delivered frame (#2428).
+        require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
         if (peer !in _peers.value) throw PeerNotConnected(peer)
         _directed.add(peer to payload)
     }

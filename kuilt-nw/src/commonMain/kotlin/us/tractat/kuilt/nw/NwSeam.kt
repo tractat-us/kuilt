@@ -1037,6 +1037,9 @@ internal class NwSeam(
 
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
         check(_state.value !is SeamState.Torn) { closedMessage }
+        // `registry` keys remotes only, so without this a self-send fell out as PeerNotConnected —
+        // false for an id this seam's own `peers` names (#2428).
+        require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
         val connId = lock.withLock { registry[peer]?.connId } ?: throw PeerNotConnected(peer)
         // Addressed and reporting, per contract: raise PayloadTooLarge BEFORE the encode, so the
         // caller learns the number it should have respected and the link below is never implicated.

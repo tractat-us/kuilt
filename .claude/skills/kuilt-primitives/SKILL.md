@@ -43,6 +43,7 @@ If you're about to write any of these, STOP and open the cookbook:
 - averaging model updates from many devices without collecting their data — federated learning/analytics, a `(Σweights, Σcount)` accumulator, a training-round barrier → `FedAvg` + `TrainingUpdate`
 - hashing a replicated state by hand so two peers can compare it as one number — "are we in sync?" across a process/socket boundary, a divergence alarm → `canonicalDigest` (and in-process, just `assertEquals` the states)
 - splitting a big blob into frames, hard-coding a chunk size, or chasing a `FrameTooLargeException` that shows up only once a peer drops out → `Room.maxPayloadBytes` / `Seam.maxPayloadBytes` (`null` means unknown, not unbounded)
+- looping a frame back to yourself, or a `peers.forEach { sendTo(it, …) }` fan-out — `peers` **includes** `selfId`, so that self-sends → `broadcast`, or filter `it != selfId`. `sendTo(selfId, …)` throws `IllegalArgumentException` on every fabric (not `PeerNotConnected` — you *are* in `peers`)
 - a `seenIds` set → `GSet` / kuilt dedup
 - a fixed/exponential retry back-off → `ExponentialBackoff`
 - merging mDNS/Multipeer discovery feeds into one lobby roster → `discoveryRoster`

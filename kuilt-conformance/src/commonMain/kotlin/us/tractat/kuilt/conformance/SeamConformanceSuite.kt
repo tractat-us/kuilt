@@ -76,8 +76,8 @@ import kotlin.test.fail
  *
  * The **core** obligations (host yields a usable seam, broadcast delivery, order,
  * peers≥2, close-idempotency, availability, both Woven-state invariants, close→Torn,
- * absent-peer throw, close-does-not-mint-a-cancellation) are **ungated** — no capability
- * flag can suppress them. That
+ * absent-peer throw, self-send refusal, close-does-not-mint-a-cancellation) are **ungated** — no
+ * capability flag can suppress them. That
  * structural guarantee is pinned by [SeamConformanceUngatedCoreTest], which drives the
  * core obligations through a harness whose [capabilities] would betray any read.
  *
@@ -583,6 +583,120 @@ public abstract class SeamConformanceSuite {
     @Test
     public fun sendToAbsentPeerThrowsPeerNotConnected(): TestResult =
         runTest { runSendToAbsentPeerThrows(this) }
+
+    // ── (10a) sendTo SELF is refused with IllegalArgumentException ───────────
+    //
+    // Contract from `Seam.sendTo`'s KDoc (#2428): an addressed send to this peer's own id is
+    // refused with `IllegalArgumentException`. A self-send has no meaning at this layer —
+    // `broadcast` is the loop-back surface — and the refusal is `require`, not [PeerNotConnected],
+    // because `selfId` IS in `peers`: reporting the peer as absent would state something false.
+    //
+    // **The complement of `runSendToAbsentPeerThrows`, and the reason it did not cover this.** That
+    // obligation addresses an id no fabric has ever heard of, so every implementation reaches its
+    // roster miss and reports it. `selfId` passes the roster check on every fabric that keeps one,
+    // and what happened next was whatever the implementation happened to do — three fabrics
+    // (including the reference `InMemoryLoom`) refused with `require`, the rest did anything from a
+    // misdelivery to the *other* peer (`LinkSeam`, `WebRTCPeerLink` — a 2-peer link resolves
+    // "somebody" to the remote) to a false [PeerNotConnected] on a peer `peers` names. Both readings
+    // were defensible against a contract that did not say, and nothing in this suite asked, so the
+    // fabrics drifted apart in silence for as long as there have been fabrics.
+    //
+    // UNGATED CORE, deliberately, and #2428 turned down a capability flag for it. Every `false` flag
+    // is an *opt-out*, and an opt-out is exactly the shape that let this drift: the first fabric that
+    // found the guard inconvenient would declare the gap and the divergence would be back, tracked
+    // instead of fixed. There is also no transport for which refusing is impossible — the check
+    // reads two ids the seam already holds and never touches the wire.
+    //
+    // **Both ends are checked.** A role-split fabric is two different implementations behind one
+    // suite (websocket hosts a `MeshSeam` and joins a `LinkSeam`), so asserting only on `host`
+    // proves at most half of what the harness under test actually ships.
+    //
+    // **The preconditions are asserted, not assumed.** A refusal is a *throw*, and a seam that is
+    // not live throws for reasons of its own — a `Torn` seam throws `IllegalStateException` from the
+    // state check, and a harness whose pair never wove could satisfy this assertion without the
+    // self-check existing at all. Pinning `Woven` and `selfId ∈ peers` first makes the rig prove it
+    // fired.
+
+    internal suspend fun runSendToSelfIsRefused(scope: TestScope): Unit =
+        scope.connectedPair { host, joiner ->
+            // Preconditions FIRST, and separately from the obligation: a green below means the
+            // refusal was reached on a live seam whose roster really does name `selfId`.
+            assertIs<SeamState.Woven>(
+                host.state.first { it is SeamState.Woven },
+                "precondition: the host must be Woven — a Torn seam refuses every send with " +
+                    "IllegalStateException, which would satisfy nothing this obligation asks",
+            )
+            assertIs<SeamState.Woven>(
+                joiner.state.first { it is SeamState.Woven },
+                "precondition: the joiner must be Woven, for the same reason as the host",
+            )
+            assertAll(
+                {
+                    assertTrue(
+                        host.selfId in host.peers.value,
+                        "precondition: selfId must be IN peers (Seam.peers' initial-value invariant) — " +
+                            "that is what makes this refusal distinct from PeerNotConnected; got " +
+                            "${host.peers.value.map { it.value }}",
+                    )
+                },
+                {
+                    assertTrue(
+                        joiner.selfId in joiner.peers.value,
+                        "precondition: the joiner's selfId must be IN peers too; got " +
+                            "${joiner.peers.value.map { it.value }}",
+                    )
+                },
+            )
+
+            // Captured rather than wrapped in `assertFailsWith`: [assertAll] takes plain (non-inline,
+            // non-suspend) lambdas, so the suspending send has to happen out here. That is the better
+            // shape anyway — a seam that *completes* the self-send yields `null`, which reads as
+            // "completed successfully" instead of as an opaque wrong-type mismatch.
+            val hostFailure = failureOf { host.sendTo(host.selfId, byteArrayOf(1)) }
+            val joinerFailure = failureOf { joiner.sendTo(joiner.selfId, byteArrayOf(2)) }
+
+            assertAll(
+                {
+                    assertIs<IllegalArgumentException>(
+                        hostFailure,
+                        "sendTo(selfId) must be REFUSED with IllegalArgumentException on the host — " +
+                            "not delivered, not dropped, and not reported as PeerNotConnected " +
+                            "(selfId IS in peers, so that would state something false). Use broadcast " +
+                            "to loop back. Got: ${hostFailure ?: "no exception — the send completed"}",
+                    )
+                },
+                {
+                    assertIs<IllegalArgumentException>(
+                        joinerFailure,
+                        "sendTo(selfId) must be REFUSED with IllegalArgumentException on the joiner " +
+                            "too — a role-split fabric ships a different Seam on each end, so the " +
+                            "host's guard proves nothing about this one. Got: " +
+                            "${joinerFailure ?: "no exception — the send completed"}",
+                    )
+                },
+            )
+        }
+
+    /**
+     * Run [block] and hand back whatever it threw, or `null` if it completed.
+     *
+     * `ensureActive()` is the discriminator the repo's exception discipline asks for: it rethrows
+     * only when *this* coroutine really is cancelled, and falls through on a `CancellationException`
+     * the seam minted itself — which `Seam.sendTo` forbids, and which must therefore be *reported*
+     * as the wrong exception type rather than silently cancelling the suite.
+     */
+    private suspend fun failureOf(block: suspend () -> Unit): Throwable? =
+        try {
+            block()
+            null
+        } catch (failure: Throwable) {
+            currentCoroutineContext().ensureActive()
+            failure
+        }
+
+    @Test
+    public fun sendToSelfIsRefused(): TestResult =
+        runTest { runSendToSelfIsRefused(this) }
 
     // ── (10b) close must not report a failure as a cancellation ──────────────
     //

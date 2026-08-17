@@ -138,6 +138,10 @@ internal class TokenGatedSeam(
     }
 
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+        // Ahead of the admission gate: `selfId` is never in `verified`, so the Verifier arm would
+        // classify a self-send as an unadmitted peer and DROP it with a debug line — the refusal
+        // the Seam contract owes the caller (#2428) never reaching the inner seam that carries it.
+        require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
         when (role) {
             is GateRole.Prover -> inner.sendTo(peer, payload)
             is GateRole.Verifier -> {

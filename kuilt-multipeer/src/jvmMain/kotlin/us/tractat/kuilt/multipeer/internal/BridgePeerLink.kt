@@ -175,6 +175,10 @@ internal class BridgePeerLink(
         payload: ByteArray,
     ) {
         check(_state.value !is SeamState.Torn) { "sendTo on a Torn seam" }
+        // Ahead of the `closing` short-circuit and the roster check: `_peers` includes selfId, so
+        // without this the bridge handed its OWN id to `mc_session_send_to` as a native addressee
+        // (#2428).
+        require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
         if (closing.get()) return
         if (peer !in _peers.value) throw PeerNotConnected(peer)
         val sent = nativeLib.mc_session_send_to(sessionHandle, peer.value, payload, payload.size)

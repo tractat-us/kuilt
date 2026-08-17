@@ -130,6 +130,7 @@ public class DelayedWovenSeam internal constructor(
 
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
         checkNotClosed()
+        require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
         if (peer !in loom.peers.value) throw PeerNotConnected(peer)
         loom.dispatch(sender = selfId, payload = payload, recipient = peer)
     }

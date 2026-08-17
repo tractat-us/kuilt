@@ -10,10 +10,13 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 
@@ -266,5 +269,61 @@ class RoomChannelTest {
             assertEquals(host.selfId, host.channel("data").selfId)
 
             host.leave()
+        }
+
+    // ── a self-send is refused on a RELAYED channel, where nothing below would (#2428) ──
+
+    /**
+     * `Seam.sendTo` refuses `sendTo(selfId)` with `IllegalArgumentException`, and a channel view has
+     * to carry that **itself** — its delegate is a `Room`, and `Room.sendTo` has no such rule.
+     *
+     * **On a flat room this test would be vacuous, which is why it is a star.** With no relay host,
+     * `SeamRoom.sendTo` passes the id straight through to the underlying seam, and every seam in tree
+     * (including the reference) already refuses — so the guard could be deleted and a flat-room
+     * assertion would stay green. A **spoke** is the case where the guard is load-bearing: there
+     * `relayHostOrNull()` is non-null, so the room rewrites the address to
+     * `seam.sendTo(host, RelayEnvelope(selfId, RelayDest.One(selfId), …))`. The seam underneath is
+     * addressed to the *host*, never to `selfId`, has no idea a self-send is in flight, and cannot
+     * refuse it — the frame goes to the host to be relayed back.
+     *
+     * The `assertNotNull(hostPeer())` is the rig asserting it fired: it is what distinguishes the
+     * relaying spoke this test needs from the flat room on which it would prove nothing.
+     */
+    @Test
+    fun `channel sendTo self is refused on a relaying spoke where the room would rewrite the address`() =
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val star = relayStar()
+            val spoke = star.joinerA
+            val channel = spoke.room.channel("data")
+
+            assertAll(
+                {
+                    assertNotNull(
+                        spoke.hostPeer(),
+                        "precondition: this spoke must have identified a relay host — on a flat room " +
+                            "the send is passed through and the seam below refuses it anyway, so the " +
+                            "assertion below would hold with the channel's guard deleted",
+                    )
+                },
+                {
+                    assertTrue(
+                        spoke.id in channel.peers.value,
+                        "precondition: selfId is IN the channel's peers, which is what makes this " +
+                            "refusal distinct from PeerNotConnected",
+                    )
+                },
+            )
+
+            assertFailsWith<IllegalArgumentException>(
+                "a relayed channel must refuse sendTo(selfId) itself — the Room below would wrap it " +
+                    "as RelayDest.One(selfId) and hand it to the HOST, so nothing under this call " +
+                    "ever sees selfId as an addressee",
+            ) {
+                channel.sendTo(spoke.id, byteArrayOf(1))
+            }
+
+            // Control: the same channel relays an ordinary co-spoke send without complaint, so the
+            // refusal above is about the addressee and not about the channel being unusable.
+            channel.sendTo(star.joinerBId, appPayload("hello"))
         }
 }

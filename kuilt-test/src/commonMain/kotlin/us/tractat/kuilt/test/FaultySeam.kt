@@ -102,6 +102,11 @@ public class FaultySeam(
         peer: PeerId,
         payload: ByteArray,
     ) {
+        // BEFORE the fault evaluation, not after. A `Drop`/`Buffer` decision never calls the
+        // delegate at all, so leaving this to the wrapped seam would make the refusal a coin flip on
+        // the injected fault profile — a lossy link is allowed to lose frames, never to launder a
+        // caller's programming error into one (#2428).
+        require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
         val decision = mutex.withLock { faultState.evaluateOutbound(payload) }
         applyOutboundDecision(decision) { delegate.sendTo(peer, it) }
     }

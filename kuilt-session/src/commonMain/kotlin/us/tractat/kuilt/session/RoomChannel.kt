@@ -214,6 +214,11 @@ internal class RoomChannelSeam(
      * view published, for no reason the caller could see.
      */
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+        // This channel is a [Seam], but its delegate is a **Room**, and `Room.sendTo` carries no
+        // self-send refusal — `SeamRoom.sendTo` in fact REWRITES the address, relaying through the
+        // host as `RelayDest.One(peer)` when there is one. So the Seam contract's refusal (#2428)
+        // has to be made here; there is nothing under this call to inherit it from.
+        require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
         try {
             room.sendTo(peer, RoomChannel.frame(subId, payload))
         } catch (tooLarge: PayloadTooLarge) {

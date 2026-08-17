@@ -432,7 +432,17 @@ public class FakeRoom(
         override val incoming: Flow<Swatch> = spool.incoming
 
         override suspend fun broadcast(payload: ByteArray): Unit = this@FakeRoom.broadcast(payload)
-        override suspend fun sendTo(peer: PeerId, payload: ByteArray): Unit = this@FakeRoom.sendTo(peer, payload)
+
+        /**
+         * Refused for `selfId` (#2428), then delegated. The delegate is a **Room**, and `Room.sendTo`
+         * carries no such refusal — the real [us.tractat.kuilt.session.RoomChannel] is guarded at
+         * exactly this position for exactly that reason, and a fake that accepts what the real
+         * channel refuses is how a consumer test goes green on a call production would reject.
+         */
+        override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+            require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
+            this@FakeRoom.sendTo(peer, payload)
+        }
 
         /** No-op — [FakeRoom] owns the lifecycle. */
         override suspend fun close(reason: CloseReason): Unit = Unit

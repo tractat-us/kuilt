@@ -154,6 +154,9 @@ internal class MCSessionLink(
         peer: PeerId,
         payload: ByteArray,
     ) {
+        // `connectedPeers` is the remotes MC has connected, never this device, so without this a
+        // self-send fell out as PeerNotConnected — false for an id `peers` names (#2428).
+        require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
         val target =
             session.connectedPeers
                 .filterIsInstance<MCPeerID>()
