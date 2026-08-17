@@ -3,6 +3,21 @@ plugins {
     alias(libs.plugins.kotlinSerialization)
 }
 
+// Forward the two opt-in gates to the JVM test process so the tests that read them via
+// System.getProperty() can actually run — without this a `-P` flag never leaves the Gradle JVM and
+// both suites self-skip while reporting green, which is dead coverage that looks live (#1748).
+//   -Pserver.realnet.tests=true   → WebSocketPeerLinkRealNetworkTest (real Netty + real OkHttp on a
+//                                   loopback socket; opt-in because it binds a real port).
+//   -Pintegration.tests=true      → WebSocketPeerLinkFactoryTest (Ktor testApplication, wall-clock
+//                                   awaits rather than virtual time).
+// Mirrors :kuilt-cluster's cluster.realsocket.reconnection.tests and :kuilt-mdns's mdns.multicast.tests.
+tasks.withType<Test>().configureEach {
+    listOf("server.realnet.tests", "integration.tests").forEach { name ->
+        val flag = providers.gradleProperty(name).orNull
+        if (flag != null) systemProperty(name, flag)
+    }
+}
+
 kotlin {
     sourceSets {
         commonMain.dependencies {
