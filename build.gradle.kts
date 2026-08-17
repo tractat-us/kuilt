@@ -3817,9 +3817,17 @@ object KotlinTypeGraph {
 // seam is a seam. `spike/src` is added by hand because `:spike` is only in the build under
 // `-PincludeSpike`, and a guard whose reach depends on a flag is a guard with a hole in it.
 //
-// The harness side scans TEST source for the transitive subclasses of `SeamConformanceSuite`; the two
+// The harness side scans TEST source for the transitive subclasses of `SeamConformanceSuite`; the
 // ANONYMOUS harnesses (`object : SeamConformanceSuite()` inside the suite's own meta-tests) have no
-// name to cite and are correctly absent from it.
+// name to cite and are correctly absent from it. `git grep ": SeamConformanceSuite"` reports 21 hits
+// and the count that matters is 17 — the other four are three object expressions and a return type.
+//
+// The transitive closure there is deliberate but has one known friction, stated before it bites: an
+// ABSTRACT harness base (`abstract class BaseFooConformanceTest : SeamConformanceSuite()`, subclassed
+// twice) lands in the set alongside its subclasses, so the cited-by-no-row check would want all three
+// named. Nothing in the tree has that shape today; when something does, cite them all — the extra
+// names are true, and narrowing the closure to leaf classes would let a base that drives a seam its
+// subclasses do not go unattributed.
 val verifySeamHarnessCoverage by tasks.registering {
     group = "verification"
     description = "Fails if a production Seam implementation has no row in docs/seam-harness-coverage.md (#1871)."
