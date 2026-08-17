@@ -30,8 +30,20 @@ import kotlinx.coroutines.flow.takeWhile
  *
  * Latching avoids that by construction: after the latch, [source] changes are not forwarded **at
  * all**. Before the latch, what is forwarded is [source] itself, which is already
- * distinct-until-changed because it is a [StateFlow]. So no de-duplication operator is needed in
- * either phase, and there is no window in which one would be.
+ * distinct-until-changed because it is a [StateFlow]. So no de-duplication operator is needed
+ * *within* either phase.
+ *
+ * ## The boundary between the phases is the one place that needs a check
+ * Neither phase can produce a duplicate on its own, but the **transition** can: if the last value
+ * published while following already equals [terminal], the latch changes nothing, and publishing
+ * [terminal] anyway would republish a value the collector is already holding. [collect] therefore
+ * emits [terminal] only when it differs from the last value that collector was actually handed —
+ * which is a strictly narrower check than a blanket `distinctUntilChanged()`, because it is the
+ * only comparison the two phases cannot already make for themselves.
+ *
+ * Concretely, on `InMemorySeam`: a seam that is the sole member of its mesh already publishes
+ * `{ selfId }`, so tearing it must publish nothing at all. Same for a seam whose only remote left
+ * before it closed.
  *
  * ## Cancellation
  * [collect] on a [StateFlow] returns `Nothing` — it never completes normally — so after emitting
@@ -54,13 +66,22 @@ internal class LatchingStateFlow<T : Any>(
     override val replayCache: List<T> get() = listOf(value)
 
     override suspend fun collect(collector: FlowCollector<T>): Nothing {
-        // `takeWhile` stops BEFORE the first latched reading, so the terminal emission below is the
-        // only one that can carry `terminal` — reached whether the latch flipped mid-collection or
-        // had already flipped when this collector subscribed.
+        // `takeWhile` stops BEFORE the first latched reading, so the emission below is the only one
+        // that can carry `terminal` — reached whether the latch flipped mid-collection or had
+        // already flipped when this collector subscribed.
+        //
+        // `lastEmitted` is what closes the boundary case. `null` means "this collector has been
+        // handed nothing yet", which is exactly the already-latched subscriber (`takeWhile` stops
+        // before its first reading) — and it must still receive `terminal`, since that is its
+        // initial value. The [T] : Any bound is what lets `null` carry that meaning unambiguously.
+        var lastEmitted: T? = null
         combine(source, latched) { current, isLatched -> Reading(current, isLatched) }
             .takeWhile { !it.latched }
-            .collect { collector.emit(it.value) }
-        collector.emit(terminal)
+            .collect {
+                collector.emit(it.value)
+                lastEmitted = it.value
+            }
+        if (lastEmitted != terminal) collector.emit(terminal)
         awaitCancellation()
     }
 }
