@@ -254,6 +254,9 @@ public class RoomHubSeam(
 
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
         checkOpen()
+        // `registered` holds the spokes, never the hub itself, so without this a self-send fell out
+        // as PeerNotConnected for an id the hub's own `peers` names (#2428).
+        require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
         val target = lock.withLock { registered[peer] }
             ?: throw PeerNotConnected(peer)
         runCatchingCancellable { target.send(payload) }

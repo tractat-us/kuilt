@@ -27,6 +27,9 @@ import us.tractat.kuilt.core.internal.MappedStateFlow
  *   send there throws, per the `Torn` rule below.)
  * - [sendTo] when the addressed peer is absent from [peers]: throws
  *   [PeerNotConnected].
+ * - [sendTo] addressed to [selfId]: throws [IllegalArgumentException] — a self-send has no meaning
+ *   here, and [broadcast] is the loop-back surface. Deliberately **not** [PeerNotConnected]: see
+ *   [sendTo].
  * - [sendTo] of a payload over [maxPayloadBytes]: throws [PayloadTooLarge]; [broadcast] instead
  *   drops it (best-effort, as above). An obligation on an implementation that *publishes* a budget
  *   — a seam reporting `null` owes nothing here — and one every in-tree seam that publishes one now
@@ -227,7 +230,32 @@ public interface Seam {
     public suspend fun broadcast(payload: ByteArray)
 
     /**
-     * Send to one peer. Suspends until accepted by the local transport.
+     * Send to one peer — never to yourself. Suspends until accepted by the local transport.
+     *
+     * ## A self-send is REFUSED, and not as PeerNotConnected
+     *
+     * `sendTo(selfId, …)` throws [IllegalArgumentException] (`require(peer != selfId)`). Addressing
+     * yourself has no meaning at this layer: this call names *another* peer to route a frame to, and
+     * [broadcast] is already the loop-back surface for a consumer that wants its own frame back.
+     *
+     * The exception type is the substance of the rule, not a detail. [PeerNotConnected] means
+     * "absent from [peers]" — and [selfId] is **in** [peers], always, by that property's initial-value
+     * invariant. Reporting it would state something false about the roster, and a caller that
+     * (reasonably) reads it as "that peer has gone" would retry, reconnect, or drop the peer over what
+     * is really a programming error in its own addressing. An `IllegalArgumentException` says the one
+     * true thing: the *argument* was wrong.
+     *
+     * **Ordering: the [SeamState.Torn] check comes first**, everywhere. State is the coarser
+     * precondition — a torn seam cannot carry a frame to anyone, so which peer was named is moot —
+     * and it keeps this refusal orthogonal to lifecycle: `sendTo(selfId)` on a live seam is an
+     * [IllegalArgumentException], on a torn one an [IllegalStateException], on every fabric.
+     *
+     * Held by `SeamConformanceSuite.sendToSelfIsRefused` as an **ungated core** obligation, on both
+     * ends of a role-split pair. It is ungated deliberately (#2428): the check reads two ids the seam
+     * already holds and never touches the wire, so no transport can be unable to honour it, and a
+     * capability flag would be an opt-out from a universal contract — which is exactly how the
+     * behaviour drifted in the first place, unspecified and untested, between fabrics that refused
+     * and fabrics that delivered the frame to the other peer instead.
      *
      * ## A send failure must NOT be reported as a cancellation
      *
@@ -251,6 +279,9 @@ public interface Seam {
      * [runCatchingCancellable]; `CompositeSeam.reconcile` and `SeamRoom`'s admit fan-out writer are the
      * in-tree patterns.
      *
+     * @throws IllegalArgumentException if [peer] is [selfId] — see the first section. Checked after
+     *   the [SeamState.Torn] state check and before the roster lookup, so it is never masked by a
+     *   [PeerNotConnected] for an id [peers] names.
      * @throws PeerNotConnected if [peer] is absent from [peers].
      * @throws PayloadTooLarge if [payload] exceeds [maxPayloadBytes] — the obligation on a seam
      *   that publishes a budget, and what a caller must be ready for. Independent of [state] (a

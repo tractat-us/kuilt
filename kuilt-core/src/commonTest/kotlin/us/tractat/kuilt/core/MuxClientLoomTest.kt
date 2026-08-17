@@ -26,7 +26,9 @@ import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
@@ -155,6 +157,58 @@ class MuxClientLoomTest {
         val b = client.join(InMemoryTag("b"))
 
         assertFalse(b.state.value is SeamState.Torn, "base Seam must remain live after a channel close")
+    }
+
+    // ── A self-send is refused against the FROZEN selfId, across a heal (#2428) ──
+
+    /**
+     * `Seam.sendTo` refuses `sendTo(selfId)` with `IllegalArgumentException`, and a resumable channel
+     * must hold that against the id **it** publishes — which is frozen at the first generation — not
+     * against whatever the current backing seam happens to publish.
+     *
+     * The two ids are equal before a heal, so a pre-heal-only assertion could not tell a correct
+     * implementation from one that simply delegated. The heal is what separates them: `InMemoryLoom`
+     * mints `peer-N` per weave, so after the re-weave the channel's frozen `selfId` is a *stranger*
+     * to the new base, and a delegating `sendTo` would answer the caller with `PeerNotConnected` for
+     * the very id the channel tells it it is. `assertNotEquals` on the two ids is the rig asserting
+     * it fired — without it this test silently degrades to the pre-heal case.
+     */
+    @Test
+    fun selfSendIsRefusedAgainstTheFrozenSelfIdAfterAHeal() = runTest(UnconfinedTestDispatcher()) {
+        val mesh = InMemoryLoom()
+        val client = muxClientLoom(CountingLoom(mesh), backgroundScope)
+
+        val chan = client.join(InMemoryTag("a"))
+        val frozenSelf = chan.selfId
+        assertFailsWith<IllegalArgumentException>("a self-send is refused before any heal") {
+            chan.sendTo(chan.selfId, byteArrayOf(1))
+        }
+
+        client.closeBase()
+        val healed = client.join(InMemoryTag("a"))
+        val underlyingSelf = mesh.join(InMemoryTag("probe")).selfId
+
+        assertAll(
+            {
+                assertEquals(frozenSelf, healed.selfId, "precondition: the channel's selfId is frozen across the heal")
+            },
+            {
+                assertNotEquals(
+                    frozenSelf,
+                    underlyingSelf,
+                    "precondition: the mesh must mint a FRESH id per weave, or the frozen id and the " +
+                        "post-heal generation's id coincide and this test proves nothing",
+                )
+            },
+        )
+
+        assertFailsWith<IllegalArgumentException>(
+            "after a heal, sendTo(selfId) must still be refused as an IllegalArgumentException — " +
+                "delegating the check to the post-heal generation would answer PeerNotConnected " +
+                "for the id this channel publishes as its own",
+        ) {
+            healed.sendTo(healed.selfId, byteArrayOf(2))
+        }
     }
 
     // ── Client-side resume: torn base re-weaves once, all names heal ──────────

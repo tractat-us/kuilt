@@ -17,6 +17,7 @@ import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.TransportRole
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
@@ -30,6 +31,46 @@ import kotlin.time.Duration.Companion.milliseconds
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class FaultySeamTest {
+    // ── A self-send is refused under EVERY fault profile (#2428) ──────────────
+
+    /**
+     * `Seam.sendTo` refuses `sendTo(selfId)` with `IllegalArgumentException`, and this decorator has
+     * to check that **before** it evaluates the fault profile, not after.
+     *
+     * The `DropAll` arm is the one that matters and it is not the obvious case: a dropping profile
+     * never calls the delegate at all, so a decorator that left the check to the wrapped seam would
+     * make the refusal a function of the injected fault — refused on a healthy link, silently
+     * swallowed on a lossy one. A simulated link is allowed to lose frames; it is not allowed to
+     * launder a caller's programming error into one. The `Healthy` arm is the control: it proves the
+     * `DropAll` arm's red would come from the profile, not from the seam being broken outright.
+     */
+    @Test
+    fun `sendTo self is refused under both a healthy and a dropping profile`() =
+        runTest {
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val a = factory.host(Pattern("Alice"))
+            factory.join(InMemoryTag("Bob"))
+
+            assertFailsWith<IllegalArgumentException>("healthy profile: a self-send is refused") {
+                a.sendTo(a.selfId, byteArrayOf(1))
+            }
+
+            a.setFaultProfile(FaultProfile.DropAll())
+            val droppedBefore = a.framesDropped
+            assertFailsWith<IllegalArgumentException>(
+                "DropAll must NOT swallow the refusal — a lossy link may lose frames, but a self-send " +
+                    "is a caller error the contract owes an exception for on every profile",
+            ) {
+                a.sendTo(a.selfId, byteArrayOf(2))
+            }
+            assertEquals(
+                droppedBefore,
+                a.framesDropped,
+                "the refusal must land BEFORE the fault evaluation — a refused self-send is not a " +
+                    "dropped frame, and counting it as one would misreport the simulated link",
+            )
+        }
+
     // ── Healthy profile ───────────────────────────────────────────────────────
 
     @Test

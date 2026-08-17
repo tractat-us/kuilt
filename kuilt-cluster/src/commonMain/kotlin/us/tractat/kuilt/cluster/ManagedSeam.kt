@@ -94,6 +94,11 @@ internal class ManagedSeam(
     }
 
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+        // Its OWN [selfId] — a constructor parameter, not a read of the backing seam — and ahead of
+        // everything else, for two independent reasons (#2428). The published identity is this one,
+        // so it is the id a caller can self-send to; and the delegation below swallows the backing
+        // seam's exceptions into a debug log, which would launder the refusal into a silent drop.
+        require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
         val seam = lock.withLock { current }
         if (seam == null) {
             log.debug { "managed-seam: $selfId sendTo $peer dropped — no backing seam yet" }

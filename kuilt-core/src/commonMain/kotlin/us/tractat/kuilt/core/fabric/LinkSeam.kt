@@ -132,6 +132,9 @@ internal class LinkSeam(
 
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
         check(state.value !is SeamState.Torn) { closedMessage }
+        // A 2-peer link's roster is { selfId, remoteId } and its wire has exactly one addressee, so
+        // without this the frame went to the REMOTE — a misdelivery, reported as success (#2428).
+        require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
         if (peer !in _peers.value) throw PeerNotConnected(peer)
         conn.oversizeOrNull(payload)?.let { throw it }
         enqueue(payload)

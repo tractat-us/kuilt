@@ -173,6 +173,10 @@ internal class WebRTCPeerLink(
         payload: ByteArray,
     ) {
         check(_state.value !is SeamState.Torn) { closedMessage }
+        // `resolvedRoster()` is { selfId, remote } and `facade.sendBytes` has exactly one addressee,
+        // so without this a self-send went down the data channel to the REMOTE and was reported as
+        // success — a misdelivery, not merely a permissive no-op (#2428).
+        require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
         if (peer !in resolvedRoster()) throw PeerNotConnected(peer)
         facade.sendBytes(payload)
     }

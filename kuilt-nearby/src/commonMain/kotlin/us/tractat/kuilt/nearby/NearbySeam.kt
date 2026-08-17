@@ -277,7 +277,7 @@ internal class NearbySeam(
 
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
         checkNotClosed()
-        require(peer != selfId) { "Cannot send to self" }
+        require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
         val endpointId = endpointPeersMutex.withLock { endpointIdFor(peer) }
             ?: throw PeerNotConnected(peer)
         sendToEndpoints(listOf(endpointId), payload)

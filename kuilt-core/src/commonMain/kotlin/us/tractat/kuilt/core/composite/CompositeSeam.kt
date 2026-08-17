@@ -1014,6 +1014,12 @@ internal class CompositeSeam(
 
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
         check(state.value !is SeamState.Torn) { "seam is Torn" }
+        // Checked HERE rather than left to the plies, because this seam rewrites the address: it
+        // resolves the caller's LOGICAL peer id through `idMap` to a per-ply transport id, and the
+        // composite's own `selfId` is a key no ply ever carries. Delegating would therefore have a
+        // ply refuse some *other* identity, or — as it did before #2428 — resolve nothing and fall
+        // through to `PeerNotConnected(selfId)`, false for an id this seam's own `peers` names.
+        require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
         val bytes = PlyFrame.encode(PlyFrame.Data(selfId, outSeq.getAndIncrement(), payload))
         // Resolve every (ply, transportId) that can reach `peer`, in send-preference order under the
         // lock; send OUTSIDE it. A candidate can tear between the resolve and the send (the Seam

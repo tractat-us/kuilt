@@ -204,7 +204,18 @@ public class MuxClientLoom(
 
         override suspend fun broadcast(payload: ByteArray): Unit = current().broadcast(payload)
 
-        override suspend fun sendTo(peer: PeerId, payload: ByteArray): Unit = current().sendTo(peer, payload)
+        /**
+         * Refused against **this view's** [selfId], not the current generation's.
+         *
+         * [selfId] is frozen at the first generation (see [frozenSelfId]) precisely so a heal cannot
+         * change the identity a holder reads — so that frozen id is the one a caller can self-send
+         * to, and delegating the check would hold the send against whatever id the *post-heal* seam
+         * happens to publish. Those differ exactly when the freeze is doing its job (#2428).
+         */
+        override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+            require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
+            current().sendTo(peer, payload)
+        }
 
         override suspend fun close(reason: CloseReason): Unit = current().close(reason)
     }

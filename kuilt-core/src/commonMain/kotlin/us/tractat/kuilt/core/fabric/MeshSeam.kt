@@ -649,6 +649,9 @@ private class MeshSeam(
 
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
         check(state.value !is SeamState.Torn) { closedMessage }
+        // Ahead of the `links` lookup on purpose: `links` holds remotes only, so without this a
+        // self-send fell out as PeerNotConnected — false, since `peers` names selfId (#2428).
+        require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
         val conn = lock.withLock { links[peer]?.conn } ?: throw PeerNotConnected(peer)
         conn.oversizeOrNull(payload)?.let { throw it }
         runCatchingCancellable { conn.send(payload) }
