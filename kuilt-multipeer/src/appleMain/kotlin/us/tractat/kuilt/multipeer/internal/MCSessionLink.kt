@@ -188,8 +188,27 @@ internal class MCSessionLink(
      * `session.disconnect()` — ARC reclaims the dropped `MCSession`; only [close]
      * disconnects. The latched `Torn` is what the owning factory's `ActiveSeamSlot`
      * reads to free its single-session slot on the next weave.
+     *
+     * Collapses the roster to `{ selfId }` **before** latching `Torn` (#1816): a torn fabric can
+     * reach nobody, and a decorator folding this seam reads whatever is left here as still
+     * reachable until the member is detached. The collapse sits ahead of the [tornDown] CAS, as in
+     * `LinkSeam.tearDown`: it is idempotent, so running it on a losing caller costs nothing and
+     * buys the stronger post-condition that `peers` is collapsed once *any* `tearDown` has
+     * returned. Previously only the remote-drop path reached `{ selfId }`, leaving a locally-closed
+     * link advertising its pre-close roster forever (#1851).
+     *
+     * Clearing [registry] is **part of** that collapse, not housekeeping. The registry — not
+     * `_peers` — is the source of truth the delegate recomputes the roster from
+     * (`registry.peers + selfId`), and [close] follows this call with `session.disconnect()`,
+     * which makes MC fire `.notConnected` for every peer that was connected. Were a stale binding
+     * left behind, the first such callback would republish the *other* still-bound peers onto an
+     * already-`Torn` seam and undo the collapse — so on an N-peer session the roster would only
+     * re-converge if every remaining callback arrived, which is the very thing #1851 says cannot
+     * be relied on. `MeshSeam.tearDown` clears its `links` map for the same reason.
      */
     private fun tearDown(reason: CloseReason) {
+        registry.clear()
+        _peers.value = setOf(selfId)
         if (!tornDown.compareAndSet(false, true)) return
         _state.value = SeamState.Torn(reason)
         bridge.close()

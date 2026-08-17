@@ -71,6 +71,19 @@ internal class PeerIdentityRegistry<T : Any> {
         }
 
     /**
+     * Drops every binding, so [peers] is empty until something binds again.
+     *
+     * Unlike [unbind] this is deliberately **not** identity-scoped: it is for the terminal
+     * teardown of the whole session, where no device holds anything any more. A caller that
+     * recomputes a roster from [peers] needs this at tear time — otherwise a post-teardown
+     * disconnect callback recomputes from stale bindings and republishes peers that are gone
+     * (#1851).
+     */
+    internal fun clear() {
+        lock.withLock { bound.clear() }
+    }
+
+    /**
      * Removes [id] only if [token] is the device currently holding it. Returns
      * `true` when a binding was actually removed. A drop from a device that
      * does not hold [id] (e.g. a collision-refused newcomer) is a no-op, so the
