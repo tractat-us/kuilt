@@ -41,6 +41,13 @@ import kotlin.test.assertTrue
  * roster is *terminal*, so the view latches instead of mapping, and post-tear registry churn reaches
  * no collector at all.
  *
+ * ### 3. The boundary between following and latching
+ * Latching removes the duplicate *within* each phase but not at the seam between them: if the last
+ * roster published while live already equals the collapsed one, an unconditional terminal emission
+ * republishes it. [aLoneSeamDoesNotRepublishARosterThatAlreadyEqualsTheCollapsedOne] and
+ * [aSeamWhoseJoinerLeftFirstDoesNotRepublishTheCollapsedRoster] pin that case, which every
+ * connected-pair test above is structurally blind to.
+ *
  * Terminal-value coverage ([aTornSeamAdvertisesExactlyItsOwnId]) is duplicated from the TCK
  * deliberately: `:kuilt-core` has no test dependency on `:kuilt-conformance`, so without it this
  * module's own red would name only the two derived properties and not the headline one.
@@ -180,6 +187,100 @@ class InMemorySeamPeersCollapseOnTearTest {
                     seen.size,
                     "nothing may reach a torn seam's peers collector after the collapse (got " +
                         "${seen.map { s -> s.map { it.value } }})",
+                )
+            },
+        )
+
+        collector.cancel()
+    }
+
+    // ── The boundary between the two phases ──────────────────────────────────────────────────────
+    //
+    // The three tests above all build a CONNECTED PAIR, so the last live roster is `{host, joiner}`
+    // and can never equal the collapsed `{ selfId }`. That makes them structurally blind to the one
+    // case where following-then-latching can still emit a duplicate: when the roster the seam was
+    // *already* publishing is the collapsed one. Then the collapse changes nothing, and StateFlow's
+    // distinct-until-changed contract says nothing may be published at all.
+    //
+    // Two independent ways to reach it, because they rig it differently: a seam that never had a
+    // remote (the registry never moves), and a seam whose remote left first (the registry moves and
+    // comes back). Only the second proves the view is comparing against what it last *emitted*
+    // rather than just special-casing a roster that never changed.
+
+    @Test
+    fun aLoneSeamDoesNotRepublishARosterThatAlreadyEqualsTheCollapsedOne() = runTest {
+        val loom = InMemoryLoom()
+        val host = loom.host(Pattern("host"))
+
+        val seen = mutableListOf<Set<PeerId>>()
+        val collector = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            host.peers.collect { seen += it }
+        }
+        runCurrent()
+
+        host.close()
+        runCurrent()
+
+        assertAll(
+            {
+                assertEquals(
+                    listOf(setOf(host.selfId)),
+                    seen.toList(),
+                    "a lone seam already publishes { selfId }, so tearing it changes NOTHING — republishing " +
+                        "the same value breaks the distinct-until-changed contract this view exists to keep " +
+                        "(got ${seen.map { s -> s.map { it.value } }})",
+                )
+            },
+            {
+                assertEquals(
+                    setOf(host.selfId),
+                    host.peers.value,
+                    "the terminal value is unchanged by the emission being elided",
+                )
+            },
+        )
+
+        collector.cancel()
+    }
+
+    @Test
+    fun aSeamWhoseJoinerLeftFirstDoesNotRepublishTheCollapsedRoster() = runTest {
+        val loom = InMemoryLoom()
+        val host = loom.host(Pattern("host"))
+        val joiner = loom.join(InMemoryTag("join"))
+        host.peers.first { it.size == 2 }
+
+        val seen = mutableListOf<Set<PeerId>>()
+        val collector = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            host.peers.collect { seen += it }
+        }
+        runCurrent()
+
+        // The remote leaves BEFORE we tear, so the host's last live roster is already { selfId } —
+        // reached by real registry motion rather than by never having moved.
+        joiner.close()
+        runCurrent()
+        val beforeClose = seen.toList()
+
+        host.close()
+        runCurrent()
+
+        assertAll(
+            {
+                assertEquals(
+                    listOf(setOf(host.selfId, joiner.selfId), setOf(host.selfId)),
+                    beforeClose,
+                    "precondition: the collector must have watched the roster move from the pair back down " +
+                        "to { selfId } (got ${beforeClose.map { s -> s.map { it.value } }})",
+                )
+            },
+            {
+                assertEquals(
+                    beforeClose,
+                    seen.toList(),
+                    "the collapse published nothing, because the seam was ALREADY publishing { selfId }: " +
+                        "the terminal emission must be compared against the last value actually emitted, not " +
+                        "made unconditionally (got ${seen.map { s -> s.map { it.value } }})",
                 )
             },
         )
