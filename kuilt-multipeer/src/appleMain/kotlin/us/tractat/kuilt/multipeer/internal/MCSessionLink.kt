@@ -136,6 +136,18 @@ internal class MCSessionLink(
     }
 
     override suspend fun broadcast(payload: ByteArray) {
+        // A Torn seam rejects sends per the shared Seam contract — latched either by close() or by
+        // the delegate's last-peer drop. `BridgePeerLink` has carried this since #1390; the Apple
+        // half never got it, so a torn link warn-dropped the frame and told the caller it went out
+        // (#2444).
+        //
+        // It must sit AHEAD of the `connectedPeers` read, not merely somewhere in the method. The
+        // two tears differ in what the session reports afterwards: close() calls
+        // session.disconnect(), so `connectedPeers` empties and the send would fall into the
+        // no-peers warn-drop below; the last-peer drop issues no disconnect, so `connectedPeers`
+        // can still name a peer MC has since lost and the send would look ordinary. Only a check
+        // that runs before the read covers both.
+        check(_state.value !is SeamState.Torn) { "broadcast on a Torn seam" }
         val targets = session.connectedPeers
         if (targets.isEmpty()) {
             log.warn { "mc.session.send dropped — no connected peers localPeer=${selfId.value} bytes=${payload.size}" }
@@ -154,6 +166,12 @@ internal class MCSessionLink(
         peer: PeerId,
         payload: ByteArray,
     ) {
+        // Ahead of BOTH the self-send guard and the `connectedPeers` lookup (#2444). Ahead of the
+        // lookup because otherwise a closed link answers with PeerNotConnected — which blames the
+        // addressee for the seam's own death, and is an IllegalStateException, so the conformance
+        // suite's `assertFailsWith<IllegalStateException>` could not tell the two apart.
+        // `MCSessionLinkTornSendTest` is what pins the distinction.
+        check(_state.value !is SeamState.Torn) { "sendTo on a Torn seam" }
         // `connectedPeers` is the remotes MC has connected, never this device, so without this a
         // self-send fell out as PeerNotConnected — false for an id `peers` names (#2428).
         require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
