@@ -48,10 +48,11 @@ required either way, and must be a real sentence:
 | `MySeam` | `kuilt-thing/src/commonMain/kotlin/us/tractat/kuilt/thing/MySeam.kt` | none | A per-peer view minted inside `MyNode`; no `Loom` produces it. |
 ```
 
-Prefer binding a harness to writing an opt-out. Most of the entries below marked
-`none` are not *untestable* — `ControllableSeam` and `FakeSeam` come out of real
-`Loom`s and would take a subclass apiece. They are simply unbound, which is the
-finding this page exists to publish.
+Prefer binding a harness to writing an opt-out. Not every entry below marked `none` is
+*untestable* — `FakeSeam` comes out of a real `Loom` and would take a subclass. It is simply
+unbound, which is the finding this page exists to publish. `ControllableSeam` was in the same
+position until #2441 bound it, and the binding immediately turned up a real defect (#2443),
+which is the argument for doing this rather than writing a reason.
 
 ## Registry
 
@@ -83,7 +84,7 @@ finding this page exists to publish.
 | `RoomChannelSeam` | `kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/RoomChannel.kt` | none | A sub-channel view `SeamRoom.channel(id)` mints — one abstraction level above `Loom`/`Seam`, and no `newLoomPair` reaches a `SeamRoom`. |
 | `PerPeerSeam` | `kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/SeamRoom.kt` | none | An internal per-peer view `SeamRoom` mints for one admitted member's heartbeat detector. Not produced by any `Loom`. |
 | `FakeChannelSeam` | `kuilt-session-test/src/commonMain/kotlin/us/tractat/kuilt/session/test/FakeRoom.kt` | none | The channel view of the `FakeRoom` test double. A `Room`-level fake, driven by room-level tests, never by a `Loom`. |
-| `ControllableSeam` | `kuilt-test/src/commonMain/kotlin/us/tractat/kuilt/test/ControllableLoom.kt` | none | Produced by `ControllableLoom.weave`. `ControllableLoom` is a genuine `Loom` and this is straightforwardly bindable — no subclass has been written, that is all. Its only consumers today are `ControllableLoomTest` and five `:kuilt-quilter` integration tests. |
+| `ControllableSeam` | `kuilt-test/src/commonMain/kotlin/us/tractat/kuilt/test/ControllableLoom.kt` | `ControllableLoomConformanceTest` | `ControllableLoom.weave` mints it and the harness returns `loom to loom` (one shared in-process mesh, as with `InMemoryLoom`). Bound in #2441; the binding found #2443 — a torn seam still names every remaining remote and has dropped its own `selfId` — declared as a `collapsesPeersOnTear` gap. |
 | `FakeSeam` | `kuilt-test/src/commonMain/kotlin/us/tractat/kuilt/test/FakeSeam.kt` | none | The general-purpose test double, produced by `FakeLoom` and constructed directly in dozens of unit tests. No harness returns a `FakeLoom`, so the fake every other test leans on is itself unverified against the contract it imitates — it was fixed for a real violation of that contract in #1854. |
 | `FaultySeam` | `kuilt-test/src/commonMain/kotlin/us/tractat/kuilt/test/FaultySeam.kt` | none | Produced by `FaultyLoom`, which *is* wired into a conformance suite — but `RoomConformanceSuite`, a different, room-level one. No `SeamConformanceSuite` subclass builds a `FaultyLoom`. |
 | `FlakyLifecycleSeam` | `kuilt-test/src/commonMain/kotlin/us/tractat/kuilt/test/FlakyLifecycleSeam.kt` | none | A lifecycle-fault decorator constructed directly by `:kuilt-core` unit tests; no `Loom` produces it. The other half of the #1854 pair, and the other fixture seam that broke the contract it exists to stress. |
