@@ -77,4 +77,34 @@ class PeerIdentityRegistryTest {
         registry.unbind(idA, deviceA)
         assertEquals(setOf(idB), registry.peers)
     }
+
+    @Test
+    fun `clear drops every binding at once`() {
+        val registry = PeerIdentityRegistry<Any>()
+        registry.bind(PeerId("iPhone#aaaa"), deviceA)
+        registry.bind(PeerId("iPhone#bbbb"), deviceB)
+
+        registry.clear()
+
+        assertTrue(registry.peers.isEmpty(), "clear must leave no binding behind")
+    }
+
+    @Test
+    fun `a disconnect arriving after clear cannot republish a surviving peer`() {
+        // The #1851 shape. MCSessionLink recomputes its roster as `registry.peers + selfId` on
+        // every `.notConnected`, and `close()` disconnects the session — so MC fires one such
+        // callback per peer AFTER the seam has torn down. If the tear left the bindings in place,
+        // the first of those callbacks would republish everyone still bound onto a Torn seam.
+        val registry = PeerIdentityRegistry<Any>()
+        val idA = PeerId("iPhone#aaaa")
+        val idB = PeerId("iPhone#bbbb")
+        registry.bind(idA, deviceA)
+        registry.bind(idB, deviceB)
+
+        registry.clear() // the seam tears down
+
+        // A's post-teardown `.notConnected` lands; recomputing the roster must not resurrect B.
+        registry.unbind(idA, deviceA)
+        assertTrue(registry.peers.isEmpty(), "a stale disconnect resurrected a peer after teardown")
+    }
 }

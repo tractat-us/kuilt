@@ -214,8 +214,18 @@ internal class BridgePeerLink(
      * interleave. Issues no native call — the native handle is disposed only by
      * [closeNow]. The latched `Torn` is what the owning factory's `ActiveSeamSlot`
      * reads to free its single-session slot on the next weave.
+     *
+     * Collapses [_peers] to `{ selfId }` **before** latching `Torn` (#1816): a torn fabric can
+     * reach nobody, and a decorator folding this seam reads whatever is left here as still
+     * reachable until the member is detached — so the roster must already be collapsed by the
+     * time anyone can observe `Torn`. The collapse sits ahead of the [tornDown] CAS, as in
+     * `LinkSeam.tearDown`: it is idempotent (always `setOf(selfId)`), so running it on a losing
+     * caller costs nothing and buys the stronger post-condition that `peers` is collapsed once
+     * *any* `tearDown` has returned. Previously only the remote-drop path reached `{ selfId }`,
+     * leaving a locally-closed link advertising its pre-close roster forever (#1851).
      */
     private fun tearDown(reason: CloseReason) {
+        _peers.value = setOf(selfId)
         if (!tornDown.compareAndSet(false, true)) return
         _state.value = SeamState.Torn(reason)
         bridge.close()

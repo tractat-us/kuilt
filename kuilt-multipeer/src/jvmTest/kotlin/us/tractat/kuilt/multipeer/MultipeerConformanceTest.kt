@@ -100,14 +100,9 @@ class MultipeerConformanceTest : SeamConformanceSuite() {
     override fun capabilities(): SeamCapabilities =
         SeamCapabilities.FULL.copy(
             reportsLiveCapability = false,
-            // `BridgePeerLink.tearDown` (and `MCSessionLink.tearDown` on Apple) never touches `_peers`,
-            // so a locally-closed link reports its pre-close roster forever. The remote-drop paths do
-            // collapse. Obligation from #1816, tracked in #1851.
-            collapsesPeersOnTear = false,
         )
 
     override fun capabilityGaps(): Map<String, String> = mapOf(
         "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
-        "collapsesPeersOnTear" to "https://github.com/tractat-us/kuilt/issues/1851",
     )
 }
