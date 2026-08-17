@@ -599,10 +599,16 @@ jobs:
   #   - verifyModuleTable  — every `:kuilt-*` module still has a row in CLAUDE.md's module table
   #     (#2257). CLAUDE.md is `*.md`, so DELETING a row is a docs-only change; only the other
   #     direction (adding a module) touches `settings.gradle.kts` and reaches the heavy build.
+  #   - verifySeamHarnessCoverage — every production `Seam` implementation still has a row in
+  #     `docs/seam-harness-coverage.md`, against a conformance harness or a written opt-out
+  #     (#1871). Same asymmetry as the module table, and the reason it belongs in this job:
+  #     deleting a row — or gutting the reason that makes an opt-out visible — is a `*.md` edit
+  #     and therefore docs-only, so `check`-wiring alone would never see the one direction a
+  #     person is most likely to take when a row is in their way.
   #
   # ORTHOGONAL to docs-only, for exactly the reason the Dokka gate is: the likeliest way to
   # drift a citation — or to break the `@sample` in a module.md, or to drop a module table row —
-  # is a docs-only PR, and that path skips build-jvm/build-native entirely. All three tasks are
+  # is a docs-only PR, and that path skips build-jvm/build-native entirely. All four tasks are
   # wired into `check` (so `./gradlew build` covers them on any code change), but `check`-wiring
   # ALONE would never fire on the very class of change most likely to break them. Cheap enough to
   # always run: no compilation and no Kotlin/Native toolchain, just file-reading verification tasks.
@@ -631,8 +637,8 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: Verify doc citations, @sample links and the module table
-        run: ./gradlew verifyDocCitations verifySampleLinks verifyModuleTable
+      - name: Verify doc citations, @sample links, the module table and seam harness coverage
+        run: ./gradlew verifyDocCitations verifySampleLinks verifyModuleTable verifySeamHarnessCoverage
 
   # ── capability-probes ───────────────────────────────────────────────────────
   # The GATING half of the probe split (#1768's option 2). Runs only the
