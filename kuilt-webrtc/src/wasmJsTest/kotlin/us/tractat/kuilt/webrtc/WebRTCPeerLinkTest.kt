@@ -2,6 +2,8 @@ package us.tractat.kuilt.webrtc
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
@@ -15,6 +17,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class WebRTCPeerLinkTest {
@@ -219,6 +222,41 @@ class WebRTCPeerLinkTest {
             link.close(CloseReason.Normal)
 
             assertEquals(SeamState.Torn(CloseReason.RemoteRequested), link.state.value)
+        }
+
+    /**
+     * What #2427's guard is now unpinned on: `tear` no-ops on an already-Torn seam, so nothing in
+     * `close`'s own body reports whether it ran. The tempting "simplification" — early-returning
+     * from [WebRTCPeerLink.close] on `state is Torn`, since the tear is a no-op anyway — would leak
+     * the facade and the seam's scope on every remotely-torn link, and no other test would notice.
+     *
+     * Asserted on outcomes rather than on the call: the scope is cancelled, and the host facade's
+     * outbound spool is closed, which is observable only as the *joiner's* incoming flow completing.
+     * The joiner's own `close()` cannot have done it — it closes the other direction.
+     */
+    @Test
+    fun closeAfterARemoteTearStillTearsDownTheFacadeAndScope() =
+        runTest {
+            val (hostFac, joinerFac) = PairedFacadeFactory.pair()
+            val host = hostFac.create(IceConfig.NoServers, hostInitiated = true)
+            val joiner = joinerFac.create(IceConfig.NoServers, hostInitiated = false)
+            val link =
+                WebRTCPeerLink(
+                    selfId = PeerId("self"),
+                    remoteId = PeerId("remote"),
+                    facade = host,
+                    dispatcher = UnconfinedTestDispatcher(testScheduler),
+                )
+
+            joiner.close()
+            link.state.first { it is SeamState.Torn }
+            assertTrue(link.scope.isActive, "scope is still live after the remote tear")
+
+            link.close(CloseReason.Normal)
+
+            assertFalse(link.scope.isActive, "close must cancel the seam scope")
+            // Completes only because the host facade closed its outbound spool.
+            assertEquals(emptyList(), joiner.incomingBytes.toList())
         }
 }
 

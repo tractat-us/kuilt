@@ -201,8 +201,25 @@ internal class WebRTCPeerLink(
      * **Both** tear paths go through here: the remote data-channel close and the local [close].
      * Only the remote one used to collapse, so a locally-closed link advertised its pre-close
      * roster forever (#1853).
+     *
+     * **Single-shot: the first tear's [CloseReason] wins** (#2427). [SeamState.Torn] is documented
+     * terminal, and the reason is what a consumer branches on to tell "we shut this down" from
+     * "the peer vanished" — the reconnect decision. Both directions of overwrite were reachable
+     * before this guard, and the two callers cannot fix it between them: [close] guards on its own
+     * `closed` flag, which the remote path never sets, and the remote path fires *inside*
+     * `facade.close()` (`dataChannel.close()` → `onclose` → the deferred this seam's `init` is
+     * parked on) — that is, before `close`'s `finally { scope.cancel() }` can shut the window.
+     * The guard has to live here, on the one write both paths share.
+     *
+     * **This is a check-then-act, and its soundness is a property of the TARGET, not of this code.**
+     * `wasmJsMain` is single-threaded, and the two writes below are synchronous with no suspension
+     * point between them, so nothing can interleave between the read of [_state] and the write to
+     * it. **Do not copy this shape to a multithreaded fabric** — there it needs a lock or a CAS
+     * (`:kuilt-core`'s internal `SeamStateGate` is the lock-guarded equivalent `TieredSeam` and
+     * `RoomHubSeam` use; #1879 is the same shape on a target where it *is* a live bug).
      */
     private fun tear(reason: CloseReason) {
+        if (_state.value is SeamState.Torn) return
         _peers.value = setOf(selfId)
         _state.value = SeamState.Torn(reason)
     }
