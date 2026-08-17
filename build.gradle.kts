@@ -3563,6 +3563,459 @@ val verifyModuleTable by tasks.registering {
     }
 }
 
+// Walks Kotlin type declarations and their SUPERTYPE LISTS, for `verifySeamHarnessCoverage` below.
+// Same `object` rationale as `KotlinCodeScanner`, whose output it consumes: the caller invokes it
+// from inside `doLast`, where a script-level function reference would capture the unserializable
+// `Build_gradle` instance.
+//
+// WHY A WALK AND NOT A REGEX. A class *implements* an interface through its supertype list, and the
+// interface's name also appears in imports, KDoc, parameter types, property types and return types
+// — so `git grep "Seam"` over-reports by an order of magnitude, and `git grep ": Seam"` under-reports
+// (it misses `: Seam by inner`, a trailing-comma constructor whose `) : Seam {` sits on its own line,
+// a qualified `: us.tractat.kuilt.core.Seam`, and every INDIRECT implementor). The supertype list is
+// a bracket-structured region — from the type-name to the body brace, minus the primary constructor
+// and the type parameters — so it is walked with depth counters, the same choice
+// `RunTestTimeoutScanner` makes for an argument list and for the same reason.
+//
+// EVERY keyword occurrence produces a record, including object EXPRESSIONS (`object : Seam { … }`,
+// name `null`). That is deliberate rather than thorough: an anonymous implementation is exactly the
+// shape that would slip past a name-keyed registry, so the caller has to see it and decide, not
+// silently not-see it.
+//
+// WHAT IT DOES NOT RESOLVE, since the guard's honesty rests on this being stated: names are matched
+// as SIMPLE names, with no import/package resolution and no typealias expansion. So an `import … as`
+// alias, or a `typealias` in the supertype position, reads as an unrelated type and its implementor
+// is MISSED; and two same-named types in different packages are conflated, which can over-report. The
+// tree today contains neither shape for `Seam` (checked when this landed), the conflation direction
+// fails safe (a spurious row is visible and deletable), and the alias direction is the residual
+// false-negative this guard cannot close by construction — closing it needs a compiler front end,
+// not a source scan.
+object KotlinTypeGraph {
+
+    /**
+     * One `class`/`interface`/`object` occurrence: its [name] (`null` for an object *expression*),
+     * its 1-based [line], and the SIMPLE names in its supertype list.
+     */
+    data class Decl(val name: String?, val line: Int, val supertypes: List<String>)
+
+    // `:` is in the lookbehind so `Foo::class` is not read as a declaration. `.` for the same reason.
+    private val KEYWORD = Regex("""(?<![A-Za-z0-9_.:])(?:class|interface|object)(?![A-Za-z0-9_])""")
+
+    /** Every declaration in already-[KotlinCodeScanner.stripNonCode]-ed [code], in source order. */
+    fun declarations(code: String): List<Decl> {
+        val out = mutableListOf<Decl>()
+        for (m in KEYWORD.findAll(code)) {
+            var p = m.range.last + 1
+            while (p < code.length && code[p].isWhitespace()) p++
+            val nameEnd = identifierEnd(code, p)
+            val named = nameEnd > p
+            // `companion object : Foo` has no written name but is not anonymous — it is `Companion`.
+            val name = if (named) code.substring(p, nameEnd) else companionName(code, m.range.first)
+            val headerFrom = if (named) nameEnd else p
+            out += Decl(name, lineOf(code, m.range.first), supertypesFrom(code, headerFrom))
+        }
+        return out
+    }
+
+    /** Exclusive end of the identifier starting at [start], or [start] when there is none. */
+    private fun identifierEnd(code: String, start: Int): Int {
+        if (start >= code.length) return start
+        if (!(code[start].isLetter() || code[start] == '_')) return start
+        var i = start + 1
+        while (i < code.length && (code[i].isLetterOrDigit() || code[i] == '_')) i++
+        return i
+    }
+
+    /** `"Companion"` when the keyword at [at] is preceded by the `companion` soft keyword. */
+    private fun companionName(code: String, at: Int): String? {
+        var i = at - 1
+        while (i >= 0 && code[i].isWhitespace()) i--
+        val end = i + 1
+        while (i >= 0 && (code[i].isLetterOrDigit() || code[i] == '_')) i--
+        return if (end > i + 1 && code.substring(i + 1, end) == "companion") "Companion" else null
+    }
+
+    private fun lineOf(code: String, index: Int): Int = code.take(index).count { it == '\n' } + 1
+
+    private fun supertypesFrom(code: String, from: Int): List<String> {
+        val colon = supertypeColon(code, from) ?: return emptyList()
+        val raw = code.substring(colon + 1, supertypeListEnd(code, colon + 1))
+        // A `where` clause constrains type PARAMETERS; it is not part of the supertype list.
+        val list = WHERE.find(raw)?.let { raw.substring(0, it.range.first) } ?: raw
+        return splitTopLevel(list).mapNotNull(::headType)
+    }
+
+    private val WHERE = Regex("""(?<![A-Za-z0-9_])where(?![A-Za-z0-9_])""")
+
+    /**
+     * Index of the `:` opening the supertype list, or `null` when the declaration has none.
+     *
+     * Depth-tracked so a constructor parameter's own `:` (inside parens) and a type-parameter bound's
+     * (inside angle brackets) are both skipped — those are the two `:`s that precede the one we want.
+     */
+    private fun supertypeColon(code: String, from: Int): Int? {
+        var i = from
+        var paren = 0
+        var angle = 0
+        var brack = 0
+        while (i < code.length) {
+            when (code[i]) {
+                '(' -> paren++
+                ')' -> paren--
+                '[' -> brack++
+                ']' -> brack--
+                '<' -> if (paren == 0 && brack == 0) angle++
+                '>' -> if (paren == 0 && brack == 0 && angle > 0) angle--
+                '{' -> if (paren == 0 && brack == 0 && angle == 0) return null
+                ':' -> if (paren == 0 && brack == 0 && angle == 0) return i
+                '\n' -> if (paren == 0 && brack == 0 && angle == 0) {
+                    // A header ends at a newline unless the next line plainly continues it. `class
+                    // Foo(val a: Int)` with no body and no supertypes is the common case here.
+                    val j = nextNonSpace(code, i + 1) ?: return null
+                    if (code[j] != ':' && code[j] != '(' && code[j] != '{' && code[j] != '<') return null
+                    i = j
+                    continue
+                }
+                else -> Unit
+            }
+            i++
+        }
+        return null
+    }
+
+    /** Exclusive end of the supertype list that starts at [from] (just after its `:`). */
+    private fun supertypeListEnd(code: String, from: Int): Int {
+        var i = from
+        var paren = 0
+        var angle = 0
+        var brack = 0
+        while (i < code.length) {
+            when (code[i]) {
+                '(' -> paren++
+                ')' -> paren--
+                '[' -> brack++
+                ']' -> brack--
+                '<' -> if (paren == 0 && brack == 0) angle++
+                '>' -> if (paren == 0 && brack == 0 && angle > 0) angle--
+                '{' -> if (paren == 0 && brack == 0 && angle == 0) return i
+                '\n' -> if (paren == 0 && brack == 0 && angle == 0 && !continues(code, from, i)) return i
+                else -> Unit
+            }
+            i++
+        }
+        return code.length
+    }
+
+    /** True when the supertype list started at [from] carries on past the newline at [at]. */
+    private fun continues(code: String, from: Int, at: Int): Boolean {
+        if (code.substring(from, at).isBlank()) return true // `: \n    Seam` — nothing consumed yet
+        var k = at - 1
+        while (k >= from && (code[k] == ' ' || code[k] == '\t')) k--
+        if (k >= from && (code[k] == ',' || code[k] == ':')) return true
+        val j = nextNonSpace(code, at + 1) ?: return false
+        if (code[j] == ',' || code[j] == '{') return true
+        return code.startsWith("by ", j) || code.startsWith("where ", j)
+    }
+
+    private fun nextNonSpace(code: String, from: Int): Int? {
+        var j = from
+        while (j < code.length && code[j].isWhitespace()) j++
+        return if (j < code.length) j else null
+    }
+
+    private fun splitTopLevel(list: String): List<String> {
+        val out = mutableListOf<String>()
+        val cur = StringBuilder()
+        var depth = 0
+        for (c in list) {
+            when (c) {
+                '(', '<', '[' -> depth++
+                ')', '>', ']' -> depth--
+                else -> Unit
+            }
+            if (c == ',' && depth == 0) {
+                out += cur.toString()
+                cur.clear()
+            } else {
+                cur.append(c)
+            }
+        }
+        if (cur.isNotBlank()) out += cur.toString()
+        return out
+    }
+
+    /** `Seam` from `us.tractat.kuilt.core.Seam by inner`, `Foo` from `Foo<T>(arg)`. */
+    private fun headType(entry: String): String? {
+        val t = entry.trim()
+        var i = 0
+        while (i < t.length && (t[i].isLetterOrDigit() || t[i] == '_' || t[i] == '.')) i++
+        val qualified = t.substring(0, i)
+        return qualified.substringAfterLast('.').ifEmpty { null }
+    }
+
+    /** Every name in [seeds]' transitive subtype closure over [supertypes], seeds included. */
+    fun closureOf(seeds: Set<String>, supertypes: Map<String, Set<String>>): Set<String> {
+        val reached = seeds.toMutableSet()
+        var grew = true
+        while (grew) {
+            grew = false
+            supertypes.forEach { (name, parents) ->
+                if (name !in reached && parents.any { it in reached }) {
+                    reached += name
+                    grew = true
+                }
+            }
+        }
+        return reached
+    }
+}
+
+// Guard: every production `Seam` implementation is ENUMERATED in `docs/seam-harness-coverage.md`,
+// against either the conformance harness that drives it or an opt-out carrying a reason (#1871).
+//
+// ── WHAT THIS PROVES, AND — READ THIS FIRST — WHAT IT DOES NOT ──────────────────────────────────
+// It proves ENUMERATION COMPLETENESS: no production `Seam` implementation is absent from the
+// registry, and no registry row names a seam or a harness that no longer exists.
+//
+// It does NOT prove COVERAGE. Nothing here checks that the harness a row names actually exercises
+// the seam it is written beside. A row mapping `NearbySeam` to `TcpConformanceTest` is a lie this
+// guard passes without comment. The mapping is a human assertion, reviewed like any other prose.
+//
+// That boundary is the whole design, not a shortcoming to be fixed later. "Is seam X covered by some
+// harness?" is not statically decidable here: `SeamConformanceSuite` drives seams through a `Loom`,
+// so nothing in the source says `InMemoryLoomConformanceTest` exercises `InMemorySeam` — the harness
+// builds a `Loom`, and which `Seam` implementation falls out is a runtime fact of `weave`. A guard
+// that CLAIMED to detect coverage would be a stronger reassurance than it could pay for, and #1871
+// is precisely a report of a reassuring artifact (a 6/6-correct blast-radius matrix) that was blind.
+// Overstating this one would repeat that mistake with more ceremony.
+//
+// ── WHY THE GAP IS WORTH A GUARD AT ALL ────────────────────────────────────────────────────────
+// #1859 added a new `Seam` obligation and measured its blast radius across every harness. The
+// measurement was correct — and still missed two production `commonMain` seams (`TieredSeam`,
+// `RoomHubSeam`) that violated both halves of the obligation, because enumerating the HARNESSES
+// answers "which seams are reachable from a `Loom` that has a bound conformance subclass", not
+// "which seams exist". Those two sets differ, and nothing reported the difference. #1937 bound the
+// two missing harnesses; it did not make the difference visible. This does: the untested set is now
+// a list somebody has to look at, and adding to it costs a written reason.
+//
+// ── WHY A MARKDOWN TABLE AND NOT A `mapOf` IN THIS SCRIPT ──────────────────────────────────────
+// The registry's PAYLOAD is its opt-out list — the first honest count of how many production seams
+// no conformance harness touches. That number only does its job if a person reads it, so it lives
+// where `verifyModuleTable`'s inventory lives: in a document, as a table, diffable in a PR. A
+// `mapOf` two thousand lines into a build script is an allowlist wearing a registry's clothes.
+//
+// The reason string is MANDATORY for an opt-out, and long enough that `n/a` cannot pass. Same
+// mechanism as `forbidProductionDispatcherInTests`'s `// ALLOW-realDispatcher: <reason>`, whose
+// group-1-blank case is itself a violation: a bare name on an allowlist re-hides exactly what the
+// list exists to surface.
+//
+// ── SCOPE ──────────────────────────────────────────────────────────────────────────────────────
+// Production source only, in both KMP and plain-JVM layouts (`src/*Main/`, `src/main/`) — the mirror
+// of `forbidProductionDispatcherInTests`'s two test shapes. That deliberately INCLUDES the
+// test-support modules' `commonMain` (`:kuilt-test`, `:kuilt-session-test`, `:kuilt-conformance`):
+// `FakeSeam` and `FlakyLifecycleSeam` were fixed for a real contract violation in #1854, so a fixture
+// seam is a seam. `spike/src` is added by hand because `:spike` is only in the build under
+// `-PincludeSpike`, and a guard whose reach depends on a flag is a guard with a hole in it.
+//
+// The harness side scans TEST source for the transitive subclasses of `SeamConformanceSuite`; the two
+// ANONYMOUS harnesses (`object : SeamConformanceSuite()` inside the suite's own meta-tests) have no
+// name to cite and are correctly absent from it.
+val verifySeamHarnessCoverage by tasks.registering {
+    group = "verification"
+    description = "Fails if a production Seam implementation has no row in docs/seam-harness-coverage.md (#1871)."
+    val srcRoots = (subprojects.map { it.projectDir.resolve("src") } + rootDir.resolve("spike/src")).distinct()
+    val productionSources = kotlinSourcesIn(srcRoots, listOf("*Main/**/*.kt", "main/**/*.kt"))
+    val harnessSources = kotlinSourcesIn(srcRoots, listOf("*Test/**/*.kt", "test/**/*.kt"))
+    val registryFile = rootDir.resolve("docs/seam-harness-coverage.md")
+    inputs.files(productionSources).withPropertyName("productionSources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.files(harnessSources).withPropertyName("harnessSources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(registryFile).withPropertyName("registry")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // See "Guard plumbing" above: the stamp is what makes UP-TO-DATE possible (#1827). The verdict is
+    // a function of file NAMES (registry rows are keyed by path) and file CONTENTS only, both of which
+    // a RELATIVE fingerprint captures — so a cache hit genuinely means "this exact tree was verified".
+    val stamp = layout.buildDirectory.file("verification/verify-seam-harness-coverage.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    val rootPath = rootDir
+    doLast {
+        val heading = "## Registry"
+        // A row: | `TypeName` | `path/to/Decl.kt` | `Harness`[, `Harness`…] or none | reason |
+        val row = Regex(
+            """^\|\s*`([A-Za-z_][A-Za-z0-9_]*)`\s*\|\s*`([^`|]+)`\s*\|\s*([^|]*?)\s*\|\s*(.*?)\s*\|\s*$""",
+        )
+        val harnessCell = Regex("""`([A-Za-z_][A-Za-z0-9_]*)`""")
+        // Long enough that `n/a`, `TODO`, `later` and a bare `-` cannot pass for a reason.
+        val minReason = 20
+
+        // ── The tree ────────────────────────────────────────────────────────────────────────────
+        val supertypes = mutableMapOf<String, MutableSet<String>>()
+        val sites = linkedMapOf<String, MutableList<Int>>() // "path#Name" -> declaration line(s)
+        val siteName = mutableMapOf<String, String>()
+        val anonymous = mutableListOf<Triple<String, Int, List<String>>>()
+        productionSources.files.sortedBy { it.invariantSeparatorsPath }.forEach { file ->
+            val rel = file.relativeTo(rootPath).invariantSeparatorsPath
+            KotlinTypeGraph.declarations(KotlinCodeScanner.stripNonCode(file.readText())).forEach { d ->
+                if (d.name == null) {
+                    anonymous += Triple(rel, d.line, d.supertypes)
+                    return@forEach
+                }
+                supertypes.getOrPut(d.name) { mutableSetOf() } += d.supertypes
+                val key = "$rel#${d.name}"
+                sites.getOrPut(key) { mutableListOf() } += d.line
+                siteName[key] = d.name
+            }
+        }
+        val harnessSupertypes = supertypes.mapValuesTo(mutableMapOf()) { it.value.toMutableSet() }
+        val harnesses = mutableSetOf<String>()
+        harnessSources.files.sortedBy { it.invariantSeparatorsPath }.forEach { file ->
+            KotlinTypeGraph.declarations(KotlinCodeScanner.stripNonCode(file.readText())).forEach { d ->
+                if (d.name != null) harnessSupertypes.getOrPut(d.name) { mutableSetOf() } += d.supertypes
+            }
+        }
+        val harnessNames = KotlinTypeGraph.closureOf(setOf("SeamConformanceSuite"), harnessSupertypes)
+        harnessSources.files.sortedBy { it.invariantSeparatorsPath }.forEach { file ->
+            KotlinTypeGraph.declarations(KotlinCodeScanner.stripNonCode(file.readText())).forEach { d ->
+                if (d.name != null && d.name != "SeamConformanceSuite" && d.name in harnessNames) {
+                    harnesses += d.name
+                }
+            }
+        }
+
+        val seamNames = KotlinTypeGraph.closureOf(setOf("Seam"), supertypes)
+        // `Seam` itself is the contract, not an implementation of it.
+        val scanned = sites.keys.filter { siteName.getValue(it) != "Seam" && siteName.getValue(it) in seamNames }
+            .sorted()
+        val failures = mutableListOf<String>()
+
+        // ── An unnameable implementation cannot carry a row ─────────────────────────────────────
+        val anonymousSeams = anonymous.filter { (_, _, sup) -> sup.any { it in seamNames } }
+        if (anonymousSeams.isNotEmpty()) {
+            failures += "Anonymous `object : Seam` in PRODUCTION source. The registry is keyed by " +
+                "`<path>#<TypeName>`, so an unnamed implementation cannot carry a row — and being " +
+                "unregisterable is exactly how it would slip past this guard (#1871). Give it a name:" +
+                anonymousSeams.joinToString("") { (path, line, sup) -> "\n    $path:$line  : ${sup.joinToString(", ")}" }
+        }
+        val ambiguous = scanned.filter { sites.getValue(it).size > 1 }
+        if (ambiguous.isNotEmpty()) {
+            failures += "Two `Seam` implementations share a simple name in ONE file, so `<path>#<Type>` " +
+                "cannot identify either (#1871). Rename one:" +
+                ambiguous.joinToString("") { "\n    $it  lines ${sites.getValue(it).joinToString(", ")}" }
+        }
+
+        // ── The registry ────────────────────────────────────────────────────────────────────────
+        if (!registryFile.isFile) {
+            error(
+                "$registryFile is missing. It is the registry of every production `Seam` implementation " +
+                    "and the conformance harness (or written opt-out) each one has — see #1871.",
+            )
+        }
+        val lines = registryFile.readLines()
+        val start = lines.indexOfFirst { it.trimEnd() == heading }
+        if (start < 0) {
+            error(
+                "${registryFile.relativeTo(rootPath)} has no \"$heading\" section, so this guard cannot " +
+                    "tell a registry row from an example in the prose and every verdict it could give " +
+                    "would be meaningless (#1871). If the section was renamed, rename it here too.",
+            )
+        }
+        val relativeEnd = lines.subList(start + 1, lines.size).indexOfFirst { it.startsWith("## ") }
+        val end = if (relativeEnd < 0) lines.size else start + 1 + relativeEnd
+        // Fenced blocks are illustration, not registry — the same false green `verifyModuleTable`
+        // closes: a ```markdown block showing the row format would otherwise satisfy the guard.
+        var fenced = false
+        val rows = mutableListOf<List<String>>() // type, path, harnessCell, reason
+        lines.subList(start, end).forEach { line ->
+            when {
+                line.trimStart().startsWith("```") -> fenced = !fenced
+                fenced -> Unit
+                else -> row.find(line)?.let { rows += it.groupValues.drop(1) }
+            }
+        }
+        val listed = rows.associateBy { "${it[1]}#${it[0]}" }
+        val duplicated = rows.groupBy { "${it[1]}#${it[0]}" }.filterValues { it.size > 1 }.keys.sorted()
+        if (duplicated.isNotEmpty()) {
+            failures += "Duplicate registry row(s) — one seam, one row:\n    " + duplicated.joinToString("\n    ")
+        }
+
+        val missing = scanned.filterNot { it in listed }
+        if (missing.isNotEmpty()) {
+            failures += "Production `Seam` implementation(s) with NO row in " +
+                "${registryFile.relativeTo(rootPath)} (#1871). Nothing else in this build would ever " +
+                "report that they are untested — that silence is the defect this guard exists to end:" +
+                missing.joinToString("") { key ->
+                    "\n    ${key.substringBefore('#')}:${sites.getValue(key).first()}  " +
+                        key.substringAfter('#')
+                } +
+                "\n  THE FIX is one row apiece under \"$heading\", naming EITHER the " +
+                "`SeamConformanceSuite` subclass that drives it — via the `Loom` its `newLoomPair` " +
+                "returns — OR `none` plus a written reason of at least $minReason characters saying " +
+                "why no harness reaches it. A reason is mandatory: a bare allowlist re-hides the very " +
+                "thing this list exists to show."
+        }
+        val dangling = listed.keys.filterNot { it in scanned }.sorted()
+        if (dangling.isNotEmpty()) {
+            failures += "Registry row(s) naming a seam this build does not have — a row describing " +
+                "code that no longer exists is worse than no row, because a reader trusts it. Delete " +
+                "it, or fix the path/name if it moved:\n    " + dangling.joinToString("\n    ")
+        }
+
+        rows.forEach { (type, path, cell, reason) ->
+            val named = harnessCell.findAll(cell).map { it.groupValues[1] }.toList()
+            // Required on EVERY row, not just an opt-out. On an opt-out it is the deliverable —
+            // the untested set is only useful if each entry says why. On a mapped row it is the
+            // only thing a reviewer can falsify: this guard cannot tell whether the named harness
+            // really weaves that seam, so the written path is what makes the claim checkable at all.
+            if (reason.length < minReason) {
+                failures += "`$path#$type` has no usable reason (\"$reason\"). Write at least " +
+                    "$minReason characters saying how the named harness reaches this seam — or, for " +
+                    "`none`, why nothing does. A bare name on a list re-hides what the list is for."
+            }
+            when {
+                cell.trim() == "none" -> Unit
+                named.isEmpty() ->
+                    failures += "`$path#$type` has an unreadable harness cell (\"$cell\"): write " +
+                        "`` `HarnessClassName` `` (comma-separated if several) or the bare word `none`."
+                else -> named.filterNot { it in harnesses }.forEach {
+                    failures += "`$path#$type` names harness `$it`, which is not a " +
+                        "`SeamConformanceSuite` subclass in this tree. Renamed, deleted, or a typo — " +
+                        "either way the row now asserts coverage nothing provides."
+                }
+            }
+        }
+        // A harness cited by no row means the mapping has drifted: every named subclass drives SOME
+        // seam through the suite, so one attributed nowhere is a row that was never updated. This is
+        // the closest thing here to a coverage check, and it is still only about the NAMES.
+        val uncited = (harnesses - rows.flatMap { harnessCell.findAll(it[2]).map { m -> m.groupValues[1] } }.toSet())
+            .sorted()
+        if (uncited.isNotEmpty()) {
+            failures += "`SeamConformanceSuite` subclass(es) cited by no registry row. Each one drives " +
+                "some seam through the suite, so a harness attributed to nothing means the mapping has " +
+                "drifted — find the seam it weaves and put it in that seam's row:\n    " +
+                uncited.joinToString("\n    ")
+        }
+
+        if (failures.isNotEmpty()) {
+            error(
+                failures.joinToString("\n\n") + "\n\nNOTE — what a GREEN here does and does not mean: it " +
+                    "means every production `Seam` implementation is ENUMERATED, and that no row names " +
+                    "a seam or harness that has gone away. It does NOT mean the harness each row names " +
+                    "actually exercises that seam; that mapping is a human assertion and is not checked.",
+            )
+        }
+        val optedOut = rows.count { it[2].trim() == "none" }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText(
+            "ok — ${scanned.size} production Seam implementation(s) enumerated; " +
+                "${scanned.size - optedOut} mapped to a harness, $optedOut opted out with a reason; " +
+                "${harnesses.size} named SeamConformanceSuite subclass(es)\n",
+        )
+    }
+}
+
 // Run the guards as part of `check` (hence `build`, hence CI) in every module.
 allprojects {
     tasks.matching { it.name == "check" }.configureEach {
@@ -3576,6 +4029,7 @@ allprojects {
         dependsOn(rootProject.tasks.named("verifySampleLinks"))
         dependsOn(rootProject.tasks.named("verifySamplesAreRun"))
         dependsOn(rootProject.tasks.named("verifyModuleTable"))
+        dependsOn(rootProject.tasks.named("verifySeamHarnessCoverage"))
         dependsOn(rootProject.tasks.named("forbidRunCatchingCancellableUnderNonCancellable"))
         dependsOn(rootProject.tasks.named("forbidCancellationRethrowAroundBound"))
         dependsOn(rootProject.tasks.named("forbidBareRunCatching"))
