@@ -405,6 +405,15 @@ class InMemoryLoomTest {
             }
         }
 
+    /**
+     * The departure is observed from the two places that can see it, and they say different things.
+     *
+     * The **survivor** (and the shared registry behind it) must stop advertising the departed peer —
+     * that is what "removed from the peers set" means here. The **closed seam itself** must not: its
+     * roster collapses to exactly `{ selfId }` (`Seam.peers`, #1816). Until #1849 this asserted
+     * `assertFalse(b.selfId in b.peers.value)` — i.e. that the torn seam dropped its own id, which is
+     * the collapse going *too far* and one of the two deviations `collapsesPeersOnTear` names.
+     */
     @Test
     fun `closed peer is removed from peers set atomically`() =
         runTest {
@@ -415,7 +424,8 @@ class InMemoryLoomTest {
             b.close()
 
             assertFalse(b.selfId in a.peers.value)
-            assertFalse(b.selfId in b.peers.value)
+            assertFalse(b.selfId in factory.peers.value)
+            assertEquals(setOf(b.selfId), b.peers.value)
         }
 
     // ── Concurrency ──────────────────────────────────────────────────────────

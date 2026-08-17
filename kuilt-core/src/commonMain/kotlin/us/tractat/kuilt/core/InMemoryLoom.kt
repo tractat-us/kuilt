@@ -9,6 +9,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import us.tractat.kuilt.core.SeamState.Torn
 import us.tractat.kuilt.core.SeamState.Woven
+import us.tractat.kuilt.core.internal.LatchingStateFlow
 
 /**
  * In-memory implementation of [Loom] for use in tests and
@@ -167,10 +168,25 @@ private class InMemorySeam(
     policy: DeliveryPolicy,
 ) : Seam {
     private val spool = Spool<Swatch>(policy)
-    private var closed = false
+
+    // Monotonic: flipped exactly once, by close(). It is a StateFlow rather than a plain `var`
+    // because `peers` below latches on it — and because an atomic compareAndSet is what makes
+    // close() idempotent under a multi-threaded dispatcher, which a read-then-write was not.
+    private val closed = MutableStateFlow(false)
     private var sequenceCounter = 0L
 
-    override val peers: StateFlow<Set<PeerId>> = factory.peers
+    /**
+     * The shared mesh registry while this seam is live, and exactly `{ selfId }` once it has closed
+     * (#1849, obligation from #1816). A torn fabric can reach nobody, so a decorator folding this
+     * seam must not read a remote peer out of it, and `selfId` must not go missing either — which
+     * it would if this stayed the raw registry, since `close()` removes this peer from it.
+     *
+     * A [LatchingStateFlow] rather than a [us.tractat.kuilt.core.internal.MappedStateFlow]: the
+     * registry is **shared**, so it keeps changing after this seam tears, and a constant transform
+     * over it would re-publish `{ selfId }` on every one of those changes. See that class's KDoc.
+     */
+    override val peers: StateFlow<Set<PeerId>> =
+        LatchingStateFlow(source = factory.peers, latched = closed, terminal = setOf(selfId))
 
     // In-memory fabric is immediately live — no async link establishment.
     private val _state = MutableStateFlow<SeamState>(Woven)
@@ -194,8 +210,11 @@ private class InMemorySeam(
     }
 
     override suspend fun close(reason: CloseReason) {
-        if (closed) return
-        closed = true
+        // Publish the roster collapse FIRST. `peers` latches the instant this flips, so a consumer
+        // woken by the terminal `Torn` below already reads `{ selfId }` and can never observe the
+        // pre-close roster through a torn seam (#1816). The compareAndSet also makes the
+        // close-once guard atomic rather than a read-then-write race.
+        if (!closed.compareAndSet(expect = false, update = true)) return
         _state.value = Torn(reason)
         factory.remove(selfId)
         spool.close()
@@ -204,7 +223,7 @@ private class InMemorySeam(
     internal fun nextSequence(): Long = ++sequenceCounter
 
     internal suspend fun deliver(frame: Swatch) {
-        if (!closed) spool.deliver(frame)
+        if (!closed.value) spool.deliver(frame)
     }
 
     private fun checkNotClosed() {
