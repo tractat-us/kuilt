@@ -7,6 +7,7 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
@@ -32,7 +33,7 @@ class ManagedSeamSelfSendTest {
 
     @Test
     fun selfSendIsRefusedAgainstTheMANAGEDIdEvenThoughTheBackingSeamHasAnother() =
-        runTest(UnconfinedTestDispatcher()) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val stableId = PeerId("stable-client")
             val managed = ManagedSeam(scope = backgroundScope, selfId = stableId)
             // Read BEFORE the swap: see the note on `peers` below.
@@ -80,7 +81,7 @@ class ManagedSeamSelfSendTest {
      */
     @Test
     fun selfSendIsRefusedBeforeTheFirstSwapWhereEveryOtherSendIsSilentlyDropped() =
-        runTest(UnconfinedTestDispatcher()) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val stableId = PeerId("stable-client")
             val managed = ManagedSeam(scope = backgroundScope, selfId = stableId)
 
