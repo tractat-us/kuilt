@@ -8,10 +8,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * The [Seam.peers] collapse obligation for the **reference fabric**, [InMemoryLoom] (#1849).
@@ -241,6 +243,40 @@ class InMemorySeamPeersCollapseOnTearTest {
         )
 
         collector.cancel()
+    }
+
+    /**
+     * The **other** arm of the conditional terminal emission, and the one whose breakage HANGS.
+     *
+     * Eliding the terminal emission when it matches the last value handed out has a companion
+     * obligation: a collector that subscribes *after* the latch was handed nothing at all (the
+     * latched reading is dropped before it), so for that collector `terminal` is not a repeat — it
+     * is the initial value every `StateFlow` subscriber is owed. The plausible wrong spelling of
+     * the fix, `lastEmitted != null && lastEmitted != terminal`, satisfies every other test in this
+     * file and leaves a late subscriber suspended forever.
+     *
+     * Bounded (in virtual time, over an in-memory fabric) so that failure surfaces as this test
+     * rather than as `runTest`'s wedge backstop with nothing naming the cause.
+     */
+    @Test
+    fun aCollectorAttachedAfterTheTearIsStillHandedTheCollapsedRoster() = runTest {
+        val loom = InMemoryLoom()
+        val host = loom.host(Pattern("host"))
+        val joiner = loom.join(InMemoryTag("join"))
+        host.peers.first { it.size == 2 }
+
+        host.close()
+
+        val handedToALateSubscriber = withTimeout(10.seconds) { host.peers.first() }
+        assertEquals(
+            setOf(host.selfId),
+            handedToALateSubscriber,
+            "subscribing to a StateFlow always hands over the current value, and a torn seam's is " +
+                "{ selfId } — a view that treats the terminal emission as a repeat for a collector it " +
+                "has handed NOTHING leaves that collector suspended forever",
+        )
+
+        joiner.close()
     }
 
     @Test
