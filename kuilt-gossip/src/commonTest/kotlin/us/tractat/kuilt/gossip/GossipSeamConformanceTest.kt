@@ -50,17 +50,12 @@ class GossipSeamConformanceTest : SeamConformanceSuite() {
         securesTransport = false,
         meshDelivery = false,
         reportsLiveCapability = false,
-        // Inherited, not the overlay's own: `GossipSeam.peers` delegates to the base seam, and this
-        // harness's base is an `InMemoryLoom`, whose closed seam reports `{ theOtherPeer }` (#1849).
-        // Fixing #1849 fixes this row; no gossip-side change is expected. Obligation from #1816.
-        collapsesPeersOnTear = false,
     )
 
     override fun capabilityGaps(): Map<String, String> = mapOf(
         "securesTransport" to CapabilityGaps.SECURES_TRANSPORT,
         "meshDelivery" to CapabilityGaps.MESH_DELIVERY,
         "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
-        "collapsesPeersOnTear" to "https://github.com/tractat-us/kuilt/issues/1849",
     )
 }
 
