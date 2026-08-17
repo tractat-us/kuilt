@@ -78,11 +78,14 @@ class MultipeerAppleConformanceTest : SeamConformanceSuite() {
      * [us.tractat.kuilt.core.Seam.capability], so it sits on the honest
      * [us.tractat.kuilt.core.FabricAvailability.Unknown] floor (#1712/#1542).
      *
-     * `throwsOnSendToTorn = false` is a **fabric** gap and a real one, found by this binding: a
-     * torn `MCSessionLink` warn-drops a `broadcast` and reports `PeerNotConnected` for an addressed
-     * send, where `BridgePeerLink` has opened both sends with `check(state !is Torn)` since #1390.
-     * The Apple half never got that fix. Tracked by #2444, kept out of this PR because turning a
-     * warn-drop into a throw on a shipping transport wants its own review.
+     * `throwsOnSendToTorn` is **not** declared here any more: #2444 gave `MCSessionLink` the
+     * `check(state !is Torn)` guard `BridgePeerLink` has carried since #1390, so the link now
+     * satisfies the obligation and inherits `SeamCapabilities.FULL`'s `true`. Note what this arm of
+     * the suite can and cannot see on this fabric: `PeerNotConnected` **is** an
+     * `IllegalStateException`, so the obligation's `sendTo` assertion would be satisfied by the
+     * pre-fix behaviour too. [MCSessionLinkTornSendTest] is what actually pins the addressed path,
+     * by asserting the refusal is the torn guard rather than a missing-peer report, and by re-arming
+     * the bus so a send would otherwise succeed.
      *
      * `meshDelivery = true` is the fabric's own topology — MC is a true N≤8 peer-to-peer mesh with
      * no relay hop, the same claim `MultipeerConformanceTest` makes. Evidence: the fabric's
@@ -97,13 +100,11 @@ class MultipeerAppleConformanceTest : SeamConformanceSuite() {
     override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL.copy(
         securesTransport = false,
         reportsLiveCapability = false,
-        throwsOnSendToTorn = false,
     )
 
     override fun capabilityGaps(): Map<String, String> = mapOf(
         "securesTransport" to CapabilityGaps.SECURES_TRANSPORT,
         "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
-        "throwsOnSendToTorn" to "https://github.com/tractat-us/kuilt/issues/2444",
     )
 
     /**
