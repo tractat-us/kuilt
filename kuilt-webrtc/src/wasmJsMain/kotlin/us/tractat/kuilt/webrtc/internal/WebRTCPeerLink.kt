@@ -111,8 +111,7 @@ internal class WebRTCPeerLink(
         scope.launch {
             facade.awaitDataChannelClose()
             log.debug { "Seam data channel closed by remote self=$selfId remote=$remoteId" }
-            _peers.value = setOf(selfId)
-            _state.value = SeamState.Torn(CloseReason.RemoteRequested)
+            tear(CloseReason.RemoteRequested)
         }
         // UNDISPATCHED, and specifically for a StateFlow reason: subscribing synchronously means
         // the observer's CURRENT value is folded in before construction returns, so a seam woven
@@ -187,11 +186,28 @@ internal class WebRTCPeerLink(
      */
     private suspend fun resolvedRoster(): Set<PeerId> = setOf(selfId, senderIdDeferred.await())
 
+    /**
+     * Latch [SeamState.Torn], collapsing the roster to `{ selfId }` **first**.
+     *
+     * The order is the obligation, not an implementation detail (#1816 / #1853): a torn fabric can
+     * reach nobody, and a decorator folding this seam ([us.tractat.kuilt.core.composite.CompositeSeam])
+     * reads whatever is left in [peers] as still-reachable until the member is detached — so the
+     * remotes must be gone by the instant [state] latches Torn, not one write later.
+     *
+     * **Both** tear paths go through here: the remote data-channel close and the local [close].
+     * Only the remote one used to collapse, so a locally-closed link advertised its pre-close
+     * roster forever (#1853).
+     */
+    private fun tear(reason: CloseReason) {
+        _peers.value = setOf(selfId)
+        _state.value = SeamState.Torn(reason)
+    }
+
     override suspend fun close(reason: CloseReason) {
         if (closed) return
         closed = true
         log.debug { "Seam closing self=$selfId remote=$remoteId reason=$reason" }
-        _state.value = SeamState.Torn(reason)
+        tear(reason)
         try {
             facade.close()
         } finally {

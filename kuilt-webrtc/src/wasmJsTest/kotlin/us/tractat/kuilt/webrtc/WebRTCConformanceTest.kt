@@ -88,16 +88,13 @@ class WebRTCConformanceTest : SeamConformanceSuite() {
      * so this fabric is off the [us.tractat.kuilt.core.FabricAvailability.Unknown] floor. What this
      * harness proves is the seam's *reaction* to a signal; that a real `RTCPeerConnection` actually
      * *emits* one is provable only against real ICE.
+     *
+     * `collapsesPeersOnTear = true` (#1853): **both** tear paths collapse the roster to `{ selfId }`
+     * *before* latching [us.tractat.kuilt.core.SeamState.Torn] — the remote data-channel close and
+     * the local [us.tractat.kuilt.core.Seam.close] share one teardown. Until #1853 only the remote
+     * path did, so a locally-closed link reported its pre-close roster forever.
      */
-    override fun capabilities(): SeamCapabilities =
-        SeamCapabilities.FULL.copy(
-            // `WebRTCPeerLink.close()` does not collapse `_peers`, so a locally-closed data channel
-            // reports its pre-close roster forever. The remote-tear path already collapses correctly,
-            // so the fix is to hoist it. Obligation from #1816, tracked in #1853.
-            collapsesPeersOnTear = false,
-        )
+    override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL
 
-    override fun capabilityGaps(): Map<String, String> = mapOf(
-        "collapsesPeersOnTear" to "https://github.com/tractat-us/kuilt/issues/1853",
-    )
+    override fun capabilityGaps(): Map<String, String> = emptyMap()
 }
