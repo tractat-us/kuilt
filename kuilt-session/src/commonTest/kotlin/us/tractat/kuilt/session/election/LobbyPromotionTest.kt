@@ -153,10 +153,22 @@ class LobbyPromotionTest {
         }
 
     @Test
-    fun `a transport tear with the roster intact still yields Torn`() =
+    fun `a transport tear yields Torn carrying the seam's own CloseReason`() =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
-            // The other collapse dimension: `peers` never shrinks (self is NOT promoted) but the
-            // seam latches Torn. Proves Torn is not reachable only through the drain path.
+            // The other collapse dimension: the seam latches Torn rather than the roster quietly
+            // draining under a still-Woven seam (the sibling above). What discriminates the two is
+            // the REASON — a drain has none of its own and reports `Unreachable`, while a tear
+            // propagates the seam's own `RemoteRequested`. `collapseReason()` derives it from
+            // `state`, so only a genuinely-torn seam can produce anything but `Unreachable` here.
+            //
+            // This assertion used to read `setOf(self, hostId)` — "peers never shrinks" — and that
+            // was the discriminator for *which watcher* fired, drain or torn. It cannot be, and was
+            // only ever true against a non-conforming fake: `Seam.peers` collapses a Torn seam's
+            // roster to exactly `{ selfId }`, so against every real seam a transport tear arms BOTH
+            // of `guardElection`'s dimensions at once and neither the roster nor the reason says
+            // which won. `FakeSeam.tear` froze its roster instead of collapsing (#1854), which is
+            // what made the old assertion pass. The watcher-level isolation is not recoverable from
+            // a conforming seam and is NOT claimed here; what survives is the reason, above.
             val self = PeerId("peer-z")
             val hostId = PeerId("peer-a")
             val seam = FakeSeam(selfId = self, initialPeers = setOf(self, hostId))
@@ -171,7 +183,8 @@ class LobbyPromotionTest {
             assertAll(
                 { assertIs<ElectionOutcome.Torn>(result) },
                 { assertEquals(CloseReason.RemoteRequested, (result as ElectionOutcome.Torn).reason) },
-                { assertEquals(setOf(self, hostId), seam.peers.value) },
+                { assertIs<SeamState.Torn>(seam.state.value, "the tear must have latched — not a bare drain") },
+                { assertEquals(setOf(self), seam.peers.value, "a Torn seam's roster is exactly { selfId }") },
             )
         }
 
