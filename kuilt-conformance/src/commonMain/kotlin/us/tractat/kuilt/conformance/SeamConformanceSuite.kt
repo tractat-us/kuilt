@@ -927,6 +927,19 @@ public abstract class SeamConformanceSuite {
     // Gated on `throwsOnSendToTorn` for a future fabric that can't honour it; the Multipeer JVM
     // bridge and the Gossip overlay's `broadcast` were the historical non-conformers (#1390),
     // since fixed — every fabric in-tree passes this today.
+    //
+    // That last clause used to be worth exactly as much as the harness coverage behind it, and it
+    // was wrong for months (#2444): #1390 fixed the Multipeer *JVM* bridge, and `MultipeerConformanceTest`
+    // is a `jvmTest`, so the Apple `MCSessionLink` that actually ships to iPhones was never reached
+    // by any harness and never got the guard. It read "every fabric passes" while meaning "every
+    // fabric a harness can see passes". Binding the Apple link (#2441) is what made the claim
+    // testable, and #2444 is what made it true again — the #1871 shape.
+    //
+    // Note also what this obligation cannot distinguish on a fabric whose `sendTo` reports an absent
+    // addressee with `PeerNotConnected`: that type IS an `IllegalStateException`, so the second
+    // assertion below passes on a seam that blames the peer for its own death. Where the two are
+    // worth telling apart, a fabric-local test has to assert the identity of the throwable
+    // (`MCSessionLinkTornSendTest` is the in-tree example).
 
     @Test
     public fun sendOnTornSeamThrows(): TestResult =
