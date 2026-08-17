@@ -386,10 +386,16 @@ public abstract class SeamConformanceSuite {
      * Assert `selfId ∈ peers` on a live (non-[SeamState.Torn]) [seam] for the whole test. Because `peers`
      * is a [kotlinx.coroutines.flow.StateFlow], this observes the latest value at each resumption, not
      * every write — a *persistent* live-seam self-eviction is reliably caught; a transient drop overwritten
-     * before the collector resumes may be missed (see the class KDoc). Scoped to non-Torn: a Torn seam has
-     * left the session, and a fabric whose `peers` is a shared mesh-registry view (e.g. the reference
-     * `InMemoryLoom`) legitimately drops the departed member — `close()` there latches Torn *before*
-     * removing `selfId` from the shared roster, so the scope is exact, not a fudge.
+     * before the collector resumes may be missed (see the class KDoc).
+     *
+     * **Scoped to non-Torn, and that scope is now narrower than it looks.** A Torn seam has left the
+     * session, so this monitor says nothing about it — but [peersCollapseToSelfIdWhenTorn] does, and it
+     * requires the *stronger* thing: a torn seam's roster is exactly `{ selfId }`, so `selfId` is in it
+     * there too. What the scope actually buys is only that a fabric whose `peers` is a shared
+     * mesh-registry view may drop the departed member from **other** seams' rosters, and that the two
+     * obligations do not fight over the instant of the tear. (Until #1849 the reference `InMemoryLoom`
+     * dropped `selfId` from its own torn seam's roster and this scope was what tolerated it; it no
+     * longer does, and every fabric declaring `collapsesPeersOnTear = false` is a tracked bug.)
      */
     private suspend fun monitorSelfAlwaysInPeers(seam: Seam) {
         seam.peers.collect { peers ->
