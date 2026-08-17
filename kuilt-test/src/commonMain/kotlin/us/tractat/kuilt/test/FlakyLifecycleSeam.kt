@@ -54,8 +54,9 @@ import kotlin.time.Duration
  *
  * ## Behaviour on [tear]
  *
- * `state → Torn(reason)` (terminal), [incoming] completes, subsequent sends
- * throw [IllegalStateException].
+ * `state → Torn(reason)` (terminal), [peers] collapses to `{selfId}` (published
+ * *before* the latch), [incoming] completes, subsequent sends throw
+ * [IllegalStateException].
  *
  * ## Composition
  *
@@ -187,7 +188,11 @@ public class FlakyLifecycleSeam(
     public fun tear(reason: CloseReason = CloseReason.Unreachable) {
         val next = onTear(_state.value, reason)
         if (next === _state.value) return
-        _peers.value = emptySet()
+        // `{ selfId }`, never `emptySet()`: `Seam.peers` always includes this peer's own id, so a Torn
+        // roster collapses to exactly `{ selfId }` — the same collapse [enterWeaving] already performs.
+        // Written before `_state` so a consumer woken by the terminal `Torn` cannot read the pre-tear
+        // roster (#1854).
+        _peers.value = setOf(selfId)
         _state.value = next
         scope.launch { delegate.close(reason) }
     }

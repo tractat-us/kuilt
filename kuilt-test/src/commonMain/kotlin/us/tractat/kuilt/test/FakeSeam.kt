@@ -107,13 +107,23 @@ public class FakeSeam(
     }
 
     /**
-     * Transition state to [SeamState.Torn] with [reason], completing [incoming] — matching every
-     * real seam (`NwSeam.latchTorn`, `MeshSeam.tearDown`, `InMemorySeam.close`), all of which close
-     * the spool on tear so a consumer that relies on `incoming` completing (or wrongly processes
-     * frames after Torn) can't pass against this fake but fail in production. Idempotent.
+     * Transition state to [SeamState.Torn] with [reason], collapsing [peers] to `{ selfId }` and
+     * completing [incoming]. Idempotent.
+     *
+     * **The spool:** every real seam (`NwSeam.latchTorn`, `MeshSeam.tearDown`, `InMemorySeam.close`)
+     * closes the spool on tear, so a consumer that relies on `incoming` completing (or wrongly
+     * processes frames after Torn) can't pass against this fake but fail in production.
+     *
+     * **The roster:** [Seam.peers] requires a `Torn` seam's roster to be exactly `{ selfId }`,
+     * published *before* the terminal latch — hence the `_peers` write ahead of `_state` below. Read
+     * the seams named above as a model for the **spool dimension only**: they do not agree on the
+     * roster one, and `InMemorySeam.close` in particular is tracked by #1849. The obligation this
+     * `tear` honours comes from [Seam.peers] and `SeamConformanceSuite.peersCollapseToSelfIdWhenTorn`,
+     * not from any one of them; it is pinned here by `TestFakePeersCollapseOnTearTest` (#1854).
      */
     public fun tear(reason: CloseReason = CloseReason.Normal) {
         if (_state.value is SeamState.Torn) return
+        _peers.value = setOf(selfId)
         _state.value = SeamState.Torn(reason)
         spool.close()
     }
