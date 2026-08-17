@@ -49,6 +49,14 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.cluster.ManagedSeam")
  * **not** propagate a backing seam's [SeamState.Torn] to [incoming]: the whole
  * point is that the node survives the tear.
  *
+ * ## The published roster is re-attributed, not copied
+ *
+ * [peers] is the backing seam's **remotes** under **this** seam's identity — its own id swapped in
+ * for the backing seam's. Copying the backing roster through would breach both halves of the
+ * [Seam.peers] contract at once: it drops [selfId], which that property says the set always
+ * contains, and it publishes the backing seam's id, which nothing here can address. See
+ * `reattributed` for the full argument (#2436).
+ *
  * ## Thread safety
  *
  * The current backing seam pointer is guarded by an atomicfu reentrant lock; the
@@ -113,8 +121,8 @@ internal class ManagedSeam(
      *
      * Cancels the current relay coroutine **first** (preserving single-collection —
      * no two collectors of a backing seam ever overlap), installs [newSeam],
-     * refreshes [peers] from it, and starts a fresh relay coroutine. The transport
-     * observing [incoming]/[peers] continues without interruption.
+     * refreshes [peers] from it — its remotes, under this seam's identity — and starts a fresh
+     * relay coroutine. The transport observing [incoming]/[peers] continues without interruption.
      *
      * Must not be called concurrently with another [swap].
      */
@@ -124,16 +132,40 @@ internal class ManagedSeam(
         relayJob.value?.cancel()
         lock.withLock {
             current = newSeam
-            _peers.value = newSeam.peers.value
+            _peers.value = reattributed(newSeam.peers.value, newSeam.selfId)
         }
         startRelay(newSeam)
     }
+
+    /**
+     * The roster this seam publishes for a backing seam: that seam's **remotes**, under **this**
+     * seam's identity.
+     *
+     * The two edits are one idea seen from either end of the swap. Adding [selfId] is
+     * [Seam.peers]' invariant — *"Live set of peers currently connected. Includes `selfId`"* — and
+     * this seam's id is a constructor parameter, so a backing roster naming the fabric's own choice
+     * of id does not contain it. Dropping [backingSelfId] is the same property's addressability
+     * pairing: *"A peer in `peers` must be addressable by [sendTo] … an implementation that
+     * publishes a peer it has no route to is the bug, not the caller that believed it."* Nothing can
+     * address the backing seam's own id through here — [sendTo] would hand it to that seam, which
+     * refuses its own id, and the refusal is swallowed into a debug line.
+     *
+     * The two ids coincide in the intended `clusterClient` wiring — the loom's `selfPeerId` is
+     * pinned to `clientNodeId` so the wire identity survives a failover — and there this is exactly
+     * the old copy-through. Where they differ it is the difference between a roster with one
+     * upstream server in it and one `RoutedRaftTransport.playerServerHop` reads as a mis-wired
+     * multi-peer relay channel, dropping every relayed send.
+     */
+    private fun reattributed(roster: Set<PeerId>, backingSelfId: PeerId): Set<PeerId> =
+        roster - backingSelfId + selfId
 
     private fun startRelay(seam: Seam) {
         val job = scope.launch {
             // Per-swap peer tracker: a StateFlow never completes, so it lives as a
             // child of the relay job and is cancelled by the next swap / teardown.
-            launch { seam.peers.collect { _peers.value = it } }
+            // Re-attributed on every emission, not only at swap — the backing roster
+            // moves as peers come and go, and each move is a fresh chance to drop selfId.
+            launch { seam.peers.collect { _peers.value = reattributed(it, seam.selfId) } }
             runCatchingCancellable {
                 seam.incoming.collect { _incoming.emit(it) }
             }.onFailure { log.debug { "managed-seam: $selfId relay ended: ${it.message}" } }
@@ -144,6 +176,11 @@ internal class ManagedSeam(
     /**
      * Stop relaying the current backing seam and close it. Idempotent. The logical
      * [ManagedSeam] itself does not tear — cancelling [scope] is what ends it.
+     *
+     * [peers] collapses back to `{ selfId }`, the same roster the constructor publishes before the
+     * first [swap] and for the same reason: with no backing seam there is no route to anyone, and
+     * every send is dropped. Leaving the closed seam's remotes behind would advertise peers
+     * [sendTo] silently discards.
      */
     override suspend fun close(reason: CloseReason) {
         val seam = lock.withLock {
@@ -151,7 +188,10 @@ internal class ManagedSeam(
             current = null
             s
         }
+        // Cancel the tracker BEFORE collapsing, so no in-flight emission of the outgoing seam's
+        // roster can be published over the collapse.
         relayJob.value?.cancel()
+        _peers.value = setOf(selfId)
         runCatchingCancellable { seam?.close(reason) }
     }
 }
