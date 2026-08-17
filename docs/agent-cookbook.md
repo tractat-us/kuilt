@@ -1151,6 +1151,27 @@ cache, a "who has these bytes" protocol, or a sandbox.
     check(lazyFetch.opToBobbin(OpId("unknown")) == null) // nothing to fetch — the task stands by
 ```
 
+## Sending to yourself
+
+**Intent:** loop a frame back to your own peer — replay your own move locally, feed your own replicator, treat "everyone" uniformly by iterating `peers` and sending to each.
+**Primitive:** `Seam.broadcast` / `Room.broadcast`. **Not** `sendTo(selfId, …)`, which throws `IllegalArgumentException` on every fabric.
+
+`broadcast` is the loop-back surface; `sendTo` names *another* peer. The refusal is deliberately not `PeerNotConnected` — `selfId` **is** in `peers`, always, so reporting the peer as absent would state something false and push a caller into reconnecting over what is really a bug in its own addressing.
+
+The trap is the uniform loop. `peers` includes you, so `peers.value.forEach { seam.sendTo(it, frame) }` sends to yourself on the first or last iteration, and before #2428 what happened next depended on which fabric you were on — a 2-peer link delivered the frame to the *other* peer and reported success. Filter, or broadcast:
+
+```kotlin
+// Wrong: `peers` includes selfId, so this self-sends.
+seam.peers.value.forEach { seam.sendTo(it, frame) }
+
+// Either filter…
+seam.peers.value.filter { it != seam.selfId }.forEach { seam.sendTo(it, frame) }
+// …or just broadcast, which is what "everyone else" means at this layer.
+seam.broadcast(frame)
+```
+
+Order matters if you are catching: the `Torn` check runs first, so a self-send on a closed seam is an `IllegalStateException`, not this. Pinned for every fabric by `SeamConformanceSuite.sendToSelfIsRefused`.
+
 ## Payload limits
 
 **Intent:** pick a chunk size for a big payload — or explain a `FrameTooLargeException` that appears only after somebody drops out.
