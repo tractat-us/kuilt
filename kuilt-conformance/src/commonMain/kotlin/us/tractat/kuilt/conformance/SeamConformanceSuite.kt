@@ -952,9 +952,19 @@ public abstract class SeamConformanceSuite {
                 assertFailsWith<IllegalStateException>("broadcast on a Torn seam must throw") {
                     host.broadcast(byteArrayOf(1))
                 }
-                assertFailsWith<IllegalStateException>("sendTo on a Torn seam must throw") {
+                val addressed = assertFailsWith<IllegalStateException>("sendTo on a Torn seam must throw") {
                     host.sendTo(joiner.selfId, byteArrayOf(2))
                 }
+                // MEASUREMENT PROBE (#2448) — not for landing as-is.
+                println(
+                    "TORN-PROBE ${this@SeamConformanceSuite::class.simpleName} -> " +
+                        "${addressed::class.simpleName} : ${addressed.message}",
+                )
+                assertFalse(
+                    addressed is PeerNotConnected,
+                    "sendTo on a Torn seam must report the TEAR, not blame the addressee: got " +
+                        "PeerNotConnected(${(addressed as? PeerNotConnected)?.peer?.value})",
+                )
             }
         }
 
