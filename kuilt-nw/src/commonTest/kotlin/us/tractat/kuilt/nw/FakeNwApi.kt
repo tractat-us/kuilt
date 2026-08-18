@@ -79,6 +79,12 @@ internal class FakeNwApi(
     // the seam's capability under virtual time. Latest-value STATE, matching RealNwApi's MutableStateFlow.
     private val _pathState = MutableStateFlow<NwPathState?>(null)
 
+    // Controllable inbound-listener state (#2449), standing in for RealNwApi's nw_listener state-changed
+    // handler. [startListening] drives Starting → (Ready | [listenFailure]); [emitListenerFailed] drives the
+    // ASYNCHRONOUS mid-session death that is the actual field shape — a listener that was up for minutes and
+    // then failed with the app suspended. Latest-value STATE, matching RealNwApi's MutableStateFlow.
+    private val _listenerState = MutableStateFlow<NwListenerState>(NwListenerState.Unknown)
+
     // #1618 Track A: the live connIds this device currently holds (open→closed), mirroring RealNwApi's
     // `connections` registry — the set a device-path-unsatisfied event demotes to PathLost. Added on
     // [emitConnectionOpened], removed on [markConnectionClosed]. Touched only from the one test coroutine.
@@ -96,6 +102,7 @@ internal class FakeNwApi(
     override val connectionClosed: Flow<NwConnectionClosed> = _connectionClosed.asSharedFlow()
     override val connectionStates: StateFlow<Map<NwConnectionId, NwConnState>> = _connectionStates.asStateFlow()
     override val pathState: StateFlow<NwPathState?> = _pathState.asStateFlow()
+    override val listenerState: StateFlow<NwListenerState> = _listenerState.asStateFlow()
 
     /**
      * Test hook for #1541: drive a live `NWPathMonitor` transition (path up/down, Wi-Fi↔cellular, a
@@ -149,8 +156,63 @@ internal class FakeNwApi(
 
     override fun availability(): FabricAvailability = FabricAvailability.Available
 
+    /**
+     * Test hook for #2449: the verdict this device's NEXT (and every subsequent) [startListening] receives.
+     * `null` — the default — models a bind that succeeds, publishing [NwListenerState.Ready]; a non-null
+     * value models a bind the OS refuses, publishing that [NwListenerState.Failed] instead.
+     *
+     * The fake must be able to REFUSE, or "does the loom retry a failing listener?" would be answered by a
+     * fake that cannot fail twice: every retry would come up Ready, the consecutive-failure counter would
+     * reset each round, and the bounded-give-up property could never be exercised at all.
+     */
+    var listenFailure: NwListenerState.Failed? = null
+
+    /** Test hook: total [startListening] calls — lets a test count re-listens after a listener failure (#2449). */
+    var startListeningCalls: Int = 0
+        private set
+
+    /**
+     * Test hook for #2449: when `true`, [startListening] THROWS after publishing
+     * [NwListenerState.Starting] — a binding that fails synchronously and therefore never publishes a
+     * verdict at all. The interesting case precisely because the campaign has nothing to await: a
+     * supervisor that only ever waits on [listenerState] parks here forever.
+     */
+    var listenThrows: Boolean = false
+
+    /**
+     * Test hook for #2449: when `false`, this device NEVER publishes a listener state — [listenerState] sits
+     * at its [NwListenerState.Unknown] default forever, modelling a binding (`BridgeNwApi`) that wires no
+     * listener signal.
+     *
+     * The case that must stay INERT. The supervisor bounds how long it will wait for a verdict, and the
+     * whole point of that bound is to convert a silent stall into a retry — so a binding whose silence is
+     * permanent and expected has to be excluded explicitly, or the bound would turn every such binding into
+     * a perpetual re-listen loop. That is a behaviour regression a test elsewhere in this file cannot see.
+     */
+    var reportsListenerState: Boolean = true
+
     override suspend fun startListening(serviceName: String, serviceType: String) {
+        startListeningCalls += 1
+        // Mirrors RealNwApi.startListening: publish Starting BEFORE the listener can report, so a watcher
+        // never reads the previous listener's terminal Failed as this attempt's verdict.
+        if (reportsListenerState) _listenerState.value = NwListenerState.Starting
+        if (listenThrows) throw RuntimeException("simulated synchronous listen failure on device '$deviceId'")
         radio.markListening(deviceId, serviceName, serviceType, peerId, txtResolvedOnAdvertise)
+        if (reportsListenerState) _listenerState.value = listenFailure ?: NwListenerState.Ready
+    }
+
+    /** Test hook for #2449: drive `nw_listener_state_waiting` — a non-verdict the campaign must not park on. */
+    internal fun emitListenerWaiting(domain: Int, code: Int) {
+        _listenerState.value = NwListenerState.Waiting(domain, code)
+    }
+
+    /**
+     * Test hook for #2449: drive an ASYNCHRONOUS listener failure on an already-[NwListenerState.Ready]
+     * listener — the real field shape, where the bind succeeded at weave and the OS tore it down minutes
+     * later while the app was suspended. Distinct from [listenFailure], which fails the bind itself.
+     */
+    internal fun emitListenerFailed(domain: Int, code: Int) {
+        _listenerState.value = NwListenerState.Failed(domain, code)
     }
 
     /** Test hook: total [stopListening] calls — lets a test prove `NwSeam.close()` stops advertising (#1419). */

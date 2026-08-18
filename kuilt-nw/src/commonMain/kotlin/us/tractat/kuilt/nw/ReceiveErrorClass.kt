@@ -29,6 +29,19 @@ internal const val NW_ERROR_DOMAIN_DNS: Int = 2
 internal const val NW_ERROR_DOMAIN_TLS: Int = 3
 
 /**
+ * A human tag for a raw `nw_error_domain_t`, so every decoded failure — a connection's (#1560) and the
+ * listener's (#2449) — is logged in ONE vocabulary and a reader can compare the two lines directly.
+ * Lives in commonMain rather than beside either caller precisely so the two cannot drift apart.
+ */
+internal fun nwErrorDomainName(domain: Int): String = when (domain) {
+    NW_ERROR_DOMAIN_INVALID -> "invalid"
+    NW_ERROR_DOMAIN_POSIX -> "posix"
+    NW_ERROR_DOMAIN_DNS -> "dns"
+    NW_ERROR_DOMAIN_TLS -> "tls"
+    else -> "unknown"
+}
+
+/**
  * The subset of POSIX `errno` values (`<sys/errno.h>`, Darwin numbering) a receive completion can
  * carry. Named so [classifyReceiveError]'s table — and its test — read as the spec, not as magic
  * numbers. `EWOULDBLOCK == EAGAIN` on Darwin (both `35`). `ECANCELED` (`89`) is what a pending

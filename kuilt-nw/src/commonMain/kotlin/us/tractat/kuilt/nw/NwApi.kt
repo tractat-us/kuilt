@@ -26,6 +26,16 @@ private val EMPTY_PATH_STATE: StateFlow<NwPathState?> =
     MutableStateFlow<NwPathState?>(null).asStateFlow()
 
 /**
+ * Shared default for [NwApi.listenerState] — a single immutable, never-updated [StateFlow] holding
+ * [NwListenerState.Unknown] so the default getter allocates nothing per call. A binding that has not wired
+ * the listener's state-changed handler (the JVM dylib bridge, the test fakes that do not model a listener)
+ * inherits "no listener signal", which is exactly the pre-#2449 world: `NwLoom` then never observes a
+ * failure and never re-listens, as before. Wiring this is what buys a binding the retry.
+ */
+private val EMPTY_LISTENER_STATE: StateFlow<NwListenerState> =
+    MutableStateFlow<NwListenerState>(NwListenerState.Unknown).asStateFlow()
+
+/**
  * Abstracts the slice of Apple's Network.framework needed by `NwLoom`.
  *
  * Implementations: `FakeNwApi` (tests, commonTest) and the real `RealNwApi`
@@ -168,4 +178,30 @@ public interface NwApi {
      */
     public val pathState: StateFlow<NwPathState?>
         get() = EMPTY_PATH_STATE
+
+    /**
+     * This peer's **inbound listener** state (#2449) — whether [startListening] actually produced a bound,
+     * advertising listener, and if not, the decoded `nw_error_t` saying why.
+     *
+     * [startListening] is a `suspend fun … : Unit` whose verdict arrives *later*, on a GCD callback, so
+     * before this flow existed a caller was **structurally incapable** of learning the listen had failed:
+     * the `runCatchingCancellable` around the call can only catch a synchronous throw, and Network.framework
+     * does not throw one. A listener refused at bind — or torn by the OS while the app was suspended and
+     * refused on the way back — was therefore silent and terminal. The 2026-08-17 field capture is that
+     * case: both peers logged a listener failure ~99 s apart, neither ever listened again, and the session
+     * never re-formed. There was no retry because there was no signal.
+     *
+     * Modelled as latest-value **[StateFlow] state** for the same reason [pathState] is: "is my listener
+     * up?" is a level, and a late subscriber must see the current answer rather than miss the transition.
+     * Defaults to a never-updated [NwListenerState.Unknown] so a binding that has not wired the underlying
+     * state-changed handler inherits the pre-#2449 behaviour (no signal ⇒ no retry) rather than being forced
+     * to implement it before the ABI lands. `RealNwApi` (appleMain) drives it from
+     * `nw_listener_set_state_changed_handler`; the test fake exposes controllable hooks.
+     *
+     * **A [NwListenerState.Failed] here is not a connection teardown.** Established peers keep working —
+     * only new *inbound* links are refused — which is precisely why the failure is invisible until someone
+     * tries to (re)join. `NwLoom` re-listens with bounded back-off, re-armed on a [pathState] change.
+     */
+    public val listenerState: StateFlow<NwListenerState>
+        get() = EMPTY_LISTENER_STATE
 }
