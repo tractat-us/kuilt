@@ -1,6 +1,7 @@
 package us.tractat.kuilt.nw
 
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -78,15 +79,24 @@ class NwSendFailurePathTest {
         // The escalation cancels; run the `cancelled` handler's close, as `onState` would.
         api.driveCloseForTest(id, failed = true)
 
-        assertEquals(
-            NwConnState.Closed("send:32"),
-            api.connectionStates.value[id],
-            "the send failure must reach the seam as a NON-graceful close naming the send — not as a debug line",
-        )
-        assertEquals(
-            NwConnectionFailure(id, domain = 1, code = 32),
-            api.lastConnectionFailure.value,
-            "the decoded (domain, code) must be captured, so a capture says WHY the send failed",
+        // Two independently-keyed receipts, so removing either half of `onSendCompletionError` reds on its
+        // own: `send:32` can only come from the `escalateClose`, and the captured (domain, code) only from
+        // the `captureFailure`. `assertAll` so one missing half never hides the other.
+        assertAll(
+            {
+                assertEquals(
+                    NwConnState.Closed("send:32"),
+                    api.connectionStates.value[id],
+                    "the send failure must reach the seam as a close NAMING the send — not as a debug line",
+                )
+            },
+            {
+                assertEquals(
+                    NwConnectionFailure(id, domain = 1, code = 32),
+                    api.lastConnectionFailure.value,
+                    "the decoded (domain, code) must be captured, so a capture says WHY the send failed",
+                )
+            },
         )
     }
 
