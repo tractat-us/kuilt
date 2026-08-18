@@ -179,14 +179,31 @@ internal class FakeNwApi(
      */
     var listenThrows: Boolean = false
 
+    /**
+     * Test hook for #2449: when `false`, this device NEVER publishes a listener state — [listenerState] sits
+     * at its [NwListenerState.Unknown] default forever, modelling a binding (`BridgeNwApi`) that wires no
+     * listener signal.
+     *
+     * The case that must stay INERT. The supervisor bounds how long it will wait for a verdict, and the
+     * whole point of that bound is to convert a silent stall into a retry — so a binding whose silence is
+     * permanent and expected has to be excluded explicitly, or the bound would turn every such binding into
+     * a perpetual re-listen loop. That is a behaviour regression a test elsewhere in this file cannot see.
+     */
+    var reportsListenerState: Boolean = true
+
     override suspend fun startListening(serviceName: String, serviceType: String) {
         startListeningCalls += 1
         // Mirrors RealNwApi.startListening: publish Starting BEFORE the listener can report, so a watcher
         // never reads the previous listener's terminal Failed as this attempt's verdict.
-        _listenerState.value = NwListenerState.Starting
+        if (reportsListenerState) _listenerState.value = NwListenerState.Starting
         if (listenThrows) throw RuntimeException("simulated synchronous listen failure on device '$deviceId'")
         radio.markListening(deviceId, serviceName, serviceType, peerId, txtResolvedOnAdvertise)
-        _listenerState.value = listenFailure ?: NwListenerState.Ready
+        if (reportsListenerState) _listenerState.value = listenFailure ?: NwListenerState.Ready
+    }
+
+    /** Test hook for #2449: drive `nw_listener_state_waiting` — a non-verdict the campaign must not park on. */
+    internal fun emitListenerWaiting(domain: Int, code: Int) {
+        _listenerState.value = NwListenerState.Waiting(domain, code)
     }
 
     /**

@@ -11,6 +11,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -178,13 +179,12 @@ public class NwLoom(
         )
         redial.start()
 
-        runCatchingCancellable { api.startListening(serviceName, serviceType) }
-            .onFailure { log.debug { "nw.listen failed serviceName=$serviceName selfId=${selfId.value}" } }
-        // That `runCatchingCancellable` can only ever catch a SYNCHRONOUS throw, and Network.framework
-        // does not raise one: startListening returns Unit and the OS decides the registration later, on a
-        // callback. So a listener that fails — at weave, or minutes in when the app is suspended — was
-        // invisible above and terminal (#2449). The supervisor watches [NwApi.listenerState] and re-listens.
-        ListenSupervisor(api, seamScope, serviceName, serviceType, selfId).start()
+        // The listen — including the FIRST one — belongs to the supervisor (#2449). `startListening` returns
+        // Unit and the OS reports the registration later on a callback, so a failure is invisible to any
+        // `runCatchingCancellable` around the call; and a listen that throws synchronously must still start
+        // the campaign at attempt 1 rather than leave a supervisor parked on a verdict that never comes.
+        // One call site, one failure policy.
+        ListenSupervisor(api, seamScope, serviceName, serviceType, selfId).startSeededWithInitialListen()
         runCatchingCancellable { api.startBrowsing(serviceType) }
             .onFailure { log.debug { "nw.browse failed serviceType=$serviceType selfId=${selfId.value}" } }
 
@@ -330,6 +330,22 @@ public class NwLoom(
          * most likely to arrive precisely when a retry would now succeed.
          */
         internal const val MAX_LISTEN_ATTEMPTS: Int = 6
+
+        /**
+         * How long the listen campaign will sit on a NON-VERDICT listener state before treating the stall as
+         * a failure and re-creating (#2449).
+         *
+         * `nw_listener_state_t` has five values; only `ready` and `failed` are verdicts. A listener parked in
+         * `waiting` ("waiting for a usable network before being able to receive connections") is the expected
+         * state of a phone resuming from suspend, and it can stay there indefinitely — so an unbounded wait
+         * for a verdict is a silent park, the same family of bug as a `startListening` that throws.
+         *
+         * Generous rather than tight: this is a backstop against a stall, not an assertion about how fast a
+         * listener should come up. A healthy listener resolves in milliseconds and never reaches it, and a
+         * `waiting` listener that recovers on its own is observed the instant it does. It deliberately does
+         * NOT apply to [NwListenerState.Unknown] — see `awaitFailure`.
+         */
+        internal val LISTEN_VERDICT_TIMEOUT: Duration = 10.seconds
     }
 }
 
@@ -382,24 +398,35 @@ private class ListenSupervisor(
     private val serviceType: String,
     private val selfId: PeerId,
 ) {
-    fun start() {
-        scope.launch { supervise() }
+    /**
+     * Perform the FIRST listen inline on the caller's coroutine (preserving `weave`'s ordering), then launch
+     * the campaign seeded with its outcome.
+     *
+     * The seeding is the point. When the initial listen was a separate call site that merely logged its own
+     * throw, a synchronous failure there left the supervisor started but unaware: it parked awaiting a
+     * verdict that would never come, and the peer stayed inbound-unreachable for the seam's life with no
+     * error logged — exactly the pre-#2449 outcome the campaign exists to prevent. One failure policy, one
+     * place.
+     */
+    suspend fun startSeededWithInitialListen() {
+        val initialFailure = listenOnce(phase = "initial")
+        scope.launch { supervise(initialFailure) }
     }
 
-    private suspend fun supervise() {
+    private suspend fun supervise(initialFailure: NwListenerState.Failed?) {
         var consecutiveFailures = 0
         var backoff = NwLoom.INITIAL_LISTEN_BACKOFF
-        // The failure this round is handling: normally one observed on [NwApi.listenerState], but a
-        // re-listen that throws SYNCHRONOUSLY carries its own. Without that second source the campaign
-        // would wedge exactly where it must not — a throwing `startListening` publishes no verdict, so
-        // awaiting one would park the supervisor forever and silently restore the pre-#2449 behaviour.
-        var synchronousFailure: NwListenerState.Failed? = null
+        // The failure this round is handling. Normally observed on [NwApi.listenerState], but a listen that
+        // throws SYNCHRONOUSLY carries its own — including the very first one. Without that second source
+        // the campaign wedges exactly where it must not: a throwing `startListening` publishes no verdict,
+        // so awaiting one parks the supervisor forever and silently restores the pre-#2449 behaviour.
+        var pendingFailure: NwListenerState.Failed? = initialFailure
         while (true) {
-            val failure = synchronousFailure ?: awaitFailure {
+            val failure = pendingFailure ?: awaitFailure {
                 consecutiveFailures = 0
                 backoff = NwLoom.INITIAL_LISTEN_BACKOFF
             }
-            synchronousFailure = null
+            pendingFailure = null
             consecutiveFailures += 1
             if (consecutiveFailures >= NwLoom.MAX_LISTEN_ATTEMPTS) {
                 log.error {
@@ -414,8 +441,10 @@ private class ListenSupervisor(
                     "nw.listen.path-changed self=${selfId.value} serviceName=$serviceName " +
                         "path=${api.pathState.value} → re-arming the listen campaign that had given up"
                 }
+                // Reset the ATTEMPT count but deliberately NOT the back-off. A campaign that exhausted its
+                // attempts re-arms at whatever interval it had reached, so sustained path churn cannot use
+                // the give-up branch as a fast path back to a 0.5 s cadence.
                 consecutiveFailures = 0
-                backoff = NwLoom.INITIAL_LISTEN_BACKOFF
             } else {
                 log.error {
                     "nw.listen.retry self=${selfId.value} serviceName=$serviceName " +
@@ -423,38 +452,78 @@ private class ListenSupervisor(
                         "nw_error domain=${nwErrorDomainName(failure.domain)}(${failure.domain}) code=${failure.code} " +
                         "retryIn=$backoff"
                 }
-                // Sit out the back-off — but wake EARLY on a device-path change, since that is the event
-                // that makes the next attempt likely to succeed rather than just the next tick of a timer.
-                withTimeoutOrNull(backoff) { awaitPathChange() }
-                backoff = (backoff * 2).coerceAtMost(NwLoom.MAX_LISTEN_BACKOFF)
             }
-            synchronousFailure = relisten()
+            waitBeforeRelisten(backoff)
+            backoff = (backoff * 2).coerceAtMost(NwLoom.MAX_LISTEN_BACKOFF)
+            pendingFailure = listenOnce(phase = "retry")
         }
     }
 
     /**
-     * Re-listen, returning a synthesized [NwListenerState.Failed] when the call threw synchronously and
+     * Wait [backoff] before the next re-listen, waking early on a device-path change — but never sooner than
+     * a floor of [NwLoom.INITIAL_LISTEN_BACKOFF].
+     *
+     * The floor is the whole point, and it is not a nicety. Every re-listen is a fresh `nw_listener_create`
+     * plus a fresh Bonjour registration plus a cancel of the superseded handle, aimed at mDNSResponder —
+     * **whose unhealthy channel is the very thing being recovered from**. Letting a path change collapse the
+     * wait to zero would make the effective retry rate the `pathState` update rate, and iOS emits those in
+     * bursts during exactly the resume this targets: the attempt bound would buy nothing and the fix would
+     * become a re-registration storm pointed at the sick component. So a path change may shorten the wait,
+     * never remove it. This is the single place any re-listen waits, so the floor cannot be bypassed by
+     * adding a branch above.
+     */
+    private suspend fun waitBeforeRelisten(backoff: Duration) {
+        val floor = minOf(NwLoom.INITIAL_LISTEN_BACKOFF, backoff)
+        delay(floor)
+        withTimeoutOrNull(backoff - floor) { awaitPathChange() }
+    }
+
+    /**
+     * Listen once, returning a synthesized [NwListenerState.Failed] when the call threw synchronously and
      * `null` when it handed off normally (the usual case — Network.framework reports asynchronously).
      *
      * The synthesized failure carries [NW_ERROR_DOMAIN_INVALID]/0 rather than an invented domain, matching
-     * how `RealNwApi` reports a FAILED transition it could not decode: the campaign still advances, and the
-     * log still says plainly that there was nothing to decode.
+     * how `RealNwApi` reports a FAILED transition it could not decode.
+     *
+     * `try`/`catch` with an explicit [ensureActive], NOT `runCatchingCancellable`. [NwApi] is a public
+     * interface, so `startListening` may be consumer-authored, and a `withTimeout` inside one mints a
+     * `TimeoutCancellationException` **at its caller** without cancelling that caller.
+     * `runCatchingCancellable` rethrows both cancellations alike, so that minted one would escape into
+     * `scope.launch { supervise(…) }` under a `SupervisorJob` — where the child is **cancelled rather than
+     * failed**: no handler runs, no stack trace is logged, and the entire campaign disappears silently. The
+     * whole campaign is work that follows this call, which is CLAUDE.md's trigger for the explicit form;
+     * none of its documented elisions cover `startListening`. [ensureActive] is what tells the two apart at
+     * runtime — it throws only when THIS job is genuinely cancelled.
      */
-    private suspend fun relisten(): NwListenerState.Failed? =
-        runCatchingCancellable { api.startListening(serviceName, serviceType) }.fold(
-            onSuccess = { null },
-            onFailure = { failure ->
-                log.error {
-                    "nw.listen.retry-threw self=${selfId.value} serviceName=$serviceName: $failure"
-                }
-                NwListenerState.Failed(NW_ERROR_DOMAIN_INVALID, code = 0)
-            },
-        )
+    private suspend fun listenOnce(phase: String): NwListenerState.Failed? =
+        try {
+            api.startListening(serviceName, serviceType)
+            null
+        } catch (failure: Throwable) {
+            currentCoroutineContext().ensureActive()
+            log.error { "nw.listen.threw self=${selfId.value} serviceName=$serviceName phase=$phase: $failure" }
+            NwListenerState.Failed(NW_ERROR_DOMAIN_INVALID, code = 0)
+        }
 
     /**
      * Suspend until the listener reports [NwListenerState.Failed], calling [onReady] whenever it comes up
      * [NwListenerState.Ready] first — a listener that genuinely came up ends the *consecutive* failure run,
      * so a session that loses its listener once an hour never walks into the give-up.
+     *
+     * ## Why the verdict wait is BOUNDED
+     * `nw_listener_state_t` has five values and only two of them are verdicts. A listener can sit in
+     * `waiting` ("waiting for a usable network before being able to receive connections") indefinitely —
+     * which is precisely where a phone resuming from suspend with a churning interface set is expected to
+     * be. An unbounded `first { Ready || Failed }` would park the campaign there forever, emitting no
+     * `attempt=` and no `gave-up`: invisible in a field capture, and the same silent-park family as a
+     * throwing `startListening`. So a stall past [NwLoom.LISTEN_VERDICT_TIMEOUT] is converted into a failure
+     * that advances the campaign, carrying the waiting state's own decoded reason when it has one. No
+     * unmodelled state can park this loop.
+     *
+     * The ONE deliberate exception is [NwListenerState.Unknown]: that is the never-updating default of a
+     * binding which wires no listener signal at all. It has no verdict to give and never will, so treating
+     * its silence as a failure would turn an inert default into a perpetual re-listen loop on every such
+     * binding. That case parks — permanently, and by design, since it is exactly the pre-#2449 behaviour.
      *
      * Reading [NwApi.listenerState] as a [kotlinx.coroutines.flow.StateFlow] means a [NwListenerState.Failed]
      * can never be missed, only observed late. It can be *conflated over*: a `Ready` immediately superseded
@@ -462,12 +531,42 @@ private class ListenSupervisor(
      */
     private suspend fun awaitFailure(onReady: () -> Unit): NwListenerState.Failed {
         while (true) {
-            val settled = api.listenerState.first { it is NwListenerState.Ready || it is NwListenerState.Failed }
+            val settled = withTimeoutOrNull(NwLoom.LISTEN_VERDICT_TIMEOUT) {
+                api.listenerState.first { it is NwListenerState.Ready || it is NwListenerState.Failed }
+            }
             if (settled is NwListenerState.Failed) return settled
-            onReady()
-            log.info { "nw.listen.ready self=${selfId.value} serviceName=$serviceName — listener up; back-off reset" }
-            // Park until it leaves Ready, so the next failure is observed rather than spun on.
-            api.listenerState.first { it !is NwListenerState.Ready }
+            if (settled is NwListenerState.Ready) {
+                onReady()
+                log.info { "nw.listen.ready self=${selfId.value} serviceName=$serviceName — listener up; back-off reset" }
+                // Park until it leaves Ready, so the next failure is observed rather than spun on. Unbounded
+                // deliberately: Ready is the healthy steady state, not a stall.
+                api.listenerState.first { it !is NwListenerState.Ready }
+                continue
+            }
+            when (val stalled = api.listenerState.value) {
+                is NwListenerState.Unknown -> {
+                    log.debug {
+                        "nw.listen.no-signal self=${selfId.value} serviceName=$serviceName — this binding " +
+                            "reports no listener state; parking (no signal, so nothing to retry on)"
+                    }
+                    api.listenerState.first { it !is NwListenerState.Unknown }
+                }
+                is NwListenerState.Waiting -> {
+                    log.error {
+                        "nw.listen.stalled self=${selfId.value} serviceName=$serviceName state=waiting " +
+                            "nw_error domain=${nwErrorDomainName(stalled.domain)}(${stalled.domain}) code=${stalled.code} " +
+                            "after=${NwLoom.LISTEN_VERDICT_TIMEOUT} → treating as a failure and re-creating the listener"
+                    }
+                    return NwListenerState.Failed(stalled.domain, stalled.code)
+                }
+                else -> {
+                    log.error {
+                        "nw.listen.stalled self=${selfId.value} serviceName=$serviceName state=$stalled " +
+                            "after=${NwLoom.LISTEN_VERDICT_TIMEOUT} → no verdict; treating as a failure"
+                    }
+                    return NwListenerState.Failed(NW_ERROR_DOMAIN_INVALID, code = 0)
+                }
+            }
         }
     }
 

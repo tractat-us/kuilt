@@ -77,8 +77,10 @@ import platform.Network.nw_listener_set_new_connection_handler
 import platform.Network.nw_listener_set_queue
 import platform.Network.nw_listener_set_state_changed_handler
 import platform.Network.nw_listener_start
+import platform.Network.nw_listener_state_cancelled
 import platform.Network.nw_listener_state_failed
 import platform.Network.nw_listener_state_ready
+import platform.Network.nw_listener_state_waiting
 import platform.Network.nw_listener_t
 import platform.Network.nw_interface_get_name
 import platform.Network.nw_interface_get_type
@@ -292,13 +294,22 @@ internal class RealNwApi(
     // listener up?" is a level, and a late subscriber must see the current answer rather than miss the edge.
     private val _listenerState = MutableStateFlow<NwListenerState>(NwListenerState.Unknown)
 
-    // Which listener generation may publish into [_listenerState]. [startListening] swaps in a new listener
-    // and cancels the superseded one, but a cancelled listener's handler can still fire afterwards on the
-    // shared queue — without this, a retry's healthy Ready would be overwritten by the DEAD listener's late
-    // FAILED, and the supervisor watching this flow would chase a failure that had already been fixed.
-    // A monotone counter rather than comparing `nw_listener_t` refs: identity of an ObjC handle across two
-    // Kotlin/Native wrappers is not something to bet a retry loop on.
-    private val listenGeneration = atomic(0L)
+    // Which listener generation may publish into [_listenerState] — GUARDED BY [lock], along with every
+    // read and write of [_listenerState] itself.
+    //
+    // A superseded listener can still deliver a queued `failed` after the swap, and the start→swap window
+    // leaves a live listener able to report before it is recorded; without a generation filter either would
+    // publish the DEAD listener's failure over the successor's state, and the supervisor would chase a
+    // failure that had already been fixed. A monotone counter rather than comparing `nw_listener_t` refs:
+    // identity of an ObjC handle across two Kotlin/Native wrappers is not something to bet a retry loop on.
+    //
+    // Why [lock] and not an atomic: the filter is a CHECK-THEN-ACT (compare the generation, then publish),
+    // and an atomic counter makes only the counter safe, not the pair. Split, the GCD queue can pass the
+    // check with generation N, [startListening] can then bump to N+1 and publish `Starting`, and the stale
+    // write lands afterwards — publishing exactly what the guard exists to prevent. The two steps must be
+    // one critical section. Same discipline as [markClosed]: a plain publish under the lock, no `nw_*` call
+    // and no suspend inside it.
+    private var listenGeneration: Long = 0L
 
     // The single lazily-started `nw_path_monitor`, guarded by [lock] (its `nw_*` calls run OUTSIDE the lock, like
     // the listener/browser handles). `null` until [ensurePathMonitor] starts it; nulled by [cancelPathMonitor].
@@ -744,12 +755,16 @@ internal class RealNwApi(
     // ── host role ────────────────────────────────────────────────────────────
 
     override suspend fun startListening(serviceName: String, serviceType: String) {
-        // Claim a fresh generation and reset the published state BEFORE anything can call back (#2449).
-        // Both halves matter: the bump silences the superseded listener's late FAILED, and the Starting
-        // reset stops a watcher reading the PREVIOUS attempt's terminal Failed as this attempt's verdict
-        // (without it a retry loop would see a stale Failed the instant it looked, and spin).
-        val generation = listenGeneration.incrementAndGet()
-        _listenerState.value = NwListenerState.Starting
+        // Claim a fresh generation and reset the published state BEFORE anything can call back (#2449), the
+        // two as ONE critical section so a stale publish cannot interleave between them. Both halves matter:
+        // the bump silences a superseded listener's still-queued FAILED, and the Starting reset stops a
+        // watcher reading the PREVIOUS attempt's terminal Failed as this attempt's verdict (without it a
+        // retry loop would see a stale Failed the instant it looked, and spin).
+        val generation = lock.withLock {
+            listenGeneration += 1
+            _listenerState.value = NwListenerState.Starting
+            listenGeneration
+        }
         // Both modes bind an OS-assigned ephemeral port (nw_listener_create; no fixed port). Loopback
         // omits the Bonjour advertise and, once ready, publishes its REAL bound port to the rendezvous
         // so the joiner dials a port that is genuinely bound — no pre-allocated number, no TOCTOU.
@@ -782,7 +797,19 @@ internal class RealNwApi(
                         log.debug { "nw.listen loopback host ready on 127.0.0.1:$port (TLS-PSK)" }
                     }
                 }
+                // `waiting` is NOT a failure and NOT a verdict: "waiting for a usable network before being
+                // able to receive connections" (`listener.h`). It is where a phone resuming from suspend
+                // sits, so it is modelled — with its own decoded error, since discarding THAT one would
+                // repeat the exact mistake this change exists to fix. `NwLoom` bounds how long it will sit
+                // here; publishing it is what lets the bound be about a real state rather than silence.
+                nw_listener_state_waiting -> onListenerWaiting(generation, error)
                 nw_listener_state_failed -> onListenerFailed(generation, error)
+                // A cancel we asked for. Per `listener.h`, `cancelled` is delivered LAST, so this is the
+                // handle going away — `stopListening`/the swap has already retired its generation and any
+                // publish here would be dropped anyway. Named rather than left to `else` so all five
+                // `nw_listener_state_t` values are visibly accounted for.
+                nw_listener_state_cancelled -> Unit
+                // `nw_listener_state_invalid` only: the listener has no meaningful state to report.
                 else -> Unit
             }
         }
@@ -812,11 +839,15 @@ internal class RealNwApi(
     }
 
     override suspend fun stopListening() {
-        val doomed = lock.withLock { listener.also { listener = null } } ?: return
-        // Retire this generation BEFORE cancelling: the cancel provokes a state callback, and a listener
-        // we deliberately tore down must not be reported as a failure anyone should retry (#2449).
-        listenGeneration.incrementAndGet()
-        _listenerState.value = NwListenerState.Unknown
+        // Retire the generation and clear the state in the SAME critical section that drops the handle, so a
+        // publish already in flight from the outgoing listener cannot land after the clear (#2449).
+        val doomed = lock.withLock {
+            val current = listener ?: return@withLock null
+            listener = null
+            listenGeneration += 1
+            _listenerState.value = NwListenerState.Unknown
+            current
+        } ?: return
         nw_listener_cancel(doomed)
     }
 
@@ -839,12 +870,36 @@ internal class RealNwApi(
      * session's log retention.
      */
     private fun onListenerFailed(generation: Long, error: nw_error_t?) {
-        // A FAILED transition carrying no error is reported as the INVALID domain rather than an invented
-        // one, so a reader can tell "nothing to decode" from a real verdict.
-        val domain = error?.let { nw_error_get_error_domain(it).toInt() } ?: NW_ERROR_DOMAIN_INVALID
-        val code = error?.let { nw_error_get_error_code(it) } ?: 0
+        val (domain, code) = decodeListenerError(error)
         captureListenerFailure(generation, domain, code)
     }
+
+    /**
+     * Publish a `waiting` transition — "waiting for a usable network before being able to receive
+     * connections" (`listener.h`) — with its decoded reason (#2449).
+     *
+     * Logged at `info`, not `error`: unlike a `failed` this is not a verdict and often resolves on its own
+     * when a usable path appears. It is published because a state nobody can observe is one that can park a
+     * watcher forever with nothing in the capture to say why — the same silent-stall shape as the discarded
+     * `nw_error_t` this change removes. Its error is decoded for exactly that reason: discarding *this*
+     * error would repeat the mistake one state over.
+     */
+    private fun onListenerWaiting(generation: Long, error: nw_error_t?) {
+        val (domain, code) = decodeListenerError(error)
+        log.info {
+            "nw.listen waiting loopback=${loopback != null} nw_error domain=${nwErrorDomainName(domain)}($domain) code=$code"
+        }
+        publishListenerState(generation, NwListenerState.Waiting(domain, code))
+    }
+
+    /**
+     * Decode a listener transition's `nw_error_t` into `(domain, code)`. A transition carrying no error is
+     * reported as the INVALID domain with code 0 rather than an invented one, so a reader can tell "nothing
+     * to decode" from a real verdict.
+     */
+    private fun decodeListenerError(error: nw_error_t?): Pair<Int, Int> =
+        if (error == null) NW_ERROR_DOMAIN_INVALID to 0
+        else nw_error_get_error_domain(error).toInt() to nw_error_get_error_code(error)
 
     /**
      * Log and publish the decoded listener-failure [domain]/[code]. Split from [onListenerFailed] for the
@@ -860,13 +915,24 @@ internal class RealNwApi(
     }
 
     /**
-     * Publish [state] only while [generation] is still the current listener's — a superseded or cancelled
-     * listener's late callback is dropped (see [listenGeneration]). A plain `value` write on a
-     * [MutableStateFlow], safe from the GCD queue like every other publish here.
+     * Publish [state] only while [generation] is still the current listener's, with the check and the write
+     * as ONE critical section under [lock] — split, they are a check-then-act that admits precisely the
+     * stale publish the generation exists to stop (see [listenGeneration]).
+     *
+     * ## What a stale callback actually is
+     * NOT a cancel. `listener.h` is explicit that cancellation's final delivered update is
+     * `nw_listener_state_cancelled`, which the handler drops by name — so a cancel never produces a
+     * `failed`. The guard covers the two cases that remain: a **spontaneous `failed` already queued** on the
+     * shared dispatch queue before [startListening] swapped the handle, and the window between
+     * `nw_listener_start` and that swap, where a live listener can report against a generation that is about
+     * to be superseded. Stated precisely because a plausible-but-wrong mechanism in a comment is the exact
+     * failure this whole change is about — `(bind unavailable?)` cost a session by naming the wrong layer.
      */
     private fun publishListenerState(generation: Long, state: NwListenerState) {
-        if (listenGeneration.value != generation) return
-        _listenerState.value = state
+        lock.withLock {
+            if (listenGeneration != generation) return
+            _listenerState.value = state
+        }
     }
 
     /**
@@ -877,14 +943,18 @@ internal class RealNwApi(
      * Not part of the fabric contract.
      */
     internal fun driveListenerFailureForTest(domain: Int, code: Int) =
-        captureListenerFailure(listenGeneration.value, domain, code)
+        captureListenerFailure(lock.withLock { listenGeneration }, domain, code)
+
+    /** Test-only (#2449): drive a `waiting` transition's publish path with injected primitives. */
+    internal fun driveListenerWaitingForTest(domain: Int, code: Int) =
+        publishListenerState(lock.withLock { listenGeneration }, NwListenerState.Waiting(domain, code))
 
     /**
      * Test-only (#2449): retire the current listener generation WITHOUT touching `nw_*`, so a test can prove
-     * a superseded listener's late FAILED is dropped rather than overwriting a healthy successor's state.
-     * Returns the generation that was just retired — the one a stale callback would still be carrying.
+     * a superseded listener's still-queued FAILED is dropped rather than overwriting a healthy successor's
+     * state. Returns the generation that was just retired — the one such a callback would still be carrying.
      */
-    internal fun supersedeListenerForTest(): Long = listenGeneration.getAndIncrement()
+    internal fun supersedeListenerForTest(): Long = lock.withLock { listenGeneration.also { listenGeneration += 1 } }
 
     /** Test-only (#2449): drive a listener failure tagged with an already-retired [generation]. */
     internal fun driveStaleListenerFailureForTest(generation: Long, domain: Int, code: Int) =

@@ -3,7 +3,7 @@ package us.tractat.kuilt.nw
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -81,10 +81,13 @@ class NwListenerRetryTest {
      */
     private class WovenPair(val apiA: FakeNwApi, val apiB: FakeNwApi, val seamA: Seam, val seamB: Seam)
 
-    private suspend fun TestScope.wovenPair(): WovenPair {
+    private suspend fun TestScope.wovenPair(configureA: (FakeNwApi) -> Unit = {}): WovenPair {
         val radio = FakeNwRadio()
         val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "peer-A", peerId = "peer-A")
         val apiB = FakeNwApi(radio, deviceId = "dev-1", serviceName = "peer-B", peerId = "peer-B")
+        // Applied BEFORE weave, so a test can arm the very first listen — the one that used to be a
+        // separate call site with its own failure policy.
+        configureA(apiA)
         val loomA = NwLoom(apiA, serviceType = TYPE, selfId = PeerId("peer-A"), random = Random(0), weaveTimeout = 10.seconds)
         val loomB = NwLoom(apiB, serviceType = TYPE, selfId = PeerId("peer-B"), random = Random(1), weaveTimeout = 10.seconds)
 
@@ -208,11 +211,177 @@ class NwListenerRetryTest {
                 ),
             )
             testScheduler.runCurrent()
+            val immediatelyAfterPathChange = pair.apiA.startListeningCalls
+
+            // The re-arm is rate-floored, not immediate: a path change may shorten the wait, never remove
+            // it. MAX_LISTEN_BACKOFF because a campaign that exhausted its attempts deliberately does NOT
+            // reset its back-off — see MAX_LISTEN_ATTEMPTS.
+            testScheduler.advanceTimeBy(NwLoom.MAX_LISTEN_BACKOFF.inWholeMilliseconds + 1)
+            testScheduler.runCurrent()
+
+            assertAll(
+                {
+                    assertEquals(
+                        gaveUpAt,
+                        immediatelyAfterPathChange,
+                        "a path change does NOT collapse the wait to zero — that would aim a re-registration " +
+                            "storm at the very mDNSResponder channel being recovered",
+                    )
+                },
+                {
+                    assertEquals(
+                        gaveUpAt + 1,
+                        pair.apiA.startListeningCalls,
+                        "the path change re-armed the campaign, which listened again once the floor elapsed",
+                    )
+                },
+            )
+        }
+
+    /**
+     * The rate floor holds MID-campaign too: a device-path change shortens a pending back-off but never
+     * removes it.
+     *
+     * Without the floor the effective retry rate becomes the `pathState` update rate — and iOS emits those
+     * in bursts during exactly the resume this targets, so the attempt bound would buy nothing and each
+     * "retry" is a fresh `nw_listener_create` plus a Bonjour re-registration aimed at the sick component.
+     */
+    @Test
+    fun aPathChangeShortensTheBackoffButNeverCollapsesIt() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val pair = wovenPair()
+            pair.apiA.listenFailure = NwListenerState.Failed(NW_ERROR_DOMAIN_DNS, DNS_DEFUNCT_CONNECTION)
+            pair.apiA.emitListenerFailed(domain = NW_ERROR_DOMAIN_DNS, code = DNS_DEFUNCT_CONNECTION)
+            testScheduler.runCurrent()
+            val beforeChurn = pair.apiA.startListeningCalls
+
+            // A burst of path churn while the first back-off is pending.
+            repeat(5) { i ->
+                pair.apiA.emitPathState(
+                    NwPathState(
+                        status = NwPathStatus.Satisfied,
+                        interfaces = setOf(if (i % 2 == 0) NwInterfaceType.WifiLan else NwInterfaceType.Cellular),
+                        isExpensive = false,
+                        isConstrained = false,
+                        unsatisfiedReason = null,
+                    ),
+                )
+                testScheduler.runCurrent()
+            }
 
             assertEquals(
-                gaveUpAt + 1,
+                beforeChurn,
                 pair.apiA.startListeningCalls,
-                "the path change re-armed the campaign and it listened again immediately",
+                "five path changes inside the floor produced no re-listen at all — the floor is not bypassable",
+            )
+        }
+
+    /**
+     * A listener parked in `nw_listener_state_waiting` does not park the campaign.
+     *
+     * `waiting` is "waiting for a usable network before being able to receive connections" — the state a
+     * phone resuming from suspend sits in, i.e. the target scenario. It is neither `Ready` nor `Failed`, so
+     * a supervisor whose only park condition is `first { Ready || Failed }` freezes here silently: no
+     * `attempt=`, no `gave-up`, nothing in a field capture. The campaign bounds the wait and re-creates,
+     * carrying the waiting state's own decoded reason.
+     */
+    @Test
+    fun aListenerStalledInWaitingAdvancesTheCampaignRatherThanParkingIt() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val pair = wovenPair()
+            val listensAtWeave = pair.apiA.startListeningCalls
+
+            pair.apiA.emitListenerWaiting(domain = NW_ERROR_DOMAIN_DNS, code = DNS_DEFUNCT_CONNECTION)
+            testScheduler.advanceTimeBy(NwLoom.LISTEN_VERDICT_TIMEOUT.inWholeMilliseconds / 2)
+            testScheduler.runCurrent()
+            val whileStillWithinTheVerdictWindow = pair.apiA.startListeningCalls
+
+            testScheduler.advanceTimeBy(
+                NwLoom.LISTEN_VERDICT_TIMEOUT.inWholeMilliseconds + NwLoom.INITIAL_LISTEN_BACKOFF.inWholeMilliseconds + 1,
+            )
+            testScheduler.runCurrent()
+
+            assertAll(
+                {
+                    assertEquals(
+                        listensAtWeave,
+                        whileStillWithinTheVerdictWindow,
+                        "a waiting listener is given its window to come up on its own — it is not a failure",
+                    )
+                },
+                {
+                    assertEquals(
+                        listensAtWeave + 1,
+                        pair.apiA.startListeningCalls,
+                        "a listener still waiting past the verdict window is re-created, not waited on forever",
+                    )
+                },
+            )
+        }
+
+    /**
+     * A binding that wires NO listener signal stays inert — the bounded verdict wait must not turn its
+     * permanent, expected silence into a perpetual re-listen loop.
+     *
+     * This is the regression the bound itself risks: `BridgeNwApi` inherits the never-updating
+     * [NwListenerState.Unknown] default, so "no verdict within the window" is its steady state rather than
+     * a stall. Every other test here would stay green while such a binding re-listened forever.
+     */
+    @Test
+    fun aBindingThatReportsNoListenerStateIsNeverRetried() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val pair = wovenPair { it.reportsListenerState = false }
+            val listensAtWeave = pair.apiA.startListeningCalls
+
+            testScheduler.advanceTimeBy(PAST_A_WHOLE_CAMPAIGN.inWholeMilliseconds)
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertEquals(1, listensAtWeave, "weave listens once") },
+                {
+                    assertEquals(
+                        listensAtWeave,
+                        pair.apiA.startListeningCalls,
+                        "silence from a binding with no listener signal is not a stall — it must never be retried",
+                    )
+                },
+                {
+                    assertEquals(
+                        NwListenerState.Unknown,
+                        pair.apiA.listenerState.value,
+                        "the binding stayed at its inert default throughout",
+                    )
+                },
+            )
+        }
+
+    /**
+     * A synchronously-throwing INITIAL listen seeds the campaign at attempt 1.
+     *
+     * The initial listen used to be its own call site, swallowing a throw into a `debug` line while the
+     * supervisor started unaware and parked on a verdict that would never arrive — the peer inbound-
+     * unreachable for the seam's life, no error logged. The timing is the discriminator: a seeded campaign
+     * re-listens after the back-off, an unseeded one only after the much longer verdict window (if at all).
+     */
+    @Test
+    fun aThrowingInitialListenSeedsTheCampaignRatherThanParkingIt() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val pair = wovenPair { it.listenThrows = true }
+            val listensAtWeave = pair.apiA.startListeningCalls
+
+            testScheduler.advanceTimeBy(NwLoom.INITIAL_LISTEN_BACKOFF.inWholeMilliseconds + 1)
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertEquals(1, listensAtWeave, "weave attempted the initial listen exactly once") },
+                {
+                    assertEquals(
+                        listensAtWeave + 1,
+                        pair.apiA.startListeningCalls,
+                        "the throwing initial listen started the campaign at attempt 1, well inside " +
+                            "LISTEN_VERDICT_TIMEOUT (${NwLoom.LISTEN_VERDICT_TIMEOUT}) — it did not park",
+                    )
+                },
             )
         }
 
@@ -267,13 +436,9 @@ class NwListenerRetryTest {
         override suspend fun connect(endpoint: NwEndpoint) = Unit
         override suspend fun disconnect(connectionId: NwConnectionId) = Unit
         override suspend fun send(connectionId: NwConnectionId, bytes: ByteArray) = Unit
-        override val endpointFound: Flow<NwEndpoint> = kotlinx.coroutines.flow.emptyFlow()
-        override val connectionOpened: Flow<NwConnectionOpened> = kotlinx.coroutines.flow.emptyFlow()
-        override val bytesReceived: Flow<NwBytesReceived> = kotlinx.coroutines.flow.emptyFlow()
-        override val connectionClosed: Flow<NwConnectionClosed> = kotlinx.coroutines.flow.emptyFlow()
-
-        // Referenced only so an unused-import sweep cannot quietly drop the StateFlow import this file
-        // needs for the assertion above; the default getter is what the test actually reads.
-        val listenerStateType: StateFlow<NwListenerState> get() = listenerState
+        override val endpointFound: Flow<NwEndpoint> = emptyFlow()
+        override val connectionOpened: Flow<NwConnectionOpened> = emptyFlow()
+        override val bytesReceived: Flow<NwBytesReceived> = emptyFlow()
+        override val connectionClosed: Flow<NwConnectionClosed> = emptyFlow()
     }
 }

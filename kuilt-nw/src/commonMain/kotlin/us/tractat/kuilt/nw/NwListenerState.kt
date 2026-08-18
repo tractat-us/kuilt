@@ -40,6 +40,19 @@ public sealed interface NwListenerState {
     public data object Ready : NwListenerState
 
     /**
+     * The OS has the listener but cannot yet receive connections — `nw_listener_state_waiting`, documented
+     * as "waiting for a usable network before being able to receive connections". [domain]/[code] carry the
+     * decoded `nw_error_t` explaining what it is waiting on, in the same vocabulary as [Failed].
+     *
+     * **Not a verdict, and not a failure.** A listener may sit here indefinitely and then come up on its
+     * own once a usable network appears — which is precisely the state a phone resuming from suspend with a
+     * churning interface set is expected to pass through. A watcher must therefore neither treat it as
+     * success nor retry on it immediately; `NwLoom` bounds how long it will sit here and then re-creates,
+     * so an unmodelled stall cannot park a campaign invisibly.
+     */
+    public data class Waiting(public val domain: Int, public val code: Int) : NwListenerState
+
+    /**
      * The listener terminally failed, carrying the decoded `nw_error_t` the OS handed the state-changed
      * handler. [domain] is the raw `nw_error_domain_t` (invalid=0 / posix=1 / dns=2 / tls=3) and [code] is
      * the domain-specific code — a POSIX errno for domain 1, a `DNSServiceErrorType` for domain 2, a TLS

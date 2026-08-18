@@ -51,12 +51,18 @@ class NwListenerStateCaptureTest {
     }
 
     /**
-     * A SUPERSEDED listener's late FAILED is dropped.
+     * A SUPERSEDED listener's still-queued FAILED is dropped.
      *
-     * Without this the retry would eat itself: `startListening` swaps in a new listener and cancels the old
-     * one, the cancel provokes the dead listener's handler on the shared queue, and its failure would land
-     * on top of the successor's state — so the supervisor would keep chasing a failure that had already
-     * been fixed, and the fix would look like it did not work.
+     * Without this the retry would eat itself: the stale failure would land on top of the successor's
+     * state, so the supervisor would keep chasing a failure that had already been fixed and the fix would
+     * look like it did not work.
+     *
+     * **What a stale callback is — stated precisely, because a plausible-but-wrong mechanism is exactly the
+     * bug this PR is about.** It is NOT the cancel: `listener.h` documents that cancellation's final
+     * delivered update is `nw_listener_state_cancelled`, which the handler drops by name, so cancelling a
+     * listener never yields a `failed`. What remains is a **spontaneous `failed` already queued** on the
+     * shared dispatch queue before `startListening` swapped the handle, plus the window between
+     * `nw_listener_start` and that swap.
      */
     @Test
     fun aSupersededListenersLateFailureCannotOverwriteTheCurrentState() = runTest {
@@ -79,6 +85,27 @@ class NwListenerStateCaptureTest {
                     "the current generation still publishes — the drop is scoped, not a dead path",
                 )
             },
+        )
+    }
+
+    /**
+     * A `waiting` transition publishes [NwListenerState.Waiting] with its OWN decoded error.
+     *
+     * The thematic point: this PR's whole argument is that the listener's `nw_error_t` was the discarded
+     * `_`. Modelling `waiting` while discarding *its* error would repeat that mistake one state over — and
+     * `waiting` is the state a phone resuming from suspend actually sits in, so its reason is the one a
+     * field capture most wants.
+     */
+    @Test
+    fun aWaitingTransitionPublishesItsOwnDecodedReason() = runTest {
+        val api = RealNwApi(NwPsk.derive(ROOM_KEY, SERVICE_TYPE))
+
+        api.driveListenerWaitingForTest(domain = NW_ERROR_DOMAIN_DNS, code = DNS_DEFUNCT_CONNECTION)
+
+        assertEquals(
+            NwListenerState.Waiting(NW_ERROR_DOMAIN_DNS, DNS_DEFUNCT_CONNECTION),
+            api.listenerState.value,
+            "waiting is published as a distinct non-verdict state carrying its decoded domain and code",
         )
     }
 }
