@@ -52,8 +52,9 @@ import kotlin.time.Duration.Companion.milliseconds
  * It covers **every** coroutine `NwSeam`'s constructor starts, not just the watchdog: any of them
  * dereferencing a not-yet-initialised field surfaces as a throwable on the handler. It does not
  * cover a field read that happens after the first suspension point (by then the constructor has
- * returned on any dispatcher), and it cannot see an ordering hazard in a *different* class — see
- * #2464 for the executable guard that would.
+ * returned on any dispatcher), and it cannot see an ordering hazard in a *different* class — eight
+ * more production sites share the shape and are safe only positionally; #2465 proposes the build
+ * guard that would cover them.
  */
 class NwSeamConstructionOrderTest {
 
