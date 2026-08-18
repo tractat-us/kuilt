@@ -9,7 +9,9 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNotEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -486,12 +488,29 @@ class FakeNwRadioTest {
         }
 
     /**
-     * A send issued on a link the far end has ALREADY closed is dropped, whether or not this end is
-     * held — the liveness check runs first, so a stale hold can never launder a dead link into a live
-     * queue and later "deliver" onto it (#2425).
+     * **One dead link, two call paths, opposite obligations** (#2455/#2459 × #2425).
+     *
+     * `NwApi.send`'s contract splits "there is no link" by *when it is discovered*, and both halves are
+     * mandated:
+     *
+     *  - A **fresh** `send` is an immediately-known failure with its caller on the stack. It MUST throw
+     *    — that throw is what drives `NwSeam.removeByConn`, and returning silently instead is precisely
+     *    the #2455 defect the reference itself used to carry.
+     *  - A frame already **handed off** and released later has no caller left. The contract routes such
+     *    a loss through the teardown signals "rather than inventing a late throw nobody is waiting to
+     *    catch", so [FakeNwRadio.releaseSends] must NOT throw; the loss is recorded as
+     *    [SendFate.DroppedLinkGone].
+     *
+     * The two arms share one rig — the same link, gone the same way — so the only variable is which
+     * path discovers it. Substituting either arm's behaviour into the other reds this test: the throw
+     * arm fails its `assertFailsWith`, and the release arm fails `releaseFailure == null`.
+     *
+     * [FakeNwRadio.severLinksSilently] is the teardown that notifies nobody, which is what leaves the
+     * queued frame intact for the release path to find. A [FakeNwRadio.disconnect] would have destroyed
+     * it as [SendFate.DiscardedOnClose] — a *different*, announced loss, covered by the test above.
      */
     @Test
-    fun aSendOnADeadLinkIsDroppedEvenWhileThatEndIsHeld() = runTest(StandardTestDispatcher()) {
+    fun aGoneLinkRefusesAFreshSendButSilentlyDropsOneAlreadyHandedOff() = runTest(StandardTestDispatcher()) {
         val radio = FakeNwRadio()
         val a = FakeNwApi(radio, deviceId = "A", serviceName = "svc-A")
         val b = FakeNwApi(radio, deviceId = "B", serviceName = "svc-B")
@@ -499,29 +518,72 @@ class FakeNwRadioTest {
         backgroundScope.collectInto(b.bytesReceived, atB)
         testScheduler.runCurrent()
 
-        val dial = radio.injectDoubleDial("A", "B")
-        testScheduler.runCurrent()
-        radio.holdSends(dial.outbound.dialerConnectionId)
-        b.disconnect(dial.outbound.accepterConnectionId) // the FAR end tears the outbound link down
+        val link = radio.injectDoubleDial("A", "B").outbound
         testScheduler.runCurrent()
 
-        a.send(dial.outbound.dialerConnectionId, "too-late".encodeToByteArray())
-        radio.releaseSends(dial.outbound.dialerConnectionId) // must not resurrect anything
+        // A frame handed off while the link was still LIVE: `send` returns normally, as the contract
+        // says it may — "handed off" is not "delivered".
+        radio.holdSends(link.dialerConnectionId)
+        a.send(link.dialerConnectionId, "already-handed-off".encodeToByteArray())
+        testScheduler.runCurrent()
+        val handedOff = radio.sentFrames.single()
+        val queuedWhileLive = handedOff.fate == SendFate.InFlight && radio.isLive(link.dialerConnectionId)
+
+        // THE RIG: the far end destroys the link and tells nobody. Nothing is discarded, so the queued
+        // frame survives to be found by the release path.
+        radio.severLinksSilently("B")
+        testScheduler.runCurrent()
+        val severed = !radio.isLive(link.dialerConnectionId)
+
+        // ARM 1 — fresh send, caller on the stack: MUST throw.
+        assertFailsWith<NwSendFailedException>(
+            "a fresh send onto a link that is already gone is an immediately-known failure and must be " +
+                "REPORTED — a silent return is what made NwSeam's eviction dead code (#2455)",
+        ) {
+            a.send(link.dialerConnectionId, "fresh".encodeToByteArray())
+        }
+        val refused = radio.sentFrames.last()
+
+        // ARM 2 — the release path, no caller left: MUST NOT throw. Caught by TYPE (never a bare
+        // `runCatching`, which would swallow this coroutine's own cancellation) so the assertion can
+        // name what went wrong instead of the test dying with a raw stack.
+        var releaseFailure: Throwable? = null
+        try {
+            radio.releaseSends(link.dialerConnectionId)
+        } catch (failure: NwSendFailedException) {
+            releaseFailure = failure
+        }
         testScheduler.runCurrent()
 
         assertAll(
-            { assertEquals(SendFate.DroppedLinkGone, radio.sentFrames.single().fate) },
-            { assertFalse(radio.sentFrames.single().wasHeld, "a dead link is never queued") },
-            { assertEquals(emptyList(), atB.map { it.bytes.decodeToString() }) },
-            { assertFalse(radio.isLive(dial.outbound.dialerConnectionId), "the closed link is gone") },
+            // Rig receipts: the frame really was queued while the link was live, and the link really
+            // did go away. Without both, "dropped" would be indistinguishable from "never sent".
+            { assertTrue(queuedWhileLive, "rig: the frame must be queued on a LIVE link, not a dead one") },
+            { assertTrue(severed, "rig: severLinksSilently must actually have destroyed the link") },
+            // ARM 1: reported, and nothing was handed to the transport.
+            { assertEquals(SendFate.Refused, refused.fate, "the refused frame is recorded as refused") },
+            // ARM 2: silent, and the frame is gone.
             {
-                assertTrue(
-                    radio.isLive(dial.inbound.dialerConnectionId),
-                    "…and only that one: the pair's OTHER link is untouched by its sibling's close",
+                assertNull(
+                    releaseFailure,
+                    "releasing onto a link that has since gone must NOT throw — `send` already returned " +
+                        "normally and no caller is left to catch it: $releaseFailure",
                 )
             },
-            { assertEquals(1, radio.liveLinkCount) },
-            { assertEquals(2, radio.openedLinkCount, "the cumulative count never falls") },
+            { assertEquals(SendFate.DroppedLinkGone, handedOff.fate, "…the loss is recorded, not raised") },
+            // The property the two arms exist to state: same dead link, different fate, because they
+            // differ in whether anybody could be told.
+            {
+                assertNotEquals(
+                    refused.fate,
+                    handedOff.fate,
+                    "the two paths MUST diverge; collapsing them onto one fate loses the only " +
+                        "distinction NwSeam can act on",
+                )
+            },
+            // Neither frame reached anybody, on either path.
+            { assertEquals(emptyList(), atB.map { it.bytes.decodeToString() }) },
+            { assertEquals(2, radio.sentFrames.size, "exactly the two sends this test issued") },
         )
     }
 
