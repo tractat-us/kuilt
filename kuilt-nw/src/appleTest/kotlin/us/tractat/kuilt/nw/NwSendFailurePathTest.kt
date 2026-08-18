@@ -2,6 +2,7 @@ package us.tractat.kuilt.nw
 
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
@@ -60,5 +61,53 @@ class NwSendFailurePathTest {
         )
 
         assertFailsWith<NwSendFailedException> { api.send(id, FRAME) }
+    }
+
+    @Test
+    fun anErroredSendCompletionEscalatesToAFailedCloseCarryingTheSendReason() = runTest {
+        // The ASYNCHRONOUS half. `nw_connection_send`'s completion fires long after `send` returned, so a
+        // throw would have nobody to catch it; the error is escalated into the close path instead, which is
+        // what `NwSeam` already treats as authoritative. Before the fix this was a single `log.debug` and
+        // the connection stayed in the registry, so the seam kept writing to a link the transport had
+        // already given up on.
+        val api = RealNwApi(NwPsk.derive(ROOM_KEY, SERVICE_TYPE))
+        val id = api.registerInertConnectionForTest(endpoint = null)
+
+        // POSIX(1) EPIPE(32) — a write to a connection whose peer is gone.
+        api.driveSendCompletionErrorForTest(id, domain = 1, code = 32, byteCount = FRAME.size)
+        // The escalation cancels; run the `cancelled` handler's close, as `onState` would.
+        api.driveCloseForTest(id, failed = true)
+
+        assertEquals(
+            NwConnState.Closed("send:32"),
+            api.connectionStates.value[id],
+            "the send failure must reach the seam as a NON-graceful close naming the send — not as a debug line",
+        )
+        assertEquals(
+            NwConnectionFailure(id, domain = 1, code = 32),
+            api.lastConnectionFailure.value,
+            "the decoded (domain, code) must be captured, so a capture says WHY the send failed",
+        )
+    }
+
+    @Test
+    fun anErroredSendCompletionOnAGracefullyClosingConnectionDoesNotClobberTheGracefulReason() = runTest {
+        // The guard that makes escalation safe to run on every errored completion: our OWN `disconnect`
+        // provokes an ECANCELED send completion, and escalating THAT would turn the contractual graceful
+        // `reason = null` close into a spurious failed one. `escalateClose` refuses a connection already
+        // marked closing (#1479); this pins that the send path inherits the refusal rather than
+        // re-deriving it.
+        val api = RealNwApi(NwPsk.derive(ROOM_KEY, SERVICE_TYPE))
+        val id = api.registerInertConnectionForTest(endpoint = null)
+        api.markClosingForTest(id) // as `disconnect` does, before the cancel lands
+
+        api.driveSendCompletionErrorForTest(id, domain = 1, code = 89, byteCount = FRAME.size) // ECANCELED
+        api.driveCloseForTest(id, failed = false)
+
+        assertEquals(
+            NwConnState.Closed(null),
+            api.connectionStates.value[id],
+            "a send error racing our own graceful cancel must stay graceful — was ${api.connectionStates.value[id]}",
+        )
     }
 }

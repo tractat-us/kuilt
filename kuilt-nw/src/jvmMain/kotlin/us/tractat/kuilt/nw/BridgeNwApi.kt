@@ -327,10 +327,14 @@ public class BridgeNwApi internal constructor(
 
     override suspend fun send(connectionId: NwConnectionId, bytes: ByteArray) {
         val result = withContext(dispatcher) { nativeLib.nw_send(handle, connectionId.value, bytes, bytes.size) }
-        // Best-effort per the NwApi contract: a synchronous failure is NwSeam's cue to evict the
-        // connection, so a negative result code throws (mirrors RealNwApi's best-effort semantics —
-        // most real failures still arrive asynchronously via connectionClosed).
-        if (result < 0) error("nw_send failed for ${connectionId.value} (result=$result)")
+        // A negative result is the dylib's report that `RealNwApi.send` behind it threw — an
+        // immediately-known failure, and NwSeam's cue to evict the connection. Typed as
+        // [NwSendFailedException] so all three bindings speak one failure vocabulary (#2455); most real
+        // failures still arrive asynchronously via connectionClosed, and a non-throwing send here means
+        // handed off, not delivered.
+        if (result < 0) {
+            throw NwSendFailedException("nw_send failed for ${connectionId.value} (result=$result)")
+        }
     }
 
     /**

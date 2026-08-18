@@ -143,6 +143,12 @@ internal class FakeNwApi(
      * Test hook: when `true`, [send] throws instead of delivering, exercising `NwSeam`'s
      * send-failure eviction path (`removeByConn`). Toggle it AFTER the mesh has formed so the
      * identity handshake still succeeds.
+     *
+     * **A blunt instrument, and not the interesting failure (#2455).** It fails EVERY send regardless of
+     * which handle the send names, so it can only prove the seam REACTS to a throw — never that a send
+     * addressed to a connection that is genuinely gone produces one. The handle-shaped failure lives in
+     * [FakeNwRadio.send], which now throws for an unknown/closed link exactly as `RealNwApi` does;
+     * [FakeNwRadio.severLinksSilently] is how a test reaches that state.
      */
     var failSend: Boolean = false
 
@@ -253,7 +259,7 @@ internal class FakeNwApi(
     }
 
     override suspend fun send(connectionId: NwConnectionId, bytes: ByteArray) {
-        if (failSend) throw RuntimeException("simulated send failure on device '$deviceId'")
+        if (failSend) throw NwSendFailedException("simulated send failure on device '$deviceId'")
         radio.send(deviceId, connectionId, bytes)
     }
 

@@ -462,7 +462,7 @@ internal class FakeNwRadio {
      * drop-tolerant STATE on both ends, and [FakeNwApi.dropCloseEvents] drops only the event while the
      * STATE still lands — so each of them evicts the peer through a route that is not the send path, and
      * none of them can leave a seam holding a connection that no longer exists. This one can: it is the
-     * ONLY way to reach the state where the *send* is the first and only thing that can discover the loss.
+     * ONLY way to reach the state where the *send* is the first and only thing able to discover the loss.
      *
      * Link ends are found by the `conn-<deviceId>-<n>` naming [nextConnId] mints, the same convention
      * [listenerDeviceIdOf] leans on for endpoints; both ends of each link are removed, so [liveLinkCount]'s
@@ -478,7 +478,15 @@ internal class FakeNwRadio {
     }
 
     suspend fun send(fromDeviceId: String, connectionId: NwConnectionId, bytes: ByteArray) {
-        val other = links[connectionId.value] ?: return // link already gone; drop
+        // An unknown/closed handle is an IMMEDIATELY-KNOWN failure and must THROW, mirroring `RealNwApi.send`
+        // (#2455). This used to be `?: return` — the fake carried the very defect it stands in for, so the
+        // seam's send-failure eviction was reachable here only through [FakeNwApi.failSend], a flag that
+        // fails EVERY send regardless of the handle it names and so cannot distinguish "the fabric reports a
+        // dead handle" from "the fabric was told to break".
+        val other = links[connectionId.value]
+            ?: throw NwSendFailedException(
+                "no live link for '${connectionId.value}' on device '$fromDeviceId' — unknown or already closed",
+            )
         devices.getValue(other.deviceId)
             .emitBytesReceived(NwBytesReceived(other.connectionId, bytes))
     }

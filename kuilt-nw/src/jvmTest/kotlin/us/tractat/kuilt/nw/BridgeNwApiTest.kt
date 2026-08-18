@@ -63,7 +63,7 @@ class BridgeNwApiTest {
         val fake = FakeNwNativeLib(sendFailsFor = "dead")
         val host = BridgeNwApi(fake, FakeNwNativeLib.HOST, dispatcher)
 
-        assertFailsWith<IllegalStateException> {
+        assertFailsWith<NwSendFailedException> {
             host.send(NwConnectionId("dead"), byteArrayOf(9))
         }
     }
