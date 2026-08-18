@@ -37,6 +37,7 @@ import kotlin.time.Duration.Companion.seconds
  * proves the consumer's reaction, never the real transport's emission — that half is confirmed against
  * the hardware reproducer, per `docs/debugging-process.md`.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class NwListenerRetryTest {
 
     private companion object {
@@ -73,7 +74,6 @@ class NwListenerRetryTest {
      */
     private class WovenPair(val apiA: FakeNwApi, val apiB: FakeNwApi, val seamA: Seam, val seamB: Seam)
 
-    @OptIn(ExperimentalCoroutinesApi::class)
     private suspend fun TestScope.wovenPair(): WovenPair {
         val radio = FakeNwRadio()
         val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "peer-A", peerId = "peer-A")

@@ -180,6 +180,11 @@ public class NwLoom(
 
         runCatchingCancellable { api.startListening(serviceName, serviceType) }
             .onFailure { log.debug { "nw.listen failed serviceName=$serviceName selfId=${selfId.value}" } }
+        // That `runCatchingCancellable` can only ever catch a SYNCHRONOUS throw, and Network.framework
+        // does not raise one: startListening returns Unit and the OS decides the registration later, on a
+        // callback. So a listener that fails — at weave, or minutes in when the app is suspended — was
+        // invisible above and terminal (#2449). The supervisor watches [NwApi.listenerState] and re-listens.
+        ListenSupervisor(api, seamScope, serviceName, serviceType, selfId).start()
         runCatchingCancellable { api.startBrowsing(serviceType) }
             .onFailure { log.debug { "nw.browse failed serviceType=$serviceType selfId=${selfId.value}" } }
 
@@ -325,6 +330,123 @@ public class NwLoom(
          * arrive precisely when a retry would now succeed.
          */
         internal const val MAX_LISTEN_ATTEMPTS: Int = 6
+    }
+}
+
+/**
+ * Keeps this peer LISTENING for as long as the seam is open (#2449) — the accept-side twin of
+ * [RedialCoordinator], which does the same job for the dial side.
+ *
+ * ## The gap it fills
+ * [NwApi.startListening] is `suspend fun … : Unit`. Network.framework decides whether the registration
+ * succeeded *after* it returns, on a GCD callback, so the `runCatchingCancellable` in [NwLoom.weave] can
+ * only catch a synchronous throw — and there is none. A listener refused at start, or torn down by the OS
+ * while the app was suspended, produced no observable signal at all: **there was no retry because there
+ * was no signal.** [NwApi.listenerState] is that signal; this watches it.
+ *
+ * ## Why bounded retry is right for the failure that actually happens
+ * The observed failure is `dns(2)/-65569` (`DefunctConnection`), landing right after a listener inbox
+ * reconcile — the OS retires the old inboxes, starts a fresh set across every interface, then cancels
+ * them and reports failed. An interface-set change racing the Bonjour registration, which is transient.
+ * So: back off ([NwLoom.INITIAL_LISTEN_BACKOFF] → double → [NwLoom.MAX_LISTEN_BACKOFF]) for at most
+ * [NwLoom.MAX_LISTEN_ATTEMPTS] CONSECUTIVE failures, then stop rather than advertise forever into a path
+ * that keeps refusing.
+ *
+ * ## The path-change trigger
+ * Stopping is not final: a [NwApi.pathState] change re-arms a fresh campaign, and also cuts a pending
+ * back-off short. This is not a speculative extra — the interface churn IS the cause, so a path change is
+ * the single event most likely to arrive exactly when a retry would now succeed. In the field capture
+ * `pathState` fired dozens of times through the dead window, including a real cellular↔Wi-Fi flap 70 s
+ * before the host's listener failed, and nothing was watching any of it. On a binding whose `pathState`
+ * never updates (the never-updating default) the give-up is simply permanent, which is honest.
+ *
+ * ## Scope and logging
+ * Runs on the seam [scope], so [Seam.close] cancels it. Every attempt logs at `error` with `attempt=` and
+ * `retryIn=`, so a terminal give-up is distinguishable in a field capture from a first failure that
+ * recovered — the distinction the original single unconditional line could not make.
+ */
+private class ListenSupervisor(
+    private val api: NwApi,
+    private val scope: CoroutineScope,
+    private val serviceName: String,
+    private val serviceType: String,
+    private val selfId: PeerId,
+) {
+    fun start() {
+        scope.launch { supervise() }
+    }
+
+    private suspend fun supervise() {
+        var consecutiveFailures = 0
+        var backoff = NwLoom.INITIAL_LISTEN_BACKOFF
+        while (true) {
+            val failure = awaitFailure {
+                consecutiveFailures = 0
+                backoff = NwLoom.INITIAL_LISTEN_BACKOFF
+            }
+            consecutiveFailures += 1
+            if (consecutiveFailures >= NwLoom.MAX_LISTEN_ATTEMPTS) {
+                log.error {
+                    "nw.listen.gave-up self=${selfId.value} serviceName=$serviceName " +
+                        "attempt=$consecutiveFailures/${NwLoom.MAX_LISTEN_ATTEMPTS} " +
+                        "nw_error domain=${nwErrorDomainName(failure.domain)}(${failure.domain}) code=${failure.code} " +
+                        "— this peer is UNREACHABLE INBOUND (existing links keep working); " +
+                        "no further listen until the device network path changes"
+                }
+                awaitPathChange()
+                log.error {
+                    "nw.listen.path-changed self=${selfId.value} serviceName=$serviceName " +
+                        "path=${api.pathState.value} → re-arming the listen campaign that had given up"
+                }
+                consecutiveFailures = 0
+                backoff = NwLoom.INITIAL_LISTEN_BACKOFF
+            } else {
+                log.error {
+                    "nw.listen.retry self=${selfId.value} serviceName=$serviceName " +
+                        "attempt=$consecutiveFailures/${NwLoom.MAX_LISTEN_ATTEMPTS} " +
+                        "nw_error domain=${nwErrorDomainName(failure.domain)}(${failure.domain}) code=${failure.code} " +
+                        "retryIn=$backoff"
+                }
+                // Sit out the back-off — but wake EARLY on a device-path change, since that is the event
+                // that makes the next attempt likely to succeed rather than just the next tick of a timer.
+                withTimeoutOrNull(backoff) { awaitPathChange() }
+                backoff = (backoff * 2).coerceAtMost(NwLoom.MAX_LISTEN_BACKOFF)
+            }
+            runCatchingCancellable { api.startListening(serviceName, serviceType) }
+                .onFailure {
+                    log.error { "nw.listen.retry-threw self=${selfId.value} serviceName=$serviceName: ${it.message}" }
+                }
+        }
+    }
+
+    /**
+     * Suspend until the listener reports [NwListenerState.Failed], calling [onReady] whenever it comes up
+     * [NwListenerState.Ready] first — a listener that genuinely came up ends the *consecutive* failure run,
+     * so a session that loses its listener once an hour never walks into the give-up.
+     *
+     * Reading [NwApi.listenerState] as a [kotlinx.coroutines.flow.StateFlow] means a [NwListenerState.Failed]
+     * can never be missed, only observed late. It can be *conflated over*: a `Ready` immediately superseded
+     * by a `Failed` may never be seen, which costs at most one un-reset counter — the conservative direction.
+     */
+    private suspend fun awaitFailure(onReady: () -> Unit): NwListenerState.Failed {
+        while (true) {
+            val settled = api.listenerState.first { it is NwListenerState.Ready || it is NwListenerState.Failed }
+            if (settled is NwListenerState.Failed) return settled
+            onReady()
+            log.info { "nw.listen.ready self=${selfId.value} serviceName=$serviceName — listener up; back-off reset" }
+            // Park until it leaves Ready, so the next failure is observed rather than spun on.
+            api.listenerState.first { it !is NwListenerState.Ready }
+        }
+    }
+
+    /**
+     * Suspend until the device's network path CHANGES from whatever it is right now. On a binding whose
+     * [NwApi.pathState] is the never-updating default this parks forever — deliberately: no path signal
+     * means no re-arm trigger, which is exactly the pre-#2449 behaviour for that binding.
+     */
+    private suspend fun awaitPathChange() {
+        val observedAt = api.pathState.value
+        api.pathState.first { it != observedAt }
     }
 }
 

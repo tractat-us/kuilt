@@ -286,6 +286,20 @@ internal class RealNwApi(
     // monitor delivers its first update. The seam folds this into its live capability.
     private val _pathState = MutableStateFlow<NwPathState?>(null)
 
+    // The inbound listener's LATEST state (#2449). Before this, a listener that failed had NO surface at
+    // all: startListening returns Unit, the verdict arrives later on [queue], and the discarded `nw_error_t`
+    // meant even the log could only GUESS at the cause. Latest-value STATE, like _pathState — "is my
+    // listener up?" is a level, and a late subscriber must see the current answer rather than miss the edge.
+    private val _listenerState = MutableStateFlow<NwListenerState>(NwListenerState.Unknown)
+
+    // Which listener generation may publish into [_listenerState]. [startListening] swaps in a new listener
+    // and cancels the superseded one, but a cancelled listener's handler can still fire afterwards on the
+    // shared queue — without this, a retry's healthy Ready would be overwritten by the DEAD listener's late
+    // FAILED, and the supervisor watching this flow would chase a failure that had already been fixed.
+    // A monotone counter rather than comparing `nw_listener_t` refs: identity of an ObjC handle across two
+    // Kotlin/Native wrappers is not something to bet a retry loop on.
+    private val listenGeneration = atomic(0L)
+
     // The single lazily-started `nw_path_monitor`, guarded by [lock] (its `nw_*` calls run OUTSIDE the lock, like
     // the listener/browser handles). `null` until [ensurePathMonitor] starts it; nulled by [cancelPathMonitor].
     private var pathMonitor: nw_path_monitor_t? = null
@@ -347,6 +361,8 @@ internal class RealNwApi(
         }
     }.buffer(BYTES_BUFFER)
     override val connectionStates: StateFlow<Map<NwConnectionId, NwConnState>> = _connectionStates.asStateFlow()
+
+    override val listenerState: StateFlow<NwListenerState> = _listenerState.asStateFlow()
 
     private val pathStateFlow: StateFlow<NwPathState?> = _pathState.asStateFlow()
 
@@ -440,15 +456,6 @@ internal class RealNwApi(
     private fun captureFailure(id: NwConnectionId, domain: Int, code: Int, phase: String) {
         log.info { "nw.api.state.error id=${id.value} $phase nw_error domain=${nwErrorDomainName(domain)}($domain) code=$code" }
         _lastConnectionFailure.value = NwConnectionFailure(id, domain, code)
-    }
-
-    /** A human tag for the raw `nw_error_domain_t` value, mirroring the [NW_ERROR_DOMAIN_TLS] et al. numbering. */
-    private fun nwErrorDomainName(domain: Int): String = when (domain) {
-        NW_ERROR_DOMAIN_INVALID -> "invalid"
-        NW_ERROR_DOMAIN_POSIX -> "posix"
-        NW_ERROR_DOMAIN_DNS -> "dns"
-        NW_ERROR_DOMAIN_TLS -> "tls"
-        else -> "unknown"
     }
 
     /**
@@ -737,6 +744,12 @@ internal class RealNwApi(
     // ── host role ────────────────────────────────────────────────────────────
 
     override suspend fun startListening(serviceName: String, serviceType: String) {
+        // Claim a fresh generation and reset the published state BEFORE anything can call back (#2449).
+        // Both halves matter: the bump silences the superseded listener's late FAILED, and the Starting
+        // reset stops a watcher reading the PREVIOUS attempt's terminal Failed as this attempt's verdict
+        // (without it a retry loop would see a stale Failed the instant it looked, and spin).
+        val generation = listenGeneration.incrementAndGet()
+        _listenerState.value = NwListenerState.Starting
         // Both modes bind an OS-assigned ephemeral port (nw_listener_create; no fixed port). Loopback
         // omits the Bonjour advertise and, once ready, publishes its REAL bound port to the rendezvous
         // so the joiner dials a port that is genuinely bound — no pre-allocated number, no TOCTOU.
@@ -753,9 +766,13 @@ internal class RealNwApi(
             if (descriptor != null) advertisePeerIdInTxt(descriptor)
             nw_listener_set_advertise_descriptor(newListener, descriptor)
         }
-        nw_listener_set_state_changed_handler(newListener) { state, _ ->
+        // The `nw_error_t` this handler is handed used to be the discarded `_` — which is precisely why
+        // the failure line could only ever GUESS at a cause (#2449). Both branches now publish, so a
+        // listener's verdict is observable state and not just a log line nobody can act on.
+        nw_listener_set_state_changed_handler(newListener) { state, error ->
             when (state) {
-                nw_listener_state_ready ->
+                nw_listener_state_ready -> {
+                    publishListenerState(generation, NwListenerState.Ready)
                     // Host loopback side only: publish the OS-assigned bound port (nw_listener_get_port
                     // returns host byte order — no hand swap) so the joiner's await unblocks. The
                     // joiner's own (unused) listener does NOT publish.
@@ -764,11 +781,8 @@ internal class RealNwApi(
                         loopback.rendezvous.hostPort.complete(port)
                         log.debug { "nw.listen loopback host ready on 127.0.0.1:$port (TLS-PSK)" }
                     }
-                // Surface a listener that never comes up (e.g. a bind failure) LOUDLY — otherwise the
-                // only symptom is a downstream weave timeout, an opaque flake in the loopback
-                // conformance run (the Apple nightly lane, not the per-PR ci-required check).
-                nw_listener_state_failed ->
-                    log.error { "nw.listen FAILED (bind unavailable?) loopback=${loopback != null}" }
+                }
+                nw_listener_state_failed -> onListenerFailed(generation, error)
                 else -> Unit
             }
         }
@@ -790,8 +804,81 @@ internal class RealNwApi(
 
     override suspend fun stopListening() {
         val doomed = lock.withLock { listener.also { listener = null } } ?: return
+        // Retire this generation BEFORE cancelling: the cancel provokes a state callback, and a listener
+        // we deliberately tore down must not be reported as a failure anyone should retry (#2449).
+        listenGeneration.incrementAndGet()
+        _listenerState.value = NwListenerState.Unknown
         nw_listener_cancel(doomed)
     }
+
+    /**
+     * Decode the `nw_error_t` a `nw_listener` FAILED transition hands us, log it, and publish it as
+     * [NwListenerState.Failed] (#2449).
+     *
+     * This error used to be discarded, and the line read `nw.listen FAILED (bind unavailable?)`. That
+     * parenthetical was **wrong**, not merely vague: Apple's own `com.apple.network:listener` log for the
+     * same millisecond on both field devices reads `reporting state failed (DNS Error: DefunctConnection)`
+     * — `dns(2)/-65569`, a Bonjour registration going defunct behind a listener inbox reconcile, with no
+     * bind or address conflict in it at all. A wrong guess in a log line is worse than none; it sent the
+     * first analysis of that session hunting an `EADDRINUSE` that never existed. So the guess is gone and
+     * what the OS actually said takes its place, in the SAME domain/code vocabulary [captureFailure] has
+     * used for connections since #1560.
+     *
+     * Stays at `error` deliberately: a peer whose listener is down is unreachable inbound while looking
+     * perfectly healthy on its existing links, and this is the one kuilt line that survived the field
+     * session's log retention.
+     */
+    private fun onListenerFailed(generation: Long, error: nw_error_t?) {
+        // A FAILED transition carrying no error is reported as the INVALID domain rather than an invented
+        // one, so a reader can tell "nothing to decode" from a real verdict.
+        val domain = error?.let { nw_error_get_error_domain(it).toInt() } ?: NW_ERROR_DOMAIN_INVALID
+        val code = error?.let { nw_error_get_error_code(it) } ?: 0
+        captureListenerFailure(generation, domain, code)
+    }
+
+    /**
+     * Log and publish the decoded listener-failure [domain]/[code]. Split from [onListenerFailed] for the
+     * same reason [captureFailure] is split from [recordFailure]: it is the half a unit test can drive with
+     * injected primitives, so [driveListenerFailureForTest] exercises the REAL log+publish plumbing rather
+     * than a copy of it that could drift from production without anything going red.
+     */
+    private fun captureListenerFailure(generation: Long, domain: Int, code: Int) {
+        log.error {
+            "nw.listen FAILED loopback=${loopback != null} nw_error domain=${nwErrorDomainName(domain)}($domain) code=$code"
+        }
+        publishListenerState(generation, NwListenerState.Failed(domain, code))
+    }
+
+    /**
+     * Publish [state] only while [generation] is still the current listener's — a superseded or cancelled
+     * listener's late callback is dropped (see [listenGeneration]). A plain `value` write on a
+     * [MutableStateFlow], safe from the GCD queue like every other publish here.
+     */
+    private fun publishListenerState(generation: Long, state: NwListenerState) {
+        if (listenGeneration.value != generation) return
+        _listenerState.value = state
+    }
+
+    /**
+     * Test-only (#2449): drive the listener-failure publish path with injected primitives, exercising the
+     * exact [publishListenerState] plumbing a real FAILED transition runs but bypassing the `nw_error_t`
+     * decode (no `nw_error_t` is synthesizable in a unit test — the same constraint [driveFailureForTest]
+     * documents for connections). Uses the CURRENT generation, so it models the live listener failing.
+     * Not part of the fabric contract.
+     */
+    internal fun driveListenerFailureForTest(domain: Int, code: Int) =
+        captureListenerFailure(listenGeneration.value, domain, code)
+
+    /**
+     * Test-only (#2449): retire the current listener generation WITHOUT touching `nw_*`, so a test can prove
+     * a superseded listener's late FAILED is dropped rather than overwriting a healthy successor's state.
+     * Returns the generation that was just retired — the one a stale callback would still be carrying.
+     */
+    internal fun supersedeListenerForTest(): Long = listenGeneration.getAndIncrement()
+
+    /** Test-only (#2449): drive a listener failure tagged with an already-retired [generation]. */
+    internal fun driveStaleListenerFailureForTest(generation: Long, domain: Int, code: Int) =
+        captureListenerFailure(generation, domain, code)
 
     // ── join role ────────────────────────────────────────────────────────────
 
