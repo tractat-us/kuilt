@@ -962,7 +962,7 @@ public abstract class SeamConformanceSuite {
     // does not — `InMemoryLoom`/`ControllableSeam` read a SHARED registry that `close()` removes only
     // *self* from; `WebRTCPeerLink` recomputes from a completed deferred and never reads the `_peers`
     // that `tear()` collapses — the addressee is still named, so nothing refuses. Those six are held
-    // by the older obligation, not this one, and #2455 tracks making them read their own `peers`.
+    // by the older obligation, not this one, and #2456 tracks making them read their own `peers`.
     //
     // Note what the reference implementation is doing in that second list: `InMemoryLoom` structurally
     // CANNOT reach the failure this clause names, so a property written only against it would look
