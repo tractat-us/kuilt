@@ -196,10 +196,12 @@ class NwSeamWedgeDiagnosticsTest {
                 oneProbe(count = 3)
                 val healthy = appender.lines(Level.ERROR, "nw.seam.registry.orphan", "closed-")
 
-                // RIG the field shape (#2425, 18:26:36.9): A's peer B is left bound to a connection A
-                // has dropped from `conns`. No NwApi input can produce this — every production removal
-                // path either evicts the peer or proves the connection was not the live one — so the
-                // ERROR arm is only ever observed by rigging it.
+                // RIG the state: A's peer B is left bound to a connection A has dropped from `conns`.
+                // No NwApi input can produce this — every production removal path either evicts the peer
+                // or proves the connection was not the live one — so the ERROR arm is only ever observed
+                // by rigging it. (This is NOT what happened in #2425: a two-sided byte ledger showed the
+                // binding there was correct and carrying traffic. The check is a cheap backstop whose
+                // ABSENCE from a future capture rules local bookkeeping out in one line.)
                 val forgotten = a.seam.dropConnWithoutEvictingForAuditRig(b.peerId)
                 assertNotNull(forgotten, "rig did not fire: B was not registered on A")
 
@@ -207,9 +209,9 @@ class NwSeamWedgeDiagnosticsTest {
                 // an arm that removes nothing and deliberately evicts nobody. The audit must still run.
                 //
                 // Emitted directly rather than driven through `disconnect`, because `FakeNwRadio` delivers
-                // the close EVENT only to the REMOTE end, while the field host observed the close of a
-                // connection IT had closed (`nw.api.close id=nw-2 closing=true` → `nw.seam.closed … :
-                // unknown-conn` 0 ms later). `RealNwApi` reports a local close locally; this is that event.
+                // the close EVENT only to the REMOTE end, whereas `RealNwApi` reports a locally-initiated
+                // close locally too (`nw.api.close` → `nw.seam.closed … : unknown-conn`). This is that
+                // event: the arm that removes nothing and evicts nobody, and must still reach the audit.
                 a.api.emitConnectionClosed(NwConnectionClosed(forgotten, reason = null))
                 pumpUntil { appender.lines(Level.ERROR, "nw.seam.registry.orphan", "closed-").isNotEmpty() }
                 val revealed = appender.lines(Level.ERROR, "nw.seam.registry.orphan", "closed-")
@@ -313,6 +315,131 @@ class NwSeamWedgeDiagnosticsTest {
                 )
             }
         }
+
+    /**
+     * The publish-then-swap window (#2425). A peer is published on one link, the consumer writes to it,
+     * and the seam then rebinds the peer to a second link and closes the first — so the write went to a
+     * socket the far end may already have closed, and this fabric neither retries nor reports it.
+     *
+     * The two links are established SEQUENTIALLY rather than double-dialled in one pump, which is what
+     * makes the window openable at all: the first link must settle (and the peer become visible) before
+     * the second arrives to displace it. `nowMillis` is an injected counter the test steps by hand, so
+     * `visible-for` is an exact assertion rather than a wall-clock reading that would differ per run.
+     */
+    @Test
+    fun aPeerRepublishedOnAnotherLinkReportsTheWindowAndWhatWasWrittenIntoIt() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            withCapture { appender ->
+                // CONTROL: seeds whose canonical nonces make the FIRST link the survivor, so both ends take
+                // the `dedup.keep` arm and no peer is ever moved. If this arm ever reds, the harness's nonce
+                // ordering has changed — pick another keep-producing pair, do not delete the arm: without it
+                // the subject below is satisfied by a WARN that fires on every dedup.
+                val keptPeers = swapScenario(tag = "keepctl", seeds = 0 to 0)
+                val keptLines = appender.lines(Level.WARN, "nw.seam.publish-swap", "keepctl-")
+
+                // SUBJECT: seeds whose canonical nonces make the SECOND link the survivor, so both ends
+                // rebind — and only device 0 wrote into the window.
+                val swappedPeers = swapScenario(tag = "swapped", seeds = 0 to 3)
+                val swapLines = appender.lines(Level.WARN, "nw.seam.publish-swap", "swapped-")
+                val writerLine = swapLines.firstOrNull { it.contains("self=swapped-peer-0") } ?: ""
+                val quietLine = swapLines.firstOrNull { it.contains("self=swapped-peer-1") } ?: ""
+
+                assertAll(
+                    { assertEquals(2, keptPeers, "control scenario must still converge") },
+                    {
+                        assertEquals(
+                            0,
+                            keptLines.size,
+                            "no peer was moved, so no window was opened: $keptLines",
+                        )
+                    },
+                    { assertEquals(2, swappedPeers, "subject scenario must still converge") },
+                    {
+                        assertEquals(
+                            2,
+                            swapLines.size,
+                            "both ends rebind, so both report their own window: $swapLines",
+                        )
+                    },
+                    {
+                        assertTrue(
+                            writerLine.contains("frames-written-to-published-link=1"),
+                            "the frame written after publish and before the swap must be counted — this is " +
+                                "the field's stranded write, as a number: $swapLines",
+                        )
+                    },
+                    {
+                        assertTrue(
+                            quietLine.contains("frames-written-to-published-link=0"),
+                            "the counter must be a measurement, not a constant — the peer that wrote " +
+                                "nothing into its window reports zero: $swapLines",
+                        )
+                    },
+                    {
+                        // The window's width, exactly as stepped: 37 ms before the write, 5 ms after.
+                        assertTrue(
+                            writerLine.contains("visible-for=42ms"),
+                            "the publish→swap window must be measured from the injected clock, not a wall " +
+                                "clock: $swapLines",
+                        )
+                    },
+                    {
+                        assertTrue(
+                            writerLine.contains("published-on=") && writerLine.contains("now-on=") &&
+                                writerLine.contains("dialled="),
+                            "both link identities, and the direction of each: $swapLines",
+                        )
+                    },
+                )
+            }
+        }
+
+    /**
+     * Two peers, two links, established one at a time so the first can settle before the second displaces
+     * it. [seeds] pick each device's nonce stream, which is what decides whether the second link wins (a
+     * rebind) or loses (no rebind at all). Device 0 broadcasts once while the peer is published on the
+     * FIRST link — the write that a swap strands. Returns the converged peer count.
+     */
+    private suspend fun TestScope.swapScenario(tag: String, seeds: Pair<Int, Int>): Int {
+        var clockMillis = 0L
+        val radio = FakeNwRadio()
+        val devices = (0..1).map { i ->
+            val api = FakeNwApi(radio, deviceId = "$tag-dev-$i", serviceName = "$tag-svc-$i")
+            val id = PeerId("$tag-peer-$i")
+            Device(
+                id,
+                api,
+                NwSeam(
+                    selfId = id,
+                    api = api,
+                    scope = seamScope(),
+                    random = Random((if (i == 0) seeds.first else seeds.second).toLong()),
+                    inboundSilenceProbe = PROBE,
+                    nowMillis = { clockMillis },
+                ),
+            )
+        }
+        for (d in devices) {
+            backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { d.seam.incoming.collect { } }
+        }
+        testScheduler.runCurrent()
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            devices[0].api.connect(NwEndpoint(id = "ep-$tag-dev-1", serviceName = "$tag-svc-1"))
+        }
+        assertTrue(
+            pumpUntil { devices.all { it.seam.peers.value.size == 2 } },
+            "$tag: the first link must publish the peer before the second is dialled",
+        )
+        clockMillis += 37
+        devices[0].seam.broadcast("in-the-window".encodeToByteArray())
+        pumpUntil { false }
+        clockMillis += 5
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            devices[1].api.connect(NwEndpoint(id = "ep-$tag-dev-0", serviceName = "$tag-svc-0"))
+        }
+        pumpUntil { false }
+        return devices.minOf { it.seam.peers.value.size }
+    }
 
     // ── capture plumbing ────────────────────────────────────────────────────────
 

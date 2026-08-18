@@ -3302,9 +3302,10 @@ val forbidDemotedFieldTrail by tasks.registering {
         "nw.seam.viability.recovered",
         "nw.seam.corrupt-inbound",
         "nw.seam.TORN",
-        // The two wedge discriminators (#2420) — a contract violation and a condition, respectively.
+        // The #2420 wedge diagnostics — one contract violation and two conditions.
         "nw.seam.registry.orphan",
         "nw.seam.inbound-silent",
+        "nw.seam.publish-swap",
         // The transport's own account, which is the only place a browse result or a path change appears.
         "nw.api.browse-result",
         "nw.path.update",

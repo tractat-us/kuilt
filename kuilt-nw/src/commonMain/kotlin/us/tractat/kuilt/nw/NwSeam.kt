@@ -38,6 +38,15 @@ import kotlin.time.Duration.Companion.seconds
 private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwSeam")
 
 /**
+ * Monotonic milliseconds from an arbitrary fixed origin — the production default for [NwSeam]'s
+ * `nowMillis`. Mirrors `:kuilt-quilter`'s `SystemMonotonicMillis`: time is a dependency, so the seam
+ * takes a provider and a test passes a controlled counter rather than racing a wall clock.
+ */
+private val seamMonotonicMillis: () -> Long = kotlin.time.TimeSource.Monotonic.markNow().let { origin ->
+    { origin.elapsedNow().inWholeMilliseconds }
+}
+
+/**
  * Full-mesh [Seam] over an [NwApi] — one peer's symmetric view of an N-peer
  * Network.framework session.
  *
@@ -114,10 +123,11 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwSeam")
  * `NwLoom.weave` timeout (which routes through [close] as [CloseReason.Unreachable]); it is never a
  * consequence of peer loss.
  *
- * ## The wedge watchdog — two discriminators for a formation that fails SILENTLY (#2420)
+ * ## The wedge watchdog — diagnostics for a formation that fails SILENTLY (#2420)
  * This fabric's characteristic failure is silence: a seam that has resolved a peer and cannot move a byte
- * over it emits nothing at all, so a wedged device and an idle one produce identical logs. Two checks make
- * the two readings of that wedge (#2425) separable, and the LEVEL SPLIT between them is deliberate:
+ * over it emits nothing at all, so a wedged device and an idle one produce identical logs. Three signals
+ * attack that, and the LEVEL SPLIT between them is deliberate — ERROR for a contract violation, WARN for
+ * a condition. Do not flatten them:
  *
  *  - **[auditRegistryLocked] — ERROR.** A [registry] entry naming a connId absent from [conns]. That is
  *    contract-impossible per this class's own model, so it can only be a host-side bookkeeping bug. Run in
@@ -125,6 +135,10 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwSeam")
  *  - **[sweepInboundSilence] — WARN.** A settled peer whose live link has carried no inbound frame for at
  *    least one [inboundSilenceProbe]. A *condition*, not a bug — an application with nothing to say looks
  *    the same — reported once per silence episode per link.
+ *  - **`nw.seam.publish-swap` — WARN**, from [resolveIdentity]'s dedup-replace arm. The peer was published
+ *    on one connection, the consumer could see and write to it, and the seam then moved it to another and
+ *    closed the first. It carries how wide that window was and how many frames were written into it. This
+ *    is the one of the three that a two-sided byte ledger has actually implicated in a field wedge.
  *
  * Both log identities and state (connIds, peer ids, the dialled endpoint, `state`, `peers`, the whole
  * `peer→conn` registry), never sizes: a count says that something changed, the identities say what.
@@ -156,6 +170,9 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwSeam")
  *   [Duration.ZERO] or negative disables the sweep entirely (the audit still runs at every mutation site).
  *   Production default [DEFAULT_INBOUND_SILENCE_PROBE]; tests inject a small value and drive it with
  *   `advanceTimeBy`.
+ * @param nowMillis monotonic-milliseconds provider, injected because time is a dependency. Read only by
+ *   the `nw.seam.publish-swap` diagnostic, to measure how long a peer was published on a link before the
+ *   seam moved it (#2420); production default [seamMonotonicMillis], tests pass a controlled counter.
  * @param maxFrameBytes the largest payload this seam's framing will carry, published as
  *   [maxPayloadBytes] and enforced by both edges of the wire — [encodeFrame] on send and each
  *   connection's [NwFramer] on receive. One number, threaded to both, so the ceiling this seam
@@ -172,6 +189,7 @@ internal class NwSeam(
     private val policy: DeliveryPolicy = DeliveryPolicy.Reliable,
     private val wovenPathGrace: Duration = DEFAULT_WOVEN_PATH_GRACE,
     private val inboundSilenceProbe: Duration = DEFAULT_INBOUND_SILENCE_PROBE,
+    private val nowMillis: () -> Long = seamMonotonicMillis,
     // ROLES ONLY — deliberately NOT a TransportCapability. The loom's `availability()` answers "is this
     // fabric usable on this runtime" (a platform question); routing it in here is what let a seam publish
     // a confident path verdict it had never observed (#1712). Narrowing the type makes that
@@ -213,10 +231,27 @@ internal class NwSeam(
 
         /** Whether the current silence episode has already been reported — one WARN per episode, not per sweep. */
         var silenceReported: Boolean = false
+
+        /**
+         * Frames this seam has HANDED TO THE TRANSPORT on this connection (#2420) — counted under [lock] in
+         * [broadcast]/[sendTo] at the moment the connId is chosen. Handed, not delivered, and the distinction
+         * is not pedantry: on the Apple binding a send failure is not reported back to the seam at all, so a
+         * count taken here is the only measure of "the consumer wrote this much to this link" that exists.
+         * It is what turns `nw.seam.publish-swap` from a window into a quantity.
+         */
+        var outboundFrames: Long = 0
     }
 
-    /** The live connection carrying a resolved peer, plus the canonical nonce both ends agreed on. */
-    private data class Winner(val connId: NwConnectionId, val canonicalNonce: String)
+    /**
+     * The live connection carrying a resolved peer, the canonical nonce both ends agreed on, and WHEN the
+     * peer was published on this connection ([nowMillis]) — the start of the publish-then-swap window that
+     * `nw.seam.publish-swap` measures.
+     */
+    private data class Winner(
+        val connId: NwConnectionId,
+        val canonicalNonce: String,
+        val publishedAtMillis: Long,
+    )
 
     private val lock = reentrantLock()
 
@@ -694,7 +729,7 @@ internal class NwSeam(
         val canonical = canonicalLinkNonce(cs.nonce, remoteNonce)
         val existing = registry[remoteId]
         if (existing == null) {
-            registry[remoteId] = Winner(connId, canonical)
+            registry[remoteId] = Winner(connId, canonical, nowMillis())
             addRemotePeer(remoteId) // refreshes settledEndpoints
             // INFO, and carrying the DIALLED endpoint next to the peer that answered. Every other verdict
             // on this path is already INFO (self-connection, closed, torn), so leaving the SUCCESS verdict
@@ -714,24 +749,46 @@ internal class NwSeam(
         }
         // Duplicate link to remoteId. Keep the SMALLER canonical nonce; disconnect the loser.
         //
-        // BOTH verdicts are INFO, and the level is the whole point (#2420). This pair decides WHICH of the
-        // two links to a peer survives — and because each end computes it from the same two nonces, the two
-        // ends are supposed to arrive at the same answer. When they do not, each holds a registry entry
-        // pointing at a link the other has already disconnected, and the symptom is a resolved, live-looking
-        // peer over which nothing traverses (#2425). Telling that apart from "one link survived and it was
-        // silent" needs exactly these two lines from both devices. At DEBUG they reach NEITHER log channel on
-        // a release iPhone build: a field capture of a wedged session held 664 INFO / 7 WARN / 1 ERROR and
-        // **zero** DEBUG records in a store that had not wrapped, so DEBUG was never captured rather than
-        // evicted. `dialled=` carries the direction, which is what makes the cross-device comparison possible:
-        // two devices that both settle on `<inbound>` deduped onto OPPOSITE links.
+        // BOTH verdicts are INFO, and the level is the whole point (#2420). This pair records WHICH of the
+        // two links to a peer each end kept, and the direction it kept it in — the only way to compare two
+        // devices' accounts of one pair after the fact. At DEBUG they reach NEITHER log channel on a release
+        // iPhone build: a field capture of a wedged session held 664 INFO / 7 WARN / 1 ERROR and **zero**
+        // DEBUG records in a store that had not wrapped, so DEBUG was never captured rather than evicted —
+        // which is why the #2425 investigation could not read them and had to be settled from the two phones'
+        // Apple unified logs instead. (Those logs since established that the two ends' dedup AGREED and that
+        // the surviving link carried traffic both ways throughout, so this pair is the RECORD of the decision,
+        // not evidence of a disagreement.)
         return if (canonical < existing.canonicalNonce) {
-            registry[remoteId] = Winner(connId, canonical) // new winner; peer stays present
+            // THE PUBLISH-THEN-SWAP WINDOW (#2425). This arm is the one that MOVES a peer that the consumer
+            // can already see: `resolved.first` published it on `existing.connId`, `peers` went `Woven`, and
+            // the consumer was free to write to it — and now that link is being closed. Measured on hardware:
+            // ~10 ms wide, and 182 bytes were written into it, to a socket the far end had already closed.
+            // The fabric does not retry them and, on the Apple binding, does not even report the failure, so
+            // the write is lost in complete silence. Read the loser's outbound count BEFORE dropping its
+            // ConnState — that count is what makes this a quantity rather than a hypothesis.
+            val displaced = conns[existing.connId]
+            val visibleForMillis = nowMillis() - existing.publishedAtMillis
+            val writtenToDisplaced = displaced?.outboundFrames ?: 0
+            registry[remoteId] = Winner(connId, canonical, nowMillis()) // new winner; peer stays present
             conns.remove(existing.connId) // drop the displaced incumbent's state
             tombstoneLocked(existing.connId) // #1528: late bytes on the displaced link must not resurrect it
             log.info {
                 "nw.seam.dedup.replace remote=${remoteId.value} self=${selfId.value} " +
                     "winner=${connId.value}(nonce=$canonical, dialled=${cs.endpoint?.id ?: "<inbound>"}) " +
                     "loser=${existing.connId.value}(nonce=${existing.canonicalNonce}) → disconnect loser"
+            }
+            // WARN, and separate from the verdict above, because it reports a CONDITION rather than a
+            // decision: the decision is routine and correct, the window it opens is the hazard. Always
+            // emitted on this arm — a zero count records a benign window and its width, which is what makes
+            // a non-zero one legible as the anomaly it is. Bounded: at most one per peer per re-resolution.
+            log.warn {
+                "nw.seam.publish-swap self=${selfId.value} peer=${remoteId.value} " +
+                    "published-on=${existing.connId.value}(dialled=${displaced?.endpoint?.id ?: "<inbound>"}) " +
+                    "now-on=${connId.value}(dialled=${cs.endpoint?.id ?: "<inbound>"}) " +
+                    "visible-for=${visibleForMillis}ms frames-written-to-published-link=$writtenToDisplaced " +
+                    "state=${_state.value} peers=${_peers.value.map { it.value }} " +
+                    "→ the peer was reachable on a link this seam is now closing; anything written in that " +
+                    "window went to a socket the far end may already have closed, and is not retried (#2425)"
             }
             existing.connId // disconnect the displaced incumbent
         } else {
@@ -1100,14 +1157,19 @@ internal class NwSeam(
      * The `site=` field is itself diagnostic: it says whether the dedup broke the binding (`classify`), a
      * later close revealed an already-broken one (`closed`), or nothing but the clock found it (`watchdog`).
      *
-     * ## What a firing line says about #2425
-     * The field shape it is built for: a peer settled on one connection, that connection removed from
-     * [conns] and closed milliseconds later with the verdict `unknown-conn`, and then eight seconds of
-     * nothing. If the peer's binding was left on the removed connection, this seam holds a peer that
-     * `peers` reports as connected and that every send writes to a link nothing owns. That is invisible
-     * from the outside — the roster is healthy, the transport reports no error — and it is the state this
-     * ERROR names. Its **absence** next to a firing `nw.seam.inbound-silent` is informative too: it says
-     * the local bookkeeping was sound and the silence came from somewhere else.
+     * ## It did NOT happen in #2425 — this is a backstop, not that bug's explanation
+     * Stated because the opposite was believed for a day and is the kind of claim that outlives its
+     * evidence. A stale binding was the leading reading of the 2026-08-17 wedge — the host's peer settled
+     * on `nw-2`, `nw-2` left [conns], and its close 1 ms later read `unknown-conn` — and a byte-level
+     * correlation of both devices then **refuted** it: 742 bytes crossed the surviving link in each
+     * direction during the eight seconds, application-layer pongs included, so the binding was correct and
+     * live throughout. The real defect there was the publish-then-swap window (see [resolveIdentity]'s
+     * replace arm and `nw.seam.publish-swap`), not this.
+     *
+     * So the value of this check is that it is CHEAP and DECIDABLE, and that its absence is now evidence:
+     * a future capture showing `nw.seam.inbound-silent` with no `nw.seam.registry.orphan` beside it has
+     * ruled out local bookkeeping in one line, which is exactly the step that cost a session to establish
+     * by hand. Do not read a firing here as "the #2425 bug"; read it as its own, unrelated defect.
      *
      * Identities, not sizes: the offending peer and the connId the registry NAMES, the live [conns] key
      * set (so the surviving link is named directly), the whole `peer→conn` registry, whether the connId
@@ -1282,7 +1344,15 @@ internal class NwSeam(
             log.debug { "nw.seam.broadcast.over-budget self=${selfId.value} payload=${payload.size}B budget=${maxFrameBytes}B → dropped (best-effort)" }
             return
         }
-        val targets = lock.withLock { registry.values.map { it.connId } }
+        // #2420: count what is handed to each link in the SAME locked snapshot that chooses the targets, so
+        // the count and the routing decision cannot disagree. The over-budget drop already returned above,
+        // so nothing counted here is a frame this seam declined to send.
+        val targets = lock.withLock {
+            registry.values.map { winner ->
+                conns[winner.connId]?.let { it.outboundFrames += 1 }
+                winner.connId
+            }
+        }
         val frame = encodeFrame(payload, maxFrameBytes)
         for (connId in targets) {
             runCatchingCancellable { api.send(connId, frame) }
@@ -1302,6 +1372,10 @@ internal class NwSeam(
         // Addressed and reporting, per contract: raise PayloadTooLarge BEFORE the encode, so the
         // caller learns the number it should have respected and the link below is never implicated.
         oversizeOrNull(payload)?.let { throw it }
+        // #2420: counted AFTER the two refusals above, so it counts frames actually handed to the transport
+        // and not ones this seam rejected. A second, uncontended acquisition rather than folding it into the
+        // lookup above — `sendTo` is per-peer, not a per-link fan-out, so the cost is one lock, not N.
+        lock.withLock { conns[connId]?.let { it.outboundFrames += 1 } }
         runCatchingCancellable { api.send(connId, encodeFrame(payload, maxFrameBytes)) }
             .onFailure {
                 log.info { "nw.seam.sendTo.send-failed peer=${peer.value} connId=${connId.value} self=${selfId.value}: ${it.message} → removeByConn" }
