@@ -3284,9 +3284,10 @@ val forbidDemotedFieldTrail by tasks.registering {
         "nw.loom.redial-parked",
         "nw.loom.redial-resumed",
         "nw.loom.weave-timeout",
-        // Which link resolved to whom — and, when a peer was double-dialled, which link SURVIVED. The
-        // two `dedup` lines are the #2425 discriminator: each end reports the direction it kept, so two
-        // devices reporting `<inbound>` for one another deduped onto opposite links.
+        // Which link resolved to whom — and, when a peer was double-dialled, which link SURVIVED. The two
+        // `dedup` lines each report the direction that end kept, so two devices' captures can be compared
+        // directly. In #2425 that comparison had to be reconstructed from both phones' Apple unified logs
+        // instead, because these lines were at DEBUG and so were absent from the kuilt capture entirely.
         "nw.seam.resolved.first",
         "nw.seam.dedup.replace",
         "nw.seam.dedup.keep",

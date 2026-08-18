@@ -1301,9 +1301,11 @@ internal class NwSeam(
      * No tear, no redial, no remediation of any kind (#2420). The consuming app's own bounds are
      * authoritative today and nothing here may race them; this is observability.
      *
-     * `dialled=` is the field that makes the cross-device comparison work: two devices that both report
-     * `<inbound>` for the same peer deduped onto OPPOSITE links, which is reading (b) of #2425 and is
-     * otherwise invisible from either device's log alone.
+     * `dialled=` records which end opened the link this seam settled on. Put the two devices' lines side
+     * by side and you can see directly whether they kept the SAME link — a fact that had to be recovered
+     * from both phones' Apple unified logs during #2425, because kuilt's own account of it was at DEBUG
+     * and therefore absent from the capture. (It turned out they did agree; the field is here so the next
+     * reader can establish that in one line rather than by correlating two system logs.)
      */
     private fun sweepInboundSilence(): List<String> {
         val lines = mutableListOf<String>()

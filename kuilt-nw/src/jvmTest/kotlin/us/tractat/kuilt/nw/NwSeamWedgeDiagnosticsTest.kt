@@ -244,8 +244,8 @@ class NwSeamWedgeDiagnosticsTest {
                         )
                     },
                     {
-                        // `dialled=` is what makes the two devices' lines comparable — it says which
-                        // side opened the surviving link, so two `<inbound>`s would mean opposite links.
+                        // `dialled=` is what makes the two devices' lines comparable — it says which side
+                        // opened the link each end settled on, so a reader can check they kept the same one.
                         assertTrue(
                             afterTwoSweeps.all { it.contains("dialled=") && it.contains("connId=") },
                             "the line must carry link identity, not just a verdict: $afterTwoSweeps",
