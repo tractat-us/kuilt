@@ -650,20 +650,34 @@ internal class NwSeam(
             return null // idempotent; same connection re-resolving
         }
         // Duplicate link to remoteId. Keep the SMALLER canonical nonce; disconnect the loser.
+        //
+        // BOTH verdicts are INFO, and the level is the whole point (#2420). This pair decides WHICH of the
+        // two links to a peer survives — and because each end computes it from the same two nonces, the two
+        // ends are supposed to arrive at the same answer. When they do not, each holds a registry entry
+        // pointing at a link the other has already disconnected, and the symptom is a resolved, live-looking
+        // peer over which nothing traverses (#2425). Telling that apart from "one link survived and it was
+        // silent" needs exactly these two lines from both devices. At DEBUG they reach NEITHER log channel on
+        // a release iPhone build: a field capture of a wedged session held 664 INFO / 7 WARN / 1 ERROR and
+        // **zero** DEBUG records in a store that had not wrapped, so DEBUG was never captured rather than
+        // evicted. `dialled=` carries the direction, which is what makes the cross-device comparison possible:
+        // two devices that both settle on `<inbound>` deduped onto OPPOSITE links.
         return if (canonical < existing.canonicalNonce) {
             registry[remoteId] = Winner(connId, canonical) // new winner; peer stays present
             conns.remove(existing.connId) // drop the displaced incumbent's state
             tombstoneLocked(existing.connId) // #1528: late bytes on the displaced link must not resurrect it
-            log.debug {
-                "nw.seam.dedup.replace remote=${remoteId.value} winner=${connId.value}(nonce=$canonical) " +
+            log.info {
+                "nw.seam.dedup.replace remote=${remoteId.value} self=${selfId.value} " +
+                    "winner=${connId.value}(nonce=$canonical, dialled=${cs.endpoint?.id ?: "<inbound>"}) " +
                     "loser=${existing.connId.value}(nonce=${existing.canonicalNonce}) → disconnect loser"
             }
             existing.connId // disconnect the displaced incumbent
         } else {
             conns.remove(connId) // drop this loser's state
             tombstoneLocked(connId) // #1528: late bytes on this loser link must not resurrect it
-            log.debug {
-                "nw.seam.dedup.keep remote=${remoteId.value} winner=${existing.connId.value}(nonce=${existing.canonicalNonce}) " +
+            log.info {
+                "nw.seam.dedup.keep remote=${remoteId.value} self=${selfId.value} " +
+                    "winner=${existing.connId.value}(nonce=${existing.canonicalNonce}, " +
+                    "dialled=${conns[existing.connId]?.endpoint?.id ?: "<inbound>"}) " +
                     "loser=${connId.value}(nonce=$canonical) → disconnect loser"
             }
             connId // this connection loses; disconnect it, incumbent stays
