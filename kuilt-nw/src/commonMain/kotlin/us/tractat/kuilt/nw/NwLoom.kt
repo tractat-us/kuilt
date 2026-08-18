@@ -379,11 +379,17 @@ private class ListenSupervisor(
     private suspend fun supervise() {
         var consecutiveFailures = 0
         var backoff = NwLoom.INITIAL_LISTEN_BACKOFF
+        // The failure this round is handling: normally one observed on [NwApi.listenerState], but a
+        // re-listen that throws SYNCHRONOUSLY carries its own. Without that second source the campaign
+        // would wedge exactly where it must not — a throwing `startListening` publishes no verdict, so
+        // awaiting one would park the supervisor forever and silently restore the pre-#2449 behaviour.
+        var synchronousFailure: NwListenerState.Failed? = null
         while (true) {
-            val failure = awaitFailure {
+            val failure = synchronousFailure ?: awaitFailure {
                 consecutiveFailures = 0
                 backoff = NwLoom.INITIAL_LISTEN_BACKOFF
             }
+            synchronousFailure = null
             consecutiveFailures += 1
             if (consecutiveFailures >= NwLoom.MAX_LISTEN_ATTEMPTS) {
                 log.error {
@@ -412,12 +418,28 @@ private class ListenSupervisor(
                 withTimeoutOrNull(backoff) { awaitPathChange() }
                 backoff = (backoff * 2).coerceAtMost(NwLoom.MAX_LISTEN_BACKOFF)
             }
-            runCatchingCancellable { api.startListening(serviceName, serviceType) }
-                .onFailure {
-                    log.error { "nw.listen.retry-threw self=${selfId.value} serviceName=$serviceName: ${it.message}" }
-                }
+            synchronousFailure = relisten()
         }
     }
+
+    /**
+     * Re-listen, returning a synthesized [NwListenerState.Failed] when the call threw synchronously and
+     * `null` when it handed off normally (the usual case — Network.framework reports asynchronously).
+     *
+     * The synthesized failure carries [NW_ERROR_DOMAIN_INVALID]/0 rather than an invented domain, matching
+     * how `RealNwApi` reports a FAILED transition it could not decode: the campaign still advances, and the
+     * log still says plainly that there was nothing to decode.
+     */
+    private suspend fun relisten(): NwListenerState.Failed? =
+        runCatchingCancellable { api.startListening(serviceName, serviceType) }.fold(
+            onSuccess = { null },
+            onFailure = { failure ->
+                log.error {
+                    "nw.listen.retry-threw self=${selfId.value} serviceName=$serviceName: $failure"
+                }
+                NwListenerState.Failed(NW_ERROR_DOMAIN_INVALID, code = 0)
+            },
+        )
 
     /**
      * Suspend until the listener reports [NwListenerState.Failed], calling [onReady] whenever it comes up

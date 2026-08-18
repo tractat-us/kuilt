@@ -171,11 +171,20 @@ internal class FakeNwApi(
     var startListeningCalls: Int = 0
         private set
 
+    /**
+     * Test hook for #2449: when `true`, [startListening] THROWS after publishing
+     * [NwListenerState.Starting] — a binding that fails synchronously and therefore never publishes a
+     * verdict at all. The interesting case precisely because the campaign has nothing to await: a
+     * supervisor that only ever waits on [listenerState] parks here forever.
+     */
+    var listenThrows: Boolean = false
+
     override suspend fun startListening(serviceName: String, serviceType: String) {
         startListeningCalls += 1
         // Mirrors RealNwApi.startListening: publish Starting BEFORE the listener can report, so a watcher
         // never reads the previous listener's terminal Failed as this attempt's verdict.
         _listenerState.value = NwListenerState.Starting
+        if (listenThrows) throw RuntimeException("simulated synchronous listen failure on device '$deviceId'")
         radio.markListening(deviceId, serviceName, serviceType, peerId, txtResolvedOnAdvertise)
         _listenerState.value = listenFailure ?: NwListenerState.Ready
     }

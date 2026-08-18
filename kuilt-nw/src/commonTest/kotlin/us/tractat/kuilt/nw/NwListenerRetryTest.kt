@@ -210,6 +210,32 @@ class NwListenerRetryTest {
         }
 
     /**
+     * A re-listen that throws SYNCHRONOUSLY still advances the campaign.
+     *
+     * This is the failure mode a supervisor built only on [NwApi.listenerState] walks into: a throwing
+     * `startListening` publishes no verdict, so awaiting one parks forever — the campaign would wedge at
+     * its first retry and silently restore the pre-#2449 behaviour, while every other test here stayed
+     * green. The bound is the same one the asynchronous path uses; what is proven is that it is *reached*.
+     */
+    @Test
+    fun aSynchronouslyThrowingRelistenStillAdvancesTheCampaign() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val pair = wovenPair()
+            val listensAtWeave = pair.apiA.startListeningCalls
+
+            pair.apiA.listenThrows = true
+            pair.apiA.emitListenerFailed(domain = NW_ERROR_DOMAIN_DNS, code = DNS_DEFUNCT_CONNECTION)
+            testScheduler.advanceTimeBy(PAST_A_WHOLE_CAMPAIGN.inWholeMilliseconds)
+            testScheduler.runCurrent()
+
+            assertEquals(
+                listensAtWeave + NwLoom.MAX_LISTEN_ATTEMPTS - 1,
+                pair.apiA.startListeningCalls,
+                "a throwing re-listen counts as a failure and the campaign runs to its bound — it does not park",
+            )
+        }
+
+    /**
      * [NwApi.listenerState] has a NON-UPDATING DEFAULT, so an existing binding that has not wired a
      * listener signal keeps compiling and keeps its pre-#2449 behaviour (no signal ⇒ no retry).
      *
