@@ -201,8 +201,10 @@ class NwPublishSwapWindowTest {
 
             assertAll(
                 // Rig receipts first. Two hellos — one per direction of the silenced link — must
-                // actually have been withheld in each arm; a hold that stopped holding would leave
-                // this at zero while every other assertion below still passed by coincidence.
+                // actually have been withheld in each arm. These are what make a failure DIAGNOSABLE
+                // rather than merely detected: a hold that stopped holding and a seam that changed
+                // which link it publishes on both red the assertions below, and only a zero here
+                // tells the two apart.
                 { assertEquals(2, outboundSilenced.heldFrames, "arm A: both ends of the outbound link held") },
                 { assertEquals(2, inboundSilenced.heldFrames, "arm B: both ends of the inbound link held") },
                 { assertEquals(2, outboundSilenced.radio.openedLinkCount, "arm A really double-dialled") },
@@ -305,11 +307,15 @@ class NwPublishSwapWindowTest {
                     )
                 },
                 {
+                    // States the PROPERTY the two assertions above happen to witness, so it survives a
+                    // future change to which seeds produce which survivor: whatever the outcomes are,
+                    // the two arms must not be the same one. Rewrite the pair above when the seeds
+                    // move; this line is what says why the pair exists at all.
                     assertNotEquals(
                         discards.survivingLinks(),
                         keeps.survivingLinks(),
                         "the two arms MUST differ — a seed knob that stopped controlling the dedup " +
-                            "would collapse them, and every other assertion here would still pass",
+                            "would collapse them onto one outcome",
                     )
                 },
                 // Whatever the dedup decided, exactly one link is left and both peers stay connected.
