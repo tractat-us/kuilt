@@ -300,6 +300,31 @@ public class NwLoom(
          * id/serviceName divergence (#2419). Retiring it is its own change.
          */
         internal val IDENTITY_GRACE: Duration = 750.milliseconds
+
+        /** First back-off after the inbound listener reports [NwListenerState.Failed], before re-listening (#2449). */
+        internal val INITIAL_LISTEN_BACKOFF: Duration = 500.milliseconds
+
+        /** Ceiling the listen back-off doubles up to (#2449) — a path that can never bind stops burning attempts here. */
+        internal val MAX_LISTEN_BACKOFF: Duration = 8.seconds
+
+        /**
+         * How many CONSECUTIVE listener failures a campaign absorbs before it gives up and parks on a
+         * device-path change (#2449).
+         *
+         * The observed failure is **transient**, which is what makes retrying right at all: Apple's own
+         * `com.apple.network:listener` log shows `failed (DNS Error: DefunctConnection)` — `dns(2)/-65569`
+         * — landing immediately after a listener inbox reconcile, where the OS retires the old inboxes,
+         * starts a fresh set across every interface (`en0`/`en1`/`awdl0`/`pdp_ip0`/`utun*`), then cancels
+         * them all and reports failed. An interface-set change racing the Bonjour registration, not a bind
+         * conflict. The 0.5 + 1 + 2 + 4 + 8 s ≈ 15.5 s of cover is sized for exactly that race.
+         *
+         * Bounded rather than unbounded because the same signal cannot distinguish that race from a path
+         * on which registration will keep failing, and a peer must not advertise into the second forever.
+         * What makes the give-up safe is that it is not final: a [NwApi.pathState] change re-arms a fresh
+         * campaign — and since the interface churn IS the trigger, that is the signal most likely to
+         * arrive precisely when a retry would now succeed.
+         */
+        internal const val MAX_LISTEN_ATTEMPTS: Int = 6
     }
 }
 
