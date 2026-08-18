@@ -197,7 +197,14 @@ internal data class Link(
     /** The [NwEndpoint.id] this link was dialled on. */
     val dialledEndpointId: String,
 ) {
-    /** This link's end on [deviceId], or `null` if [deviceId] is not one of its two ends. */
+    /**
+     * This link's end on [deviceId], or `null` if [deviceId] is not one of its two ends.
+     *
+     * A link whose two ends are the SAME device — [FakeNwRadio.injectSelfDial] /
+     * [FakeNwRadio.injectDialLandingOnSelf] — has no unambiguous answer, and this returns the DIALLING
+     * end. Reach for [dialerConnectionId]/[accepterConnectionId] by name there; the convenience only
+     * pays off for the two-device case it is written for.
+     */
     fun endOn(deviceId: String): NwConnectionId? = when (deviceId) {
         dialerDeviceId -> dialerConnectionId
         accepterDeviceId -> accepterConnectionId
