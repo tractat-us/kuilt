@@ -3121,6 +3121,274 @@ val forbidTightRunTestTimeout by tasks.registering {
     }
 }
 
+// Locates a structured EVENT NAME inside a logging call and reports the LEVEL that call was made at,
+// for `forbidDemotedFieldTrail` below (#2420). Same `object` rationale as the sibling scanners: it is
+// invoked from inside `doLast`, where a script-level function reference would capture the
+// unserializable `Build_gradle` instance.
+//
+// It needs the INVERSE stripping of every other scanner here. Its subject lives inside a STRING
+// LITERAL (`log.info { "nw.seam.settled self=…" }`), which `KotlinCodeScanner.stripNonCode` blanks by
+// design, and `KdocScanner` keeps only KDoc. So this one blanks COMMENTS and keeps strings — while
+// still tracking string state, because a `//` inside a literal must not open a comment and a `"` inside
+// a comment must not open a string. Blanking comments is not tidiness: the event names appear in
+// PROSE all over this repo (KDoc on the very functions that log them, and the field-trail argument in
+// `NwSeam`'s class doc), and every one of those would otherwise be attributed to whatever log call
+// happened to precede it.
+//
+// OWNERSHIP is the nearest PRECEDING log call, with no extent computed. That is sound for the shape it
+// reads — an event name is the first thing in its own log call's message — and its failure mode is a
+// loud false positive (an event name written outside any log call is attributed to the previous one, or
+// reported as `[not inside a logging call]` when there is no previous one) rather than a silent miss.
+// Both spellings of the logger receiver in this tree are matched (`log` and `logger`); a third would
+// read as "not inside a logging call", which fails rather than passing quietly.
+object FieldTrailScanner {
+    private val logCall = Regex("""(?<![A-Za-z0-9_])(?:log|logger)\s*\.\s*(trace|debug|info|warn|error)\s*[({]""")
+
+    /** One occurrence of an event name: its 1-based line, and the level of the call it sits inside. */
+    data class Sighting(val line: Int, val level: String?)
+
+    /** Blank comments to nothing, preserving newlines (hence line numbers) and every string literal. */
+    fun stripComments(text: String): String {
+        val out = StringBuilder(text.length)
+        var i = 0
+        var blockDepth = 0
+        var inStr = false
+        var inRaw = false
+        var inChar = false
+        while (i < text.length) {
+            val c = text[i]
+            val next = if (i + 1 < text.length) text[i + 1] else ' '
+            when {
+                blockDepth > 0 -> when { // block comments nest, as they do in Kotlin
+                    c == '/' && next == '*' -> { blockDepth++; i += 2 }
+                    c == '*' && next == '/' -> { blockDepth--; i += 2 }
+                    else -> { if (c == '\n') out.append('\n'); i++ }
+                }
+                inRaw ->
+                    if (text.startsWith("\"\"\"", i)) { inRaw = false; out.append("\"\"\""); i += 3 } else { out.append(c); i++ }
+                // An escape consumes its escapee, so `\"` cannot close the literal — but a `\` before a
+                // newline still emits the newline, or every later line number shifts.
+                inStr -> when {
+                    c == '\\' -> { out.append(c); i++; if (i < text.length) { out.append(text[i]); i++ } }
+                    c == '"' -> { inStr = false; out.append(c); i++ }
+                    c == '\n' -> { inStr = false; out.append(c); i++ } // malformed; recover, don't run away
+                    else -> { out.append(c); i++ }
+                }
+                inChar -> when {
+                    c == '\\' -> { out.append(c); i++; if (i < text.length) { out.append(text[i]); i++ } }
+                    c == '\'' || c == '\n' -> { inChar = false; out.append(c); i++ }
+                    else -> { out.append(c); i++ }
+                }
+                c == '/' && next == '*' -> { blockDepth = 1; i += 2 }
+                c == '/' && next == '/' -> while (i < text.length && text[i] != '\n') i++
+                text.startsWith("\"\"\"", i) -> { inRaw = true; out.append("\"\"\""); i += 3 }
+                c == '"' -> { inStr = true; out.append(c); i++ }
+                c == '\'' -> { inChar = true; out.append(c); i++ }
+                else -> { out.append(c); i++ }
+            }
+        }
+        return out.toString()
+    }
+
+    /**
+     * Every occurrence of [event] in already-comment-stripped [code], each with the level of the nearest
+     * preceding logging call. The boundary check on both sides is what keeps `nw.seam.closed` from
+     * matching `nw.seam.closed-state` and `nw.seam.closed.ignored` — three distinct events, two of which
+     * are legitimately DEBUG.
+     */
+    fun sightings(code: String, event: String): List<Sighting> {
+        fun tokenChar(c: Char) = c.isLetterOrDigit() || c == '_' || c == '.' || c == '-'
+        val starts = logCall.findAll(code).map { it.range.first to it.groupValues[1] }.toList()
+        val out = mutableListOf<Sighting>()
+        var idx = code.indexOf(event)
+        while (idx >= 0) {
+            val before = code.getOrNull(idx - 1)
+            val after = code.getOrNull(idx + event.length)
+            if ((before == null || !tokenChar(before)) && (after == null || !tokenChar(after))) {
+                out += Sighting(
+                    line = code.take(idx).count { it == '\n' } + 1,
+                    level = starts.lastOrNull { it.first < idx }?.second,
+                )
+            }
+            idx = code.indexOf(event, idx + 1)
+        }
+        return out
+    }
+}
+
+// Guard: forbid a CURATED field-trail log line from being emitted below INFO — or from silently going
+// away. #2420.
+//
+// WHAT THIS IS FOR. `:kuilt-nw`'s characteristic failure is SILENCE: a seam that has resolved a peer
+// and cannot move a byte over it emits nothing for its whole lifetime, so a wedged device and an idle
+// one produce identical logs. Diagnosing one therefore rests entirely on a handful of lines being
+// PRESENT in a capture taken off a real phone — and DEBUG is not present there. Measured from a field
+// store during the #2425 wedge: 664 INFO / 7 WARN / 1 ERROR and **zero** DEBUG records, in a store that
+// had not wrapped (its oldest record was 36 days older than the session). So DEBUG was never CAPTURED,
+// not evicted, and the level of these specific lines is the difference between a one-line read and a
+// two-device forensic exercise. Two of them — `nw.seam.dedup.replace` / `dedup.keep` — were at DEBUG
+// during that incident, which is why the deciding fact was unavailable.
+//
+// WHY A CURATED LIST AND NOT A HEURISTIC. This is the load-bearing design decision, and the honest
+// answer is that no heuristic is available. "Every `nw.*` event must be INFO" is simply false: most of
+// them are correctly DEBUG (`nw.seam.opened`, `nw.send`, `nw.api.state` on the quiet transitions), and
+// promoting them would raise a device's noise floor enough to evict the very trail this protects — the
+// store is bounded. Nor can the criterion be derived from the code, because it is a judgement about
+// what a DIAGNOSTICIAN needs, made once per line. So the list IS the assertion: an entry means "a human
+// decided this line has to survive to a field capture", and adding or removing one is an edit a
+// reviewer sees. The alternative shape considered and rejected was a `// FIELD-TRAIL:` marker comment
+// on each call site — cheaper to add, but it puts the claim where a mechanical level change tends to
+// sweep past it, and it cannot detect the line being DELETED at all.
+//
+// WHAT IT CHECKS, per curated event:
+//   1. every occurrence is at `info`, `warn` or `error` — the three levels a release device records;
+//   2. every occurrence sits inside a logging call, so the level is knowable at all;
+//   3. the event still EXISTS somewhere in production source. A rename or deletion fails, for the same
+//      reason `verifyModuleTable` and `forbidUnlintedModule` check their own stale direction: the trail
+//      is a claim about what a capture will contain, and an entry naming a line nobody emits is a lie
+//      that no other check can catch.
+// It deliberately does NOT check the CONTENT of a line — whether it carries identities rather than
+// sizes is a human assertion, exactly like `verifySeamHarnessCoverage`'s row-to-harness mapping.
+//
+// ONE ATTRIBUTION EDGE worth knowing about, because it is invisible in a green: an event name that is
+// not lexically inside its own logging call — `nw.seam.inbound-silent` is built into a string in
+// `sweepInboundSilence` and logged by a `log.warn { line }` further down — is vouched for via the
+// NEAREST PRECEDING log call, which happens to be that `log.warn`. The verdict is correct today, but a
+// function reorder could silently retarget it to some other call. What actually pins that line's level
+// is a test asserting `Level.WARN` on the emitted event (`NwSeamWedgeDiagnosticsTest`), not this guard;
+// the guard's contribution there is the staleness check. Keeping the trail's lines lexically inside
+// their own `log.*` call is the cheap way to stay clear of this.
+//
+// The LEVEL SPLIT among the curated lines is a design decision this guard preserves but cannot verify:
+// ERROR for a contract violation (`nw.seam.registry.orphan` — a state `NwSeam`'s own model forbids),
+// WARN for a condition (`nw.seam.inbound-silent` — a quiet link may be a wedge or an idle app). All
+// three levels satisfy the guard; flattening them would pass here and lose the distinction, so it is
+// stated in the code that emits them, not enforced here.
+//
+// SCOPE: production `*Main/**/*.kt` across every module, the same source set as the sibling guards —
+// which notably INCLUDES `appleMain`, where `detektAll` reaches nothing at all (its tasks are
+// parse-only, #2039). `:spike`, `build-logic/` and `*.kts` are unscanned, as with every sibling.
+val forbidDemotedFieldTrail by tasks.registering {
+    group = "verification"
+    description = "Fails if a curated field-trail log line is emitted below INFO, or has gone missing (#2420)."
+    val sources = kotlinSourcesIn(subprojects.map { it.projectDir.resolve("src") }, "*Main/**/*.kt")
+    inputs.files(sources).withPropertyName("productionSources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // See "Guard plumbing" above: the stamp is what makes UP-TO-DATE possible (#1827). The verdict is a
+    // pure function of the scanned file contents and of the curated list, and the list is a literal here
+    // precisely so it is folded into the task-action implementation hash — externalising it would drop it
+    // out of the cache key and reintroduce the stale-green class.
+    val stamp = layout.buildDirectory.file("verification/forbid-demoted-field-trail.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    val rootPath = rootDir
+    // THE TRAIL a stuck `:kuilt-nw` formation is diagnosed from. Grouped by the question each answers.
+    // Adding a line here is a promise that a field capture will carry it; removing one is a decision that
+    // nobody needs it. Both belong in a diff.
+    val fieldTrail = setOf(
+        // Who did this device see, and what did it decide to do about it?
+        "nw.loom.discovered",
+        "nw.loom.self-skip",
+        "nw.loom.name-collision",
+        "nw.loom.redial-parked",
+        "nw.loom.redial-resumed",
+        "nw.loom.weave-timeout",
+        // Which link resolved to whom — and, when a peer was double-dialled, which link SURVIVED. The two
+        // `dedup` lines each report the direction that end kept, so two devices' captures can be compared
+        // directly. In #2425 that comparison had to be reconstructed from both phones' Apple unified logs
+        // instead, because these lines were at DEBUG and so were absent from the kuilt capture entirely.
+        "nw.seam.resolved.first",
+        "nw.seam.dedup.replace",
+        "nw.seam.dedup.keep",
+        "nw.seam.self-connection",
+        "nw.seam.dialled-mismatch",
+        "nw.seam.settled",
+        // Did the link then die, and did this seam agree that it had?
+        "nw.seam.closed",
+        "nw.seam.closed-state",
+        "nw.seam.removeByConn",
+        "nw.seam.grace.expired",
+        "nw.seam.viability.lost",
+        "nw.seam.viability.recovered",
+        "nw.seam.corrupt-inbound",
+        "nw.seam.TORN",
+        // The #2420 wedge diagnostics — one contract violation and two conditions.
+        "nw.seam.registry.orphan",
+        "nw.seam.inbound-silent",
+        "nw.seam.publish-swap",
+        // The transport's own account, which is the only place a browse result or a path change appears.
+        "nw.api.browse-result",
+        "nw.path.update",
+    )
+    doLast {
+        val captured = setOf("info", "warn", "error") // what a release device's store actually retains
+        val demoted = mutableListOf<String>()
+        val unlogged = mutableListOf<String>()
+        val seen = mutableMapOf<String, Int>()
+        sources.files.sortedBy { it.invariantSeparatorsPath }.forEach { file ->
+            val raw = file.readText()
+            if (fieldTrail.none { it in raw }) return@forEach
+            val code = FieldTrailScanner.stripComments(raw)
+            val path = file.relativeTo(rootPath).invariantSeparatorsPath
+            for (event in fieldTrail) {
+                for (sighting in FieldTrailScanner.sightings(code, event)) {
+                    seen[event] = (seen[event] ?: 0) + 1
+                    val where = "$path:${sighting.line}  $event"
+                    when {
+                        sighting.level == null -> unlogged += "$where  [not inside a logging call]"
+                        sighting.level !in captured -> demoted += "$where  [log.${sighting.level}]"
+                    }
+                }
+            }
+        }
+        val missing = fieldTrail.filter { it !in seen }.sorted()
+        if (demoted.isNotEmpty() || unlogged.isNotEmpty() || missing.isNotEmpty()) {
+            val detail = buildString {
+                if (demoted.isNotEmpty()) {
+                    append("\n  BELOW INFO — a release device records nothing of these:\n  ")
+                    append(demoted.joinToString("\n  "))
+                }
+                if (unlogged.isNotEmpty()) {
+                    append("\n\n  NOT IN A LOGGING CALL — the guard cannot vouch for a level it cannot see. ")
+                    append("If this is prose, it belongs in a comment (which is stripped); if it is a log ")
+                    append("line on a receiver other than `log`/`logger`, rename the receiver:\n  ")
+                    append(unlogged.joinToString("\n  "))
+                }
+                if (missing.isNotEmpty()) {
+                    append("\n\n  NO LONGER EMITTED ANYWHERE — renamed or deleted:\n  ")
+                    append(missing.joinToString("\n  "))
+                    append("\n  A curated entry naming a line nobody emits is a lie about what a capture ")
+                    append("will contain. Update the event name here in the same commit that renames it, ")
+                    append("or delete the entry if the line is genuinely gone — and then say so in the ")
+                    append("issue, because something that was on the trail no longer is.")
+                }
+            }
+            error(
+                "A curated FIELD-TRAIL log line is not reachable in a field capture (#2420).\n" +
+                    "These lines are the diagnosis of a stuck `:kuilt-nw` formation, whose failure mode is " +
+                    "SILENCE — a wedged device and an idle one otherwise produce identical logs. DEBUG does " +
+                    "NOT reach a release device's store: a capture taken during the #2425 wedge held 664 " +
+                    "INFO / 7 WARN / 1 ERROR and ZERO debug records, in a store that had not wrapped. So a " +
+                    "line demoted to `log.debug` is not quieter, it is ABSENT.\n" +
+                    "  THE FIX IS THE LEVEL, NOT THE LIST. Restore the call to `log.info` (or `warn`/`error` " +
+                    "if it reports a condition or a contract violation). Do NOT drop the entry from " +
+                    "`fieldTrail` in `build.gradle.kts` to get past this — that is the edit this guard " +
+                    "exists to make visible, and it is the one that costs a two-device forensic exercise " +
+                    "the next time a pair of phones 30 cm apart will not form a session.\n" +
+                    "  If the line genuinely no longer belongs on the trail, removing its entry is a " +
+                    "reviewable decision — make it deliberately, in its own commit, with the reason." +
+                    detail,
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText(
+            "ok — ${fieldTrail.size} curated field-trail event(s), " +
+                "${seen.values.sum()} emission site(s), all at INFO or above\n",
+        )
+    }
+}
+
 // Guard: forbid a module that contributes Kotlin source but no detekt task (#2005).
 //
 // Detekt is registered as a SIDE EFFECT of applying `kuilt.kmp-library`. Nothing else applies it,
@@ -4044,5 +4312,6 @@ allprojects {
         dependsOn(rootProject.tasks.named("forbidKotlinAssert"))
         dependsOn(rootProject.tasks.named("forbidProductionDispatcherInTests"))
         dependsOn(rootProject.tasks.named("forbidTightRunTestTimeout"))
+        dependsOn(rootProject.tasks.named("forbidDemotedFieldTrail"))
     }
 }
