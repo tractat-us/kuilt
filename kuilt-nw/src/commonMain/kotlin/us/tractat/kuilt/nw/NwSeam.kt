@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.CloseReason
@@ -563,6 +564,13 @@ internal class NwSeam(
                     // the frame — so it is exactly "frames attributed to a peer", and so it can never race
                     // the sweep that reads it.
                     cs.inboundFrames += 1
+                    // An arrival ends a reported silence episode, so the link becomes reportable again and
+                    // the (parked) watchdog has to be told. Only on the transition — a chatty link must not
+                    // wake it on every frame.
+                    if (cs.silenceReported) {
+                        cs.silenceReported = false
+                        wakeWatchdogLocked()
+                    }
                     FrameOutcome.Data(resolved)
                 }
                 else -> {
@@ -813,6 +821,7 @@ internal class NwSeam(
         val wove = _state.value is SeamState.Weaving
         if (wove) _state.value = SeamState.Woven
         refreshSettledLocked()
+        wakeWatchdogLocked() // a newly-settled link has never been reported — see [inboundSilenceLoop]
         log.debug { "nw.seam.peer-added remote=${remoteId.value} self=${selfId.value} peers=${_peers.value.map { it.value }} state=${_state.value}${if (wove) " (Weaving→Woven)" else ""}" }
     }
 
@@ -1204,17 +1213,60 @@ internal class NwSeam(
     }
 
     /**
-     * The wedge watchdog (#2420). Sweeps every [inboundSilenceProbe], reporting a settled peer whose live
-     * link has carried no inbound frame, and re-asserting [auditRegistryLocked] periodically so an orphan
-     * created by a path nobody enumerated is still named.
+     * Bumped whenever something happens that could make [watchdogPendingLocked] true — a peer registering,
+     * an inbound frame re-arming a reported link. Purely a wake signal; the value carries no meaning. A
+     * [MutableStateFlow] because its write must be safe from any thread and must not suspend under [lock].
+     */
+    private val watchdogWake = MutableStateFlow(0L)
+
+    /** Signal the watchdog that state changed. Called under [lock]; a non-suspending atomic write. */
+    private fun wakeWatchdogLocked() {
+        watchdogWake.value = watchdogWake.value + 1
+    }
+
+    /**
+     * Is there anything left for the watchdog to report? True iff some [registry] entry either has a live
+     * [ConnState] whose silence has not yet been reported, or has NO `ConnState` and has not yet been
+     * reported as an orphan. False means every live link has already had its say, and the loop may sleep
+     * with **no timer armed** — which is the whole reason this predicate exists (see [inboundSilenceLoop]).
+     * Called under [lock].
+     */
+    private fun watchdogPendingLocked(): Boolean = registry.any { (peer, winner) ->
+        val cs = conns[winner.connId]
+        if (cs == null) peer !in reportedOrphans else !cs.silenceReported
+    }
+
+    /**
+     * The wedge watchdog (#2420). Sweeps every [inboundSilenceProbe] **while there is something left to
+     * report**, then parks on [watchdogWake] with no pending timer until state changes again.
      *
-     * A plain re-arming timer, so it never advances under `advanceUntilIdle()` — tests drive it with
-     * bounded `advanceTimeBy`. [Duration.ZERO] (or negative) disables it: the loop returns and the seam
-     * carries no timer at all, which is what a test that wants no watchdog noise passes.
+     * ## Why it parks rather than re-arming forever — this shape is load-bearing, not an optimisation
+     * A perpetually re-arming timer is incompatible with `runTest`: after the body returns, `runTest`
+     * advances virtual time until idle, and a timer that always re-arms is never idle — the test does not
+     * fail, it **HANGS**, burning CPU in virtual time. `SeamConformanceSuite` documents exactly this hazard
+     * for `NwLoom`'s redial loop and defends against it by closing both seams; but any consumer test that
+     * leaves a woven seam open on the test's own job would hang on this timer, and three `:kuilt-nw` test
+     * tasks did precisely that when this loop was first written as an unconditional `while (true) { delay }`.
+     *
+     * Parking fixes it structurally rather than by convention: when every settled link has been reported
+     * there is no scheduled work, so `advanceUntilIdle` completes. It also makes the diagnostic quieter,
+     * for free — an idle-but-healthy session emits its one line per link and then goes silent, instead of
+     * waking every probe forever to decide it has nothing to say.
+     *
+     * The wake sites are the only three places [watchdogPendingLocked] can go from false to true:
+     * [addRemotePeer] (a link that has never been reported), the [FrameOutcome.Data] arm (an arrival that
+     * re-arms a reported link), and [dropConnWithoutEvictingForAuditRig]. A missed wake would park the
+     * watchdog early — which is why the predicate is derived from the same fields the sweep mutates rather
+     * than from a separate flag that could drift.
+     *
+     * [Duration.ZERO] (or negative) disables it entirely: the loop returns and the seam carries no timer at
+     * all, which is what a test wanting no watchdog output passes.
      */
     private suspend fun inboundSilenceLoop() {
         if (inboundSilenceProbe <= Duration.ZERO) return
         while (true) {
+            // Parks here — and a park schedules nothing, so a terminal `advanceUntilIdle` can complete.
+            watchdogWake.first { lock.withLock { watchdogPendingLocked() } }
             delay(inboundSilenceProbe)
             if (closed.value) return
             for (line in sweepInboundSilence()) log.warn { line }
@@ -1301,6 +1353,9 @@ internal class NwSeam(
     internal fun dropConnWithoutEvictingForAuditRig(peer: PeerId): NwConnectionId? = lock.withLock {
         val connId = registry[peer]?.connId ?: return@withLock null
         conns.remove(connId)
+        // The rig creates an orphan without going through a mutation site, so it owes the watchdog the same
+        // wake a real state change would give it — otherwise the loop stays parked and the rig proves nothing.
+        wakeWatchdogLocked()
         connId
     }
 
