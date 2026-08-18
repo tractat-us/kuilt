@@ -32,6 +32,13 @@ kotlin {
     // so the cinterop is wired for every apple target. Def: src/nativeInterop/cinterop/nwshim.def.
     listOf(iosArm64(), iosSimulatorArm64(), macosArm64()).forEach { target ->
         target.compilations.getByName("main").cinterops.create("nwshim")
+        // #2457: a TEST-ONLY interop for NwHalfCloseProbeTest. The half-close question turns on
+        // values Kotlin/Native does not reliably bridge — NW_CONNECTION_FINAL_MESSAGE_CONTEXT
+        // (RealNwApi.send already records that the NW_CONNECTION_*_CONTEXT constants mis-bridge)
+        // and NW_PARAMETERS_DISABLE_PROTOCOL — so the probe spells them in C, with Apple's own
+        // macros. That is what makes a NEGATIVE verdict attributable to the platform rather than
+        // to the caller. Not on the main compilation: no production code links it.
+        target.compilations.getByName("test").cinterops.create("nwprobe")
     }
 
     sourceSets {
