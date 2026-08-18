@@ -525,6 +525,63 @@ class FakeNwRadioTest {
         )
     }
 
+    /**
+     * The [FakeNwRadio.sentFrames] ledger is append-only for the radio's lifetime, so what it retains
+     * per frame is a bound it MUST hold: `SeamConformanceSuite`'s payload-budget cases send this
+     * fabric's whole 16 MiB `maxPayloadBytes`, and retaining those in full took the Kotlin/Native test
+     * process down under the parallel full build.
+     *
+     * Both halves are load-bearing and both are asserted here: the ledger truncates, and delivery does
+     * not. A bound that also truncated what arrives would be far worse than the leak it replaced —
+     * every payload test on this radio would silently pass against a corrupted frame.
+     */
+    @Test
+    fun theSendLedgerRetainsATruncatedPrefixWhileDeliveryStaysWhole() = runTest(StandardTestDispatcher()) {
+        val radio = FakeNwRadio()
+        val a = FakeNwApi(radio, deviceId = "A", serviceName = "svc-A")
+        val b = FakeNwApi(radio, deviceId = "B", serviceName = "svc-B")
+        val atB = mutableListOf<NwBytesReceived>()
+        backgroundScope.collectInto(b.bytesReceived, atB)
+        testScheduler.runCurrent()
+
+        val dial = radio.injectDoubleDial("A", "B")
+        testScheduler.runCurrent()
+
+        // Big enough that a ledger retaining it whole is visibly different from one that does not.
+        val big = ByteArray(FakeNwRadio.LEDGER_PREVIEW_BYTES * 4) { (it % 251).toByte() }
+        a.send(dial.outbound.dialerConnectionId, big) // straight through
+        radio.holdSends(dial.inbound.accepterConnectionId)
+        a.send(dial.inbound.accepterConnectionId, big) // via the in-flight queue
+        testScheduler.runCurrent()
+        radio.releaseSends(dial.inbound.accepterConnectionId)
+        testScheduler.runCurrent()
+
+        val direct = radio.sentFrames.first()
+        val queued = radio.sentFrames.last()
+        assertAll(
+            { assertEquals(big.size, direct.sizeBytes, "the TRUE size is retained in full") },
+            {
+                assertEquals(
+                    FakeNwRadio.LEDGER_PREVIEW_BYTES,
+                    direct.bytes.size,
+                    "…but only a bounded prefix of the payload is",
+                )
+            },
+            { assertEquals(big.size, queued.sizeBytes, "same for a frame that went through the queue") },
+            { assertEquals(FakeNwRadio.LEDGER_PREVIEW_BYTES, queued.bytes.size) },
+            {
+                assertTrue(
+                    direct.bytes.contentEquals(big.copyOf(FakeNwRadio.LEDGER_PREVIEW_BYTES)),
+                    "the prefix must be the frame's LEADING bytes — that is what a marker test matches on",
+                )
+            },
+            // Delivery is untouched by the ledger's bound, on both paths.
+            { assertEquals(2, atB.size, "both frames arrived") },
+            { assertTrue(atB[0].bytes.contentEquals(big), "the direct send arrives whole") },
+            { assertTrue(atB[1].bytes.contentEquals(big), "the released send arrives whole") },
+        )
+    }
+
     @Test
     fun threeDevicesEachDiscoverAllPeersIncludingThemselves() = runTest(StandardTestDispatcher()) {
         val radio = FakeNwRadio()

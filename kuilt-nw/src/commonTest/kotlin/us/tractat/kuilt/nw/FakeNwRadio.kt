@@ -151,10 +151,23 @@ internal enum class SendFate {
  * [fate] and [wasHeld] are written only by [FakeNwRadio]. [wasHeld] is deliberately NOT derivable
  * from [fate] — a released frame ends [SendFate.Delivered], so without it a test could not prove its
  * hold ever fired, and a hold that silently stopped holding would pass quietly.
+ *
+ * ## [bytes] is a TRUNCATED preview, and has to be
+ * The ledger is append-only for the radio's lifetime, so retaining each frame's payload in full makes
+ * it a memory leak proportional to everything a test ever sent — and `SeamConformanceSuite`'s
+ * payload-budget cases send `Seam.maxPayloadBytes`, which for this fabric is 16 MiB. Under the
+ * parallel full build that was enough to take the Kotlin/Native test process down. So the record
+ * keeps [sizeBytes] exactly and only the first [FakeNwRadio.LEDGER_PREVIEW_BYTES] of the payload:
+ * enough to attribute a frame by a marker a test put at the front of it, bounded regardless of what
+ * flows through. Delivery is unaffected — the full payload lives in the in-flight queue, not here,
+ * and is released the moment the frame reaches a terminal fate.
  */
 internal class SentFrame(
     val fromDeviceId: String,
     val connectionId: NwConnectionId,
+    /** The frame's true size, retained in full even though [bytes] is not. */
+    val sizeBytes: Int,
+    /** The frame's leading bytes, truncated to [FakeNwRadio.LEDGER_PREVIEW_BYTES]. */
     val bytes: ByteArray,
 ) {
     var fate: SendFate = SendFate.Delivered
@@ -165,7 +178,7 @@ internal class SentFrame(
         internal set
 
     override fun toString(): String =
-        "SentFrame(from=$fromDeviceId conn=${connectionId.value} bytes=${bytes.size} fate=$fate held=$wasHeld)"
+        "SentFrame(from=$fromDeviceId conn=${connectionId.value} bytes=$sizeBytes fate=$fate held=$wasHeld)"
 }
 
 /**
@@ -299,8 +312,16 @@ internal class FakeNwRadio {
     /** Sending ends currently held by [holdSends] — a [send] on one of these queues instead of delivering. */
     private val heldEnds = mutableSetOf<String>()
 
+    /**
+     * A frame queued on a held end: its ledger [record] plus the FULL [payload] to deliver on release.
+     *
+     * The full bytes live here and only here, so they are reachable exactly as long as the frame is in
+     * flight — draining or discarding the queue drops them, while the (bounded) ledger record survives.
+     */
+    private class Queued(val record: SentFrame, val payload: ByteArray)
+
     /** Held sending end → the frames queued on it, in issue order. Drained by [releaseSends], destroyed by a close. */
-    private val inFlight = mutableMapOf<String, MutableList<SentFrame>>()
+    private val inFlight = mutableMapOf<String, MutableList<Queued>>()
 
     private val sent = mutableListOf<SentFrame>()
 
@@ -677,18 +698,20 @@ internal class FakeNwRadio {
     suspend fun releaseSends(connectionId: NwConnectionId) {
         heldEnds -= connectionId.value
         val queued = inFlight.remove(connectionId.value) ?: return
-        for (record in queued) deliverOrDrop(record)
+        for (entry in queued) deliverOrDrop(entry.record, entry.payload)
     }
 
     /** Frames currently queued on [connectionId] by [holdSends] — the hold's live rig receipt. */
-    fun inFlightOn(connectionId: NwConnectionId): List<SentFrame> = inFlight[connectionId.value].orEmpty()
+    fun inFlightOn(connectionId: NwConnectionId): List<SentFrame> =
+        inFlight[connectionId.value].orEmpty().map { it.record }
 
     /** Whether the radio still holds a link for [connectionId] — how a test names the dedup's SURVIVOR. */
     fun isLive(connectionId: NwConnectionId): Boolean = connectionId.value in links
 
     /**
-     * Deliver [record] to the far end, or mark it [SendFate.DroppedLinkGone] if its link has gone —
-     * **never throwing**, which is the whole difference between this and [send]'s own liveness check.
+     * Deliver [payload] to the far end of [record]'s link, or mark it [SendFate.DroppedLinkGone] if
+     * that link has gone — **never throwing**, which is the whole difference between this and [send]'s
+     * own liveness check.
      *
      * The two reach the same "there is no link" state from call sites with opposite obligations, and
      * `NwApi.send`'s contract mandates both directions:
@@ -709,14 +732,14 @@ internal class FakeNwRadio {
      * link's disappearance was never announced — [discardInFlight] covers the announced close — so it
      * is the fake's remaining model of a silent loss, and deliberately so.
      */
-    private suspend fun deliverOrDrop(record: SentFrame) {
+    private suspend fun deliverOrDrop(record: SentFrame, payload: ByteArray) {
         val other = links[record.connectionId.value]
         if (other == null) {
             record.fate = SendFate.DroppedLinkGone
             return
         }
         record.fate = SendFate.Delivered
-        devices.getValue(other.deviceId).emitBytesReceived(NwBytesReceived(other.connectionId, record.bytes))
+        devices.getValue(other.deviceId).emitBytesReceived(NwBytesReceived(other.connectionId, payload))
     }
 
     /**
@@ -732,7 +755,12 @@ internal class FakeNwRadio {
      * case is.
      */
     suspend fun send(fromDeviceId: String, connectionId: NwConnectionId, bytes: ByteArray) {
-        val record = SentFrame(fromDeviceId, connectionId, bytes)
+        val record = SentFrame(
+            fromDeviceId = fromDeviceId,
+            connectionId = connectionId,
+            sizeBytes = bytes.size,
+            bytes = bytes.copyOf(minOf(bytes.size, LEDGER_PREVIEW_BYTES)),
+        )
         sent += record
         // Liveness FIRST, before the hold: a stale hold must never launder a dead link into a live
         // queue, and the caller is owed the refusal whether or not this end happens to be held.
@@ -745,15 +773,15 @@ internal class FakeNwRadio {
         if (connectionId.value in heldEnds) {
             record.fate = SendFate.InFlight
             record.wasHeld = true
-            inFlight.getOrPut(connectionId.value) { mutableListOf() } += record
+            inFlight.getOrPut(connectionId.value) { mutableListOf() } += Queued(record, bytes)
             return
         }
-        deliverOrDrop(record)
+        deliverOrDrop(record, bytes)
     }
 
     /** The bytes a torn-down socket destroys: everything [holdSends] still had queued on [connectionId]. */
     private fun discardInFlight(connectionId: NwConnectionId) {
-        inFlight.remove(connectionId.value)?.forEach { it.fate = SendFate.DiscardedOnClose }
+        inFlight.remove(connectionId.value)?.forEach { it.record.fate = SendFate.DiscardedOnClose }
     }
 
     suspend fun disconnect(fromDeviceId: String, connectionId: NwConnectionId) {
@@ -774,5 +802,19 @@ internal class FakeNwRadio {
         // Only the REMOTE side observes the close EVENT (the fast reason-carrying path); it may be dropped.
         devices.getValue(other.deviceId)
             .emitConnectionClosed(NwConnectionClosed(other.connectionId, reason = null))
+    }
+
+    internal companion object {
+        /**
+         * How much of each frame the append-only [sentFrames] ledger retains (#2425).
+         *
+         * Bounded on purpose: `SeamConformanceSuite`'s payload-budget cases send this fabric's whole
+         * 16 MiB `maxPayloadBytes`, and holding those arrays for the radio's lifetime was enough to
+         * kill the Kotlin/Native test process under the parallel full build. A frame is attributed by
+         * a marker a test writes at the FRONT of its payload, so a small prefix is all the ledger
+         * needs; [SentFrame.sizeBytes] keeps the true length either way, and the full payload lives in
+         * the in-flight queue only while it is genuinely in flight.
+         */
+        const val LEDGER_PREVIEW_BYTES: Int = 256
     }
 }
