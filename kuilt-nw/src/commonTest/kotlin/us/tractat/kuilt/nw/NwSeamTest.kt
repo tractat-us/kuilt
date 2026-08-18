@@ -517,6 +517,66 @@ class NwSeamTest {
     }
 
     @Test
+    fun aSendOntoALinkTheRemoteAlreadyDestroyedEvictsThePeer() = runTest(StandardTestDispatcher()) {
+        // #2455, the REACTION half. The field shape behind #2425: the remote destroyed its end of the link
+        // and no close ever reached this side, so the seam still holds the connection and writes the next
+        // frame onto it. That write must fail, and the failure must EVICT — not merely be raised.
+        //
+        // Distinct from `sendFailureOnLastPeerReformsToWeavingNotTorn` above, which reaches the same eviction
+        // through `FakeNwApi.failSend` — a flag that fails EVERY send regardless of which handle it names,
+        // and which therefore cannot tell "the fabric reports a dead handle" from "the fabric was told to
+        // break". Here nothing is rigged to fail: the link is genuinely gone, and the send discovers it.
+        // That is the case `RealNwApi` could not reach at all before #2455 (it logged the dead id at debug
+        // and returned), which is why this test needs `NwSendFailurePathTest` beside it — this one proves
+        // the seam evicts when the fabric reports; that one proves the fabric reports.
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val apiB = FakeNwApi(radio, deviceId = "dev-1", serviceName = "svc-1")
+        val seamA = NwSeam(PeerId("peer-0"), apiA, seamScope(), Random(0))
+        val seamB = NwSeam(PeerId("peer-1"), apiB, seamScope(), Random(1))
+        var aIncomingCompleted = false
+        val aCollect = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            seamA.incoming.collect { }
+            aIncomingCompleted = true
+        }
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamB.incoming.collect { } }
+        testScheduler.runCurrent()
+        apiA.connect(NwEndpoint(id = "ep-dev-1", serviceName = "svc-1"))
+        assertTrue(pumpUntil { seamA.peers.value.size == 2 }, "A wove to 2 peers")
+
+        // B's end of the link is destroyed and NOTHING is delivered to A — no close event, no Closed STATE.
+        radio.severLinksSilently("dev-1")
+        // Rig check: A must still believe B is present, or the eviction below would have a second possible
+        // cause (the close/STATE routes) and this test would pass without the send path ever running.
+        pumpUntil(maxPumps = 50) { false } // let any other teardown route this sever might trip surface first
+        assertEquals(
+            setOf(PeerId("peer-0"), PeerId("peer-1")),
+            seamA.peers.value,
+            "rig check: a silent sever must leave A holding B — otherwise some other route is doing the eviction",
+        )
+
+        seamA.sendTo(PeerId("peer-1"), "onto-a-dead-connection".encodeToByteArray())
+
+        assertTrue(
+            pumpUntil { seamA.peers.value == setOf(seamA.selfId) },
+            "A must evict B via removeByConn once the send onto the destroyed link fails — was ${seamA.peers.value}",
+        )
+        pumpUntil(maxPumps = 50) { false } // give a wrong Torn / incoming-completion a chance to surface
+        assertAll(
+            { assertEquals(setOf(seamA.selfId), seamA.peers.value, "A's peers collapse to {A}") },
+            { assertTrue(seamA.state.value is SeamState.Weaving, "a last-remote send-failure eviction re-forms to Weaving, not Torn — was ${seamA.state.value}") },
+            { assertTrue(!aIncomingCompleted && !aCollect.isCompleted, "A.incoming stays OPEN so NwLoom can redial") },
+            {
+                assertEquals(
+                    setOf(PeerId("peer-0"), PeerId("peer-1")),
+                    seamB.peers.value,
+                    "B is untouched — the sever is one-sided, so the eviction is A's own send discovering the loss",
+                )
+            },
+        )
+    }
+
+    @Test
     fun remotePeerDepartureCollapsesPeersAndReformsToWeavingNotTorn() = runTest(StandardTestDispatcher()) {
         // #1513 policy: a peer loss is RECOVERABLE, not terminal. A 2-node mesh forms (A.peers == {A,B},
         // Woven). B departs — its close() disconnects B's connections, so the radio delivers

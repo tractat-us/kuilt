@@ -81,11 +81,17 @@ class NwNativeLibTest {
 
             // The reviewer's empty-payload nw_send concern, resolved empirically on the real dylib:
             // JNA marshals byte[0] to a NON-null pointer, so the K/N `data == null` guard is not hit
-            // and the empty send does not crash. RealNwApi.send treats an unknown connection as a
-            // best-effort no-op (logs + returns), so nw_send comes back 0 — not the spurious -1 the
-            // reviewer worried a null-pointer marshalling could produce. Safe on both counts, and
-            // NwSeam never sends an empty frame anyway (encodeFrame always prepends a 4-byte prefix).
-            assertEquals(0, lib.nw_send(handle, "no-such-conn", ByteArray(0), 0), "empty nw_send to unknown conn")
+            // and the empty send does not crash.
+            //
+            // The RESULT CODE flipped 0 → -1 in #2455, and this line is the end-to-end receipt that the
+            // fix crosses the ABI. `RealNwApi.send` used to treat an unknown connection as a best-effort
+            // no-op (log at debug, return), so the dylib reported success for a frame that went nowhere —
+            // this assertion pinned that silence in the one place a consumer could still have seen it.
+            // The unknown id now throws, `nw_send`'s runCatchingCancellable maps the throw to -1, and
+            // `BridgeNwApi.send` raises NwSendFailedException — so the JVM bridge gets the same eviction
+            // signal as appleMain. -1 here is therefore the SUCCESS condition, and it is a real
+            // measurement: it comes back through the bundled dylib, not a fake.
+            assertEquals(-1, lib.nw_send(handle, "no-such-conn", ByteArray(0), 0), "empty nw_send to unknown conn")
         } finally {
             lib.nw_runtime_destroy(handle)
         }

@@ -3319,6 +3319,13 @@ val forbidDemotedFieldTrail by tasks.registering {
         // The transport's own account, which is the only place a browse result or a path change appears.
         "nw.api.browse-result",
         "nw.path.update",
+        // A frame that went nowhere (#2455). Both were at DEBUG, which is the whole reason "no send error
+        // in the log" was evidence of NOTHING on this fabric during the #2425 analysis: 182 bytes were
+        // written onto a destroyed connection and the capture recorded neither line. They are pinned here
+        // rather than left to the throw and the escalation alone, because those two reach a CALLER and a
+        // teardown path — not a capture. This is what the fix itself now rests on for field diagnosis.
+        "nw.send.no-connection",
+        "nw.send.failed",
     )
     doLast {
         val captured = setOf("info", "warn", "error") // what a release device's store actually retains

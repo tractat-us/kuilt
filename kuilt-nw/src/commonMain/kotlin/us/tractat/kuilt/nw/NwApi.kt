@@ -36,6 +36,19 @@ private val EMPTY_LISTENER_STATE: StateFlow<NwListenerState> =
     MutableStateFlow<NwListenerState>(NwListenerState.Unknown).asStateFlow()
 
 /**
+ * Thrown by [NwApi.send] for an **immediately-known** send failure — the addressed [NwConnectionId] is
+ * unknown to this binding or already closed (#2455).
+ *
+ * A plain [Exception], deliberately **not** a [kotlin.coroutines.cancellation.CancellationException], so a
+ * caller guarding the send with `runCatchingCancellable` sees a fabric failure rather than its own
+ * structured cancellation (the same reasoning as [NwUnreachableException]).
+ *
+ * It says the frame was **never handed to the transport**, which is strictly narrower than "not delivered":
+ * a `send` that returns normally has only been handed off, and may still be lost. See [NwApi.send].
+ */
+public class NwSendFailedException(message: String) : Exception(message)
+
+/**
  * Abstracts the slice of Apple's Network.framework needed by `NwLoom`.
  *
  * Implementations: `FakeNwApi` (tests, commonTest) and the real `RealNwApi`
@@ -79,13 +92,24 @@ public interface NwApi {
     /**
      * Send raw [bytes] over [connectionId]. Framing is the caller's responsibility.
      *
-     * **Best-effort.** An implementation MAY throw synchronously to signal an immediately-known
-     * failure (e.g. an unknown/closed [connectionId]) — `NwSeam` treats a throw as a cue to evict
-     * that connection. But a real datagram transport reports most send failures asynchronously
-     * (the link breaks after the call returns), surfacing them via [connectionClosed] rather than
-     * by throwing here. Callers must therefore rely on [connectionClosed] (the fast reason-carrying
-     * path) — backstopped by the drop-tolerant [connectionStates] `Closed` STATE — as the authoritative
-     * teardown signal, and treat a non-throwing `send` as "handed off", not "delivered".
+     * **An immediately-known failure MUST throw [NwSendFailedException]** — an implementation that
+     * knows, before handing anything to the transport, that [connectionId] is unknown or already
+     * closed reports that by throwing, not by returning. `NwSeam` treats a throw as its cue to evict
+     * that connection. This used to read "MAY throw", and `RealNwApi` took the option: it logged the
+     * dead id at debug and returned normally, which made its half of `NwSeam`'s send-failure eviction
+     * dead code and turned a frame written onto a destroyed connection into a silent discard with no
+     * warn, no error and no retry (#2455 — the loss that made the #2425 wedge undiagnosable). "MAY"
+     * is not a contract a caller can build on; the eviction is, so this direction is now required.
+     *
+     * **A non-throwing `send` still means "handed off", NOT "delivered".** A real transport reports
+     * *most* send failures asynchronously — the link breaks after the call returns — and this method
+     * does not wait for the transport's completion, so it cannot and must not be read as an
+     * acknowledgement. Those failures surface via [connectionClosed] (the fast reason-carrying path),
+     * backstopped by the drop-tolerant [connectionStates] `Closed` STATE; together they remain the
+     * authoritative teardown signal, and an implementation that learns of an asynchronous send failure
+     * routes it there rather than inventing a late throw nobody is waiting to catch.
+     *
+     * @throws NwSendFailedException if [connectionId] is unknown to this binding or already closed.
      */
     public suspend fun send(connectionId: NwConnectionId, bytes: ByteArray)
 

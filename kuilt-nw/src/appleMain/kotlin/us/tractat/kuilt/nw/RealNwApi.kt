@@ -1049,26 +1049,81 @@ internal class RealNwApi(
     // ── data ─────────────────────────────────────────────────────────────────
 
     /**
-     * **Fire-and-forget** (the [NwApi.send] best-effort contract, #1419). This NEVER throws to report a link
-     * failure: `nw_connection_send` returns immediately and any error surfaces only asynchronously in the
-     * completion block below (logged, not propagated). A broken link is therefore reported to `NwSeam` via
-     * [connectionClosed]/[connectionStates] (the `failed`/`cancelled` state → [closeConnection] path), never
-     * by a throw here. Consequence: `NwSeam`'s send-path eviction (`removeByConn` on a `send` throw) is
-     * exercised ONLY by `FakeNwApi`'s synchronous-throw hook — against the real transport it is dead weight,
-     * kept as idempotent best-effort. Eviction against reality is driven entirely by the close route.
+     * Hand [bytes] to the transport on [connectionId]. **Two failures, two different routes** (#2455).
+     *
+     * **Synchronous — an unknown or already-closed [connectionId] THROWS** [NwSendFailedException]. Nothing
+     * was handed to the transport and this binding knows it before doing anything, so it is reported to the
+     * caller, which is `NwSeam`'s cue to [connectionClosed]-independently evict the connection. This used to
+     * log at debug and `return`, and that silence is the whole of #2455: the seam's `removeByConn`-on-throw
+     * branch was unreachable against the real fabric, so a frame written onto a connection the remote had
+     * already destroyed vanished with no warn, no error, no metric and no retry — and "no send error in the
+     * log" was therefore evidence of nothing.
+     *
+     * **Asynchronous — the completion's error does NOT come back here.** `nw_connection_send` returns
+     * immediately and reports the transport's verdict later, on the queue, to a caller that is long gone; a
+     * throw at that point would have nobody to catch it. [onSendCompletionError] instead escalates it into
+     * the SAME authoritative teardown path a terminal receive error takes ([escalateClose] → `cancelled` →
+     * [closeConnection] → [connectionClosed] + [connectionStates] `Closed`), which is the route `NwSeam`
+     * already reconciles. So the async failure becomes loud and acted upon without this method ever
+     * pretending to be an acknowledgement: a `send` that returns has **handed off**, not delivered, exactly
+     * as [NwApi.send] says.
      */
     override suspend fun send(connectionId: NwConnectionId, bytes: ByteArray) {
         val connection = lock.withLock { connections[connectionId]?.connection }
         if (connection == null) {
-            log.debug { "nw.send to closed/unknown connection id=${connectionId.value}" }
-            return
+            // INFO, not debug: this is a LOST FRAME, and on a device capture only INFO+ survives. Carries the
+            // byte count so a two-sided ledger (the #2425 analysis) can see which write went nowhere.
+            log.info { "nw.send.no-connection id=${connectionId.value} bytes=${bytes.size} → throw (unknown/closed)" }
+            throw NwSendFailedException(
+                "no live connection '${connectionId.value}' — unknown or already closed",
+            )
         }
+        // Read the size before arming: the completion block outlives this frame, and capturing the count
+        // rather than the array keeps a failed send from pinning the payload until the queue drains.
+        val byteCount = bytes.size
         // Explicit content context — the NW_CONNECTION_*_CONTEXT constants mis-bridge under K/N.
         val context = nw_content_context_create("kuilt")
         nw_connection_send(connection, toDispatchData(bytes), context, true) { error ->
-            if (error != null) log.debug { "nw.send-done err id=${connectionId.value} bytes=${bytes.size}" }
+            if (error != null) {
+                onSendCompletionError(
+                    connectionId,
+                    nw_error_get_error_domain(error).toInt(),
+                    nw_error_get_error_code(error),
+                    byteCount,
+                )
+            }
         }
     }
+
+    /**
+     * A `nw_connection_send` completion that came back with an error (#2455) — decoded to its (domain, code)
+     * primitives, recorded, and escalated into a close.
+     *
+     * Escalating rather than merely logging is the point. On a connection-oriented `nw_connection` a send
+     * error is terminal — the link is not usable afterwards — so leaving it at debug meant the seam kept a
+     * dead connection in `registry` and kept writing to it until some *other* signal noticed. [escalateClose]
+     * routes it through the one path the seam already treats as authoritative, and is idempotent and
+     * self-guarding: a connection already gracefully cancelling ([ConnectionEntry.closing]) is never
+     * escalated, so the `ECANCELED` our OWN [disconnect] provokes cannot turn a graceful `reason = null`
+     * close into a spurious failed one; an already-escalating or already-dropped entry is a no-op.
+     *
+     * Split from the completion block so it is unit-testable with injected primitives — no `nw_error_t` is
+     * synthesizable in a test — exactly as [captureFailure] is split from [recordFailure].
+     */
+    private fun onSendCompletionError(id: NwConnectionId, domain: Int, code: Int, byteCount: Int) {
+        log.info { "nw.send.failed id=${id.value} bytes=$byteCount → escalateClose(send:$code)" }
+        captureFailure(id, domain, code, "SEND")
+        escalateClose(id, "send:$code")
+    }
+
+    /**
+     * Test-only (#2455): drive the send-completion failure path for [id] with injected [domain]/[code],
+     * running the exact production [onSendCompletionError] plumbing an errored `nw_connection_send`
+     * completion runs — but bypassing the un-synthesizable `nw_error_t` decode (the same constraint
+     * [driveFailureForTest] works around). Not part of the fabric contract.
+     */
+    internal fun driveSendCompletionErrorForTest(id: NwConnectionId, domain: Int, code: Int, byteCount: Int) =
+        onSendCompletionError(id, domain, code, byteCount)
 
     // ── connection lifecycle ───────────────────────────────────────────────────
 
