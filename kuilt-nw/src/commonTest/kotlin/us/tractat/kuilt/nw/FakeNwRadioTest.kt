@@ -4,10 +4,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -300,6 +302,226 @@ class FakeNwRadioTest {
             // more; only the second dial, biased to dev-b, may arrive there.
             { assertEquals(3, openedByA.size, "dev-a: two ends of the self-resolved dial, then its own second dial") },
             { assertEquals(1, openedByB.size, "dev-b accepts exactly the dial the bias sent to it — no more, no fewer") },
+        )
+    }
+
+    /**
+     * [FakeNwRadio.injectDoubleDial] must hand back BOTH links of a pair, named by direction, with
+     * nothing pumped in between — that gap is what lets a test install a [FakeNwRadio.holdSends]
+     * before any [NwHello] moves, and so choose arrival order rather than inherit it from dial order
+     * (#2425).
+     */
+    @Test
+    fun aDoubleDialOpensBothDirectionsAndNamesEachDevicesEndOfEach() = runTest(StandardTestDispatcher()) {
+        val radio = FakeNwRadio()
+        val a = FakeNwApi(radio, deviceId = "A", serviceName = "svc-A")
+        val b = FakeNwApi(radio, deviceId = "B", serviceName = "svc-B")
+
+        val openedByA = mutableListOf<NwConnectionOpened>()
+        val openedByB = mutableListOf<NwConnectionOpened>()
+        backgroundScope.collectInto(a.connectionOpened, openedByA)
+        backgroundScope.collectInto(b.connectionOpened, openedByB)
+        testScheduler.runCurrent()
+
+        val dial = radio.injectDoubleDial("A", "B")
+        // Deliberately read BEFORE pumping: the point of the primitive is that both links exist while
+        // no collector has run, so a hold installed here precedes every hello.
+        val liveBeforePumping = radio.liveLinkCount to radio.openedLinkCount
+        testScheduler.runCurrent()
+
+        val ends = listOf(
+            dial.outbound.dialerConnectionId,
+            dial.outbound.accepterConnectionId,
+            dial.inbound.dialerConnectionId,
+            dial.inbound.accepterConnectionId,
+        )
+        assertAll(
+            { assertEquals(2 to 2, liveBeforePumping, "both links must exist before anything is pumped") },
+            { assertEquals("A", dial.outbound.dialerDeviceId, "outbound is the link A dialled") },
+            { assertEquals("B", dial.inbound.dialerDeviceId, "inbound is the link A accepted") },
+            { assertEquals(4, ends.toSet().size, "four distinct handles — one per device per link: $ends") },
+            { assertEquals(listOf(dial.outbound, dial.inbound), radio.openedLinks, "both links, in dial order") },
+            { assertEquals("ep-B", dial.outbound.dialledEndpointId) },
+            { assertEquals("ep-A", dial.inbound.dialledEndpointId) },
+            // `endOn` is the whole reason a test never has to reproduce the `conn-<dev>-<n>` convention.
+            { assertEquals(dial.outbound.dialerConnectionId, dial.outbound.endOn("A")) },
+            { assertEquals(dial.outbound.accepterConnectionId, dial.outbound.endOn("B")) },
+            { assertEquals(null, dial.outbound.endOn("C"), "a device that is not an end of this link") },
+            // The radio's own account must agree with the handles the primitive returned.
+            {
+                assertEquals(
+                    setOf(dial.outbound.dialerConnectionId, dial.inbound.accepterConnectionId),
+                    openedByA.map { it.connectionId }.toSet(),
+                    "A sees exactly its two ends",
+                )
+            },
+            {
+                assertEquals(
+                    setOf(dial.outbound.accepterConnectionId, dial.inbound.dialerConnectionId),
+                    openedByB.map { it.connectionId }.toSet(),
+                    "B sees exactly its two ends",
+                )
+            },
+            { assertTrue(ends.all { radio.isLive(it) }, "every end of both links is live") },
+        )
+    }
+
+    /**
+     * [FakeNwRadio.holdSends] must actually withhold — and only in ONE direction, since it is keyed on
+     * the sending device's own handle (#2425). A hold that leaked the reverse direction would make
+     * "which hello arrives first" uncontrollable, which is the entire capability.
+     */
+    @Test
+    fun aHeldEndWithholdsItsOwnDirectionOnlyAndDeliversInIssueOrderOnRelease() =
+        runTest(StandardTestDispatcher()) {
+            val radio = FakeNwRadio()
+            val a = FakeNwApi(radio, deviceId = "A", serviceName = "svc-A")
+            val b = FakeNwApi(radio, deviceId = "B", serviceName = "svc-B")
+
+            val bytesAtA = mutableListOf<NwBytesReceived>()
+            val bytesAtB = mutableListOf<NwBytesReceived>()
+            backgroundScope.collectInto(a.bytesReceived, bytesAtA)
+            backgroundScope.collectInto(b.bytesReceived, bytesAtB)
+            testScheduler.runCurrent()
+
+            val link = radio.injectDoubleDial("A", "B").outbound
+            testScheduler.runCurrent()
+            radio.holdSends(link.dialerConnectionId) // A→B only
+
+            a.send(link.dialerConnectionId, "one".encodeToByteArray())
+            a.send(link.dialerConnectionId, "two".encodeToByteArray())
+            b.send(link.accepterConnectionId, "pong".encodeToByteArray()) // the UNHELD reverse direction
+            testScheduler.runCurrent()
+
+            val heldWhileHeld = radio.inFlightOn(link.dialerConnectionId).size
+            val atBWhileHeld = bytesAtB.map { it.bytes.decodeToString() }
+            val atAWhileHeld = bytesAtA.map { it.bytes.decodeToString() }
+
+            radio.releaseSends(link.dialerConnectionId)
+            testScheduler.runCurrent()
+
+            assertAll(
+                // The rig's own receipt: two frames really were withheld, counted where they were
+                // withheld rather than inferred from B having seen nothing (which is also what an
+                // unsent frame looks like).
+                { assertEquals(2, heldWhileHeld, "both A→B frames must be queued while the end is held") },
+                { assertEquals(emptyList(), atBWhileHeld, "nothing crosses a held end") },
+                { assertEquals(listOf("pong"), atAWhileHeld, "the REVERSE direction is untouched by the hold") },
+                {
+                    assertEquals(
+                        listOf("one", "two"),
+                        bytesAtB.map { it.bytes.decodeToString() },
+                        "released in issue order",
+                    )
+                },
+                { assertEquals(0, radio.inFlightOn(link.dialerConnectionId).size, "the queue is drained") },
+                {
+                    assertEquals(
+                        listOf(true, true, false),
+                        radio.sentFrames.map { it.wasHeld },
+                        "wasHeld must survive release — a released frame is Delivered, so fate alone " +
+                            "could not tell a working hold from one that silently stopped holding",
+                    )
+                },
+                {
+                    assertEquals(
+                        List(3) { SendFate.Delivered },
+                        radio.sentFrames.map { it.fate },
+                        "every frame ends up delivered; the hold changed WHEN, not WHETHER",
+                    )
+                },
+            )
+        }
+
+    /**
+     * Bytes still in flight when their link is torn down are DESTROYED — silently, with no error to
+     * the sender and nothing to the receiver (#2425). This is the state a delivered-instantly fake has
+     * no way to represent, and it is what a consumer frame written into `NwSeam`'s publish-then-swap
+     * window actually suffers.
+     *
+     * The control arm is the same frame on the same link, released a moment earlier. Without it, the
+     * subject arm would be satisfied by a radio that dropped every held frame.
+     */
+    @Test
+    fun bytesInFlightWhenTheLinkClosesAreDestroyed_theSameFrameReleasedFirstIsNot() =
+        runTest(StandardTestDispatcher()) {
+            suspend fun TestScope.arm(releaseBeforeClose: Boolean): Triple<SentFrame, List<String>, Boolean> {
+                val radio = FakeNwRadio()
+                val a = FakeNwApi(radio, deviceId = "A", serviceName = "svc-A")
+                val b = FakeNwApi(radio, deviceId = "B", serviceName = "svc-B")
+                val atB = mutableListOf<NwBytesReceived>()
+                backgroundScope.collectInto(b.bytesReceived, atB)
+                testScheduler.runCurrent()
+
+                val link = radio.injectDoubleDial("A", "B").outbound
+                testScheduler.runCurrent()
+                radio.holdSends(link.dialerConnectionId)
+
+                a.send(link.dialerConnectionId, "cargo".encodeToByteArray())
+                testScheduler.runCurrent()
+                val queued = radio.inFlightOn(link.dialerConnectionId).size == 1
+
+                if (releaseBeforeClose) radio.releaseSends(link.dialerConnectionId)
+                testScheduler.runCurrent()
+                a.disconnect(link.dialerConnectionId)
+                testScheduler.runCurrent()
+
+                return Triple(radio.sentFrames.single(), atB.map { it.bytes.decodeToString() }, queued)
+            }
+
+            val (released, atBReleased, releasedWasQueued) = arm(releaseBeforeClose = true)
+            val (destroyed, atBDestroyed, destroyedWasQueued) = arm(releaseBeforeClose = false)
+
+            assertAll(
+                // Rig receipts FIRST: both arms must actually have held the frame, or the fate
+                // difference below would be about something other than the hold.
+                { assertTrue(releasedWasQueued, "control arm: the frame must have been queued") },
+                { assertTrue(destroyedWasQueued, "subject arm: the frame must have been queued") },
+                { assertTrue(released.wasHeld && destroyed.wasHeld, "both arms exercised the hold") },
+                { assertEquals(SendFate.Delivered, released.fate, "released before the close: it arrived") },
+                { assertEquals(listOf("cargo"), atBReleased, "…and the far end has it") },
+                { assertEquals(SendFate.DiscardedOnClose, destroyed.fate, "still in flight: destroyed") },
+                { assertEquals(emptyList(), atBDestroyed, "…and the far end never sees it, nor any error") },
+            )
+        }
+
+    /**
+     * A send issued on a link the far end has ALREADY closed is dropped, whether or not this end is
+     * held — the liveness check runs first, so a stale hold can never launder a dead link into a live
+     * queue and later "deliver" onto it (#2425).
+     */
+    @Test
+    fun aSendOnADeadLinkIsDroppedEvenWhileThatEndIsHeld() = runTest(StandardTestDispatcher()) {
+        val radio = FakeNwRadio()
+        val a = FakeNwApi(radio, deviceId = "A", serviceName = "svc-A")
+        val b = FakeNwApi(radio, deviceId = "B", serviceName = "svc-B")
+        val atB = mutableListOf<NwBytesReceived>()
+        backgroundScope.collectInto(b.bytesReceived, atB)
+        testScheduler.runCurrent()
+
+        val dial = radio.injectDoubleDial("A", "B")
+        testScheduler.runCurrent()
+        radio.holdSends(dial.outbound.dialerConnectionId)
+        b.disconnect(dial.outbound.accepterConnectionId) // the FAR end tears the outbound link down
+        testScheduler.runCurrent()
+
+        a.send(dial.outbound.dialerConnectionId, "too-late".encodeToByteArray())
+        radio.releaseSends(dial.outbound.dialerConnectionId) // must not resurrect anything
+        testScheduler.runCurrent()
+
+        assertAll(
+            { assertEquals(SendFate.DroppedLinkGone, radio.sentFrames.single().fate) },
+            { assertFalse(radio.sentFrames.single().wasHeld, "a dead link is never queued") },
+            { assertEquals(emptyList(), atB.map { it.bytes.decodeToString() }) },
+            { assertFalse(radio.isLive(dial.outbound.dialerConnectionId), "the closed link is gone") },
+            {
+                assertTrue(
+                    radio.isLive(dial.inbound.dialerConnectionId),
+                    "…and only that one: the pair's OTHER link is untouched by its sibling's close",
+                )
+            },
+            { assertEquals(1, radio.liveLinkCount) },
+            { assertEquals(2, radio.openedLinkCount, "the cumulative count never falls") },
         )
     }
 
