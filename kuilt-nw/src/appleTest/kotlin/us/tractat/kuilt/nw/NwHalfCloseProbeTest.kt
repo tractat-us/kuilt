@@ -65,6 +65,17 @@ import kotlin.time.Duration.Companion.seconds
  * dedup, rebind writes to the winning connection, **half-close** the loser and keep **reading** it
  * until remote EOF. D exists only if the platform preserves read-after-write-close on this binding.
  *
+ * ## Verdict: NO — the write-close is accepted and then ignored
+ * Measured identically on `macosArm64` and `iosSimulatorArm64`, 6/6 runs each. Over **plain TCP**
+ * the write-close works exactly as documented: the remote observes a read-close (a zero-byte,
+ * `isFinal && isComplete` completion) and a subsequent local send fails with `EPIPE`. Over the
+ * **TLS-PSK** parameters kuilt-nw actually ships, the *identical* call is accepted with no error
+ * and then has no effect whatsoever — the remote never receives a read-close, and bytes written
+ * afterwards are still delivered to it. The write direction simply stays open.
+ *
+ * So D's termination condition ("until remote FIN/EOF") can never fire on this fabric, and the peer
+ * on the other end of a losing connection is never told to stop writing to it.
+ *
  * ## What the headers promise (macOS 26.5 SDK)
  * From `Network.framework/Headers/connection.h`:
  *  - **`:561-568`** — *"In order to close a connection on the sending side (a \"write close\"), send
@@ -368,6 +379,11 @@ class NwHalfCloseProbeTest {
      *
      * Asserted from the **receiving** end; a clean send completion on the remote proves only that
      * the call was accepted (`connection.h:594-599`).
+     *
+     * As with [bytesTheRemoteAlreadySentSurviveOurWriteClose], on this binding the write-close is a
+     * no-op, so what this currently measures is an untouched connection — recorded because it is the
+     * question #2457 asks, and because it becomes load-bearing on any binding that honours the
+     * write-close.
      */
     @Test
     fun remoteCanStillWriteToUsAfterOurWriteClose() = runBlocking {
@@ -709,7 +725,7 @@ internal class ProbeLink private constructor(
         }
 
         /** Built in C (`nwprobe.def`) so the TLS-disable and final-context macros are Apple's own. */
-        private fun params(psk: NwPskMaterial, tls: Boolean): nw_parameters_t? =
+        private fun params(psk: NwPskMaterial, tls: Boolean): nw_parameters_t =
             psk.psk.usePinned { key ->
                 psk.identity.usePinned { id ->
                     kuilt_nw_probe_params(
