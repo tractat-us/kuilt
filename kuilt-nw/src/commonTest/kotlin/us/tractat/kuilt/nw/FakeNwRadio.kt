@@ -452,6 +452,31 @@ internal class FakeNwRadio {
         devices.getValue(deviceId).emitConnectionOpened(NwConnectionOpened(connIdAccepter, endpoint = null))
     }
 
+    /**
+     * Destroy every link [deviceId] holds and tell **nobody** — no close EVENT, no [NwConnState.Closed]
+     * STATE, on either side (#2455).
+     *
+     * The field shape behind #2425: a peer destroyed its end of a link and the notification never reached
+     * the other side, which went on believing the connection was live and wrote a frame onto it. Every
+     * other teardown hook here is a *notified* one — [disconnect] emits the close event and latches the
+     * drop-tolerant STATE on both ends, and [FakeNwApi.dropCloseEvents] drops only the event while the
+     * STATE still lands — so each of them evicts the peer through a route that is not the send path, and
+     * none of them can leave a seam holding a connection that no longer exists. This one can: it is the
+     * ONLY way to reach the state where the *send* is the first and only thing that can discover the loss.
+     *
+     * Link ends are found by the `conn-<deviceId>-<n>` naming [nextConnId] mints, the same convention
+     * [listenerDeviceIdOf] leans on for endpoints; both ends of each link are removed, so [liveLinkCount]'s
+     * even-parity invariant still holds.
+     */
+    fun severLinksSilently(deviceId: String) {
+        require(deviceId in devices) { "no device '$deviceId' whose links could be severed" }
+        val doomed = links.keys.filter { it.startsWith("conn-$deviceId-") }
+        require(doomed.isNotEmpty()) { "device '$deviceId' holds no live link to sever" }
+        for (end in doomed) {
+            links.remove(end)?.let { links.remove(it.connectionId.value) }
+        }
+    }
+
     suspend fun send(fromDeviceId: String, connectionId: NwConnectionId, bytes: ByteArray) {
         val other = links[connectionId.value] ?: return // link already gone; drop
         devices.getValue(other.deviceId)
