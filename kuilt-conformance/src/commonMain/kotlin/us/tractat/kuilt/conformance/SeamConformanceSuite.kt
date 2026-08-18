@@ -950,7 +950,14 @@ public abstract class SeamConformanceSuite {
     //
     // The receipt that this is load-bearing rather than a green-by-construction assertion: deleting
     // `NwSeam.sendTo`'s `check(_state.value !is SeamState.Torn)` makes THIS assertion red naming
-    // `PeerNotConnected`, while the pre-#2448 assertion stayed GREEN under the identical rig.
+    // `PeerNotConnected`, while the pre-#2448 assertion stayed GREEN under the identical rig. Run on
+    // all three `:kuilt-nw` harnesses, so the rig covers the REAL transport and not only the fake:
+    // `NwConformanceTest` (`FakeNwApi`), `NwLoopbackConformanceTest` (`RealNwApi`, real
+    // Network.framework + TLS-PSK) and `NwBridgeLoopbackConformanceTest` (via `libkuilt.dylib`).
+    // That distinction matters here specifically, because `RealNwApi.send` is documented
+    // fire-and-forget and CANNOT throw — a fake-only rig would have left open whether these greens
+    // were satisfied or merely unfalsifiable. They are satisfied: on a Torn seam the state check and
+    // the registry lookup both precede `api.send`, which is never reached.
     //
     // What it still does NOT cover: a fabric that RE-FORMS rather than tears. `NwSeam` answers a
     // peer eviction with `Woven → Weaving` (#1513, deliberate), so a locally-dead link reports
