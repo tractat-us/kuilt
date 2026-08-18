@@ -406,6 +406,10 @@ class NwSeamWedgeDiagnosticsTest {
                 // the subject below is satisfied by a WARN that fires on every dedup.
                 val keptPeers = swapScenario(tag = "keepctl", seeds = 0 to 0)
                 val keptLines = appender.lines(Level.WARN, "nw.seam.publish-swap", "keepctl-")
+                // The control's own rig receipt: assert the dedup actually RAN and took the keep arm.
+                // Without this the control is green by absence — it would read the same if the second
+                // link never arrived at all. Readable only because `dedup.keep` was promoted to INFO.
+                val keptDedups = appender.lines(Level.INFO, "nw.seam.dedup.keep", "keepctl-")
 
                 // SUBJECT: seeds whose canonical nonces make the SECOND link the survivor, so both ends
                 // rebind — and only device 0 wrote into the window.
@@ -416,6 +420,14 @@ class NwSeamWedgeDiagnosticsTest {
 
                 assertAll(
                     { assertEquals(2, keptPeers, "control scenario must still converge") },
+                    {
+                        assertEquals(
+                            2,
+                            keptDedups.size,
+                            "control rig check — both ends must have run the dedup and KEPT their first " +
+                                "link, or the zero below proves nothing: $keptDedups",
+                        )
+                    },
                     {
                         assertEquals(
                             0,
@@ -510,6 +522,216 @@ class NwSeamWedgeDiagnosticsTest {
         pumpUntil { false }
         return devices.minOf { it.seam.peers.value.size }
     }
+
+    /**
+     * The post-swap wedge — the exact shape this whole class exists to instrument, and the one the
+     * watchdog was blind to.
+     *
+     * A peer settles, goes quiet, is reported, and the watchdog PARKS. A second link then wins the dedup
+     * and the peer is rebound onto it. That rebind goes through neither [addRemotePeer] (the peer is not
+     * new) nor the data arm (the frame that drove the resolve carried identity, not data), so nothing woke
+     * the parked loop — and the brand-new link, which is the one a swap-related wedge would sit on, was
+     * never watched again however long it stayed dead.
+     *
+     * The assertion is deliberately about the SECOND episode naming the NEW connId: a test that only
+     * counted lines would pass on the first episode alone.
+     */
+    @Test
+    fun aPeerReboundOntoANewLinkIsWatchedAgainEvenAfterTheWatchdogParked() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            withCapture { appender ->
+                var clockMillis = 0L
+                val tag = "postswap"
+                val radio = FakeNwRadio()
+                val devices = (0..1).map { i ->
+                    val api = FakeNwApi(radio, deviceId = "$tag-dev-$i", serviceName = "$tag-svc-$i")
+                    val id = PeerId("$tag-peer-$i")
+                    Device(
+                        id,
+                        api,
+                        NwSeam(
+                            selfId = id,
+                            api = api,
+                            scope = seamScope(),
+                            // Seeds chosen so the SECOND link wins the dedup on both ends — i.e. the
+                            // rebind actually happens. The `dedup.replace` assertion below is what proves
+                            // the rig fired rather than leaving the peer on its original link.
+                            random = Random((if (i == 0) 0 else 3).toLong()),
+                            inboundSilenceProbe = PROBE,
+                            nowMillis = { clockMillis },
+                        ),
+                    )
+                }
+                for (d in devices) {
+                    backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { d.seam.incoming.collect { } }
+                }
+                testScheduler.runCurrent()
+
+                // Link 1 alone, so the peer is published and can be reported before link 2 arrives.
+                backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    devices[0].api.connect(NwEndpoint(id = "ep-$tag-dev-1", serviceName = "$tag-svc-1"))
+                }
+                assertTrue(
+                    pumpUntil { devices.all { it.seam.peers.value.size == 2 } },
+                    "the first link must publish the peer before the second is dialled",
+                )
+
+                // Episode 1 on link 1: reported, then the watchdog parks.
+                oneProbe(count = 2)
+                val episode1 = appender.lines(Level.WARN, "nw.seam.inbound-silent", "$tag-")
+                val link1ConnIds = episode1.map { connIdOf(it) }
+
+                // Confirm it really is parked: more probes with nothing pending must add nothing.
+                oneProbe(count = 4)
+                val whileParked = appender.lines(Level.WARN, "nw.seam.inbound-silent", "$tag-")
+
+                // Link 2 arrives and wins the dedup: the peer is REBOUND onto a link nothing has watched.
+                clockMillis += 11
+                backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    devices[1].api.connect(NwEndpoint(id = "ep-$tag-dev-0", serviceName = "$tag-svc-0"))
+                }
+                pumpUntil { false }
+                val swaps = appender.lines(Level.WARN, "nw.seam.publish-swap", "$tag-")
+
+                // Episode 2 must happen on the NEW link.
+                oneProbe(count = 3)
+                val episode2 = appender.lines(Level.WARN, "nw.seam.inbound-silent", "$tag-")
+                val fresh = episode2.drop(episode1.size)
+
+                assertAll(
+                    { assertEquals(2, episode1.size, "episode 1: one line per link: $episode1") },
+                    {
+                        assertEquals(
+                            2,
+                            whileParked.size,
+                            "the watchdog must be genuinely parked before the rebind, or this test proves " +
+                                "nothing about waking it: $whileParked",
+                        )
+                    },
+                    {
+                        assertEquals(
+                            2,
+                            swaps.size,
+                            "rig check — both ends must actually REBIND, else there is no swap to be blind " +
+                                "to. If this reds, the harness's nonce ordering changed; pick seeds that " +
+                                "produce a replace rather than deleting the arm: $swaps",
+                        )
+                    },
+                    {
+                        assertEquals(
+                            2,
+                            fresh.size,
+                            "the rebound peers must be watched again — this is the post-swap wedge, and a " +
+                                "parked watchdog reports NOTHING here: $episode2",
+                        )
+                    },
+                    {
+                        // The decisive assertion: the new lines are about the NEW connections. Counting
+                        // alone would be satisfied by a stale repeat of episode 1.
+                        assertTrue(
+                            fresh.none { connIdOf(it) in link1ConnIds },
+                            "episode 2 must name the links the peers were REBOUND onto, not the displaced " +
+                                "ones (episode 1 was $link1ConnIds): $fresh",
+                        )
+                    },
+                )
+            }
+        }
+
+    /**
+     * Pins `site=classify` — the audit's position inside [NwSeam]'s frame-classify critical section, on the
+     * identity arm. Nothing else exercised it, so the placement was free to be wrong (and it was: it used
+     * to sit after the whole `when`, firing on every data frame while being structurally unable to detect
+     * anything there).
+     *
+     * The rig leaves A holding a stale binding for B, then a THIRD peer resolves on A. That resolve is the
+     * only thing that runs; virtual time never advances, so the watchdog cannot be what reports it.
+     */
+    @Test
+    fun aStaleBindingIsReportedByTheIdentityPathWhenTheNextPeerResolves() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            withCapture { appender ->
+                val tag = "classify"
+                val radio = FakeNwRadio()
+                val devices = (0..2).map { i ->
+                    val api = FakeNwApi(radio, deviceId = "$tag-dev-$i", serviceName = "$tag-svc-$i")
+                    val id = PeerId("$tag-peer-$i")
+                    Device(
+                        id,
+                        api,
+                        NwSeam(
+                            selfId = id,
+                            api = api,
+                            scope = seamScope(),
+                            random = Random(i.toLong()),
+                            inboundSilenceProbe = PROBE,
+                        ),
+                    )
+                }
+                for (d in devices) {
+                    backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { d.seam.incoming.collect { } }
+                }
+                testScheduler.runCurrent()
+
+                // A and B form; C stays out for now.
+                backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    devices[0].api.connect(NwEndpoint(id = "ep-$tag-dev-1", serviceName = "$tag-svc-1"))
+                }
+                assertTrue(
+                    pumpUntil { devices[0].seam.peers.value.size == 2 },
+                    "A and B must form before the rig",
+                )
+
+                val forgotten = devices[0].seam.dropConnWithoutEvictingForAuditRig(devices[1].peerId)
+                assertNotNull(forgotten, "rig did not fire: B was not registered on A")
+                val beforeResolve = appender.lines(Level.ERROR, "nw.seam.registry.orphan", "$tag-")
+
+                // C now resolves on A. NO virtual time passes, so the watchdog's `delay` cannot fire and
+                // the identity path is the only thing that can report the stale binding.
+                backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    devices[2].api.connect(NwEndpoint(id = "ep-$tag-dev-0", serviceName = "$tag-svc-0"))
+                }
+                assertTrue(
+                    pumpUntil { devices[0].seam.peers.value.size == 3 },
+                    "C must resolve on A, or the identity path never runs",
+                )
+                val afterResolve = appender.lines(Level.ERROR, "nw.seam.registry.orphan", "$tag-")
+
+                assertAll(
+                    {
+                        assertEquals(
+                            0,
+                            beforeResolve.size,
+                            "the rig alone must report nothing — it goes through no audit site: $beforeResolve",
+                        )
+                    },
+                    {
+                        assertEquals(
+                            1,
+                            afterResolve.size,
+                            "the next identity resolution must report the stale binding: $afterResolve",
+                        )
+                    },
+                    {
+                        assertTrue(
+                            afterResolve.single().contains("site=classify"),
+                            "and it must be the CLASSIFY site — no virtual time passed, so the watchdog " +
+                                "cannot be what found it: ${afterResolve.single()}",
+                        )
+                    },
+                    {
+                        assertTrue(
+                            afterResolve.single().contains("connId=${forgotten.value}"),
+                            "naming the link the registry still points at: ${afterResolve.single()}",
+                        )
+                    },
+                )
+            }
+        }
+
+    /** The `connId=` field of a diagnostic line, so an assertion can compare LINKS rather than counts. */
+    private fun connIdOf(line: String): String =
+        line.substringAfter("connId=").substringBefore(' ')
 
     // ── capture plumbing ────────────────────────────────────────────────────────
 

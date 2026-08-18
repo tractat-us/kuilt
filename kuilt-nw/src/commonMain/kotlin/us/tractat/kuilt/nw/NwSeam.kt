@@ -588,13 +588,20 @@ internal class NwSeam(
                     if (hello == null) {
                         FrameOutcome.DecodeFailed
                     } else {
+                        // #2420: [resolveIdentity] is the ONLY thing on this path that writes `registry`
+                        // or `conns`, so the audit belongs HERE and not after the `when`. Hoisted from
+                        // there because the outer position also ran it on `Data` — i.e. on every data
+                        // frame on every connection, inside the shared demux loop's critical section, on
+                        // an arm that mutates two counters and is structurally unable to break the
+                        // invariant. This is a byte-moving library; that loop is the one thing #1415 says
+                        // must not be made expensive. Nothing is lost: a binding that goes stale anywhere
+                        // else is still caught at `closed`/`removeByConn`, or by the watchdog within one
+                        // probe.
                         FrameOutcome.Resolved(resolveIdentity(connId, cs, hello.peerId, hello.nonce))
+                            .also { auditRegistryLocked("classify") }
                     }
                 }
             }
-            // #2420: [resolveIdentity] is the one path that WRITES `registry`, so audit the invariant in
-            // the same critical section that may have broken it.
-            auditRegistryLocked("classify")
             classified
         }
         when (outcome) {
@@ -781,6 +788,14 @@ internal class NwSeam(
             val visibleForMillis = swappedAtMillis - existing.publishedAtMillis
             val writtenToDisplaced = displaced?.outboundFrames ?: 0
             registry[remoteId] = Winner(connId, canonical, swappedAtMillis) // new winner; peer stays present
+            // The FOURTH wake site, and the one it is easiest to miss: this rebinds an EXISTING peer onto
+            // a fresh ConnState whose `silenceReported` is false, so `watchdogPendingLocked` flips false →
+            // true without going through [addRemotePeer] (the peer was already present) or the
+            // [FrameOutcome.Data] arm (the frame that drove this resolve took the `resolved == null`
+            // branch). Without it, a peer that had already been reported silent and parked the watchdog
+            // gets a brand-new link that is NEVER watched — which is precisely the post-swap wedge this
+            // whole class exists to make legible.
+            wakeWatchdogLocked()
             conns.remove(existing.connId) // drop the displaced incumbent's state
             tombstoneLocked(existing.connId) // #1528: late bytes on the displaced link must not resurrect it
             log.info {
@@ -1253,11 +1268,17 @@ internal class NwSeam(
      * for free — an idle-but-healthy session emits its one line per link and then goes silent, instead of
      * waking every probe forever to decide it has nothing to say.
      *
-     * The wake sites are the only three places [watchdogPendingLocked] can go from false to true:
-     * [addRemotePeer] (a link that has never been reported), the [FrameOutcome.Data] arm (an arrival that
-     * re-arms a reported link), and [dropConnWithoutEvictingForAuditRig]. A missed wake would park the
-     * watchdog early — which is why the predicate is derived from the same fields the sweep mutates rather
-     * than from a separate flag that could drift.
+     * The wake sites are the only FOUR places [watchdogPendingLocked] can go from false to true:
+     * [addRemotePeer] (a peer arriving on a link that has never been reported), the [FrameOutcome.Data] arm
+     * (an arrival re-arming an already-reported link), [resolveIdentity]'s dedup-REPLACE arm (an existing
+     * peer rebound onto a fresh, never-reported link — the one that goes through neither of the first two,
+     * because the peer is not new and the driving frame took the identity branch), and
+     * [dropConnWithoutEvictingForAuditRig].
+     *
+     * A missed wake parks the watchdog early and the diagnostic is then silently absent — the worst failure
+     * this class can have, since it looks exactly like a healthy session. That is why the predicate is
+     * derived from the very fields the sweep mutates rather than from a separate flag that could drift, and
+     * why each site has a test that reds when its wake is removed.
      *
      * [Duration.ZERO] (or negative) disables it entirely: the loop returns and the seam carries no timer at
      * all, which is what a test wanting no watchdog output passes.
@@ -1428,14 +1449,25 @@ internal class NwSeam(
         // `registry` keys remotes only, so without this a self-send fell out as PeerNotConnected —
         // false for an id this seam's own `peers` names (#2428).
         require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
-        val connId = lock.withLock { registry[peer]?.connId } ?: throw PeerNotConnected(peer)
-        // Addressed and reporting, per contract: raise PayloadTooLarge BEFORE the encode, so the
-        // caller learns the number it should have respected and the link below is never implicated.
-        oversizeOrNull(payload)?.let { throw it }
-        // #2420: counted AFTER the two refusals above, so it counts frames actually handed to the transport
-        // and not ones this seam rejected. A second, uncontended acquisition rather than folding it into the
-        // lookup above — `sendTo` is per-peer, not a per-link fan-out, so the cost is one lock, not N.
-        lock.withLock { conns[connId]?.let { it.outboundFrames += 1 } }
+        // Addressed and reporting, per contract: the over-budget refusal is decided BEFORE the encode, so
+        // the caller learns the number it should have respected and the link below is never implicated.
+        // COMPUTED here and THROWN below, so `PeerNotConnected` keeps its precedence over `PayloadTooLarge`
+        // for a peer that is both absent and over-budget — moving the throw up here would silently swap
+        // which of the two refusals a caller sees.
+        val oversize = oversizeOrNull(payload)
+        // #2420: the routing decision and the outbound count are taken in ONE critical section, the rule
+        // [broadcast] already states. Split across two acquisitions they can disagree: this seam must be
+        // correct under a multi-threaded dispatcher, so the bytes loop can run [resolveIdentity]'s dedup-
+        // REPLACE arm in between — `conns[connId]` is then gone, the increment silently no-ops, and the
+        // frame still goes out on the displaced link. That would drop precisely the send that
+        // `frames-written-to-published-link` exists to count: the one stranded by the swap.
+        val connId = lock.withLock {
+            val winner = registry[peer]?.connId ?: return@withLock null
+            // Count only what is actually handed to the transport, never a frame this seam refuses.
+            if (oversize == null) conns[winner]?.let { it.outboundFrames += 1 }
+            winner
+        } ?: throw PeerNotConnected(peer)
+        oversize?.let { throw it }
         runCatchingCancellable { api.send(connId, encodeFrame(payload, maxFrameBytes)) }
             .onFailure {
                 log.info { "nw.seam.sendTo.send-failed peer=${peer.value} connId=${connId.value} self=${selfId.value}: ${it.message} → removeByConn" }

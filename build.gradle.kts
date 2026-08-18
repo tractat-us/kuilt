@@ -3250,6 +3250,15 @@ object FieldTrailScanner {
 // It deliberately does NOT check the CONTENT of a line — whether it carries identities rather than
 // sizes is a human assertion, exactly like `verifySeamHarnessCoverage`'s row-to-harness mapping.
 //
+// ONE ATTRIBUTION EDGE worth knowing about, because it is invisible in a green: an event name that is
+// not lexically inside its own logging call — `nw.seam.inbound-silent` is built into a string in
+// `sweepInboundSilence` and logged by a `log.warn { line }` further down — is vouched for via the
+// NEAREST PRECEDING log call, which happens to be that `log.warn`. The verdict is correct today, but a
+// function reorder could silently retarget it to some other call. What actually pins that line's level
+// is a test asserting `Level.WARN` on the emitted event (`NwSeamWedgeDiagnosticsTest`), not this guard;
+// the guard's contribution there is the staleness check. Keeping the trail's lines lexically inside
+// their own `log.*` call is the cheap way to stay clear of this.
+//
 // The LEVEL SPLIT among the curated lines is a design decision this guard preserves but cannot verify:
 // ERROR for a contract violation (`nw.seam.registry.orphan` — a state `NwSeam`'s own model forbids),
 // WARN for a condition (`nw.seam.inbound-silent` — a quiet link may be a wedge or an idle app). All
