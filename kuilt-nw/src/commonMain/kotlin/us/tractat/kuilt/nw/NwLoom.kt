@@ -151,7 +151,7 @@ public class NwLoom(
         val seamScope = CoroutineScope(currentCoroutineContext() + SupervisorJob())
         // NW_ROLES, not capability(): the seam takes ROLES only. Its availability may come from the path
         // monitor and nowhere else — `capability().availability` is a platform-support answer (#1712).
-        val seam = NwSeam(selfId, api, seamScope, random, policy, wovenPathGrace, NW_ROLES)
+        val seam = NwSeam(selfId, api, seamScope, random, policy, wovenPathGrace, staticRoles = NW_ROLES)
 
         // Per-peer, NOT the session name (ADR-005 / #2416). Every peer sharing one instance name made
         // the dial target ambiguous: identity comes from the TXT record, but the dial goes to a NAME
