@@ -972,12 +972,18 @@ public abstract class SeamConformanceSuite {
     // first pass: `LinkSeam`, `InMemoryLoom` and `ControllableSeam` all render "Seam for … is closed",
     // so three unrelated impls folded into one row and four of them were miscounted as proven.)
     //
-    // The rig also covers the REAL transport and not just the fakes, which matters here specifically
-    // because `RealNwApi.send` is documented fire-and-forget and CANNOT throw: `NwLoopbackConformanceTest`
+    // The rig also covers the REAL transport and not just the fakes: `NwLoopbackConformanceTest`
     // (`RealNwApi`, real Network.framework + TLS-PSK) and `NwBridgeLoopbackConformanceTest` (via
     // `libkuilt.dylib`) both red on this clause, so those greens are satisfied rather than merely
     // unfalsifiable — on a Torn seam the state check and the registry lookup both precede `api.send`,
     // which is never reached.
+    //
+    // This used to add "which matters here specifically because `RealNwApi.send` is documented
+    // fire-and-forget and CANNOT throw". #2455 made that false the day after it was written — an unknown
+    // or closed `connectionId` now throws `NwSendFailedException` — so it is corrected here rather than
+    // left as a claim a reader would trust. It was never load-bearing: what makes the red meaningful is
+    // that `api.send` is unreachable on a Torn seam, and both guards ahead of it are unchanged. Whether
+    // the transport underneath could have thrown does not enter the argument.
     //
     // What it still does NOT cover: a fabric that RE-FORMS rather than tears. `NwSeam` answers a
     // peer eviction with `Woven → Weaving` (#1513, deliberate), so a locally-dead link reports
