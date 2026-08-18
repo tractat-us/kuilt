@@ -767,9 +767,12 @@ internal class NwSeam(
             // the write is lost in complete silence. Read the loser's outbound count BEFORE dropping its
             // ConnState — that count is what makes this a quantity rather than a hypothesis.
             val displaced = conns[existing.connId]
-            val visibleForMillis = nowMillis() - existing.publishedAtMillis
+            // ONE reading of the clock, used for both the window that is closing and the one that is
+            // opening — so the two cannot disagree by however long this critical section takes.
+            val swappedAtMillis = nowMillis()
+            val visibleForMillis = swappedAtMillis - existing.publishedAtMillis
             val writtenToDisplaced = displaced?.outboundFrames ?: 0
-            registry[remoteId] = Winner(connId, canonical, nowMillis()) // new winner; peer stays present
+            registry[remoteId] = Winner(connId, canonical, swappedAtMillis) // new winner; peer stays present
             conns.remove(existing.connId) // drop the displaced incumbent's state
             tombstoneLocked(existing.connId) // #1528: late bytes on the displaced link must not resurrect it
             log.info {
