@@ -59,7 +59,9 @@ private val seamMonotonicMillis: () -> Long = kotlin.time.TimeSource.Monotonic.m
  *
  * Four collectors, all launched [CoroutineStart.UNDISPATCHED] at construction so they
  * subscribe **before** `NwLoom` triggers advertise/browse/dial (subscribe-before-trigger,
- * since [NwApi]'s flows are hot with no replay):
+ * since [NwApi]'s flows are hot with no replay). They — and the seam's three other coroutines —
+ * start from the `init` block at the **foot** of this class; see it for why that position is
+ * load-bearing rather than stylistic (#2462).
  *
  *  1. **connectionOpened** — sends our identity frame ([NwHello]: this peer's [PeerId] plus this
  *     connection's per-connection dedup nonce).
@@ -373,26 +375,9 @@ internal class NwSeam(
 
     private val closedMessage get() = "NwSeam for ${selfId.value} is closed"
 
-    // UNDISPATCHED so all four collectors subscribe synchronously at construction — before any
-    // connectionOpened/bytes/close/state event can be emitted (subscribe-before-trigger).
-    private val openedJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { connectionOpenedLoop() }
-    private val bytesJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { bytesReceivedLoop() }
-    private val closedJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { connectionClosedLoop() }
-    private val statesJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { connectionStatesLoop() }
-
-    // The single dedicated reader draining [deliveryStage] into the [spool] (#1415). Launched like every
-    // other loop and cancelled with [scope] at teardown. It is the ONLY caller of [Spool.deliver], so the
-    // (possibly-suspending) delivery backpressure lives here, off the shared demux loop.
-    private val drainJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { deliveryDrainLoop() }
-
-    // #1541: fold the live network-path state into [capability]. Mirrors the other collectors — UNDISPATCHED
-    // so it subscribes (and reads the current path value) synchronously at construction, and cancelled with
-    // [scope] on [close]/[latchTorn] (the same launch/cancel lifecycle as [closedJob]).
-    private val pathJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { pathStateLoop() }
-
-    // #2420: the wedge watchdog. Deliberately NOT UNDISPATCHED — it subscribes to nothing, so there is no
-    // subscribe-before-trigger obligation to honour, and its first act is a `delay`. Cancelled with [scope].
-    private val silenceJob: Job = scope.launch { inboundSilenceLoop() }
+    // The seam's seven coroutines are started by the `init` block at the BOTTOM of this class, not from
+    // property initialisers here. See that block for why — it is a correctness constraint (#2462), not
+    // a style choice.
 
     // ── loop 1: connectionOpened ────────────────────────────────────────────────
 
@@ -1570,6 +1555,61 @@ internal class NwSeam(
         }
         scope.coroutineContext[Job]?.cancel()
         return true
+    }
+
+    /**
+     * Start the seam's seven coroutines. **This block must stay LAST in the class body**, below every
+     * property declaration — that position is load-bearing (#2462), not a style preference.
+     *
+     * ## Why
+     * Kotlin runs property initialisers and `init` blocks **in declaration order**, so a coroutine
+     * started from a property initialiser can only safely touch state declared *above* it. #2451 broke
+     * that: it added the watchdog as `private val silenceJob = scope.launch { inboundSilenceLoop() }`
+     * beside the other loops near the top of the class, and the [watchdogWake] flow the loop reads 840
+     * lines below. Anything that ran the body before the constructor finished then dereferenced a `null`
+     * backing field — an NPE on the JVM, a SIGSEGV on Kotlin/Native — *inside a `launch`*, so it reached
+     * the scope's exception handler rather than the caller: the seam was constructed successfully with
+     * its watchdog silently already dead, which is the exact failure mode #2420 exists to remove.
+     *
+     * ## Why this position rather than moving one declaration
+     * Hoisting [watchdogWake] above the launch also fixes the instance, and leaves a **pairwise**
+     * constraint standing: every launch must sit below every field it *transitively* reads, re-checked
+     * on every future edit, with nothing to catch a violation — which is how the defect arrived in the
+     * first place. Starting everything from one terminal `init` collapses that to a single constraint on
+     * a single, obviously-terminal block, and makes the property that actually matters
+     * — *nothing runs until construction is complete* — hold for a field added **anywhere** in the class.
+     * (A `companion object` declares no instance state, so following this block it initialises nothing
+     * and does not weaken the position.)
+     *
+     * `NwSeamConstructionOrderTest` is the executable half: it constructs a seam on an eager dispatcher,
+     * where a launched body runs inline at the launch site, and fails on any coroutine that throws during
+     * construction. A regression here reddens there deterministically.
+     *
+     * ## What the individual launches mean
+     * The first four are `UNDISPATCHED` so all four collectors subscribe **synchronously at
+     * construction** — before any `connectionOpened`/`bytes`/`close`/`state` event can be emitted
+     * (subscribe-before-trigger). Moving them from mid-constructor to end-of-constructor does not weaken
+     * that: no property initialiser between the two positions touches [api], so no event can be emitted
+     * in the interval, and the subscription is still in place before this constructor returns.
+     */
+    init {
+        scope.launch(start = CoroutineStart.UNDISPATCHED) { connectionOpenedLoop() }
+        scope.launch(start = CoroutineStart.UNDISPATCHED) { bytesReceivedLoop() }
+        scope.launch(start = CoroutineStart.UNDISPATCHED) { connectionClosedLoop() }
+        scope.launch(start = CoroutineStart.UNDISPATCHED) { connectionStatesLoop() }
+        // The single dedicated reader draining [deliveryStage] into the [spool] (#1415). Cancelled with
+        // [scope] at teardown. It is the ONLY caller of [Spool.deliver], so the (possibly-suspending)
+        // delivery backpressure lives here, off the shared demux loop.
+        scope.launch(start = CoroutineStart.UNDISPATCHED) { deliveryDrainLoop() }
+        // #1541: fold the live network-path state into [capability]. Mirrors the other collectors —
+        // UNDISPATCHED so it subscribes (and reads the current path value) synchronously at construction,
+        // and cancelled with [scope] on [close]/[latchTorn].
+        scope.launch(start = CoroutineStart.UNDISPATCHED) { pathStateLoop() }
+        // #2420: the wedge watchdog. Deliberately NOT UNDISPATCHED — it subscribes to nothing, so there is
+        // no subscribe-before-trigger obligation to honour, and its first act is a park. Cancelled with
+        // [scope]. This is the launch #2462 was: on a real (or otherwise eager) dispatcher its body could
+        // run before [watchdogWake] existed.
+        scope.launch { inboundSilenceLoop() }
     }
 
     internal companion object {
