@@ -282,7 +282,13 @@ public interface Seam {
      * @throws IllegalArgumentException if [peer] is [selfId] — see the first section. Checked after
      *   the [SeamState.Torn] state check and before the roster lookup, so it is never masked by a
      *   [PeerNotConnected] for an id [peers] names.
-     * @throws PeerNotConnected if [peer] is absent from [peers].
+     * @throws PeerNotConnected if [peer] is absent from [peers]. Reserved for a statement about the
+     *   **addressee** — never about this seam. A [SeamState.Torn] seam owes its caller an
+     *   [IllegalStateException] that is *not* a [PeerNotConnected] (#2448): the tear is a fact about
+     *   this seam, and reporting it as an absent peer sends the caller re-resolving the roster and
+     *   retrying against a fabric that can no longer carry anything. So the [SeamState.Torn] check
+     *   comes FIRST — ahead of the self-send guard and the roster lookup — and
+     *   `SeamConformanceSuite.sendOnTornSeamThrows` holds every fabric to the distinction.
      * @throws PayloadTooLarge if [payload] exceeds [maxPayloadBytes] — the obligation on a seam
      *   that publishes a budget, and what a caller must be ready for. Independent of [state] (a
      *   `Woven` seam raises it), so a `catch (PeerNotConnected)` written against the state-driven

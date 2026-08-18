@@ -935,11 +935,27 @@ public abstract class SeamConformanceSuite {
     // fabric a harness can see passes". Binding the Apple link (#2441) is what made the claim
     // testable, and #2444 is what made it true again — the #1871 shape.
     //
-    // Note also what this obligation cannot distinguish on a fabric whose `sendTo` reports an absent
-    // addressee with `PeerNotConnected`: that type IS an `IllegalStateException`, so the second
-    // assertion below passes on a seam that blames the peer for its own death. Where the two are
-    // worth telling apart, a fabric-local test has to assert the identity of the throwable
-    // (`MCSessionLinkTornSendTest` is the in-tree example).
+    // The addressed half also asserts the throwable's IDENTITY, not just its supertype (#2448).
+    // `PeerNotConnected` IS an `IllegalStateException`, so until this the property passed on a seam
+    // that blamed the *addressee* for its own death — a statement about the peer, which a caller may
+    // reasonably answer by re-resolving the roster and retrying, sending it chasing a peer that was
+    // never the problem while the dead seam goes unreplaced. That is not cosmetic: the misleading
+    // line is the most legible thing in the log at exactly the moment someone is reading an outage.
+    //
+    // Blast radius, measured before landing (the #1859 order) across all 19 in-tree harnesses on
+    // jvm / macosArm64 / iosSimulatorArm64 / wasmJs-browser: ZERO reds. Every fabric already places
+    // its `Torn` check ahead of the roster lookup, so the strengthening is free and UNIVERSAL — no
+    // new capability flag. A flag would need a fabric able to honestly declare `false`, and none can;
+    // an unreachable `false` arm is the deleted-`ordersDelivery` shape (#2304).
+    //
+    // The receipt that this is load-bearing rather than a green-by-construction assertion: deleting
+    // `NwSeam.sendTo`'s `check(_state.value !is SeamState.Torn)` makes THIS assertion red naming
+    // `PeerNotConnected`, while the pre-#2448 assertion stayed GREEN under the identical rig.
+    //
+    // What it still does NOT cover: a fabric that RE-FORMS rather than tears. `NwSeam` answers a
+    // peer eviction with `Woven → Weaving` (#1513, deliberate), so a locally-dead link reports
+    // `PeerNotConnected` from a non-`Torn` seam and never reaches this property at all — tracked
+    // separately, and out of reach of any assertion keyed on `Torn`.
 
     @Test
     public fun sendOnTornSeamThrows(): TestResult =
@@ -955,15 +971,12 @@ public abstract class SeamConformanceSuite {
                 val addressed = assertFailsWith<IllegalStateException>("sendTo on a Torn seam must throw") {
                     host.sendTo(joiner.selfId, byteArrayOf(2))
                 }
-                // MEASUREMENT PROBE (#2448) — not for landing as-is.
-                println(
-                    "TORN-PROBE ${this@SeamConformanceSuite::class.simpleName} -> " +
-                        "${addressed::class.simpleName} : ${addressed.message}",
-                )
                 assertFalse(
                     addressed is PeerNotConnected,
-                    "sendTo on a Torn seam must report the TEAR, not blame the addressee: got " +
-                        "PeerNotConnected(${(addressed as? PeerNotConnected)?.peer?.value})",
+                    "sendTo on a Torn seam must report the TEAR, not blame the addressee — " +
+                        "PeerNotConnected is a claim about the PEER, and a caller that believes it " +
+                        "re-resolves the roster and retries against a corpse. Move the Torn check " +
+                        "ahead of the roster lookup",
                 )
             }
         }
