@@ -316,18 +316,18 @@ public class NwLoom(
          * How many CONSECUTIVE listener failures a campaign absorbs before it gives up and parks on a
          * device-path change (#2449).
          *
-         * The observed failure is **transient**, which is what makes retrying right at all: Apple's own
-         * `com.apple.network:listener` log shows `failed (DNS Error: DefunctConnection)` — `dns(2)/-65569`
-         * — landing immediately after a listener inbox reconcile, where the OS retires the old inboxes,
-         * starts a fresh set across every interface (`en0`/`en1`/`awdl0`/`pdp_ip0`/`utun*`), then cancels
-         * them all and reports failed. An interface-set change racing the Bonjour registration, not a bind
-         * conflict. The 0.5 + 1 + 2 + 4 + 8 s ≈ 15.5 s of cover is sized for exactly that race.
+         * The failure is **recoverable by re-creating the listener**, which is what makes retrying right at
+         * all: Apple's own `com.apple.network:listener` log shows `Error advertising bonjour service: DNS
+         * Error: DefunctConnection` (`dns(2)/-65569`) on app suspend, with the listener's TCP inboxes
+         * starting fine across every interface (`en0`/`en1`/`awdl0`/`pdp_ip0`/`utun*`) milliseconds
+         * earlier. A dead advertiser channel to mDNSResponder, not a bind conflict. The
+         * 0.5 + 1 + 2 + 4 + 8 s ≈ 15.5 s of cover is sized for a resume settling its interface set.
          *
-         * Bounded rather than unbounded because the same signal cannot distinguish that race from a path
-         * on which registration will keep failing, and a peer must not advertise into the second forever.
-         * What makes the give-up safe is that it is not final: a [NwApi.pathState] change re-arms a fresh
-         * campaign — and since the interface churn IS the trigger, that is the signal most likely to
-         * arrive precisely when a retry would now succeed.
+         * Bounded rather than unbounded because the same signal cannot distinguish a re-registration that
+         * will succeed on the next attempt from one that will keep failing, and a peer must not spin on the
+         * second forever. What makes the give-up safe is that it is not final: a [NwApi.pathState] change
+         * re-arms a fresh campaign — and since suspend/resume churns the interface set, that is the signal
+         * most likely to arrive precisely when a retry would now succeed.
          */
         internal const val MAX_LISTEN_ATTEMPTS: Int = 6
     }
@@ -344,13 +344,23 @@ public class NwLoom(
  * while the app was suspended, produced no observable signal at all: **there was no retry because there
  * was no signal.** [NwApi.listenerState] is that signal; this watches it.
  *
- * ## Why bounded retry is right for the failure that actually happens
- * The observed failure is `dns(2)/-65569` (`DefunctConnection`), landing right after a listener inbox
- * reconcile — the OS retires the old inboxes, starts a fresh set across every interface, then cancels
- * them and reports failed. An interface-set change racing the Bonjour registration, which is transient.
- * So: back off ([NwLoom.INITIAL_LISTEN_BACKOFF] → double → [NwLoom.MAX_LISTEN_BACKOFF]) for at most
- * [NwLoom.MAX_LISTEN_ATTEMPTS] CONSECUTIVE failures, then stop rather than advertise forever into a path
- * that keeps refusing.
+ * ## What the retry must DO: re-create, never restart
+ * The observed failure is `Error advertising bonjour service: DNS Error: DefunctConnection`
+ * (`dns(2)/-65569`), triggered by **app suspend** — a screen-lock mid-game. What goes defunct is the
+ * Bonjour **advertiser's** channel to mDNSResponder, not a TCP bind: the listener's inboxes were starting
+ * fine on every interface milliseconds earlier. So re-arming the same `nw_listener_t` would re-arm the
+ * very object whose advertiser channel is dead, and would not recover. Recovery requires a **fresh
+ * listener and a fresh advertise descriptor**.
+ *
+ * This retries by calling [NwApi.startListening], which is exactly that: `RealNwApi` builds a new
+ * `nw_listener_t` and a new `nw_advertise_descriptor_create_bonjour_service` on every call and cancels the
+ * superseded handle. That is a load-bearing property of the binding, flagged as such at the swap site —
+ * a "reuse the existing listener" optimisation there would silently turn this whole mechanism into a
+ * retry that cannot work, which is worse than no retry because it looks like a fix.
+ *
+ * Bounded because a signal cannot tell a transient re-registration failure from one that will keep
+ * failing: back off ([NwLoom.INITIAL_LISTEN_BACKOFF] → double → [NwLoom.MAX_LISTEN_BACKOFF]) for at most
+ * [NwLoom.MAX_LISTEN_ATTEMPTS] CONSECUTIVE failures, then stop rather than advertise forever.
  *
  * ## The path-change trigger
  * Stopping is not final: a [NwApi.pathState] change re-arms a fresh campaign, and also cuts a pending

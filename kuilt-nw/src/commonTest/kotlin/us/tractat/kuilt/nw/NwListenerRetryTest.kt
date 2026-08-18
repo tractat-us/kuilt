@@ -26,12 +26,18 @@ import kotlin.time.Duration.Companion.seconds
  * The field shape this pins: two phones mid-game, one screen-locks, and both peers log a listener
  * failure ~99 s apart. Neither ever listens again and the session never re-forms. The reason is
  * structural rather than a missed branch — [NwApi.startListening] is `suspend fun … : Unit`, the OS
- * decides the bind on a GCD callback *after* it returns, and [NwLoom.weave]'s `runCatchingCancellable`
+ * reports the outcome on a GCD callback *after* it returns, and [NwLoom.weave]'s `runCatchingCancellable`
  * can only catch a synchronous throw. **There was no retry because there was no signal.**
  *
  * So these tests drive [NwApi.listenerState] — the signal — and assert the loom acts on it: it
  * re-listens after a back-off, it stops after a bounded number of consecutive failures rather than
  * advertising into a dead path forever, and a device-path change re-arms a campaign that had given up.
+ *
+ * They pin that a re-listen HAPPENS. That it re-CREATES the listener — a fresh `nw_listener_t` and a
+ * fresh advertise descriptor, which is what recovery actually requires, since the defunct thing is the
+ * advertiser's channel to mDNSResponder — is a property of `RealNwApi.startListening`, unchanged by this
+ * work and flagged load-bearing at its swap site. A `FakeNwApi` has no listener object, so no test here
+ * can speak to it; do not read a green in this file as evidence of it.
  *
  * What they do NOT prove, deliberately: that `RealNwApi` *emits* the failure. A fake-driven signal
  * proves the consumer's reaction, never the real transport's emission — that half is confirmed against
@@ -46,11 +52,12 @@ class NwListenerRetryTest {
         /**
          * `kDNSServiceErr_DefunctConnection` (`dns_sd.h`) — the DNS-domain code Apple's own
          * `com.apple.network:listener` log reported on BOTH field devices, 7 ms and 32 ms before kuilt's
-         * line, as `reporting state failed (DNS Error: DefunctConnection)`.
+         * line, as `Error advertising bonjour service: DNS Error: DefunctConnection`.
          *
          * Used here rather than an `EADDRINUSE` so the fixture drives the failure that actually happens.
-         * The distinction is not cosmetic: this is a Bonjour registration going defunct behind an
-         * interface-set change, with no bind or address conflict in it at all.
+         * The distinction is not cosmetic — it is a different LAYER: the Bonjour advertiser's channel to
+         * mDNSResponder went defunct on app suspend, while the listener's TCP inboxes were starting fine
+         * on every interface. Nothing about a bind or an address conflict is involved.
          */
         const val DNS_DEFUNCT_CONNECTION = -65569
 
@@ -105,8 +112,8 @@ class NwListenerRetryTest {
             val pair = wovenPair()
             val listensAtWeave = pair.apiA.startListeningCalls
 
-            // The phone locks: an interface-set change races the Bonjour registration and the OS reports the
-            // listener failed — dns(2)/DefunctConnection, per Apple's own listener log for this session.
+            // The phone locks: app suspend kills the Bonjour advertiser's channel to mDNSResponder and the
+            // OS reports the listener failed — dns(2)/DefunctConnection, per Apple's own log for this session.
             pair.apiA.emitListenerFailed(domain = NW_ERROR_DOMAIN_DNS, code = DNS_DEFUNCT_CONNECTION)
             testScheduler.runCurrent()
             val listensBeforeBackoff = pair.apiA.startListeningCalls
@@ -124,8 +131,8 @@ class NwListenerRetryTest {
 
     /**
      * Consecutive failures are BOUNDED. With every re-listen refused ([FakeNwApi.listenFailure]) the
-     * campaign spends its attempts and then stops, rather than advertising into a path that cannot bind
-     * for the life of the seam.
+     * campaign spends its attempts and then stops, rather than re-registering forever on a device that
+     * keeps refusing, for the life of the seam.
      *
      * The second window is what makes this a bound rather than a rate: the count must be identical after
      * a *further* whole campaign's worth of virtual time.

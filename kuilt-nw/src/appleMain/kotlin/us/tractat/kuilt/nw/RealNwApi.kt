@@ -792,6 +792,15 @@ internal class RealNwApi(
         }
         // Swap in the new handle and cancel any superseded one OUTSIDE the lock (no nw_* under it):
         // a re-start would otherwise leave the previous listener advertising over Bonjour forever.
+        //
+        // ⚠ #2449 RECOVERY DEPENDS ON THIS BEING A RE-CREATION, NOT A RESTART. What dies on app suspend is
+        // the ADVERTISER's channel to mDNSResponder (`Error advertising bonjour service: DNS Error:
+        // DefunctConnection`) — the TCP inboxes were starting fine milliseconds earlier. Re-starting the
+        // SAME `nw_listener_t` would re-arm a listener whose advertiser channel is the defunct thing, and
+        // would not recover. Every call above therefore builds a fresh `nw_listener_t` AND a fresh
+        // `nw_advertise_descriptor_create_bonjour_service` — a new registration — and retires the old one
+        // here. `ListenSupervisor` re-listens by calling this function, so it inherits that guarantee;
+        // do not "optimise" this into reusing the existing handle.
         val superseded = lock.withLock { listener.also { listener = newListener } }
         superseded?.let { nw_listener_cancel(it) }
         nw_listener_start(newListener)
@@ -816,13 +825,14 @@ internal class RealNwApi(
      * [NwListenerState.Failed] (#2449).
      *
      * This error used to be discarded, and the line read `nw.listen FAILED (bind unavailable?)`. That
-     * parenthetical was **wrong**, not merely vague: Apple's own `com.apple.network:listener` log for the
-     * same millisecond on both field devices reads `reporting state failed (DNS Error: DefunctConnection)`
-     * — `dns(2)/-65569`, a Bonjour registration going defunct behind a listener inbox reconcile, with no
-     * bind or address conflict in it at all. A wrong guess in a log line is worse than none; it sent the
-     * first analysis of that session hunting an `EADDRINUSE` that never existed. So the guess is gone and
-     * what the OS actually said takes its place, in the SAME domain/code vocabulary [captureFailure] has
-     * used for connections since #1560.
+     * parenthetical named **the wrong layer**, not merely a vague cause: Apple's own
+     * `com.apple.network:listener` log for the same millisecond on both field devices reads
+     * `Error advertising bonjour service: DNS Error: DefunctConnection` — `dns(2)/-65569`. What died is the
+     * **Bonjour advertiser's channel to mDNSResponder**; the listener's TCP inboxes were starting fine on
+     * every interface milliseconds earlier, and there is no bind or address conflict anywhere in it. A
+     * wrong guess in a log line is worse than none: it sent the first analysis of that session hunting an
+     * `EADDRINUSE` that never existed. So the guess is gone and what the OS actually said takes its place,
+     * in the SAME domain/code vocabulary [captureFailure] has used for connections since #1560.
      *
      * Stays at `error` deliberately: a peer whose listener is down is unreachable inbound while looking
      * perfectly healthy on its existing links, and this is the one kuilt line that survived the field
