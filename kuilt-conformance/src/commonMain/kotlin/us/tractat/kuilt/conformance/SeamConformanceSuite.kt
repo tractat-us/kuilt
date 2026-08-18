@@ -954,8 +954,8 @@ public abstract class SeamConformanceSuite {
     //
     // What it still does NOT cover: a fabric that RE-FORMS rather than tears. `NwSeam` answers a
     // peer eviction with `Woven → Weaving` (#1513, deliberate), so a locally-dead link reports
-    // `PeerNotConnected` from a non-`Torn` seam and never reaches this property at all — tracked
-    // separately, and out of reach of any assertion keyed on `Torn`.
+    // `PeerNotConnected` from a non-`Torn` seam and never reaches this property at all — #2454, and
+    // out of reach of any assertion keyed on `Torn`.
 
     @Test
     public fun sendOnTornSeamThrows(): TestResult =
