@@ -935,11 +935,54 @@ public abstract class SeamConformanceSuite {
     // fabric a harness can see passes". Binding the Apple link (#2441) is what made the claim
     // testable, and #2444 is what made it true again — the #1871 shape.
     //
-    // Note also what this obligation cannot distinguish on a fabric whose `sendTo` reports an absent
-    // addressee with `PeerNotConnected`: that type IS an `IllegalStateException`, so the second
-    // assertion below passes on a seam that blames the peer for its own death. Where the two are
-    // worth telling apart, a fabric-local test has to assert the identity of the throwable
-    // (`MCSessionLinkTornSendTest` is the in-tree example).
+    // The addressed half also asserts the throwable's IDENTITY, not just its supertype (#2448).
+    // `PeerNotConnected` IS an `IllegalStateException`, so until this the property passed on a seam
+    // that blamed the *addressee* for its own death — a statement about the peer, which a caller may
+    // reasonably answer by re-resolving the roster and retrying, sending it chasing a peer that was
+    // never the problem while the dead seam goes unreplaced. That is not cosmetic: the misleading
+    // line is the most legible thing in the log at exactly the moment someone is reading an outage.
+    //
+    // Blast radius, measured before landing (the #1859 order) across all 19 in-tree harnesses on
+    // jvm / macosArm64 / iosSimulatorArm64 / wasmJs-browser: ZERO reds. So the strengthening costs
+    // nothing and needs no new capability flag — a flag would want a fabric able to honestly declare
+    // `false`, and none can; an unreachable `false` arm is the deleted-`ordersDelivery` shape (#2304).
+    //
+    // WHERE THE NEW CLAUSE ACTUALLY BITES, measured by deleting each impl's `sendTo` Torn check and
+    // reading which assertion reds. It is NOT everywhere, and the earlier claim that it was — "every
+    // fabric places its Torn check ahead of the roster lookup" — was false at six harnesses:
+    //
+    //  - Reds on THIS clause (the guard is what separates tear from blame): `LinkSeam` (Handshaking,
+    //    Identified, Tcp, WebSocket, MDNS), `MeshSeam`, `RoomHubSeam`, `CompositeSeam`, `TieredSeam`,
+    //    `NwSeam` (all three harnesses), `MCSessionLink`. Thirteen.
+    //  - Reds on the PRE-EXISTING `assertFailsWith` instead, because deleting the guard lets the send
+    //    COMPLETE: `InMemoryLoom`, `ControllableSeam`, `GossipSeam` (pure delegation to an InMemoryLoom
+    //    base — it has no Torn check of its own), `NearbySeam`, `BridgePeerLink`, `WebRTCPeerLink`. Six.
+    //
+    // The discriminator is whether the roster `sendTo` consults COLLAPSES on a local tear. Where it
+    // does not — `InMemoryLoom`/`ControllableSeam` read a SHARED registry that `close()` removes only
+    // *self* from; `WebRTCPeerLink` recomputes from a completed deferred and never reads the `_peers`
+    // that `tear()` collapses — the addressee is still named, so nothing refuses. Those six are held
+    // by the older obligation, not this one, and #2456 tracks making them read their own `peers`.
+    //
+    // Note what the reference implementation is doing in that second list: `InMemoryLoom` structurally
+    // CANNOT reach the failure this clause names, so a property written only against it would look
+    // discriminating and test nothing. That is the #2240/#2247 shape — a TCK stops testing any failure
+    // its reference cannot reach — arriving once more, and it is why the split above is measured per
+    // implementation rather than argued from one exception message. (Message is exactly what misled the
+    // first pass: `LinkSeam`, `InMemoryLoom` and `ControllableSeam` all render "Seam for … is closed",
+    // so three unrelated impls folded into one row and four of them were miscounted as proven.)
+    //
+    // The rig also covers the REAL transport and not just the fakes, which matters here specifically
+    // because `RealNwApi.send` is documented fire-and-forget and CANNOT throw: `NwLoopbackConformanceTest`
+    // (`RealNwApi`, real Network.framework + TLS-PSK) and `NwBridgeLoopbackConformanceTest` (via
+    // `libkuilt.dylib`) both red on this clause, so those greens are satisfied rather than merely
+    // unfalsifiable — on a Torn seam the state check and the registry lookup both precede `api.send`,
+    // which is never reached.
+    //
+    // What it still does NOT cover: a fabric that RE-FORMS rather than tears. `NwSeam` answers a
+    // peer eviction with `Woven → Weaving` (#1513, deliberate), so a locally-dead link reports
+    // `PeerNotConnected` from a non-`Torn` seam and never reaches this property at all — #2454, and
+    // out of reach of any assertion keyed on `Torn`.
 
     @Test
     public fun sendOnTornSeamThrows(): TestResult =
@@ -949,12 +992,41 @@ public abstract class SeamConformanceSuite {
                 host.close()
                 assertIs<SeamState.Torn>(host.state.value, "host must be Torn after close()")
 
-                assertFailsWith<IllegalStateException>("broadcast on a Torn seam must throw") {
-                    host.broadcast(byteArrayOf(1))
-                }
-                assertFailsWith<IllegalStateException>("sendTo on a Torn seam must throw") {
-                    host.sendTo(joiner.selfId, byteArrayOf(2))
-                }
+                // Captured rather than wrapped in `assertFailsWith`, for the reason
+                // `runSendToSelfIsRefused` gives: [assertAll] takes plain (non-suspend) lambdas, so the
+                // sends happen out here — and a seam that *completes* the send then reads as `null`
+                // ("completed successfully") rather than as an opaque wrong-type mismatch. Sequential
+                // asserts also cost a reader two thirds of the diagnosis: a fabric failing the broadcast
+                // obligation never reached the addressed ones.
+                val loopback = failureOf { host.broadcast(byteArrayOf(1)) }
+                val addressed = failureOf { host.sendTo(joiner.selfId, byteArrayOf(2)) }
+
+                assertAll(
+                    {
+                        assertIs<IllegalStateException>(
+                            loopback,
+                            "broadcast on a Torn seam must throw — a torn transport cannot deliver, and " +
+                                "swallowing the send hides the failure. Got: " +
+                                "${loopback ?: "no exception — the send completed"}",
+                        )
+                    },
+                    {
+                        assertIs<IllegalStateException>(
+                            addressed,
+                            "sendTo on a Torn seam must throw. Got: " +
+                                "${addressed ?: "no exception — the send completed"}",
+                        )
+                    },
+                    {
+                        assertFalse(
+                            addressed is PeerNotConnected,
+                            "sendTo on a Torn seam must report the TEAR, not blame the addressee — " +
+                                "PeerNotConnected is a claim about the PEER, and a caller that believes " +
+                                "it re-resolves the roster and retries against a corpse. Move the Torn " +
+                                "check ahead of the roster lookup",
+                        )
+                    },
+                )
             }
         }
 
