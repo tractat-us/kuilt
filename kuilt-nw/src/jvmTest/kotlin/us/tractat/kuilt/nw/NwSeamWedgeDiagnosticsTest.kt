@@ -112,6 +112,76 @@ class NwSeamWedgeDiagnosticsTest {
         return devices[0] to devices[1]
     }
 
+    /**
+     * The watchdog PARKS once every settled link has been reported — it must not re-arm forever, or
+     * `runTest`'s terminal `advanceUntilIdle` spins on it and every test using this seam hangs instead of
+     * failing (it did: three `:kuilt-nw` test tasks timed out). Parking costs a wake signal on each state
+     * change that could make something reportable again, and this pins the one wake site nothing else
+     * covers: an inbound frame ending a reported silence episode.
+     *
+     * Without that wake the watchdog stays parked and the SECOND episode is never reported — a silent
+     * regression, since the first episode still fires and every other assertion here stays green.
+     */
+    @Test
+    fun anArrivalReArmsAParkedWatchdogSoASecondSilenceEpisodeIsReportedToo() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            withCapture { appender ->
+                val (a, b) = buildPair("rearm")
+
+                // Episode 1: both links quiet, both reported, watchdog parks.
+                oneProbe(count = 2)
+                val firstEpisode = appender.lines(Level.WARN, "nw.seam.inbound-silent", "rearm-")
+
+                // Nothing further happens: a PARKED watchdog must add nothing.
+                oneProbe(count = 6)
+                val whileParked = appender.lines(Level.WARN, "nw.seam.inbound-silent", "rearm-")
+
+                // A frame arrives on B's link from A. That ends B's silence episode and is the only thing
+                // that can un-park the watchdog for it.
+                a.seam.broadcast("wake-up".encodeToByteArray())
+                pumpUntil { false }
+
+                // Episode 2: the link that received goes quiet again and must be reported a second time.
+                oneProbe(count = 4)
+                val secondEpisode = appender.lines(Level.WARN, "nw.seam.inbound-silent", "rearm-")
+                val forB = secondEpisode.filter { it.contains("self=${b.peerId.value}") }
+                val forA = secondEpisode.filter { it.contains("self=${a.peerId.value}") }
+
+                assertAll(
+                    { assertEquals(2, firstEpisode.size, "one line per link in episode 1: $firstEpisode") },
+                    {
+                        assertEquals(
+                            2,
+                            whileParked.size,
+                            "a parked watchdog must emit nothing at all: $whileParked",
+                        )
+                    },
+                    {
+                        assertEquals(
+                            2,
+                            forB.size,
+                            "B received a frame, so its silence re-arms and is reported a second time: " +
+                                secondEpisode,
+                        )
+                    },
+                    {
+                        assertEquals(
+                            1,
+                            forA.size,
+                            "A received nothing, so its episode never ended and must NOT be re-reported: " +
+                                secondEpisode,
+                        )
+                    },
+                    {
+                        assertTrue(
+                            forB.last().contains("frames-in=1"),
+                            "the second report counts the frame that arrived in between: ${forB.last()}",
+                        )
+                    },
+                )
+            }
+        }
+
     @Test
     fun aSettledLinkThatCarriesNoInboundFrameIsReportedOnceAtWarn() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
