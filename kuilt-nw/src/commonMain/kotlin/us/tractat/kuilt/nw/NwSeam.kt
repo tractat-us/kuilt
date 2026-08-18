@@ -1124,7 +1124,7 @@ internal class NwSeam(
         removeByConn(connId)
     }
 
-    // ── the wedge watchdog: two discriminators for a silent formation (#2420/#2425) ──
+    // ── the wedge watchdog: diagnostics for a silent formation (#2420/#2425) ──
 
     /**
      * Assert this seam's own bookkeeping invariant under [lock]: **every [registry] entry names a connId
