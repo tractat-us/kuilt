@@ -79,11 +79,148 @@ package us.tractat.kuilt.nw
  * [disconnect] delivers `connectionClosed` to the OTHER device only (a peer that cancels its own
  * side tears it down directly; only the remote observes the close) and drops the link.
  *
+ * ## In-flight bytes — [holdSends] / [releaseSends] and the [sentFrames] ledger (#2425)
+ * By default a [send] is delivered in the same virtual instant it is issued, so the radio has no
+ * state in which bytes exist but have not arrived. A real transport does: `nw_connection_send`
+ * accepts bytes, and cancelling that connection destroys whatever it has not yet put on the wire.
+ * Two things in `NwSeam` are only observable through that state, and both are #2425:
+ *
+ *  - **Which link the seam RESOLVES on** is decided by which remote [NwHello] arrives first, and
+ *    that is independent of which link the dedup then KEEPS (a function of the two nonces, i.e. of
+ *    each seam's seeded `random`). Holding one link's traffic separates the two, so a test can drive
+ *    the field's discriminating shape — *the seam resolves on the link the dedup then discards* —
+ *    without serialising the two dials, which would beg the question by construction.
+ *  - **A frame written into the publish-then-swap window** is lost with the link it was written to.
+ *    Delivered-instantly bytes can never show that; held bytes can, and [SendFate.DiscardedOnClose]
+ *    names it.
+ *
+ * [holdSends] is keyed on the SENDING end's [NwConnectionId], which is per-device unique, so a hold
+ * is inherently DIRECTIONAL — holding `conn-A-0` silences A→B on that link and leaves B→A alone.
+ * Every [send] is recorded in [sentFrames] with the fate it ended up having, so "where did that
+ * frame go?" is a question the harness answers rather than one a test infers from a side effect.
+ *
+ * A hold also splits [send]'s "there is no link" case in two, and the halves must stay divergent
+ * ([SendFate.Refused] vs [SendFate.DroppedLinkGone]) — the argument is on [deliverOrDrop].
+ *
  * ## Threading
  * Driven under `runTest`'s single virtual thread; every emit is a `suspend` call on the caller's
  * coroutine (no private [kotlinx.coroutines.CoroutineScope]). The registry/link maps are only ever
  * touched from that one test coroutine, so plain mutable maps are correct here and need no lock.
  */
+/**
+ * What became of one [FakeNwRadio.send] (#2425). A frame's fate is decided when it is issued and may
+ * change ONCE, when a held frame is later released or destroyed — never afterwards.
+ */
+internal enum class SendFate {
+    /** Handed to the receiving device's `bytesReceived` flow. */
+    Delivered,
+
+    /** Queued by [FakeNwRadio.holdSends] — accepted by the transport, not yet at the far end. */
+    InFlight,
+
+    /** Was [InFlight] when its link was torn down: the bytes died with the socket and no error was raised. */
+    DiscardedOnClose,
+
+    /**
+     * Released onto a link that had gone by the time the queue drained — lost, with **nobody told**.
+     *
+     * Reachable only from [FakeNwRadio.releaseSends]: the frame was handed off while the link was live,
+     * so `send` had already returned normally and there is no caller left to raise anything to. Its
+     * counterpart on the fresh-send path is [Refused], and the two are separate precisely because they
+     * differ in whether the failure was reportable — which is the only part the seam can act on.
+     */
+    DroppedLinkGone,
+
+    /**
+     * Refused outright: [FakeNwRadio.send] threw [NwSendFailedException] because the addressed link was
+     * already gone when the caller asked (#2455/#2459). The frame was never handed to the transport and
+     * **the caller was told**, which is what drives `NwSeam`'s `removeByConn`.
+     */
+    Refused,
+}
+
+/**
+ * One [FakeNwRadio.send] and what became of it (#2425).
+ *
+ * The ledger exists because "the consumer wrote a frame and it was silently lost" has no other
+ * observable: the seam's `sendTo` returns normally, the transport reports nothing, and the receiving
+ * end simply never sees it. Asserting on the RECEIVER cannot tell "lost" from "not sent yet"; this
+ * record can, and it names WHICH link the write went out on, which is the whole question in a
+ * publish-then-swap.
+ *
+ * [fate] and [wasHeld] are written only by [FakeNwRadio]. [wasHeld] is deliberately NOT derivable
+ * from [fate] — a released frame ends [SendFate.Delivered], so without it a test could not prove its
+ * hold ever fired, and a hold that silently stopped holding would pass quietly.
+ *
+ * ## [bytes] is a TRUNCATED preview, and has to be
+ * The ledger is append-only for the radio's lifetime, so retaining each frame's payload in full makes
+ * it a memory leak proportional to everything a test ever sent — and `SeamConformanceSuite`'s
+ * payload-budget cases send `Seam.maxPayloadBytes`, which for this fabric is 16 MiB. Under the
+ * parallel full build that was enough to take the Kotlin/Native test process down. So the record
+ * keeps [sizeBytes] exactly and only the first [FakeNwRadio.LEDGER_PREVIEW_BYTES] of the payload:
+ * enough to attribute a frame by a marker a test put at the front of it, bounded regardless of what
+ * flows through. Delivery is unaffected — the full payload lives in the in-flight queue, not here,
+ * and is released the moment the frame reaches a terminal fate.
+ */
+internal class SentFrame(
+    val fromDeviceId: String,
+    val connectionId: NwConnectionId,
+    /** The frame's true size, retained in full even though [bytes] is not. */
+    val sizeBytes: Int,
+    /** The frame's leading bytes, truncated to [FakeNwRadio.LEDGER_PREVIEW_BYTES]. */
+    val bytes: ByteArray,
+) {
+    var fate: SendFate = SendFate.Delivered
+        internal set
+
+    /** Whether this frame was ever queued by a [FakeNwRadio.holdSends] — the hold's own rig receipt. */
+    var wasHeld: Boolean = false
+        internal set
+
+    override fun toString(): String =
+        "SentFrame(from=$fromDeviceId conn=${connectionId.value} bytes=$sizeBytes fate=$fate held=$wasHeld)"
+}
+
+/**
+ * Both ends of one link the radio opened, in the order it opened them (#2425).
+ *
+ * A test that drives a double dial has to name its two links — to hold one, to assert which one
+ * survived — and the only handle it had before was the `"conn-<device>-<n>"` string convention,
+ * which is a private implementation detail of [FakeNwRadio.nextConnId] that a test should not have
+ * to reproduce. [FakeNwRadio.openedLinks] hands the identities back instead.
+ */
+internal data class Link(
+    val dialerDeviceId: String,
+    val dialerConnectionId: NwConnectionId,
+    val accepterDeviceId: String,
+    val accepterConnectionId: NwConnectionId,
+    /** The [NwEndpoint.id] this link was dialled on. */
+    val dialledEndpointId: String,
+) {
+    /**
+     * This link's end on [deviceId], or `null` if [deviceId] is not one of its two ends.
+     *
+     * A link whose two ends are the SAME device — [FakeNwRadio.injectSelfDial] /
+     * [FakeNwRadio.injectDialLandingOnSelf] — has no unambiguous answer, and this returns the DIALLING
+     * end. Reach for [dialerConnectionId]/[accepterConnectionId] by name there; the convenience only
+     * pays off for the two-device case it is written for.
+     */
+    fun endOn(deviceId: String): NwConnectionId? = when (deviceId) {
+        dialerDeviceId -> dialerConnectionId
+        accepterDeviceId -> accepterConnectionId
+        else -> null
+    }
+}
+
+/**
+ * The two links of one [FakeNwRadio.injectDoubleDial], named by direction from the dialling device's
+ * point of view (#2425): [outbound] is the link that device dialled, [inbound] the one it accepted.
+ *
+ * Which of the two a seam RESOLVES on and which one its dedup KEEPS are independent, and the field
+ * failure is precisely the case where they differ.
+ */
+internal data class DoubleDial(val outbound: Link, val inbound: Link)
+
 internal class FakeNwRadio {
 
     /**
@@ -158,6 +295,18 @@ internal class FakeNwRadio {
     private val connCounters = mutableMapOf<String, Int>()
 
     /**
+     * Every link the radio has EVER opened, in open order — one per successful [connect], never
+     * removed (#2390/#2425). [openedLinkCount] is its size.
+     *
+     * A test naming links positionally (`openedLinks[0]` is the first dial) is reading the same list
+     * the counter counts, so the identity surface and the rig receipt cannot drift apart.
+     */
+    private val opened = mutableListOf<Link>()
+
+    /** @see opened */
+    val openedLinks: List<Link> get() = opened
+
+    /**
      * Links the radio has EVER opened — one per successful [connect], never decremented (#2390).
      *
      * The rig receipt for any [liveLinkCount] assertion. A settled mesh that never double-dialled
@@ -165,8 +314,30 @@ internal class FakeNwRadio {
      * also assert that MORE links than that were opened in the first place: on a full mesh built by
      * dialling every ordered pair, `openedLinkCount == 2 * liveLinkCount` is the double-dial firing.
      */
-    var openedLinkCount: Int = 0
-        private set
+    val openedLinkCount: Int get() = opened.size
+
+    /** Sending ends currently held by [holdSends] — a [send] on one of these queues instead of delivering. */
+    private val heldEnds = mutableSetOf<String>()
+
+    /**
+     * A frame queued on a held end: its ledger [record] plus the FULL [payload] to deliver on release.
+     *
+     * The full bytes live here and only here, so they are reachable exactly as long as the frame is in
+     * flight — draining or discarding the queue drops them, while the (bounded) ledger record survives.
+     */
+    private class Queued(val record: SentFrame, val payload: ByteArray)
+
+    /** Held sending end → the frames queued on it, in issue order. Drained by [releaseSends], destroyed by a close. */
+    private val inFlight = mutableMapOf<String, MutableList<Queued>>()
+
+    private val sent = mutableListOf<SentFrame>()
+
+    /**
+     * Every [send] this radio has been asked to make, in issue order, each carrying its [SentFrame.fate]
+     * (#2425). The ledger a test reads to answer "which link did that frame go out on, and did it
+     * arrive?" — neither of which the receiving end can distinguish from "nothing was sent".
+     */
+    val sentFrames: List<SentFrame> get() = sent
 
     /**
      * Links currently open on the switchboard — the fake's stand-in for live sockets/file
@@ -384,9 +555,9 @@ internal class FakeNwRadio {
             else -> resolutionBias(endpoint.id, owners.toList())
         }
         require(accepterId in devices) { "no device for endpoint '${endpoint.id}'" }
-        openedLinkCount += 1
         val connIdDialer = nextConnId(dialerDeviceId)
         val connIdAccepter = nextConnId(accepterId)
+        opened += Link(dialerDeviceId, connIdDialer, accepterId, connIdAccepter, endpoint.id)
 
         // Record the link in both directions.
         links[connIdDialer.value] = LinkEnd(accepterId, connIdAccepter)
@@ -397,6 +568,37 @@ internal class FakeNwRadio {
             .emitConnectionOpened(NwConnectionOpened(connIdDialer, endpoint))
         devices.getValue(accepterId)
             .emitConnectionOpened(NwConnectionOpened(connIdAccepter, endpoint = null))
+    }
+
+    /**
+     * Form BOTH links of a **double dial** between [deviceId] and [peerDeviceId] (#2425), returning
+     * them named by direction *from [deviceId]'s point of view*: [DoubleDial.outbound] is the link
+     * [deviceId] dialled, [DoubleDial.inbound] the one it accepted.
+     *
+     * A full mesh produces this for every unordered pair — both peers advertise and browse, so both
+     * dial — and it is the shape every #2425 scenario starts from. Two things make it worth a named
+     * primitive rather than two [connect] calls:
+     *
+     *  - **Direction is the vocabulary of the failure.** The field capture reads "the seam resolved on
+     *    the INBOUND link and the dedup kept the OUTBOUND one"; a test that has to work that out from
+     *    `"conn-<device>-<n>"` counters is one renumbering away from silently asserting the mirror
+     *    image of what it says it asserts.
+     *  - **Nothing is pumped in between.** Both links exist, and neither seam has run a single
+     *    collector, so the caller can install [holdSends] on either end BEFORE any [NwHello] moves.
+     *    That is what lets arrival order be chosen rather than inherited from dial order — and dial
+     *    order is exactly the variable a "dial one, settle, dial the other" setup would confound it
+     *    with.
+     *
+     * Endpoints use the `"ep-<deviceId>"` convention [listenerDeviceIdOf] resolves, so neither device
+     * has to be advertising; `serviceName` is carried for display only ([connect] routes on
+     * [NwEndpoint.id] alone).
+     */
+    suspend fun injectDoubleDial(deviceId: String, peerDeviceId: String): DoubleDial {
+        require(deviceId != peerDeviceId) { "a double dial needs two distinct devices, got '$deviceId' twice" }
+        val before = opened.size
+        connect(deviceId, NwEndpoint(id = endpointIdFor(peerDeviceId), serviceName = peerDeviceId))
+        connect(peerDeviceId, NwEndpoint(id = endpointIdFor(deviceId), serviceName = deviceId))
+        return DoubleDial(outbound = opened[before], inbound = opened[before + 1])
     }
 
     /**
@@ -437,9 +639,9 @@ internal class FakeNwRadio {
         identityResolved: Boolean = true,
     ) {
         require(deviceId in devices) { "no device '$deviceId' to dial from" }
-        openedLinkCount += 1
         val connIdDialer = nextConnId(deviceId)
         val connIdAccepter = nextConnId(deviceId)
+        opened += Link(deviceId, connIdDialer, deviceId, connIdAccepter, dialledEndpointId)
         links[connIdDialer.value] = LinkEnd(deviceId, connIdAccepter)
         links[connIdAccepter.value] = LinkEnd(deviceId, connIdDialer)
         // Dialler carries the dialled endpoint — the REAL peer's id; accepter has none (inbound).
@@ -477,24 +679,127 @@ internal class FakeNwRadio {
         }
     }
 
+    /**
+     * Stop delivering what [connectionId]'s OWNER sends on it (#2425): each subsequent [send] is
+     * recorded [SendFate.InFlight] and queued instead. Directional — [connectionId] is one device's
+     * own handle for one link, so the reverse direction is untouched.
+     *
+     * Held bytes are in the state a real transport keeps them in between accepting a send and putting
+     * it on the wire: [releaseSends] puts them there, and tearing the link down destroys them
+     * ([SendFate.DiscardedOnClose]) with no error reported to anybody — which is exactly what a
+     * consumer frame written into `NwSeam`'s publish-then-swap window suffers.
+     *
+     * Idempotent; may be called before the link exists (connIds are allocated deterministically, but
+     * the intended idiom is to dial first and take the handle from [openedLinks]).
+     */
+    fun holdSends(connectionId: NwConnectionId) {
+        heldEnds += connectionId.value
+    }
+
+    /**
+     * Undo [holdSends] on [connectionId] and deliver everything queued on it, in issue order. A frame
+     * whose link has since gone becomes [SendFate.DroppedLinkGone] rather than being delivered, and
+     * **must not throw** — see [deliverOrDrop], which is where that obligation lives. No-op for an end
+     * that was never held.
+     */
+    suspend fun releaseSends(connectionId: NwConnectionId) {
+        heldEnds -= connectionId.value
+        val queued = inFlight.remove(connectionId.value) ?: return
+        for (entry in queued) deliverOrDrop(entry.record, entry.payload)
+    }
+
+    /** Frames currently queued on [connectionId] by [holdSends] — the hold's live rig receipt. */
+    fun inFlightOn(connectionId: NwConnectionId): List<SentFrame> =
+        inFlight[connectionId.value].orEmpty().map { it.record }
+
+    /** Whether the radio still holds a link for [connectionId] — how a test names the dedup's SURVIVOR. */
+    fun isLive(connectionId: NwConnectionId): Boolean = connectionId.value in links
+
+    /**
+     * Deliver [payload] to the far end of [record]'s link, or mark it [SendFate.DroppedLinkGone] if
+     * that link has gone — **never throwing**, which is the whole difference between this and [send]'s
+     * own liveness check.
+     *
+     * The two reach the same "there is no link" state from call sites with opposite obligations, and
+     * `NwApi.send`'s contract mandates both directions:
+     *
+     *  - [send] is asked while its caller is on the stack and nothing has been handed to the transport
+     *    yet — an **immediately-known** failure, which MUST throw ([SendFate.Refused]). That throw is
+     *    what drives `NwSeam`'s `removeByConn`, so making it a silent return is exactly the #2455
+     *    defect the reference used to carry.
+     *  - This is reached from [releaseSends], long after [send] returned normally on a link that was
+     *    live at the time. The frame was already **handed off**, there is no caller left to tell, and
+     *    the contract is explicit that such a failure is routed through the teardown signals "rather
+     *    than inventing a late throw nobody is waiting to catch". Throwing here would surface an
+     *    exception in a coroutine that owns nothing.
+     *
+     * That asymmetry is why [SendFate.Refused] and [SendFate.DroppedLinkGone] are separate fates
+     * rather than one: they differ in whether anybody was told, which is the only thing the seam can
+     * act on. Since #2459 this branch is the sole way a *send* is lost with nobody informed while the
+     * link's disappearance was never announced — [discardInFlight] covers the announced close — so it
+     * is the fake's remaining model of a silent loss, and deliberately so.
+     */
+    private suspend fun deliverOrDrop(record: SentFrame, payload: ByteArray) {
+        val other = links[record.connectionId.value]
+        if (other == null) {
+            record.fate = SendFate.DroppedLinkGone
+            return
+        }
+        record.fate = SendFate.Delivered
+        devices.getValue(other.deviceId).emitBytesReceived(NwBytesReceived(other.connectionId, payload))
+    }
+
+    /**
+     * An unknown/closed handle is an IMMEDIATELY-KNOWN failure and THROWS, mirroring `RealNwApi.send`
+     * (#2455/#2459). This used to be `?: return` — the fake carried the very defect it stands in for, so
+     * the seam's send-failure eviction was reachable here only through [FakeNwApi.failSend], a flag that
+     * fails EVERY send regardless of the handle it names and so cannot distinguish "the fabric reports a
+     * dead handle" from "the fabric was told to break".
+     *
+     * The refusal is recorded in [sentFrames] BEFORE it is raised, so a throw still leaves a ledger
+     * entry: "this frame was refused" is an answer to *where did it go?*, and a test asserting the
+     * fates of everything a device wrote would otherwise have a hole exactly where the interesting
+     * case is.
+     */
     suspend fun send(fromDeviceId: String, connectionId: NwConnectionId, bytes: ByteArray) {
-        // An unknown/closed handle is an IMMEDIATELY-KNOWN failure and must THROW, mirroring `RealNwApi.send`
-        // (#2455). This used to be `?: return` — the fake carried the very defect it stands in for, so the
-        // seam's send-failure eviction was reachable here only through [FakeNwApi.failSend], a flag that
-        // fails EVERY send regardless of the handle it names and so cannot distinguish "the fabric reports a
-        // dead handle" from "the fabric was told to break".
-        val other = links[connectionId.value]
-            ?: throw NwSendFailedException(
+        val record = SentFrame(
+            fromDeviceId = fromDeviceId,
+            connectionId = connectionId,
+            sizeBytes = bytes.size,
+            bytes = bytes.copyOf(minOf(bytes.size, LEDGER_PREVIEW_BYTES)),
+        )
+        sent += record
+        // Liveness FIRST, before the hold: a stale hold must never launder a dead link into a live
+        // queue, and the caller is owed the refusal whether or not this end happens to be held.
+        if (connectionId.value !in links) {
+            record.fate = SendFate.Refused
+            throw NwSendFailedException(
                 "no live link for '${connectionId.value}' on device '$fromDeviceId' — unknown or already closed",
             )
-        devices.getValue(other.deviceId)
-            .emitBytesReceived(NwBytesReceived(other.connectionId, bytes))
+        }
+        if (connectionId.value in heldEnds) {
+            record.fate = SendFate.InFlight
+            record.wasHeld = true
+            inFlight.getOrPut(connectionId.value) { mutableListOf() } += Queued(record, bytes)
+            return
+        }
+        deliverOrDrop(record, bytes)
+    }
+
+    /** The bytes a torn-down socket destroys: everything [holdSends] still had queued on [connectionId]. */
+    private fun discardInFlight(connectionId: NwConnectionId) {
+        inFlight.remove(connectionId.value)?.forEach { it.record.fate = SendFate.DiscardedOnClose }
     }
 
     suspend fun disconnect(fromDeviceId: String, connectionId: NwConnectionId) {
         val other = links.remove(connectionId.value) ?: return
         // Drop the reverse mapping too so the link is fully torn down.
         links.remove(other.connectionId.value)
+        // Bytes still in flight on EITHER end die with the link, silently — no error reaches the sender
+        // and nothing reaches the receiver (#2425). Both ends, because a cancelled connection destroys
+        // the queues at both, not only at the peer that asked for the close.
+        discardInFlight(connectionId)
+        discardInFlight(other.connectionId)
         // #1522/#1539: latch the closure into the drop-tolerant [connectionStates] as Closed on BOTH sides —
         // mirrors RealNwApi, where each side's own `closeConnection` marks its own connId closed. Closed
         // supersedes any prior Viable/PathLost entry (no separate viability prune needed), and this STATE is
@@ -504,5 +809,19 @@ internal class FakeNwRadio {
         // Only the REMOTE side observes the close EVENT (the fast reason-carrying path); it may be dropped.
         devices.getValue(other.deviceId)
             .emitConnectionClosed(NwConnectionClosed(other.connectionId, reason = null))
+    }
+
+    internal companion object {
+        /**
+         * How much of each frame the append-only [sentFrames] ledger retains (#2425).
+         *
+         * Bounded on purpose: `SeamConformanceSuite`'s payload-budget cases send this fabric's whole
+         * 16 MiB `maxPayloadBytes`, and holding those arrays for the radio's lifetime was enough to
+         * kill the Kotlin/Native test process under the parallel full build. A frame is attributed by
+         * a marker a test writes at the FRONT of its payload, so a small prefix is all the ledger
+         * needs; [SentFrame.sizeBytes] keeps the true length either way, and the full payload lives in
+         * the in-flight queue only while it is genuinely in flight.
+         */
+        const val LEDGER_PREVIEW_BYTES: Int = 256
     }
 }
