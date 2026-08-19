@@ -16,9 +16,30 @@ import kotlin.test.assertTrue
  * ```
  *
  * for every document `X` and every mutator `m` — [JsonCrdt.set]'s delta against
- * [JsonCrdt.setWhole], [JsonCrdt.remove]'s against [JsonCrdt.removeWhole]. The reference side is
- * deliberately the internal whole-document form: comparing the delta path against itself would
- * prove nothing.
+ * [JsonCrdt.setWhole], [JsonCrdt.remove]'s against [JsonCrdt.removeWhole].
+ *
+ * **The reference has to be a second implementation, and once was not.** The first cut of #2111
+ * wrote `setWhole` as `JsonCrdt(root.piece { it.put(replica, key, node) }, replica)`, which looks
+ * like an independent whole-state path and is not: `S.piece(mutate)` is `piece(mutate(this).delta)`,
+ * so that expression *is* `root.piece(root.put(…).delta)` — exactly what the test's delta side
+ * computes. Both law arms asserted `x == x`, over an immutable `root` and a pure `put`. They could
+ * not go red under any change to [JsonCrdt.set], and would have stayed green through the
+ * superseded-tags defect #2044 actually measured. [JsonCrdt.setWhole] and [JsonCrdt.removeWhole] now
+ * delegate to [ORMap.putWhole]/[ORMap.removeWhole], which build `entries + (key to newEntry)` and
+ * `context.add(dot)` directly and share no code with the patch path.
+ *
+ * **Positive controls, run against the repointed reference** — each mutates the *delta* path only
+ * and leaves the whole-state path intact, so a green arm would mean the reference had collapsed
+ * back into the mechanism:
+ *
+ * | mutation | effect |
+ * |----------|--------|
+ * | `putPatch` drops its superseded-tags term (#2044's measured failure) | [setDeltaSatisfiesTheMutatorLawOnBytes] **RED** |
+ * | `putPatch` drops `foldOwn`, so the delta stops carrying the sender's own prior writes | [setDeltaSatisfiesTheMutatorLawOnBytes] **RED** |
+ * | `removePatch` retires one observed tag fewer | [removeDeltaSatisfiesTheMutatorLawOnBytes] **RED** |
+ *
+ * Both convergence tests go red alongside each of the three. Under the pre-repoint `setWhole`, all
+ * of these were green.
  *
  * **What #2111 was.** `JsonCrdt` is a thin wrapper over `ORMap<String, JsonNode>`, whose mutators
  * already return the change rather than the whole map. The wrapper threw that away: `set`/`remove`
@@ -33,12 +54,18 @@ import kotlin.test.assertTrue
  * | [aRemovesFrameIsFlatInDocumentSize] | 12,169 b → 127,215 b | 49 b → 49 b |
  * | [aSetsFrameIsFlatInTheStoredSubtreesSize] | 12,588 b → 127,634 b | 266 b → 266 b |
  *
- * **Why the law alone cannot see that.** `Patch(doc.setWhole(…))` satisfies
- * `X.piece(mᵟ(X)) == m(X)` perfectly — that is exactly what shipped. Reinstating the defect (make
- * `set` return `Patch(setWhole(…))`) leaves **every law test and both convergence tests in this
- * file green**; only the flat-frame measurements and
- * [removingAnAbsentKeyYieldsTheLatticeIdentity] go red. Those five are the only assertions standing
- * between this change and a no-op that looks fully pinned.
+ * **Why the law alone cannot see that, and why that is not a defect in the law.** Reinstating the
+ * #2111 defect (make `set` return `Patch(setWhole(…))`) leaves **every law test and both
+ * convergence tests green**; only the four flat-frame measurements and
+ * [removingAnAbsentKeyYieldsTheLatticeIdentity] go red. Re-verified after the repoint above.
+ *
+ * That green is *correct*, not a symptom. A whole state is a perfectly valid delta — it dominates
+ * itself in the lattice, so `X.piece(whole(X)) == whole(X)` holds by construction for any state
+ * lattice whatsoever. No law over `piece` can ever separate a minimal delta from a maximal one;
+ * only a measurement of the frame can. So the defect's signature is bytes, not correctness, and the
+ * five assertions above are the ones standing between this change and a no-op that looks fully
+ * pinned. The controls that prove the *law* arms are alive are the delta-path mutations in the
+ * table above — a different question, needing a different mutation.
  *
  * **The shuffle/duplication property is verified here, not assumed.** #2111 was filed while
  * `ORMap.piece` — and therefore `JsonCrdt.piece` — was non-associative on the value axis, so the
@@ -154,27 +181,90 @@ class JsonCrdtDeltaMutatorLawTest {
         val small = documentOfSize(SMALL_STATE)
         val large = documentOfSize(LARGE_STATE)
         val written = scalar("W-fresh", "fresh")
+        val smallFrame = setFrame(small.withReplica(bravo), "k-0", written)
+        val largeFrame = setFrame(large.withReplica(bravo), "k-0", written)
 
         assertFlat(
-            small = setFrame(small.withReplica(bravo), "k-0", written),
-            large = setFrame(large.withReplica(bravo), "k-0", written),
+            small = smallFrame,
+            large = largeFrame,
             whole = bytes(large),
             what = "set frame over a $SMALL_STATE-key vs a $LARGE_STATE-key document",
-        )
+        ) {
+            assertAll(
+                {
+                    assertEquals(
+                        setOf("k-0"),
+                        decode(largeFrame).keys,
+                        "the frame must carry the key that was written, and only it",
+                    )
+                },
+                {
+                    assertEquals(
+                        written,
+                        decode(largeFrame)["k-0"],
+                        "\u2026holding the node that was written — a size test alone cannot see this",
+                    )
+                },
+                {
+                    assertEquals(
+                        decode(smallFrame).keys,
+                        decode(largeFrame).keys,
+                        "both frames must carry the same write, or the two sizes are not comparable",
+                    )
+                },
+            )
+        }
     }
 
-    /** The same for [JsonCrdt.remove]'s frame. */
+    /**
+     * The same for [JsonCrdt.remove]'s frame.
+     *
+     * Its vacuity arm cannot be "the frame holds the key" — a remove frame's store is bottom by
+     * design. The only claim that separates it from an empty frame is what absorbing it *does*: a
+     * frame that retired nothing would be perfectly flat, and would leave the key standing.
+     */
     @Test
     fun aRemovesFrameIsFlatInDocumentSize() {
         val small = documentOfSize(SMALL_STATE)
         val large = documentOfSize(LARGE_STATE)
+        val smallFrame = removeFrame(small, "k-0")
+        val largeFrame = removeFrame(large, "k-0")
 
         assertFlat(
-            small = removeFrame(small, "k-0"),
-            large = removeFrame(large, "k-0"),
+            small = smallFrame,
+            large = largeFrame,
             whole = bytes(large),
             what = "remove frame over a $SMALL_STATE-key vs a $LARGE_STATE-key document",
-        )
+        ) {
+            assertAll(
+                {
+                    assertEquals(
+                        emptySet<String>(),
+                        decode(largeFrame).keys,
+                        "a remove frame's store is bottom — it says what to retire, not what to add",
+                    )
+                },
+                {
+                    assertTrue(
+                        "k-0" !in large.piece(decode(largeFrame)).keys,
+                        "absorbing the frame must actually retire the key \u2014 a frame retiring " +
+                            "nothing would be flat too, and this is the only arm that can tell",
+                    )
+                },
+                {
+                    assertTrue(
+                        "k-1" in large.piece(decode(largeFrame)).keys,
+                        "\u2026and retire nothing else",
+                    )
+                },
+                {
+                    assertTrue(
+                        "k-0" !in small.piece(decode(smallFrame)).keys,
+                        "the same at the smaller size, or the two sizes are not comparable",
+                    )
+                },
+            )
+        }
     }
 
     /**
@@ -193,12 +283,20 @@ class JsonCrdtDeltaMutatorLawTest {
 
         assertAll(
             {
+                val largeFrame = setFrame(large.withReplica(bravo), SUBTREE_KEY, written)
                 assertFlat(
                     small = setFrame(small.withReplica(bravo), SUBTREE_KEY, written),
-                    large = setFrame(large.withReplica(bravo), SUBTREE_KEY, written),
+                    large = largeFrame,
                     whole = bytes(large),
                     what = "set frame over a $SMALL_STATE-field vs a $LARGE_STATE-field stored subtree",
-                )
+                ) {
+                    assertEquals(
+                        written,
+                        decode(largeFrame)[SUBTREE_KEY],
+                        "the frame must carry the node that was written — decoded off the wire, not " +
+                            "read back out of the patch the sender happens to be holding",
+                    )
+                }
             },
             {
                 assertEquals(
@@ -273,12 +371,20 @@ class JsonCrdtDeltaMutatorLawTest {
 
         assertAll(
             {
+                val largeFrame = nestedDeltaFrame(LARGE_STATE)
                 assertFlat(
                     small = nestedDeltaFrame(SMALL_STATE),
-                    large = nestedDeltaFrame(LARGE_STATE),
+                    large = largeFrame,
                     whole = bytes(documentWithSubtreeOfSize(LARGE_STATE)),
                     what = "set frame carrying the nested ORMap's own delta",
-                )
+                ) {
+                    assertEquals(
+                        setOf(FRESH_FIELD),
+                        (decode(largeFrame)[SUBTREE_KEY] as JsonNode.Object).map.keys,
+                        "the frame must carry the one nested field written and nothing else — that " +
+                            "is the whole claim this cheap spelling makes",
+                    )
+                }
             },
             {
                 assertEquals(expected, subtreeOf(viaRebuild).keys, "the rebuild reads back whole")
@@ -480,8 +586,11 @@ class JsonCrdtDeltaMutatorLawTest {
      * multi-tag key, [ORMap.put]'s superseded-tags term is always a singleton, and the law would
      * hold vacuously against precisely the defect it exists to catch.
      *
-     * Built with the whole-document mutators so the generator never depends on the mechanism the
-     * law is testing.
+     * Built with [JsonCrdt.setWhole]/[JsonCrdt.removeWhole], which reach [ORMap.putWhole] and
+     * [ORMap.removeWhole] — no `putPatch`, no `removePatch` — so the generator never depends on the
+     * mechanism the law is testing. That claim was **false** in the first cut of #2111, where those
+     * two delegated to `root.piece { it.put(…) }` and therefore ran the delta path; see the file
+     * KDoc.
      */
     private fun randomState(random: Random, uid: () -> Int): JsonCrdt {
         var left = JsonCrdt.empty(alpha)
@@ -565,8 +674,20 @@ class JsonCrdtDeltaMutatorLawTest {
      * must be within [FLAT_TOLERANCE_PERCENT]% of [small], measured across an order of magnitude.
      * [whole] is reported for scale only — it is deliberately *not* what the assertion compares
      * against.
+     *
+     * [carriesTheWrite] is the vacuity arm, and it is the caller's job because only the caller
+     * knows what its frame should contain. It has to be a claim that can be **false**: an earlier
+     * version asserted `small.isNotEmpty() && large.isNotEmpty()`, which no input can violate —
+     * `Cbor.encodeToByteArray` always emits at least a map header, so a frame carrying nothing at
+     * all would have passed as "flat". Decode the frame and assert the write is in it.
      */
-    private fun assertFlat(small: ByteArray, large: ByteArray, whole: ByteArray, what: String) {
+    private fun assertFlat(
+        small: ByteArray,
+        large: ByteArray,
+        whole: ByteArray,
+        what: String,
+        carriesTheWrite: () -> Unit,
+    ) {
         assertAll(
             {
                 assertTrue(
@@ -575,14 +696,13 @@ class JsonCrdtDeltaMutatorLawTest {
                         "to ${large.size} b (the whole document at that size is ${whole.size} b)",
                 )
             },
-            {
-                assertTrue(
-                    small.isNotEmpty() && large.isNotEmpty(),
-                    "$what: vacuous — an empty frame would be flat for the wrong reason",
-                )
-            },
+            carriesTheWrite,
         )
     }
+
+    /** A frame as a receiver sees it — off the wire and back into a document. */
+    private fun decode(frame: ByteArray): JsonCrdt =
+        cbor.decodeFromByteArray(JsonCrdt.serializer(), frame)
 
     /** Fails if too few trials exercised a key carrying concurrent tags. */
     private fun assertNonVacuous(multiTagTrials: Int, mutator: String) {

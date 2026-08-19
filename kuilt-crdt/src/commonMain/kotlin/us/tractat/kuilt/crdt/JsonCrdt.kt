@@ -142,16 +142,24 @@ public class JsonCrdt internal constructor(
      * Deliberately **not public**: it is the O(document) spelling this type exists to keep off the
      * wire, and the only caller that needs it is `JsonCrdtDeltaMutatorLawTest`, which cannot state
      * the delta-mutator law without an independent reference to compare against.
+     *
+     * **It must delegate to [ORMap.putWhole], not to `root.piece { it.put(…) }`.** The convenient
+     * spelling is not a second implementation: `S.piece(mutate)` is `piece(mutate(this).delta)`, so
+     * `root.piece { it.put(…) }` *is* `root.piece(root.put(…).delta)` — the delta path, letter for
+     * letter. A law stated against it reads `x == x` and cannot go red under any change to [set].
+     * That is what shipped in the first cut of #2111, and it is why this KDoc now names the callee.
+     * [ORMap.putWhole] builds `entries + (key to newEntry)` and `context.add(dot)` directly and
+     * shares no code with `putPatch`, which is what makes the comparison mean anything.
      */
     internal fun setWhole(key: String, node: JsonNode): JsonCrdt {
         requireReplica()
-        return JsonCrdt(root.piece { it.put(replica, key, node) }, replica)
+        return JsonCrdt(root.putWhole(replica, key, node), replica)
     }
 
     /** The whole document a [remove] produces. Internal for the same reason as [setWhole]. */
     internal fun removeWhole(key: String): JsonCrdt {
         requireReplica()
-        return JsonCrdt(root.piece { it.remove(key) }, replica)
+        return JsonCrdt(root.removeWhole(key), replica)
     }
 
     private fun requireReplica() {
