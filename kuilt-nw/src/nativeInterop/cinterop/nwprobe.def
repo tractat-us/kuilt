@@ -1,0 +1,163 @@
+package = us.tractat.kuilt.nw.probe.cinterop
+language = Objective-C
+linkerOpts = -framework Network -framework Security
+compilerOpts = -fobjc-arc
+---
+#import <Network/Network.h>
+#import <Security/Security.h>
+#import <dispatch/dispatch.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
+
+/*
+ * kuilt-nw TEST-ONLY probe shim — the half-close question in issue #2457.
+ *
+ * Wired into the *test* compilations only (kuilt-nw/build.gradle.kts); no production code
+ * links it.
+ *
+ * WHY IT EXISTS. The question "can this binding be half-closed?" is only worth answering if
+ * the answer cannot be blamed on the caller. Two of Network.framework's load-bearing values
+ * here are `#define`s over `extern const` globals that Kotlin/Native does not reliably
+ * bridge — `RealNwApi.send` already carries the note that "the NW_CONNECTION_*_CONTEXT
+ * constants mis-bridge under K/N", and a first pass at this probe found a
+ * NW_PARAMETERS_DISABLE_PROTOCOL spelled from Kotlin produced parameters over which no
+ * connection would form at all.
+ *
+ * So every value whose bridging is in doubt is spelled HERE, in C, using Apple's own macros:
+ *
+ *   - NW_CONNECTION_FINAL_MESSAGE_CONTEXT   — the write-close context (connection.h:488-497)
+ *   - NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT — the ordinary message context (connection.h:473-483)
+ *   - NW_PARAMETERS_DISABLE_PROTOCOL        — the plain-TCP control arm (parameters.h)
+ *   - NW_PARAMETERS_DEFAULT_CONFIGURATION   — default TCP configuration
+ *
+ * A negative verdict reached through this shim cannot be explained by "you called it wrong":
+ * the call is byte-for-byte the one Apple's header documents.
+ *
+ * Callbacks unpack to PRIMITIVES only and route through a plain C function pointer, so no
+ * Obj-C object crosses the Kotlin boundary — the same discipline nwshim.def adopted for #1516.
+ */
+
+typedef void (*kuilt_nw_probe_send_cb)(
+    void *ctx,
+    bool has_error,
+    int32_t err_domain,
+    int32_t err_code);
+
+typedef void (*kuilt_nw_probe_receive_cb)(
+    void *ctx,
+    int32_t len,
+    bool is_complete,
+    bool is_final,
+    bool has_error,
+    int32_t err_domain,
+    int32_t err_code);
+
+/*
+ * Parameters for the probe link.
+ *
+ * tls=true  : secure TCP with an external PSK installed — byte-identical in shape to
+ *             RealNwApi.secureParams (sec_protocol_options_add_pre_shared_key).
+ * tls=false : the SAME secure-TCP parameters with the TLS protocol disabled — plain TCP.
+ *             This is the control arm: TCP half-close is well-defined (RFC 793 FIN), so a
+ *             plain-TCP link that DOES half-close proves the call is right and indicts TLS;
+ *             one that does not indicts the framework or the call instead.
+ *
+ * The PSK dispatch_data objects are created OUTSIDE the configure_tls block and captured by
+ * it. dispatch_data_create with a NULL destructor copies the buffer immediately, so the
+ * Kotlin-side pinned arrays need not outlive this call — and ARC keeps the two dispatch_data
+ * objects alive for the block's (i.e. the parameters') lifetime. Building them inside the
+ * block would instead capture the raw pointers and dereference them long after the pinning
+ * ended.
+ */
+static inline nw_parameters_t kuilt_nw_probe_params(
+    const void *psk, int32_t psk_len,
+    const void *identity, int32_t identity_len,
+    bool tls) {
+    nw_parameters_t params;
+    if (tls) {
+        dispatch_data_t key = dispatch_data_create(psk, (size_t) psk_len, NULL, NULL);
+        dispatch_data_t id  = dispatch_data_create(identity, (size_t) identity_len, NULL, NULL);
+        params = nw_parameters_create_secure_tcp(
+            ^(nw_protocol_options_t options) {
+                sec_protocol_options_t sec = nw_tls_copy_sec_protocol_options(options);
+                sec_protocol_options_add_pre_shared_key(sec, key, id);
+            },
+            NW_PARAMETERS_DEFAULT_CONFIGURATION);
+    } else {
+        params = nw_parameters_create_secure_tcp(
+            NW_PARAMETERS_DISABLE_PROTOCOL,
+            NW_PARAMETERS_DEFAULT_CONFIGURATION);
+    }
+    /* A direct 127.0.0.1 link is exempt from Local Network Privacy and must not raise AWDL. */
+    nw_parameters_set_include_peer_to_peer(params, false);
+    return params;
+}
+
+/*
+ * One send. `final` selects NW_CONNECTION_FINAL_MESSAGE_CONTEXT over
+ * NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT; is_complete is always true, so a final send is
+ * exactly the "write close" of connection.h:561-568 — "send a context that is marked as
+ * 'final' and mark is_complete".
+ *
+ * `content` is NULL when len == 0, which is the bare-FIN form (no payload).
+ */
+static inline void kuilt_nw_probe_send(
+    nw_connection_t connection,
+    const void *bytes,
+    int32_t len,
+    bool final,
+    void *ctx,
+    kuilt_nw_probe_send_cb cb) {
+    dispatch_data_t content = NULL;
+    if (bytes != NULL && len > 0) {
+        content = dispatch_data_create(bytes, (size_t) len, NULL, NULL);
+    }
+    nw_content_context_t context = final
+        ? NW_CONNECTION_FINAL_MESSAGE_CONTEXT
+        : NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT;
+    nw_connection_send(connection, content, context, true, ^(nw_error_t error) {
+        bool has_error = (error != NULL);
+        int32_t domain = 0;
+        int32_t code = 0;
+        if (has_error) {
+            domain = (int32_t) nw_error_get_error_domain(error);
+            code = nw_error_get_error_code(error);
+        }
+        cb(ctx, has_error, domain, code);
+    });
+}
+
+/*
+ * One receive, reporting BOTH is_complete and the received context's is_final
+ * (nw_content_context_get_is_final, content_context.h:80-90). The pair is what decides a read
+ * close: connection.h:352-356 — "the context will be marked as 'final' … Once a final context
+ * is marked as complete, the recipient may assume that the connection has been closed in the
+ * receiving direction … For TCP, this represents receiving a FIN."
+ *
+ * Byte contents are irrelevant to every question this probe asks, so only the LENGTH crosses
+ * back; nothing aliases into the mapped region after the block returns.
+ */
+static inline void kuilt_nw_probe_receive(
+    nw_connection_t connection,
+    uint32_t minimum,
+    uint32_t maximum,
+    void *ctx,
+    kuilt_nw_probe_receive_cb cb) {
+    nw_connection_receive(connection, minimum, maximum,
+        ^(dispatch_data_t content, nw_content_context_t context, bool is_complete, nw_error_t error) {
+            int32_t len = 0;
+            if (content != NULL) {
+                len = (int32_t) dispatch_data_get_size(content);
+            }
+            bool is_final = (context != NULL) && nw_content_context_get_is_final(context);
+            bool has_error = (error != NULL);
+            int32_t domain = 0;
+            int32_t code = 0;
+            if (has_error) {
+                domain = (int32_t) nw_error_get_error_domain(error);
+                code = nw_error_get_error_code(error);
+            }
+            cb(ctx, len, is_complete, is_final, has_error, domain, code);
+        });
+}
