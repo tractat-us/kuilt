@@ -3837,6 +3837,17 @@ val forbidDemotedFieldTrail by tasks.registering {
         "nw.seam.viability.recovered",
         "nw.seam.corrupt-inbound",
         "nw.seam.TORN",
+        // Why a link was REFUSED, once the frame body became self-describing (#2425). Added with the
+        // wire flag day, because a version break presents as exactly the silence this trail exists to
+        // diagnose: two peers discover each other, dial, and never form a session, and without these
+        // lines the capture shows a formation that simply never happens. `version-mismatch` is the one a
+        // reader wants first — it is not corruption or hostility but a peer on the other side of the flag
+        // day, and it names both versions. The other four are protocol violations by the remote.
+        "nw.seam.wire.version-mismatch",
+        "nw.seam.wire.unknown-type",
+        "nw.seam.wire.truncated",
+        "nw.seam.wire.hello-on-resolved",
+        "nw.seam.wire.data-before-hello",
         // The #2420 wedge diagnostics — one contract violation and two conditions.
         "nw.seam.registry.orphan",
         "nw.seam.inbound-silent",

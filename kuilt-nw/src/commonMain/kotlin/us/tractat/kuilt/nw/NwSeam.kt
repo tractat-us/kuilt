@@ -442,7 +442,7 @@ internal class NwSeam(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                evictCorruptConn(connId, "nw.seam.corrupt-inbound", "framer decode failed: ${e.message}")
+                evictCorruptConn(connId, "framer decode failed: ${e.message}")
                 return@collect
             }
             for (frame in frames) {
@@ -523,19 +523,24 @@ internal class NwSeam(
         data class Goodbye(val peer: PeerId?) : FrameOutcome
 
         /**
-         * The frame's TYPE contradicts the connection's state — the two cases positional classification
-         * could not even express, and so silently permitted (#2425 slice 1):
+         * A [NwFrameType.Hello] on a connection that has ALREADY resolved (#2425 slice 1).
          *
-         *  - a [NwFrameType.Hello] on a connection that has already resolved. Positionally this was
-         *    indistinguishable from data, so a duplicate preamble was handed to the CONSUMER as an
-         *    application frame.
-         *  - a [NwFrameType.Data] before any hello. Positionally this occupied the hello slot, so it was
-         *    fed to `NwHello.decode` — which either threw or, worse, parsed and registered a phantom peer.
-         *
-         * Both are protocol violations by a remote and are refused: the connection is disconnected and
-         * evicted through the shared backstop, naming [reason].
+         * Positionally this was indistinguishable from data, so a duplicate preamble was handed to the
+         * CONSUMER as an application frame. It is a protocol violation by the remote and the connection
+         * is refused. ([RealNwApi] has its own guard against re-arming a receive loop and double-sending
+         * a hello, so this reports the remote's behaviour, not ours.)
          */
-        data class Refused(val tag: String, val reason: String) : FrameOutcome
+        data class HelloOnResolved(val resolved: PeerId, val claimed: PeerId) : FrameOutcome
+
+        /**
+         * A [NwFrameType.Data] before any hello (#2425 slice 1).
+         *
+         * Positionally this occupied the hello slot, so it was fed to `NwHello.decode` — which either
+         * threw or, worse, parsed and registered a phantom peer. There is no identity to attribute it to,
+         * so the connection is refused rather than the frame silently dropped: a peer that talks before
+         * it identifies itself will keep doing so.
+         */
+        data class DataBeforeHello(val payloadBytes: Int) : FrameOutcome
 
         /**
          * The connection is no longer the live one when classified (#1528 finding 2): [getOrCreateConnForBytes]
@@ -571,10 +576,30 @@ internal class NwSeam(
         } catch (e: CancellationException) {
             throw e
         } catch (e: NwWireFormatException) {
-            evictCorruptConn(connId, wireRefusalTag(e), "${e.message}")
+            // One line per refusal reason, each with its tag written as a LITERAL so the field-trail
+            // guard can see the level it is emitted at. A `"$tag …"` interpolation reads identically to
+            // a human and is invisible to that guard — which is how these lines would quietly drift to
+            // DEBUG and vanish from a release capture (#2420).
+            when (e) {
+                is NwUnsupportedWireVersionException -> log.warn {
+                    "nw.seam.wire.version-mismatch connId=${connId.value} self=${selfId.value} " +
+                        "remote-version=${e.remoteVersion} local-version=${e.localVersion} " +
+                        "→ disconnect + evict (loop preserved); the remote is on the other side of the " +
+                        "#2425 wire flag day and the two cannot form a session"
+                }
+                is NwUnknownFrameTypeException -> log.warn {
+                    "nw.seam.wire.unknown-type connId=${connId.value} self=${selfId.value} " +
+                        "code=${e.code} : ${e.message} → disconnect + evict (loop preserved)"
+                }
+                is NwTruncatedFrameException -> log.warn {
+                    "nw.seam.wire.truncated connId=${connId.value} self=${selfId.value} " +
+                        "frame-bytes=${frame.size} : ${e.message} → disconnect + evict (loop preserved)"
+                }
+            }
+            disconnectAndEvictConn(connId)
             return
         } catch (e: Exception) {
-            evictCorruptConn(connId, "nw.seam.corrupt-inbound", "body decode failed: ${e.message}")
+            evictCorruptConn(connId, "body decode failed: ${e.message}")
             return
         }
         val outcome = lock.withLock {
@@ -588,11 +613,7 @@ internal class NwSeam(
             } else {
                 when (wire) {
                     is NwWireFrame.Hello -> if (resolved != null) {
-                        FrameOutcome.Refused(
-                            tag = "nw.seam.wire.hello-on-resolved",
-                            reason = "a HELLO arrived on a connection already resolved to ${resolved.value} " +
-                                "(claiming ${wire.hello.peerId.value})",
-                        )
+                        FrameOutcome.HelloOnResolved(resolved = resolved, claimed = wire.hello.peerId)
                     } else {
                         // #2420: [resolveIdentity] is the ONLY thing on this path that writes `registry`
                         // or `conns`, so the audit belongs HERE and not after the `when`. Hoisted from
@@ -608,11 +629,7 @@ internal class NwSeam(
                     }
 
                     NwWireFrame.Data -> if (resolved == null) {
-                        FrameOutcome.Refused(
-                            tag = "nw.seam.wire.data-before-hello",
-                            reason = "a ${frame.size - NwWire.TYPE_BYTES}-byte DATA frame arrived before " +
-                                "any identity, so it can be attributed to nobody",
-                        )
+                        FrameOutcome.DataBeforeHello(payloadBytes = frame.size - NwWire.TYPE_BYTES)
                     } else {
                         // #2420: the wedge watchdog's input. Counted HERE — under the same lock that
                         // classifies the frame — so it is exactly "frames attributed to a peer", and so it
@@ -664,8 +681,26 @@ internal class NwSeam(
                 "nw.seam.wire.goodbye connId=${connId.value} self=${selfId.value} peer=${outcome.peer?.value} " +
                     "→ no-op (the drain it terminates is not implemented yet, #2425)"
             }
-            // A frame whose TYPE contradicts the connection's state — refused through the shared backstop.
-            is FrameOutcome.Refused -> evictCorruptConn(connId, outcome.tag, outcome.reason)
+            // A frame whose TYPE contradicts the connection's state. Both arms log a LITERAL tag for the
+            // same reason the decode-failure arms above do.
+            is FrameOutcome.HelloOnResolved -> {
+                log.warn {
+                    "nw.seam.wire.hello-on-resolved connId=${connId.value} self=${selfId.value} " +
+                        "resolved=${outcome.resolved.value} claimed=${outcome.claimed.value} " +
+                        "→ disconnect + evict (loop preserved); a settled link must never carry a second " +
+                        "identity preamble, and positional classification used to hand these bytes to the " +
+                        "consumer as an application frame (#2425)"
+                }
+                disconnectAndEvictConn(connId)
+            }
+            is FrameOutcome.DataBeforeHello -> {
+                log.warn {
+                    "nw.seam.wire.data-before-hello connId=${connId.value} self=${selfId.value} " +
+                        "payload-bytes=${outcome.payloadBytes} → disconnect + evict (loop preserved); " +
+                        "there is no identity to attribute it to (#2425)"
+                }
+                disconnectAndEvictConn(connId)
+            }
             // Stale/dead conn at classify time (#1528 finding 2) — nothing to do; the frame is dropped.
             is FrameOutcome.Dropped ->
                 log.debug { "nw.seam.classify.dropped-stale connId=${connId.value} self=${selfId.value} (conn removed/tombstoned before classify)" }
@@ -673,39 +708,30 @@ internal class NwSeam(
     }
 
     /**
-     * The log tag for a [NwWireFormatException], so a field capture can be grepped by *which* wire
-     * refusal fired rather than by reading prose out of one shared line.
+     * Backstop for an inbound on [connId] this seam cannot parse at all (#1528): [NwFramer.decode] threw
+     * on a bad length prefix (in [bytesReceivedLoop]), or a body decode failed for a reason
+     * [NwWireFormatException] does not name.
      *
-     * The version mismatch has its own tag deliberately: it is the one refusal that is neither
-     * corruption nor hostility but a peer on the other side of the flag day, and its message names both
-     * versions ([NwUnsupportedWireVersionException]).
+     * Reports the condition, then hands off to [disconnectAndEvictConn]. The typed-wire refusals in
+     * [processFrame] log their own line and call that directly, so each refusal reason reaches a field
+     * capture under its own greppable tag — see the comment there for why the tag must be a literal.
      */
-    private fun wireRefusalTag(failure: NwWireFormatException): String = when (failure) {
-        is NwUnsupportedWireVersionException -> "nw.seam.wire.version-mismatch"
-        is NwUnknownFrameTypeException -> "nw.seam.wire.unknown-type"
-        is NwTruncatedFrameException -> "nw.seam.wire.truncated"
+    private suspend fun evictCorruptConn(connId: NwConnectionId, reason: String) {
+        log.warn { "nw.seam.corrupt-inbound connId=${connId.value} self=${selfId.value}: $reason → disconnect + evict (loop preserved)" }
+        disconnectAndEvictConn(connId)
     }
 
     /**
-     * Shared backstop for an inbound on [connId] this seam refuses (#1528, extended for the typed wire in
-     * #2425). Reached from three places: [NwFramer.decode] threw on a bad length prefix (in
-     * [bytesReceivedLoop]); [NwWire.decode] could not classify the body (in [processFrame]); or the body
-     * classified but its TYPE contradicts the connection's state ([FrameOutcome.Refused]).
-     *
-     * Best-effort disconnect the connection OUTSIDE the lock, then drive the local eviction via
-     * [removeByConn] — which removes it from [conns], records a [tombstoneLocked], and evicts its peer if it
-     * was the live link (so a corrupt chunk on a *resolved* conn doesn't strand a zombie in [registry]). A
-     * single refused frame can therefore never kill the receive loop. Suspends only OUTSIDE the lock,
-     * preserving the no-suspend-under-lock rule.
-     *
-     * [tag] is REQUIRED and carries no default: with the typed wire there are now five distinct reasons a
-     * connection is refused, and folding them onto one tag would put the discriminator back in prose — the
-     * exact thing this slice removes from the wire. See [wireRefusalTag].
+     * The MECHANISM behind every refusal, separated from the reporting so each caller owns its own log
+     * line: best-effort disconnect the connection OUTSIDE the lock, then drive the local eviction via
+     * [removeByConn] — which removes it from [conns], records a [tombstoneLocked], and evicts its peer if
+     * it was the live link (so a refused frame on a *resolved* conn doesn't strand a zombie in
+     * [registry]). A single refused frame can therefore never kill the receive loop. Suspends only
+     * OUTSIDE the lock, preserving the no-suspend-under-lock rule.
      */
-    private suspend fun evictCorruptConn(connId: NwConnectionId, tag: String, reason: String) {
-        log.warn { "$tag connId=${connId.value} self=${selfId.value}: $reason → disconnect + evict (loop preserved)" }
+    private suspend fun disconnectAndEvictConn(connId: NwConnectionId) {
         runCatchingCancellable { api.disconnect(connId) }
-            .onFailure { log.debug { "nw.seam.corrupt-inbound.disconnect-failed connId=${connId.value}: ${it.message}" } }
+            .onFailure { log.debug { "nw.seam.refused.disconnect-failed connId=${connId.value}: ${it.message}" } }
         removeByConn(connId)
     }
 
