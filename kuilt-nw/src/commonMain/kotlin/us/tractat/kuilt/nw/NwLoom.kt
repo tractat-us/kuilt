@@ -242,12 +242,25 @@ public class NwLoom(
      * across an hour of wedge, against the ~3600 a per-second poll would write. [SeamState.Torn] ends the
      * loop; the seam's scope is cancelled on close anyway, so this is belt-and-braces for a binding that
      * latches Torn without tearing the scope down.
+     *
+     * Note that within ONE weave attempt at most one periodic dump can fire — the second would be due at
+     * `2.5 × weaveTimeout`, past the timeout that closes the seam. The repeating schedule is for the seam
+     * that WOVE and then lost its peer for good: #1513 re-forms `Woven → Weaving` rather than tearing, so
+     * that seam lives for as long as the consumer holds it, and it is the shape a device sits in for an
+     * hour.
+     *
+     * **No timer is armed on a device that has seen nobody.** The park below is not an optimisation: a
+     * timer that re-arms forever with nothing to report is a coroutine that never lets its scheduler go
+     * idle, and it would make every idle lobby pay for a diagnostic that could not produce a line. It waits
+     * on [visiblePeers] because a redialer is only ever armed through the same call that rosters its
+     * endpoint, so a first sighting always wakes it.
      */
     private suspend fun formationStuckLoop(formation: Formation) {
         // Never zero: `withTimeoutOrNull(ZERO)` returns immediately without suspending, which would spin.
         val firstInterval = (weaveTimeout / 2).coerceAtLeast(1.milliseconds)
         while (true) {
             if (formation.seam.state.first { it !is SeamState.Woven } is SeamState.Torn) return
+            if (!formation.redial.snapshot().sawSomebody) _visiblePeers.first { it.isNotEmpty() }
             var interval = firstInterval
             while (true) {
                 val wove = withTimeoutOrNull(interval) { formation.seam.state.first { it is SeamState.Woven } }
