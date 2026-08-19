@@ -214,7 +214,10 @@ internal abstract class MeshDisplacementDrainConformanceSuite {
             winnerFar.send(MeshWire.encodeHello(PEER, LOW_NONCE))
         }
 
-        val mesh = async { hubMesh(SELF, listOf(loserEnd, winnerEnd), dispatcher, Random(0)) }.await()
+        val displacements = mutableListOf<MeshDisplacement>()
+        val mesh = async {
+            hubMesh(SELF, listOf(loserEnd, winnerEnd), dispatcher, Random(0), onDisplacement = { displacements += it })
+        }.await()
         check(loserReplied.isCompleted && winnerReplied.isCompleted) {
             "harness: a far end never saw the mesh's handshake preamble"
         }
@@ -257,6 +260,25 @@ internal abstract class MeshDisplacementDrainConformanceSuite {
                 assertTrue(
                     received.all { it.sender == PEER },
                     "a drained link's frames stay attributed to their peer — draining is not anonymising",
+                )
+            },
+            {
+                // COUNTS what the drain saved rather than inferring it from "a drain happened": a
+                // drain-happened assertion stays true when the loser is closed unread, and
+                // `framesDrained` is the field that does not. `Goodbye` (not `Bound`) says the in-band
+                // FIN terminated it, and `Keep` that nothing was ever published locally.
+                assertEquals(
+                    listOf<MeshDisplacement>(
+                        MeshDisplacement.Drained(
+                            peer = PEER,
+                            arm = MeshDisplacement.Arm.Keep,
+                            outcome = MeshDisplacement.Outcome.Goodbye,
+                            framesDrained = 2,
+                        ),
+                    ),
+                    displacements.toList(),
+                    "construction's dedup must report exactly one drain, ended by the remote's goodbye, " +
+                        "having saved BOTH window frames",
                 )
             },
         )
