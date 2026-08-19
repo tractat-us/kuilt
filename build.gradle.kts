@@ -3818,6 +3818,23 @@ val forbidDemotedFieldTrail by tasks.registering {
         "nw.loom.redial-parked",
         "nw.loom.redial-resumed",
         "nw.loom.weave-timeout",
+        // The campaign's own health line (#2420): a redialer that has reached the back-off ceiling without
+        // ever connecting. Bounded to ONE line per campaign, so it belongs here rather than being left to
+        // `nw.loom.redial-failed` — which stays at DEBUG precisely because it can fire every 250 ms, and
+        // which is therefore absent from every field capture. Without this the trail can distinguish
+        // "parked, dialling nothing" from nothing at all, but not "dialling hard and getting nowhere".
+        "nw.loom.redial-ceiling",
+        // The periodic STATE dump (#2420) — the one entry here that is not an event. Everything else on this
+        // trail says what HAPPENED; a formation that is stuck emits no events at all, which is the whole
+        // failure mode, so the dump is the only line a reader who arrives late is guaranteed to find. It
+        // carries the settled set with provenance, every armed redialer's back-off and parked flag, the live
+        // links, and the path — i.e. it is a superset of what several of the event lines above would have
+        // said, minutes after they scrolled out of a bounded store.
+        "nw.loom.formation-stuck",
+        // What this device is ACTUALLY advertising (#2420). The `… (2)` mDNS conflict rename is delivered
+        // only to the device it happens to, and nothing was listening for it — in the 2026-08-15 session it
+        // was recoverable only from the OTHER phone's capture, 6 s after the dial it invalidated.
+        "nw.api.advertised-name",
         // Which link resolved to whom — and, when a peer was double-dialled, which link SURVIVED. The two
         // `dedup` lines each report the direction that end kept, so two devices' captures can be compared
         // directly. In #2425 that comparison had to be reconstructed from both phones' Apple unified logs

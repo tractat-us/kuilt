@@ -1973,6 +1973,48 @@ internal class NwSeam(
         winner.connId
     }
 
+    /**
+     * This seam's contribution to `NwLoom.dumpFormationState()` (#2420) — read-only, under [lock], one pass.
+     *
+     * Everything here is state a stuck formation is diagnosed FROM and which no event line carries once it
+     * has scrolled out of a bounded on-device store: which endpoints are settled **and why each one**
+     * ([settledProvenanceLocked] — a `self` entry on an endpoint that is really another device is the #2416
+     * failure), and every connection with the endpoint it was dialled on, the identity it resolved to (or
+     * `UNRESOLVED`, the shape of a link that opened and never handshook), and its frame counters in both
+     * directions.
+     *
+     * `role` is derived from the two maps rather than stored, so it cannot drift from them; the audit
+     * ([auditRegistryLocked]) is what turns a *wrong* role into an ERROR, and this only reports it.
+     * [NwApi.connectionStates] is a `StateFlow` read — non-suspending, so taking it under [lock] keeps the
+     * seam's own view and the transport's verdict from being sampled at two different instants.
+     */
+    internal fun formationSnapshot(): NwSeamSnapshot = lock.withLock {
+        val transport = api.connectionStates.value
+        val live = registry.values.associateBy { it.connId }
+        NwSeamSnapshot(
+            state = _state.value.toString(),
+            peers = _peers.value.map { it.value },
+            settled = _settledEndpoints.value.sorted().map { "$it(${settledProvenanceLocked(it)})" },
+            links = conns.entries.sortedBy { it.key.value }.map { (connId, cs) ->
+                NwLinkState(
+                    connId = connId.value,
+                    dialled = cs.endpoint?.id ?: INBOUND_LINK,
+                    resolvedPeer = cs.resolvedPeerId?.value,
+                    role = when {
+                        connId in draining -> "draining"
+                        connId in live -> "live"
+                        else -> "unbound"
+                    },
+                    connState = transport[connId]?.toString() ?: "unknown",
+                    framesIn = cs.inboundFrames,
+                    framesOut = cs.outboundFrames,
+                )
+            },
+            roles = _capability.value.roles.map { it.toString() },
+            availability = _capability.value.availability.toString(),
+        )
+    }
+
     // ── send ────────────────────────────────────────────────────────────────────
 
     /**

@@ -74,7 +74,32 @@ first if you need to branch gracefully.
 Both phones are in the lobby, the signal is strong, and no session ever forms. Nothing crashes and
 nothing is logged as an error, because from each device's point of view it is simply still trying.
 
-Pull the log off **both** devices and read these lines, in this order. Every one of them is `INFO` or
+**Start with `nw.loom.formation-stuck`.** A device that can see somebody and has not connected writes
+one `WARN` line carrying its whole formation state — what it is advertising and what the OS renamed
+that to, which endpoints it has stopped dialling and *why* each one settled, which it is still dialling
+and how hard, every live link with the endpoint it was dialled on and the identity it resolved to, and
+the network path. It fires halfway to the weave timeout, again on the timeout itself, and thereafter on
+a geometric schedule capped at five minutes for as long as the seam stays unwoven — so a device wedged
+for an hour writes about a dozen of them, and an idle device with nobody around writes none at all.
+That last part is the point: without it a wedged device and an idle one produce identical logs.
+
+```text
+nw.loom.formation-stuck reason=weave-timeout after=4s self=alice serviceType=_kuilt._tcp
+  advertised=alice→alice renamed=false state=Weaving peers=[alice] visible=[bob(name=bob resolved=false)]
+  settled=[] redialers=[bob(name=bob backoff=4000ms attempts=4 parked=false)] deferrals=[]
+  name-owners=[alice→alice] links=[nw-1(dialled=bob peer=UNRESOLVED role=unbound state=unknown in=0 out=0)]
+  roles=[Data, Discovery] availability=Unknown path=unknown listener=Ready
+```
+
+(It is one line on the wire; wrapped here to fit.) Read it as: *we can see `bob` and have dialled it
+four times; nothing has settled, so no redialer is starved; a link opened and never handshook.* A
+`settled=[bob(self)]` on an endpoint that is really another device would be the #2416 failure, and a
+`parked=true` redialer next to it says which peer that has starved.
+
+`NwLoom.dumpFormationState()` returns the same body on demand — useful from a consumer's "still
+connecting…" timeout or a crash reporter.
+
+Then pull the log off **both** devices and read these lines, in this order. Every one of them is `INFO` or
 above, so they survive a normal on-device capture — but only if the app's logging backend is left at
 `INFO`; a backend pinned to `WARN` drops most of the trail. Note that the fabric identifies peers by
 the `PeerId` in the Bonjour TXT record while it *dials* a Bonjour **name**, and mDNS re-resolves that
@@ -91,14 +116,18 @@ prints both.
 | `nw.seam.dialled-mismatch` | Fired when they differ on the success path — a peer's endpoint has been recorded under another peer's id. **Expected on the macOS-JVM bridge and meaningless there:** the bridge cannot marshal identity provenance across the ABI and loom and dylib hold different ids (#2419), so every healthy bridge connection trips it. On a phone it means what it says. |
 | `nw.seam.settled` | The set of endpoints that need no further dial, with `(self)` or `(peer=…)` provenance for each. An endpoint listed `(self)` that is really another device is the failure. |
 | `nw.loom.redial-parked` | This endpoint's dials have stopped. Paired with the `nw.seam.settled` line above it, this says which peer is starved and why. A `redial-parked` with no matching `redial-resumed` is a peer that will never be dialled again for the seam's lifetime. |
+| `nw.loom.redial-ceiling` | The opposite failure: this endpoint is being dialled *forever* and never connecting. One line per campaign, carrying the attempt count at which the back-off hit its ceiling. Its absence alongside a live redialer means the campaign is still ramping, not stuck. |
+| `nw.api.advertised-name` | What this device is **actually** called on the network. `renamed=true` means mDNS resolved an instance-name collision by renaming *us*, so a peer dialling the name it discovered earlier now reaches somebody else. The `at=` field is a monotonic in-process stamp, so it orders against the dial even when two records share a write time. |
 
 `nw.loom.weave-timeout` is the *symptom*, not the diagnosis — by the time it fires the decisive
-evidence is already minutes earlier in the trail above.
+evidence is already minutes earlier in the trail above, which is why the timeout path also emits a
+`nw.loom.formation-stuck` dump before it throws.
 
 Two related notes. If you are extracting these logs with `:kuilt-otel-tap`, host the tap on a
 **different** fabric from the one you are debugging (`installLogTapJoining` over a WebSocket loom,
 say) — tapping a broken fabric over itself cannot work. And a capture only contains what the app's
-logging backend admitted: turn the level down *before* reproducing, not after.
+logging backend admitted: turn the level down *before* reproducing, not after. Both, and the rest of
+the capture procedure, are in [`docs/log-capture-and-extraction.md`](../docs/log-capture-and-extraction.md).
 
 ---
 

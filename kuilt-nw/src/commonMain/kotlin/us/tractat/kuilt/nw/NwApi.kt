@@ -36,6 +36,15 @@ private val EMPTY_LISTENER_STATE: StateFlow<NwListenerState> =
     MutableStateFlow<NwListenerState>(NwListenerState.Unknown).asStateFlow()
 
 /**
+ * Shared default for [NwApi.advertisedName] — a single immutable, never-updated [StateFlow] holding `null`
+ * ("this binding does not report what it is advertising") so the default getter allocates nothing per call.
+ * A binding that has not wired `nw_listener_set_advertised_endpoint_changed_handler` inherits it, and a
+ * `null` there means *unknown*, never *not renamed* (#2420).
+ */
+private val EMPTY_ADVERTISED_NAME: StateFlow<String?> =
+    MutableStateFlow<String?>(null).asStateFlow()
+
+/**
  * Thrown by [NwApi.send] for an **immediately-known** send failure — the addressed [NwConnectionId] is
  * unknown to this binding or already closed (#2455).
  *
@@ -228,4 +237,25 @@ public interface NwApi {
      */
     public val listenerState: StateFlow<NwListenerState>
         get() = EMPTY_LISTENER_STATE
+
+    /**
+     * The Bonjour instance name this device is **actually** advertising right now, or `null` while unknown
+     * (#2420).
+     *
+     * It is **not** the name [startListening] was asked for. mDNS resolves an instance-name collision by
+     * renaming the *later* advertiser — `alice` becomes `alice (2)` — and the rename lands on a callback,
+     * after the listener is already up. So the requested name is what this peer *meant* to publish and this
+     * is what a browser will actually see, and they come apart exactly in the case that matters: a dial
+     * armed for the requested name then resolves to whoever else is holding it (#2416). In the 2026-08-15
+     * two-phone session the rename landed 6 s after the fatal dial and was visible only from the *other*
+     * handset, because nothing on the renamed device was watching for it.
+     *
+     * Modelled as latest-value **[StateFlow]** for the same reason [listenerState] is: "what am I called?"
+     * is a level. Defaults to a never-updated `null` so a binding that has not wired
+     * `nw_listener_set_advertised_endpoint_changed_handler` (the JVM bridge, the fakes that model no
+     * listener) inherits "unknown" — which is deliberately NOT the same as "not renamed", and the formation
+     * dump renders it as `?` rather than claiming agreement. `RealNwApi` (appleMain) drives it.
+     */
+    public val advertisedName: StateFlow<String?>
+        get() = EMPTY_ADVERTISED_NAME
 }

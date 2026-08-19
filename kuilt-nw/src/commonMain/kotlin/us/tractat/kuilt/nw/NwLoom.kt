@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -31,11 +32,13 @@ import us.tractat.kuilt.core.LoomDefaults
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.freshPeerId
 import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
 private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwLoom")
@@ -142,6 +145,135 @@ public class NwLoom(
      */
     public val visiblePeers: StateFlow<Set<NwEndpoint>> = _visiblePeers.asStateFlow()
 
+    /** One live [weave]: the seam, the dial campaign driving it, and the name this loom asked to advertise. */
+    private class Formation(
+        val seam: NwSeam,
+        val redial: RedialCoordinator,
+        val requestedServiceName: String,
+    )
+
+    /** Guards [formations]. A plain lock, not confinement: [dumpFormationState] is callable from any thread. */
+    private val formationsLock = reentrantLock()
+
+    /**
+     * Every formation this loom currently has in flight. Added by [weave] before it awaits its first peer;
+     * removed when the seam's scope completes, which `NwSeam.close` guarantees by cancelling it — so a
+     * closed seam cannot linger here and make a dump describe a session that ended.
+     *
+     * A list rather than a single slot because [weave] is callable more than once on one loom; in the
+     * ordinary case it holds exactly one entry. Guarded by [formationsLock].
+     */
+    private val formations = mutableListOf<Formation>()
+
+    /**
+     * A one-line, `grep`-able snapshot of every in-flight formation: what this peer advertises, what it can
+     * see, what it has stopped dialling and **why**, what it is still dialling and how hard, which links
+     * exist, and what the radio says (#2420).
+     *
+     * ## Why this exists
+     * This fabric's failure mode is **silence**. A redialer parked on a wrongly-settled endpoint emits
+     * nothing for the seam's whole lifetime, so a wedged device and an idle one produce identical logs —
+     * which is what made #2416 a two-device forensic exercise (pull both phones' stores, decode, correlate
+     * by hand) rather than a one-line read. This is the fabric-side equivalent of the Raft/warp sim
+     * harnesses' `dumpState()`: a hang that names its own state.
+     *
+     * The loom calls it on a bounded geometric schedule while a formation is stuck (see
+     * [MAX_FORMATION_DUMP_INTERVAL]) and once on the [weave] timeout path, logging the result at WARN under
+     * `nw.loom.formation-stuck`. It is public so a consumer can also pull it on demand — from a "still
+     * connecting…" UI timeout, a crash reporter, or an integration harness — and it is safe to call at any
+     * time: it takes no lock it does not already need and changes no decision.
+     *
+     * The returned body carries no event tag; the loom's own emission prefixes `nw.loom.formation-stuck`.
+     * A caller logging it itself should include an equivalent marker, or the line is unfindable in a
+     * capture.
+     */
+    public fun dumpFormationState(): String {
+        val live = formationsLock.withLock { formations.toList() }
+        if (live.isEmpty()) {
+            return "self=${selfId.value} serviceType=$serviceType formations=none (no seam is being woven)"
+        }
+        return live.joinToString(separator = " || ") { render(it) }
+    }
+
+    /** Compose one formation's line from its three collaborators' read-only snapshots. */
+    private fun render(formation: Formation): String = renderFormationDump(
+        selfId = selfId.value,
+        serviceType = serviceType,
+        requestedName = formation.requestedServiceName,
+        effectiveName = api.advertisedName.value,
+        seam = formation.seam.formationSnapshot(),
+        redial = formation.redial.snapshot(),
+        visible = _visiblePeers.value,
+        path = api.pathState.value,
+        listener = api.listenerState.value,
+    )
+
+    /**
+     * The ONE site that emits `nw.loom.formation-stuck`, so the curated field trail's level guard is
+     * checking the level the line is actually written at (the tag is a literal here, never a parameter).
+     *
+     * WARN: it fires only when something is already wrong, and WARN is retained by a release device's
+     * store — measured during the #2425 wedge, a field capture held 664 INFO / 7 WARN / 1 ERROR and **zero**
+     * DEBUG records, in a store that had not wrapped.
+     */
+    private fun logFormationStuck(formation: Formation, reason: String) {
+        log.warn { "nw.loom.formation-stuck reason=$reason ${render(formation)}" }
+    }
+
+    /**
+     * Dump [formation]'s state on a bounded geometric schedule for as long as it is stuck (#2420).
+     *
+     * **Trigger — stuck, not merely unwoven.** A dump is emitted only while the seam is not
+     * [SeamState.Woven] **and** this formation has an endpoint it knows about: "we can see somebody and have
+     * not connected". An idle device with nobody around emits nothing, ever, which is what keeps this from
+     * being noise on every app that opens a lobby and waits. The "somebody" test is
+     * [NwRedialSnapshot.sawSomebody] rather than a non-empty [visiblePeers] — see that property for why the
+     * roster alone would go quiet in exactly one wedge shape.
+     *
+     * **Schedule — geometric, and it cannot spam.** First at `weaveTimeout / 2` (so the state that explains
+     * a timeout is already in the trail before the timeout fires), then ×[FORMATION_DUMP_GROWTH] each time,
+     * capped at [MAX_FORMATION_DUMP_INTERVAL]. The wait is `withTimeoutOrNull` on "did we become Woven",
+     * so the timer both **elapses only while unwoven** and is **cancelled the instant the seam weaves** —
+     * one mechanism for both obligations, rather than a timer plus a racing cancel. Weaving resets the
+     * schedule, so a `Woven → Weaving` re-form (#1513) is re-armed at the first interval rather than
+     * inheriting a five-minute silence.
+     *
+     * With the default 30 s weave timeout that is 15 s, 60 s, 240 s, then 300 s apart: about a dozen lines
+     * across an hour of wedge, against the ~3600 a per-second poll would write. [SeamState.Torn] ends the
+     * loop; the seam's scope is cancelled on close anyway, so this is belt-and-braces for a binding that
+     * latches Torn without tearing the scope down.
+     *
+     * Note that within ONE weave attempt at most one periodic dump can fire — the second would be due at
+     * `2.5 × weaveTimeout`, past the timeout that closes the seam. The repeating schedule is for the seam
+     * that WOVE and then lost its peer for good: #1513 re-forms `Woven → Weaving` rather than tearing, so
+     * that seam lives for as long as the consumer holds it, and it is the shape a device sits in for an
+     * hour.
+     *
+     * **No timer is armed on a device that has seen nobody.** The park below is not an optimisation: a
+     * timer that re-arms forever with nothing to report is a coroutine that never lets its scheduler go
+     * idle, and it would make every idle lobby pay for a diagnostic that could not produce a line. It waits
+     * on the coordinator's monotone [RedialCoordinator.armedEndpoints] rather than on [visiblePeers] —
+     * see that property for why a prunable roster is the wrong thing to park on.
+     */
+    private suspend fun formationStuckLoop(formation: Formation) {
+        // Never zero: `withTimeoutOrNull(ZERO)` returns immediately without suspending, which would spin.
+        val firstInterval = (weaveTimeout / 2).coerceAtLeast(1.milliseconds)
+        while (true) {
+            if (formation.seam.state.first { it !is SeamState.Woven } is SeamState.Torn) return
+            formation.redial.armedEndpoints.first { it > 0 }
+            var interval = firstInterval
+            while (true) {
+                val wove = withTimeoutOrNull(interval) { formation.seam.state.first { it is SeamState.Woven } }
+                if (wove != null) break // woven → stop dumping and re-arm from the top on the next un-weave
+                if (formation.seam.state.value is SeamState.Torn) return
+                if (formation.redial.snapshot().sawSomebody) {
+                    logFormationStuck(formation, "stuck-for>=$interval")
+                }
+                interval = (interval * FORMATION_DUMP_GROWTH).coerceAtMost(MAX_FORMATION_DUMP_INTERVAL)
+            }
+        }
+    }
+
     override fun capability(): TransportCapability =
         TransportCapability(roles = NW_ROLES, availability = api.availability())
 
@@ -179,6 +311,20 @@ public class NwLoom(
         )
         redial.start()
 
+        // Register the formation BEFORE anything can go wrong, so a dump taken at any point from here on
+        // describes a real session; deregister on the seam scope's completion, which `NwSeam.close`
+        // guarantees by cancelling it (`latchTorn`). Tying removal to the scope rather than to a close
+        // callback means every exit — consumer close, weave timeout, caller cancellation — is covered by
+        // one mechanism.
+        val formation = Formation(seam, redial, serviceName)
+        formationsLock.withLock { formations += formation }
+        seamScope.coroutineContext.job.invokeOnCompletion {
+            formationsLock.withLock { formations -= formation }
+        }
+        // Not UNDISPATCHED: it subscribes to nothing that must be live before a trigger, and its first act
+        // is a park. Cancelled with the seam's scope.
+        seamScope.launch { formationStuckLoop(formation) }
+
         // The listen — including the FIRST one — belongs to the supervisor (#2449). `startListening` returns
         // Unit and the OS reports the registration later on a callback, so a failure is invisible to any
         // `runCatchingCancellable` around the call; and a listen that throws synchronously must still start
@@ -205,6 +351,13 @@ public class NwLoom(
             }
         } catch (_: TimeoutCancellationException) {
             log.info { "nw.loom.weave-timeout self=${selfId.value} serviceType=$serviceType after=$weaveTimeout → Unreachable" }
+            // UNCONDITIONALLY, and BEFORE the discard — a failed weave must leave behind the state that
+            // explains it, not a bare "timed out". Unconditional because the trigger's "did we see anybody"
+            // guard exists to keep the PERIODIC dump off idle devices; here the formation has demonstrably
+            // failed, and "we saw nobody at all for the whole timeout" is itself the finding. Before the
+            // discard because `close` wipes `settledEndpoints` and cancels every redialer, so a dump taken
+            // afterwards would report an empty, blameless seam.
+            logFormationStuck(formation, "weave-timeout after=$weaveTimeout")
             discardUnreturnedSeam(seam)
             throw NwUnreachableException(
                 "nw weave timed out: no peer reached for serviceType=$serviceType within $weaveTimeout",
@@ -273,6 +426,28 @@ public class NwLoom(
 
         /** Ceiling the redial backoff doubles up to — a gone endpoint's dials keep failing fast here (#1513). */
         internal val MAX_REDIAL_BACKOFF: Duration = 5.seconds
+
+        /**
+         * Factor the formation-stuck dump interval grows by after each dump (#2420).
+         *
+         * Four, not two: doubling from `weaveTimeout / 2` takes ~7 dumps to reach
+         * [MAX_FORMATION_DUMP_INTERVAL] where ×4 takes 3, and the interesting state changes fastest in the
+         * first seconds of a formation and then stops changing at all. A wedge that has lasted a minute is
+         * unlikely to say anything new at 2 minutes that it did not say at 1.
+         */
+        internal const val FORMATION_DUMP_GROWTH: Int = 4
+
+        /**
+         * Ceiling on the formation-stuck dump interval (#2420) — a permanently wedged seam settles to one
+         * line every five minutes and stays there for as long as the consumer keeps it open.
+         *
+         * Bounded on both sides deliberately. Uncapped growth would make a long-lived stuck seam go silent
+         * again, which is the exact failure this whole mechanism exists to remove; no cap on the *rate*
+         * (i.e. a fixed short period) would flood a bounded on-device store and evict the event trail the
+         * dump is meant to be read alongside. Five minutes is ~12 lines an hour against the store's
+         * observed ~670 records per session — legible, and nowhere near the eviction pressure.
+         */
+        internal val MAX_FORMATION_DUMP_INTERVAL: Duration = 5.minutes
 
         /**
          * How long a possibly-self endpoint whose TXT identity has NOT resolved is held back before it is
@@ -642,10 +817,44 @@ private class RedialCoordinator(
     private class Redialer(val endpoint: NwEndpoint) {
         var backoffMs: Long = NwLoom.INITIAL_REDIAL_BACKOFF.inWholeMilliseconds
         var job: Job? = null
+
+        /**
+         * Dials issued since this campaign last started — reset when the endpoint un-settles and the loop
+         * begins a fresh campaign, so the number always means "attempts in the CURRENT run of failures"
+         * rather than a lifetime total that a reconnect would make meaningless (#2420).
+         */
+        var attempts: Long = 0
+
+        /**
+         * Whether [redialLoop] is parked on [NwSeam.settledEndpoints]. Held explicitly rather than derived
+         * from the settled set, because the loop's own belief is what stops the dials — and a disagreement
+         * between the two is a finding, not something a dump should smooth over.
+         */
+        var parked: Boolean = false
+
+        /** Whether this campaign already reported reaching the ceiling — one WARN per campaign, not per dial. */
+        var ceilingReported: Boolean = false
     }
 
-    /** endpoint id → its redial state. Guarded by [lock]. */
+    /** What one [redialLoop] iteration decided under [lock], acted on (and logged) outside it. */
+    private class RedialStep(val delayMs: Long, val attempts: Long, val reachedCeiling: Boolean)
+
+    /** endpoint id → its redial state. Guarded by [lock]. Append-only: an entry is never removed. */
     private val redialers = mutableMapOf<String, Redialer>()
+
+    private val _armedEndpoints = MutableStateFlow(0)
+
+    /**
+     * How many distinct endpoints this coordinator has armed a redialer for (#2420) — the wake signal
+     * `NwLoom`'s formation-stuck loop parks on before it will arm any timer at all.
+     *
+     * **Monotone, and that is the whole point.** [redialers] is append-only, so this only ever grows, and a
+     * waiter on `first { it > 0 }` therefore cannot be conflated past the transition it is waiting for.
+     * Parking on [NwLoom.visiblePeers] instead would be subtly wrong: that roster is pruned on a Bonjour
+     * removal, so an add-then-remove inside one `StateFlow` conflation window would leave the waiter parked
+     * forever with a redialer hammering away and nothing reporting it — the exact silence #2420 removes.
+     */
+    val armedEndpoints: StateFlow<Int> = _armedEndpoints.asStateFlow()
 
     /**
      * Bonjour serviceName → the pending grace timer for a possibly-self endpoint under that name whose
@@ -676,6 +885,30 @@ private class RedialCoordinator(
      * fires **once per colliding pair** rather than on every browse re-emit. Guarded by [lock].
      */
     private val reportedNameCollisions = mutableSetOf<String>()
+
+    /**
+     * This coordinator's contribution to [NwLoom.dumpFormationState] (#2420) — read-only, under [lock].
+     *
+     * The three maps together answer the question a stuck formation turns on: *what is this device still
+     * trying, what has it given up on, and does anybody else hold a name it is dialling*. None of it is
+     * recoverable from the event trail once the deciding lines have scrolled out of a bounded on-device
+     * store, which is why it is snapshot rather than merely logged at the moment it changes.
+     */
+    fun snapshot(): NwRedialSnapshot = lock.withLock {
+        NwRedialSnapshot(
+            redialers = redialers.values.sortedBy { it.endpoint.id }.map {
+                NwRedialerState(
+                    endpointId = it.endpoint.id,
+                    serviceName = it.endpoint.serviceName,
+                    backoffMs = it.backoffMs,
+                    attempts = it.attempts,
+                    parked = it.parked,
+                )
+            },
+            deferrals = deferrals.keys.sorted(),
+            nameOwners = nameOwners.toMap(),
+        )
+    }
 
     /** Subscribe to discovery UNDISPATCHED (before advertise/browse) so no sighting is missed. */
     fun start() {
@@ -809,7 +1042,10 @@ private class RedialCoordinator(
             // periods a redial targets — so resetting on a re-emit would peg a present-but-unreachable
             // flapping peer at ~250ms forever instead of backing off to the ceiling. A reconnect (the peer
             // was connected then dropped) resets the backoff in [redialLoop] on the settled→un-settled edge.
-            val r = existing ?: Redialer(endpoint).also { redialers[endpoint.id] = it }
+            val r = existing ?: Redialer(endpoint).also {
+                redialers[endpoint.id] = it
+                _armedEndpoints.value = redialers.size // monotone; see [armedEndpoints]
+            }
             if (r.job?.isActive == true) {
                 false // already redialing this endpoint
             } else {
@@ -893,27 +1129,65 @@ private class RedialCoordinator(
             // idle one in a hardware capture. `nw.seam.settled` carries the provenance of each entry —
             // read the two together to see WHICH endpoint parked this redialer and WHY it settled.
             if (endpointId in seam.settledEndpoints.value) {
+                lock.withLock { redialers[endpointId]?.parked = true }
                 log.info {
                     "nw.loom.redial-parked endpoint=$endpointId self=${selfId.value} " +
                         "settled=${seam.settledEndpoints.value} — no further dial until it un-settles"
                 }
                 seam.settledEndpoints.first { endpointId !in it }
                 log.info { "nw.loom.redial-resumed endpoint=$endpointId self=${selfId.value} → un-settled, redialing from the initial backoff" }
-                lock.withLock { redialers[endpointId]?.backoffMs = NwLoom.INITIAL_REDIAL_BACKOFF.inWholeMilliseconds }
+                // A fresh campaign in every respect: the attempt count and the ceiling report are per-campaign
+                // (see [Redialer.attempts]), so a peer that reconnects and later wedges again reports its
+                // SECOND campaign's ceiling rather than staying quiet because the first one already fired.
+                lock.withLock {
+                    redialers[endpointId]?.let {
+                        it.backoffMs = NwLoom.INITIAL_REDIAL_BACKOFF.inWholeMilliseconds
+                        it.parked = false
+                        it.attempts = 0
+                        it.ceilingReported = false
+                    }
+                }
                 continue
             }
+            val attempt = lock.withLock { redialers[endpointId]?.let { it.attempts += 1; it.attempts } } ?: return
             runCatchingCancellable { api.connect(endpoint) }
-                .onFailure { log.debug { "nw.loom.redial-failed endpoint=$endpointId self=${selfId.value}: ${it.message}" } }
+                .onFailure {
+                    log.debug {
+                        "nw.loom.redial-failed endpoint=$endpointId self=${selfId.value} attempt=$attempt: ${it.message}"
+                    }
+                }
             // Snapshot the backoff, advance it (doubling to the ceiling), and draw the jitter — all under
             // the lock so [jitterRandom] is never touched concurrently by another redial coroutine.
-            val delayMs = lock.withLock {
+            val step = lock.withLock {
                 val r = redialers[endpointId] ?: return
                 val w = r.backoffMs
                 r.backoffMs = (r.backoffMs * 2).coerceAtMost(NwLoom.MAX_REDIAL_BACKOFF.inWholeMilliseconds)
-                w + jitterRandom.nextLong(0, (w / 4).coerceAtLeast(1))
+                val reachedCeiling =
+                    r.backoffMs >= NwLoom.MAX_REDIAL_BACKOFF.inWholeMilliseconds && !r.ceilingReported
+                if (reachedCeiling) r.ceilingReported = true
+                RedialStep(
+                    delayMs = w + jitterRandom.nextLong(0, (w / 4).coerceAtLeast(1)),
+                    attempts = r.attempts,
+                    reachedCeiling = reachedCeiling,
+                )
+            }
+            // The campaign's ONE health line (#2420). Until now a peer dialled forever at the ceiling was
+            // reported only by `nw.loom.redial-failed` — at DEBUG, which a release device's store does not
+            // retain at all, and with no attempt count, so a capture could not distinguish "dialling hard"
+            // from "not dialling". WARN because it is a CONDITION rather than a contract violation: the
+            // endpoint may still come back. Edge-triggered on the FIRST arrival at the ceiling, so it is one
+            // line per campaign — a dial every 5 s for an hour still writes exactly this one.
+            if (step.reachedCeiling) {
+                log.warn {
+                    "nw.loom.redial-ceiling endpoint=$endpointId serviceName=${endpoint.serviceName} " +
+                        "self=${selfId.value} attempts=${step.attempts} backoff=${NwLoom.MAX_REDIAL_BACKOFF} " +
+                        "settled=${seam.settledEndpoints.value} state=${seam.state.value} — every dial to " +
+                        "this endpoint has failed to connect; dialling continues at the ceiling and this " +
+                        "line will not repeat until the endpoint settles and un-settles"
+                }
             }
             // Wait the backoff, but wake the instant the endpoint settles so we stop dialing promptly.
-            withTimeoutOrNull(delayMs.milliseconds) {
+            withTimeoutOrNull(step.delayMs.milliseconds) {
                 seam.settledEndpoints.first { endpointId in it }
             }
         }
