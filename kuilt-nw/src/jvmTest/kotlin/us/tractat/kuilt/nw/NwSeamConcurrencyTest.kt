@@ -210,52 +210,61 @@ class NwSeamConcurrencyTest {
         }
     }
 
-    // ── hazard 3: close() racing a remote departure ─────────────────────────────
+    // ── hazard 3: close() racing remote departures ──────────────────────────────
 
     /**
-     * `close()` and the remote's departure race into the same two maps from opposite directions.
+     * `close()` and the remotes' departures race into the same two maps from opposite directions.
      *
      * `close()` snapshots `registry.values + draining.keys`, then clears `registry`, `draining`,
-     * `conns` and `graceJobs` in one critical section; `connectionClosedLoop` removes a single
-     * connection from `conns`, tombstones it, and evicts its peer from `registry` in another. Both
-     * are read-then-write over the same state, and both run on different threads here.
+     * `conns`, `graceJobs`, `peerEndpoint` and `selfEndpointIds` in **one** critical section;
+     * `connectionClosedLoop` removes a single connection from `conns`, tombstones it, and evicts its
+     * peer from `registry` in another. Both are read-then-write over the same state, on different
+     * threads.
+     *
+     * ## Why a star and not a pair
+     * The first cut raced one `close()` against one departure on a 2-node pair and did **not** red
+     * with `close()`'s `withLock` removed — a one-entry registry cleared against a one-entry eviction
+     * has almost no interleaving to get wrong, so the probe was green by absence. [PEER_COUNT]
+     * remotes departing while the hub clears all of them at once is what makes the lost-update and
+     * mid-iteration-mutation windows wide enough to hit.
      *
      * The invariant is that teardown is **single-shot and total**: exactly one `Torn`, a roster of
-     * exactly `{selfId}`, and — the part a roster check alone would miss — no `registry` entry left
-     * naming a connection `conns` no longer has.
+     * exactly `{selfId}`, no tracked connection left behind, and — the part a roster check alone
+     * would miss — no `registry` entry naming a connection `conns` no longer has.
      */
     @Test
     fun closeRacingARemoteDepartureProducesOneCleanTorn() = runConcurrencyStress { stage ->
-        repeat(PAIR_ITERATIONS) { iter ->
+        repeat(BROADCAST_ITERATIONS) { iter ->
             val radio = FakeNwRadio()
-            val nodes = listOf(node(radio, 0, iter.toLong()), node(radio, 1, iter.toLong()))
-            val (a, b) = nodes
+            val nodes = (0..PEER_COUNT).map { node(radio, it, iter.toLong() * 100) }
+            val hub = nodes.first()
+            val peers = nodes.drop(1)
 
-            stage.at("iter=$iter form pair") { dump(iter, radio, nodes) }
-            a.api.connect(endpointFor(1))
-            a.seam.peers.first { it.size == 2 }
-            b.seam.peers.first { it.size == 2 }
+            stage.at("iter=$iter build star") { dump(iter, radio, nodes) }
+            for (p in peers) hub.api.connect(endpointFor(nodes.indexOf(p)))
+            hub.seam.peers.first { it.size == nodes.size }
 
-            stage.at("iter=$iter close vs departure") { dump(iter, radio, nodes) }
+            stage.at("iter=$iter close vs departures") { dump(iter, radio, nodes) }
             coroutineScope {
                 val ready = CompletableDeferred<Unit>()
-                // B's close disconnects the link, which drives A's connectionClosed + connectionStates
-                // collectors into eviction — concurrently with A's OWN close clearing the same maps.
-                val departure = async(Dispatchers.Default) { ready.await(); b.seam.close(CloseReason.Normal) }
-                val closer = async(Dispatchers.Default) { ready.await(); a.seam.close(CloseReason.Normal) }
+                // Every remote's close disconnects its link, driving the hub's connectionClosed +
+                // connectionStates collectors into per-peer eviction — concurrently with the hub's OWN
+                // close clearing every one of those entries in a single sweep.
+                val departures = peers.map { p ->
+                    async(Dispatchers.Default) { ready.await(); p.seam.close(CloseReason.Normal) }
+                }
+                val closer = async(Dispatchers.Default) { ready.await(); hub.seam.close(CloseReason.Normal) }
                 ready.complete(Unit)
-                awaitAll(departure, closer)
+                awaitAll(closer, *departures.toTypedArray())
             }
 
-            stage.at("iter=$iter await both torn") { dump(iter, radio, nodes) }
-            a.seam.state.first { it is SeamState.Torn }
-            b.seam.state.first { it is SeamState.Torn }
+            stage.at("iter=$iter await all torn") { dump(iter, radio, nodes) }
+            for (n in nodes) n.seam.state.first { it is SeamState.Torn }
 
             assertAll(
-                { assertIs<SeamState.Torn>(a.seam.state.value, "A did not latch a clean Torn") },
-                { assertIs<SeamState.Torn>(b.seam.state.value, "B did not latch a clean Torn") },
-                { assertEquals(setOf(a.peerId), a.seam.peers.value, "A's roster corrupted by close/departure: ${dump(iter, radio, nodes)}") },
-                { assertEquals(setOf(b.peerId), b.seam.peers.value, "B's roster corrupted by close/departure: ${dump(iter, radio, nodes)}") },
+                { assertIs<SeamState.Torn>(hub.seam.state.value, "the hub did not latch a clean Torn") },
+                { assertEquals(setOf(hub.peerId), hub.seam.peers.value, "hub roster corrupted by close/departure: ${dump(iter, radio, nodes)}") },
+                { assertEquals(0, hub.seam.formationSnapshot().links.size, "close() must leave no tracked connection behind: ${dump(iter, radio, nodes)}") },
                 { assertRegistryAndConnsAgree(nodes, iter, radio) },
             )
             teardown(nodes)
