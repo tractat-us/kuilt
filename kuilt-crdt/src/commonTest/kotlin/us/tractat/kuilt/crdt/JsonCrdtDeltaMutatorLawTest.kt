@@ -32,14 +32,16 @@ import kotlin.test.assertTrue
  * and leaves the whole-state path intact, so a green arm would mean the reference had collapsed
  * back into the mechanism:
  *
- * | mutation | effect |
- * |----------|--------|
- * | `putPatch` drops its superseded-tags term (#2044's measured failure) | [setDeltaSatisfiesTheMutatorLawOnBytes] **RED** |
- * | `putPatch` drops `foldOwn`, so the delta stops carrying the sender's own prior writes | [setDeltaSatisfiesTheMutatorLawOnBytes] **RED** |
- * | `removePatch` retires one observed tag fewer | [removeDeltaSatisfiesTheMutatorLawOnBytes] **RED** |
+ * | mutation of the delta path | goes RED |
+ * |----------------------------|----------|
+ * | `ORMap.putPatch` drops its superseded-tags term (#2044's measured failure) | [setDeltaSatisfiesTheMutatorLawOnBytes], [setDeltasConvergeUnderShuffledAndDuplicatedDelivery], [removeDeltasConvergeUnderShuffledAndDuplicatedDelivery] |
+ * | `ORMap.putPatch` drops `foldOwn`, so the delta stops carrying the sender's own prior writes | the same three |
+ * | `ORMap.removePatch` retires one observed tag fewer | [removeDeltaSatisfiesTheMutatorLawOnBytes], [removeDeltasConvergeUnderShuffledAndDuplicatedDelivery], [theCheapNestedSpellingIsFlatButKeepsLessAcrossAConcurrentRemove] |
  *
- * Both convergence tests go red alongside each of the three. Under the pre-repoint `setWhole`, all
- * of these were green.
+ * Under the pre-repoint `setWhole`, both law arms were green through all three. Note the third row
+ * leaves [setDeltasConvergeUnderShuffledAndDuplicatedDelivery] green — it generates no removes, so
+ * a `removePatch` defect is genuinely outside its reach, which is why the two convergence arms are
+ * separate tests rather than one.
  *
  * **What #2111 was.** `JsonCrdt` is a thin wrapper over `ORMap<String, JsonNode>`, whose mutators
  * already return the change rather than the whole map. The wrapper threw that away: `set`/`remove`
