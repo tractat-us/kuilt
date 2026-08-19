@@ -252,15 +252,15 @@ public class NwLoom(
      * **No timer is armed on a device that has seen nobody.** The park below is not an optimisation: a
      * timer that re-arms forever with nothing to report is a coroutine that never lets its scheduler go
      * idle, and it would make every idle lobby pay for a diagnostic that could not produce a line. It waits
-     * on [visiblePeers] because a redialer is only ever armed through the same call that rosters its
-     * endpoint, so a first sighting always wakes it.
+     * on the coordinator's monotone [RedialCoordinator.armedEndpoints] rather than on [visiblePeers] —
+     * see that property for why a prunable roster is the wrong thing to park on.
      */
     private suspend fun formationStuckLoop(formation: Formation) {
         // Never zero: `withTimeoutOrNull(ZERO)` returns immediately without suspending, which would spin.
         val firstInterval = (weaveTimeout / 2).coerceAtLeast(1.milliseconds)
         while (true) {
             if (formation.seam.state.first { it !is SeamState.Woven } is SeamState.Torn) return
-            if (!formation.redial.snapshot().sawSomebody) _visiblePeers.first { it.isNotEmpty() }
+            formation.redial.armedEndpoints.first { it > 0 }
             var interval = firstInterval
             while (true) {
                 val wove = withTimeoutOrNull(interval) { formation.seam.state.first { it is SeamState.Woven } }
@@ -839,8 +839,22 @@ private class RedialCoordinator(
     /** What one [redialLoop] iteration decided under [lock], acted on (and logged) outside it. */
     private class RedialStep(val delayMs: Long, val attempts: Long, val reachedCeiling: Boolean)
 
-    /** endpoint id → its redial state. Guarded by [lock]. */
+    /** endpoint id → its redial state. Guarded by [lock]. Append-only: an entry is never removed. */
     private val redialers = mutableMapOf<String, Redialer>()
+
+    private val _armedEndpoints = MutableStateFlow(0)
+
+    /**
+     * How many distinct endpoints this coordinator has armed a redialer for (#2420) — the wake signal
+     * `NwLoom`'s formation-stuck loop parks on before it will arm any timer at all.
+     *
+     * **Monotone, and that is the whole point.** [redialers] is append-only, so this only ever grows, and a
+     * waiter on `first { it > 0 }` therefore cannot be conflated past the transition it is waiting for.
+     * Parking on [NwLoom.visiblePeers] instead would be subtly wrong: that roster is pruned on a Bonjour
+     * removal, so an add-then-remove inside one `StateFlow` conflation window would leave the waiter parked
+     * forever with a redialer hammering away and nothing reporting it — the exact silence #2420 removes.
+     */
+    val armedEndpoints: StateFlow<Int> = _armedEndpoints.asStateFlow()
 
     /**
      * Bonjour serviceName → the pending grace timer for a possibly-self endpoint under that name whose
@@ -1028,7 +1042,10 @@ private class RedialCoordinator(
             // periods a redial targets — so resetting on a re-emit would peg a present-but-unreachable
             // flapping peer at ~250ms forever instead of backing off to the ceiling. A reconnect (the peer
             // was connected then dropped) resets the backoff in [redialLoop] on the settled→un-settled edge.
-            val r = existing ?: Redialer(endpoint).also { redialers[endpoint.id] = it }
+            val r = existing ?: Redialer(endpoint).also {
+                redialers[endpoint.id] = it
+                _armedEndpoints.value = redialers.size // monotone; see [armedEndpoints]
+            }
             if (r.job?.isActive == true) {
                 false // already redialing this endpoint
             } else {

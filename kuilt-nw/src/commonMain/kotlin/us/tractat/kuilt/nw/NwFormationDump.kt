@@ -52,14 +52,20 @@ internal data class NwRedialSnapshot(
     val nameOwners: Map<String, String>,
 ) {
     /**
-     * Whether this coordinator has seen ANY endpoint — the "we can see somebody" half of the dump trigger.
+     * Whether this coordinator has armed a dial for ANY endpoint — the "we can see somebody" half of the
+     * dump trigger.
      *
      * Deliberately wider than "is [NwLoom.visiblePeers] non-empty": a Bonjour removal prunes that roster but
      * NOT the redialer (removals are often transient interface churn, and #1513's redial is what recovers a
      * flapping peer). An endpoint discovered and then pruned while its redialer keeps dialling is precisely a
      * wedge shape, and keying the trigger on the roster alone would go silent exactly there.
+     *
+     * Deferrals deliberately do NOT count. A deferral is a *possibly-self* sighting held back because its
+     * identity has not resolved (#1709); it is bounded by `IDENTITY_GRACE` and then either dropped or armed,
+     * so it is a moment in the discovery handshake rather than evidence that a peer is there. Counting it
+     * would let a device report itself as stuck on a sighting that may be its own advertisement.
      */
-    val sawSomebody: Boolean get() = redialers.isNotEmpty() || deferrals.isNotEmpty()
+    val sawSomebody: Boolean get() = redialers.isNotEmpty()
 }
 
 /** One connection the seam is tracking, as it appears in a dump (#2420). */
