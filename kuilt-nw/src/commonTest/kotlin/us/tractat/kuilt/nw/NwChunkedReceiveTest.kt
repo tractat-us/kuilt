@@ -58,15 +58,22 @@ class NwChunkedReceiveTest {
     // ── 1. a split frame reassembles, and is attributed to the connection it came in on ──
 
     /**
-     * The base case: one frame, six receives, one [Swatch] — carrying the original bytes and the
-     * sender of the link they arrived on.
+     * The base case: two frames written back to back, seven receives, two [Swatch]es — each carrying
+     * its original bytes and the sender of the link they arrived on.
      *
-     * Two peers are attached rather than one, and that is not decoration: with a single peer,
-     * "attributed to the right sender" cannot be false, because there is no other identity the seam
-     * could have named. The silent spoke is what makes the attribution assertion falsifiable.
+     * ## Two frames, not one, and the boundary deliberately falls in the middle of the second
+     * A receive is a slice of the byte stream, not of a frame, so the interesting one carries the
+     * **end of one frame and the start of the next**. A test that writes a single frame never
+     * produces that receive, and an accumulator that discards its remainder whenever a decode pass
+     * completed something survives it untouched. Here chunk 1 completes [FIRST] and leaves six bytes
+     * of the next frame behind, which have to be carried forward across five more receives.
+     *
+     * ## Two peers, not one
+     * With a single peer "attributed to the right sender" cannot be false — there is no other
+     * identity the seam could have named. The silent spoke is what makes that assertion falsifiable.
      */
     @Test
-    fun aFrameSplitAcrossReceivesReassemblesAndIsAttributedToItsSender() =
+    fun framesSplitAcrossReceivesReassembleInOrderAndAreAttributedToTheirSender() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val hub = hub("attrib")
             val alice = hub.attach("dev-alice", "peer-alice")
@@ -74,72 +81,77 @@ class NwChunkedReceiveTest {
             hub.hello(alice, fill = 1)
             hub.hello(bystander, fill = 2)
 
-            val frame = encodeFrame(NwWire.encodeData(SPLIT_PAYLOAD))
+            val first = encodeFrame(NwWire.encodeData(FIRST.encodeToByteArray()))
+            val second = encodeFrame(NwWire.encodeData(SPLIT_PAYLOAD))
+            val wire = first + second
             val mark = hub.mark()
             hub.radio.maxChunkBytes = CHUNK
-            hub.data(alice, SPLIT_PAYLOAD)
-            hub.pumpUntil { hub.received.isNotEmpty() }
+            hub.radio.send(alice.deviceId, alice.ownEnd, wire)
+            hub.pumpUntil { hub.received.size == 2 }
 
             val chunks = hub.chunksOn(alice.hubEnd, since = mark)
             assertAll(
                 // ── rig receipts: the split really happened, and happened where it was asked to ──
                 {
                     assertEquals(
-                        ceilDiv(frame.size, CHUNK),
+                        ceilDiv(wire.size, CHUNK),
                         chunks.size,
-                        "the ${frame.size}-byte frame must arrive as ${ceilDiv(frame.size, CHUNK)} receives of " +
-                            "at most $CHUNK bytes — a count of 1 means the knob did nothing and this test is " +
-                            "about whole-payload delivery, which every other test in this module already covers",
+                        "the ${wire.size} bytes must arrive as ${ceilDiv(wire.size, CHUNK)} receives of at " +
+                            "most $CHUNK — a count of 1 means the knob did nothing and this test is about " +
+                            "whole-payload delivery, which every other test in this module already covers",
                     )
                 },
                 { assertTrue(chunks.size >= 2, "…and at least two, or there is no boundary to reassemble across") },
                 {
                     assertEquals(
-                        List(chunks.size - 1) { CHUNK } + (frame.size - CHUNK * (chunks.size - 1)),
+                        List(chunks.size - 1) { CHUNK } + (wire.size - CHUNK * (chunks.size - 1)),
                         chunks.map { it.bytes.size },
                         "every receive but the last carries a full budget, and the last the remainder",
                     )
                 },
                 {
                     assertTrue(
-                        chunks.none { it.bytes.size == frame.size },
-                        "no single receive carried the whole frame: ${chunks.map { it.bytes.size }}",
+                        chunks.none { it.bytes.size >= first.size + Int.SIZE_BYTES },
+                        "no single receive carried a whole frame plus the next one's header: " +
+                            "${chunks.map { it.bytes.size }}",
                     )
                 },
                 {
-                    // The length prefix is 4 bytes and the first chunk is 8, so the frame's own header is
-                    // complete in chunk 0 while its body is not. That is the shape the accumulator exists
-                    // for, and it is worth pinning rather than assuming from the budget.
+                    // THE receive this test exists for: it finishes `first` and opens `second`. The
+                    // remainder it leaves is what a "discard whatever did not complete" accumulator loses.
                     assertTrue(
-                        chunks[0].bytes.size < frame.size && chunks[0].bytes.size > Int.SIZE_BYTES,
-                        "chunk 0 must carry a complete length prefix and an INCOMPLETE body",
+                        first.size in (CHUNK + 1)..(2 * CHUNK - 1),
+                        "one receive must both COMPLETE the first frame and START the second — first is " +
+                            "${first.size} bytes and the budget is $CHUNK",
                     )
                 },
 
                 // ── the outcome ──────────────────────────────────────────────────────────────
                 {
                     assertEquals(
-                        1,
-                        hub.received.size,
-                        "six receives are ONE frame — a consumer must never see the pieces: ${hub.saw()}",
+                        listOf(FIRST, SPLIT_MARKER),
+                        hub.saw(),
+                        "${chunks.size} receives are TWO frames, in write order — a consumer must never see " +
+                            "the pieces, and never lose the one that straddled a boundary",
                     )
                 },
                 {
-                    // `firstOrNull`, not `single`: a broken accumulator delivers NOTHING, and a `single()`
-                    // on an empty list raises a NoSuchElementException that `assertAll` promotes over every
-                    // named failure beside it — so the diagnosis becomes "List is empty" instead of the
-                    // assertion that says what was expected.
+                    // `lastOrNull`, not `last`: a broken accumulator delivers NOTHING, and a `last()` on an
+                    // empty list raises a NoSuchElementException that `assertAll` promotes over every named
+                    // failure beside it — so the diagnosis becomes "List is empty" instead of the assertion
+                    // that says what was expected.
                     assertContentEquals(
                         SPLIT_PAYLOAD,
-                        hub.received.firstOrNull()?.toByteArray(),
-                        "…and it is byte-for-byte the payload that was written",
+                        hub.received.lastOrNull()?.toByteArray(),
+                        "…and the split frame is byte-for-byte the payload that was written",
                     )
                 },
                 {
                     assertEquals(
-                        alice.peerId,
-                        hub.received.firstOrNull()?.sender,
-                        "…attributed to the peer whose connection carried it, not to the other resolved peer",
+                        List<PeerId?>(2) { alice.peerId },
+                        hub.senders(),
+                        "…both attributed to the peer whose connection carried them, not to the other " +
+                            "resolved peer",
                     )
                 },
             )
@@ -642,6 +654,14 @@ class NwChunkedReceiveTest {
         /** 40 bytes, so a DATA frame of it is 45 and splits into six receives at [CHUNK]. */
         const val SPLIT_MARKER = "chunked-payload-crossing-many-receives--"
         val SPLIT_PAYLOAD = SPLIT_MARKER.encodeToByteArray()
+
+        /**
+         * 5 bytes, so its DATA frame is 10 — longer than [CHUNK] and shorter than two of them. That is
+         * what puts its END and the NEXT frame's start in the same receive, which is the receive an
+         * accumulator that drops its remainder loses. The test asserts the arithmetic rather than
+         * trusting it.
+         */
+        const val FIRST = "first"
 
         /** Bob's `HELLO` frame length: `[len_be32][type][version][idLen_be32][id][nonce]`. */
         const val BOB_HELLO_BYTES =
