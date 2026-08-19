@@ -1147,8 +1147,19 @@ internal class NwSeam(
         if (!armed) {
             // The drain ended between resolveIdentity releasing the lock and this line — a close event or a
             // Closed state on the loser. Nothing to arm; the timer would fire against a tombstoned connId.
+            //
+            // The hold armed two lines up is the part that must not be left behind: the drain-end that won
+            // this race released the peer's hold BEFORE we armed it, so nothing is left that would ever
+            // release ours and every frame from that peer would buffer until the cap. Undo it — unless
+            // another drain to the same peer is still running, in which case the hold is now that drain's
+            // and releasing it here would deliver ahead of ITS tail.
             bound.cancel()
-            log.debug { "nw.seam.drain.start-raced connId=${connId.value} self=${selfId.value} (drain already ended)" }
+            val stillDraining = lock.withLock { draining.values.any { it.peer == peer } }
+            val orphaned = if (stillDraining) 0 else releaseOrderingHold(peer)
+            log.debug {
+                "nw.seam.drain.start-raced connId=${connId.value} self=${selfId.value} peer=${peer.value} " +
+                    "(drain already ended; released $orphaned held frame(s), still-draining=$stillDraining)"
+            }
             return
         }
         bound.start()
@@ -2146,6 +2157,10 @@ internal class NwSeam(
         for (connId in targets) {
             runCatchingCancellable { api.disconnect(connId) }
         }
+        // Drop whatever the ordering holds were carrying (#2425). [latchTorn] has already closed the spool,
+        // so there is nowhere left to deliver it; this just stops a torn seam retaining a hold's worth of
+        // payloads for as long as something keeps a reference to it.
+        stageMutex.withMutex { orderingHolds.clear() }
         // #1419 (I3): the seam owns the close lifecycle and holds the [api] that `NwLoom.weave` started
         // advertising + browsing on — so tearing the connections is not enough. Stop the advertiser and the
         // browser too, AFTER the connections are down. On a real device an un-stopped `NWListener`/`NWBrowser`
