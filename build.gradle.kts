@@ -3654,12 +3654,15 @@ val forbidUnlintedAndroidMain by tasks.registering {
 // would capture the unserializable `Build_gradle` instance.
 //
 // It expects text already put through `KotlinCodeScanner.stripNonCode`, and that dependency is what
-// keeps a `!!` written in PROSE from being reported as code. Not a hypothetical: `!!` appears in
-// prose ten times in this tree today — `Assertions.kt`, `MappedBolt.kt`, `CardState.kt`,
-// `EntitlementLedger.kt`, `MetricTapClient.kt`, `ServerClusterReconnect.kt`, `MultiNodeRaftSim.kt`
-// — every one of them inside KDoc or a `//` comment, several of them saying "never write `!!`".
-// A naive grep reports all ten. The stripper also RE-ENTERS code mode inside a string-template
-// hole, so `"len=${value!!}"` is a real violation and is still reported.
+// keeps a `!!` written in PROSE from being reported as code. Writing `!!` in prose is an established
+// habit here, not a hypothetical — `Assertions.kt`, `MappedBolt.kt`, `CardState.kt`,
+// `EntitlementLedger.kt`, `MetricTapClient.kt`, `ServerClusterReconnect.kt` and `MultiNodeRaftSim.kt`
+// all do it, several of them in a KDoc or comment saying *never write `!!`*, and a naive grep reports
+// every one. Be precise about what that shows: all of those sit in `commonMain`, i.e. OUTSIDE this
+// guard's scope, so none of them is a live receipt — the first one written in an apple or wasm file
+// would be, as a false red on somebody's unrelated PR. `selfTestFailures()` is what keeps that from
+// being how the dependency gets discovered. The stripper also RE-ENTERS code mode inside a
+// string-template hole, so `"len=${value!!}"` is a real violation and is still reported.
 //
 // `selfTestFailures()` pins both directions on every execution of the guard, rather than in a
 // review comment. `KotlinCodeScanner`'s own note asks whoever edits it to "re-verify BOTH
