@@ -143,6 +143,63 @@ jobs:
           -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8"
           -Dkotlin.daemon.jvmargs="-Xmx3g"
 
+      # #2487: `NwBridgeLoopbackConformanceTest` drives NwLoom over the JVM bridge
+      # (BridgeNwApi → libkuilt.dylib → RealNwApi) against a real 127.0.0.1 TLS-PSK link — JNA
+      # marshalling, StableRef lifecycle, the callback→flow bridge and the handshake, end to end.
+      # Until now it executed in ZERO lanes, ever. It is a `jvmTest`, so ci.yml schedules it on
+      # build-jvm (ubuntu-latest), where NwNativeLib.load() returns null off macOS and newLoomPair
+      # throws AssumptionViolatedException — JUnit records a clean SKIP and the lane goes green
+      # having proven nothing. No other lane runs jvmTest on a macOS host: this workflow ran only
+      # the K/N targets, and ci.yml's spike-compile is compile-only.
+      #
+      # It needs no new toolchain: packageMacosNatives copies libkuilt.dylib from
+      # linkReleaseSharedMacosArm64 into jvmMain's resources under darwin-aarch64/ (JNA's
+      # platform-resource convention), and that task is genuinely in :kuilt-nw:jvmTest's graph —
+      # verified from the task graph, not assumed, because a dylib that never reaches the test
+      # classpath would make this step skip on macOS too and re-buy the same false green.
+      #
+      # LAST among the work steps deliberately. The K/N *release* shared link is the one cost this
+      # lane has never paid, so if it ever threatens the 60-minute timeout it must starve neither
+      # the K/N test executions nor the :spike compile — both established signals, both above.
+      # `!cancelled()` for the same reason those two carry it: the three signals are independent.
+      # Non-gating like everything here (5-concurrent-macOS-job cap, see the header); the alert
+      # step below turns a red scheduled run into a tracking issue.
+      - name: JVM bridge tests on a real macOS host (#2487)
+        if: ${{ !cancelled() }}
+        run: >-
+          ./gradlew :kuilt-nw:jvmTest --max-workers=2
+          -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8"
+          -Dkotlin.daemon.jvmargs="-Xmx3g"
+
+      # A green tick here is NOT the receipt — a suite that self-skips is also green. The signal is
+      # that the bridge suite reports a non-zero run count with zero skips, so assert it rather than
+      # leaving it to a human to read the artifact. Fails the step (and so the lane) if the XML is
+      # missing, empty, or all-skipped, which is exactly the regression that would silently undo
+      # #2487: anything that stops the dylib reaching the test classpath returns the suite to a
+      # clean, invisible skip.
+      - name: Assert the bridge suite EXECUTED (#2487)
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          XML=kuilt-nw/build/test-results/jvmTest/TEST-us.tractat.kuilt.nw.NwBridgeLoopbackConformanceTest.xml
+          if [ ! -f "$XML" ]; then
+            echo "::error::$XML is absent — the bridge conformance suite did not run at all."
+            exit 1
+          fi
+          # Attribute order is not guaranteed, so read each independently rather than positionally.
+          read_attr() { sed -n 's/.*[[:space:]]'"$1"'="\([0-9]*\)".*/\1/p' "$XML" | head -1; }
+          TESTS=$(read_attr tests); SKIPPED=$(read_attr skipped)
+          echo "NwBridgeLoopbackConformanceTest: tests=${TESTS:-?} skipped=${SKIPPED:-?}"
+          if [ -z "${TESTS:-}" ] || [ "$TESTS" -eq 0 ]; then
+            echo "::error::Bridge suite reported no tests — dylib absent from the test classpath?"
+            exit 1
+          fi
+          if [ "${SKIPPED:-0}" -eq "$TESTS" ]; then
+            echo "::error::All $TESTS bridge tests SKIPPED — NwNativeLib.load() returned null. False green."
+            exit 1
+          fi
+          echo "Bridge suite executed $((TESTS - ${SKIPPED:-0}))/$TESTS tests on a real macOS host."
+
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v7
