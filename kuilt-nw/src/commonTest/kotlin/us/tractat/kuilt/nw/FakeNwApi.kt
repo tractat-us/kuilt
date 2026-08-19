@@ -160,6 +160,20 @@ internal class FakeNwApi(
      */
     var dropCloseEvents: Boolean = false
 
+    /**
+     * The INVERSE of [dropCloseEvents], and the one this fake could not previously express: when `false`
+     * this device publishes no [NwConnState.Closed] STATE at all, so the lossy close EVENT is the only
+     * teardown signal it ever produces.
+     *
+     * That is not a hypothetical binding. [NwApi.connectionStates] carries a **shared empty default**, so
+     * an implementation that never wires the state callback is a supported one by construction — and for
+     * it, every teardown obligation `NwSeam` fulfils through [NwConnState.Closed] must ALSO be fulfilled
+     * by [NwApi.connectionClosed]. Without this knob the two paths are indistinguishable in the harness:
+     * `connectionClosedLoop`'s half can be deleted outright and every test stays green, because
+     * `reconcileStates` → `removeByConn` silently covers for it (#2425).
+     */
+    var reportsCloseStates: Boolean = true
+
     override fun availability(): FabricAvailability = FabricAvailability.Available
 
     /**
@@ -310,6 +324,10 @@ internal class FakeNwApi(
      */
     internal fun markConnectionClosed(connectionId: NwConnectionId, reason: String?) {
         liveConnIds -= connectionId // #1618: a closed conn is no longer demotable by a device-path event
+        // A binding that wires no state callback publishes nothing here — see [reportsCloseStates]. The
+        // liveConnIds bookkeeping above still runs: that models the transport's own view of the link,
+        // not the signal it chooses to publish.
+        if (!reportsCloseStates) return
         closedOrder.addLast(connectionId)
         if (closedOrder.size > CLOSED_RETENTION_CAP) {
             // Hoist the FIFO mutation OUT of the CAS lambda (see RealNwApi.markClosed).

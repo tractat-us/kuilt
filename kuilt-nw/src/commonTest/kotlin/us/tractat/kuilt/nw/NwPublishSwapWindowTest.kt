@@ -105,6 +105,7 @@ class NwPublishSwapWindowTest {
         val joiner: NwSeam,
         val hostDeviceId: String,
         val joinerDeviceId: String,
+        val joinerApi: FakeNwApi,
         val silenced: Link,
         val receivedByJoiner: List<Swatch>,
         val receivedByHost: List<Swatch>,
@@ -199,7 +200,8 @@ class NwPublishSwapWindowTest {
                 "host=${host.peers.value} joiner=${joiner.peers.value}",
         )
         return Scenario(
-            radio, dial, host, joiner, hostDeviceId, joinerDeviceId, silenced, receivedByJoiner, receivedByHost,
+            radio, dial, host, joiner, hostDeviceId, joinerDeviceId, joinerApi, silenced,
+            receivedByJoiner, receivedByHost,
         )
     }
 
@@ -680,6 +682,61 @@ class NwPublishSwapWindowTest {
                 { assertEquals(1, s.radio.liveLinkCount, "one live link: the winner") },
                 { assertEquals(SeamState.Woven, s.joiner.state.value, "an abrupt loser close is not a peer loss") },
                 { assertEquals(2, s.joiner.peers.value.size, "…and evicts nobody") },
+            )
+        }
+
+    /**
+     * **Arm 2b — the same cancel, on a binding that publishes no close STATE.**
+     *
+     * [NwApi.connectionStates] carries a shared empty default, so a binding that wires only the lossy
+     * close EVENT is supported by construction. For that binding `connectionClosedLoop` is the ONLY
+     * signal that can end a drain, and this is the arm that says so.
+     *
+     * It exists because deleting that half of the fix reddened nothing: `reconcileStates` sees the
+     * `Closed` STATE, calls `removeByConn`, and settles the drain there instead — so the two paths were
+     * indistinguishable and one of them was untested. That is a green row naming an unproven guard, and
+     * [FakeNwApi.reportsCloseStates] is what tells the two apart.
+     */
+    @Test
+    fun aCloseEventAloneEndsTheDrainWhenTheBindingPublishesNoCloseState() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val s = scenario("evtonly", KEEPS_OUTBOUND, Scenario.SILENCE_OUTBOUND)
+            s.joinerApi.reportsCloseStates = false
+            s.holdBothEndsOfTheLoser()
+            releaseSilencedLink(s)
+
+            s.host.broadcast(AFTER_SWAP.encodeToByteArray())
+            pump()
+            val heldByTheOrderingHold = s.joinerSaw()
+
+            s.radio.disconnect(s.hostDeviceId, s.hostEndOfInbound)
+            pump()
+
+            assertAll(
+                {
+                    assertEquals(
+                        emptyMap(),
+                        s.joinerApi.connectionStates.value,
+                        "rig check: this binding must publish NO connection state at all, or the close " +
+                            "EVENT is not the only signal and this arm proves nothing",
+                    )
+                },
+                {
+                    assertEquals(
+                        emptyList(),
+                        heldByTheOrderingHold,
+                        "rig check: the post-swap write must be HELD before the cancel",
+                    )
+                },
+                {
+                    assertEquals(
+                        listOf(AFTER_SWAP),
+                        s.joinerSaw(),
+                        "the close EVENT alone ends the drain and releases the hold",
+                    )
+                },
+                { assertEquals(1, s.radio.liveLinkCount) },
+                { assertEquals(SeamState.Woven, s.joiner.state.value) },
             )
         }
 
