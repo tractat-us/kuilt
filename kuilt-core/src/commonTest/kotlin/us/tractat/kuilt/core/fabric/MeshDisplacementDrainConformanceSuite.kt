@@ -62,12 +62,20 @@ import kotlin.test.assertTrue
  *
  * | # | Mutation | Kind | verdict |
  * |---|----------|------|---------|
- * | 1 | `addLink`'s replace arm closes the loser on the spot instead of draining it | real | **RED — [aDisplacedLinksTailSurvivesAnAbruptClose]** |
- * | 2 | [newAbruptClosingConnectionPair] returns the well-behaved `connectionPair()` | rig | **RED — [theFixtureReallyDiscardsOnClose]**, and row 1's property then goes GREEN under mutation 1 |
+ * | 1 | `addLink`'s replace arm closes the loser on the spot instead of draining it | real | **RED — [aDisplacedLinksTailSurvivesAnAbruptClose]**, delivering `[[11,1]]`: the whole tail gone |
+ * | 2 | [newAbruptClosingConnectionPair] returns the well-behaved `connectionPair()` | rig | **RED — [theFixtureReallyDiscardsOnClose]** |
+ * | 3 | rows 1 **and** 2 together | rig | **both RED** — the drain property still reds, same `[[11,1]]` |
  *
- * Row 2 is the argument for the precondition arm existing at all: with a flushing fixture the drain
- * property is satisfied by the *connection* and stays green through the defect it was written for.
- * The precondition converts that from a quiet pass into a named failure.
+ * **Row 3 is the honest reading, and it corrects what row 2 looks like it is saying.** A flushing
+ * fixture does NOT make the drain property vacuous today, because [singleCollection] — which every
+ * mesh link is wrapped in, whatever the delegate — cancels its republishing pump before closing that
+ * delegate, so the tail dies at the wrapper no matter how carefully the transport underneath flushes.
+ *
+ * What [theFixtureReallyDiscardsOnClose] is for, then, is the *future*: making `singleCollection`
+ * flush on close is a plausible and locally sensible change, and it would silently re-satisfy the
+ * property above from the transport instead of from the seam — which is precisely how this guarantee
+ * came to be unpinned in the first place. The precondition keeps the fixture's abruptness a checked
+ * fact rather than an inherited accident.
  */
 internal abstract class MeshDisplacementDrainConformanceSuite {
 
