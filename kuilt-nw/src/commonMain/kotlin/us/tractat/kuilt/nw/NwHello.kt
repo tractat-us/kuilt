@@ -5,6 +5,9 @@ import us.tractat.kuilt.core.PeerId
 /** Length of a per-connection dedup nonce, in bytes. */
 internal const val NONCE_BYTES = 16
 
+/** Length of the leading wire-version field, in bytes. */
+internal const val VERSION_BYTES = 1
+
 /**
  * The NwSeam identity preamble: this peer's [PeerId] plus a per-connection [nonce].
  *
@@ -14,10 +17,16 @@ internal const val NONCE_BYTES = 16
  * derive the SAME survivor when a duplicate link to the same peer exists — cross-node dedup
  * agreement with no coordination and no dependence on which collector observed the link first.
  *
- * Wire format: length-prefix — `[4-byte big-endian id length][id UTF-8 bytes][NONCE_BYTES nonce bytes]`.
- * No delimiter: the id length field makes the frame self-describing. The nonce is raw bytes (not
+ * ## Wire format — the BODY of a [NwFrameType.Hello] frame
+ * `[VERSION_BYTES version][4-byte big-endian id length][id UTF-8 bytes][NONCE_BYTES nonce bytes]`.
+ * No delimiter: the id length field makes the body self-describing. The nonce is raw bytes (not
  * hex-encoded) and always exactly [NONCE_BYTES] bytes long — enforced by both [NwHello.encode] and
  * [NwHello.decode], not merely documented (#1812).
+ *
+ * These bytes are the frame's body only: the [NwFrameType] discriminator that says *this is a
+ * hello* lives one layer out, in [NwWire]. The **version** lives HERE rather than beside the type
+ * byte because it versions this body's layout, not the type space — and because a hello is the
+ * first thing a peer sends, so the version is known before anything else is interpreted (#2425).
  */
 internal data class NwHello(val peerId: PeerId, val nonce: ByteArray) {
     override fun equals(other: Any?): Boolean =
@@ -31,23 +40,32 @@ internal data class NwHello(val peerId: PeerId, val nonce: ByteArray) {
                 "malformed NwHello: nonce is ${nonce.size} bytes, expected exactly $NONCE_BYTES"
             }
             val idBytes = peerId.value.encodeToByteArray()
-            return ByteArray(4 + idBytes.size + nonce.size).also { buf ->
-                buf.writeInt(idBytes.size, offset = 0)
-                idBytes.copyInto(buf, destinationOffset = 4)
-                nonce.copyInto(buf, destinationOffset = 4 + idBytes.size)
+            return ByteArray(VERSION_BYTES + Int.SIZE_BYTES + idBytes.size + nonce.size).also { buf ->
+                buf[0] = NW_WIRE_VERSION.toByte()
+                buf.writeInt(idBytes.size, offset = VERSION_BYTES)
+                idBytes.copyInto(buf, destinationOffset = VERSION_BYTES + Int.SIZE_BYTES)
+                nonce.copyInto(buf, destinationOffset = VERSION_BYTES + Int.SIZE_BYTES + idBytes.size)
             }
         }
 
         /**
-         * Decode a preamble frame, throwing [IllegalArgumentException] if it is malformed.
+         * Decode a preamble **body** (the frame minus its [NwFrameType] byte), throwing
+         * [IllegalArgumentException] if it is malformed.
          *
-         * The frame is the **first bytes a remote sends**, so every check runs before the read it
-         * protects (#1788): a frame shorter than the 4-byte length prefix would index-fault inside
+         * The body is the **first bytes a remote sends**, so every check runs before the read it
+         * protects (#1788): a body shorter than the 4-byte length prefix would index-fault inside
          * [readInt], a negative declared length passes any `size >= 4 + idLen` test (the prefix is read
          * as a signed [Int]), and a large one wraps `4 + idLen` negative so that test passes too — hence
          * the subtraction. `NwSeam.processFrame` does guard this call, but the frame's own decoder is
          * where a peer-supplied length belongs: a typed rejection here says *what* was wrong, where an
          * `IndexOutOfBoundsException` escaping from inside [readInt] says only that something did.
+         *
+         * ## The version is read FIRST, and a version we do not know ends the decode (#2425)
+         * Every field after it is laid out *by* that version, so reading one before checking the
+         * version is reading a body whose shape is not yet established. A mismatch raises
+         * [NwUnsupportedWireVersionException], which names both versions — never a generic
+         * malformed-frame error, because on a version break "malformed" is precisely the wrong
+         * diagnosis and the one a reader will act on.
          *
          * ## The nonce is a fixed-width field, and a wrong width is REJECTED, never reshaped (#1812)
          *
@@ -63,22 +81,30 @@ internal data class NwHello(val peerId: PeerId, val nonce: ByteArray) {
          * reshaping picks. The frame is dropped instead; `NwSeam.processFrame` already treats a decode
          * failure on an unresolved conn as "tear this connection" (#1528 part B).
          */
-        fun decode(frame: ByteArray): NwHello {
-            require(frame.size >= Int.SIZE_BYTES) {
-                "truncated NwHello: ${frame.size} bytes cannot hold the ${Int.SIZE_BYTES}-byte id length"
+        fun decode(body: ByteArray): NwHello {
+            if (body.size < VERSION_BYTES) {
+                throw NwTruncatedFrameException(
+                    "truncated NwHello: ${body.size} bytes cannot hold the $VERSION_BYTES-byte wire version",
+                )
             }
-            val idLen = frame.readInt(offset = 0)
+            val version = body[0].toInt() and 0xff
+            if (version != NW_WIRE_VERSION) throw NwUnsupportedWireVersionException(version, NW_WIRE_VERSION)
+            val idOffset = VERSION_BYTES + Int.SIZE_BYTES
+            require(body.size >= idOffset) {
+                "truncated NwHello: ${body.size} bytes cannot hold the ${Int.SIZE_BYTES}-byte id length"
+            }
+            val idLen = body.readInt(offset = VERSION_BYTES)
             require(idLen >= 0) { "malformed NwHello: negative declared id length $idLen" }
-            require(frame.size - Int.SIZE_BYTES >= idLen) {
-                "truncated NwHello: declared id length $idLen exceeds the ${frame.size}-byte frame"
+            require(body.size - idOffset >= idLen) {
+                "truncated NwHello: declared id length $idLen exceeds the ${body.size}-byte body"
             }
-            // Safe subtraction: the two checks above pin `0 <= idLen <= frame.size - 4`.
-            val nonceLen = frame.size - Int.SIZE_BYTES - idLen
+            // Safe subtraction: the two checks above pin `0 <= idLen <= body.size - idOffset`.
+            val nonceLen = body.size - idOffset - idLen
             require(nonceLen == NONCE_BYTES) {
                 "malformed NwHello: nonce is $nonceLen bytes, expected exactly $NONCE_BYTES"
             }
-            val peerId = PeerId(frame.decodeToString(startIndex = Int.SIZE_BYTES, endIndex = Int.SIZE_BYTES + idLen))
-            val nonce = frame.copyOfRange(Int.SIZE_BYTES + idLen, frame.size)
+            val peerId = PeerId(body.decodeToString(startIndex = idOffset, endIndex = idOffset + idLen))
+            val nonce = body.copyOfRange(idOffset + idLen, body.size)
             return NwHello(peerId, nonce)
         }
     }

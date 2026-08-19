@@ -63,12 +63,17 @@ private val seamMonotonicMillis: () -> Long = kotlin.time.TimeSource.Monotonic.m
  * start from the `init` block at the **foot** of this class; see it for why that position is
  * load-bearing rather than stylistic (#2462).
  *
- *  1. **connectionOpened** — sends our identity frame ([NwHello]: this peer's [PeerId] plus this
- *     connection's per-connection dedup nonce).
- *  2. **bytesReceived** — the demux + inline handshake: the first decoded frame on an unresolved
- *     connection is the remote's [NwHello] (id + nonce); every later frame is data, stamped with that
- *     sender and handed to the bounded [deliveryStage] (drained by [deliveryDrainLoop] into [incoming]) so a
- *     slow local consumer never wedges this shared loop's reads for other connections' handshakes (#1415).
+ *  1. **connectionOpened** — sends our identity frame (a [NwFrameType.Hello] carrying an [NwHello]: this
+ *     peer's [PeerId] plus this connection's per-connection dedup nonce).
+ *  2. **bytesReceived** — the demux + inline handshake. Each decoded frame is classified by its leading
+ *     [NwFrameType] byte (#2425): a [NwFrameType.Hello] on an unresolved connection resolves identity, a
+ *     [NwFrameType.Data] on a resolved one is stamped with that sender and handed to the bounded
+ *     [deliveryStage] (drained by [deliveryDrainLoop] into [incoming]) so a slow local consumer never
+ *     wedges this shared loop's reads for other connections' handshakes (#1415), and a
+ *     [NwFrameType.Goodbye] is a no-op until slice 2. **Either type in the wrong position is refused**,
+ *     which is what the type byte bought: classification used to be POSITIONAL ("the first frame is the
+ *     hello"), so a duplicate hello reached the consumer as data and an early data frame was fed to
+ *     `NwHello.decode`.
  *  3. **connectionClosed** — the fast, reason-carrying close EVENT path: evicts the peer (conn-identity
  *     guarded so a deduped loser's close can't evict the survivor) and, when the last remote drops,
  *     **re-forms to [SeamState.Weaving] rather than latching [SeamState.Torn]** (#1513) — peer loss is
@@ -176,13 +181,14 @@ private val seamMonotonicMillis: () -> Long = kotlin.time.TimeSource.Monotonic.m
  * @param nowMillis monotonic-milliseconds provider, injected because time is a dependency. Read only by
  *   the `nw.seam.publish-swap` diagnostic, to measure how long a peer was published on a link before the
  *   seam moved it (#2420); production default [seamMonotonicMillis], tests pass a controlled counter.
- * @param maxFrameBytes the largest payload this seam's framing will carry, published as
- *   [maxPayloadBytes] and enforced by both edges of the wire — [encodeFrame] on send and each
- *   connection's [NwFramer] on receive. One number, threaded to both, so the ceiling this seam
- *   *publishes* is by construction the ceiling it *enforces* (#2069); previously each edge reached
- *   for [DEFAULT_MAX_FRAME_SIZE] independently and the seam published nothing. Production default
- *   [DEFAULT_MAX_FRAME_SIZE] (16 MiB); tests inject a small value so an over-budget payload costs
- *   bytes rather than megabytes.
+ * @param maxFrameBytes the largest FRAME this seam's framing will carry, enforced by both edges of the
+ *   wire — [encodeFrame] on send and each connection's [NwFramer] on receive. One number, threaded to
+ *   both, so the ceiling this seam *publishes* is by construction the ceiling it *enforces* (#2069);
+ *   previously each edge reached for [DEFAULT_MAX_FRAME_SIZE] independently and the seam published
+ *   nothing. Since #2425 the published [maxPayloadBytes] is this less [NwWire.TYPE_BYTES], because the
+ *   frame's leading type byte is spent out of the caller's budget rather than added to the wire.
+ *   Production default [DEFAULT_MAX_FRAME_SIZE] (16 MiB); tests inject a small value so an over-budget
+ *   payload costs bytes rather than megabytes.
  */
 internal class NwSeam(
     override val selfId: PeerId,
@@ -404,7 +410,7 @@ internal class NwSeam(
             // could go stale before the locked reconcile ran.
             if (created) reconcileStates()
             log.debug { "nw.seam.opened connId=${connId.value} self=${selfId.value} → sending NwHello" }
-            runCatchingCancellable { api.send(connId, encodeFrame(NwHello.encode(selfId, cs.nonce), maxFrameBytes)) }
+            runCatchingCancellable { api.send(connId, encodeFrame(NwWire.encodeHello(selfId, cs.nonce), maxFrameBytes)) }
                 .onFailure { log.debug { "nw.seam.identity-send-failed connId=${connId.value} self=${selfId.value}: ${it.message}" } }
         }
     }
@@ -502,19 +508,39 @@ internal class NwSeam(
 
     /** Outcome of classifying one frame under [lock]; the suspend action runs OUTSIDE the lock. */
     private sealed interface FrameOutcome {
-        /** Already-resolved connection: [frame] is data attributed to [sender]. */
+        /** A [NwFrameType.Data] frame on an already-resolved connection, attributed to [sender]. */
         data class Data(val sender: PeerId) : FrameOutcome
 
         /** Just-resolved identity: [loser] (if any) is the dedup loser to disconnect. */
         data class Resolved(val loser: NwConnectionId?) : FrameOutcome
 
         /**
-         * The first frame on an unresolved connection failed to decode as an [NwHello] (#1528 part B):
-         * routed through the shared [evictCorruptConn] backstop OUTSIDE the lock rather than letting the
-         * decode throw escape [processFrame] and kill [bytesReceivedLoop]. Bounds the worst symptom even if
-         * a tombstone is missed.
+         * A [NwFrameType.Goodbye] arrived. **Inert in this slice** (#2425 slice 1): it is defined and
+         * decoded so the wire has a place for it, and slice 2 is what makes it terminate the drain of a
+         * deduplicated double-dial loser. Until then it is a debug-logged no-op — no drain, no
+         * `draining` state, no ordering hold.
          */
-        object DecodeFailed : FrameOutcome
+        data class Goodbye(val peer: PeerId?) : FrameOutcome
+
+        /**
+         * A [NwFrameType.Hello] on a connection that has ALREADY resolved (#2425 slice 1).
+         *
+         * Positionally this was indistinguishable from data, so a duplicate preamble was handed to the
+         * CONSUMER as an application frame. It is a protocol violation by the remote and the connection
+         * is refused. ([RealNwApi] has its own guard against re-arming a receive loop and double-sending
+         * a hello, so this reports the remote's behaviour, not ours.)
+         */
+        data class HelloOnResolved(val resolved: PeerId, val claimed: PeerId) : FrameOutcome
+
+        /**
+         * A [NwFrameType.Data] before any hello (#2425 slice 1).
+         *
+         * Positionally this occupied the hello slot, so it was fed to `NwHello.decode` — which either
+         * threw or, worse, parsed and registered a phantom peer. There is no identity to attribute it to,
+         * so the connection is refused rather than the frame silently dropped: a peer that talks before
+         * it identifies itself will keep doing so.
+         */
+        data class DataBeforeHello(val payloadBytes: Int) : FrameOutcome
 
         /**
          * The connection is no longer the live one when classified (#1528 finding 2): [getOrCreateConnForBytes]
@@ -527,51 +553,70 @@ internal class NwSeam(
     }
 
     /**
-     * Handle ONE decoded frame: the first on an unresolved connection is identity; the rest are data.
+     * Handle ONE decoded frame, classified by its **type byte** rather than by its position (#2425).
      *
-     * The `resolvedPeerId == null` check and the [resolveIdentity] mutation happen in the SAME
-     * critical section, so [connectionClosedLoop] cannot interleave between them and re-register a
-     * peer on an already-closed connection (the identity-resolution race). The suspend actions
-     * ([Spool.deliver], [NwApi.disconnect]) run OUTSIDE the lock.
+     * The body's leading [NwFrameType] is decoded FIRST, outside the lock — it depends on nothing this
+     * seam owns, and doing it here rather than under the lock also takes `NwHello.decode` off the shared
+     * demux loop's critical section. A body this build cannot classify (unknown type, unknown wire
+     * version, truncated) is refused by name through [evictCorruptConn]; the specific reason is the
+     * point, because on a version break a generic "malformed frame" is the wrong diagnosis and the one
+     * a reader would act on.
+     *
+     * The `resolvedPeerId` check and the [resolveIdentity] mutation then happen in the SAME critical
+     * section, so [connectionClosedLoop] cannot interleave between them and re-register a peer on an
+     * already-closed connection (the identity-resolution race). The suspend actions ([Spool.deliver],
+     * [NwApi.disconnect]) run OUTSIDE the lock.
      */
     private suspend fun processFrame(connId: NwConnectionId, cs: ConnState, frame: ByteArray) {
-        var decodeError: Throwable? = null
+        // #1528 part B: a body this build cannot read must NOT throw out of the collector and kill the
+        // receive loop. Narrowly wrap ONLY the decode; a real structured-concurrency cancel is always
+        // re-thrown, never swallowed.
+        val wire = try {
+            NwWire.decode(frame)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: NwWireFormatException) {
+            // One line per refusal reason, each with its tag written as a LITERAL so the field-trail
+            // guard can see the level it is emitted at. A `"$tag …"` interpolation reads identically to
+            // a human and is invisible to that guard — which is how these lines would quietly drift to
+            // DEBUG and vanish from a release capture (#2420).
+            when (e) {
+                is NwUnsupportedWireVersionException -> log.warn {
+                    "nw.seam.wire.version-mismatch connId=${connId.value} self=${selfId.value} " +
+                        "remote-version=${e.remoteVersion} local-version=${e.localVersion} " +
+                        "→ disconnect + evict (loop preserved); the remote is on the other side of the " +
+                        "#2425 wire flag day and the two cannot form a session"
+                }
+                // The offending byte is NOT repeated as a field: `e.code` is a signed `Byte`, so it would
+                // render 0xFF as `-1` right beside the message's own `0xff`, and a reader would have to
+                // work out which of the two to believe.
+                is NwUnknownFrameTypeException -> log.warn {
+                    "nw.seam.wire.unknown-type connId=${connId.value} self=${selfId.value} : ${e.message} " +
+                        "→ disconnect + evict (loop preserved)"
+                }
+                is NwTruncatedFrameException -> log.warn {
+                    "nw.seam.wire.truncated connId=${connId.value} self=${selfId.value} " +
+                        "frame-bytes=${frame.size} : ${e.message} → disconnect + evict (loop preserved)"
+                }
+            }
+            disconnectAndEvictConn(connId)
+            return
+        } catch (e: Exception) {
+            evictCorruptConn(connId, "body decode failed: ${e.message}")
+            return
+        }
         val outcome = lock.withLock {
             val resolved = cs.resolvedPeerId
-            val classified = when {
-                // #1528 finding 2: getOrCreateConnForBytes and this classify are two lock acquisitions, so a
-                // removal path can tombstone/replace [connId] between them. Resolving identity on a dead conn
-                // would register registry[peer] = Winner(deadConnId) — an unevictable zombie. If this cs is no
-                // longer the live one (replaced) or its connId was tombstoned, DROP the frame.
-                conns[connId] !== cs || connId in tombstones -> FrameOutcome.Dropped
-                resolved != null -> {
-                    // #2420: the wedge watchdog's input. Counted HERE — under the same lock that classifies
-                    // the frame — so it is exactly "frames attributed to a peer", and so it can never race
-                    // the sweep that reads it.
-                    cs.inboundFrames += 1
-                    // An arrival ends a reported silence episode, so the link becomes reportable again and
-                    // the (parked) watchdog has to be told. Only on the transition — a chatty link must not
-                    // wake it on every frame.
-                    if (cs.silenceReported) {
-                        cs.silenceReported = false
-                        wakeWatchdogLocked()
-                    }
-                    FrameOutcome.Data(resolved)
-                }
-                else -> {
-                    // #1528 part B: a corrupt/undecodable first frame must NOT throw out of the collector and
-                    // kill the receive loop. Narrowly wrap ONLY the decode (never resolveIdentity); a real
-                    // structured-concurrency cancel is always re-thrown, never swallowed.
-                    val hello = try {
-                        NwHello.decode(frame)
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        decodeError = e
-                        null
-                    }
-                    if (hello == null) {
-                        FrameOutcome.DecodeFailed
+            // #1528 finding 2: getOrCreateConnForBytes and this classify are two lock acquisitions, so a
+            // removal path can tombstone/replace [connId] between them. Resolving identity on a dead conn
+            // would register registry[peer] = Winner(deadConnId) — an unevictable zombie. If this cs is no
+            // longer the live one (replaced) or its connId was tombstoned, DROP the frame.
+            if (conns[connId] !== cs || connId in tombstones) {
+                FrameOutcome.Dropped
+            } else {
+                when (wire) {
+                    is NwWireFrame.Hello -> if (resolved != null) {
+                        FrameOutcome.HelloOnResolved(resolved = resolved, claimed = wire.hello.peerId)
                     } else {
                         // #2420: [resolveIdentity] is the ONLY thing on this path that writes `registry`
                         // or `conns`, so the audit belongs HERE and not after the `when`. Hoisted from
@@ -582,12 +627,30 @@ internal class NwSeam(
                         // must not be made expensive. Nothing is lost: a binding that goes stale anywhere
                         // else is still caught at `closed`/`removeByConn`, or by the watchdog within one
                         // probe.
-                        FrameOutcome.Resolved(resolveIdentity(connId, cs, hello.peerId, hello.nonce))
+                        FrameOutcome.Resolved(resolveIdentity(connId, cs, wire.hello.peerId, wire.hello.nonce))
                             .also { auditRegistryLocked("classify") }
                     }
+
+                    NwWireFrame.Data -> if (resolved == null) {
+                        FrameOutcome.DataBeforeHello(payloadBytes = frame.size - NwWire.TYPE_BYTES)
+                    } else {
+                        // #2420: the wedge watchdog's input. Counted HERE — under the same lock that
+                        // classifies the frame — so it is exactly "frames attributed to a peer", and so it
+                        // can never race the sweep that reads it.
+                        cs.inboundFrames += 1
+                        // An arrival ends a reported silence episode, so the link becomes reportable again
+                        // and the (parked) watchdog has to be told. Only on the transition — a chatty link
+                        // must not wake it on every frame.
+                        if (cs.silenceReported) {
+                            cs.silenceReported = false
+                            wakeWatchdogLocked()
+                        }
+                        FrameOutcome.Data(resolved)
+                    }
+
+                    NwWireFrame.Goodbye -> FrameOutcome.Goodbye(resolved)
                 }
             }
-            classified
         }
         when (outcome) {
             // Data frame — hand OFF to the bounded staging channel (#1415), never call the SUSPEND-under-
@@ -595,8 +658,14 @@ internal class NwSeam(
             // connection's handshake) whenever THIS sender's consumer is slow. The single deliveryDrainLoop
             // owns Spool.deliver. Sequence is stamped in arrival order here, so FIFO is preserved across the
             // stage. Runs OUTSIDE the lock; deliveryStage.send only suspends when the (bounded) stage is full.
-            is FrameOutcome.Data ->
-                deliveryStage.send(Swatch(payload = frame, sender = outcome.sender, sequence = seq.incrementAndGet()))
+            //
+            // `dropFirst` strips the type byte as a ZERO-COPY view (the pattern `Swatch` documents for
+            // framing layers) — the alternative, materialising the body in NwWire.decode, would copy every
+            // received payload a second time on this loop.
+            is FrameOutcome.Data -> deliveryStage.send(
+                Swatch(payload = frame, sender = outcome.sender, sequence = seq.incrementAndGet())
+                    .dropFirst(NwWire.TYPE_BYTES),
+            )
             // Dedup loser (if any) — disconnect OUTSIDE the lock (best-effort). The loser's ConnState was
             // just removed from `conns` in resolveIdentity; cancel any grace timer armed for it too, for
             // symmetry with connectionClosedLoop/removeByConn. Normally the loser's own connectionClosed
@@ -608,9 +677,33 @@ internal class NwSeam(
                 runCatchingCancellable { api.disconnect(loserId) }
                     .onFailure { log.debug { "nw.dedup disconnect failed connId=${loserId.value}" } }
             }
-            // Undecodable first frame (#1528 part B) — routed through the shared corrupt-inbound backstop.
-            is FrameOutcome.DecodeFailed ->
-                evictCorruptConn(connId, "hello-decode failed: ${decodeError?.message}")
+            // #2425 slice 1: GOODBYE is DEFINED and DECODED but means nothing yet. Slice 2 makes it end a
+            // dedup loser's drain; landing any of that here early would be the behaviour change this slice
+            // exists to avoid.
+            is FrameOutcome.Goodbye -> log.debug {
+                "nw.seam.wire.goodbye connId=${connId.value} self=${selfId.value} peer=${outcome.peer?.value} " +
+                    "→ no-op (the drain it terminates is not implemented yet, #2425)"
+            }
+            // A frame whose TYPE contradicts the connection's state. Both arms log a LITERAL tag for the
+            // same reason the decode-failure arms above do.
+            is FrameOutcome.HelloOnResolved -> {
+                log.warn {
+                    "nw.seam.wire.hello-on-resolved connId=${connId.value} self=${selfId.value} " +
+                        "resolved=${outcome.resolved.value} claimed=${outcome.claimed.value} " +
+                        "→ disconnect + evict (loop preserved); a settled link must never carry a second " +
+                        "identity preamble, and positional classification used to hand these bytes to the " +
+                        "consumer as an application frame (#2425)"
+                }
+                disconnectAndEvictConn(connId)
+            }
+            is FrameOutcome.DataBeforeHello -> {
+                log.warn {
+                    "nw.seam.wire.data-before-hello connId=${connId.value} self=${selfId.value} " +
+                        "payload-bytes=${outcome.payloadBytes} → disconnect + evict (loop preserved); " +
+                        "there is no identity to attribute it to (#2425)"
+                }
+                disconnectAndEvictConn(connId)
+            }
             // Stale/dead conn at classify time (#1528 finding 2) — nothing to do; the frame is dropped.
             is FrameOutcome.Dropped ->
                 log.debug { "nw.seam.classify.dropped-stale connId=${connId.value} self=${selfId.value} (conn removed/tombstoned before classify)" }
@@ -618,18 +711,30 @@ internal class NwSeam(
     }
 
     /**
-     * Shared backstop for a corrupt inbound on [connId] that cannot be parsed (#1528): either [NwFramer.decode]
-     * threw on a bad length prefix (in [bytesReceivedLoop]) or [NwHello.decode] threw on an unresolved conn (in
-     * [processFrame]). Best-effort disconnect the connection OUTSIDE the lock, then drive the local eviction via
-     * [removeByConn] — which removes it from [conns], records a [tombstoneLocked], and evicts its peer if it was
-     * the live link (so a corrupt chunk on a *resolved* conn doesn't strand a zombie in [registry]). A single
-     * corrupt chunk can therefore never kill the receive loop. Suspends only OUTSIDE the lock, preserving the
-     * no-suspend-under-lock rule.
+     * Backstop for an inbound on [connId] this seam cannot parse at all (#1528): [NwFramer.decode] threw
+     * on a bad length prefix (in [bytesReceivedLoop]), or a body decode failed for a reason
+     * [NwWireFormatException] does not name.
+     *
+     * Reports the condition, then hands off to [disconnectAndEvictConn]. The typed-wire refusals in
+     * [processFrame] log their own line and call that directly, so each refusal reason reaches a field
+     * capture under its own greppable tag — see the comment there for why the tag must be a literal.
      */
     private suspend fun evictCorruptConn(connId: NwConnectionId, reason: String) {
         log.warn { "nw.seam.corrupt-inbound connId=${connId.value} self=${selfId.value}: $reason → disconnect + evict (loop preserved)" }
+        disconnectAndEvictConn(connId)
+    }
+
+    /**
+     * The MECHANISM behind every refusal, separated from the reporting so each caller owns its own log
+     * line: best-effort disconnect the connection OUTSIDE the lock, then drive the local eviction via
+     * [removeByConn] — which removes it from [conns], records a [tombstoneLocked], and evicts its peer if
+     * it was the live link (so a refused frame on a *resolved* conn doesn't strand a zombie in
+     * [registry]). A single refused frame can therefore never kill the receive loop. Suspends only
+     * OUTSIDE the lock, preserving the no-suspend-under-lock rule.
+     */
+    private suspend fun disconnectAndEvictConn(connId: NwConnectionId) {
         runCatchingCancellable { api.disconnect(connId) }
-            .onFailure { log.debug { "nw.seam.corrupt-inbound.disconnect-failed connId=${connId.value}: ${it.message}" } }
+            .onFailure { log.debug { "nw.seam.refused.disconnect-failed connId=${connId.value}: ${it.message}" } }
         removeByConn(connId)
     }
 
@@ -1370,8 +1475,15 @@ internal class NwSeam(
     // ── send ────────────────────────────────────────────────────────────────────
 
     /**
-     * The largest payload this seam will carry (#2069) — [maxFrameBytes], the one number enforced at both
-     * edges of the wire: [encodeFrame] on send and each connection's [NwFramer] on receive.
+     * The largest payload this seam will carry (#2069) — [maxFrameBytes] less the one byte of
+     * [NwWire.TYPE_BYTES] the self-describing body spends on its frame type (#2425).
+     *
+     * The FRAME ceiling is unchanged and stays the one number enforced at both edges of the wire
+     * ([encodeFrame] on send, each connection's [NwFramer] on receive), because the type byte rides
+     * *inside* the payload those two agree on. What the type byte costs is therefore taken out of the
+     * caller's budget rather than added to the wire — which is why it is reported as `reservedBytes`
+     * on a refusal ([oversizeOrNull]) and not hidden. Widening the frame ceiling by one instead would
+     * have made a maximal `:kuilt-nw` frame one byte larger than a maximal `:kuilt-stream` one.
      *
      * Publishing it is a **promise to carry** a payload of that size, not merely to refuse above it, and
      * that promise was withheld until #2134. Both `NwApi` implementations used to hand received bytes off
@@ -1382,7 +1494,7 @@ internal class NwSeam(
      * on the consumer), so the promise is one the fabric can keep, and the TCK's
      * `payloadOfExactlyTheBudgetIsCarried` — the case that found the defect — is what holds it.
      */
-    override val maxPayloadBytes: Int = maxFrameBytes
+    override val maxPayloadBytes: Int = maxFrameBytes - NwWire.TYPE_BYTES
 
     /**
      * Refuse [payload] if it cannot be framed, rather than letting [encodeFrame] throw from inside a
@@ -1392,11 +1504,18 @@ internal class NwSeam(
      * the caller was told the send had been accepted.
      *
      * Returns the refusal for the caller to raise or ignore, per the two methods' differing
-     * contracts, so both read the ceiling exactly once and in the same way.
+     * contracts, so both read the ceiling exactly once and in the same way. The ceiling read is
+     * [maxPayloadBytes] — the number this seam PUBLISHES — never [maxFrameBytes]: with a byte of the
+     * frame now spent on the type discriminator the two differ, and checking the frame ceiling here
+     * would accept exactly the one payload [encodeFrame] then throws on.
      */
     private fun oversizeOrNull(payload: ByteArray): PayloadTooLarge? =
-        if (payload.size > maxFrameBytes) {
-            PayloadTooLarge(payloadBytes = payload.size, budgetBytes = maxFrameBytes, reservedBytes = 0)
+        if (payload.size > maxPayloadBytes) {
+            PayloadTooLarge(
+                payloadBytes = payload.size,
+                budgetBytes = maxPayloadBytes,
+                reservedBytes = NwWire.TYPE_BYTES,
+            )
         } else {
             null
         }
@@ -1407,7 +1526,7 @@ internal class NwSeam(
         // this seam shares one ceiling, so — unlike a mesh of independently-framed links — there is no
         // subset that could still carry it, and the drop is whole rather than per link.
         if (oversizeOrNull(payload) != null) {
-            log.debug { "nw.seam.broadcast.over-budget self=${selfId.value} payload=${payload.size}B budget=${maxFrameBytes}B → dropped (best-effort)" }
+            log.debug { "nw.seam.broadcast.over-budget self=${selfId.value} payload=${payload.size}B budget=${maxPayloadBytes}B → dropped (best-effort)" }
             return
         }
         // #2420: count what is handed to each link in the SAME locked snapshot that chooses the targets, so
@@ -1419,7 +1538,7 @@ internal class NwSeam(
                 winner.connId
             }
         }
-        val frame = encodeFrame(payload, maxFrameBytes)
+        val frame = encodeFrame(NwWire.encodeData(payload), maxFrameBytes)
         for (connId in targets) {
             runCatchingCancellable { api.send(connId, frame) }
                 .onFailure {
@@ -1453,7 +1572,7 @@ internal class NwSeam(
             winner
         } ?: throw PeerNotConnected(peer)
         oversize?.let { throw it }
-        runCatchingCancellable { api.send(connId, encodeFrame(payload, maxFrameBytes)) }
+        runCatchingCancellable { api.send(connId, encodeFrame(NwWire.encodeData(payload), maxFrameBytes)) }
             .onFailure {
                 log.info { "nw.seam.sendTo.send-failed peer=${peer.value} connId=${connId.value} self=${selfId.value}: ${it.message} → removeByConn" }
                 removeByConn(connId)
@@ -1593,6 +1712,12 @@ internal class NwSeam(
      * in the interval, and the subscription is still in place before this constructor returns.
      */
     init {
+        // A frame ceiling that cannot hold the type byte would publish a zero-or-negative
+        // [maxPayloadBytes] — a budget no caller can satisfy, discovered as a refusal on every send
+        // rather than as a construction error. Fail fast instead.
+        require(maxFrameBytes > NwWire.TYPE_BYTES) {
+            "maxFrameBytes=$maxFrameBytes leaves no room for the ${NwWire.TYPE_BYTES}-byte frame type"
+        }
         scope.launch(start = CoroutineStart.UNDISPATCHED) { connectionOpenedLoop() }
         scope.launch(start = CoroutineStart.UNDISPATCHED) { bytesReceivedLoop() }
         scope.launch(start = CoroutineStart.UNDISPATCHED) { connectionClosedLoop() }

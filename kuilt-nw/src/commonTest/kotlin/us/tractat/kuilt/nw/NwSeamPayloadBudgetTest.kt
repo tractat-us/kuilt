@@ -40,17 +40,22 @@ import kotlin.test.assertNull
  * The TCK ([us.tractat.kuilt.conformance.SeamConformanceSuite]) now selects this fabric's budget
  * cases — `maxPayloadBytes` is published as of #2134 — but it exercises them at the production
  * 16 MiB, and over a real socket. That is what `NwSeam(maxFrameBytes = …)` is for here: the same
- * number reaches both edges of the wire, so a [CEILING]-byte ceiling exercises exactly the
+ * number reaches both edges of the wire, so a [FRAME_CEILING]-byte ceiling exercises exactly the
  * production refusal paths at a cost of bytes rather than megabytes.
  */
 class NwSeamPayloadBudgetTest {
 
-    /** Small enough that an over-budget payload costs bytes; the production default is 16 MiB. */
-    private val ceiling = CEILING
+    /**
+     * The PAYLOAD budget this seam publishes: the [FRAME_CEILING] it frames at, less the one byte the
+     * self-describing body spends on its frame type (#2425). Small enough that an over-budget payload
+     * costs bytes; the production frame ceiling is 16 MiB.
+     */
+    private val ceiling = FRAME_CEILING - NwWire.TYPE_BYTES
 
     /**
      * The seam publishes **exactly** the ceiling it enforces — one number, reaching the caller, the
-     * encoder, and every connection's [NwFramer] (#2069).
+     * encoder, and every connection's [NwFramer] (#2069), less the [NwWire.TYPE_BYTES] the frame's own
+     * type discriminator occupies (#2425).
      *
      * This was the deliberate tripwire held closed while #2134 was open. Publishing is a promise that a
      * payload of that size will *cross*, not merely that a larger one is refused, and the receive path
@@ -105,9 +110,18 @@ class NwSeamPayloadBudgetTest {
                         { assertEquals(ceiling, refusal.budgetBytes, "the refusal names the ceiling the seam enforces") },
                         {
                             assertEquals(
-                                0,
+                                NwWire.TYPE_BYTES,
                                 refusal.reservedBytes,
-                                "the 4-byte length prefix rides ON TOP of the payload ceiling, not carved out of it",
+                                "the 4-byte length prefix rides ON TOP of the payload ceiling, but the frame " +
+                                    "TYPE byte is carved OUT of it — it lives inside the framed payload, so " +
+                                    "the caller's budget is the frame ceiling less that one byte (#2425)",
+                            )
+                        },
+                        {
+                            assertEquals(
+                                FRAME_CEILING,
+                                refusal.budgetBytes + refusal.reservedBytes,
+                                "budgetBytes + reservedBytes is the fabric's frame limit, per PayloadTooLarge",
                             )
                         },
                     )
@@ -166,8 +180,8 @@ class NwSeamPayloadBudgetTest {
     }
 
     /**
-     * A converged 2-node mesh over one [FakeNwRadio], both seams built with a [ceiling]-byte frame
-     * ceiling — the same number [NwSeam] threads to [encodeFrame] and to each connection's
+     * A converged 2-node mesh over one [FakeNwRadio], both seams built with a [FRAME_CEILING]-byte
+     * frame ceiling — the same number [NwSeam] threads to [encodeFrame] and to each connection's
      * [NwFramer] in production, just small enough to test with.
      */
     private fun TestScope.budgetedPair(): Pair<Device, Device> {
@@ -184,7 +198,7 @@ class NwSeamPayloadBudgetTest {
                     api = api,
                     scope = CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext[Job])),
                     random = Random(i.toLong()),
-                    maxFrameBytes = ceiling,
+                    maxFrameBytes = FRAME_CEILING,
                 ),
             )
         }
@@ -212,8 +226,8 @@ class NwSeamPayloadBudgetTest {
     }
 
     private companion object {
-        /** The test ceiling. Bytes, not megabytes — the point is the mechanism, not the number. */
-        const val CEILING = 512
+        /** The test FRAME ceiling. Bytes, not megabytes — the point is the mechanism, not the number. */
+        const val FRAME_CEILING = 512
 
         /** Non-uniform fill for the at-budget payload, so truncation cannot pass as a zero-fill. */
         const val PAYLOAD_FILL_MODULUS = 251

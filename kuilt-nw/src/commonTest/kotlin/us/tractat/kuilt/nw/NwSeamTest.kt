@@ -910,7 +910,7 @@ class NwSeamTest {
         apiA.emitConnectionOpened(NwConnectionOpened(live, endpoint = null))
         testScheduler.runCurrent()
         apiA.emitBytesReceived(
-            NwBytesReceived(live, encodeFrame(NwHello.encode(PeerId("peer-1"), ByteArray(NONCE_BYTES) { 1 }))),
+            NwBytesReceived(live, encodeFrame(NwWire.encodeHello(PeerId("peer-1"), ByteArray(NONCE_BYTES) { 1 }))),
         )
         assertTrue(pumpUntil { PeerId("peer-1") in seamA.peers.value }, "peer-1 resolved on the live conn")
 
@@ -920,7 +920,7 @@ class NwSeamTest {
         apiA.emitConnectionOpened(NwConnectionOpened(selfConn, endpoint = null))
         testScheduler.runCurrent()
         apiA.emitBytesReceived(
-            NwBytesReceived(selfConn, encodeFrame(NwHello.encode(self, ByteArray(NONCE_BYTES) { 2 }))),
+            NwBytesReceived(selfConn, encodeFrame(NwWire.encodeHello(self, ByteArray(NONCE_BYTES) { 2 }))),
         )
         testScheduler.runCurrent()
         assertEquals(setOf(self, PeerId("peer-1")), seamA.peers.value, "self never joins the roster (pre-condition)")
@@ -928,12 +928,12 @@ class NwSeamTest {
         // Late, buffered DATA frame arrives on the just-removed self-conn — pre-fix this resurrects it and is
         // misparsed as an NwHello for a phantom peer.
         apiA.emitBytesReceived(
-            NwBytesReceived(selfConn, encodeFrame(NwHello.encode(PeerId("phantom-peer"), ByteArray(NONCE_BYTES) { 3 }))),
+            NwBytesReceived(selfConn, encodeFrame(NwWire.encodeHello(PeerId("phantom-peer"), ByteArray(NONCE_BYTES) { 3 }))),
         )
         testScheduler.runCurrent()
 
         // The receive loop is still healthy: a later legit frame on the live conn is still delivered.
-        apiA.emitBytesReceived(NwBytesReceived(live, encodeFrame("still-alive".encodeToByteArray())))
+        apiA.emitBytesReceived(NwBytesReceived(live, encodeFrame(NwWire.encodeData("still-alive".encodeToByteArray()))))
         pumpUntil { received.any { it.decodeToString() == "still-alive" } }
 
         assertAll(
@@ -962,21 +962,29 @@ class NwSeamTest {
         apiA.emitConnectionOpened(NwConnectionOpened(live, endpoint = null))
         testScheduler.runCurrent()
         apiA.emitBytesReceived(
-            NwBytesReceived(live, encodeFrame(NwHello.encode(PeerId("peer-1"), ByteArray(NONCE_BYTES) { 1 }))),
+            NwBytesReceived(live, encodeFrame(NwWire.encodeHello(PeerId("peer-1"), ByteArray(NONCE_BYTES) { 1 }))),
         )
         assertTrue(pumpUntil { PeerId("peer-1") in seamA.peers.value }, "peer-1 resolved on the live conn")
 
-        // A genuinely-new conn whose FIRST frame is undecodable as an NwHello (idLen = 0x7fffffff — a declared
-        // length no buffer can satisfy, and one that overflows `4 + idLen`; see NwHello.decode).
+        // A genuinely-new conn whose FIRST frame is a well-TYPED hello with an undecodable body
+        // (idLen = 0x7fffffff — a declared length no buffer can satisfy, and one that overflows
+        // `4 + idLen`; see NwHello.decode). The type byte says "this is a hello", so the failure is in
+        // the body's own bounds check rather than in classification — which is what this test is about.
         val bad = NwConnectionId("c-bad")
         apiA.emitConnectionOpened(NwConnectionOpened(bad, endpoint = null))
         testScheduler.runCurrent()
-        val garbage = encodeFrame(byteArrayOf(0x7F.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte()))
+        val garbage = encodeFrame(
+            byteArrayOf(
+                NwFrameType.Hello.code,
+                NW_WIRE_VERSION.toByte(),
+                0x7F.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(),
+            ),
+        )
         apiA.emitBytesReceived(NwBytesReceived(bad, garbage))
         testScheduler.runCurrent()
 
         // The loop survived: a later legit frame on the live conn is still delivered.
-        apiA.emitBytesReceived(NwBytesReceived(live, encodeFrame("still-alive".encodeToByteArray())))
+        apiA.emitBytesReceived(NwBytesReceived(live, encodeFrame(NwWire.encodeData("still-alive".encodeToByteArray()))))
         pumpUntil { received.any { it.decodeToString() == "still-alive" } }
 
         assertAll(
@@ -1007,11 +1015,11 @@ class NwSeamTest {
         val c1 = NwConnectionId("c-1")
         apiA.emitConnectionOpened(NwConnectionOpened(c1, endpoint = null))
         testScheduler.runCurrent()
-        apiA.emitBytesReceived(NwBytesReceived(c1, encodeFrame(NwHello.encode(PeerId("peer-1"), ByteArray(NONCE_BYTES) { 1 }))))
+        apiA.emitBytesReceived(NwBytesReceived(c1, encodeFrame(NwWire.encodeHello(PeerId("peer-1"), ByteArray(NONCE_BYTES) { 1 }))))
         val c2 = NwConnectionId("c-2")
         apiA.emitConnectionOpened(NwConnectionOpened(c2, endpoint = null))
         testScheduler.runCurrent()
-        apiA.emitBytesReceived(NwBytesReceived(c2, encodeFrame(NwHello.encode(PeerId("peer-2"), ByteArray(NONCE_BYTES) { 2 }))))
+        apiA.emitBytesReceived(NwBytesReceived(c2, encodeFrame(NwWire.encodeHello(PeerId("peer-2"), ByteArray(NONCE_BYTES) { 2 }))))
         assertTrue(
             pumpUntil { setOf(PeerId("peer-1"), PeerId("peer-2")).all { it in seamA.peers.value } },
             "both peers resolved",
@@ -1022,7 +1030,7 @@ class NwSeamTest {
         testScheduler.runCurrent()
 
         // The loop survived: a later legit frame on the OTHER live conn (peer-2) is still delivered.
-        apiA.emitBytesReceived(NwBytesReceived(c2, encodeFrame("still-alive".encodeToByteArray())))
+        apiA.emitBytesReceived(NwBytesReceived(c2, encodeFrame(NwWire.encodeData("still-alive".encodeToByteArray()))))
         pumpUntil { received.any { it.decodeToString() == "still-alive" } }
 
         assertAll(
@@ -1063,7 +1071,7 @@ class NwSeamTest {
         testScheduler.runCurrent()
         // 3) A hello arrives on that tombstoned-but-tracked conn. The classify guard must DROP it (dead conn),
         //    resolving NO identity — pre-fix it registers a phantom "peer-1" zombie.
-        apiA.emitBytesReceived(NwBytesReceived(conn, encodeFrame(NwHello.encode(PeerId("peer-1"), ByteArray(NONCE_BYTES) { 1 }))))
+        apiA.emitBytesReceived(NwBytesReceived(conn, encodeFrame(NwWire.encodeHello(PeerId("peer-1"), ByteArray(NONCE_BYTES) { 1 }))))
         testScheduler.runCurrent()
         pumpUntil(maxPumps = 50) { false } // let any (wrong) resolution surface
 
@@ -1141,7 +1149,7 @@ class NwSeamTest {
         apiA.emitConnectionOpened(NwConnectionOpened(conn, endpoint = null))
         testScheduler.runCurrent()
         // 3) A late NwHello on that conn must be DROPPED (tombstoned) — no phantom peer resolves.
-        apiA.emitBytesReceived(NwBytesReceived(conn, encodeFrame(NwHello.encode(PeerId("peer-1"), ByteArray(NONCE_BYTES) { 1 }))))
+        apiA.emitBytesReceived(NwBytesReceived(conn, encodeFrame(NwWire.encodeHello(PeerId("peer-1"), ByteArray(NONCE_BYTES) { 1 }))))
         testScheduler.runCurrent()
         pumpUntil(maxPumps = 50) { false }
 
@@ -1203,7 +1211,7 @@ class NwSeamTest {
         val conn1 = NwConnectionId("c-1")
         apiA.emitConnectionOpened(NwConnectionOpened(conn1, endpoint = null))
         testScheduler.runCurrent()
-        apiA.emitBytesReceived(NwBytesReceived(conn1, encodeFrame(NwHello.encode(PeerId("peer-1"), ByteArray(NONCE_BYTES) { 1 }))))
+        apiA.emitBytesReceived(NwBytesReceived(conn1, encodeFrame(NwWire.encodeHello(PeerId("peer-1"), ByteArray(NONCE_BYTES) { 1 }))))
         assertTrue(pumpUntil { PeerId("peer-1") in seamA.peers.value }, "peer-1 resolved on conn1")
 
         // conn1 closes (both signals) → peer-1 evicted, conn1 tombstoned.
@@ -1215,7 +1223,7 @@ class NwSeamTest {
         val conn2 = NwConnectionId("c-2")
         apiA.emitConnectionOpened(NwConnectionOpened(conn2, endpoint = null))
         testScheduler.runCurrent()
-        apiA.emitBytesReceived(NwBytesReceived(conn2, encodeFrame(NwHello.encode(PeerId("peer-1"), ByteArray(NONCE_BYTES) { 2 }))))
+        apiA.emitBytesReceived(NwBytesReceived(conn2, encodeFrame(NwWire.encodeHello(PeerId("peer-1"), ByteArray(NONCE_BYTES) { 2 }))))
         assertTrue(pumpUntil { PeerId("peer-1") in seamA.peers.value }, "peer-1 re-resolved on conn2")
 
         // A STALE closed-state for the defunct conn1 must NOT evict peer-1 (whose live conn is conn2).
@@ -1347,13 +1355,13 @@ class NwSeamTest {
         val src = NwConnectionId("c-src")
         apiA.emitConnectionOpened(NwConnectionOpened(src, endpoint = null))
         testScheduler.runCurrent()
-        apiA.emitBytesReceived(NwBytesReceived(src, encodeFrame(NwHello.encode(PeerId("peer-1"), ByteArray(NONCE_BYTES) { 1 }))))
+        apiA.emitBytesReceived(NwBytesReceived(src, encodeFrame(NwWire.encodeHello(PeerId("peer-1"), ByteArray(NONCE_BYTES) { 1 }))))
         assertTrue(pumpUntil { PeerId("peer-1") in seam.peers.value }, "peer-1 (slow source) resolved")
 
         // Flood c-src with data frames. The first fills the 1-slot spool; the rest have nowhere to go — pre-fix
         // they suspend the demux loop inside deliver(). A handful (well under the staging depth) so post-fix the
         // loop keeps flowing.
-        repeat(4) { i -> apiA.emitBytesReceived(NwBytesReceived(src, encodeFrame("data-$i".encodeToByteArray()))) }
+        repeat(4) { i -> apiA.emitBytesReceived(NwBytesReceived(src, encodeFrame(NwWire.encodeData("data-$i".encodeToByteArray())))) }
         testScheduler.runCurrent()
 
         // A NEW peer (peer-2) arrives and sends its NwHello AFTER the slow source's flood. In the single demux
@@ -1362,7 +1370,7 @@ class NwSeamTest {
         val late = NwConnectionId("c-late")
         apiA.emitConnectionOpened(NwConnectionOpened(late, endpoint = null))
         testScheduler.runCurrent()
-        apiA.emitBytesReceived(NwBytesReceived(late, encodeFrame(NwHello.encode(PeerId("peer-2"), ByteArray(NONCE_BYTES) { 2 }))))
+        apiA.emitBytesReceived(NwBytesReceived(late, encodeFrame(NwWire.encodeHello(PeerId("peer-2"), ByteArray(NONCE_BYTES) { 2 }))))
 
         assertAll(
             {
@@ -1476,7 +1484,7 @@ class NwSeamTest {
         val remote = PeerId(remoteValue)
         fake.emitConnectionOpened(NwConnectionOpened(connId, endpoint = null))
         testScheduler.runCurrent()
-        fake.emitBytesReceived(NwBytesReceived(connId, encodeFrame(NwHello.encode(remote, ByteArray(NONCE_BYTES) { 7 }))))
+        fake.emitBytesReceived(NwBytesReceived(connId, encodeFrame(NwWire.encodeHello(remote, ByteArray(NONCE_BYTES) { 7 }))))
         assertTrue(pumpUntil { remote in seam.peers.value }, "$remote woven on $connId")
         return connId to remote
     }
