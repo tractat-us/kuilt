@@ -66,6 +66,14 @@ import kotlin.test.assertTrue
  * | 1 | `addLink`'s replace arm closes the loser on the spot instead of draining it | real | **RED — [aDisplacedLinksTailSurvivesAnAbruptClose]**, delivering `[[11,1]]`: the whole tail gone |
  * | 2 | [newAbruptClosingConnectionPair] returns the well-behaved `connectionPair()` | rig | **RED — [theFixtureReallyDiscardsOnClose]** |
  * | 3 | rows 1 **and** 2 together | rig | **both RED** — the drain property still reds, same `[[11,1]]` |
+ * | 4 | `buildMesh` closes its losers instead of handing them over (the pre-#2485 line) | real | **RED — [aLinkDisplacedAtConstructionIsDrainedToo]**, delivering `[[11,1]]` and reporting **no** `Drained` at all |
+ * | 5 | `init` registers the drains but does not arm the ordering hold | real | **RED — [aLinkDisplacedAtConstructionIsDrainedToo]**, delivering `[[10,1],[11,1],[10,2]]` — `AFTER_SWAP` in the middle |
+ * | 6 | construction reports [MeshDisplacement.Arm.Replace] instead of `Keep` | real | **RED — [aLinkDisplacedAtConstructionIsDrainedToo]** |
+ *
+ * **Row 5 is why the `framesDrained` row is not the whole receipt, and vice versa.** Under row 5 the
+ * drain still runs and still saves both frames, so the `Drained(…, framesDrained = 2)` assertion stays
+ * GREEN while the delivery order is wrong; under row 4 the order assertion and the count assertion red
+ * together. Neither alone separates "drained" from "drained *and* ordered".
  *
  * **Row 3 is the honest reading, and it corrects what row 2 looks like it is saying.** A flushing
  * fixture does NOT make the drain property vacuous today, because [singleCollection] — which every
