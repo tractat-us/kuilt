@@ -234,9 +234,15 @@ private class Link(
  * **Dedup (cross-node agreement):** if two connections resolve the same remote id (duplicate links from
  * a simultaneous dial), both ends keep the link with the lexicographically smallest *link nonce* —
  * a canonical, order-independent function of the two per-connection nonces. Because both ends see
- * both nonces, they derive the same survivor and close the same loser, with no coordination. The
+ * both nonces, they derive the same survivor and displace the same loser, with no coordination. The
  * old self-relative `selfId < remoteId` rule could leave a link half-open (the two ends disagreed
  * on the survivor); the nonce-based rule cannot.
+ *
+ * The loser is **drained, not closed** (#2485): it keeps a read loop, is sent one in-band goodbye, and
+ * is disposed of only once the remote's goodbye comes back — so the frames a remote that deduped first
+ * had already written are still delivered, ahead of the surviving link's, rather than dying at a close.
+ * This is the same treatment [Mesh.addLink] gives a later duplicate; passing duplicate connections here
+ * is supported, not merely tolerated.
  *
  * **Per-link failure:** if a link's remote peer disconnects or errors, that peer is removed from
  * [Seam.peers] and the mesh continues operating. The seam remains [SeamState.Woven] until
@@ -447,23 +453,31 @@ private suspend fun buildMesh(
             else -> losers += link
         }
     }
-    // NOT drained (#2474), and the asymmetry with [Mesh.addLink]'s two arms is deliberate rather than an
-    // oversight. A drain needs a seam to attribute the drained link's frames to, and here there is none
-    // yet — the seam is constructed on the last line of this function. What that costs is bounded: no
-    // peer has been published locally, so there is no local publish-then-swap window at all; the residual
-    // is the REMOTE's window, if it deduped first and wrote into the link before we got here. Draining it
-    // would mean handing these losers to the seam and starting their drains from `init`, where the
-    // ordering hold cannot be armed before the winners' read loops start. Tracked separately.
-    losers.forEach { closeBestEffort(it.conn) }
+    // The losers are DRAINED, not closed (#2485) — handed to the seam, which starts their drains from
+    // `init`. They are not closed here, and `buildMesh` must not close them: disposal is owed at drain
+    // end, by `MeshSeam.endDrain`, exactly as it is for a loser displaced by `Mesh.addLink`.
+    //
+    // The window it recovers is narrower than `addLink`'s, and worth stating precisely: no peer has been
+    // published locally yet, so there is no LOCAL publish-then-swap window at all. What was lost is the
+    // REMOTE's — it deduped first and wrote into the link before this seam existed — and on a
+    // simultaneous dial caught at construction it is the symmetric case, where BOTH ends drain and
+    // "terminate on the remote's abrupt close" is therefore no termination condition at all. That is
+    // precisely why the in-band goodbye, not the close, is what ends the drain.
 
     // A2 (born-dead): a peer-mesh that REQUESTED connections but had them ALL rejected/deduped away
     // asked for peers and got none — it has nothing that could ever drain, so it must latch Torn at
     // birth rather than sit Woven forever with an empty roster. A start-empty peer-mesh
     // (`connections` empty) requested nothing, so it is NOT born-dead: it stays Woven and grows via
     // addLink. Hubs never latch, so bornDead is always false for them (latchTornWhenDrained = false).
+    //
+    // `winners.isEmpty()` also implies `losers.isEmpty()`, so a born-dead seam never carries a drain and
+    // the two paths never interact. It holds because `winners` above is ASSIGN-ONLY — nothing is ever
+    // removed from it — and both loser-producing branches of that `when` require `existing != null`,
+    // i.e. a winner already recorded for that peer, which they then leave recorded (one overwrites it
+    // with the new winner, the other keeps it). So a loser existing implies a winner existing.
     val bornDead = latchTornWhenDrained && connections.isNotEmpty() && winners.isEmpty()
     return MeshSeam(
-        selfId, winners, dispatcher, random, policy, admission, latchTornWhenDrained, bornDead,
+        selfId, winners, losers, dispatcher, random, policy, admission, latchTornWhenDrained, bornDead,
         drainBound, orderingHoldCapacity, onDisplacement,
     )
 }
@@ -505,14 +519,16 @@ internal class MeshWireOutOfOrderException(message: String) : MeshWireFormatExce
  * loops and filed the single-item closes as unaffected ("nothing follows them to skip"); that is wrong
  * for three of them, and the item count was never the right axis:
  *
- *  - [MeshSeam.close] / [buildMesh]'s dedup — the rest of the roster follows. A half-open leak, and
- *    unbounded on a hub, which accepts arbitrarily many spokes.
+ *  - [MeshSeam.close] — the rest of the roster follows. A half-open leak, and unbounded on a hub,
+ *    which accepts arbitrarily many spokes.
  *  - `MeshSeam.endDrain`'s disposal of a drained dedup loser (#2474) — the peer's ordering-hold release
  *    and its [MeshDisplacement.Drained] report follow. A rethrow strands the hold, so that peer's live
  *    traffic buffers until it hits the cap and is then delivered OUT OF SEND ORDER — the one failure
  *    the hold exists to prevent, reached by way of a close that had nothing to do with it. **This is
  *    the site #1834 used to name as `addLink`'s displaced-loser close; that close no longer exists**
  *    — since #2474 `addLink` starts a drain instead, and the obligation moved here with the close.
+ *    Since #2485 [buildMesh]'s own dedup close has moved here too, for the same reason: construction's
+ *    losers are drained, so every dedup loser in this file is now disposed of by `endDrain`.
  *  - [admitLink]'s two rejection closes — a `return false` follows, consumed by [buildMesh]'s `filter`,
  *    so a rethrow fails WHOLE-MESH construction against a documented "rejection never fails construction".
  *
@@ -604,9 +620,12 @@ private suspend fun admitLink(selfId: PeerId, admission: LinkAdmission, link: Li
  *  - it terminates on the remote's goodbye | the link dying under it | the injected [drainBound], and
  *    only THEN is it closed and forgotten.
  *
- * **Both dedup arms drain.** The keep arm looks like the harmless half — the peer was never published
- * on that link locally — but both ends dedup onto the same physical link, so *our* keep-arm loser is
- * the *remote's* replace-arm loser, with its window frames in flight toward us.
+ * **Both dedup arms drain, and so does construction's (#2485).** The keep arm looks like the harmless
+ * half — the peer was never published on that link locally — but both ends dedup onto the same physical
+ * link, so *our* keep-arm loser is the *remote's* replace-arm loser, with its window frames in flight
+ * toward us. [buildMesh]'s losers are the same case one step earlier: nothing is published locally at
+ * construction, so they are all reported as [MeshDisplacement.Arm.Keep], and the remote's window is
+ * still in flight. Their drains start from `init`, which arms every hold before launching any read loop.
  *
  * The goodbye is what makes the drain sound rather than an optimisation of it. Terminating on "the
  * link died" is self-defeating once both ends drain: that signal exists only while the remote still
@@ -633,6 +652,9 @@ private suspend fun admitLink(selfId: PeerId, admission: LinkAdmission, link: Li
 private class MeshSeam(
     override val selfId: PeerId,
     initialLinks: Map<PeerId, Link>,
+    // Links [buildMesh]'s dedup displaced before this seam existed (#2485). Drained from `init`, never
+    // published, never closed by the caller — see `init`.
+    displacedAtConstruction: List<Link>,
     private val dispatcher: CoroutineContext,
     private val random: Random,
     policy: DeliveryPolicy,
@@ -714,7 +736,9 @@ private class MeshSeam(
     /**
      * Peers whose live-link frames are being held pending a drain-end (#2474). **Guarded by
      * [stageMutex] only** — never by [lock] — so the hold decision and the delivery it guards are one
-     * atomic step.
+     * atomic step. The single exception is `init`, which writes this map inline — there exclusivity is
+     * structural and there is nothing yet to be guarded against. It is written inline, and not extracted
+     * into a helper, precisely so that exception cannot be invoked from anywhere the argument fails.
      *
      * A peer's presence as a key IS the armed flag. Bounded by [orderingHoldCapacity], after which
      * the hold releases early and is removed outright (see [stageInbound]).
@@ -770,8 +794,39 @@ private class MeshSeam(
         _peers.value = buildPeerSet()
         _attestedPrincipals.value = buildRoster()
 
+        // Register construction's dedup losers as draining and arm their peers' ordering holds — ALL of
+        // it before a single read loop is launched below, so no live-link frame can outrun a hold (#2485).
+        // This is the arm `addLink`'s keep arm cannot have: there the winner has been reading all along.
+        //
+        // The `orderingHolds` write is the ONE place that map is touched without [stageMutex], and it is
+        // written INLINE here rather than behind a helper on purpose. Its safety is a property of *this
+        // position* — no read loop exists, `scope` has launched nothing, the seam is unpublished, so
+        // exclusivity is structural rather than acquired (the same argument `links.putAll` above rests
+        // on, and `launch` publishes these writes to the coroutines that follow). A private
+        // `armOrderingHoldAtConstruction()` would have been callable from `addLink`, where every word of
+        // that argument is false: it would compile, pass under a test dispatcher that serialises the race
+        // away, and reintroduce an unguarded write. There is no method to call, so there is nothing to
+        // misuse — the constraint is structural instead of a caller obligation nothing checks.
+        //
+        // It is also why this needs no `startDrain` undo: that undo exists for a terminator ending the
+        // drain across `armOrderingHold`'s suspension, and nothing here suspends.
+        displacedAtConstruction.forEach { loser ->
+            draining[loser] = Drain(loser.remoteId, MeshDisplacement.Arm.Keep, boundFor(loser))
+            orderingHolds.getOrPut(loser.remoteId) { OrderingHold() }.waitingOn += loser
+        }
+
         // Launch a supervised reader for each initial link.
         initialLinks.values.forEach { link -> scope.launch { readLoop(link) } }
+
+        // …and for each drained loser: the zombie backstop, the read loop that IS the drain, and the
+        // goodbye. [startDrain]'s remaining steps, minus its arm (done above) and minus its undo —
+        // nothing can have terminated a drain registered a few instructions ago with no coroutine yet
+        // running, which is why `getValue` is a fail-fast assertion here rather than a hazard.
+        displacedAtConstruction.forEach { loser ->
+            draining.getValue(loser).bound.start()
+            scope.launch { readLoop(loser) }
+            scope.launch { runCatchingCancellable { sayGoodbye(loser) } }
+        }
 
         // A2 born-dead: a peer-mesh that REQUESTED construction connections but had them all rejected
         // by admission (or deduped away) is born with zero links. The drain latch only fires from

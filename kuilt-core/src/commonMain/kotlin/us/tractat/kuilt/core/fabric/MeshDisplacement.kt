@@ -25,7 +25,12 @@ public sealed interface MeshDisplacement {
         /** The peer had been PUBLISHED on the drained link and was moved off it — the swap window. */
         Replace,
 
-        /** The drained link resolved second and lost; the peer was never published on it locally. */
+        /**
+         * The peer was **never published on the drained link locally** — the dedup either kept a link
+         * that was already live and drained the newcomer, or ran at construction, where nothing has been
+         * published on any link yet. Construction's losers are always reported this way (#2485): a
+         * [Replace] there would assert a local swap window that never existed.
+         */
         Keep,
     }
 

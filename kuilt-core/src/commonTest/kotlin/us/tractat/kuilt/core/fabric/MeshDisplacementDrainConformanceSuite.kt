@@ -3,6 +3,7 @@
 package us.tractat.kuilt.core.fabric
 
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -65,6 +66,14 @@ import kotlin.test.assertTrue
  * | 1 | `addLink`'s replace arm closes the loser on the spot instead of draining it | real | **RED — [aDisplacedLinksTailSurvivesAnAbruptClose]**, delivering `[[11,1]]`: the whole tail gone |
  * | 2 | [newAbruptClosingConnectionPair] returns the well-behaved `connectionPair()` | rig | **RED — [theFixtureReallyDiscardsOnClose]** |
  * | 3 | rows 1 **and** 2 together | rig | **both RED** — the drain property still reds, same `[[11,1]]` |
+ * | 4 | `buildMesh` closes its losers instead of handing them over (the pre-#2485 line) | real | **RED — [aLinkDisplacedAtConstructionIsDrainedToo]**, delivering `[[11,1]]` and reporting **no** `Drained` at all |
+ * | 5 | `init` registers the drains but does not arm the ordering hold | real | **RED — [aLinkDisplacedAtConstructionIsDrainedToo]**, delivering `[[10,1],[11,1],[10,2]]` — `AFTER_SWAP` in the middle |
+ * | 6 | construction reports [MeshDisplacement.Arm.Replace] instead of `Keep` | real | **RED — [aLinkDisplacedAtConstructionIsDrainedToo]** |
+ *
+ * **Row 5 is why the `framesDrained` row is not the whole receipt, and vice versa.** Under row 5 the
+ * drain still runs and still saves both frames, so the `Drained(…, framesDrained = 2)` assertion stays
+ * GREEN while the delivery order is wrong; under row 4 the order assertion and the count assertion red
+ * together. Neither alone separates "drained" from "drained *and* ordered".
  *
  * **Row 3 is the honest reading, and it corrects what row 2 looks like it is saying.** A flushing
  * fixture does NOT make the drain property vacuous today, because [singleCollection] — which every
@@ -175,6 +184,116 @@ internal abstract class MeshDisplacementDrainConformanceSuite {
     }
 
     /**
+     * **The same property at the other entry point (#2485): a link displaced by CONSTRUCTION's dedup.**
+     *
+     * `buildMesh` handshakes every construction connection concurrently and runs the same canonical-nonce
+     * lottery [addLink] does, so a caller that hands it two connections to one peer — a simultaneous dial
+     * caught at construction, which [MeshSeamTest.simultaneousDialDedupAgreesCrossNode] already exercises
+     * — produces a loser here too. Until #2485 that loser was closed on the spot, unread: it never even
+     * got a read loop, so its whole tail went on the floor, and this is the arm the drain did not cover.
+     *
+     * The window is real and is set up as such: [TAIL_1] is written by the far end **before construction
+     * returns**, i.e. while the remote has already deduped and this seam does not yet exist. That is the
+     * residual precisely — no peer is published locally at construction, so what is lost is the REMOTE's
+     * window, not ours.
+     *
+     * Ordering is pinned the same way as [aDisplacedLinksTailSurvivesAnAbruptClose]: [AFTER_SWAP] is
+     * handed to the surviving link between the loser's two tail frames, so a seam that drains without
+     * arming the peer's ordering hold delivers it in the middle.
+     */
+    @Test
+    fun aLinkDisplacedAtConstructionIsDrainedToo(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val (loserEnd, loserFar) = newAbruptClosingConnectionPair()
+        val (winnerEnd, winnerFar) = newAbruptClosingConnectionPair()
+
+        // Both far ends answer as the SAME peer; the all-zero nonce wins the canonical tiebreak, so
+        // `loserEnd` is construction's dedup loser. Started UNDISPATCHED so each is already collecting
+        // when the mesh writes its own preamble — a handshake is a crossing pair.
+        val loserReplied = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            loserFar.incoming.first()
+            loserFar.send(MeshWire.encodeHello(PEER, HIGH_NONCE))
+            // THE WINDOW: written before `hubMesh` returns, so this frame is in flight before the seam
+            // that must not throw it away has been constructed.
+            loserFar.send(MeshWire.encodeData(TAIL_1))
+        }
+        val winnerReplied = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            winnerFar.incoming.first()
+            winnerFar.send(MeshWire.encodeHello(PEER, LOW_NONCE))
+        }
+
+        val displacements = mutableListOf<MeshDisplacement>()
+        val mesh = async {
+            hubMesh(SELF, listOf(loserEnd, winnerEnd), dispatcher, Random(0), onDisplacement = { displacements += it })
+        }.await()
+        check(loserReplied.isCompleted && winnerReplied.isCompleted) {
+            "harness: a far end never saw the mesh's handshake preamble"
+        }
+
+        val received = mutableListOf<Swatch>()
+        backgroundScope.launch { mesh.incoming.collect { received += it } }
+        val winnerInbox = mutableListOf<ByteArray>()
+        backgroundScope.launch { winnerFar.incoming.collect { winnerInbox += it } }
+        runCurrent()
+
+        // Precondition, and deliberately one that holds with or without the drain: which link WON is a
+        // pure function of the two nonces, and if `Random(0)` ever drew a local nonce that flipped it,
+        // every assertion below would be measuring the surviving link's own frames.
+        assertEquals(setOf(SELF, PEER), mesh.peers.value, "precondition: two links must have deduped to one peer")
+        mesh.sendTo(PEER, PROBE)
+        runCurrent()
+        assertTrue(
+            winnerInbox.any { it.contentEquals(MeshWire.encodeData(PROBE)) },
+            "precondition: the ALL-ZERO-nonce link must be the dedup winner, so `loserEnd` is the drained " +
+                "loser. The seam routed its send elsewhere, so this test is set up backwards",
+        )
+
+        winnerFar.send(MeshWire.encodeData(AFTER_SWAP))
+        runCurrent()
+        loserFar.send(MeshWire.encodeData(TAIL_2))
+        loserFar.send(MeshWire.encodeGoodbye())
+        runCurrent()
+
+        assertAll(
+            {
+                assertEquals(
+                    listOf(TAIL_1.toList(), TAIL_2.toList(), AFTER_SWAP.toList()),
+                    received.map { it.toByteArray().toList() },
+                    "a link displaced by CONSTRUCTION's dedup must be drained to its goodbye like one " +
+                        "displaced by addLink: a missing tail frame is the abrupt close showing through, " +
+                        "and AFTER_SWAP in the middle is a drain with no receiver ordering hold behind it",
+                )
+            },
+            {
+                assertTrue(
+                    received.all { it.sender == PEER },
+                    "a drained link's frames stay attributed to their peer — draining is not anonymising",
+                )
+            },
+            {
+                // COUNTS what the drain saved rather than inferring it from "a drain happened": a
+                // drain-happened assertion stays true when the loser is closed unread, and
+                // `framesDrained` is the field that does not. `Goodbye` (not `Bound`) says the in-band
+                // FIN terminated it, and `Keep` that nothing was ever published locally.
+                assertEquals(
+                    listOf<MeshDisplacement>(
+                        MeshDisplacement.Drained(
+                            peer = PEER,
+                            arm = MeshDisplacement.Arm.Keep,
+                            outcome = MeshDisplacement.Outcome.Goodbye,
+                            framesDrained = 2,
+                        ),
+                    ),
+                    displacements.toList(),
+                    "construction's dedup must report exactly one drain, ended by the remote's goodbye, " +
+                        "having saved BOTH window frames",
+                )
+            },
+        )
+        mesh.close()
+    }
+
+    /**
      * Admit one more link to [PEER], driving its far end through the mesh handshake with [nonce], and
      * return the far end so the caller can write to it.
      *
@@ -203,5 +322,6 @@ internal abstract class MeshDisplacementDrainConformanceSuite {
         val TAIL_1 = byteArrayOf(0x0a, 1)
         val TAIL_2 = byteArrayOf(0x0a, 2)
         val AFTER_SWAP = byteArrayOf(0x0b, 1)
+        val PROBE = byteArrayOf(0x0c, 1)
     }
 }
