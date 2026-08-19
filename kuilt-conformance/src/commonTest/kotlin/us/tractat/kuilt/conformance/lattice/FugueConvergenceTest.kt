@@ -27,6 +27,13 @@ internal class FugueConvergenceTest : LatticeLawSuite<Fugue<String>>() {
                 if (state.size > 0) state.removeAt(random.nextInt(state.size))?.first ?: state else state
             },
         ),
+        // No-op ceiling tightened from the shared 25% default. Measured over seeds `0..15` — the
+        // window `generatorIsNotVacuous` runs — this binding reads **7.1%**; the ceiling sits at
+        // 12%, a 4.9-point margin. See `VacuityFloors.maxNoOpSteps` for the rule and for why the
+        // shared default cannot do this job. What the 12% catches that 25% did not:
+        //  - the leading assert removed from the pool builder: 16.5%, reds by 4.5 points.
+        //  - retirement dead off replica 0 (#2158's shape): 20.6%, reds by 8.6 points.
+        floors = VacuityFloors(maxNoOpSteps = 0.12),
         serializer = Fugue.wireSerializer(String.serializer()),
         replicaCount = 3,
         opsPerReplica = 8,

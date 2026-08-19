@@ -255,18 +255,18 @@ public fun <S> defaultCriticalShapes(alphabet: List<LatticeOp<S>>): List<List<St
  *
  * The cost is that the default `assert · retire · assert` shape contributes about 9 points of
  * retirement rate at these pool sizes — most of the 10% floor — so **a binding must not be read as
- * clearing the retirement floor on its shape alone.** Every retiring binding in the tree clears it
- * with room to spare on exploration too (the lowest is 21.3%), and a binding that sat near 10%
- * would be worth looking at rather than passing.
+ * clearing the retirement floor on its shape alone.** Every retiring binding does also clear it on
+ * exploration alone; the paragraph below gives that figure and says what it does and does not buy.
  *
  * **That margin is a property of the binding, not of the floor, and #2158 is the standing record of
  * the difference.** Since #2145 every retiring binding clears the 10% floor on its *exploration*
- * retirement alone — the weakest is `JsonCrdt` at 11.5% of all steps over seeds `0..63`, where
+ * retirement alone — the weakest is `JsonCrdt` at **11.5%** of all steps over seeds `0..63`, where
  * before the leading asserts it was 10.0% and therefore had no margin at all. What has not changed
  * is the floor's own discriminating power: the shape still contributes ~8.6 points of the 10%, so a
  * *mutant* whose retirement is dead on two of three replicas still clears it (an `ORSet` shaped that
  * way measures 17.0%). Read this floor as evidence about a healthy binding's generator, not as a
- * detector for retirement that has died unevenly across replicas.
+ * detector for retirement that has died unevenly across replicas. **What catches that shape is the
+ * no-op ceiling** — see [maxNoOpSteps], which is where #2145 left a debt and where it was paid.
  *
  * - **effective retire steps** — steps whose op is [OpKind.RETIRE] **and which changed the state**.
  *   The `and` is the whole point: a `remove` of something absent is the lattice identity, and a
@@ -274,6 +274,35 @@ public fun <S> defaultCriticalShapes(alphabet: List<LatticeOp<S>>): List<List<St
  *   [OpKind] for the controlled experiment showing it is the *only* one of the four that separates
  *   a searching generator from a vacuous one.
  * - **no-op steps** — steps of any kind that left the state unchanged. A ceiling, not a floor.
+ *
+ * ## The no-op ceiling is per-binding, and on a retiring binding it is the load-bearing one
+ *
+ * [maxNoOpSteps] defaults to 25%, which is a *shared* value and therefore pinned by whichever
+ * binding sits highest — `GSet`, at 24.7%. That makes the shared default nearly decorative on the
+ * twelve retiring bindings, whose healthy rates run **0.0% – 19.3%** over seeds `0..15`. Each of
+ * them declares its own instead, and the rule is:
+ *
+ * > **The ceiling sits at the midpoint between the binding's measured healthy rate and the lowest
+ * > rate it must catch, rounded to a whole percent.**
+ *
+ * The two rates it must catch are (i) the same binding with
+ * [LatticeLawHarness.leadEveryReplicaWithAnAssert] removed, and (ii) the same binding with
+ * retirement dead off replica 0 — #2158's shape. Where those sit so close to the healthy rate that
+ * no ceiling has two points on both sides, the constant targets the one it can separate and the
+ * binding's comment says which, with the numbers. Nine of the twelve pin the leading assert; eleven
+ * catch #2158's shape; `VacuityBreakdownProbe` (`-Plattice.vacuity.breakdown=true`) re-derives every
+ * figure.
+ *
+ * **This is the debt #2145 created, and the reason to read a *lowered* ceiling as different in kind
+ * from a raised one.** Before the leading asserts, six retiring bindings caught #2158's mutant on
+ * this ceiling — `ORSet` 28.6%, `CausalDotMap` 28.9%, `CausalDotSet` 25.8%, `Fugue`/`Rga` 26.1%,
+ * `TwoPhaseSet` 40.0%, all over the 25% default. That was an **accident**: the mutant cleared the
+ * ceiling only because the *healthy* binding was itself wasting a fifth of its budget at the lattice
+ * bottom. #2145 removed that waste, healthy `ORSet` fell 20.3% → 8.6%, and the mutant fell with it
+ * to 21.7% — under the default, uncaught, on five of the six. The signal had in fact grown (11.7
+ * points of excess against the healthy rate, up from 8.3); only the constant was in the wrong place.
+ * Raising a ceiling buys the number without buying the search, which is why the failure message says
+ * not to. Lowering one onto a measured healthy rate buys the search back.
  *
  * ## The two waivers, and why they are shaped differently
  *
@@ -292,7 +321,10 @@ public fun <S> defaultCriticalShapes(alphabet: List<LatticeOp<S>>): List<List<St
  * @param strictAncestorPairs minimum fraction of ordered pairs that are strict-ancestor pairs.
  * @param concurrentPairs minimum fraction of ordered pairs that are concurrent. Waived by [totalOrder].
  * @param effectiveRetireSteps minimum fraction of steps that retire *and* change the state.
- * @param maxNoOpSteps maximum fraction of steps that leave the state unchanged.
+ * @param maxNoOpSteps maximum fraction of steps that leave the state unchanged. **Set this
+ *   per-binding on anything that retires** — see the section above for the rule, and the binding's
+ *   own comment for the measurement behind its constant. The 25% default is the shared value and is
+ *   pinned by `GSet`; it is far too loose to say anything about a retiring binding.
  * @param totalOrder the type's reachable states form a chain, so the concurrency floor is
  *   unreachable rather than unmet. Waives that one floor and nothing else.
  */

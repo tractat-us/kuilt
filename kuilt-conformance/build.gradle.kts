@@ -4,6 +4,16 @@ plugins {
     alias(libs.plugins.kover)
 }
 
+// Forward -Plattice.vacuity.breakdown=true to the JVM test process so that
+// VacuityBreakdownProbe can read it via System.getProperty(). The probe is a measuring
+// instrument rather than a check — it asserts nothing about any binding — so it is off by
+// default and costs a normal run nothing. JVM only: it is a developer surface, and every
+// number it produces is target-independent (the pool builder is seeded).
+tasks.withType<Test>().configureEach {
+    val flag = providers.gradleProperty("lattice.vacuity.breakdown").orNull
+    if (flag != null) systemProperty("lattice.vacuity.breakdown", flag)
+}
+
 // Shareable transport-contract conformance harness. Unlike a normal module's
 // commonTest (which sibling modules cannot see), this lives in commonMain so
 // every fabric adapter can subclass SeamConformanceSuite from its own test

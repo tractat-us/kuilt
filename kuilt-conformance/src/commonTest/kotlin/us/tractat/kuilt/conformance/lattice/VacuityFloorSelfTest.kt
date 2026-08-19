@@ -169,10 +169,25 @@ internal class VacuityFloorSelfTest {
      * on a world where every retire everywhere is effective, which is the world the shortcut would
      * be safe in.
      *
-     * The states this moves out of the randomised pool are not lost. `runExhaustiveSmall` walks
-     * **every** word of length `1..L` from `initial` on replica 0, so `[remove]` and `[unset-high]`
-     * — and every continuation of them within the bound — are still searched, exhaustively, on
-     * every run.
+     * **What the leading assert does cost those two, stated exactly.** The states `⊥ · remove` and
+     * `⊥ · unset-high` leave the randomised pool, and three passes build from that pool, so be
+     * precise about which still see them:
+     *
+     * - `runExhaustiveSmall` **does** — it walks every word of length `1..L` from `initial` on
+     *   replica 0, so `[remove]`, `[unset-high]` and every continuation within the bound are still
+     *   searched exhaustively on every run. That is the bracketing pair (associativity and
+     *   canonicality), which is the pass the whole suite is built around.
+     * - `runOtherJoinLaws` and `runCodecLaws` **do not** — both build from `causalPool`. The codec
+     *   pass calls itself "the one seam every test above skips", so this is a real narrowing and not
+     *   a technicality. What still covers the shape there is `:kuilt-crdt`'s cross-target golden
+     *   vectors: `CanonicalGoldenVectorTest`'s `TwoPhaseSet` fixture joins in
+     *   `TwoPhaseSet.empty().remove("delta")` — a tombstone for an element never added — so a
+     *   codec that dropped it fails there. That is byte-level pinning of one constructed state, not
+     *   the three codec arms over a pool, and it is what the tree has.
+     *
+     * Restoring it here would mean naming those words in a critical shape, which on `TwoPhaseSet`
+     * is not spellable: its elements are single-shot, so `remove · add · remove` no-ops on its third
+     * step and the harness rejects the shape as decoration.
      */
     @Test
     fun aBottomStateRetireIsEffectiveOnTheBindingsThatWriteATombstone() {

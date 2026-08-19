@@ -41,8 +41,12 @@ internal class ORSetConvergenceTest : LatticeLawSuite<ORSet<String>>() {
             // is still reached whenever a replica has removed everything it holds. It is no longer
             // reached from `initial` — since #2145 every replica takes one leading assert, so no
             // replica starts empty and the bottom-state no-ops this line used to produce (85 of the
-            // binding's 139 over seeds 0..63, all of them RETIRE) are gone. `runExhaustiveSmall` is
-            // where a retire against the empty set is still walked, exhaustively.
+            // binding's 139 over seeds 0..63, all of them RETIRE) are gone. `runExhaustiveSmall`
+            // still walks a retire against the empty set exhaustively; the pool-built passes
+            // (`runOtherJoinLaws`, `runCodecLaws`) no longer reach it. See
+            // `VacuityFloorSelfTest.aBottomStateRetireIsEffectiveOnTheBindingsThatWriteATombstone`,
+            // which states that split exactly — for an `ORSet` the state in question is the
+            // identity anyway, which is why this binding is that test's control arm.
             LatticeOp("remove-roam", OpKind.RETIRE) { state, _, random ->
                 val held = state.elements.sorted()
                 val element = if (held.isEmpty()) ELEMENTS[random.nextInt(ELEMENTS.size)] else held[random.nextInt(held.size)]
@@ -54,6 +58,13 @@ internal class ORSetConvergenceTest : LatticeLawSuite<ORSet<String>>() {
         // the SAME element is the shape that matters here: `add` mints a fresh dot, so a lattice
         // that let the retired tag survive lands somewhere a correct one does not.
         criticalShapes = listOf(listOf("add", "remove", "add")),
+        // No-op ceiling tightened from the shared 25% default. Measured over seeds `0..15` — the
+        // window `generatorIsNotVacuous` runs — this binding reads **8.6%**; the ceiling sits at
+        // 14%, a 5.4-point margin. See `VacuityFloors.maxNoOpSteps` for the rule and for why the
+        // shared default cannot do this job. What the 14% catches that 25% did not:
+        //  - the leading assert removed from the pool builder: 20.3%, reds by 6.3 points.
+        //  - retirement dead off replica 0 (#2158's shape): 21.7%, reds by 7.7 points.
+        floors = VacuityFloors(maxNoOpSteps = 0.14),
         serializer = ORSet.serializer(String.serializer()),
         replicaCount = 3,
         opsPerReplica = 8,

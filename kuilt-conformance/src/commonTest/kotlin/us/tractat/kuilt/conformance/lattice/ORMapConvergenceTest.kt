@@ -64,14 +64,25 @@ internal class ORMapConvergenceTest : LatticeLawSuite<ORMap<String, GCounter>>()
             // holds. It is no longer reached from `initial` — since #2145 every replica takes one
             // leading assert, so no replica starts empty and the bottom-state no-ops this line used
             // to produce (70 of the binding's 115 over seeds 0..63, all of them RETIRE) are gone.
-            // `runExhaustiveSmall` is where a retire against the empty map is still walked,
-            // exhaustively.
+            // `runExhaustiveSmall` still walks a retire against the empty map exhaustively; the
+            // pool-built passes (`runOtherJoinLaws`, `runCodecLaws`) no longer reach it. For an
+            // `ORMap` that state is the identity, so nothing observable is lost — the two bindings
+            // where it is not are `TwoPhaseSet` and `LWWRegister`, and
+            // `VacuityFloorSelfTest.aBottomStateRetireIsEffectiveOnTheBindingsThatWriteATombstone`
+            // is where that is stated and pinned.
             LatticeOp("remove-roam", OpKind.RETIRE) { state, _, random ->
                 val held = state.keys.sorted()
                 val key = if (held.isEmpty()) "k-${random.nextInt(0, 3)}" else held[random.nextInt(held.size)]
                 state.piece { it.remove(key) }
             },
         ),
+        // No-op ceiling tightened from the shared 25% default. Measured over seeds `0..15` — the
+        // window `generatorIsNotVacuous` runs — this binding reads **4.2%**; the ceiling sits at
+        // 10%, a 5.8-point margin. See `VacuityFloors.maxNoOpSteps` for the rule and for why the
+        // shared default cannot do this job. What the 10% catches that 25% did not:
+        //  - the leading assert removed from the pool builder: 15.8%, reds by 5.8 points.
+        //  - retirement dead off replica 0 (#2158's shape): 17.6%, reds by 7.6 points.
+        floors = VacuityFloors(maxNoOpSteps = 0.10),
         serializer = ORMap.serializer(String.serializer(), GCounter.serializer()),
         replicaCount = 3,
         opsPerReplica = 8,

@@ -61,6 +61,15 @@ internal class JsonCrdtConvergenceTest : LatticeLawSuite<JsonCrdt>() {
                 state.withReplica(replicaIds[replicaIndex]).piece { it.remove(keys[random.nextInt(keys.size)]) }
             },
         ),
+        // No-op ceiling tightened from the shared 25% default. Measured over seeds `0..15` — the
+        // window `generatorIsNotVacuous` runs — this binding reads **11.5%**; the ceiling sits at
+        // 15%, a 3.5-point margin. See `VacuityFloors.maxNoOpSteps` for the rule and for why the
+        // shared default cannot do this job. What the 15% catches that 25% did not:
+        //  - the leading assert removed from the pool builder: 18.6%, reds by 3.6 points.
+        //  - NOT #2158's shape: retirement dead off replica 0 reads 13.7%, under this ceiling. The
+        //    healthy and crippled rates are 2.2 points apart here, too narrow for a ceiling to
+        //    separate them without reading as noise on the next generator edit.
+        floors = VacuityFloors(maxNoOpSteps = 0.15),
         serializer = JsonCrdt.serializer(),
         replicaCount = 3,
         opsPerReplica = 8,
