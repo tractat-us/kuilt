@@ -498,8 +498,9 @@ rest. A late joiner that dials in after construction is admitted with
 (`kuilt-core/.../MeshSeam.kt:49`), which runs the same preamble exchange and
 dedup, then launches the new link's read loop.
 
-**A deduplicated loser is drained, not dropped, so your `Connection.close` owes the
-mesh nothing.** Whichever link loses the tiebreak stays open and keeps being read
+**A deduplicated loser is drained, not dropped — at construction and via `addLink`
+alike — so your `Connection.close` owes the mesh nothing.** Whichever link loses the
+tiebreak stays open and keeps being read
 until the remote's in-band goodbye arrives, and the surviving link's frames are held
 behind that tail; only then is the loser closed. This matters when writing a fabric:
 a `Connection` whose `close` discards buffered input is *fine* — the mesh never
