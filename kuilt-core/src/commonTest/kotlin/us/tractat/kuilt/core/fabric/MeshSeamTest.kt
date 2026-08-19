@@ -60,14 +60,14 @@ class MeshSeamTest {
 
         // Simulate peer-2 handshake (the failing conn — sends hello once, which succeeds).
         val peer2HelloDeferred = async {
-            badTheirs.send(MeshHello.encode(badId, meshNonce(2)))
-            MeshHello.decode(badTheirs.incoming.first())
+            badTheirs.send(MeshWire.encodeHello(badId, meshNonce(2)))
+            meshHelloOf(badTheirs.incoming.first())
         }
 
         // Simulate peer-1 handshake (the good conn).
         val peer1HelloDeferred = async {
-            goodTheirs.send(MeshHello.encode(goodId, meshNonce(1)))
-            MeshHello.decode(goodTheirs.incoming.first())
+            goodTheirs.send(MeshWire.encodeHello(goodId, meshNonce(1)))
+            meshHelloOf(goodTheirs.incoming.first())
         }
 
         val senderMesh = senderMeshDeferred.await()
@@ -83,7 +83,7 @@ class MeshSeamTest {
         senderMesh.broadcast(payload)
 
         // (b) The good link must have delivered the payload despite the failing link being first.
-        val received = goodTheirs.incoming.first()
+        val received = meshPayloadOf(goodTheirs.incoming.first())
         assertContentEquals(payload, received, "surviving peer must receive the broadcast payload")
 
         // (c) The failing peer must be removed from the roster.
@@ -186,16 +186,16 @@ class MeshSeamTest {
         val onPeer2 = async { theirs2.incoming.first() }
         val payload = byteArrayOf(11, 22)
         seam.broadcast(payload)
-        assertContentEquals(payload, onPeer1.await(), "existing peer must receive broadcast")
-        assertContentEquals(payload, onPeer2.await(), "late joiner must receive broadcast")
+        assertContentEquals(payload, meshPayloadOf(onPeer1.await()), "existing peer must receive broadcast")
+        assertContentEquals(payload, meshPayloadOf(onPeer2.await()), "late joiner must receive broadcast")
     }
 
     /** Drive the far end of a [connectionPair] through the mesh handshake for [remoteId]. */
     private suspend fun handshakeRemote(theirs: Connection, remoteId: PeerId) {
         val helloFromMesh = theirs.incoming.first()
-        val meshNonce = MeshHello.decode(helloFromMesh).nonce
+        val meshNonce = meshHelloOf(helloFromMesh).nonce
         assertTrue(meshNonce.isNotEmpty(), "mesh preamble must carry a non-empty nonce")
-        theirs.send(MeshHello.encode(remoteId, meshNonce(0)))
+        theirs.send(MeshWire.encodeHello(remoteId, meshNonce(0)))
     }
 
     /**

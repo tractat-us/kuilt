@@ -5,6 +5,8 @@ import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
@@ -12,6 +14,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
@@ -19,6 +22,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock as withMutex
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.PeerId
@@ -34,6 +39,8 @@ import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.coroutines.CoroutineContext
 import kotlin.random.Random
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * A [Seam] over a fully-connected N-peer mesh of point-to-point [Connection]s, with support for
@@ -84,10 +91,16 @@ public interface Mesh : Seam, PrincipalRoster {
  * survivor when a duplicate link to the same peer exists — cross-node dedup agreement with no
  * coordination.
  *
- * Wire format: length-prefix — `[4-byte big-endian id length][id UTF-8 bytes][NONCE_BYTES nonce bytes]`.
- * No delimiter: the id length field makes the frame self-describing. The nonce is raw bytes (not
+ * Wire format — the BODY of a [MeshFrameType.Hello] frame:
+ * `[VERSION_BYTES version][4-byte big-endian id length][id UTF-8 bytes][NONCE_BYTES nonce bytes]`.
+ * No delimiter: the id length field makes the body self-describing. The nonce is raw bytes (not
  * hex-encoded) and always exactly [NONCE_BYTES] bytes long — enforced by both [encode] and [decode],
  * not merely documented (#1812).
+ *
+ * These bytes are the frame's body only: the [MeshFrameType] discriminator that says *this is a
+ * hello* lives one layer out, in [MeshWire]. The **version** lives HERE rather than beside the type
+ * byte because it versions this body's layout, not the type space — and because a hello is the
+ * first thing a peer sends, so the version is known before anything else is interpreted (#2474).
  */
 internal data class MeshHello(val peerId: PeerId, val nonce: ByteArray) {
     override fun equals(other: Any?): Boolean =
@@ -101,18 +114,20 @@ internal data class MeshHello(val peerId: PeerId, val nonce: ByteArray) {
                 "malformed MeshHello: nonce is ${nonce.size} bytes, expected exactly $NONCE_BYTES"
             }
             val idBytes = peerId.value.encodeToByteArray()
-            return ByteArray(4 + idBytes.size + nonce.size).also { buf ->
-                buf.writeInt(idBytes.size, offset = 0)
-                idBytes.copyInto(buf, destinationOffset = 4)
-                nonce.copyInto(buf, destinationOffset = 4 + idBytes.size)
+            return ByteArray(VERSION_BYTES + Int.SIZE_BYTES + idBytes.size + nonce.size).also { buf ->
+                buf[0] = MESH_WIRE_VERSION.toByte()
+                buf.writeInt(idBytes.size, offset = VERSION_BYTES)
+                idBytes.copyInto(buf, destinationOffset = VERSION_BYTES + Int.SIZE_BYTES)
+                nonce.copyInto(buf, destinationOffset = VERSION_BYTES + Int.SIZE_BYTES + idBytes.size)
             }
         }
 
         /**
-         * Decode a preamble frame, throwing [IllegalArgumentException] if it is malformed.
+         * Decode a preamble **body** (the frame minus its [MeshFrameType] byte), throwing
+         * [IllegalArgumentException] if it is malformed.
          *
-         * The frame is the **first bytes a remote sends**, so every check runs before the read it
-         * protects (#1788): a frame shorter than the 4-byte length prefix would index-fault inside
+         * The body is the **first bytes a remote sends**, so every check runs before the read it
+         * protects (#1788): a body shorter than the 4-byte length prefix would index-fault inside
          * [readInt], a negative declared length passes any `size >= 4 + idLen` test (the prefix is read
          * as a signed [Int]), and a large one wraps `4 + idLen` negative so that test passes too — hence
          * the subtraction. (Additive checks are fine in `NamedFrame`/`GossipFrame` only because their
@@ -124,6 +139,13 @@ internal data class MeshHello(val peerId: PeerId, val nonce: ByteArray) {
          * accept pump (`HostedOverlay`). Rejecting in the decoder replaces an `IndexOutOfBoundsException`
          * raised from inside [readInt] — which says only that *something* was wrong — with a message that
          * names *what*.
+         *
+         * ## The version is read FIRST, and a version we do not know ends the decode (#2474)
+         * Every field after it is laid out *by* that version, so reading one before checking the
+         * version is reading a body whose shape is not yet established. A mismatch raises
+         * [MeshUnsupportedWireVersionException], which names both versions — never a generic
+         * malformed-frame error, because on a version break "malformed" is precisely the wrong
+         * diagnosis and the one a reader will act on.
          *
          * ## The nonce is a fixed-width field, and a wrong width is REJECTED, never reshaped (#1812)
          *
@@ -138,28 +160,39 @@ internal data class MeshHello(val peerId: PeerId, val nonce: ByteArray) {
          * proof into a valid-looking identity — the forger simply gets whichever in-range value the
          * reshaping picks. The frame is dropped instead.
          */
-        public fun decode(frame: ByteArray): MeshHello {
-            require(frame.size >= Int.SIZE_BYTES) {
-                "truncated MeshHello: ${frame.size} bytes cannot hold the ${Int.SIZE_BYTES}-byte id length"
+        public fun decode(body: ByteArray): MeshHello {
+            if (body.size < VERSION_BYTES) {
+                throw MeshTruncatedFrameException(
+                    "truncated MeshHello: ${body.size} bytes cannot hold the $VERSION_BYTES-byte wire version",
+                )
             }
-            val idLen = frame.readInt(offset = 0)
+            val version = body[0].toInt() and 0xff
+            if (version != MESH_WIRE_VERSION) throw MeshUnsupportedWireVersionException(version, MESH_WIRE_VERSION)
+            val idOffset = VERSION_BYTES + Int.SIZE_BYTES
+            require(body.size >= idOffset) {
+                "truncated MeshHello: ${body.size} bytes cannot hold the ${Int.SIZE_BYTES}-byte id length"
+            }
+            val idLen = body.readInt(offset = VERSION_BYTES)
             require(idLen >= 0) { "malformed MeshHello: negative declared id length $idLen" }
-            require(frame.size - Int.SIZE_BYTES >= idLen) {
-                "truncated MeshHello: declared id length $idLen exceeds the ${frame.size}-byte frame"
+            require(body.size - idOffset >= idLen) {
+                "truncated MeshHello: declared id length $idLen exceeds the ${body.size}-byte body"
             }
-            // Safe subtraction: the two checks above pin `0 <= idLen <= frame.size - 4`.
-            val nonceLen = frame.size - Int.SIZE_BYTES - idLen
+            // Safe subtraction: the two checks above pin `0 <= idLen <= body.size - idOffset`.
+            val nonceLen = body.size - idOffset - idLen
             require(nonceLen == NONCE_BYTES) {
                 "malformed MeshHello: nonce is $nonceLen bytes, expected exactly $NONCE_BYTES"
             }
-            val peerId = PeerId(frame.decodeToString(startIndex = Int.SIZE_BYTES, endIndex = Int.SIZE_BYTES + idLen))
-            val nonce = frame.copyOfRange(Int.SIZE_BYTES + idLen, frame.size)
+            val peerId = PeerId(body.decodeToString(startIndex = idOffset, endIndex = idOffset + idLen))
+            val nonce = body.copyOfRange(idOffset + idLen, body.size)
             return MeshHello(peerId, nonce)
         }
     }
 }
 
 private const val NONCE_BYTES = 16
+
+/** Length of the leading wire-version field, in bytes. */
+private const val VERSION_BYTES = 1
 
 /** Write [value] as a 4-byte big-endian integer into [this] at [offset]. */
 private fun ByteArray.writeInt(value: Int, offset: Int) {
@@ -234,6 +267,18 @@ private class Link(
  *   built from the surviving links — one rejected joiner never fails construction nor cancels the
  *   concurrent sibling handshakes. A rejected link is never published, so it can never contend in
  *   dedup, join [Seam.peers], or land in the [attestedPrincipals] roster.
+ * @param drainBound how long a deduplicated loser is drained before the seam gives up on the
+ *   remote's goodbye and disposes of the link anyway (#2474). A **zombie-link backstop**, never the
+ *   mechanism: the healthy path terminates in-band on the goodbye, milliseconds after the swap, with
+ *   no timer involved. Production default [DEFAULT_MESH_DRAIN_BOUND]; tests inject a small value and
+ *   drive it with `advanceTimeBy`. Runs on [dispatcher], so it advances under virtual time.
+ * @param orderingHoldCapacity how many live-link frames a peer's receiver ordering hold buffers
+ *   before it releases early and accepts the reorder (#2474). Bounded, never unbounded;
+ *   backpressuring instead would stall staging on a release only the drained link can perform.
+ *   Production default [DEFAULT_MESH_ORDERING_HOLD_CAPACITY].
+ * @param onDisplacement raised when a displaced link finishes draining, and when a peer's ordering
+ *   hold overflows. `kuilt-core` is logger-free, so this is how those surface to a consumer's own
+ *   logger. Best-effort and non-suspending; defaults to a silent absorb. See [MeshDisplacement].
  */
 @Deprecated(
     message = "meshSeam is ambiguous — it carries hub semantics (never self-torns on drain) under a " +
@@ -253,7 +298,13 @@ public suspend fun meshSeam(
     random: Random = Random.Default,
     policy: DeliveryPolicy = DeliveryPolicy.Reliable,
     admission: LinkAdmission = LinkAdmission.AcceptAll,
-): Mesh = buildMesh(selfId, connections, dispatcher, random, policy, admission, latchTornWhenDrained = false)
+    drainBound: Duration = DEFAULT_MESH_DRAIN_BOUND,
+    orderingHoldCapacity: Int = DEFAULT_MESH_ORDERING_HOLD_CAPACITY,
+    onDisplacement: (MeshDisplacement) -> Unit = {},
+): Mesh = buildMesh(
+    selfId, connections, dispatcher, random, policy, admission,
+    latchTornWhenDrained = false, drainBound, orderingHoldCapacity, onDisplacement,
+)
 
 /**
  * Build a symmetric **peer-mesh** [Seam] — the contract-conforming N-peer fabric.
@@ -297,7 +348,13 @@ public suspend fun peerMesh(
     random: Random = Random.Default,
     policy: DeliveryPolicy = DeliveryPolicy.Reliable,
     admission: LinkAdmission = LinkAdmission.AcceptAll,
-): Mesh = buildMesh(selfId, connections, dispatcher, random, policy, admission, latchTornWhenDrained = true)
+    drainBound: Duration = DEFAULT_MESH_DRAIN_BOUND,
+    orderingHoldCapacity: Int = DEFAULT_MESH_ORDERING_HOLD_CAPACITY,
+    onDisplacement: (MeshDisplacement) -> Unit = {},
+): Mesh = buildMesh(
+    selfId, connections, dispatcher, random, policy, admission,
+    latchTornWhenDrained = true, drainBound, orderingHoldCapacity, onDisplacement,
+)
 
 /**
  * Build a **hub-mesh** [Seam] — the start-empty-and-grow topology (a host admitting joiners).
@@ -317,7 +374,33 @@ public suspend fun hubMesh(
     random: Random = Random.Default,
     policy: DeliveryPolicy = DeliveryPolicy.Reliable,
     admission: LinkAdmission = LinkAdmission.AcceptAll,
-): Mesh = buildMesh(selfId, connections, dispatcher, random, policy, admission, latchTornWhenDrained = false)
+    drainBound: Duration = DEFAULT_MESH_DRAIN_BOUND,
+    orderingHoldCapacity: Int = DEFAULT_MESH_ORDERING_HOLD_CAPACITY,
+    onDisplacement: (MeshDisplacement) -> Unit = {},
+): Mesh = buildMesh(
+    selfId, connections, dispatcher, random, policy, admission,
+    latchTornWhenDrained = false, drainBound, orderingHoldCapacity, onDisplacement,
+)
+
+/**
+ * How long a deduplicated loser is drained before the seam gives up on the remote's goodbye (#2474).
+ *
+ * A **zombie-link backstop**, not the mechanism: a healthy drain terminates in-band on the goodbye,
+ * milliseconds after the swap, with no timer involved. Two seconds because the drain holds two things
+ * open while it runs — a connection, and the peer's receiver ordering hold — and frame-scale transport
+ * hiccups are milliseconds, so this never truncates a real drain.
+ */
+public val DEFAULT_MESH_DRAIN_BOUND: Duration = 2.seconds
+
+/**
+ * Default depth of a peer's receiver ordering hold (#2474): how far the live link may run ahead of a
+ * drained link's tail before the seam gives up on ordering the two and releases early.
+ *
+ * The same shape as [DeliveryPolicy.DEFAULT_CAPACITY] because it absorbs the same kind of transient.
+ * Bounded, never unbounded — see [MeshDisplacement.OrderingHoldOverflowed] for why backpressuring at
+ * the bound is the one option not available.
+ */
+public const val DEFAULT_MESH_ORDERING_HOLD_CAPACITY: Int = DeliveryPolicy.DEFAULT_CAPACITY
 
 /**
  * Shared construction for the mesh factories: handshake every [connections] entry, apply
@@ -333,6 +416,9 @@ private suspend fun buildMesh(
     policy: DeliveryPolicy,
     admission: LinkAdmission,
     latchTornWhenDrained: Boolean,
+    drainBound: Duration,
+    orderingHoldCapacity: Int,
+    onDisplacement: (MeshDisplacement) -> Unit,
 ): Mesh {
     val handshaked = coroutineScope {
         connections.map { conn -> async { handshakeLink(selfId, conn, dispatcher, random) } }.awaitAll()
@@ -353,6 +439,13 @@ private suspend fun buildMesh(
             else -> losers += link
         }
     }
+    // NOT drained (#2474), and the asymmetry with [Mesh.addLink]'s two arms is deliberate rather than an
+    // oversight. A drain needs a seam to attribute the drained link's frames to, and here there is none
+    // yet — the seam is constructed on the last line of this function. What that costs is bounded: no
+    // peer has been published locally, so there is no local publish-then-swap window at all; the residual
+    // is the REMOTE's window, if it deduped first and wrote into the link before we got here. Draining it
+    // would mean handing these losers to the seam and starting their drains from `init`, where the
+    // ordering hold cannot be armed before the winners' read loops start. Tracked separately.
     losers.forEach { closeBestEffort(it.conn) }
 
     // A2 (born-dead): a peer-mesh that REQUESTED connections but had them ALL rejected/deduped away
@@ -361,7 +454,10 @@ private suspend fun buildMesh(
     // (`connections` empty) requested nothing, so it is NOT born-dead: it stays Woven and grows via
     // addLink. Hubs never latch, so bornDead is always false for them (latchTornWhenDrained = false).
     val bornDead = latchTornWhenDrained && connections.isNotEmpty() && winners.isEmpty()
-    return MeshSeam(selfId, winners, dispatcher, random, policy, admission, latchTornWhenDrained, bornDead)
+    return MeshSeam(
+        selfId, winners, dispatcher, random, policy, admission, latchTornWhenDrained, bornDead,
+        drainBound, orderingHoldCapacity, onDisplacement,
+    )
 }
 
 /**
@@ -378,10 +474,20 @@ private suspend fun handshakeLink(selfId: PeerId, conn: Connection, dispatcher: 
     val principal = (conn as? PrincipalAttested)?.principal
     val single = conn.singleCollection(dispatcher)
     val myNonce = random.nextBytes(NONCE_BYTES)
-    single.send(MeshHello.encode(selfId, myNonce))
-    val remote = MeshHello.decode(single.firstFrame())
+    single.send(MeshWire.encodeHello(selfId, myNonce))
+    // Classification is by TYPE, not by position (#2474). The preamble used to be "whatever the first
+    // frame is", so a peer that opened with data had those bytes fed to `MeshHello.decode`; now the
+    // frame says what it is and anything other than a hello here is refused by name.
+    val remote = when (val first = MeshWire.decode(single.firstFrame())) {
+        is MeshWireFrame.Hello -> first.hello
+        MeshWireFrame.Data, MeshWireFrame.Goodbye ->
+            throw MeshWireOutOfOrderException("mesh handshake: expected a HELLO frame first, got $first")
+    }
     return Link(remote.peerId, single, canonicalLinkNonce(myNonce, remote.nonce), principal)
 }
+
+/** A frame whose type is known but whose POSITION is not one this build accepts — see [MeshWire]. */
+internal class MeshWireOutOfOrderException(message: String) : MeshWireFormatException(message)
 
 /**
  * Close [conn] best-effort: the *conn's* failure to close must not cancel the work that follows (#1834).
@@ -470,6 +576,51 @@ private suspend fun admitLink(selfId: PeerId, admission: LinkAdmission, link: Li
     return false
 }
 
+/**
+ * ## The graceful displacement drain (#2474) — a port of `:kuilt-nw`'s D+ (#2425)
+ *
+ * A displaced dedup loser used to be dropped from [links] and closed in the same breath. That loses
+ * whatever the remote wrote into the publish-then-swap window, and it loses it *silently*: every mesh
+ * link is wrapped in [singleCollection], whose `close` cancels its republishing pump **before**
+ * closing the delegate, so bytes the delegate had already handed over are discarded no matter how
+ * orderly the underlying transport's close is. On the keep arm it was worse — that loser never had a
+ * read loop at all, so its whole tail went on the floor.
+ *
+ * Since #2474 a displaced link is instead marked **draining** ([draining]):
+ *
+ *  - it **keeps (or is given) a read loop**, so its inbound data is still attributed to its peer;
+ *  - it is **never selected for a send** — it is not in [links], which is the one map [broadcast] and
+ *    [sendTo] route through, so this is structural rather than a rule to remember;
+ *  - it is sent exactly **one [MeshFrameType.Goodbye]**, outside [lock], as the last thing written to it;
+ *  - it terminates on the remote's goodbye | the link dying under it | the injected [drainBound], and
+ *    only THEN is it closed and forgotten.
+ *
+ * **Both dedup arms drain.** The keep arm looks like the harmless half — the peer was never published
+ * on that link locally — but both ends dedup onto the same physical link, so *our* keep-arm loser is
+ * the *remote's* replace-arm loser, with its window frames in flight toward us.
+ *
+ * The goodbye is what makes the drain sound rather than an optimisation of it. Terminating on "the
+ * link died" is self-defeating once both ends drain: that signal exists only while the remote still
+ * closes abruptly, and when neither does, every formation's drain runs to the full bound with the
+ * ordering hold below stalling the healthy path for its whole duration. [drainBound] is a
+ * **zombie-link backstop**, not the mechanism.
+ *
+ * ## The receiver ordering hold (#2474)
+ * [Seam.incoming] promises frames in send order. A remote writes to exactly one link per peer at a
+ * time (its own [links] lookup is a single locked read), so its stream across a swap is strictly
+ * loser-then-winner — but the two links are read by two independent loops here, so *delivery* order
+ * is not. Draining without a hold would trade silent loss for silent reordering. So a per-peer hold
+ * ([orderingHolds]) is armed when a drain starts and released when that peer's last drain ends;
+ * while it is armed, frames arriving on the peer's live link are buffered and frames arriving on a
+ * DRAINING link are delivered immediately.
+ *
+ * **The hold buffers and continues; it never suspends the caller.** See [stageInbound] for the
+ * no-circular-wait argument, which is the reason this shape is mandatory rather than tidy.
+ *
+ * **Sequence is stamped at release time**, inside [stageMutex], so stamped order is delivery order.
+ * The buffer is bounded ([orderingHoldCapacity]); on overflow it releases early, reports
+ * [MeshDisplacement.OrderingHoldOverflowed] and accepts the reorder rather than backpressuring.
+ */
 private class MeshSeam(
     override val selfId: PeerId,
     initialLinks: Map<PeerId, Link>,
@@ -483,6 +634,9 @@ private class MeshSeam(
     // A2: this peer-mesh REQUESTED construction connections but had them all rejected/deduped away —
     // dead on arrival, latch Torn at birth (see init). A start-empty peer-mesh is NOT bornDead.
     bornDead: Boolean,
+    private val drainBound: Duration,
+    private val orderingHoldCapacity: Int,
+    private val onDisplacement: (MeshDisplacement) -> Unit,
 ) : Mesh {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
 
@@ -493,6 +647,48 @@ private class MeshSeam(
     // release, then send/close outside it.
     private val lock = reentrantLock()
     private val links = mutableMapOf<PeerId, Link>()
+
+    /**
+     * Links currently DRAINING (#2474) → their bookkeeping. Keyed by [Link], which is a plain class
+     * with **identity** equality on purpose: two links to one peer are distinguished by nothing else
+     * (they differ only in a nonce this map does not read), and redial churn can leave two drains to
+     * one peer in flight at once, which a peer-keyed map would silently collapse.
+     *
+     * A link in here is NOT in [links] — that is what makes "never selected for a send" structural.
+     * Guarded by [lock].
+     */
+    private val draining = mutableMapOf<Link, Drain>()
+
+    /** A displaced loser being drained rather than closed (#2474). */
+    private class Drain(val peer: PeerId, val arm: MeshDisplacement.Arm) {
+        /** The [drainBound] backstop. Set once, immediately after the drain is registered. */
+        var boundJob: Job? = null
+
+        /** Data frames the remote delivered on this link AFTER the drain began — what the drain saved. */
+        var drainedFrames: Int = 0
+    }
+
+    /**
+     * Serialises **every** delivery into [spool] with the ordering-hold decision that precedes it
+     * (#2474), so a hold's flush and a fresh arrival can never interleave out of order.
+     *
+     * A coroutine [Mutex], not the seam-wide [lock]: the guarded region contains [Spool.deliver],
+     * which suspends for backpressure. That is the exact opposite of [lock]'s no-suspend rule, and
+     * the reason the two are separate primitives. **[lock] is never held while this is acquired, and
+     * this is never held while [lock] is acquired** — the two are strictly disjoint, so there is no
+     * ordering to invert.
+     */
+    private val stageMutex = Mutex()
+
+    /**
+     * Peers whose live-link frames are being held pending a drain-end (#2474): peer → the frames
+     * buffered so far, in arrival order. **Guarded by [stageMutex] only** — never by [lock] — so the
+     * hold decision and the delivery it guards are one atomic step.
+     *
+     * A peer's presence as a key IS the armed flag; the list may be empty. Bounded by
+     * [orderingHoldCapacity], after which the hold releases early (see [stageInbound]).
+     */
+    private val orderingHolds = mutableMapOf<PeerId, MutableList<ByteArray>>()
 
     private val _peers = MutableStateFlow(setOf(selfId))
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
@@ -512,9 +708,18 @@ private class MeshSeam(
      * So this value **tightens over a mesh's life**: a hub with no links yet, or a peer-mesh still
      * `Weaving`, reports "unknown", and the number appears — and may shrink again — as links
      * attach. Read it per send rather than caching it at construction.
+     *
+     * It is the tightest link ceiling **less [MeshWire.TYPE_BYTES]** (#2474): the self-describing
+     * body spends one byte of every frame on its type, and that byte is taken out of the caller's
+     * budget rather than added to the wire — which is why it is reported as `reservedBytes` on a
+     * refusal and not hidden. Floored at zero, so a pathological one-byte link reports `0` rather
+     * than a negative budget.
      */
     override val maxPayloadBytes: Int?
-        get() = lock.withLock { links.values.mapNotNull { it.conn.maxFrameBytes }.minOrNull() }
+        get() = lock.withLock {
+            links.values.mapNotNull { it.conn.maxFrameBytes }.minOrNull()
+                ?.let { (it - MeshWire.TYPE_BYTES).coerceAtLeast(0) }
+        }
 
     // Host-verified principals of currently-linked peers (PrincipalRoster). Updated ONLY under
     // `lock`, in the same critical sections that mutate `links`, so it can never desync from the
@@ -535,7 +740,7 @@ private class MeshSeam(
         _attestedPrincipals.value = buildRoster()
 
         // Launch a supervised reader for each initial link.
-        initialLinks.values.forEach { link -> scope.launch { readLoop(link.remoteId, link.conn) } }
+        initialLinks.values.forEach { link -> scope.launch { readLoop(link) } }
 
         // A2 born-dead: a peer-mesh that REQUESTED construction connections but had them all rejected
         // by admission (or deduped away) is born with zero links. The drain latch only fires from
@@ -570,29 +775,62 @@ private class MeshSeam(
             throw LinkRejectedException(link.remoteId, attested = link.principal != null)
         }
         // Dedup against any existing link to the same peer using the canonical nonce, then publish.
-        // Snapshot the loser under the lock, close it outside.
-        val loser = admitOrReject(link)
-        // Best-effort (see [closeBestEffort]). This closes ONE conn, but item count is the wrong axis:
-        // what matters is that work which MUST happen follows it. `admitOrReject` has already installed
-        // the winner in `links` and published the rosters, and the winner's readLoop launches on the
-        // next line — so rethrowing a cancellation the loser's conn minted would leave a ZOMBIE LINK
-        // (peer in `peers`, nothing ever reading its conn, its disconnect never noticed) and let a bare
-        // CancellationException escape `addLink` into `acceptPump` and `superviseVoterReconnection`,
-        // skipping their cleanup and cancelling that peer's supervision outright (#1834).
-        loser?.let { closeBestEffort(it) }
-        if (loser != link.conn) scope.launch { readLoop(link.remoteId, link.conn) }
+        when (val outcome = admitOrReject(link)) {
+            // First link to this peer: nothing to drain, just start reading it.
+            Admission.First -> scope.launch { readLoop(link) }
+
+            // REPLACE arm: the incoming link wins and displaces a PUBLISHED one. `startDrain` runs
+            // BEFORE the winner's read loop is launched, so the ordering hold is armed before the
+            // winner can deliver a single frame — the swap is airtight on this arm.
+            is Admission.Replaced -> {
+                startDrain(outcome.loser)
+                scope.launch { readLoop(link) }
+            }
+
+            // KEEP arm: the incoming link loses. It has no read loop yet — one is launched HERE, and
+            // it is the drain reader; before #2474 this loser was closed unread and its whole tail
+            // was lost. `startDrain` precedes that launch so the hold is armed before the drained
+            // link can deliver.
+            is Admission.Kept -> {
+                startDrain(link)
+                scope.launch { readLoop(link) }
+            }
+
+            // The seam tore between the handshake and the lock. Best-effort close (see
+            // [closeBestEffort]): a rethrown callee-minted cancellation would escape `addLink` into
+            // `acceptPump` and `superviseVoterReconnection`, skipping their cleanup and cancelling
+            // that peer's supervision outright (#1834).
+            Admission.Refused -> closeBestEffort(link.conn)
+        }
+    }
+
+    /** What [admitOrReject] decided — see its KDoc. */
+    private sealed interface Admission {
+        /** First link to this peer; it is installed and live. */
+        data object First : Admission
+
+        /** The incoming link won and displaced [loser], which is now draining. */
+        data class Replaced(val loser: Link) : Admission
+
+        /** The incoming link lost to the live one and is itself now draining. */
+        data object Kept : Admission
+
+        /** The seam is [SeamState.Torn]; the link is not admitted at all. */
+        data object Refused : Admission
     }
 
     /**
-     * Install [link] under the lock if it wins dedup, returning the conn to close (the loser) — the
-     * incoming conn itself if it lost, the displaced existing conn if it won, or `null` if it is the
-     * first link to that peer. Suspending closes happen in the caller, outside the lock.
+     * Install [link] under the lock if it wins dedup, and register the loser as **draining** rather
+     * than dropping it (#2474). Returns what the caller must do outside the lock: every arm that
+     * produces a drain has already put the loser in [draining], so from the instant this returns the
+     * loser's frames are attributed and bypass the ordering hold, while [links] — the one map the
+     * send path reads — names only the winner.
      */
-    private fun admitOrReject(link: Link): Connection? = lock.withLock {
-        if (state.value is SeamState.Torn) return@withLock link.conn
+    private fun admitOrReject(link: Link): Admission = lock.withLock {
+        if (state.value is SeamState.Torn) return@withLock Admission.Refused
         val existing = links[link.remoteId]
         when {
-            existing == null -> { links[link.remoteId] = link; publishRosters(); null }
+            existing == null -> { links[link.remoteId] = link; publishRosters(); Admission.First }
             // Displacement keeps the peer set identical but may change the peer's attestation —
             // including to NONE, and that is deliberate (#2357). The displaced conn is closed, so
             // after this there is exactly one live link for the id; the roster is derived from that
@@ -609,8 +847,16 @@ private class MeshSeam(
             // attested peer's id here, and the defence is deployment policy — unlike `RoomAuthorizer`,
             // `LinkAdmission` receives the principal and runs BEFORE this lottery. `RoomHubSeam`
             // refuses in code instead, because it holds both links live and can.
-            link.linkNonce < existing.linkNonce -> { links[link.remoteId] = link; publishRosters(); existing.conn }
-            else -> link.conn
+            link.linkNonce < existing.linkNonce -> {
+                links[link.remoteId] = link
+                publishRosters()
+                draining[existing] = Drain(existing.remoteId, MeshDisplacement.Arm.Replace)
+                Admission.Replaced(existing)
+            }
+            else -> {
+                draining[link] = Drain(link.remoteId, MeshDisplacement.Arm.Keep)
+                Admission.Kept
+            }
         }
     }
 
@@ -636,13 +882,15 @@ private class MeshSeam(
 
     override suspend fun broadcast(payload: ByteArray) {
         check(state.value !is SeamState.Torn) { closedMessage }
-        // Snapshot the live links under the lock, then send OUTSIDE it.
+        // Snapshot the live links under the lock, then send OUTSIDE it. `links` never names a
+        // draining link (#2474), so "a drained loser is never written to" is structural here.
         val targets = lock.withLock { links.values.map { it.remoteId to it.conn } }
+        val frame = MeshWire.encodeData(payload)
         targets.forEach { (remoteId, conn) ->
             // Best-effort by contract, and per link: a link too tight for this payload is skipped,
             // while the links that can carry it still get it. Skipping is not a link failure.
-            if (conn.oversizeOrNull(payload) != null) return@forEach
-            runCatchingCancellable { conn.send(payload) }
+            if (conn.oversizeOrNull(payload, reservedBytes = MeshWire.TYPE_BYTES) != null) return@forEach
+            runCatchingCancellable { conn.send(frame) }
                 .onFailure { removePeer(remoteId, conn) }
         }
     }
@@ -653,8 +901,8 @@ private class MeshSeam(
         // self-send fell out as PeerNotConnected — false, since `peers` names selfId (#2428).
         require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
         val conn = lock.withLock { links[peer]?.conn } ?: throw PeerNotConnected(peer)
-        conn.oversizeOrNull(payload)?.let { throw it }
-        runCatchingCancellable { conn.send(payload) }
+        conn.oversizeOrNull(payload, reservedBytes = MeshWire.TYPE_BYTES)?.let { throw it }
+        runCatchingCancellable { conn.send(MeshWire.encodeData(payload)) }
             .onFailure { removePeer(peer, conn) }
     }
 
@@ -666,22 +914,244 @@ private class MeshSeam(
         toClose.forEach { conn -> closeBestEffort(conn) }
     }
 
-    private suspend fun readLoop(remoteId: PeerId, conn: Connection) {
+    /**
+     * One link's reader. Classifies each frame by its leading [MeshFrameType] (#2474) rather than by
+     * position, so a duplicate hello can no longer reach the consumer as data and a goodbye is a
+     * message rather than a payload.
+     *
+     * The loop runs on a DRAINING link too — that is the whole drain: its data still belongs to its
+     * peer and is delivered ahead of the live link's held frames, and its goodbye is what ends the
+     * drain and disposes of it.
+     */
+    private suspend fun readLoop(link: Link) {
         try {
-            conn.incoming.collect { bytes ->
-                if (state.value !is SeamState.Torn) {
-                    // Sequence number is assigned atomically outside the lock. `deliver` SUSPENDS
-                    // for backpressure (SUSPEND policy) — never called while holding `lock`.
-                    spool.deliver(Swatch(payload = bytes, sender = remoteId, sequence = seq.incrementAndGet()))
+            link.conn.incoming.collect { bytes ->
+                if (state.value is SeamState.Torn) return@collect
+                // A frame this build cannot classify is a fault of THIS link and nothing else: the
+                // collect below rethrows out of the lambda, the catch treats it as a remote
+                // disconnect, and `finally` disposes of exactly this link.
+                when (MeshWire.decode(bytes)) {
+                    is MeshWireFrame.Hello -> throw MeshWireOutOfOrderException(
+                        "mesh link to ${link.remoteId.value}: a second HELLO arrived on an already " +
+                            "handshaked link — refusing the link rather than delivering it as data",
+                    )
+                    MeshWireFrame.Data -> stageInbound(link, bytes)
+                    // The drain terminator (#2474). On a link we are NOT draining it is the remote
+                    // telling us it has deduped and stopped writing here; our own dedup has not run
+                    // yet (or ran the other way). Nothing to end, and nothing to do — the remote
+                    // keeps reading this link for its whole drain, so writes we make meanwhile still
+                    // land, and our dedup will follow.
+                    MeshWireFrame.Goodbye -> endDrain(link, MeshDisplacement.Outcome.Goodbye)
                 }
             }
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
-            // Connection errored — treat as remote disconnect.
+            // Connection errored, or sent a frame this build refuses — treat as remote disconnect.
         } finally {
-            removePeer(remoteId, conn)
+            // NonCancellable is NOT used here (matching the pre-#2474 shape): `removePeer` already
+            // shields its own closes. What is new is that a drained link also has to settle — its
+            // ordering hold must be released whether the drain ended in a goodbye or in the link
+            // dying under it, or the peer's live frames buffer to the cap for nothing.
+            removePeer(link.remoteId, link.conn)
+            endDrain(link, MeshDisplacement.Outcome.LinkLoss)
         }
+    }
+
+    // ── the graceful displacement drain (#2474) ─────────────────────────────────
+
+    /**
+     * Begin draining [loser], a link this seam's dedup has just displaced. Runs OUTSIDE [lock], with
+     * the [Drain] already registered by [admitOrReject]'s critical section.
+     *
+     * Three things happen, in this order, and the order is load-bearing:
+     *  1. **arm the peer's ordering hold**, so the very next frame staged from its live link is
+     *     buffered rather than delivered ahead of the drained link's tail;
+     *  2. **arm [drainBound]**, the zombie-link backstop — attached to the [Drain] under [lock] so a
+     *     drain that has already ended cannot leave a stray timer behind;
+     *  3. **write exactly one [MeshFrameType.Goodbye]**, the last thing this seam ever puts on this
+     *     link. It is FIFO behind every window frame, which is what makes it a sound end-of-tail
+     *     marker one layer above a `Connection.close` that guarantees no flush at all.
+     *
+     * A goodbye the transport refuses outright means the link is already gone, so the drain ends
+     * immediately rather than waiting out a bound on a link that can never deliver anything.
+     *
+     * **The residual on the keep arm, stated rather than hidden.** On the replace arm the winner's
+     * read loop has not started when this returns, so no live-link frame can outrun the hold. On the
+     * keep arm the winner has been reading all along, and the hold is armed a few instructions after
+     * the dedup decision — but the wider and unavoidable window is earlier still: the loser's frames
+     * sit unread in its [singleCollection] inbox for the whole handshake, so anything the remote had
+     * already moved to the winner is past us before this seam knows a second link exists. What bounds
+     * both is that a remote writes to exactly ONE link per peer at a time, so it has nothing on the
+     * winner until it has finished with the loser.
+     */
+    private suspend fun startDrain(loser: Link) {
+        // Step 1 runs in the CALLER, so `addLink` can rely on the hold being armed before it launches
+        // the winner's read loop. Steps 2 and 3 do not: they touch the drained link, and a loser whose
+        // `send` wedges must not be able to keep the winner from being read, nor to hold `addLink`'s
+        // caller (an accept pump) open. Best-effort at the top because nothing follows it.
+        armOrderingHold(loser.remoteId)
+        scope.launch { runCatchingCancellable { armBoundAndSayGoodbye(loser) } }
+    }
+
+    /** Steps 2 and 3 of [startDrain] — the parts that talk to the drained link. */
+    private suspend fun armBoundAndSayGoodbye(loser: Link) {
+        val bound = scope.launch(start = CoroutineStart.LAZY) {
+            delay(drainBound)
+            // Best-effort: nothing follows this, and a delivery-policy overflow while flushing the
+            // hold must not surface as an unhandled exception on the seam's supervisor scope.
+            runCatchingCancellable { endDrain(loser, MeshDisplacement.Outcome.Bound) }
+        }
+        val armed = lock.withLock {
+            val drain = draining[loser] ?: return@withLock false
+            drain.boundJob = bound
+            true
+        }
+        if (!armed) {
+            // The drain ended between `admitOrReject` releasing the lock and this line. Nothing to
+            // arm — but the hold armed two lines up must not be left behind: the drain-end that won
+            // this race released the peer's hold BEFORE we armed it, so nothing remains that would
+            // ever release ours and every frame from that peer would buffer to the cap. Undo it,
+            // unless a sibling drain to the same peer now owns it.
+            bound.cancel()
+            if (lock.withLock { draining.values.none { it.peer == loser.remoteId } }) {
+                releaseOrderingHold(loser.remoteId)
+            }
+            return
+        }
+        bound.start()
+        val sent = runCatchingCancellable { loser.conn.send(MeshWire.encodeGoodbye()) }
+        if (sent.isFailure) endDrain(loser, MeshDisplacement.Outcome.LinkLoss)
+    }
+
+    /**
+     * End the drain of [loser] and dispose of the link: close it, release the peer's ordering hold
+     * (unless another drain to the same peer is still running), and report.
+     *
+     * Idempotent and safe from every terminator — the remote's goodbye, [drainBound], and the link
+     * dying under the drain all funnel here, and only the first one to take the [Drain] out of
+     * [draining] does any work.
+     *
+     * ## The residual this cannot close, recorded rather than hidden
+     * Disposing on the remote's goodbye can still destroy bytes of OUR OWN that a transport has
+     * accepted but not yet put on the wire. It is a far smaller window than the one this closes —
+     * today's close lands immediately after the swap, this one lands after a full goodbye exchange —
+     * but it is not zero, and the honest bound on it is the transport's, not ours.
+     */
+    private suspend fun endDrain(loser: Link, outcome: MeshDisplacement.Outcome) {
+        val ended = lock.withLock {
+            val drain = draining.remove(loser) ?: return@withLock null
+            // Computed HERE rather than at release time: redial churn can leave two drains to one
+            // peer in flight, and releasing the hold on the first would deliver live-link frames
+            // ahead of the second drain's tail — the reordering the hold exists to prevent.
+            drain to draining.values.none { it.peer == drain.peer }
+        } ?: return
+        val (drain, lastForPeer) = ended
+
+        // Cancel the backstop unless it is the job currently running — cancelling ourselves here
+        // would abort the rest of this function, which is precisely the hold release and the report
+        // the [MeshDisplacement.Outcome.Bound] path exists to perform.
+        val thisJob = currentCoroutineContext()[Job]
+        drain.boundJob?.takeIf { it !== thisJob }?.cancel()
+
+        closeBestEffort(loser.conn)
+        if (lastForPeer) releaseOrderingHold(drain.peer)
+        onDisplacement(MeshDisplacement.Drained(drain.peer, drain.arm, outcome, drain.drainedFrames))
+    }
+
+    // ── the receiver ordering hold (#2474) ──────────────────────────────────────
+
+    /**
+     * Arm [peer]'s ordering hold: from now until its last drain ends, frames arriving on its LIVE
+     * link are buffered instead of delivered. Idempotent — a second concurrent drain to one peer
+     * keeps the first hold and its contents rather than starting a fresh, empty one.
+     */
+    private suspend fun armOrderingHold(peer: PeerId) {
+        stageMutex.withMutex { orderingHolds.getOrPut(peer) { mutableListOf() } }
+    }
+
+    /**
+     * Release [peer]'s ordering hold, delivering everything it buffered in arrival order.
+     *
+     * The flush happens under [stageMutex], so a frame arriving on another loop mid-flush queues
+     * behind the buffer rather than overtaking it. That is the entire reason the mutex exists.
+     */
+    private suspend fun releaseOrderingHold(peer: PeerId) {
+        stageMutex.withMutex {
+            val held = orderingHolds.remove(peer) ?: return@withMutex
+            for (frame in held) deliverStagedLocked(peer, frame)
+        }
+    }
+
+    /**
+     * The ONE path from a [readLoop] to [spool], and the place the ordering hold is applied.
+     *
+     * ## Buffer-and-continue, never suspend — the deadlock this shape exists to make impossible
+     * The hold's release is performed by [endDrain], reached from the DRAINED link's own read loop
+     * when the remote's goodbye arrives. That loop reaches [spool] through this same [stageMutex].
+     * So if a live-link frame *suspended* here while holding the mutex, waiting for the drain to end:
+     * the drained loop could not deliver its tail (it needs the mutex), [releaseOrderingHold] could
+     * not run (it needs the mutex), and the goodbye that would release the hold could never be
+     * processed — a permanent wedge, on a per-link-loop fabric just as surely as on `:kuilt-nw`'s
+     * single demux loop.
+     *
+     * The claim that rules it out is **no circular wait**, not "this returns quickly":
+     *  - when the hold is armed and has room, this appends and returns without touching [spool] at all;
+     *  - every other holder of [stageMutex] — the pass-through below, the overflow flush, and
+     *    [releaseOrderingHold] — waits on nothing but [Spool.deliver], i.e. on the CONSUMER of
+     *    [Seam.incoming], which is external to this seam and produced by no read loop;
+     *  - [lock] is never held while [stageMutex] is acquired, and [stageMutex] is never held while
+     *    [lock] is acquired, so the two cannot be taken in opposite orders.
+     *
+     * A frame from a DRAINING link is never held — it is the tail the hold is waiting for.
+     *
+     * ## Overflow releases EARLY rather than backpressuring
+     * A bounded buffer must do something at the bound, and backpressure is the one option that is not
+     * available: suspending here would reintroduce the deadlock by another route. So the hold is
+     * released early, the reorder is accepted, and it is reported as
+     * [MeshDisplacement.OrderingHoldOverflowed] — a loud, bounded admission that [Seam.incoming]'s
+     * send-order promise was traded for liveness on this peer, in preference to a silent wedge.
+     *
+     * ## Sequence is stamped HERE, at release time
+     * [Swatch.sequence] is assigned inside [stageMutex] immediately before delivery, so stamped order
+     * is delivery order for held and unheld frames alike. Stamping at arrival time would have
+     * numbered a held frame ahead of the live-link frames delivered while it waited.
+     */
+    private suspend fun stageInbound(link: Link, frame: ByteArray) {
+        val fromDrainingLink = lock.withLock { draining[link]?.also { it.drainedFrames += 1 } != null }
+        var overflowed = 0
+        stageMutex.withMutex {
+            val hold = if (fromDrainingLink) null else orderingHolds[link.remoteId]
+            if (hold != null) {
+                if (hold.size < orderingHoldCapacity) {
+                    hold += frame
+                    return@withMutex
+                }
+                overflowed = hold.size
+                orderingHolds.remove(link.remoteId)
+                for (buffered in hold) deliverStagedLocked(link.remoteId, buffered)
+            }
+            deliverStagedLocked(link.remoteId, frame)
+        }
+        if (overflowed > 0) {
+            onDisplacement(
+                MeshDisplacement.OrderingHoldOverflowed(link.remoteId, overflowed, orderingHoldCapacity),
+            )
+        }
+    }
+
+    /**
+     * Stamp [frame] and deliver it. **Called only under [stageMutex]**, which is what makes the stamp
+     * order and the delivery order the same order.
+     *
+     * `dropFirst` strips the type byte as a ZERO-COPY view — the pattern [Swatch] documents for
+     * framing layers — rather than copying every received payload a second time.
+     */
+    private suspend fun deliverStagedLocked(sender: PeerId, frame: ByteArray) {
+        spool.deliver(
+            Swatch(payload = frame, sender = sender, sequence = seq.incrementAndGet())
+                .dropFirst(MeshWire.TYPE_BYTES),
+        )
     }
 
     /**
@@ -699,8 +1169,14 @@ private class MeshSeam(
         val conns = lock.withLock {
             // Single-shot INSIDE the lock: a loser sees Torn already latched and bails.
             if (state.value is SeamState.Torn) return null
-            val snapshot = links.values.map { it.conn }
+            // DRAINING links are in the snapshot too (#2474). They are deliberately absent from
+            // `links`, so without this a teardown mid-drain would cancel their read loops and leave
+            // the connections open forever — exactly the half-open leak this snapshot exists to
+            // prevent, reintroduced by the one map that does not appear in it.
+            val snapshot = links.values.map { it.conn } + draining.keys.map { it.conn }
             links.clear()
+            draining.values.forEach { it.boundJob?.cancel() }
+            draining.clear()
             _peers.value = setOf(selfId)
             _attestedPrincipals.value = emptyMap()
             // Latch Torn LAST in this section so the collapsed roster is published before Torn.

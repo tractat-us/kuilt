@@ -165,6 +165,6 @@ class MeshRoleDrainTest {
     /** Drive the far end of a [connectionPair] through the mesh handshake for [remoteId]. */
     private suspend fun handshakeRemote(theirs: Connection, remoteId: PeerId) {
         theirs.incoming.first() // consume the mesh's Hello preamble
-        theirs.send(MeshHello.encode(remoteId, meshNonce(0)))
+        theirs.send(MeshWire.encodeHello(remoteId, meshNonce(0)))
     }
 }

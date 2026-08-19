@@ -112,7 +112,20 @@ class FabricSeamPayloadRefusalTest {
         testScheduler.runCurrent()
 
         assertAll(
-            { assertEquals(ceiling, refusal.budgetBytes, "the budget is THAT link's ceiling, not the mesh minimum") },
+            {
+                assertEquals(
+                    ceiling - MeshWire.TYPE_BYTES,
+                    refusal.budgetBytes,
+                    "the budget is THAT link's ceiling less the mesh's frame-type byte, not the mesh minimum",
+                )
+            },
+            {
+                assertEquals(
+                    MeshWire.TYPE_BYTES,
+                    refusal.reservedBytes,
+                    "the byte the mesh spends on the frame type is NAMED on the refusal, not hidden (#2474)",
+                )
+            },
             { assertContains(mesh.seam.peers.value, TIGHT, "a payload the caller got wrong is not a dead link") },
             { assertIs<SeamState.Woven>(mesh.seam.state.value) },
         )
@@ -130,7 +143,7 @@ class FabricSeamPayloadRefusalTest {
 
         val overTight = ByteArray(ceiling + 1) { 5 }
         mesh.seam.broadcast(overTight)
-        val onTheLooseWire = mesh.loose.incoming.first()
+        val onTheLooseWire = meshPayloadOf(mesh.loose.incoming.first())
 
         assertAll(
             { assertContentEquals(overTight, onTheLooseWire, "the loose link can carry it") },
@@ -158,8 +171,8 @@ class FabricSeamPayloadRefusalTest {
         }
         val handshakes = listOf(TIGHT to tightTheirs, LOOSE to looseTheirs).mapIndexed { index, (id, conn) ->
             async {
-                conn.send(MeshHello.encode(id, meshNonce(index.toByte())))
-                MeshHello.decode(conn.incoming.first())
+                conn.send(MeshWire.encodeHello(id, meshNonce(index.toByte())))
+                meshHelloOf(conn.incoming.first())
             }
         }
         val mesh = meshDeferred.await()

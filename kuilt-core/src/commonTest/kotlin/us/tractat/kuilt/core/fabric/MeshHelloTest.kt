@@ -48,29 +48,57 @@ class MeshHelloTest {
     fun encodedFrameContainsNoNulBytes() {
         val id = PeerId("peer-1")
         val nonce = ByteArray(16) { 0 }   // all-zero nonce — worst case for NUL contamination
-        val frame = MeshHello.encode(id, nonce)
-        // The id length occupies the first 4 bytes; the id is ASCII-safe; the nonce is raw bytes.
-        // The ONLY bytes that could be 0 in the id region are zero-length padding in the length
-        // field itself (e.g. length 6 → 0x00 0x00 0x00 0x06). Verify: the id bytes themselves
-        // are non-NUL for a normal ASCII id.
+        val body = MeshHello.encode(id, nonce)
+        // The wire version occupies byte 0 and the id length the next 4; the id is ASCII-safe; the
+        // nonce is raw bytes. The ONLY bytes that could be 0 in the id region are zero-length padding
+        // in the length field itself (e.g. length 6 → 0x00 0x00 0x00 0x06). Verify: the id bytes
+        // themselves are non-NUL for a normal ASCII id.
         val idBytes = id.value.encodeToByteArray()
-        val idInFrame = frame.copyOfRange(4, 4 + idBytes.size)
-        assertContentEquals(idBytes, idInFrame, "id bytes in frame must match the raw UTF-8")
+        val idInBody = body.copyOfRange(ID_OFFSET, ID_OFFSET + idBytes.size)
+        assertContentEquals(idBytes, idInBody, "id bytes in body must match the raw UTF-8")
     }
 
     @Test
     fun encodedLengthPrefixMatchesIdByteCount() {
         val id = PeerId("hello")
         val nonce = meshNonce(1, 2, 3)
-        val frame = MeshHello.encode(id, nonce)
+        val body = MeshHello.encode(id, nonce)
         val idByteLen = id.value.encodeToByteArray().size
-        // Big-endian 4-byte int at offset 0
-        val prefixLen = ((frame[0].toInt() and 0xff) shl 24) or
-            ((frame[1].toInt() and 0xff) shl 16) or
-            ((frame[2].toInt() and 0xff) shl 8) or
-            (frame[3].toInt() and 0xff)
+        // Big-endian 4-byte int, immediately after the wire-version byte.
+        val prefixLen = ((body[1].toInt() and 0xff) shl 24) or
+            ((body[2].toInt() and 0xff) shl 16) or
+            ((body[3].toInt() and 0xff) shl 8) or
+            (body[4].toInt() and 0xff)
         assertEquals(idByteLen, prefixLen)
-        assertEquals(4 + idByteLen + nonce.size, frame.size)
+        assertEquals(ID_OFFSET + idByteLen + nonce.size, body.size)
+    }
+
+    // --- the wire version leads the body, and an unknown one is refused BY NAME (#2474) ---
+
+    @Test
+    fun theEncodedBodyLeadsWithThisBuildsWireVersion() {
+        val body = MeshHello.encode(PeerId("peer-1"), meshNonce(1))
+        assertEquals(
+            MESH_WIRE_VERSION,
+            body[0].toInt() and 0xff,
+            "the version is the first thing a peer reads, because every later field is laid out BY it",
+        )
+    }
+
+    @Test
+    fun aBodyDeclaringAnUnknownWireVersionIsRefusedByName() {
+        val body = MeshHello.encode(PeerId("peer-1"), meshNonce(1))
+        listOf(0, MESH_WIRE_VERSION + 1, 0xff).forEach { version ->
+            val alien = body.copyOf().also { it[0] = version.toByte() }
+            val refusal = assertFailsWith<MeshUnsupportedWireVersionException>(
+                "v$version must be refused as a VERSION break, never as a malformed frame — " +
+                    "'malformed' is the diagnosis a reader would act on, and it is the wrong one",
+            ) { MeshHello.decode(alien) }
+            assertAll(
+                { assertEquals(version, refusal.remoteVersion) },
+                { assertEquals(MESH_WIRE_VERSION, refusal.localVersion) },
+            )
+        }
     }
 
     // --- malformed input a REMOTE can send (#1788) ---
@@ -83,9 +111,12 @@ class MeshHelloTest {
 
     @Test
     fun aFrameTooShortForTheLengthPrefixIsRejected() {
-        (0 until 4).forEach { size ->
+        (0 until ID_OFFSET).forEach { size ->
+            // A well-versioned prefix of the body, so what is under test is the LENGTH check rather
+            // than the version check an all-zero array would trip first.
+            val truncated = ByteArray(size).also { if (size >= 1) it[0] = MESH_WIRE_VERSION.toByte() }
             assertFailsWith<IllegalArgumentException>("a $size-byte preamble must be rejected, not index-fault") {
-                MeshHello.decode(ByteArray(size))
+                MeshHello.decode(truncated)
             }
         }
     }
@@ -141,30 +172,37 @@ class MeshHelloTest {
         )
     }
 
-    /** A well-formed 4-byte length prefix declaring [declaredIdLength], plus a 16-byte body. */
+    /** A well-versioned body with a 4-byte length prefix declaring [declaredIdLength], plus 16 bytes. */
     private fun frameDeclaring(declaredIdLength: Int): ByteArray =
-        ByteArray(4 + 16).also { frame ->
-            frame[0] = (declaredIdLength ushr 24).toByte()
-            frame[1] = (declaredIdLength ushr 16).toByte()
-            frame[2] = (declaredIdLength ushr 8).toByte()
-            frame[3] = declaredIdLength.toByte()
+        ByteArray(ID_OFFSET + 16).also { body ->
+            body[0] = MESH_WIRE_VERSION.toByte()
+            body[1] = (declaredIdLength ushr 24).toByte()
+            body[2] = (declaredIdLength ushr 16).toByte()
+            body[3] = (declaredIdLength ushr 8).toByte()
+            body[4] = declaredIdLength.toByte()
         }
 
     /**
-     * Hand-assemble a preamble carrying [nonce] verbatim.
+     * Hand-assemble a preamble body carrying [nonce] verbatim.
      *
      * Not [MeshHello.encode] — that enforces the same width invariant, so a wrong-width nonce cannot be
      * produced through it. This is what a hostile or buggy remote puts on the wire.
      */
     private fun frameWithNonce(id: PeerId, nonce: ByteArray): ByteArray {
         val idBytes = id.value.encodeToByteArray()
-        return ByteArray(4 + idBytes.size + nonce.size).also { frame ->
-            frame[0] = (idBytes.size ushr 24).toByte()
-            frame[1] = (idBytes.size ushr 16).toByte()
-            frame[2] = (idBytes.size ushr 8).toByte()
-            frame[3] = idBytes.size.toByte()
-            idBytes.copyInto(frame, destinationOffset = 4)
-            nonce.copyInto(frame, destinationOffset = 4 + idBytes.size)
+        return ByteArray(ID_OFFSET + idBytes.size + nonce.size).also { body ->
+            body[0] = MESH_WIRE_VERSION.toByte()
+            body[1] = (idBytes.size ushr 24).toByte()
+            body[2] = (idBytes.size ushr 16).toByte()
+            body[3] = (idBytes.size ushr 8).toByte()
+            body[4] = idBytes.size.toByte()
+            idBytes.copyInto(body, destinationOffset = ID_OFFSET)
+            nonce.copyInto(body, destinationOffset = ID_OFFSET + idBytes.size)
         }
+    }
+
+    private companion object {
+        /** Where the id starts in a hello body: one version byte plus the 4-byte id length. */
+        const val ID_OFFSET = 1 + 4
     }
 }
