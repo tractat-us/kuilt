@@ -79,6 +79,25 @@ package us.tractat.kuilt.nw
  * [disconnect] delivers `connectionClosed` to the OTHER device only (a peer that cancels its own
  * side tears it down directly; only the remote observes the close) and drops the link.
  *
+ * ## Chunked receive — [maxChunkBytes] / [betweenChunks] (#2479)
+ * A real `nw_connection_receive` hands over **at most ~64 KiB per completion**, so a 16 MiB frame
+ * reaches the far end as 256+ separate `bytesReceived` events. This fake delivered every payload
+ * whole, so no test over it had ever driven `NwSeam` across a chunk boundary — the per-connection
+ * [NwFramer] accumulator inside the shared `bytesReceivedLoop` was exercised only by
+ * `NwFramingTest`, which drives the framer in isolation and knows nothing of the demux loop, the
+ * tombstones, or the ordering hold. [maxChunkBytes] splits each delivery into that many bytes per
+ * emission; **`null` (the default) is the whole payload**, so the knob is off unless a test asks.
+ *
+ * The split models the RECEIVING side's delivery granularity, not a send-side fragmentation: every
+ * byte has already crossed by the time the first chunk is emitted. Tearing the link down between
+ * two chunks therefore does NOT retract the rest — which is the whole point, because that is the
+ * only way to reach a connId tombstoned *mid-frame* (the #1528 hazard, with a real partial frame in
+ * the accumulator rather than an empty one).
+ *
+ * [betweenChunks] is what lets a test act in that gap — inject another connection's traffic onto the
+ * shared demux loop, or tear this one down — and it fires exactly `chunks - 1` times, so a test can
+ * read it as its own rig receipt. It is not re-entered from a delivery it itself provokes.
+ *
  * ## In-flight bytes — [holdSends] / [releaseSends] and the [sentFrames] ledger (#2425)
  * By default a [send] is delivered in the same virtual instant it is issued, so the radio has no
  * state in which bytes exist but have not arrived. A real transport does: `nw_connection_send`
@@ -716,6 +735,56 @@ internal class FakeNwRadio {
     fun isLive(connectionId: NwConnectionId): Boolean = connectionId.value in links
 
     /**
+     * Deliver each payload to the receiving device in emissions of at most this many bytes (#2479), or —
+     * as `null`, the **default** — whole, exactly as this fake always has.
+     *
+     * A real `nw_connection_receive` completion carries at most ~64 KiB, so on the wire the receiving
+     * `NwSeam` reassembles almost every non-trivial frame from several `bytesReceived` events. Whole-payload
+     * delivery made that path unreachable from any test in this module.
+     *
+     * ## The value is a prescription, and the vacuous setting is the easy one
+     * Any budget `>= payload.size` yields ONE emission — i.e. silently no chunking at all, and a green test
+     * that proved nothing. The budget is therefore never the interesting number on its own: a test that sets
+     * it must also **count the emissions it caused** and assert that count is at least two and is what the
+     * budget implies. Every test in `NwChunkedReceiveTest` does, against an independent collector on the
+     * receiving device's own [NwApi.bytesReceived] rather than against anything this class reports.
+     */
+    var maxChunkBytes: Int? = null
+        set(value) {
+            require(value == null || value > 0) { "maxChunkBytes must be positive or null (whole payload), got $value" }
+            field = value
+        }
+
+    /**
+     * Invoked in the gap **between** two chunks of one [maxChunkBytes]-split delivery, with the RECEIVING
+     * end's [NwConnectionId] and the 0-based index of the chunk just emitted (#2479).
+     *
+     * The gap is the only place a test can act on a seam that is holding **half a frame**: inject another
+     * connection's traffic onto the shared `bytesReceivedLoop`, or tear this connection down so its connId
+     * is tombstoned mid-frame. Neither state is reachable while a payload arrives atomically.
+     *
+     * Fires exactly `chunks - 1` times — never for an unchunked delivery — so its call count is a rig
+     * receipt in its own right. It is **not re-entered** from a delivery it provokes itself: a hook that
+     * sends a payload large enough to chunk would otherwise recurse into itself indefinitely. Like the
+     * registry maps, the guard is touched only from the delivering coroutine.
+     */
+    var betweenChunks: (suspend (receiverConnectionId: NwConnectionId, chunkIndex: Int) -> Unit)? = null
+
+    /** @see betweenChunks — the re-entrancy guard, so a hook that sends may itself be chunked. */
+    private var inBetweenChunks = false
+
+    private suspend fun runBetweenChunks(receiverConnectionId: NwConnectionId, chunkIndex: Int) {
+        val hook = betweenChunks ?: return
+        if (inBetweenChunks) return
+        inBetweenChunks = true
+        try {
+            hook(receiverConnectionId, chunkIndex)
+        } finally {
+            inBetweenChunks = false
+        }
+    }
+
+    /**
      * Deliver [payload] to the far end of [record]'s link, or mark it [SendFate.DroppedLinkGone] if
      * that link has gone — **never throwing**, which is the whole difference between this and [send]'s
      * own liveness check.
@@ -746,7 +815,25 @@ internal class FakeNwRadio {
             return
         }
         record.fate = SendFate.Delivered
-        devices.getValue(other.deviceId).emitBytesReceived(NwBytesReceived(other.connectionId, payload))
+        val receiver = devices.getValue(other.deviceId)
+        val chunk = maxChunkBytes
+        // DEFAULT-OFF, and structurally so: with no chunk budget, or a payload that fits one, this is
+        // byte-identical to the single emission the fake has always made — same array instance, same event.
+        if (chunk == null || payload.size <= chunk) {
+            receiver.emitBytesReceived(NwBytesReceived(other.connectionId, payload))
+            return
+        }
+        var offset = 0
+        var index = 0
+        while (offset < payload.size) {
+            val end = minOf(offset + chunk, payload.size)
+            receiver.emitBytesReceived(NwBytesReceived(other.connectionId, payload.copyOfRange(offset, end)))
+            offset = end
+            // Between, not after: the last chunk completes the frame, and a hook there would be acting on a
+            // seam that has already seen the whole thing — the state every other test can already reach.
+            if (offset < payload.size) runBetweenChunks(other.connectionId, index)
+            index += 1
+        }
     }
 
     /**
