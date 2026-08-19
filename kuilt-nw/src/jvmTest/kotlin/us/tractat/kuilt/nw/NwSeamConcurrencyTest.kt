@@ -10,7 +10,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.yield
 import us.tractat.kuilt.core.CloseReason
@@ -37,33 +36,38 @@ import kotlin.test.assertTrue
  * suite** — the only thing that had ever run them truly concurrently was the real-transport
  * conformance suites, and only probabilistically.
  *
- * ## What each test drives
- * One hazard each, and each one is backed by a revert receipt in the PR that added it — the specific
- * `withLock` that makes it safe was removed and the probe observed to redden **reliably**, not once.
- * A probe that cannot be made to red is green by absence.
+ * ## ONE probe, because one hazard turned out to be a genuine two-writer race
+ * #2481 named four: the double-dial dedup, `broadcast` against eviction, `close()` against a remote
+ * departure, and a drain's start against its own end. Each was built and then **mutation-tested** by
+ * deleting the specific `withLock` that makes it safe. Only the second reddens reliably, and only it
+ * ships — a probe that cannot be made to red is green by absence, and shipping one inflates the
+ * apparent coverage of exactly the file it is supposed to protect.
  *
- *  1. [broadcastNeverLeaksARaceExceptionWhilePeersAreEvicted] — `broadcast` snapshotting `registry`
- *     while a lifecycle collector evicts out of it.
- *  2. [closeRacingARemoteDepartureProducesOneCleanTorn] — consumer `close()` against a remote's
- *     departure, both of which tear down `registry`/`conns`.
- *  3. [drainsAreNeverOrphanedWhenTheirLinkDiesUnderThem] — a displacement drain's start racing its
- *     own end.
+ * [broadcastNeverLeaksARaceExceptionWhilePeersAreEvicted] is that probe: with `broadcast`'s target
+ * snapshot un-guarded it fails **6 of 6 rounds**, with a `ConcurrentModificationException` raised out
+ * of `broadcast` while a lifecycle collector evicts from `registry` underneath its iteration.
  *
- * ## The dedup has deliberately NO probe here, and that is a finding rather than an omission
- * #2481 asked for one on "concurrent double-dial dedup on one pair", reasoning from `NwSeam`'s own
- * KDoc that the pre-port direction-based rule "could wedge a pair to zero under a multi-threaded
- * dispatcher". That premise does not survive contact with the code: `resolveIdentity` is reached
- * **only** from the single `bytesReceivedLoop`, so two resolutions on one seam can never race each
- * other however hard both ends dial — the dedup is not a two-writer hazard. Removing its `withLock`
- * outright left a dedicated double-dial probe green over 5 consecutive rounds.
+ * ## Why the other three are not probes, which is a finding about the issue rather than an omission
+ * All three ask a collector to race *itself*, and `NwSeam` gives each collector exactly one coroutine:
  *
- * What genuinely races a resolution is another *coroutine* touching the same two maps, which is what
- * the three probes below already drive, and the resolve path's own `registry`/`conns` writes are
- * covered there. Trying to contend it directly with a broadcast hammer during formation is a trap
- * worth recording: `broadcast`'s send-failure arm calls `removeByConn`, which legitimately evicts the
- * peer, and with no `NwLoom` to redial the pair settles at zero peers — so the rig manufactures the
- * very wedge it claims to detect. That is a rig bug, not a seam bug, and a probe built on it would
- * have shipped as an intermittent false red.
+ *  - **The dedup.** `resolveIdentity` is reached **only** from the single `bytesReceivedLoop`, so two
+ *    resolutions on one seam can never race however hard both ends dial. Un-guarded, a dedicated
+ *    double-dial probe stayed green 5 of 5.
+ *  - **`close()` against a departure.** `close()` calls `latchTorn` *first*, which latches the `closed`
+ *    flag and cancels [scope] — so every collector is already gone before its teardown critical section
+ *    runs, and there is nothing left to race. Un-guarded: green 0 of 6 (2-node), green 0 of 6 (a 6-node
+ *    star built specifically to widen it). Removing `connectionClosedLoop`'s guard instead reddened
+ *    1 of 6 — real, but nowhere near reliable, and a 1-in-6 probe in CI is a flake generator.
+ *  - **Drain start against drain end.** Un-guarded `endDrain`: green 0 of 6. Every teardown path
+ *    converges on the same end state whatever the interleaving, so "no orphaned drain" cannot separate
+ *    them.
+ *
+ * A trap found on the way and worth recording, because it would have shipped as an intermittent false
+ * red: contending the dedup with a `broadcast` hammer *during formation* wedges the pair to zero peers
+ * on **unmutated** code. That is the rig, not the seam — `broadcast`'s send-failure arm calls
+ * `removeByConn`, which legitimately evicts the peer, and with no `NwLoom` to redial there is nothing
+ * to bring it back. The probe's own [StageTracker] snapshot is what named it (`liveLinks=0
+ * openedLinks=8`, both seams back to `Weaving`) rather than leaving it as an opaque 5-minute hang.
  *
  * ## The invariant every test shares
  * [assertRegistryAndConnsAgree] re-asserts `auditRegistryLocked`'s **contract-impossible** condition
@@ -210,131 +214,6 @@ class NwSeamConcurrencyTest {
         }
     }
 
-    // ── hazard 3: close() racing remote departures ──────────────────────────────
-
-    /**
-     * `close()` and the remotes' departures race into the same two maps from opposite directions.
-     *
-     * `close()` snapshots `registry.values + draining.keys`, then clears `registry`, `draining`,
-     * `conns`, `graceJobs`, `peerEndpoint` and `selfEndpointIds` in **one** critical section;
-     * `connectionClosedLoop` removes a single connection from `conns`, tombstones it, and evicts its
-     * peer from `registry` in another. Both are read-then-write over the same state, on different
-     * threads.
-     *
-     * ## Why a star and not a pair
-     * The first cut raced one `close()` against one departure on a 2-node pair and did **not** red
-     * with `close()`'s `withLock` removed — a one-entry registry cleared against a one-entry eviction
-     * has almost no interleaving to get wrong, so the probe was green by absence. [PEER_COUNT]
-     * remotes departing while the hub clears all of them at once is what makes the lost-update and
-     * mid-iteration-mutation windows wide enough to hit.
-     *
-     * The invariant is that teardown is **single-shot and total**: exactly one `Torn`, a roster of
-     * exactly `{selfId}`, no tracked connection left behind, and — the part a roster check alone
-     * would miss — no `registry` entry naming a connection `conns` no longer has.
-     */
-    @Test
-    fun closeRacingARemoteDepartureProducesOneCleanTorn() = runConcurrencyStress { stage ->
-        repeat(BROADCAST_ITERATIONS) { iter ->
-            val radio = FakeNwRadio()
-            val nodes = (0..PEER_COUNT).map { node(radio, it, iter.toLong() * 100) }
-            val hub = nodes.first()
-            val peers = nodes.drop(1)
-
-            stage.at("iter=$iter build star") { dump(iter, radio, nodes) }
-            for (p in peers) hub.api.connect(endpointFor(nodes.indexOf(p)))
-            hub.seam.peers.first { it.size == nodes.size }
-
-            stage.at("iter=$iter close vs departures") { dump(iter, radio, nodes) }
-            coroutineScope {
-                val ready = CompletableDeferred<Unit>()
-                // Every remote's close disconnects its link, driving the hub's connectionClosed +
-                // connectionStates collectors into per-peer eviction — concurrently with the hub's OWN
-                // close clearing every one of those entries in a single sweep.
-                val departures = peers.map { p ->
-                    async(Dispatchers.Default) { ready.await(); p.seam.close(CloseReason.Normal) }
-                }
-                val closer = async(Dispatchers.Default) { ready.await(); hub.seam.close(CloseReason.Normal) }
-                ready.complete(Unit)
-                awaitAll(closer, *departures.toTypedArray())
-            }
-
-            stage.at("iter=$iter await all torn") { dump(iter, radio, nodes) }
-            for (n in nodes) n.seam.state.first { it is SeamState.Torn }
-
-            assertAll(
-                { assertIs<SeamState.Torn>(hub.seam.state.value, "the hub did not latch a clean Torn") },
-                { assertEquals(setOf(hub.peerId), hub.seam.peers.value, "hub roster corrupted by close/departure: ${dump(iter, radio, nodes)}") },
-                { assertEquals(0, hub.seam.formationSnapshot().links.size, "close() must leave no tracked connection behind: ${dump(iter, radio, nodes)}") },
-                { assertRegistryAndConnsAgree(nodes, iter, radio) },
-            )
-            teardown(nodes)
-        }
-    }
-
-    // ── hazard 4: drain start racing drain end ──────────────────────────────────
-
-    /**
-     * A displacement drain's **start** raced against its own **end**.
-     *
-     * `startDrain` runs outside `lock`: it arms the peer's ordering hold, builds the bound job, and
-     * only then re-acquires the lock to attach that job to the `Drain` — which by then may already
-     * have been taken by `connectionClosedLoop` or `removeByConn` on the link dying underneath it.
-     * `NwSeam` has an explicit branch for losing that race (cancel the bound, un-arm the hold unless
-     * another drain to the same peer still owns it). This probe is what makes that branch reachable:
-     * it double-dials so a dedup loser exists, then tears links out concurrently.
-     *
-     * The invariant is that **no drain is orphaned**. A drain left in `draining` after everything has
-     * settled holds a socket and the peer's receiver ordering hold open with nothing left that could
-     * ever release them — the one shape this mechanism can fail in, and one that is invisible to a
-     * roster check because a drained link is deliberately still in `conns` and still resolved.
-     * `formationSnapshot()` reports it directly as a link whose role is `draining`.
-     */
-    @Test
-    fun drainsAreNeverOrphanedWhenTheirLinkDiesUnderThem() = runConcurrencyStress { stage ->
-        repeat(PAIR_ITERATIONS) { iter ->
-            val radio = FakeNwRadio()
-            val nodes = listOf(node(radio, 0, iter.toLong()), node(radio, 1, iter.toLong()))
-            val (a, b) = nodes
-
-            stage.at("iter=$iter double dial into dedup") { dump(iter, radio, nodes) }
-            coroutineScope {
-                val ready = CompletableDeferred<Unit>()
-                val dials = listOf(
-                    async(Dispatchers.Default) { ready.await(); a.api.connect(endpointFor(1)) },
-                    async(Dispatchers.Default) { ready.await(); b.api.connect(endpointFor(0)) },
-                )
-                // Racing the dedup's drain-start: whichever link this reaches, its drain (if one was
-                // armed) is being ended by the close path while `startDrain` is still arming it.
-                val churn = async(Dispatchers.Default) {
-                    ready.await()
-                    val links = radio.openedLinks
-                    for (link in links) radio.disconnect(link.dialerDeviceId, link.dialerConnectionId)
-                }
-                ready.complete(Unit)
-                awaitAll(churn, *dials.toTypedArray())
-            }
-
-            // Definitive terminator: closing both seams disposes of every link either still holds, so
-            // anything left `draining` afterwards was genuinely orphaned rather than merely in flight.
-            stage.at("iter=$iter close both") { dump(iter, radio, nodes) }
-            a.seam.close(CloseReason.Normal)
-            b.seam.close(CloseReason.Normal)
-            a.seam.state.first { it is SeamState.Torn }
-            b.seam.state.first { it is SeamState.Torn }
-
-            stage.at("iter=$iter await drains to settle") { dump(iter, radio, nodes) }
-            val stillDraining = awaitStable { nodes.sumOf { n -> n.seam.formationSnapshot().links.count { it.role == DRAINING_ROLE } } }
-
-            assertAll(
-                { assertEquals(0, stillDraining, "a drain was orphaned — it holds a socket and the peer's ordering hold with nothing left to release them: ${dump(iter, radio, nodes)}") },
-                { assertEquals(setOf(a.peerId), a.seam.peers.value, "A's roster after teardown") },
-                { assertEquals(setOf(b.peerId), b.seam.peers.value, "B's roster after teardown") },
-                { assertRegistryAndConnsAgree(nodes, iter, radio) },
-            )
-            teardown(nodes)
-        }
-    }
-
     // ── shared invariant + helpers ──────────────────────────────────────────────
 
     /**
@@ -364,38 +243,6 @@ class NwSeamConcurrencyTest {
     }
 
     /**
-     * Poll [read] until it stops moving for [stableFor] consecutive reads, and return where it
-     * settled; give up at [SETTLE_BUDGET_NANOS] and return the last reading anyway.
-     *
-     * Quiescing rather than waiting for an expected value is deliberate: a wait keyed to the number
-     * the caller is about to assert makes its failing arm an uninformative timeout, while this hands
-     * back whatever the system actually settled on and lets `assertEquals` print both sides. The
-     * budget is a **wedge backstop**, never the assertion — a genuinely stuck run is caught by
-     * `runConcurrencyStress`'s own cap with a full coroutine dump attached, which is the diagnostic
-     * that matters.
-     *
-     * A real-time bound is legitimate here in a way it never is under virtual time: this probe's
-     * trajectory *is* wall-clock, so there is no virtual-time schedule for a ceiling to distort.
-     */
-    private suspend fun awaitStable(stableFor: Int = STABLE_READS, read: () -> Int): Int {
-        val deadline = System.nanoTime() + SETTLE_BUDGET_NANOS
-        var last = read()
-        var stable = 0
-        while (System.nanoTime() < deadline) {
-            delay(POLL_MILLIS)
-            val now = read()
-            if (now == last) {
-                stable += 1
-                if (stable >= stableFor) return now
-            } else {
-                stable = 0
-                last = now
-            }
-        }
-        return read()
-    }
-
-    /**
      * Run [broadcast]; fail loudly the instant a race exception escapes. A clean closed-seam
      * [IllegalStateException] is the contract once the seam is torn — accept it. Any send that lands
      * before teardown simply succeeds.
@@ -414,13 +261,6 @@ class NwSeamConcurrencyTest {
     }
 
     private companion object {
-        /**
-         * Rounds per pair-shaped probe. Each round builds two seams, forms them over real threads and
-         * tears them down, so the window under test is re-entered once per round; the count is what
-         * turns a narrow interleaving into a reliable red rather than an occasional one.
-         */
-        const val PAIR_ITERATIONS = 150
-
         /** Rounds for the star-shaped broadcast probe — heavier per round (six seams), so fewer. */
         const val BROADCAST_ITERATIONS = 80
 
@@ -430,20 +270,12 @@ class NwSeamConcurrencyTest {
         /** Remotes on the hub in the broadcast probe: enough that eviction and iteration genuinely overlap. */
         const val PEER_COUNT = 5
 
+        /** [NwSeam.formationSnapshot]'s label for a connection carrying a rostered peer. */
+        const val LIVE_ROLE = "live"
+
         /** Concurrent `broadcast` callers hammering one seam. */
         const val BROADCASTERS = 4
         const val SENDS_PER_BROADCASTER = 200
-
-        /** [NwSeam.formationSnapshot]'s role labels — the two this probe reads. */
-        const val LIVE_ROLE = "live"
-        const val DRAINING_ROLE = "draining"
-
-        /** Consecutive unchanged reads that count as settled in [awaitStable]. */
-        const val STABLE_READS = 20
-        const val POLL_MILLIS = 1L
-
-        /** Wedge backstop for [awaitStable] — five seconds, mirroring `MeshSeamConcurrencyTest`'s. */
-        const val SETTLE_BUDGET_NANOS = 5_000_000_000L
 
         /**
          * Watchdog sweep interval. Tiny on purpose: the sweep takes the seam's lock and walks `conns`,
