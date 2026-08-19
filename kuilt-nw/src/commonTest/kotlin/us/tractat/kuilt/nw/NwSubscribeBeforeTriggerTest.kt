@@ -46,18 +46,30 @@ import kotlin.time.Duration.Companion.seconds
  * The obvious test — emit an event during the window and show it is dropped — cannot be written here,
  * because the window is **structurally unreachable on the fake**. Between `NwSeam(…)` and `NwLoom`'s
  * first trigger the scheduler is pumped many times before any *connection* event can exist: a
- * connection needs a dial, which needs discovery, which needs several dispatches. Measured on
- * `4eec711a`, rewriting all four `NwSeam` launches to a plain `scope.launch { … }` left the whole
- * deterministic `:kuilt-nw` JVM suite green — 91 pass / 0 fail. The window is real on a real
- * transport and invisible to every behavioural test in this module.
+ * connection needs a dial, which needs discovery, which needs several dispatches. The window is real
+ * on a real transport and, for six of the seven launches, invisible to every behavioural test here.
+ *
+ * Measured on `c633752b` by dropping `UNDISPATCHED` from one launch at a time and running the whole
+ * 258-test `:kuilt-nw:jvmTest`, counting only classes OTHER than this one:
+ *
+ * | launch | other classes that noticed |
+ * |---|---|
+ * | `connectionOpenedLoop` / `bytesReceivedLoop` / `connectionClosedLoop` | none |
+ * | `connectionStatesLoop` / `pathStateLoop` | none |
+ * | `endpointLost` collector | none |
+ * | `endpointFound` collector | **7 classes, 55 tests** |
+ *
+ * `endpointFound` is the one already covered, and obviously so in hindsight: unsubscribe discovery and
+ * the loom never reaches a peer, so every mesh-forming test in the module dies. The other six are the
+ * gap. Note the asymmetry with `endpointLost` — the same `start()`, one collector over, and nothing
+ * noticed at all.
  *
  * So the detector reads the property directly instead: on a [StandardTestDispatcher], which **defers**
- * a `CoroutineStart.DEFAULT` body until the scheduler is pumped, each flow's
- * `MutableSharedFlow.subscriptionCount` must already be non-zero the instant the construction site
- * returns, with no `runCurrent()` in between. It is `0` for any launch that is not `UNDISPATCHED`.
- * The technique is `BridgeNwApi.bytesSubscriberCountForTest`'s, generalised to one accessor per flow
- * on [FakeNwApi] — and asserted **per flow**, so a single regressed collector cannot hide behind five
- * healthy ones.
+ * a `CoroutineStart.DEFAULT` body until the scheduler is pumped, each flow's `subscriptionCount` must
+ * already be non-zero the instant the construction site returns, with no `runCurrent()` in between. It
+ * is `0` for any launch that is not `UNDISPATCHED`. The technique is
+ * `BridgeNwApi.bytesSubscriberCountForTest`'s, generalised to one accessor per flow on [FakeNwApi] —
+ * and asserted **per flow**, so a single regressed collector cannot hide behind six healthy ones.
  *
  * ## The rig check
  * Both tests launch a `DEFAULT`-start canary before the construction under test and assert it has
