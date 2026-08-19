@@ -140,6 +140,12 @@ public class ConnectivitySuite {
         capture: SuiteLogCapture,
     ) {
         results.clear()
+        // #2488: the one role that is not a scenario. See [runRenameProbe].
+        if (role == RENAME_PROBE_ROLE) {
+            runRenameProbe(onLog)
+            onComplete("rename-probe done")
+            return
+        }
         // A "-s4" role suffix runs ONLY scenario 4 — the #1467 controlled experiment. Scenario 4's leg1
         // is structurally identical to scenario 2 (same weave call, different service type), yet it timed
         // out at 45s in the field while 2/3/5 wove in under a second. Running it alone, in a process where
@@ -277,6 +283,51 @@ public class ConnectivitySuite {
         }
 
     // ── 2. real kuilt-nw Seam weave ───────────────────────────────────────────
+
+    /**
+     * Force an mDNS instance-name collision so `nw.api.advertised-name renamed=true` can be observed on
+     * real hardware (#2488, #2420's handler).
+     *
+     * **Why this needs a pinned name.** Since ADR-005 (#2416) the advertised Bonjour instance name IS
+     * [NwLoom.selfId], which defaults to a fresh random UUID per peer — so two kuilt peers can never
+     * collide, and the `… (2)` rename path is unreachable between them **by construction**. The renamed
+     * advertiser is whichever registers *second*, so making the phone the one renamed requires some other
+     * advertiser to already hold the name — which requires the phone's name to be predictable.
+     *
+     * Deliberately reuses [SVC2]: every service type must be declared in `app/project.yml`'s
+     * `NSBonjourServices` or iOS blocks discovery silently, and SVC2 is already declared.
+     *
+     * Operator step, on a Mac, BEFORE launching this role:
+     * ```
+     * dns-sd -R kuiltrenameprobe _ksuite2._tcp local 9999
+     * ```
+     * Then `grep nw.api.advertised-name` — `renamed=true` with `advertised=kuiltrenameprobe (2)` is the
+     * result being sought; `renamed=false` means Network.framework did not report the rename here.
+     */
+    private suspend fun runRenameProbe(onLog: (String) -> Unit) {
+        KotlinLoggingConfiguration.loggerFactory = DirectLoggerFactory
+        KotlinLoggingConfiguration.direct.logLevel = Level.DEBUG
+        onLog("rename-probe: pinned name=$RENAME_PROBE_NAME svc=$SVC2 window=$RENAME_PROBE_WINDOW")
+        onLog("rename-probe: expecting mDNS to rename US if another advertiser already holds that name")
+        val loom = appleNwLoom(
+            SVC2,
+            ROOM_KEY,
+            selfId = PeerId(RENAME_PROBE_NAME),
+            weaveTimeout = RENAME_PROBE_WINDOW,
+        )
+        // The weave never completes (no peer is expected); it is only how the listener gets started and
+        // kept advertising for the window. Cancelled below rather than awaited.
+        val weaving = scope.launch {
+            try {
+                loom.weave(Rendezvous.New(pattern()))
+            } catch (failure: Throwable) {
+                onLog("rename-probe: weave ended: $failure")
+            }
+        }
+        delay(RENAME_PROBE_WINDOW)
+        weaving.cancel()
+        onLog("rename-probe: window elapsed — grep nw.api.advertised-name for renamed=")
+    }
 
     private suspend fun scenarioSeamWeave(role: String, onLog: (String) -> Unit): ScenarioResult =
         scenario(2, "Fabric Seam weave", onLog) { hop ->
@@ -1835,6 +1886,15 @@ public class ConnectivitySuite {
         // it is the reproducer, so the fix must be validated against THIS key, not a lucky one.
         const val ROOM_KEY = "kuilt-suite-psk"
         const val SESSION = "kuilt-suite"
+
+        /** Role selecting the #2488 mDNS-rename probe — not a scenario. See `runRenameProbe`. */
+        const val RENAME_PROBE_ROLE = "rename-probe"
+
+        /** The pinned Bonjour instance name the probe advertises, and that the operator pre-registers. */
+        const val RENAME_PROBE_NAME = "kuiltrenameprobe"
+
+        /** How long the probe keeps advertising. Long enough to read the log, short enough to babysit. */
+        val RENAME_PROBE_WINDOW: Duration = 60.seconds
 
         /** Role suffix selecting the scenario-4-in-isolation diagnostic run (#1467). */
         const val S4_SUFFIX = "-s4"

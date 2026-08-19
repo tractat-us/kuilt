@@ -257,6 +257,9 @@ struct ContentView: View {
             if args.contains("otel-residual") { model.startOtelResidual() }
             else if args.contains("otel-probe-recover") { model.startOtelProbe(recover: true) }
             else if args.contains("otel-probe") { model.startOtelProbe() }
+            // #2488: not a scenario — advertises a PINNED Bonjour name so an operator holding that
+            // name from another host forces the `… (2)` rename this build's handler is meant to see.
+            else if args.contains("rename-probe") { model.start(role: "rename-probe") }
             else if args.contains("host-s4") { model.start(role: "host-s4") }
             else if args.contains("join-s4") { model.start(role: "join-s4") }
             else if args.contains("host-s6") { model.start(role: "host-s6") }
