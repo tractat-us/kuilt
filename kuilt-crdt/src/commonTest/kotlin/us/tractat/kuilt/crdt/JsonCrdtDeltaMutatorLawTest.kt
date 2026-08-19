@@ -24,13 +24,21 @@ import kotlin.test.assertTrue
  * already return the change rather than the whole map. The wrapper threw that away: `set`/`remove`
  * absorbed the `ORMap` delta locally and handed back a whole new document, so
  * `Patch(doc.set(k, v))` put every key **and every key's subtree** on the wire on every write.
- * Measured before the fix, at 100 vs 1,000 keys: a `set` frame grew 12,632 b → 127,678 b, a
- * `remove` frame 12,385 b → 127,431 b, against a whole document of 127,553 b.
+ *
+ * Measured over the fixtures below, at 100 vs 1,000 keys (whole document: 127,333 b):
+ *
+ * | frame | before | after |
+ * |-------|--------|-------|
+ * | [aSetsFrameIsFlatInDocumentSize] | 12,416 b → 127,462 b | 177 b → 177 b |
+ * | [aRemovesFrameIsFlatInDocumentSize] | 12,169 b → 127,215 b | 49 b → 49 b |
+ * | [aSetsFrameIsFlatInTheStoredSubtreesSize] | 12,588 b → 127,634 b | 266 b → 266 b |
  *
  * **Why the law alone cannot see that.** `Patch(doc.setWhole(…))` satisfies
- * `X.piece(mᵟ(X)) == m(X)` perfectly — that is exactly what shipped. So the law tests are paired
- * with the flat-frame measurements below, which are the only assertions standing between this
- * change and a no-op that looks fully pinned.
+ * `X.piece(mᵟ(X)) == m(X)` perfectly — that is exactly what shipped. Reinstating the defect (make
+ * `set` return `Patch(setWhole(…))`) leaves **every law test and both convergence tests in this
+ * file green**; only the flat-frame measurements and
+ * [removingAnAbsentKeyYieldsTheLatticeIdentity] go red. Those five are the only assertions standing
+ * between this change and a no-op that looks fully pinned.
  *
  * **The shuffle/duplication property is verified here, not assumed.** #2111 was filed while
  * `ORMap.piece` — and therefore `JsonCrdt.piece` — was non-associative on the value axis, so the
