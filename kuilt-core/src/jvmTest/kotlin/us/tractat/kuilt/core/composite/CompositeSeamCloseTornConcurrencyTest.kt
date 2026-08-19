@@ -20,13 +20,13 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PlyId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
-import us.tractat.kuilt.core.runConcurrencyStress
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.test.assertIs
 import kotlin.time.Duration.Companion.seconds
+import us.tractat.kuilt.test.runConcurrencyStress
 
 /**
  * Regression probe for the **lost terminal-`Torn` transition** race in [CompositeSeam.close] (#1135).

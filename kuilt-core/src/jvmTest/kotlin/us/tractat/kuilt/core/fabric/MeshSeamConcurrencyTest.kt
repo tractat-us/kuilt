@@ -16,12 +16,12 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.SeamState
-import us.tractat.kuilt.core.runConcurrencyStress
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import us.tractat.kuilt.test.runConcurrencyStress
 
 /**
  * Thread-safety probe for [MeshSeam] (#410).

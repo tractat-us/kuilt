@@ -22,6 +22,7 @@ import kotlinx.coroutines.yield
 import kotlin.test.Test
 import kotlin.test.assertIs
 import kotlin.time.Duration.Companion.seconds
+import us.tractat.kuilt.test.runConcurrencyStress
 
 /**
  * Regression probe for the **lost terminal-`Torn`** race in [TieredSeam.close] (#1363 — the #1135

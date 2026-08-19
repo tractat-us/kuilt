@@ -14,6 +14,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import us.tractat.kuilt.test.runConcurrencyStress
 
 /**
  * Real-threaded probe for [ScopedCloseable]'s close-once guard (#2305).
