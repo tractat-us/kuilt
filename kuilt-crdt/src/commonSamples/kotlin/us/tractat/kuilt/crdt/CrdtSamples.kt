@@ -284,6 +284,55 @@ internal fun sampleORMap() {
     check("team" !in bravo.keys)
 }
 
+// ── JsonCrdt ──────────────────────────────────────────────────────────────────
+
+/**
+ * A shared JSON document whose writes ship one field, not the document. Every mutator returns a
+ * [Patch] carrying just the key it touched, so an edit costs the same whether the document holds
+ * two fields or two thousand. Absorbing one locally is `doc.piece { … }`.
+ */
+@Suppress("unused")
+internal fun sampleJsonCrdt() {
+    val a = ReplicaId("A")
+    val b = ReplicaId("B")
+
+    fun text(writer: ReplicaId, value: String) =
+        JsonNode.Leaf(MVRegister.empty<JsonValue>().set(writer, JsonValue.Str(value)))
+
+    // Two peers have converged on a document with a title and a long body.
+    var alpha = JsonCrdt.empty(a)
+        .piece { it.set("title", text(a, "Draft")) }
+        .piece { it.set("body", text(a, "a very long document body")) }
+    var bravo = alpha.withReplica(b)
+
+    // B retitles the document and puts only that key on the wire. The body does not travel —
+    // that is the whole saving, and it holds however large the rest of the document gets.
+    val retitle = bravo.set("title", text(b, "Final"))
+    check(retitle.delta.keys == setOf("title"))
+    check(retitle.delta["body"] == null)
+
+    alpha = alpha.piece(retitle)
+    bravo = bravo.piece(retitle)
+    check(alpha == bravo)
+
+    // Both scalar writes are retained, because neither observed the other: the leaf is a
+    // multi-value register the caller resolves by writing again once it has read both.
+    val title = alpha["title"] as JsonNode.Leaf
+    check(title.register.values == setOf(JsonValue.Str("Draft"), JsonValue.Str("Final")))
+
+    // A concurrent write beats a concurrent remove: B's write mints a tag A's remove never saw.
+    val concurrent = alpha.withReplica(b).set("title", text(b, "Revived"))
+    check("title" in alpha.piece(alpha.remove("title")).piece(concurrent).keys)
+
+    // A remove ships the retired tags and nothing else — its delta holds no key at all.
+    val drop = alpha.remove("body")
+    check(drop.delta.keys.isEmpty())
+    alpha = alpha.piece(drop)
+    bravo = bravo.piece(drop)
+    check("body" !in alpha.keys)
+    check("body" !in bravo.keys)
+}
+
 // ── BoundedCounter ────────────────────────────────────────────────────────────
 
 /** Each replica spends within its own quota; transfers redistribute budget. */

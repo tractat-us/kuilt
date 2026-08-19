@@ -718,8 +718,8 @@ class CanonicalGoldenVectorTest {
                     .set(replica, JsonValue.Str(value)))).first
             }
             return JsonCrdt.empty(replica)
-                .set("list", JsonNode.Array(rga))
-                .set("name", JsonNode.Leaf(MVRegister.empty<JsonValue>().set(replica, JsonValue.Str(tag))))
+                .piece { it.set("list", JsonNode.Array(rga)) }
+                .piece { it.set("name", JsonNode.Leaf(MVRegister.empty<JsonValue>().set(replica, JsonValue.Str(tag)))) }
         }
         return view(zulu, "z").piece(view(alpha, "a"))
     }

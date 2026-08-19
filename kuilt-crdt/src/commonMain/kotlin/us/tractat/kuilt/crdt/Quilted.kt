@@ -33,20 +33,35 @@ import kotlin.jvm.JvmInline
  * delta.** That is true of a single-cell type — an [LWWRegister] holds one tagged
  * value, so there is nothing smaller to send. It is **not** true of a collection,
  * however single-celled its per-key merge looks: an `ORSet` add touches one
- * element, an `ORMap` put one key, an `LWWMap` set one cell, and returning the
- * container would put every *other* element on the wire too. Those three return a
- * [Patch] for exactly that reason, and their deltas are pinned byte-for-byte by
- * the delta-mutator law `X.piece(mᵟ(X)) == m(X)` (#2044) — unconditionally for
- * `ORSet` and `ORMap`, and for `LWWMap` exactly while the write's
- * `(timestamp, replica)` tag dominates the key's current one, which is what its
- * own tag-uniqueness rule already requires. Outside that domain no delta exists,
- * because a delta is joined and a join can only move up the lattice (#2087).
+ * element, an `ORMap` put one key, an `LWWMap` set one cell, a `JsonCrdt` set one
+ * document key, and returning the container would put every *other* element on
+ * the wire too. Those four return a [Patch] for exactly that reason, and their
+ * deltas are pinned byte-for-byte by the delta-mutator law `X.piece(mᵟ(X)) == m(X)`
+ * (#2044, #2111) — unconditionally for `ORSet`, `ORMap` and `JsonCrdt`, and for
+ * `LWWMap` exactly while the write's `(timestamp, replica)` tag dominates the
+ * key's current one, which is what its own tag-uniqueness rule already requires.
+ * Outside that domain no delta exists, because a delta is joined and a join can
+ * only move up the lattice (#2087).
  *
- * An earlier version of this paragraph offered *registers and maps* together as
- * the family whose whole state is already minimal. The maps were never in it, and
- * that sentence is a large part of why every write shipped O(state) bytes for six
- * months without anyone looking. When adding a type here, ask what one write
- * costs on a large instance — not what the merge function looks like.
+ * **The law is necessary and nowhere near sufficient, so do not stop at it.** A
+ * whole state dominates itself, so `X.piece(whole(X)) == whole(X)` holds for any
+ * lattice at all: a mutator returning `Patch(wholeNewState)` satisfies the law
+ * perfectly while saving nothing. No property of [piece] can tell the two apart —
+ * only measuring the encoded frame across two instance sizes can. Every type above
+ * therefore carries a *flat-frame* test beside its law test, and a delta shape
+ * that is merely correct is not the thing being claimed here.
+ *
+ * A pair of traps that both caught this codebase, worth reading before adding a
+ * type. An earlier version of this paragraph offered *registers and maps* together
+ * as the family whose whole state is already minimal; the maps were never in it,
+ * and that sentence is a large part of why every write shipped O(state) bytes for
+ * six months without anyone looking. And a law test is only as good as its
+ * reference: `JsonCrdt`'s first one compared the delta path against
+ * `root.piece { it.put(…) }`, which *is* `root.piece(root.put(…).delta)` — the same
+ * expression — so it asserted `x == x` and pinned nothing (#2111). Point the
+ * reference at a second implementation and prove it by mutating the delta path and
+ * watching the law go red. When adding a type here, ask what one write costs on a
+ * large instance — not what the merge function looks like.
  *
  * @param S the self-type — implementors write `class Foo : Quilted<Foo>`.
  */

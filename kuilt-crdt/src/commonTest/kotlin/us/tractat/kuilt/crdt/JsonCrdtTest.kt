@@ -68,7 +68,7 @@ class JsonCrdtTest {
 
     @Test
     fun setThenGet() {
-        val doc = JsonCrdt.empty(a).set("name", str("Alice"))
+        val doc = JsonCrdt.empty(a).piece { it.set("name", str("Alice")) }
         assertIs<JsonNode.Leaf>(doc["name"])
         assertEquals(setOf(JsonValue.Str("Alice")), (doc["name"] as JsonNode.Leaf).register.values)
     }
@@ -80,7 +80,7 @@ class JsonCrdtTest {
 
     @Test
     fun removeKey() {
-        val doc = JsonCrdt.empty(a).set("x", str("hi")).remove("x")
+        val doc = JsonCrdt.empty(a).piece { it.set("x", str("hi")) }.piece { it.remove("x") }
         assertNull(doc["x"])
     }
 
@@ -95,9 +95,9 @@ class JsonCrdtTest {
      */
     @Test
     fun nestedObjectMerge() {
-        val base = JsonCrdt.empty(a).set("profile", JsonNode.Object(ORMap.empty()))
-        val docA = base.set("profile", obj(a, "name" to str("Alice")))
-        val docB = base.withReplica(b).set("profile", obj(b, "age" to num(30.0)))
+        val base = JsonCrdt.empty(a).piece { it.set("profile", JsonNode.Object(ORMap.empty())) }
+        val docA = base.piece { it.set("profile", obj(a, "name" to str("Alice"))) }
+        val docB = base.withReplica(b).piece { it.set("profile", obj(b, "age" to num(30.0))) }
         val merged = docA.piece(docB)
         val profile = assertIs<JsonNode.Object>(merged["profile"])
         assertEquals(setOf("name", "age"), profile.map.keys)
@@ -107,9 +107,9 @@ class JsonCrdtTest {
 
     @Test
     fun addWinsOverConcurrentRemove() {
-        val base = JsonCrdt.empty(a).set("x", str("hello"))
-        val docA = base.remove("x")
-        val docB = base.withReplica(b).set("x", str("world"))
+        val base = JsonCrdt.empty(a).piece { it.set("x", str("hello")) }
+        val docA = base.piece { it.remove("x") }
+        val docB = base.withReplica(b).piece { it.set("x", str("world")) }
         val merged = docA.piece(docB)
         assertContains(merged.keys, "x")
     }
@@ -119,8 +119,8 @@ class JsonCrdtTest {
     @Test
     fun concurrentScalarWritesProduceMultiValue() {
         val base = JsonCrdt.empty(a)
-        val docA = base.set("flag", JsonNode.Leaf(MVRegister.empty<JsonValue>().set(a, JsonValue.Str("x"))))
-        val docB = base.withReplica(b).set("flag", JsonNode.Leaf(MVRegister.empty<JsonValue>().set(b, JsonValue.Str("y"))))
+        val docA = base.piece { it.set("flag", JsonNode.Leaf(MVRegister.empty<JsonValue>().set(a, JsonValue.Str("x")))) }
+        val docB = base.withReplica(b).piece { it.set("flag", JsonNode.Leaf(MVRegister.empty<JsonValue>().set(b, JsonValue.Str("y")))) }
         val merged = docA.piece(docB)
         val leaf = assertIs<JsonNode.Leaf>(merged["flag"])
         assertEquals(setOf(JsonValue.Str("x"), JsonValue.Str("y")), leaf.register.values)
@@ -131,8 +131,8 @@ class JsonCrdtTest {
     @Test
     fun arrayMergeUnionsOpLogs() {
         val base = JsonCrdt.empty(a)
-        val docA = base.set("list", arr(a, str("a"), str("b")))
-        val docB = base.withReplica(b).set("list", arr(b, str("c")))
+        val docA = base.piece { it.set("list", arr(a, str("a"), str("b"))) }
+        val docB = base.withReplica(b).piece { it.set("list", arr(b, str("c"))) }
         val merged = docA.piece(docB)
         val list = assertIs<JsonNode.Array>(merged["list"])
         assertEquals(3, list.rga.toList().size)
@@ -144,11 +144,11 @@ class JsonCrdtTest {
     fun deeplyNestedObjectMerge() {
         val innerA = obj(a, "value" to num(1.0))
         val outerA = obj(a, "inner" to innerA)
-        val docA = JsonCrdt.empty(a).set("root", outerA)
+        val docA = JsonCrdt.empty(a).piece { it.set("root", outerA) }
 
         val innerB = obj(b, "extra" to bool(true))
         val outerB = obj(b, "inner" to innerB)
-        val docB = JsonCrdt.empty(b).set("root", outerB)
+        val docB = JsonCrdt.empty(b).piece { it.set("root", outerB) }
 
         val merged = docA.piece(docB)
         val root = assertIs<JsonNode.Object>(merged["root"])
@@ -164,8 +164,8 @@ class JsonCrdtTest {
      */
     @Test
     fun objectWinsOverLeafBothMergeOrders() {
-        val docObject = JsonCrdt.empty(a).set("k", obj(a, "x" to str("v")))
-        val docLeaf = JsonCrdt.empty(b).set("k", str("scalar"))
+        val docObject = JsonCrdt.empty(a).piece { it.set("k", obj(a, "x" to str("v"))) }
+        val docLeaf = JsonCrdt.empty(b).piece { it.set("k", str("scalar")) }
         val merged1 = docObject.piece(docLeaf)
         val merged2 = docLeaf.piece(docObject)
         assertIs<JsonNode.Object>(merged1["k"])
@@ -175,8 +175,8 @@ class JsonCrdtTest {
 
     @Test
     fun objectWinsOverArrayBothMergeOrders() {
-        val docObject = JsonCrdt.empty(a).set("k", obj(a, "x" to str("v")))
-        val docArray = JsonCrdt.empty(b).set("k", arr(b, str("item")))
+        val docObject = JsonCrdt.empty(a).piece { it.set("k", obj(a, "x" to str("v"))) }
+        val docArray = JsonCrdt.empty(b).piece { it.set("k", arr(b, str("item"))) }
         val merged1 = docObject.piece(docArray)
         val merged2 = docArray.piece(docObject)
         assertIs<JsonNode.Object>(merged1["k"])
@@ -186,8 +186,8 @@ class JsonCrdtTest {
 
     @Test
     fun arrayWinsOverLeafBothMergeOrders() {
-        val docArray = JsonCrdt.empty(a).set("k", arr(a, str("item")))
-        val docLeaf = JsonCrdt.empty(b).set("k", str("scalar"))
+        val docArray = JsonCrdt.empty(a).piece { it.set("k", arr(a, str("item"))) }
+        val docLeaf = JsonCrdt.empty(b).piece { it.set("k", str("scalar")) }
         val merged1 = docArray.piece(docLeaf)
         val merged2 = docLeaf.piece(docArray)
         assertIs<JsonNode.Array>(merged1["k"])
@@ -203,8 +203,8 @@ class JsonCrdtTest {
     @Test
     fun localRetypeObjectThenLeafKeepsObject() {
         val doc = JsonCrdt.empty(a)
-            .set("k", obj(a, "x" to str("v")))
-            .set("k", str("scalar"))
+            .piece { it.set("k", obj(a, "x" to str("v"))) }
+            .piece { it.set("k", str("scalar")) }
         assertIs<JsonNode.Object>(doc["k"])
     }
 
@@ -215,9 +215,9 @@ class JsonCrdtTest {
     @Test
     fun crossTypePieceIsAssociative() {
         val c = ReplicaId("C")
-        val docA = JsonCrdt.empty(a).set("k", obj(a, "x" to str("v")))
-        val docB = JsonCrdt.empty(b).set("k", str("scalar"))
-        val docC = JsonCrdt.empty(c).set("k", arr(c, str("item")))
+        val docA = JsonCrdt.empty(a).piece { it.set("k", obj(a, "x" to str("v"))) }
+        val docB = JsonCrdt.empty(b).piece { it.set("k", str("scalar")) }
+        val docC = JsonCrdt.empty(c).piece { it.set("k", arr(c, str("item"))) }
         assertEquals(docA.piece(docB).piece(docC), docA.piece(docB.piece(docC)))
     }
 
@@ -247,8 +247,8 @@ class JsonCrdtTest {
     @Test
     fun jsonCrdtRoundTripsThroughJson() {
         val crdt = JsonCrdt.empty(a)
-            .set("name", str("Alice"))
-            .set("tags", arr(a, str("admin"), str("user")))
+            .piece { it.set("name", str("Alice")) }
+            .piece { it.set("tags", arr(a, str("admin"), str("user"))) }
         val ser = JsonCrdt.serializer()
         assertEquals(crdt, json.decodeFromString(ser, json.encodeToString(ser, crdt)))
     }
@@ -286,9 +286,9 @@ class JsonCrdtTest {
     @Test
     fun jsonCrdtRoundTripsThroughCbor() {
         val crdt = JsonCrdt.empty(a)
-            .set("name", str("Alice"))
-            .set("tags", arr(a, str("admin"), str("user")))
-            .set("meta", obj(a, "active" to bool(true), "score" to num(9.5)))
+            .piece { it.set("name", str("Alice")) }
+            .piece { it.set("tags", arr(a, str("admin"), str("user"))) }
+            .piece { it.set("meta", obj(a, "active" to bool(true), "score" to num(9.5))) }
         val ser = JsonCrdt.serializer()
         assertEquals(crdt, cbor.decodeFromByteArray(ser, cbor.encodeToByteArray(ser, crdt)))
     }
@@ -297,8 +297,8 @@ class JsonCrdtTest {
     fun deeplyNestedCrdtRoundTripsThroughCbor() {
         val inner = obj(a, "value" to num(1.0), "label" to str("x"))
         val crdt = JsonCrdt.empty(a)
-            .set("profile", obj(a, "name" to str("Alice"), "inner" to inner))
-            .set("items", arr(a, str("a"), str("b")))
+            .piece { it.set("profile", obj(a, "name" to str("Alice"), "inner" to inner)) }
+            .piece { it.set("items", arr(a, str("a"), str("b"))) }
         val ser = JsonCrdt.serializer()
         assertEquals(crdt, cbor.decodeFromByteArray(ser, cbor.encodeToByteArray(ser, crdt)))
     }
@@ -309,25 +309,25 @@ class JsonCrdtTest {
     fun pieceIsIdempotent() {
         // Use a doc with a shared key to exercise nested-merge idempotence
         val crdt = JsonCrdt.empty(a)
-            .set("x", str("v"))
-            .set("obj", obj(a, "k" to num(1.0)))
+            .piece { it.set("x", str("v")) }
+            .piece { it.set("obj", obj(a, "k" to num(1.0))) }
         assertEquals(crdt, crdt.piece(crdt))
     }
 
     @Test
     fun pieceIsCommutative() {
         // Both replicas write to the same key with different types to exercise conflict
-        val docA = JsonCrdt.empty(a).set("shared", obj(a, "ka" to str("va"))).set("a-only", str("a"))
-        val docB = JsonCrdt.empty(b).set("shared", arr(b, str("item"))).set("b-only", str("b"))
+        val docA = JsonCrdt.empty(a).piece { it.set("shared", obj(a, "ka" to str("va"))) }.piece { it.set("a-only", str("a")) }
+        val docB = JsonCrdt.empty(b).piece { it.set("shared", arr(b, str("item"))) }.piece { it.set("b-only", str("b")) }
         assertEquals(docA.piece(docB), docB.piece(docA))
     }
 
     @Test
     fun pieceIsAssociative() {
         val c = ReplicaId("C")
-        val docA = JsonCrdt.empty(a).set("a", str("1")).set("shared", obj(a, "ka" to str("va")))
-        val docB = JsonCrdt.empty(b).set("b", str("2")).set("shared", str("scalar"))
-        val docC = JsonCrdt.empty(c).set("c", str("3")).set("shared", arr(c, str("item")))
+        val docA = JsonCrdt.empty(a).piece { it.set("a", str("1")) }.piece { it.set("shared", obj(a, "ka" to str("va"))) }
+        val docB = JsonCrdt.empty(b).piece { it.set("b", str("2")) }.piece { it.set("shared", str("scalar")) }
+        val docC = JsonCrdt.empty(c).piece { it.set("c", str("3")) }.piece { it.set("shared", arr(c, str("item"))) }
         assertEquals(docA.piece(docB).piece(docC), docA.piece(docB.piece(docC)))
     }
 
@@ -339,25 +339,25 @@ class JsonCrdtTest {
      */
     @Test
     fun setFailsOnEmptyReplicaId() {
-        val doc = JsonCrdt.empty(a).set("x", str("hello"))
+        val doc = JsonCrdt.empty(a).piece { it.set("x", str("hello")) }
         val deserialized = json.decodeFromString(JsonCrdt.serializer(), json.encodeToString(JsonCrdt.serializer(), doc))
         assertFailsWith<IllegalArgumentException> { deserialized.set("y", str("world")) }
     }
 
     @Test
     fun removeFailsOnEmptyReplicaId() {
-        val doc = JsonCrdt.empty(a).set("x", str("hello"))
+        val doc = JsonCrdt.empty(a).piece { it.set("x", str("hello")) }
         val deserialized = json.decodeFromString(JsonCrdt.serializer(), json.encodeToString(JsonCrdt.serializer(), doc))
         assertFailsWith<IllegalArgumentException> { deserialized.remove("x") }
     }
 
     @Test
     fun withReplicaAllowsMutationAfterDeserialization() {
-        val doc = JsonCrdt.empty(a).set("x", str("hello"))
+        val doc = JsonCrdt.empty(a).piece { it.set("x", str("hello")) }
         val deserialized = json.decodeFromString(JsonCrdt.serializer(), json.encodeToString(JsonCrdt.serializer(), doc))
             .withReplica(a)
         assertEquals(doc, deserialized)
-        val updated = deserialized.set("y", str("world"))
+        val updated = deserialized.piece { it.set("y", str("world")) }
         assertContains(updated.keys, "y")
     }
 
@@ -369,8 +369,8 @@ class JsonCrdtTest {
      */
     @Test
     fun crossTypeMergeObjectOverLeafPayloadIsAbsent() {
-        val docObject = JsonCrdt.empty(a).set("k", obj(a, "nested" to str("kept")))
-        val docLeaf = JsonCrdt.empty(b).set("k", str("discarded"))
+        val docObject = JsonCrdt.empty(a).piece { it.set("k", obj(a, "nested" to str("kept"))) }
+        val docLeaf = JsonCrdt.empty(b).piece { it.set("k", str("discarded")) }
         val merged = docObject.piece(docLeaf)
         val winner = assertIs<JsonNode.Object>(merged["k"])
         // The Object's inner content is intact
@@ -384,8 +384,8 @@ class JsonCrdtTest {
      */
     @Test
     fun crossTypeMergeObjectOverArraySubtreeIsAbsent() {
-        val docObject = JsonCrdt.empty(a).set("k", obj(a, "x" to str("v")))
-        val docArray = JsonCrdt.empty(b).set("k", arr(b, str("item1"), str("item2")))
+        val docObject = JsonCrdt.empty(a).piece { it.set("k", obj(a, "x" to str("v"))) }
+        val docArray = JsonCrdt.empty(b).piece { it.set("k", arr(b, str("item1"), str("item2"))) }
         val merged1 = docObject.piece(docArray)
         val merged2 = docArray.piece(docObject)
         // Object wins in both merge orders
@@ -406,11 +406,11 @@ class JsonCrdtTest {
     fun deserializedDocumentsConvergeCorrectly() {
         val ser = JsonCrdt.serializer()
         val docA = JsonCrdt.empty(a)
-            .set("shared", obj(a, "name" to str("Alice")))
-            .set("a-only", str("from-a"))
+            .piece { it.set("shared", obj(a, "name" to str("Alice"))) }
+            .piece { it.set("a-only", str("from-a")) }
         val docB = JsonCrdt.empty(b)
-            .set("shared", obj(b, "age" to num(30.0)))
-            .set("b-only", str("from-b"))
+            .piece { it.set("shared", obj(b, "age" to num(30.0))) }
+            .piece { it.set("b-only", str("from-b")) }
         val expected = docA.piece(docB)
 
         val deserA = cbor.decodeFromByteArray(ser, cbor.encodeToByteArray(ser, docA))
@@ -430,7 +430,7 @@ class JsonCrdtTest {
      */
     @Test
     fun causalDotsIncludesNestedArrayDots() {
-        val doc = JsonCrdt.empty(a).set("items", arr(a, str("x"), str("y")))
+        val doc = JsonCrdt.empty(a).piece { it.set("items", arr(a, str("x"), str("y"))) }
         val dots = doc.causalDots()
         // arr() builds an Rga with Insert ops minted by replica a — those dots
         // must surface at the JsonCrdt level.
@@ -442,7 +442,7 @@ class JsonCrdtTest {
     fun causalDotsIncludesDeeplyNestedArrayDots() {
         val innerArr = arr(a, str("deep"))
         val outerObj = obj(a, "list" to innerArr)
-        val doc = JsonCrdt.empty(a).set("root", outerObj)
+        val doc = JsonCrdt.empty(a).piece { it.set("root", outerObj) }
         val dots = doc.causalDots()
         assertTrue(dots.isNotEmpty(), "causalDots() must recurse into nested Object→Array")
     }
@@ -515,9 +515,9 @@ class JsonCrdtTest {
      */
     @Test
     fun pieceIsAssociativeAcrossARemoveBetweenTwoSets() {
-        val first = JsonCrdt.empty(a).set("k", scalar("W1", "v1"))
-        val removed = first.remove("k")
-        val reSet = removed.set("k", scalar("W2", "v2"))
+        val first = JsonCrdt.empty(a).piece { it.set("k", scalar("W1", "v1")) }
+        val removed = first.piece { it.remove("k") }
+        val reSet = removed.piece { it.set("k", scalar("W2", "v2")) }
 
         val left = first.piece(removed).piece(reSet)
         val right = first.piece(removed.piece(reSet))
@@ -566,9 +566,9 @@ class JsonCrdtTest {
      */
     @Test
     fun aRemovedSubtreeStaysDiscardedInEveryGrouping() {
-        val first = JsonCrdt.empty(a).set("obj", objectNode("W1", "p" to scalar("W1", "p1"), "r" to scalar("W1", "r1")))
-        val removed = first.remove("obj")
-        val reSet = removed.set("obj", objectNode("W2", "q" to scalar("W2", "q1")))
+        val first = JsonCrdt.empty(a).piece { it.set("obj", objectNode("W1", "p" to scalar("W1", "p1"), "r" to scalar("W1", "r1"))) }
+        val removed = first.piece { it.remove("obj") }
+        val reSet = removed.piece { it.set("obj", objectNode("W2", "q" to scalar("W2", "q1"))) }
 
         val left = first.piece(removed).piece(reSet)
         val right = first.piece(removed.piece(reSet))
@@ -604,9 +604,9 @@ class JsonCrdtTest {
         val innerRemoved = inner.piece { it.remove("p") }
         val innerReSet = innerRemoved.piece { it.put(ReplicaId("Q"), "p", scalar("W2", "p2")) }
 
-        val x = JsonCrdt.empty(a).set("obj", JsonNode.Object(inner))
-        val y = JsonCrdt.empty(a).set("obj", JsonNode.Object(innerRemoved))
-        val z = JsonCrdt.empty(a).set("obj", JsonNode.Object(innerReSet))
+        val x = JsonCrdt.empty(a).piece { it.set("obj", JsonNode.Object(inner)) }
+        val y = JsonCrdt.empty(a).piece { it.set("obj", JsonNode.Object(innerRemoved)) }
+        val z = JsonCrdt.empty(a).piece { it.set("obj", JsonNode.Object(innerReSet)) }
 
         val leftInner = (x.piece(y).piece(z)["obj"] as? JsonNode.Object)?.map?.get("p")
         val rightInner = (x.piece(y.piece(z))["obj"] as? JsonNode.Object)?.map?.get("p")
@@ -644,9 +644,9 @@ class JsonCrdtTest {
      */
     @Test
     fun aRemovedArrayElementStaysGoneInEveryGrouping() {
-        val first = JsonCrdt.empty(a).set("xs", arrayNode("W1", scalar("W1", "e1")))
-        val removed = first.remove("xs")
-        val reSet = removed.set("xs", arrayNode("W2", scalar("W2", "e2")))
+        val first = JsonCrdt.empty(a).piece { it.set("xs", arrayNode("W1", scalar("W1", "e1"))) }
+        val removed = first.piece { it.remove("xs") }
+        val reSet = removed.piece { it.set("xs", arrayNode("W2", scalar("W2", "e2"))) }
 
         val left = (first.piece(removed).piece(reSet)["xs"] as? JsonNode.Array)?.rga
         val right = (first.piece(removed.piece(reSet))["xs"] as? JsonNode.Array)?.rga
@@ -673,9 +673,9 @@ class JsonCrdtTest {
      */
     @Test
     fun pieceIsAssociativeAcrossAConcurrentSetAndRemove() {
-        val start = JsonCrdt.empty(a).set("k", scalar("W1", "v1"))
-        val remover = start.remove("k")
-        val setter = start.withReplica(b).set("k", scalar("W2", "v2"))
+        val start = JsonCrdt.empty(a).piece { it.set("k", scalar("W1", "v1")) }
+        val remover = start.piece { it.remove("k") }
+        val setter = start.withReplica(b).piece { it.set("k", scalar("W2", "v2")) }
 
         assertAll(
             *associativityChecks("concurrent set/remove", remover, setter, start),
@@ -713,10 +713,10 @@ class JsonCrdtTest {
     @Test
     fun pieceIsAssociativeOnConcurrentCrossTypeWritesFromASharedAncestor() {
         val c = ReplicaId("C")
-        val branchPoint = JsonCrdt.empty(a).set("unrelated", scalar("W0", "v0"))
-        val asLeaf = branchPoint.set("k", scalar("W1", "v1"))
-        val asArray = branchPoint.withReplica(b).set("k", arrayNode("W2", scalar("W2", "e1")))
-        val asObject = branchPoint.withReplica(c).set("k", objectNode("W3", "p" to scalar("W3", "p1")))
+        val branchPoint = JsonCrdt.empty(a).piece { it.set("unrelated", scalar("W0", "v0")) }
+        val asLeaf = branchPoint.piece { it.set("k", scalar("W1", "v1")) }
+        val asArray = branchPoint.withReplica(b).piece { it.set("k", arrayNode("W2", scalar("W2", "e1"))) }
+        val asObject = branchPoint.withReplica(c).piece { it.set("k", objectNode("W3", "p" to scalar("W3", "p1"))) }
 
         assertAll(
             *associativityChecks("concurrent cross-type", asLeaf, asArray, asObject),
@@ -858,20 +858,20 @@ class JsonCrdtTest {
                 if (key in removedAnywhere) reSetsAfterRemove++
 
                 live[author] = when (random.nextInt(6)) {
-                    0, 1 -> state.set(key, scalar(writer, "v${random.nextInt(4)}"))
+                    0, 1 -> state.piece { it.set(key, scalar(writer, "v${random.nextInt(4)}")) }
                     2 -> {
                         objectValues++
-                        state.set(key, objectNode(writer, "p${random.nextInt(3)}" to scalar(writer, "n")))
+                        state.piece { it.set(key, objectNode(writer, "p${random.nextInt(3)}" to scalar(writer, "n"))) }
                     }
                     3 -> {
                         arrayValues++
-                        state.set(key, arrayNode(writer, scalar(writer, "e${random.nextInt(3)}")))
+                        state.piece { it.set(key, arrayNode(writer, scalar(writer, "e${random.nextInt(3)}"))) }
                     }
                     4 -> if (allowRemove) {
                         if (key in state.keys) removedAnywhere += key
-                        state.remove(key)
+                        state.piece { it.remove(key) }
                     } else {
-                        state.set(key, scalar(writer, "w"))
+                        state.piece { it.set(key, scalar(writer, "w")) }
                     }
                     else -> state.piece(live.getValue(TRAJECTORY_REPLICAS.random(random)))
                 }

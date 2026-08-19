@@ -359,8 +359,13 @@ propagates any `Quilted<S>` over a `Seam` with no application-level merge
 calls. For collaborative JSON documents, use `JsonCrdt`:
 
 ```kotlin
-val doc = JsonCrdt.empty(ReplicaId("my-peer"))
-    .set("title", JsonNode.Leaf(MVRegister.empty<JsonValue>().set(replica, JsonValue.Str("Hello"))))
+// set/remove return a Patch carrying the one key they touched — that is what goes
+// on the wire, whatever else the document holds.
+val title = JsonNode.Leaf(MVRegister.empty<JsonValue>().set(replica, JsonValue.Str("Hello")))
+quilter.mutate { it.set("title", title) }
+
+// Outside a replicator, absorb the patch to hold the resulting document:
+val doc = JsonCrdt.empty(ReplicaId("my-peer")).piece { it.set("title", title) }
 
 // After deserialization, restore the replica id before mutating:
 val received: JsonCrdt = cbor.decodeFromByteArray(JsonCrdt.serializer(), bytes)
@@ -368,7 +373,10 @@ val received: JsonCrdt = cbor.decodeFromByteArray(JsonCrdt.serializer(), bytes)
 ```
 
 See the `JsonCrdt` and `JsonNode` KDoc for conflict-resolution semantics and
-the cross-type precedence rule (`Object > Array > Leaf`).
+the cross-type precedence rule (`Object > Array > Leaf`). A write nested inside an
+existing object still rebuilds that object, so its frame is the size of the
+subtree — [#2469](https://github.com/tractat-us/kuilt/issues/2469) tracks a
+path-addressed edit.
 
 For live presence and awareness (cursors, typing indicators, per-peer ephemeral
 state), use `EphemeralMap` with `EphemeralMapTracker`:

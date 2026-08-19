@@ -62,23 +62,23 @@ internal class JsonCrdtConformanceTest : QuiltedConformanceSuite<JsonCrdt>() {
     // they do not alias: each observes the last. The re-asserted leaf is authored by R7 so the
     // register's join keeps both values apart — a leaf re-written under R6's own dot would carry
     // the same tag twice, and a dropped contribution would then be invisible.
-    private val jAsserted = JsonCrdt.empty(r6).set("j", leaf(r6, "one"))
-    private val jRetired = jAsserted.remove("j")
-    private val jReAsserted = jRetired.set("j", leaf(r7, "two"))
+    private val jAsserted = JsonCrdt.empty(r6).piece { it.set("j", leaf(r6, "one")) }
+    private val jRetired = jAsserted.piece { it.remove("j") }
+    private val jReAsserted = jRetired.piece { it.set("j", leaf(r7, "two")) }
 
     override fun samples(): List<JsonCrdt> = listOf(
         // empty — identity element
         JsonCrdt.empty(r1),
         // leaf at "k" (replica R2) — cross-type conflict pair with the object below
-        JsonCrdt.empty(r2).set("k", leaf(r2, "scalar")),
+        JsonCrdt.empty(r2).piece { it.set("k", leaf(r2, "scalar")) },
         // object at "k" (replica R3) — cross-type conflict pair with the leaf above and array below
-        JsonCrdt.empty(r3).set("k", objNode(r3, "x" to num(r3, 1.0))),
+        JsonCrdt.empty(r3).piece { it.set("k", objNode(r3, "x" to num(r3, 1.0))) },
         // array at "k" (replica R4) — cross-type conflict pair with both above
-        JsonCrdt.empty(r4).set("k", arrNode(r4, leaf(r4, "item"))),
+        JsonCrdt.empty(r4).piece { it.set("k", arrNode(r4, leaf(r4, "item"))) },
         // multi-key document (replica R5) — distinct keys so it merges additively with the above
         JsonCrdt.empty(r5)
-            .set("name", leaf(r5, "Alice"))
-            .set("meta", objNode(r5, "active" to leaf(r5, "true"))),
+            .piece { it.set("name", leaf(r5, "Alice")) }
+            .piece { it.set("meta", objNode(r5, "active" to leaf(r5, "true"))) },
         jAsserted,
         jRetired,
         jReAsserted,
