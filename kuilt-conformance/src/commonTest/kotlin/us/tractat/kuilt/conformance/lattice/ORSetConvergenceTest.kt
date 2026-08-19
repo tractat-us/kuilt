@@ -37,9 +37,12 @@ internal class ORSetConvergenceTest : LatticeLawSuite<ORSet<String>>() {
             // indexing it raw would give the targets different trajectories from one seed.
             //
             // The empty-state fallback keeps the absent-element case reachable rather than erasing
-            // it — replicas 1 and 2 start empty, and "removing an element you do not hold is the
-            // identity" is real behaviour. `remove` (pinned) reaches it too, which is where the
-            // residual no-op rate lives.
+            // it: "removing an element you do not hold is the identity" is real behaviour, and it
+            // is still reached whenever a replica has removed everything it holds. It is no longer
+            // reached from `initial` — since #2145 every replica takes one leading assert, so no
+            // replica starts empty and the bottom-state no-ops this line used to produce (85 of the
+            // binding's 139 over seeds 0..63, all of them RETIRE) are gone. `runExhaustiveSmall` is
+            // where a retire against the empty set is still walked, exhaustively.
             LatticeOp("remove-roam", OpKind.RETIRE) { state, _, random ->
                 val held = state.elements.sorted()
                 val element = if (held.isEmpty()) ELEMENTS[random.nextInt(ELEMENTS.size)] else held[random.nextInt(held.size)]

@@ -791,9 +791,11 @@ public class LatticeLawHarness<S : Quilted<S>>(
      *
      * Every step is asserted to have **changed the state**, because a shape that no-ops is
      * decoration that reads like coverage. This is not hypothetical: `ORMapConvergenceTest`'s
-     * generator burns **10 of 29** steps removing a key the state does not hold, so a third of its
-     * budget already buys nothing by accident. A constructed shape that did the same would be worse,
+     * generator once burned **10 of 29** steps removing a key the state did not hold, so a third of
+     * its budget bought nothing by accident. A constructed shape that did the same would be worse,
      * because someone wrote it down on purpose and the next reader would trust it.
+     * ([leadEveryReplicaWithAnAssert] and the binding's own roaming ops have since taken that rate
+     * to 5.7% over seeds `0..63`; the point the check makes is unchanged.)
      */
     private fun applyCriticalShapes(
         latest: MutableList<S>,

@@ -59,9 +59,13 @@ internal class ORMapConvergenceTest : LatticeLawSuite<ORMap<String, GCounter>>()
             // it raw would give the targets different trajectories from the same seed.
             //
             // The empty-state fallback keeps the absent-key case in the alphabet rather than
-            // erasing it — replicas 1 and 2 start empty, and "removing an absent key is the
-            // identity" is real behaviour worth reaching. `remove` (pinned) reaches it too, at
-            // 40/97 draws, which is where the residual no-op rate lives.
+            // erasing it: "removing an absent key is the identity" is real behaviour worth
+            // reaching, and it is still reached whenever a replica has removed everything it
+            // holds. It is no longer reached from `initial` — since #2145 every replica takes one
+            // leading assert, so no replica starts empty and the bottom-state no-ops this line used
+            // to produce (70 of the binding's 115 over seeds 0..63, all of them RETIRE) are gone.
+            // `runExhaustiveSmall` is where a retire against the empty map is still walked,
+            // exhaustively.
             LatticeOp("remove-roam", OpKind.RETIRE) { state, _, random ->
                 val held = state.keys.sorted()
                 val key = if (held.isEmpty()) "k-${random.nextInt(0, 3)}" else held[random.nextInt(held.size)]

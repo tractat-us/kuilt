@@ -94,6 +94,13 @@ import kotlin.random.Random
  * | generator as bound | 30.2% | 39.7% | 34.6% | 9.3% | **500 / 45,797** |
  * | removes deleted | 28.4% | 43.2% | 39.3% | **0.0%** | **0 / 47,059** |
  *
+ * The rows are a dated receipt, not the live numbers: they predate #2145's leading asserts. Those
+ * move the **top** row — a bound generator now spends fewer steps at the lattice bottom, so its
+ * ancestry falls and its concurrency and retirement rise — and leave the **bottom** row exactly
+ * where it is, because an alphabet with nothing to retire gets no leading assert at all. The
+ * asymmetry the table exists to show is therefore, if anything, wider than it reads here.
+ * `VacuityFloorSelfTest` runs both arms live rather than quoting them.
+ *
  * Ancestry, concurrency and join-non-triviality — the three a reviewer reaches for, and the three a
  * generic `Quilted` can compute — are all *satisfied* by the arm that finds nothing. Concurrency and
  * join-non-triviality even go **up** when the removes are deleted. The retirement rate is the only
@@ -221,30 +228,45 @@ public fun <S> defaultCriticalShapes(alphabet: List<LatticeOp<S>>): List<List<St
  * ## The step rates
  *
  * A **step** is one op the pool builder applied to a replica: **every op of every critical shape,
- * plus every op of the random exploration**. Absorbing a peer's state (the gossip draw) is not a
- * step — it is not drawn from the alphabet and has no [OpKind] to classify.
+ * every replica's leading assert, plus every op of the random exploration**. Absorbing a peer's
+ * state (the gossip draw) is not a step — it is not drawn from the alphabet and has no [OpKind] to
+ * classify.
  *
- * **Whether the critical-shape ops count is a real choice, and it moves the numbers a long way.**
- * `ORSetConvergenceTest` reads **20.3%** no-ops counting them and **27.9%** excluding them, on the
- * same pool over the same seeds — one side of a 25% ceiling to the other. The case for excluding
- * them is that the harness already asserts every shape step changed the state, so they are
- * validated constants that dilute a ceiling and inflate a floor. They are counted anyway, for three
- * reasons:
+ * The leading asserts are [LatticeLawHarness.leadEveryReplicaWithAnAssert] — one asserting op per
+ * replica, on any alphabet with something to retire, so that no replica takes its first exploration
+ * draw from the lattice bottom. They are *constructed* steps and count for the same three reasons
+ * the shape steps do.
+ *
+ * **Whether the constructed ops count is a real choice, and it moves the numbers a long way.**
+ * `ORSetConvergenceTest` reads **8.6%** no-ops counting them and **15.0%** excluding them, on the
+ * same pool over the same seeds. The case for excluding them is that the harness already asserts
+ * every constructed step changed the state, so they are validated constants that dilute a ceiling
+ * and inflate a floor. They are counted anyway, for three reasons:
  *
  * 1. **They are not free.** A shape whose step does not move the state fails the binding outright,
- *    so a shape cannot be padding — declaring one is doing the work, not dodging it.
+ *    so a shape cannot be padding — declaring one is doing the work, not dodging it. The same check
+ *    guards the leading asserts.
  * 2. **They are the design's own thesis.** Constructed shapes are what reach the interesting
  *    configuration on *every* seed rather than on a lucky one. A denominator that excludes exactly
  *    the constructed part measures only the part this suite considers weaker.
  * 3. **Consistency with the pair rates.** Ancestry and concurrency are measured over the whole
- *    pool, shape states included. Excluding shape steps would have one table describing two
- *    different populations.
+ *    pool, constructed states included. Excluding constructed steps would have one table describing
+ *    two different populations.
  *
  * The cost is that the default `assert · retire · assert` shape contributes about 9 points of
  * retirement rate at these pool sizes — most of the 10% floor — so **a binding must not be read as
  * clearing the retirement floor on its shape alone.** Every retiring binding in the tree clears it
- * with room to spare on exploration too (the lowest is 19.8%), and a binding that sat near 10%
+ * with room to spare on exploration too (the lowest is 21.3%), and a binding that sat near 10%
  * would be worth looking at rather than passing.
+ *
+ * **That margin is a property of the binding, not of the floor, and #2158 is the standing record of
+ * the difference.** Since #2145 every retiring binding clears the 10% floor on its *exploration*
+ * retirement alone — the weakest is `JsonCrdt` at 11.5% of all steps over seeds `0..63`, where
+ * before the leading asserts it was 10.0% and therefore had no margin at all. What has not changed
+ * is the floor's own discriminating power: the shape still contributes ~8.6 points of the 10%, so a
+ * *mutant* whose retirement is dead on two of three replicas still clears it (an `ORSet` shaped that
+ * way measures 17.0%). Read this floor as evidence about a healthy binding's generator, not as a
+ * detector for retirement that has died unevenly across replicas.
  *
  * - **effective retire steps** — steps whose op is [OpKind.RETIRE] **and which changed the state**.
  *   The `and` is the whole point: a `remove` of something absent is the lattice identity, and a

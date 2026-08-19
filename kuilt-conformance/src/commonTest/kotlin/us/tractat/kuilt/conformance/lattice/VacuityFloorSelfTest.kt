@@ -3,6 +3,7 @@ package us.tractat.kuilt.conformance.lattice
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ORMap
 import us.tractat.kuilt.test.assertAll
+import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -147,6 +148,67 @@ internal class VacuityFloorSelfTest {
                 )
             },
         )
+    }
+
+    /**
+     * **A retire at the lattice bottom is not always inert**, and nothing the harness does may
+     * assume it is.
+     *
+     * #2145's leading asserts exist because a retiring draw on a replica still holding `initial`
+     * usually *cannot* be effective — there is nothing yet to retire — and on eight of the twelve
+     * retiring bindings every single bottom-state no-op was exactly that. The tempting shortcut is
+     * to read that as a law and act on it directly: skip a retiring draw at the bottom, or re-draw
+     * until an asserting op comes up. It is not a law. `TwoPhaseSet.remove` and `LWWRegister.unset`
+     * both write a **tombstone**, so on an empty state they change it — and both bindings measured
+     * **0** bottom-state no-ops for that reason. A harness that suppressed the draw would delete
+     * real coverage from precisely these two, and would do it silently, because the rates it
+     * reports would only improve.
+     *
+     * So the fix leads with an assert rather than filtering the draw, and this test pins the premise
+     * that makes the distinction matter. The `ORSet` arm is the control: without it the test passes
+     * on a world where every retire everywhere is effective, which is the world the shortcut would
+     * be safe in.
+     *
+     * The states this moves out of the randomised pool are not lost. `runExhaustiveSmall` walks
+     * **every** word of length `1..L` from `initial` on replica 0, so `[remove]` and `[unset-high]`
+     * — and every continuation of them within the bound — are still searched, exhaustively, on
+     * every run.
+     */
+    @Test
+    fun aBottomStateRetireIsEffectiveOnTheBindingsThatWriteATombstone() {
+        assertAll(
+            { assertBottomRetires("TwoPhaseSet", TwoPhaseSetConvergenceTest().newHarness(), effective = true) },
+            { assertBottomRetires("LWWRegister", LWWRegisterConvergenceTest().newHarness(), effective = true) },
+            { assertBottomRetires("ORSet", ORSetConvergenceTest().newHarness(), effective = false) },
+        )
+    }
+
+    /**
+     * Every [OpKind.RETIRE] op of [harness]'s alphabet, applied to `initial`, either changes the
+     * state ([effective] true) or is absorbed by it ([effective] false).
+     *
+     * A fixed [Random] because a roaming op draws its target from the stream; the claim is about the
+     * op's behaviour at the bottom, and one draw is enough to make it.
+     */
+    private fun <S : us.tractat.kuilt.crdt.Quilted<S>> assertBottomRetires(
+        name: String,
+        harness: LatticeLawHarness<S>,
+        effective: Boolean,
+    ) {
+        val retires = harness.alphabet.filter { it.kind == OpKind.RETIRE }
+        assertTrue(retires.isNotEmpty(), "$name declares no RETIRE op, so this arm asserts nothing")
+        for (op in retires) {
+            val after = op.apply(harness.initial, 0, Random(0))
+            assertEquals(
+                effective,
+                after != harness.initial,
+                "$name's '${op.name}' at the lattice bottom: expected it to " +
+                    (if (effective) "CHANGE" else "leave unchanged") +
+                    " `initial`. Read the KDoc on this test before touching the number — the two " +
+                    "answers are what stops the leading-assert fix from being written as a filter " +
+                    "on the draw. initial=${harness.initial}, after=$after",
+            )
+        }
     }
 
     /**
