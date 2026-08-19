@@ -22,6 +22,30 @@ if (concurrencyStressFlag != null) {
         .configureEach { environment("CONCURRENCY_STRESS_TESTS", concurrencyStressFlag) }
 }
 
+// The JVM half of the same flag, copied verbatim from kuilt-core/build.gradle.kts (#2481).
+// Every `*ConcurrencyTest` here is a real-threaded probe — the name is the contract, deliberately
+// NOT an enumeration, which is what went stale in kuilt-core as probes were added. They run on real
+// threads rather than virtual time, so their background pump coroutines get starved of CPU when the
+// machine is saturated by sibling test JVMs, and an unbounded await can then blow the per-Test task
+// budget → the task is killed and writes no XML (the #1135 hang). So they are EXCLUDED from the
+// normal test run and only run under -Pconcurrency.stress.tests=true, on a dedicated CI runner with
+// no co-scheduled test JVMs (the `nw-concurrency-probes` job in ci.yml). See #1158.
+val runConcurrencyStress = concurrencyStressFlag == "true"
+tasks.withType<Test>().configureEach {
+    // Apply the exclusion only when the flag is OFF. With the flag ON the exclusion is absent, so a
+    // command-line `--tests "*ConcurrencyTest"` include filter runs them (a build-defined exclude
+    // would otherwise win over the include and match nothing — the CI job would be green by vacuity).
+    if (!runConcurrencyStress) {
+        filter { excludeTestsMatching("*ConcurrencyTest") }
+    } else {
+        // The probe harness installs DebugProbes to dump *coroutine* stacks on a hang (#1784), which
+        // attaches a java agent at runtime. JDK 21+ warns on stderr when that happens (JEP 451), and
+        // stderr cleanliness is itself evidence on these hangs. Scoped to the stress runs, so the
+        // normal build's test JVMs are untouched.
+        jvmArgs("-XX:+EnableDynamicAgentLoading")
+    }
+}
+
 kotlin {
     val macosLibName = "kuilt"
     macosArm64 { binaries.sharedLib { baseName = macosLibName } }
