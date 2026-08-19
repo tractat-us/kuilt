@@ -12,6 +12,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.yield
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.SeamState
@@ -36,24 +37,33 @@ import kotlin.test.assertTrue
  * suite** — the only thing that had ever run them truly concurrently was the real-transport
  * conformance suites, and only probabilistically.
  *
- * The sharpest form of the gap: `NwSeam`'s canonical-nonce dedup is an explicit *port* of `MeshSeam`'s
- * and says so in its own KDoc — "the old direction-based rule could wedge a pair to zero under a
- * multi-threaded dispatcher (direction was written by one collector and read by another with no
- * happens-before)". `MeshSeam` has `MeshSeamConcurrencyTest` for precisely that hazard. The port did
- * not, so the property the port exists to provide was asserted nowhere.
- *
  * ## What each test drives
  * One hazard each, and each one is backed by a revert receipt in the PR that added it — the specific
  * `withLock` that makes it safe was removed and the probe observed to redden **reliably**, not once.
  * A probe that cannot be made to red is green by absence.
  *
- *  1. [concurrentDoubleDialDedupesToExactlyOneLink] — the dedup itself, on one pair.
- *  2. [broadcastNeverLeaksARaceExceptionWhilePeersAreEvicted] — `broadcast` snapshotting `registry`
+ *  1. [broadcastNeverLeaksARaceExceptionWhilePeersAreEvicted] — `broadcast` snapshotting `registry`
  *     while a lifecycle collector evicts out of it.
- *  3. [closeRacingARemoteDepartureProducesOneCleanTorn] — consumer `close()` against a remote's
+ *  2. [closeRacingARemoteDepartureProducesOneCleanTorn] — consumer `close()` against a remote's
  *     departure, both of which tear down `registry`/`conns`.
- *  4. [drainsAreNeverOrphanedWhenTheirLinkDiesUnderThem] — a displacement drain's start racing its
+ *  3. [drainsAreNeverOrphanedWhenTheirLinkDiesUnderThem] — a displacement drain's start racing its
  *     own end.
+ *
+ * ## The dedup has deliberately NO probe here, and that is a finding rather than an omission
+ * #2481 asked for one on "concurrent double-dial dedup on one pair", reasoning from `NwSeam`'s own
+ * KDoc that the pre-port direction-based rule "could wedge a pair to zero under a multi-threaded
+ * dispatcher". That premise does not survive contact with the code: `resolveIdentity` is reached
+ * **only** from the single `bytesReceivedLoop`, so two resolutions on one seam can never race each
+ * other however hard both ends dial — the dedup is not a two-writer hazard. Removing its `withLock`
+ * outright left a dedicated double-dial probe green over 5 consecutive rounds.
+ *
+ * What genuinely races a resolution is another *coroutine* touching the same two maps, which is what
+ * the three probes below already drive, and the resolve path's own `registry`/`conns` writes are
+ * covered there. Trying to contend it directly with a broadcast hammer during formation is a trap
+ * worth recording: `broadcast`'s send-failure arm calls `removeByConn`, which legitimately evicts the
+ * peer, and with no `NwLoom` to redial the pair settles at zero peers — so the rig manufactures the
+ * very wedge it claims to detect. That is a rig bug, not a seam bug, and a probe built on it would
+ * have shipped as an intermittent false red.
  *
  * ## The invariant every test shares
  * [assertRegistryAndConnsAgree] re-asserts `auditRegistryLocked`'s **contract-impossible** condition
@@ -127,64 +137,6 @@ class NwSeamConcurrencyTest {
                 "links=${snapshot.links.map { "${it.connId}(${it.role},peer=${it.resolvedPeer})" }}"
         }
 
-    // ── hazard 1: the dedup itself ──────────────────────────────────────────────
-
-    /**
-     * Both ends of a pair dial **at the same instant** on a real multi-threaded dispatcher, then the
-     * canonical-nonce dedup must collapse the two links to exactly one — from BOTH ends, agreeing.
-     *
-     * This is the property `NwSeam`'s own KDoc claims the port bought and nothing asserted: the
-     * pre-port direction-based rule "could wedge a pair to zero under a multi-threaded dispatcher",
-     * and `liveLinkCount` is the only place a surviving-or-missing link is observable at all —
-     * `broadcast`/`sendTo` fan out over `registry` (one connection per peer) and `peers` is a `Set`,
-     * so neither a duplicate link nor a wrongly-dropped one changes a single frame any receiver sees.
-     *
-     * The assertion is three-sided on purpose. `openedLinkCount == 2` is the **rig receipt**: without
-     * it "exactly one live link" is satisfied vacuously by a pair that never double-dialled, which is
-     * the shape a broken dial would silently produce. `liveLinkCount == 1` is the dedup. And both
-     * seams reaching `Woven` with the full roster is what separates "deduped" from "wedged to zero".
-     */
-    @Test
-    fun concurrentDoubleDialDedupesToExactlyOneLink() = runConcurrencyStress { stage ->
-        repeat(PAIR_ITERATIONS) { iter ->
-            val radio = FakeNwRadio()
-            val nodes = listOf(node(radio, 0, iter.toLong()), node(radio, 1, iter.toLong()))
-            val (a, b) = nodes
-
-            stage.at("iter=$iter simultaneous double dial") { dump(iter, radio, nodes) }
-            coroutineScope {
-                val ready = CompletableDeferred<Unit>()
-                val dials = listOf(
-                    async(Dispatchers.Default) { ready.await(); a.api.connect(endpointFor(1)) },
-                    async(Dispatchers.Default) { ready.await(); b.api.connect(endpointFor(0)) },
-                )
-                ready.complete(Unit)
-                awaitAll(*dials.toTypedArray())
-            }
-
-            stage.at("iter=$iter await both rosters") { dump(iter, radio, nodes) }
-            a.seam.peers.first { it.size == 2 }
-            b.seam.peers.first { it.size == 2 }
-
-            // Quiesce rather than wait for the number being asserted: a wait keyed to `== 1` turns the
-            // interesting failure ("it settled on 0" / "it settled on 2") into an uninformative timeout,
-            // whereas settling first lets assertEquals print what actually happened.
-            stage.at("iter=$iter await dedup drain to settle") { dump(iter, radio, nodes) }
-            val liveLinks = awaitStable { radio.liveLinkCount }
-
-            assertAll(
-                { assertEquals(2, radio.openedLinkCount, "rig: both ends must really have dialled — otherwise there was no double dial to dedup") },
-                { assertEquals(1, liveLinks, "dedup must collapse the double dial to exactly ONE live link; 0 is the wedge the nonce rule exists to prevent, 2 is a leaked socket. ${dump(iter, radio, nodes)}") },
-                { assertEquals(setOf(a.peerId, b.peerId), a.seam.peers.value, "A's roster") },
-                { assertEquals(setOf(a.peerId, b.peerId), b.seam.peers.value, "B's roster") },
-                { assertIs<SeamState.Woven>(a.seam.state.value, "A settled Woven") },
-                { assertIs<SeamState.Woven>(b.seam.state.value, "B settled Woven") },
-                { assertRegistryAndConnsAgree(nodes, iter, radio) },
-            )
-            teardown(nodes)
-        }
-    }
-
     // ── hazard 2: broadcast against concurrent eviction ─────────────────────────
 
     /**
@@ -225,17 +177,28 @@ class NwSeamConcurrencyTest {
                         }
                     }
                 }
-                // Every remote leaves at once: each departure drives the hub's connectionClosed +
-                // connectionStates collectors into `registry`/`conns` while the senders read them.
-                val leavers = peers.map { p ->
-                    async(Dispatchers.Default) { ready.await(); p.seam.close(CloseReason.Normal) }
+                // The remotes leave STAGGERED, not in one burst at instant zero: each departure drives
+                // the hub's connectionClosed + connectionStates collectors into `registry`/`conns`, and
+                // spreading them across the hammer is what keeps evictions landing while the senders
+                // are actually mid-iteration. Bursting them all at `ready` — the first cut — fired every
+                // eviction before the broadcasters had started, and the probe dropped to 4/5 red.
+                val leavers = peers.mapIndexed { i, p ->
+                    async(Dispatchers.Default) {
+                        ready.await()
+                        repeat(i * DEPARTURE_STAGGER_YIELDS) { yield() }
+                        p.seam.close(CloseReason.Normal)
+                    }
                 }
-                val closer = async(Dispatchers.Default) { ready.await(); hub.seam.close(CloseReason.Normal) }
                 ready.complete(Unit)
-                awaitAll(closer, *leavers.toTypedArray(), *senders.toTypedArray())
+                awaitAll(*leavers.toTypedArray(), *senders.toTypedArray())
             }
 
+            // The hub closes AFTER the hammer, not inside it: a hub torn at instant zero makes every
+            // remaining broadcast an immediate `IllegalStateException`, so the window under test would
+            // close before most of the sends ever iterated `registry`. Racing close against departure
+            // is a hazard in its own right and has its own probe.
             stage.at("iter=$iter await hub torn") { dump(iter, radio, nodes) }
+            hub.seam.close(CloseReason.Normal)
             hub.seam.state.first { it is SeamState.Torn }
 
             assertAll(
@@ -450,14 +413,17 @@ class NwSeamConcurrencyTest {
         const val PAIR_ITERATIONS = 150
 
         /** Rounds for the star-shaped broadcast probe — heavier per round (six seams), so fewer. */
-        const val BROADCAST_ITERATIONS = 60
+        const val BROADCAST_ITERATIONS = 80
+
+        /** `yield()`s of stagger per departing peer, so evictions land THROUGHOUT the broadcast hammer. */
+        const val DEPARTURE_STAGGER_YIELDS = 8
 
         /** Remotes on the hub in the broadcast probe: enough that eviction and iteration genuinely overlap. */
         const val PEER_COUNT = 5
 
         /** Concurrent `broadcast` callers hammering one seam. */
         const val BROADCASTERS = 4
-        const val SENDS_PER_BROADCASTER = 25
+        const val SENDS_PER_BROADCASTER = 200
 
         /** [NwSeam.formationSnapshot]'s role labels — the two this probe reads. */
         const val LIVE_ROLE = "live"
