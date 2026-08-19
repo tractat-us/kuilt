@@ -3121,10 +3121,11 @@ val forbidTightRunTestTimeout by tasks.registering {
     }
 }
 
-// Locates a coroutine STARTED FROM A CLASS-MEMBER PROPERTY INITIALISER, for
-// `forbidCoroutineLaunchInPropertyInitializer` below (#2465). Same `object` rationale as the sibling
-// scanners: it is invoked from inside `doLast`, where a script-level function reference would capture
-// the unserializable `Build_gradle` instance.
+// Locates a coroutine STARTED WHILE THE OBJECT IS STILL BEING CONSTRUCTED — from a class-member
+// property initialiser (#2465), or from an `init { }` block that is not last in its class body
+// (#2482) — for `forbidCoroutineLaunchDuringConstruction` below. Same `object` rationale as the
+// sibling scanners: it is invoked from inside `doLast`, where a script-level function reference would
+// capture the unserializable `Build_gradle` instance.
 //
 // THE DEFECT. Kotlin initialises a class's properties in DECLARATION ORDER, so a `launch {}` written
 // as a property initialiser runs its body against a partly-constructed object: every field declared
@@ -3146,9 +3147,24 @@ val forbidTightRunTestTimeout by tasks.registering {
 // which is precisely how #2462 arrived (the launch was correct when written; a field moved in
 // underneath it later). A rule that exempted "last property" would have gone green on the defect.
 //
+// THE SECOND SHAPE, and why the first rule alone was positional (#2482). An `init { }` block runs in
+// the SAME declaration-order pass as the property initialisers around it, so a launch inside one may
+// only touch state declared ABOVE the block. #2464's fix — "move it to an `init { }` placed LAST" —
+// is therefore two claims, and the rule above only enforced the first: a launch that has been moved
+// into an `init { }` sitting mid-class is back to being safe by POSITION, revocable by the next edit
+// that adds a property below it. That is the exact objection #2464's own KDoc raises against hoisting
+// a field ("leaves a pairwise constraint standing … re-checked on every future edit, with nothing to
+// catch a violation"), and it applied to the fix as much as to the defect. So an `init { }` that
+// starts a coroutine is flagged when a CONSTRUCTION-INITIALISED property is declared below it —
+// `val x = e` or `val x by lazy { … }`, the two spellings whose backing field the constructor fills
+// in declaration order. Not `val x get() = e`: an accessor has no field, runs on read, and cannot be
+// observed uninitialised, so flagging it would be noise with no failure behind it. Not `lateinit`
+// either — it is null until some later call assigns it, which is true whether it sits above the block
+// or below, so its hazard is not the POSITIONAL one this rule decides.
+//
 // WHAT IT DOES DISTINGUISH, mechanically and exactly:
-//   * a launch in an `init { }` block — NOT flagged. That is the prescribed fix, and where all of
-//     `NwSeam`'s launches now live.
+//   * a launch in an `init { }` block placed LAST — NOT flagged. That is the prescribed fix, and
+//     where all of `NwSeam`'s launches now live.
 //   * a launch in a function body, including a LOCAL `val job = scope.launch { … }` — NOT flagged.
 //     Pre-fix `NwSeam` had one of those too, and it was never the defect.
 //   * a launch in a `get()`/`set()` accessor or behind `by` — NOT flagged; neither runs at
@@ -3168,6 +3184,13 @@ val forbidTightRunTestTimeout by tasks.registering {
 //     CALLER, before the constructor runs, so the shape genuinely differs; zero in-tree sites have it.
 //   * a TOP-LEVEL property. Declaration order applies to a file's top-level properties too, but the
 //     class-member case is the one with a shipped defect and the one #2465 scopes.
+//   * a cold builder written INSIDE an `init { }` — `init { _incoming = channelFlow { launch { … } } }`.
+//     The property rule declines to over-approximate there, because the brace tells it the launch is
+//     not on the constructor's execution path; the init rule cannot borrow that test, because a
+//     brace-depth requirement would equally drop `init { if (enabled) { scope.launch { … } } }`, which
+//     is a genuine construction-time start. So the init rule takes ANY launch textually in the block
+//     and accepts the cold-builder false positive. Zero in-tree sites have it, and its cost is one
+//     mechanical hoist.
 //
 // Ownership of a class body is resolved by scanning forward from a `class`/`interface`/`object`
 // keyword for the first `{` at paren-depth 0, stepping over any brace nested in the header (a lambda
@@ -3175,9 +3198,19 @@ val forbidTightRunTestTimeout by tasks.registering {
 // keyword. That last clause is what stops a BODILESS class — `private class Batch(val logs: List<L>,
 // val code: C)` in `KuiltLogRecordExporter`, immediately above two launching properties — from
 // claiming the next unrelated `{` as its body and mis-scoping everything after it.
-object PropertyInitializerLaunchScanner {
-    /** One offending site: where the coroutine is started, and the property whose initialiser it is. */
-    data class Violation(val line: Int, val property: String, val starter: String)
+object ConstructionLaunchScanner {
+    /** Which construct starts the coroutine. The two have different fixes, so they baseline separately. */
+    enum class Site { PROPERTY_INITIALISER, INIT_BLOCK }
+
+    /**
+     * One offending site: where the coroutine is started, and the property that makes it one.
+     *
+     * For [Site.PROPERTY_INITIALISER] [property] is the property whose initialiser starts it. For
+     * [Site.INIT_BLOCK] it is the first construction-initialised property declared BELOW the block —
+     * the thing that makes the block's position load-bearing, and the one to name when explaining why
+     * the block has to move.
+     */
+    data class Violation(val site: Site, val line: Int, val property: String, val starter: String)
 
     // `:` and `.` in every keyword lookbehind here are load-bearing, and both were found by a red
     // rather than reasoned in. `::class` is a CLASS LITERAL, not a declaration, and this repo writes
@@ -3196,6 +3229,7 @@ object PropertyInitializerLaunchScanner {
     private val headerBail =
         Regex("""(?<![A-Za-z0-9_.:])(?:fun|val|var|class|interface|object|typealias|init)(?![A-Za-z0-9_])""")
     private val property = Regex("""(?<![A-Za-z0-9_.:])(?:val|var)(?![A-Za-z0-9_])""")
+    private val initKeyword = Regex("""(?<![A-Za-z0-9_.:])init(?![A-Za-z0-9_])""")
     // What ends a property's INITIALISER: the next member, or an accessor/delegate, none of which runs
     // at construction.
     private val unitEnd =
@@ -3214,12 +3248,18 @@ object PropertyInitializerLaunchScanner {
         val bails = headerBail.findAll(code).map { it.range.first }.toSet()
         val properties = property.findAll(code).map { it.range.first }.toSet()
         val stops = unitEnd.findAll(code).map { it.range.first }.toSet()
+        val inits = initKeyword.findAll(code).map { it.range.first }.toSet()
         val out = mutableListOf<Violation>()
         for (open in classBodyOpeners(code, bails)) {
             val bodyEnd = (matchingBrace(code, open) ?: continue) - 1 // index OF the closing `}`
             var i = open + 1
             var depth = 0
             var paren = 0
+            // `init { }` blocks of THIS class body that start a coroutine and have not yet met a
+            // construction-initialised property below them. Every one still pending when the body ends
+            // is an init block with nothing underneath that could be read too early — the safe shape.
+            // Each entry is one block's starters, as (absolute offset, `launch`/`async`).
+            val pending = mutableListOf<List<Pair<Int, String>>>()
             while (i < bodyEnd) {
                 val c = code[i]
                 when {
@@ -3229,8 +3269,38 @@ object PropertyInitializerLaunchScanner {
                     c == ')' || c == ']' -> { paren--; i++ }
                     // Directly in the class body — not in a function, an `init`, or a lambda.
                     depth == 0 && paren == 0 && i in properties -> {
-                        out += initialiserViolations(code, i, unitStop(code, i + 3, bodyEnd, stops))
+                        val stop = unitStop(code, i + 3, bodyEnd, stops)
+                        out += initialiserViolations(code, i, stop)
+                        if (pending.isNotEmpty() && constructionInitialised(code, i, stop)) {
+                            val name = propertyName(code, i, stop)
+                            // One violation per starter, matching the property rule's granularity; the
+                            // whole block is cleared, because ONE property below is what makes its
+                            // position load-bearing and further ones add no information.
+                            pending.flatten().forEach { (at, token) ->
+                                out += Violation(
+                                    site = Site.INIT_BLOCK,
+                                    line = code.take(at).count { it == '\n' } + 1,
+                                    property = name,
+                                    starter = token,
+                                )
+                            }
+                            pending.clear()
+                        }
                         i += 3 // `val` and `var` are both three characters
+                    }
+                    depth == 0 && paren == 0 && i in inits -> {
+                        val brace = code.indexOf('{', i).takeIf { it >= 0 && code.subSequence(i + 4, it).isBlank() }
+                        val end = brace?.let { matchingBrace(code, it) }
+                        if (brace == null || end == null) {
+                            i += 4 // `init` is four characters; not a block, so nothing to record
+                        } else {
+                            // Absolute offsets, so a reported line is the file's own.
+                            val starters = starter.findAll(code.substring(brace, end))
+                                .map { (brace + it.range.first) to it.groupValues[1] }
+                                .toList()
+                            if (starters.isNotEmpty()) pending += starters
+                            i = end // past the block's `}`: nothing inside it is a class-body member
+                        }
                     }
                     else -> i++
                 }
@@ -3239,11 +3309,27 @@ object PropertyInitializerLaunchScanner {
         return out.sortedBy { it.line }
     }
 
+    /**
+     * Does the property declared at [start] and ending at [stop] get its backing field filled DURING
+     * CONSTRUCTION — the only kind an `init { }` block above it can observe half-built?
+     *
+     * `val x = e` does (a top-level `=`). `val x by lazy { … }` does too: the delegate is itself a
+     * field written in declaration order, and [unitStop] cuts the unit AT the `by`, so it has no `=`
+     * to find — hence the second arm rather than one test. `val x get() = e` does not (no field), and
+     * neither does a `lateinit var`, whose null is not positional.
+     */
+    private fun constructionInitialised(code: String, start: Int, stop: Int): Boolean =
+        topLevelAssign(code.substring(start, stop)) != null || code.startsWith("by", stop)
+
+    /** The declared name of the property at [start], or `<unnamed>` if the declaration is unreadable. */
+    private fun propertyName(code: String, start: Int, stop: Int): String =
+        identifier.find(code.substring(start, stop).substring(3))?.groupValues?.get(1)?.trim('`') ?: "<unnamed>"
+
     /** Coroutines started in the initialiser of the property declared at [start] and ending at [stop]. */
     private fun initialiserViolations(code: String, start: Int, stop: Int): List<Violation> {
         val unit = code.substring(start, stop)
         val eq = topLevelAssign(unit) ?: return emptyList() // accessor-only or delegated: no initialiser
-        val name = identifier.find(unit.substring(3))?.groupValues?.get(1)?.trim('`') ?: "<unnamed>"
+        val name = propertyName(code, start, stop)
         val braceDepth = braceDepths(unit)
         return starter.findAll(unit)
             // The launch call itself must be at BRACE DEPTH 0 of the initialiser — i.e. the initialiser
@@ -3257,6 +3343,7 @@ object PropertyInitializerLaunchScanner {
             .filter { it.range.first > eq && braceDepth[it.range.first] == 0 }
             .map { hit ->
                 Violation(
+                    site = Site.PROPERTY_INITIALISER,
                     line = code.take(start + hit.range.first).count { it == '\n' } + 1,
                     property = name,
                     starter = hit.groupValues[1],
@@ -3355,7 +3442,7 @@ object PropertyInitializerLaunchScanner {
 }
 
 // The guard's own POSITIVE CONTROL, run at the head of every execution of
-// `forbidCoroutineLaunchInPropertyInitializer` below.
+// `forbidCoroutineLaunchDuringConstruction` below.
 //
 // WHY IT IS IN THE TASK AND NOT IN A TEST SOURCE SET. The scanner lives in this script, which no test
 // source set can reach — `build-logic` has no test harness and neither does the root build. The
@@ -3372,7 +3459,11 @@ object PropertyInitializerLaunchScanner {
 // function that was never the defect); the `fixed` arm is that same class rewritten the way #2464
 // rewrote it, and it must be SILENT. An arm that only proved firing would pass a scanner that flagged
 // everything, which is the other way to be useless.
-object PropertyInitializerLaunchControls {
+//
+// The `init { }` arms (#2482) are the same two-sidedness one construct over: `initNotLast` must fire
+// and `fixed` must stay silent, and between them they pin the ONE thing that distinguishes the shapes
+// — whether anything the block could read half-built is declared below it.
+object ConstructionLaunchControls {
     /** The pre-fix `NwSeam` shape (#2462): launches as property initialisers, and one that is not. */
     private val defect = """
         class NwSeam(private val scope: CoroutineScope) : Seam {
@@ -3491,6 +3582,82 @@ object PropertyInitializerLaunchControls {
     """.trimIndent()
 
     /**
+     * An `init { }` block that is NOT last: a construction-initialised property sits below it, so the
+     * launched body could read that field before the constructor filled it. #2482's shape, and the one
+     * the property rule alone was blind to. The accessor above [incoming] is load-bearing in the other
+     * direction — it must NOT be what closes the block out, or the rule would fire on every decorator
+     * in the tree.
+     */
+    private val initNotLast = """
+        class Bridge(private val scope: CoroutineScope, private val delegate: Seam) : Seam {
+            private val staging = Channel<Frame>(64)
+            private val spool = Spool<Frame>()
+
+            init {
+                scope.launch { for (frame in staging) spool.deliver(frame) }
+            }
+
+            override val selfId: PeerId get() = delegate.selfId
+            override val incoming: Flow<Frame> = spool.incoming
+
+            fun close() { scope.cancel() }
+        }
+    """.trimIndent()
+
+    /**
+     * `BridgeNwApi`'s actual shape, which must stay SILENT: below the block there are only accessors,
+     * functions holding local `val`s, a nested class whose constructor properties live in its header,
+     * and a `companion object` whose members are initialised on the companion's own first touch rather
+     * than with this instance. Each of those is a way the walk could wrongly claim a property below the
+     * block, and this is the arm that says it does not.
+     */
+    private val initLastButForMembersWithNoField = """
+        class Bridge(private val scope: CoroutineScope) {
+            private val staging = Channel<Frame>(64)
+
+            init {
+                scope.launch { for (frame in staging) emit(frame) }
+                scope.launch { watch() }
+            }
+
+            override val selfId: PeerId get() = delegate.selfId
+            val ready: Boolean get() = staging.isEmpty
+
+            fun close() {
+                val pending = staging.tryReceive()
+                scope.cancel()
+            }
+
+            private class Disposer(private val handle: Pointer) : Runnable {
+                override fun run() { handle.destroy() }
+            }
+
+            private companion object {
+                private const val BUFFER = 64
+                private val CLEANER: Cleaner = Cleaner.create()
+            }
+        }
+    """.trimIndent()
+
+    /**
+     * A `by lazy` below the block. Its DELEGATE is a field written in declaration order like any other,
+     * so it is the same hazard — but [ConstructionLaunchScanner]'s unit ends AT the `by`, leaving no
+     * `=` to find, so it takes a second test rather than one. Nothing in-tree has this shape today,
+     * which is exactly why it needs an arm: an untested branch of a lexical guard is green by absence.
+     */
+    private val initAboveDelegate = """
+        class Delegating(private val scope: CoroutineScope) {
+            private val staging = Channel<Frame>(64)
+
+            init {
+                scope.launch { drain(staging) }
+            }
+
+            private val heavy: Codec by lazy { Codec(staging) }
+        }
+    """.trimIndent()
+
+    /**
      * Throws with a legible diff when any arm's verdict is wrong; returns how many arms RAN, so the
      * stamp reports a number the code produced rather than one a comment claims. The distinction is
      * not pedantry — the first draft of this guard wrote "fired on all 4 arms" into the stamp as a
@@ -3498,31 +3665,53 @@ object PropertyInitializerLaunchControls {
      */
     fun verify(): Int {
         fun scan(source: String) =
-            PropertyInitializerLaunchScanner.violations(KotlinCodeScanner.stripNonCode(source))
+            ConstructionLaunchScanner.violations(KotlinCodeScanner.stripNonCode(source))
         val failures = mutableListOf<String>()
         var arms = 0
-        fun expect(arm: String, source: String, want: Int, wantProperties: List<String> = emptyList()) {
+        fun expect(
+            arm: String,
+            source: String,
+            want: Int,
+            wantProperties: List<String> = emptyList(),
+            wantSites: List<ConstructionLaunchScanner.Site> = emptyList(),
+        ) {
             arms++
             val got = scan(source)
-            if (got.size != want || (wantProperties.isNotEmpty() && got.map { it.property } != wantProperties)) {
+            val wrong = got.size != want ||
+                (wantProperties.isNotEmpty() && got.map { it.property } != wantProperties) ||
+                (wantSites.isNotEmpty() && got.map { it.site } != wantSites)
+            if (wrong) {
                 failures += "  $arm — expected $want violation(s)" +
                     (if (wantProperties.isEmpty()) "" else " on $wantProperties") +
-                    ", got ${got.size}: ${got.map { "${it.property}@${it.line}(${it.starter})" }}"
+                    (if (wantSites.isEmpty()) "" else " at $wantSites") +
+                    ", got ${got.size}: ${got.map { "${it.site}/${it.property}@${it.line}(${it.starter})" }}"
             }
         }
+        val fromProperty = ConstructionLaunchScanner.Site.PROPERTY_INITIALISER
+        val fromInit = ConstructionLaunchScanner.Site.INIT_BLOCK
         expect(
             "defect (#2462's pre-fix NwSeam shape)",
             defect,
             7,
             listOf("openedJob", "bytesJob", "closedJob", "statesJob", "drainJob", "pathJob", "silenceJob"),
+            List(7) { fromProperty },
         )
         expect("fixed (#2464's init { } placed last)", fixed, 0)
         expect("quiet (accessor, delegate, cold builder, function body, local val, field assign)", quiet, 0)
         expect("literals (`::class` above a top-level function)", literals, 0)
-        expect("awkward (explicit primary constructor, multi-line initialiser, async)", awkward, 1, listOf("late"))
+        expect(
+            "awkward (explicit primary constructor, multi-line initialiser, async)",
+            awkward,
+            1,
+            listOf("late"),
+            listOf(fromProperty),
+        )
+        expect("initNotLast (#2482: an initialised property below the block)", initNotLast, 1, listOf("incoming"), listOf(fromInit))
+        expect("initLastButForMembersWithNoField (accessors, functions, nested class, companion)", initLastButForMembersWithNoField, 0)
+        expect("initAboveDelegate (#2482: a `by lazy` below the block)", initAboveDelegate, 1, listOf("heavy"), listOf(fromInit))
         if (failures.isNotEmpty()) {
             error(
-                "forbidCoroutineLaunchInPropertyInitializer's OWN POSITIVE CONTROL failed (#2465).\n" +
+                "forbidCoroutineLaunchDuringConstruction's OWN POSITIVE CONTROL failed (#2465, #2482).\n" +
                     "The scanner no longer agrees with the shapes it exists to decide, so its verdict on " +
                     "the tree means nothing — a lexical guard that stops matching is GREEN BY ABSENCE, " +
                     "which is indistinguishable from a clean tree. Fix the scanner, or, if a fixture is " +
@@ -3534,11 +3723,13 @@ object PropertyInitializerLaunchControls {
     }
 }
 
-// Guard: forbid starting a coroutine from a CLASS-MEMBER PROPERTY INITIALISER. #2465.
+// Guard: forbid starting a coroutine BEFORE CONSTRUCTION COMPLETES — from a class-member property
+// initialiser (#2465), or from an `init { }` block that something construction-initialised is declared
+// below (#2482).
 //
 // The rule, the rationale and every boundary it does and does not decide are on
-// `PropertyInitializerLaunchScanner` above; the positive control that keeps it from going green by
-// absence is on `PropertyInitializerLaunchControls`, and runs first on every execution.
+// `ConstructionLaunchScanner` above; the positive control that keeps it from going green by
+// absence is on `ConstructionLaunchControls`, and runs first on every execution.
 //
 // THE BASELINE IS A PER-FILE COUNT RATCHET, the shape `forbidTightRunTestTimeout` uses and for the
 // same reason: a file allowlist exempts exactly the file that has already proved it attracts the
@@ -3546,15 +3737,20 @@ object PropertyInitializerLaunchControls {
 // on an increase, so a file at its baseline is not a licence to add one more. Sweeping a file drives
 // its count to zero and deletes its entry; the baseline only moves down.
 //
+// THE TWO SHAPES BASELINE SEPARATELY, in two maps rather than one summed count. A single count per
+// file would let a branch sweep one property initialiser and add one init block in the same edit and
+// stay green — the ratchet would hold arithmetically while the class of defect grew. They also have
+// different fixes, so a merged failure message could not say what to do.
+//
 // It also fails on a baselined path that is no longer scanned at all — deleted, renamed, or moved out
 // of a production source set — for the reason `verifyModuleTable` and `forbidUnlintedModule` check
 // their own stale direction: an entry naming a file nobody has is a grandfathering claim about
 // nothing, and no other check can catch it. A DECREASE within a still-present file is deliberately
 // not failed, same as the sibling: it would red-light a branch that merely deletes one of the four.
-val forbidCoroutineLaunchInPropertyInitializer by tasks.registering {
+val forbidCoroutineLaunchDuringConstruction by tasks.registering {
     group = "verification"
     description =
-        "Fails when a class-member property initialiser starts a coroutine — move it to an init { } block placed last, or an explicit start() (#2465)."
+        "Fails when a coroutine is started before construction completes — from a property initialiser, or from an init { } block with a property below it (#2465, #2482)."
     // Both production layouts: the KMP `src/<target>Main/` and the plain-JVM `src/main/`, for the
     // reason the sibling guard gives — one pattern expresses either, and the KMP one silently drops
     // `:kuilt-scale`, `:demo-cli` and `:examples`.
@@ -3567,7 +3763,7 @@ val forbidCoroutineLaunchInPropertyInitializer by tasks.registering {
     // See "Guard plumbing" above: the stamp is what makes UP-TO-DATE possible (#1827). The verdict is
     // a function of file PATHS (the baseline keys) and file CONTENTS, both captured by a RELATIVE
     // fingerprint — so a cache hit genuinely means "this exact source was verified green".
-    val stamp = layout.buildDirectory.file("verification/forbid-coroutine-launch-in-property-initializer.ok")
+    val stamp = layout.buildDirectory.file("verification/forbid-coroutine-launch-during-construction.ok")
     outputs.file(stamp)
     outputs.cacheIf { true }
     val rootPath = rootDir
@@ -3576,7 +3772,7 @@ val forbidCoroutineLaunchInPropertyInitializer by tasks.registering {
     // `gradle.properties` or a resource would silently drop it out and reintroduce the stale-green
     // class the stamps were made safe against. Counts are as of #2465, from this scanner — regenerate
     // after a sweep by reading the failure, never by hand.
-    val baseline = mapOf(
+    val propertyBaseline = mapOf(
         "kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/RoutedRaftTransport.kt" to 1,
         "kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/RoutedUnicastRouter.kt" to 1,
         "kuilt-liveness/src/commonMain/kotlin/us/tractat/kuilt/liveness/SoloDeadlineDetector.kt" to 1,
@@ -3585,35 +3781,77 @@ val forbidCoroutineLaunchInPropertyInitializer by tasks.registering {
         "kuilt-otel-sdk/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/otel/sdk/KuiltMetricExporter.kt" to 1,
         "kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/election/SeamElectionLobby.kt" to 1,
     )
+    // The #2482 shape, counted separately for the reason above. Every entry here is an `init { }` whose
+    // launched body reads only state declared ABOVE it — i.e. correct today, and correct POSITIONALLY,
+    // which is what the ratchet exists to stop from silently becoming untrue. All four are the same
+    // decorator shape: a pipe started in `init`, with `override val incoming = <spool>` below it.
+    val initBaseline = mapOf(
+        "kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/MuxBase.kt" to 1,
+        "kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/SingleCollectionConnection.kt" to 1,
+        "kuilt-test/src/commonMain/kotlin/us/tractat/kuilt/test/FaultySeam.kt" to 1,
+        "kuilt-test/src/commonMain/kotlin/us/tractat/kuilt/test/FlakyLifecycleSeam.kt" to 1,
+    )
     doLast {
-        val arms = PropertyInitializerLaunchControls.verify()
-        val found = sortedMapOf<String, List<PropertyInitializerLaunchScanner.Violation>>()
+        val arms = ConstructionLaunchControls.verify()
+        val found = sortedMapOf<String, List<ConstructionLaunchScanner.Violation>>()
         val scanned = mutableSetOf<String>()
         sources.files.forEach { file ->
             val path = file.relativeTo(rootPath).invariantSeparatorsPath
             scanned += path
             val raw = file.readText()
             if ("launch" !in raw && "async" !in raw) return@forEach
-            val hits = PropertyInitializerLaunchScanner.violations(KotlinCodeScanner.stripNonCode(raw))
+            val hits = ConstructionLaunchScanner.violations(KotlinCodeScanner.stripNonCode(raw))
             if (hits.isNotEmpty()) found[path] = hits
         }
-        val stale = baseline.keys.filter { it !in scanned }.sorted()
+        val stale = (propertyBaseline.keys + initBaseline.keys).filter { it !in scanned }.sorted()
         if (stale.isNotEmpty()) {
             error(
-                "forbidCoroutineLaunchInPropertyInitializer's baseline names production source that no " +
+                "forbidCoroutineLaunchDuringConstruction's baseline names production source that no " +
                     "longer exists (#2465). A grandfathering entry for a file nobody has is a claim about " +
                     "nothing — if the file was swept, renamed or moved, delete its entry in the same " +
                     "edit:\n  " + stale.joinToString("\n  "),
             )
         }
-        val regressions = found.filter { (path, hits) -> hits.size > (baseline[path] ?: 0) }
-        if (regressions.isNotEmpty()) {
-            val detail = regressions.entries.joinToString("\n") { (path, hits) ->
+
+        fun regressionsFor(site: ConstructionLaunchScanner.Site, baseline: Map<String, Int>) =
+            found.mapValues { (_, hits) -> hits.filter { it.site == site } }
+                .filter { (path, hits) -> hits.size > (baseline[path] ?: 0) }
+
+        fun detailFor(regressions: Map<String, List<ConstructionLaunchScanner.Violation>>, baseline: Map<String, Int>) =
+            regressions.entries.joinToString("\n") { (path, hits) ->
                 val was = baseline[path]
                 val from = if (was == null) "no baseline (this file is new to the ratchet)" else "baseline $was"
                 "  $path — $from, now ${hits.size}\n" +
-                    hits.joinToString("\n") { "    :${it.line}  ${it.starter} in the initialiser of `${it.property}`" }
+                    hits.joinToString("\n") {
+                        val where = when (it.site) {
+                            ConstructionLaunchScanner.Site.PROPERTY_INITIALISER ->
+                                "in the initialiser of `${it.property}`"
+                            ConstructionLaunchScanner.Site.INIT_BLOCK ->
+                                "in an init { } block, with `${it.property}` declared below it"
+                        }
+                        "    :${it.line}  ${it.starter} $where"
+                    }
             }
+
+        // Shared tail: both shapes have the same fix and the same ratchet discipline.
+        val theFix =
+            "  THE FIX IS STRUCTURAL, not a reordering: start it from an `init { }` block placed " +
+                "LAST in the class body, or from an explicit `start()` called after construction. " +
+                "Hoisting the field above the launch fixes only the instance and leaves a pairwise " +
+                "constraint standing that the next edit silently breaks.\n" +
+                "      init { scope.launch { … } }            // last in the class body — NwSeam (#2464)\n" +
+                "      fun start() { scope.launch { … } }     // called after construction — NwLoom\n" +
+                "  `NwLoom` is the counter-example done right: it launches nothing from a property, " +
+                "only from `start()`, so it is immune BY CONSTRUCTION rather than by where its fields " +
+                "happen to sit.\n" +
+                "  This is a per-file COUNT ratchet, and being at baseline is not a licence to add one " +
+                "more. Do NOT raise the baseline in `build.gradle.kts` — sweep the file (all-or-none, " +
+                "so the next contributor copies the `init { }` rather than a neighbour) and delete its " +
+                "entry.\n"
+
+        val propertyRegressions =
+            regressionsFor(ConstructionLaunchScanner.Site.PROPERTY_INITIALISER, propertyBaseline)
+        if (propertyRegressions.isNotEmpty()) {
             error(
                 "A coroutine is started from a CLASS-MEMBER PROPERTY INITIALISER (#2465).\n" +
                     "Kotlin initialises properties in DECLARATION ORDER, so the body runs against a " +
@@ -3621,19 +3859,21 @@ val forbidCoroutineLaunchInPropertyInitializer by tasks.registering {
                     "That is #2462: an NPE on the JVM and a SIGSEGV on Kotlin/Native, thrown inside a " +
                     "`launch` where nothing catches it — and invisible to the whole test suite, because a " +
                     "`StandardTestDispatcher` defers the body past the constructor.\n" +
-                    "  THE FIX IS STRUCTURAL, not a reordering: start it from an `init { }` block placed " +
-                    "LAST in the class body, or from an explicit `start()` called after construction. " +
-                    "Hoisting the field above the launch fixes only the instance and leaves a pairwise " +
-                    "constraint standing that the next edit silently breaks.\n" +
-                    "      init { scope.launch { … } }            // last in the class body — NwSeam (#2464)\n" +
-                    "      fun start() { scope.launch { … } }     // called after construction — NwLoom\n" +
-                    "  `NwLoom` is the counter-example done right: it launches nothing from a property, " +
-                    "only from `start()`, so it is immune BY CONSTRUCTION rather than by where its fields " +
-                    "happen to sit.\n" +
-                    "  This is a per-file COUNT ratchet, and being at baseline is not a licence to add one " +
-                    "more. Do NOT raise the baseline in `build.gradle.kts` — sweep the file (all-or-none, " +
-                    "so the next contributor copies the `init { }` rather than a neighbour) and delete its " +
-                    "entry.\n" + detail,
+                    theFix + detailFor(propertyRegressions, propertyBaseline),
+            )
+        }
+        val initRegressions = regressionsFor(ConstructionLaunchScanner.Site.INIT_BLOCK, initBaseline)
+        if (initRegressions.isNotEmpty()) {
+            error(
+                "A coroutine is started from an `init { }` block that is NOT LAST — something whose " +
+                    "backing field the constructor fills is declared below it (#2482).\n" +
+                    "An `init { }` block runs in the same DECLARATION-ORDER pass as the properties around " +
+                    "it, so moving a launch into one is only half the fix: below the block, every such " +
+                    "field is still null when the body runs, exactly as in #2462. Nothing is broken yet if " +
+                    "the body does not happen to read one — which is the problem. That is a PAIRWISE " +
+                    "constraint between two declarations, re-checked by hand on every future edit, with " +
+                    "nothing to catch a violation.\n" +
+                    theFix + detailFor(initRegressions, initBaseline),
             )
         }
         val out = stamp.get().asFile
@@ -5796,7 +6036,7 @@ allprojects {
         dependsOn(rootProject.tasks.named("forbidKotlinAssert"))
         dependsOn(rootProject.tasks.named("forbidProductionDispatcherInTests"))
         dependsOn(rootProject.tasks.named("forbidTightRunTestTimeout"))
-        dependsOn(rootProject.tasks.named("forbidCoroutineLaunchInPropertyInitializer"))
+        dependsOn(rootProject.tasks.named("forbidCoroutineLaunchDuringConstruction"))
         dependsOn(rootProject.tasks.named("forbidSuspendCallUnderLock"))
         dependsOn(rootProject.tasks.named("forbidDemotedFieldTrail"))
     }
