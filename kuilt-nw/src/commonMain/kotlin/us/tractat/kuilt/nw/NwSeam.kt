@@ -1788,7 +1788,11 @@ internal class NwSeam(
      */
     private fun watchdogPendingLocked(): Boolean = registry.any { (peer, winner) ->
         val cs = conns[winner.connId]
-        if (cs == null) peer !in reportedOrphans else !cs.silenceReported
+        // A binding that names a DRAINING link is reportable on the same terms as one that names an
+        // untracked link (#2425): both are unusable, [auditRegistryLocked] owns both, and both must stay
+        // reachable after the link has already had its silence reported — otherwise the watchdog parks on
+        // a peer whose binding went bad afterwards and the ERROR is silently never emitted.
+        if (cs == null || winner.connId in draining) peer !in reportedOrphans else !cs.silenceReported
     }
 
     /**
@@ -1812,8 +1816,8 @@ internal class NwSeam(
      * [addRemotePeer] (a peer arriving on a link that has never been reported), the [FrameOutcome.Data] arm
      * (an arrival re-arming an already-reported link), [resolveIdentity]'s dedup-REPLACE arm (an existing
      * peer rebound onto a fresh, never-reported link — the one that goes through neither of the first two,
-     * because the peer is not new and the driving frame took the identity branch), and
-     * [dropConnWithoutEvictingForAuditRig].
+     * because the peer is not new and the driving frame took the identity branch), and the two audit rigs
+     * ([dropConnWithoutEvictingForAuditRig], [markWinnerDrainingForAuditRig]).
      *
      * A missed wake parks the watchdog early and the diagnostic is then silently absent — the worst failure
      * this class can have, since it looks exactly like a healthy session. That is why the predicate is
@@ -1924,6 +1928,38 @@ internal class NwSeam(
         // wake a real state change would give it — otherwise the loop stays parked and the rig proves nothing.
         wakeWatchdogLocked()
         connId
+    }
+
+    /**
+     * TEST-ONLY rig for [auditRegistryLocked]'s SECOND arm (#2425): mark [peer]'s LIVE connection as
+     * draining while leaving [registry] pointing at it — a peer routed over a link this seam has already
+     * told the remote it has finished writing on. Returns the connId it poisoned, or `null` if [peer] is
+     * not registered (which a test should treat as its rig having failed to fire).
+     *
+     * The arm's whole job is to make "a draining conn is never selected for a send" ENFORCED rather than
+     * argued, and no [NwApi] input can produce the state it reports: [resolveIdentity] puts a connId into
+     * [draining] only in the same critical section that points [registry] at the *other* link, so the two
+     * maps are disjoint by construction. Which is exactly why the arm needs a rig — a check that is never
+     * made to fire passes identically whether or not it works.
+     *
+     * `internal`, and named so its only plausible caller is a test. Nothing in production calls it.
+     */
+    internal fun markWinnerDrainingForAuditRig(peer: PeerId): NwConnectionId? = lock.withLock {
+        val winner = registry[peer] ?: return@withLock null
+        draining[winner.connId] = Drain(
+            peer = peer,
+            arm = DrainArm.Replace,
+            winner = winner.connId,
+            loserDialled = INBOUND_LINK,
+            winnerDialled = INBOUND_LINK,
+            visibleForMillis = 0,
+            framesWritten = 0,
+        )
+        // Like its sibling rig, this poisons the binding without going through a mutation site, so it owes
+        // the watchdog the wake a real state change would have given it — otherwise the loop stays parked
+        // and the rig proves nothing.
+        wakeWatchdogLocked()
+        winner.connId
     }
 
     // ── send ────────────────────────────────────────────────────────────────────
