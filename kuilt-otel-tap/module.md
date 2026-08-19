@@ -117,6 +117,52 @@ Real-device transport verification (a Mac pulling an iPhone's buffer over an
 encrypted Multipeer link) needs two physical Apple devices and is tracked as a
 manual step in `docs/otel-tap-multipeer-validation.md`.
 
+### Debugging a fabric: tap it over a *different* one
+
+If the thing you are debugging is a fabric — two phones that see each other and
+never connect — then the obvious call is the wrong one. `installLogTap(brokenLoom, …)`
+compiles, reads naturally, and is dead: the transport carrying the logs is the
+transport under test. Nothing stops you writing it, so it is written down here.
+
+Make the two disjoint. Tap a **peer-to-peer** fabric (Network.framework/AWDL,
+Multipeer, Nearby) over **ordinary infrastructure Wi-Fi**:
+
+- **On the phone:**
+  [installLogTapJoining][us.tractat.kuilt.otel.tap.installLogTapJoining] with a
+  `KtorClientLoom` — the phone joins a session your laptop hosts.
+- **On the laptop:** host it (`KtorServerLoom`) and pull with
+  [LogTapClient][us.tractat.kuilt.otel.tap.LogTapClient].
+
+The log path is then a laptop-hosted WebSocket through the access point, and the
+fabric under test has no access point in it. Breaking one cannot break the other.
+Point both phones at the same laptop and
+[pullStamped][us.tractat.kuilt.otel.tap.LogTapClient.pullStamped] total-orders
+their records into one timeline — which is what replaces correlating two
+separately-extracted stores by hand.
+
+### Three things the tap does not do
+
+Worth stating before you rely on it in an incident.
+
+1. **It moves logs; it does not create them.** It replicates whatever
+   `installLogCapture` put in the buffer, and that is gated by your app's logging
+   backend *before* this module ever sees the event. A `logger.debug {}` on a
+   device configured at `INFO` produces nothing to replicate. On the field wedge
+   that motivated this section a real store held 664 `INFO` / 7 `WARN` /
+   1 `ERROR` and **zero** `DEBUG` records without having wrapped — so better log
+   *transport* would have delivered exactly the same insufficient lines the manual
+   pull did. Turn the backend down **before** you reproduce.
+2. **It cannot recover what was never captured.** There is no retro-active
+   level: a line the backend dropped is gone, and a tap started after the fact
+   pulls a buffer that never had it.
+3. **It is another peer on the network.** It holds an interface and a
+   connection. When the bug is about contention, interface churn, or radio
+   scheduling, the tap is part of the system under test — say so in the write-up
+   rather than treating it as a neutral observer.
+
+The full procedure, including what to set and in what order, is in
+[`docs/log-capture-and-extraction.md`](../docs/log-capture-and-extraction.md).
+
 ### The one honest limitation
 
 Over a plain LAN WebSocket the log bytes themselves travel **unencrypted**. The

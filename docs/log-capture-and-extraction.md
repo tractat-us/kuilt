@@ -168,6 +168,71 @@ That is the whole shape: your app logs the way it always has, the lines land in 
 buffer that survives going offline, and a peer — a test, a CI job, or your laptop
 across the room from a tester's phone — reaches in and pulls them out.
 
+## Debug capture profile: getting a *complete* trail off a device
+
+The two calls above are the mechanism. This is the **procedure** — what to set,
+and in what order, before you reproduce a bug you only get one shot at. It is
+written down because the expensive part of the last hardware debug was not
+transport: both phones' logs came off fine, and the decisive facts simply were
+not in them.
+
+Do these three things **before** you reproduce, not after:
+
+1. **Turn the app's logging backend down to `INFO` (or `DEBUG` if you can).**
+   The tap replicates whatever `installLogCapture` put in the buffer, and that is
+   gated by your app's logging backend *before* kuilt ever sees the event. A
+   `logger.debug {}` on a device configured at `WARN` produces nothing to
+   replicate. Measured from a real field store during one wedge: 664 `INFO`,
+   7 `WARN`, 1 `ERROR`, and **zero** `DEBUG` records — in a store that had not
+   wrapped. So `DEBUG` there was never *captured*, not evicted.
+2. **Host the tap on a *different* fabric from the one you are debugging.**
+   See the section below — this is the one way to hold the thing wrong.
+3. **Start the tap and confirm one line arrives** before you begin. A tap that
+   never connected looks exactly like a device that logged nothing.
+
+### Tapping a fabric over itself cannot work
+
+`installLogTap(brokenLoom, …)` is the natural-looking call and it is dead: the
+fabric you are trying to diagnose is the fabric the logs would have to travel
+over. Nothing stops you writing it.
+
+The safe pattern is to make the two disjoint. For a peer-to-peer fabric under
+test (`:kuilt-nw` over AWDL, `:kuilt-multipeer`, `:kuilt-nearby`), tap over
+ordinary infrastructure Wi-Fi instead:
+
+- **On the phone:** `installLogTapJoining(KtorClientLoom(…), tag)` — the phone
+  *joins* a session your laptop hosts. This is not a workaround for the tap; it
+  is why `installLogTapJoining` exists at all (an iOS device cannot run a server
+  or advertise itself), and it happens to give exactly the disjointness you want.
+- **On the laptop:** host with `KtorServerLoom` and pull with `LogTapClient`.
+
+Now the log path is laptop-hosted WebSocket over the access point, and the fabric
+under test is peer-to-peer with no access point in it. Breaking one does not
+break the other.
+
+Two devices' captures can then be read as one timeline: `pullStamped()` total-orders
+records **across** devices by `rgaId`, which is what replaces the by-hand
+correlation of two separately-extracted stores.
+
+### What the tap does *not* solve, stated plainly
+
+- **It moves logs; it does not create them.** This is the finding worth carrying:
+  on the wedge that motivated this section, better log *transport* would have
+  delivered exactly the same insufficient lines the manual pull did. Better log
+  *content* is what fixed it. The tap is a convenience, not a diagnosis.
+- **It cannot recover what the backend dropped.** Point 1 above is the whole
+  lever, and it only works if you set it beforehand.
+- **On a plain LAN WebSocket the log bytes travel unencrypted.** The join code
+  controls who may pull; it does not encrypt the traffic. See
+  `kuilt-otel-tap/module.md`.
+- **It is another peer on the network.** It consumes an interface and a
+  connection. If the bug you are chasing is about contention or interface churn,
+  say so in the write-up — the tap is part of the system under test.
+
+For `:kuilt-nw` specifically, the lines worth having in that trail — and the one
+periodic state dump that a *stuck* formation emits — are listed in
+[`kuilt-nw/module.md`](../kuilt-nw/module.md#when-two-devices-see-each-other-but-never-connect).
+
 ## Going deeper
 
 - **[Capturing & pulling logs](https://tractat-us.github.io/kuilt/guide/log-capture.html)**
