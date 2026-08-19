@@ -16,7 +16,9 @@ plugins {
     // PARSE-ONLY tier: `detektAll` reaches `detektWasmJsMain`, but detekt resolves types
     // only against a JVM classpath, so config/detekt/detekt.yml's four nullability rules
     // cannot fire here. Read that plugin's tier comment before assuming a green means more
-    // than it does (#2016); closing that gap is #2039.
+    // than it does (#2016). The one rule that matters most is covered anyway, from outside
+    // detekt: `forbidNotNullAssertionInUnresolvedSource` in the root build bans `!!` in every
+    // source set no type-resolved detekt task reaches, this one included (#2039).
     id("kuilt.detekt-kmp")
 }
 
