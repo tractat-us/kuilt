@@ -75,16 +75,20 @@ internal suspend fun Connection.firstFrame(): ByteArray = incoming.first()
  * is actually going down — on a mesh the seam-level minimum would refuse a payload the chosen link
  * could carry perfectly well.
  *
- * `reservedBytes = 0`: both fabric seams hand the caller's payload to [send] byte for byte, with no
- * per-frame header of their own, so the payload budget *is* the frame ceiling. Reservation happens
- * further up, in the layers that wrap a payload before it gets this far (`RoomChannel`, `SeamRoom`).
+ * [reservedBytes] is what the *seam* spends out of the frame before the caller's payload starts.
+ * `LinkSeam` spends nothing and passes `0`: the payload budget there *is* the frame ceiling. `MeshSeam`
+ * spends `MeshWire.TYPE_BYTES` on the self-describing frame type (#2474) and passes that, so the byte
+ * comes out of the caller's budget rather than being added to the wire — and is *named* on a refusal
+ * rather than hidden inside an off-by-one. Reservation for layers further up (`RoomChannel`,
+ * `SeamRoom`) happens there, against [us.tractat.kuilt.core.Seam.maxPayloadBytes].
  *
  * A link that names no ceiling returns `null` — unknown is not a refusal.
  */
-internal fun Connection.oversizeOrNull(payload: ByteArray): PayloadTooLarge? {
+internal fun Connection.oversizeOrNull(payload: ByteArray, reservedBytes: Int = 0): PayloadTooLarge? {
     val ceiling = maxFrameBytes ?: return null
-    return if (payload.size > ceiling) {
-        PayloadTooLarge(payloadBytes = payload.size, budgetBytes = ceiling, reservedBytes = 0)
+    val budget = (ceiling - reservedBytes).coerceAtLeast(0)
+    return if (payload.size > budget) {
+        PayloadTooLarge(payloadBytes = payload.size, budgetBytes = budget, reservedBytes = reservedBytes)
     } else {
         null
     }
