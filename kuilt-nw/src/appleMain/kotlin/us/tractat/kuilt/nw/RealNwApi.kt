@@ -73,6 +73,7 @@ import platform.Network.nw_listener_cancel
 import platform.Network.nw_listener_create
 import platform.Network.nw_listener_get_port
 import platform.Network.nw_listener_set_advertise_descriptor
+import platform.Network.nw_listener_set_advertised_endpoint_changed_handler
 import platform.Network.nw_listener_set_new_connection_handler
 import platform.Network.nw_listener_set_queue
 import platform.Network.nw_listener_set_state_changed_handler
@@ -128,6 +129,21 @@ import us.tractat.kuilt.core.freshPeerId
 import us.tractat.kuilt.nw.cinterop.kuilt_nw_connection_receive
 
 private val log = KotlinLogging.logger("us.tractat.kuilt.nw.RealNwApi")
+
+/**
+ * Milliseconds since this file was first touched — a **monotonic** process-local stamp for the
+ * `at=` field on `nw.api.advertised-name` (#2420).
+ *
+ * A log record's own timestamp in the offline-first buffer is its *write* time, and writes happen on a
+ * fixed cadence, so two events seconds apart can carry the same one. Ordering "was I renamed before or
+ * after that dial?" therefore needs a stamp taken *at the event*. Monotonic rather than wall-clock
+ * because the question is only ever about intervals within one process's trail, and a wall clock can
+ * step backwards mid-session. Mirrors `NwSeam`'s `seamMonotonicMillis`; not injected because nothing
+ * branches on it — it is printed and nothing more.
+ */
+private val apiMonotonicMillis: () -> Long = kotlin.time.TimeSource.Monotonic.markNow().let { origin ->
+    { origin.elapsedNow().inWholeMilliseconds }
+}
 
 /**
  * In-process port rendezvous shared by a loopback host/joiner [RealNwApi] pair.
@@ -294,6 +310,18 @@ internal class RealNwApi(
     // listener up?" is a level, and a late subscriber must see the current answer rather than miss the edge.
     private val _listenerState = MutableStateFlow<NwListenerState>(NwListenerState.Unknown)
 
+    // What this device is ACTUALLY advertising over Bonjour (#2420), as reported by
+    // `nw_listener_set_advertised_endpoint_changed_handler`. `null` until the OS reports one.
+    //
+    // This is not the name [startListening] was asked for. mDNS resolves an instance-name collision by
+    // renaming the later advertiser — `alice` → `alice (2)` — and reports it here, asynchronously, after the
+    // listener is up. Nothing was wired to this handler at all before #2420, so a device NEVER logged its
+    // own rename: in the 2026-08-15 two-phone session the rename landed 6 s after the fatal dial and was
+    // recoverable only from the OTHER handset's capture. Latest-value STATE, guarded by the same
+    // [listenGeneration] filter as [_listenerState] so a superseded listener's late callback cannot publish
+    // over its successor's name.
+    private val _advertisedName = MutableStateFlow<String?>(null)
+
     // Which listener generation may publish into [_listenerState] — GUARDED BY [lock], along with every
     // read and write of [_listenerState] itself.
     //
@@ -374,6 +402,8 @@ internal class RealNwApi(
     override val connectionStates: StateFlow<Map<NwConnectionId, NwConnState>> = _connectionStates.asStateFlow()
 
     override val listenerState: StateFlow<NwListenerState> = _listenerState.asStateFlow()
+
+    override val advertisedName: StateFlow<String?> = _advertisedName.asStateFlow()
 
     private val pathStateFlow: StateFlow<NwPathState?> = _pathState.asStateFlow()
 
@@ -780,6 +810,14 @@ internal class RealNwApi(
             // (create failed) simply advertises nothing here.
             if (descriptor != null) advertisePeerIdInTxt(descriptor)
             nw_listener_set_advertise_descriptor(newListener, descriptor)
+            // #2420: the ONLY signal that says what this device is really called on the network. Per
+            // `listener.h` the handler fires for listeners that set an advertise descriptor, once per
+            // advertised endpoint added or removed — which is where an mDNS `… (2)` conflict rename shows
+            // up, asynchronously, after the listener is already up. It was never wired, so the rename that
+            // decided the 2026-08-15 session was observable only from the other phone.
+            nw_listener_set_advertised_endpoint_changed_handler(newListener) { advertised, added ->
+                onAdvertisedEndpointChanged(generation, serviceName, serviceType, advertised, added)
+            }
         }
         // The `nw_error_t` this handler is handed used to be the discarded `_` — which is precisely why
         // the failure line could only ever GUESS at a cause (#2449). Both branches now publish, so a
@@ -846,9 +884,73 @@ internal class RealNwApi(
             listener = null
             listenGeneration += 1
             _listenerState.value = NwListenerState.Unknown
+            // Nothing is advertised any more, and "unknown" is the honest answer — retaining the last name
+            // would let a formation dump claim this peer is still discoverable under it (#2420).
+            _advertisedName.value = null
             current
         } ?: return
         nw_listener_cancel(doomed)
+    }
+
+    /**
+     * Report — and record — what this device is ACTUALLY advertising over Bonjour (#2420).
+     *
+     * ## Why this line exists
+     * The name a peer *dials* is a Bonjour instance name that mDNS re-resolves at connect time; the identity
+     * it *means* is the `PeerId` in the TXT record. Those come apart when two advertisers hold one name, and
+     * mDNS's own resolution of that — renaming the later advertiser to `… (2)` — is delivered **here** and
+     * nowhere else on the renamed device. Before this handler was wired, a device could learn of its own
+     * rename only by being told by another device: in the 2026-08-15 session the rename landed 6 s *after*
+     * the dial that failed, and reconstructing "was I renamed, and was it before or after?" needed both
+     * handsets' captures side by side. With this line it is one `grep` on one device.
+     *
+     * ## Level, and why there are two
+     * A rename is a **condition** — this peer is no longer reachable under the name any already-armed dial
+     * is holding — so it is WARN. An uncontested add/remove is routine bookkeeping and is INFO. Both are
+     * retained by a release device's store, which DEBUG is not; the split is what lets a reader `grep` for
+     * the interesting half.
+     *
+     * `at=` is a **monotonic** millisecond stamp taken in this process, not a wall clock: a record's own
+     * timestamp in the offline-first buffer is its *write* time, and fixed-cadence writes make those useless
+     * for ordering two events seconds apart. This field is what makes "before or after the dial" answerable.
+     *
+     * A stale generation is dropped for the same reason [publishListenerState] drops one — a superseded
+     * listener's queued callback must not publish over its successor's name — but it is still LOGGED, since
+     * a late callback from a listener we have already replaced is itself worth seeing in a capture.
+     */
+    private fun onAdvertisedEndpointChanged(
+        generation: Long,
+        requested: String,
+        serviceType: String,
+        advertised: nw_endpoint_t?,
+        added: Boolean,
+    ) {
+        val effective = advertised?.let { nw_endpoint_get_bonjour_service_name(it)?.toKString() }
+        val current = lock.withLock {
+            if (generation != listenGeneration) return@withLock false
+            when {
+                added && effective != null -> _advertisedName.value = effective
+                // A removal only clears the published name if it is the one we are still claiming; mDNS
+                // re-advertises under the new name around a rename, and the two callbacks may arrive in
+                // either order.
+                !added && effective != null && _advertisedName.value == effective -> _advertisedName.value = null
+                else -> Unit
+            }
+            true
+        }
+        val renamed = added && effective != null && effective != requested
+        val body = "requested=$requested advertised=${effective ?: "?"} added=$added renamed=$renamed " +
+            "generation=$generation current=$current at=${apiMonotonicMillis()}ms " +
+            "self=${selfId.value} serviceType=$serviceType"
+        if (renamed) {
+            log.warn {
+                "nw.api.advertised-name $body — mDNS RENAMED this device's advertisement to resolve a " +
+                    "Bonjour instance-name collision, so a peer dialling '$requested' now reaches whoever " +
+                    "else holds it, not us (#2416)"
+            }
+        } else {
+            log.info { "nw.api.advertised-name $body" }
+        }
     }
 
     /**

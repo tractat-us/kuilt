@@ -85,6 +85,12 @@ internal class FakeNwApi(
     // then failed with the app suspended. Latest-value STATE, matching RealNwApi's MutableStateFlow.
     private val _listenerState = MutableStateFlow<NwListenerState>(NwListenerState.Unknown)
 
+    // The Bonjour instance name this device is ACTUALLY advertising (#2420), standing in for RealNwApi's
+    // nw_listener_set_advertised_endpoint_changed_handler. Set by [startListening] to the name that was
+    // asked for; [emitAdvertisedRename] drives the mDNS conflict rename ("alice" → "alice (2)") that makes
+    // the requested and effective names diverge. Latest-value STATE, matching RealNwApi.
+    private val _advertisedName = MutableStateFlow<String?>(null)
+
     // #1618 Track A: the live connIds this device currently holds (open→closed), mirroring RealNwApi's
     // `connections` registry — the set a device-path-unsatisfied event demotes to PathLost. Added on
     // [emitConnectionOpened], removed on [markConnectionClosed]. Touched only from the one test coroutine.
@@ -103,6 +109,22 @@ internal class FakeNwApi(
     override val connectionStates: StateFlow<Map<NwConnectionId, NwConnState>> = _connectionStates.asStateFlow()
     override val pathState: StateFlow<NwPathState?> = _pathState.asStateFlow()
     override val listenerState: StateFlow<NwListenerState> = _listenerState.asStateFlow()
+    override val advertisedName: StateFlow<String?> = _advertisedName.asStateFlow()
+
+    /**
+     * Test hook for #2420: model mDNS resolving an instance-name collision by renaming **this** device's
+     * advertisement (`"alice"` → `"alice (2)"`), which on hardware arrives on
+     * `nw_listener_set_advertised_endpoint_changed_handler` some time after the listener came up.
+     *
+     * This is the fake's model of the fact a device could not previously observe about ITSELF: in the
+     * 2026-08-15 field session the rename landed 6 s after the fatal dial and was visible only from the
+     * other handset. Note what it can and cannot prove — it makes the *consequence* (a formation dump whose
+     * requested and effective names disagree) assertable on the JVM; it cannot detect `RealNwApi` failing to
+     * wire the native handler, which lives in appleMain behind Network.framework.
+     */
+    internal fun emitAdvertisedRename(name: String?) {
+        _advertisedName.value = name
+    }
 
     /**
      * Test hook for #1541: drive a live `NWPathMonitor` transition (path up/down, Wi-Fi↔cellular, a
@@ -219,6 +241,10 @@ internal class FakeNwApi(
         if (listenThrows) throw RuntimeException("simulated synchronous listen failure on device '$deviceId'")
         radio.markListening(deviceId, serviceName, serviceType, peerId, txtResolvedOnAdvertise)
         if (reportsListenerState) _listenerState.value = listenFailure ?: NwListenerState.Ready
+        // The uncontested case: the OS advertises the name that was asked for. A test drives the contested
+        // one with [emitAdvertisedRename]. Deliberately AFTER the verdict, mirroring the real ordering —
+        // the advertised-endpoint callback fires once the listener is up, never before.
+        if (reportsListenerState) _advertisedName.value = serviceName
     }
 
     /** Test hook for #2449: drive `nw_listener_state_waiting` — a non-verdict the campaign must not park on. */
@@ -241,6 +267,7 @@ internal class FakeNwApi(
 
     override suspend fun stopListening() {
         stopListeningCalls += 1
+        _advertisedName.value = null // nothing is advertised any more; "unknown" is the honest answer
         radio.markStopListening(deviceId)
     }
 
