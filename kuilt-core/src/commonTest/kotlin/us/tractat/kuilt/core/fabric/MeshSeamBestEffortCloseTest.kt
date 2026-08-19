@@ -119,20 +119,25 @@ class MeshSeamBestEffortCloseTest {
     }
 
     /**
-     * `addLink`'s dedup close is a third site of the same class.
+     * The dedup loser's disposal is a third site of the same class — **and since #2474 it has moved**.
      *
-     * It closes ONE conn, which is why #1834 filed it as out of scope — but item count is the wrong
-     * axis. What matters is whether work that MUST happen follows, and it does: `admitOrReject` has
-     * already installed the winner in `links` and published the rosters, and the winner's `readLoop` is
-     * launched on the very next line. A rethrow in between leaves a **zombie link** — the peer sits in
-     * [Mesh.peers] while nothing ever reads its conn, so its frames are never delivered and its
-     * disconnect is never noticed — and lets a bare `CancellationException` escape `addLink` into
-     * `acceptPump` (skipping its `onFailure` and its own `conn.close()`) and into
-     * `superviseVoterReconnection`, where it cancels that peer's supervision coroutine for good. On the
-     * voter-mesh path duplicate links are the norm — both ends call `addLink` concurrently — not an edge.
+     * `addLink` no longer closes the loser at all: it starts a drain, and the close is owed at drain
+     * END, inside `MeshSeam.endDrain`, on the drained link's own read-loop coroutine. The obligation
+     * moved with it, and it got *sharper*: what follows that close is the peer's **ordering-hold
+     * release** and its displacement report. A rethrow there strands the hold, so the peer's live
+     * traffic buffers until it hits the cap and is then delivered out of send order — the exact
+     * failure the hold exists to prevent, reached by way of a close that had nothing to do with it.
+     *
+     * This test drives that site: the loser's far end says goodbye, `endDrain` closes a connection
+     * whose `close` mints a `CancellationException`, and the assertion is that everything behind the
+     * close still happened — the loser was closed, the winner is in the roster, and a frame on the
+     * winner reaches `incoming` rather than sitting in a stranded hold.
+     *
+     * On the voter-mesh path duplicate links are the norm — both ends call `addLink` concurrently —
+     * not an edge.
      */
     @Test
-    fun addLinkStartsTheWinnersReadLoopWhenTheDisplacedLoserMintsACancellation() = runTest {
+    fun drainEndReleasesTheOrderingHoldWhenTheLosersCloseMintsACancellation() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val self = PeerId("peer-0")
         val peer = PeerId("peer-1")
@@ -149,22 +154,27 @@ class MeshSeamBestEffortCloseTest {
         assertEquals(setOf(self, peer), mesh.peers.value, "precondition: the incumbent link is live")
 
         val (mineB, theirsB) = connectionPair()
-        val add = async { closeSwallowingCalleeCancellation { mesh.addLink(mineB) } }
+        // No `closeSwallowingCalleeCancellation` around this any more, deliberately: `addLink` no
+        // longer closes anything, so a wrapper there would absorb nothing and read as protection the
+        // call does not need. The cancellation is minted further down, by `endDrain`'s close.
+        val add = async { mesh.addLink(mineB) }
         val handshakeB = async { handshakeRemote(theirsB, peer, ByteArray(MESH_NONCE_BYTES) { 0x00 }) }
         add.await()
         handshakeB.await()
 
-        // Since #2474 the displaced loser is DRAINED rather than closed on the spot, so its close is
-        // now owed at drain END — and the close that mints the cancellation is the same close. Its
-        // far end says goodbye, which is the drain's terminator: that is what disposes of the loser
-        // and releases the peer's ordering hold.
-        theirsA.send(MeshWire.encodeGoodbye())
-
-        // The winner is installed either way — the defect is that nothing READS it. Bounded, so the
-        // zombie case fails fast instead of hanging on a frame that will never arrive.
+        // Write to the WINNER while the drain is still open, so the frame is sitting in the peer's
+        // ordering hold when the close below mints its cancellation. Without this the frame would be
+        // delivered directly and the assertion could not tell a released hold from a stranded one.
         val delivered = async { mesh.incoming.first() }
         val payload = byteArrayOf(9, 8, 7)
         theirsB.send(MeshWire.encodeData(payload))
+        testScheduler.runCurrent()
+
+        // The drain's terminator. `endDrain` closes conn-a — which mints a `CancellationException` —
+        // and must go on to release the hold and report anyway.
+        theirsA.send(MeshWire.encodeGoodbye())
+
+        // Bounded, so a stranded hold fails fast instead of hanging on a frame that will never arrive.
         val swatch = withTimeoutOrNull(5.seconds) { delivered.await() }
         delivered.cancel()
 
@@ -175,8 +185,8 @@ class MeshSeamBestEffortCloseTest {
                 assertContentEquals(
                     payload,
                     swatch?.toByteArray(),
-                    "the winner's readLoop must be running: a frame on the surviving link must reach " +
-                        "incoming. A null here is the zombie link — peer in the roster, nothing reading it",
+                    "the held frame must be released after the close that mints a cancellation: a null " +
+                        "here is a STRANDED ordering hold, which delivers nothing until it overflows",
                 )
             },
         )

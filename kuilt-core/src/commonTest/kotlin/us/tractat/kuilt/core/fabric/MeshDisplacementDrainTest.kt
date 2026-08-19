@@ -256,6 +256,75 @@ class MeshDisplacementDrainTest {
         )
     }
 
+    /**
+     * A **second** drain to the same peer keeps its own hold: ending the first must not flush the
+     * second's buffer ahead of the second's tail.
+     *
+     * This is the shape review found in the first cut of the mechanism. There the release asked
+     * `lock` "is any other drain to this peer still running?" and then acted on that answer *after*
+     * the suspending close — so a redial that registered a second drain in the gap had its hold
+     * adopted and then torn down, its frames delivered out of order, silently and with no overflow
+     * report. Keying each claim on the link that armed it makes that unrepresentable, and this is
+     * what says so: with two drains in flight, releasing the first delivers nothing at all.
+     *
+     * Mutation receipt: deleting the `waitingOn` check from `MeshSeam.releaseOrderingHold` — i.e.
+     * restoring the peer-keyed release — reds THIS property and nothing else in the class (1 of 9).
+     */
+    @Test
+    fun endingOneDrainDoesNotReleaseASiblingDrainsHold() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val rig = rig()
+        val received = rig.collectIncoming()
+
+        // Three links to one peer, admitted in descending nonce order so each new one displaces the
+        // incumbent: A published, B displaces A, C displaces B. A and B are both draining, and both
+        // hold a claim on the peer's ONE ordering hold; C is live.
+        rig.admit(rig.linkA, nonce = nonceOf(0xFF))
+        rig.admit(rig.linkB, nonce = nonceOf(0x80))
+        rig.admit(rig.linkC, nonce = nonceOf(0x00))
+        assertEquals(
+            2,
+            rig.mesh.peers.value.size,
+            "precondition: one peer over three links — the rig's nonces must have produced two displacements",
+        )
+
+        rig.linkC.farEnd.send(MeshWire.encodeData(AFTER_B))
+        runCurrent()
+        assertTrue(received.isEmpty(), "rig: the hold is armed, so the live link's frame is buffered")
+
+        // End ONE of the two drains. The other is still waiting on its tail, so nothing may be flushed.
+        rig.linkA.farEnd.send(MeshWire.encodeGoodbye())
+        runCurrent()
+
+        assertAll(
+            {
+                assertEquals(
+                    1,
+                    rig.drained.size,
+                    "rig: exactly one of the two drains has ended — if both did, this asserts nothing",
+                )
+            },
+            {
+                assertTrue(
+                    received.isEmpty(),
+                    "the surviving drain's hold must still be held: releasing it here would deliver " +
+                        "${received.size} live-link frame(s) ahead of a tail that has not arrived, which " +
+                        "is precisely the reordering the hold exists to prevent — got $received",
+                )
+            },
+        )
+
+        // ...and when the LAST drain ends, everything comes through.
+        rig.linkB.farEnd.send(MeshWire.encodeData(TAIL_1))
+        rig.linkB.farEnd.send(MeshWire.encodeGoodbye())
+        runCurrent()
+
+        assertEquals(
+            listOf(TAIL_1.toList(), AFTER_B.toList()),
+            received.map { it.toByteArray().toList() },
+            "the last drain to end releases the hold, tail first",
+        )
+    }
+
     /** Closing a seam mid-drain must not leak the drained connection, which is absent from `links`. */
     @Test
     fun tearingDownMidDrainStillClosesTheDrainingLink() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
@@ -315,6 +384,9 @@ class MeshDisplacementDrainTest {
         val linkA = newLink()
         val linkB = newLink()
 
+        /** A third link to the same peer, for the two-drains-in-flight case. */
+        val linkC = newLink()
+
         private fun newLink(): RigLink {
             val (mine, theirs) = connectionPair()
             return RigLink(farEnd = theirs, delegate = mine)
@@ -360,9 +432,17 @@ class MeshDisplacementDrainTest {
         val SELF = PeerId("self")
         val PEER = PeerId("peer-1")
 
-        /** All-`0x00` beats all-`0xFF`: `canonicalLinkNonce` sorts the two hex halves and joins them. */
-        val LOW_NONCE = ByteArray(MESH_NONCE_BYTES) { 0x00 }
-        val HIGH_NONCE = ByteArray(MESH_NONCE_BYTES) { 0xFF.toByte() }
+        /**
+         * A full-width nonce of one repeated byte. `canonicalLinkNonce` hex-encodes both endpoints'
+         * nonces, sorts the two strings and joins them, and the local nonces come from a seeded
+         * `Random(0)` — so a strictly descending sequence of far-end bytes gives a strictly descending
+         * sequence of canonical values, i.e. each new link displaces the incumbent.
+         */
+        fun nonceOf(byte: Int) = ByteArray(MESH_NONCE_BYTES) { byte.toByte() }
+
+        /** All-`0x00` beats all-`0xFF`. */
+        val LOW_NONCE = nonceOf(0x00)
+        val HIGH_NONCE = nonceOf(0xFF)
 
         val TAIL_1 = byteArrayOf(0x0a, 1)
         val TAIL_2 = byteArrayOf(0x0a, 2)
