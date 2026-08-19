@@ -3,6 +3,7 @@
 package us.tractat.kuilt.core.fabric
 
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -175,6 +176,94 @@ internal abstract class MeshDisplacementDrainConformanceSuite {
     }
 
     /**
+     * **The same property at the other entry point (#2485): a link displaced by CONSTRUCTION's dedup.**
+     *
+     * `buildMesh` handshakes every construction connection concurrently and runs the same canonical-nonce
+     * lottery [addLink] does, so a caller that hands it two connections to one peer — a simultaneous dial
+     * caught at construction, which [MeshSeamTest.simultaneousDialDedupAgreesCrossNode] already exercises
+     * — produces a loser here too. Until #2485 that loser was closed on the spot, unread: it never even
+     * got a read loop, so its whole tail went on the floor, and this is the arm the drain did not cover.
+     *
+     * The window is real and is set up as such: [TAIL_1] is written by the far end **before construction
+     * returns**, i.e. while the remote has already deduped and this seam does not yet exist. That is the
+     * residual precisely — no peer is published locally at construction, so what is lost is the REMOTE's
+     * window, not ours.
+     *
+     * Ordering is pinned the same way as [aDisplacedLinksTailSurvivesAnAbruptClose]: [AFTER_SWAP] is
+     * handed to the surviving link between the loser's two tail frames, so a seam that drains without
+     * arming the peer's ordering hold delivers it in the middle.
+     */
+    @Test
+    fun aLinkDisplacedAtConstructionIsDrainedToo(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val (loserEnd, loserFar) = newAbruptClosingConnectionPair()
+        val (winnerEnd, winnerFar) = newAbruptClosingConnectionPair()
+
+        // Both far ends answer as the SAME peer; the all-zero nonce wins the canonical tiebreak, so
+        // `loserEnd` is construction's dedup loser. Started UNDISPATCHED so each is already collecting
+        // when the mesh writes its own preamble — a handshake is a crossing pair.
+        val loserReplied = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            loserFar.incoming.first()
+            loserFar.send(MeshWire.encodeHello(PEER, HIGH_NONCE))
+            // THE WINDOW: written before `hubMesh` returns, so this frame is in flight before the seam
+            // that must not throw it away has been constructed.
+            loserFar.send(MeshWire.encodeData(TAIL_1))
+        }
+        val winnerReplied = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            winnerFar.incoming.first()
+            winnerFar.send(MeshWire.encodeHello(PEER, LOW_NONCE))
+        }
+
+        val mesh = async { hubMesh(SELF, listOf(loserEnd, winnerEnd), dispatcher, Random(0)) }.await()
+        check(loserReplied.isCompleted && winnerReplied.isCompleted) {
+            "harness: a far end never saw the mesh's handshake preamble"
+        }
+
+        val received = mutableListOf<Swatch>()
+        backgroundScope.launch { mesh.incoming.collect { received += it } }
+        val winnerInbox = mutableListOf<ByteArray>()
+        backgroundScope.launch { winnerFar.incoming.collect { winnerInbox += it } }
+        runCurrent()
+
+        // Precondition, and deliberately one that holds with or without the drain: which link WON is a
+        // pure function of the two nonces, and if `Random(0)` ever drew a local nonce that flipped it,
+        // every assertion below would be measuring the surviving link's own frames.
+        assertEquals(setOf(SELF, PEER), mesh.peers.value, "precondition: two links must have deduped to one peer")
+        mesh.sendTo(PEER, PROBE)
+        runCurrent()
+        assertTrue(
+            winnerInbox.any { it.contentEquals(MeshWire.encodeData(PROBE)) },
+            "precondition: the ALL-ZERO-nonce link must be the dedup winner, so `loserEnd` is the drained " +
+                "loser. The seam routed its send elsewhere, so this test is set up backwards",
+        )
+
+        winnerFar.send(MeshWire.encodeData(AFTER_SWAP))
+        runCurrent()
+        loserFar.send(MeshWire.encodeData(TAIL_2))
+        loserFar.send(MeshWire.encodeGoodbye())
+        runCurrent()
+
+        assertAll(
+            {
+                assertEquals(
+                    listOf(TAIL_1.toList(), TAIL_2.toList(), AFTER_SWAP.toList()),
+                    received.map { it.toByteArray().toList() },
+                    "a link displaced by CONSTRUCTION's dedup must be drained to its goodbye like one " +
+                        "displaced by addLink: a missing tail frame is the abrupt close showing through, " +
+                        "and AFTER_SWAP in the middle is a drain with no receiver ordering hold behind it",
+                )
+            },
+            {
+                assertTrue(
+                    received.all { it.sender == PEER },
+                    "a drained link's frames stay attributed to their peer — draining is not anonymising",
+                )
+            },
+        )
+        mesh.close()
+    }
+
+    /**
      * Admit one more link to [PEER], driving its far end through the mesh handshake with [nonce], and
      * return the far end so the caller can write to it.
      *
@@ -203,5 +292,6 @@ internal abstract class MeshDisplacementDrainConformanceSuite {
         val TAIL_1 = byteArrayOf(0x0a, 1)
         val TAIL_2 = byteArrayOf(0x0a, 2)
         val AFTER_SWAP = byteArrayOf(0x0b, 1)
+        val PROBE = byteArrayOf(0x0c, 1)
     }
 }
