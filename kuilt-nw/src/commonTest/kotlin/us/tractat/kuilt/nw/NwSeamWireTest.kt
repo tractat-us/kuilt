@@ -89,6 +89,13 @@ class NwSeamWireTest {
             rig.api.emitBytesReceived(NwBytesReceived(early, encodeFrame(NwWire.encodeData(TOO_EARLY))))
             testScheduler.runCurrent()
 
+            // REFUSED, not merely ignored — and this is what tells the two apart. A refusal evicts and
+            // TOMBSTONES the connection, so a subsequent perfectly-good hello on it must be dropped as
+            // well. Downgrade the refusal to a silent drop and the connection stays tracked, this hello
+            // resolves, and `peer-late` joins the roster.
+            rig.api.emitBytesReceived(NwBytesReceived(early, encodeFrame(NwWire.encodeHello(PeerId("peer-late"), nonce(4)))))
+            testScheduler.runCurrent()
+
             rig.api.emitBytesReceived(NwBytesReceived(control, encodeFrame(NwWire.encodeData(ALIVE))))
             rig.pumpUntil { rig.received.isNotEmpty() }
 
@@ -97,7 +104,8 @@ class NwSeamWireTest {
                     assertEquals(
                         setOf(rig.self, PeerId("peer-control")),
                         rig.seam.peers.value,
-                        "data arriving before an identity registers nobody — no phantom peer",
+                        "data arriving before an identity registers nobody — no phantom peer, and the " +
+                            "refused connection is dead to a later hello too",
                     )
                 },
                 {
