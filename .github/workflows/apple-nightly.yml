@@ -181,6 +181,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
+          # #2466's interim rule: a :kuilt-nw conformance verdict without a load sample is
+          # uninterpretable — this suite's whole subject is a real socket + real GCD queues, and
+          # this lane's header records a measured 10-20x wall-clock slowdown on this runner. Emit
+          # it BEFORE the assertions so a FAILING run carries it too, which is when it is needed.
+          # Never fatal: a missing sample must not be what turns the lane red.
+          echo "Runner: $(sysctl -n hw.ncpu 2>/dev/null || echo '?') vCPU, \
+          $(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1073741824 )) GB — $(uptime || true)"
           XML=kuilt-nw/build/test-results/jvmTest/TEST-us.tractat.kuilt.nw.NwBridgeLoopbackConformanceTest.xml
           if [ ! -f "$XML" ]; then
             echo "::error::$XML is absent — the bridge conformance suite did not run at all."
