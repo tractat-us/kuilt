@@ -20,7 +20,7 @@ internal class Probe2145 {
         const val GOSSIP_ONE_IN = 4
 
         /** Which arm the shipped harness currently implements — flip once the fix lands. */
-        val SHIPPED = Bootstrap.NONE
+        val SHIPPED = Bootstrap.RANDOM_ASSERT
     }
 
     private enum class Bootstrap { NONE, FIRST_ASSERT, RANDOM_ASSERT }
@@ -80,7 +80,7 @@ internal class Probe2145 {
                     pool += after
                 }
             }
-            if (bootstrap != Bootstrap.NONE) {
+            if (bootstrap != Bootstrap.NONE && h.alphabet.any { it.kind == OpKind.RETIRE }) {
                 val asserts = h.alphabet.filter { it.kind == OpKind.ASSERT }
                 if (asserts.isNotEmpty()) {
                     for (r in 0 until h.replicaCount) {
@@ -201,6 +201,61 @@ internal class Probe2145 {
                 "${pctL(c.strictAncestor, c.pairs)}|${pctL(c.concurrent, c.pairs)}|" +
                 "${pctL(c.equalPairs, c.pairs)}",
         )
+    }
+
+    /**
+     * #2158's receipt: an `ORSet`-shaped mutant whose retiring ops are effective ONLY on replica 0,
+     * against the exact state the critical shape presents. Retirement is dead on 2 of 3 replicas and
+     * dead against everything random exploration produces.
+     */
+    private fun mutantArm(shapeOnly: Boolean): LatticeLawHarness<us.tractat.kuilt.crdt.ORSet<String>> {
+        val real = ORSetConvergenceTest().newHarness()
+        val add = real.alphabet.first { it.name == "add" }
+        val shapeState = add.apply(real.initial, 0, Random(0))
+        val alphabet = real.alphabet.map { op ->
+            if (op.kind != OpKind.RETIRE) {
+                op
+            } else {
+                LatticeOp(op.name, op.kind) { state, replicaIndex, random ->
+                    val live = replicaIndex == 0 && (!shapeOnly || state == shapeState)
+                    if (live) op.apply(state, replicaIndex, random) else state
+                }
+            }
+        }
+        return LatticeLawHarness(
+            initial = real.initial,
+            alphabet = alphabet,
+            serializer = real.serializer,
+            criticalShapes = real.criticalShapes,
+            floors = real.floors,
+            replicaCount = real.replicaCount,
+            opsPerReplica = real.opsPerReplica,
+        )
+    }
+
+    @Test
+    fun mutant2158() {
+        for (seeds in listOf(0L..15L, 0L..63L)) {
+            val window = if (seeds.last == 15L) "s0-15" else "s0-63"
+            for (bootstrap in Bootstrap.entries) for (shapeOnly in listOf(false, true)) {
+                val h = mutantArm(shapeOnly)
+                val c = breakdown(h, seeds, bootstrap)
+                val f = h.floors
+                fun verdict(measured: Double, bound: Double, ceiling: Boolean) =
+                    if (ceiling) (if (measured <= bound) "pass" else "BREACH") else (if (measured >= bound) "pass" else "BREACH")
+                val anc = c.strictAncestor.toDouble() / c.pairs
+                val con = c.concurrent.toDouble() / c.pairs
+                val ret = c.effectiveRetires.toDouble() / c.steps
+                val noOp = c.noOps.toDouble() / c.steps
+                println(
+                    "MUT|$window|$bootstrap|anc=${pctL(c.strictAncestor, c.pairs)}(${verdict(anc, f.strictAncestorPairs, false)})|" +
+                        "conc=${pctL(c.concurrent, c.pairs)}(${verdict(con, f.concurrentPairs, false)})|" +
+                        "retire=${pct(c.effectiveRetires, c.steps)}(${verdict(ret, f.effectiveRetireSteps, false)})|" +
+                        "noOp=${pct(c.noOps, c.steps)}(${verdict(noOp, f.maxNoOpSteps, true)})|" +
+                        "leadRetire=${c.leadEffectiveRetires}|explRetire=${c.explorationEffectiveRetires}",
+                )
+            }
+        }
     }
 
     @Test
