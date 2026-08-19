@@ -111,6 +111,36 @@ internal class FakeNwApi(
     override val listenerState: StateFlow<NwListenerState> = _listenerState.asStateFlow()
     override val advertisedName: StateFlow<String?> = _advertisedName.asStateFlow()
 
+    // ── test-only subscriber counts, one per flow (#2478) ─────────────────────────────────────────
+    //
+    // Mirrors `BridgeNwApi.bytesSubscriberCountForTest`, and exists for the same reason: these flows
+    // are hot with **no replay**, so an event emitted before a collector attaches is simply gone. The
+    // collectors that must not miss one are launched `CoroutineStart.UNDISPATCHED` precisely so they
+    // subscribe before the trigger that can produce it — and *that* claim is only assertable from the
+    // outside if the fake can report, per flow, how many collectors are attached right now.
+    //
+    // ONE ACCESSOR PER FLOW, deliberately: a single aggregate total would let a regressed collector
+    // hide behind five healthy ones, which is the exact failure `NwSubscribeBeforeTriggerTest` exists
+    // to catch. None of this is part of the `NwApi` contract — do not build behaviour on it.
+
+    /** Test-only: collectors currently attached to [endpointFound]. Not part of the fabric contract. */
+    internal fun endpointFoundSubscriberCountForTest(): Int = _endpointFound.subscriptionCount.value
+
+    /** Test-only: collectors currently attached to [endpointLost]. Not part of the fabric contract. */
+    internal fun endpointLostSubscriberCountForTest(): Int = _endpointLost.subscriptionCount.value
+
+    /** Test-only: collectors currently attached to [connectionOpened]. Not part of the fabric contract. */
+    internal fun connectionOpenedSubscriberCountForTest(): Int = _connectionOpened.subscriptionCount.value
+
+    /** Test-only: collectors currently attached to [bytesReceived]. Not part of the fabric contract. */
+    internal fun bytesReceivedSubscriberCountForTest(): Int = _bytesReceived.subscriptionCount.value
+
+    /** Test-only: collectors currently attached to [connectionClosed]. Not part of the fabric contract. */
+    internal fun connectionClosedSubscriberCountForTest(): Int = _connectionClosed.subscriptionCount.value
+
+    /** Test-only: collectors currently attached to [connectionStates]. Not part of the fabric contract. */
+    internal fun connectionStatesSubscriberCountForTest(): Int = _connectionStates.subscriptionCount.value
+
     /**
      * Test hook for #2420: model mDNS resolving an instance-name collision by renaming **this** device's
      * advertisement (`"alice"` → `"alice (2)"`), which on hardware arrives on
