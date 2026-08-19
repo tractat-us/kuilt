@@ -76,7 +76,7 @@ class MeshAdmissionTest {
             { assertEquals(setOf(hub, good), mesh.peers.value, "rejected link absent; good link intact") },
             { assertEquals(mapOf(good to Principal("user-good")), mesh.attestedPrincipals.value) },
             { assertTrue(badRemainingFrames.isEmpty(), "the rejected connection must be closed") },
-            { assertContentEquals(payload, goodGotFrame, "the seam keeps serving the admitted link after a rejection") },
+            { assertContentEquals(payload, meshPayloadOf(goodGotFrame), "the seam keeps serving the admitted link after a rejection") },
             { assertEquals(SeamState.Woven, mesh.state.value, "one rejection must not tear down the seam") },
         )
     }
@@ -139,7 +139,7 @@ class MeshAdmissionTest {
         assertAll(
             { assertEquals(victim, rejection.remoteId) },
             { assertTrue(rejection.attested, "the attacker's link WAS attested — just to the wrong subject") },
-            { assertContentEquals(payload, victimGotFrame, "the victim's live link must survive the spoof attempt") },
+            { assertContentEquals(payload, meshPayloadOf(victimGotFrame), "the victim's live link must survive the spoof attempt") },
             { assertTrue(attackerFrames.isEmpty(), "the attacker's connection must be closed, having received nothing") },
             { assertEquals(mapOf(victim to Principal("victim")), mesh.attestedPrincipals.value) },
             { assertEquals(setOf(hub, victim), mesh.peers.value, "the spoof must not disturb the live roster") },
@@ -175,7 +175,7 @@ class MeshAdmissionTest {
         val payload = byteArrayOf(9, 8, 7)
         val received = async { attackerFarEnd.incoming.first() }
         mesh.sendTo(victim, payload)
-        assertContentEquals(payload, received.await(), "the spoofed link displaced the victim (dedup lottery won)")
+        assertContentEquals(payload, meshPayloadOf(received.await()), "the spoofed link displaced the victim (dedup lottery won)")
     }
 
     // ── Construction-time symmetry — reject-and-continue, no sibling teardown ──
@@ -275,7 +275,7 @@ class MeshAdmissionTest {
 
         assertAll(
             { assertEquals(setOf(hub, victim), mesh.peers.value) },
-            { assertContentEquals(payload, plainGot, "rig: the unattested duplicate won dedup and owns the peer id") },
+            { assertContentEquals(payload, meshPayloadOf(plainGot), "rig: the unattested duplicate won dedup and owns the peer id") },
             {
                 assertTrue(
                     mesh.attestedPrincipals.value.isEmpty(),
@@ -326,7 +326,7 @@ class MeshAdmissionTest {
             { assertEquals(setOf(hub, good), mesh.peers.value, "self must not join the roster") },
             { assertFalse(hub in mesh.attestedPrincipals.value, "self must not land in the roster") },
             { assertTrue(selfRemainingFrames.isEmpty(), "the self-connection must be closed") },
-            { assertContentEquals(payload, goodGotFrame, "the seam keeps serving after a self-dial") },
+            { assertContentEquals(payload, meshPayloadOf(goodGotFrame), "the seam keeps serving after a self-dial") },
             { assertEquals(SeamState.Woven, mesh.state.value, "a self-dial must not tear the seam") },
         )
     }
@@ -420,6 +420,6 @@ class MeshAdmissionTest {
     /** Drive the far end of a [connectionPair] through the mesh handshake for [remoteId]. */
     private suspend fun handshakeRemote(theirs: Connection, remoteId: PeerId, nonce: ByteArray) {
         theirs.incoming.first() // the mesh's own MeshHello preamble
-        theirs.send(MeshHello.encode(remoteId, nonce))
+        theirs.send(MeshWire.encodeHello(remoteId, nonce))
     }
 }

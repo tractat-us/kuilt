@@ -75,7 +75,7 @@ class MeshSeamColdConnectionTest {
      * collection. Mirrors `HandshakingColdConnectionTest.ColdConnection` for the mesh wire.
      */
     private class ColdConnection(remoteId: PeerId, payload: ByteArray) : Connection {
-        private val frames = listOf(MeshHello.encode(remoteId, meshNonce(1, 2, 3, 4)), payload)
+        private val frames = listOf(MeshWire.encodeHello(remoteId, meshNonce(1, 2, 3, 4)), MeshWire.encodeData(payload))
         private val collected = atomic(false)
         val sent = atomic(emptyList<ByteArray>())
 

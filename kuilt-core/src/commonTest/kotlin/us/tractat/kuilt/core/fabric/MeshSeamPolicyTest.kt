@@ -53,15 +53,15 @@ class MeshSeamPolicyTest {
         // peer-0 builds its mesh; handshake runs concurrently.
         val selfMeshDeferred = async { hubMesh(self, listOf(mine), dispatcher, Random(0), policy) }
         val handshakeDeferred = async {
-            theirs.send(MeshHello.encode(sender, meshNonce(42)))
-            MeshHello.decode(theirs.incoming.first())
+            theirs.send(MeshWire.encodeHello(sender, meshNonce(42)))
+            meshHelloOf(theirs.incoming.first())
         }
         val selfMesh = selfMeshDeferred.await()
         handshakeDeferred.await()
 
         // peer-1 sends two frames back-to-back. Both enter the unlimited connection channel immediately.
-        theirs.send(byteArrayOf(1))
-        theirs.send(byteArrayOf(2))
+        theirs.send(MeshWire.encodeData(byteArrayOf(1)))
+        theirs.send(MeshWire.encodeData(byteArrayOf(2)))
 
         // Run one scheduler step: the read-loop delivers frame 1 to the spool (capacity=1, now full)
         // and then suspends trying to deliver frame 2. The consumer has not run yet.

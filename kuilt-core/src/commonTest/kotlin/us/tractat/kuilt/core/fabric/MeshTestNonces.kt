@@ -18,3 +18,22 @@ internal const val MESH_NONCE_BYTES: Int = 16
  */
 internal fun meshNonce(vararg leading: Byte): ByteArray =
     ByteArray(MESH_NONCE_BYTES).also { leading.copyInto(it) }
+
+/**
+ * The [MeshHello] inside a frame a mesh sent, failing by name if that frame was not a hello (#2474).
+ *
+ * A hand-driven far end used to call `MeshHello.decode` on whatever arrived, which was correct only
+ * while the wire was positional. Since the frame says what it is, the cast is the assertion: a rig
+ * that has slipped a frame out of step fails here rather than misparsing a payload as an identity.
+ */
+internal fun meshHelloOf(frame: ByteArray): MeshHello =
+    (MeshWire.decode(frame) as MeshWireFrame.Hello).hello
+
+/**
+ * The consumer payload inside a [MeshFrameType.Data] frame a mesh sent, failing by name if the frame
+ * was a hello or a goodbye. The mirror of [MeshWire.encodeData] for a hand-driven far end.
+ */
+internal fun meshPayloadOf(frame: ByteArray): ByteArray {
+    check(MeshWire.decode(frame) == MeshWireFrame.Data) { "expected a mesh DATA frame, got ${MeshWire.decode(frame)}" }
+    return frame.copyOfRange(MeshWire.TYPE_BYTES, frame.size)
+}

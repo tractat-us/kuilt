@@ -154,16 +154,22 @@ class MeshSeamBestEffortCloseTest {
         add.await()
         handshakeB.await()
 
+        // Since #2474 the displaced loser is DRAINED rather than closed on the spot, so its close is
+        // now owed at drain END — and the close that mints the cancellation is the same close. Its
+        // far end says goodbye, which is the drain's terminator: that is what disposes of the loser
+        // and releases the peer's ordering hold.
+        theirsA.send(MeshWire.encodeGoodbye())
+
         // The winner is installed either way — the defect is that nothing READS it. Bounded, so the
         // zombie case fails fast instead of hanging on a frame that will never arrive.
         val delivered = async { mesh.incoming.first() }
         val payload = byteArrayOf(9, 8, 7)
-        theirsB.send(payload)
+        theirsB.send(MeshWire.encodeData(payload))
         val swatch = withTimeoutOrNull(5.seconds) { delivered.await() }
         delivered.cancel()
 
         assertAll(
-            { assertEquals(listOf(PeerId("conn-a")), closed.value, "the displaced loser must still be closed") },
+            { assertEquals(listOf(PeerId("conn-a")), closed.value, "the drained loser must still be closed at drain end") },
             { assertEquals(setOf(self, peer), mesh.peers.value, "the winner must be in the roster") },
             {
                 assertContentEquals(
@@ -247,7 +253,7 @@ class MeshSeamBestEffortCloseTest {
     /** Drive the far end of a [connectionPair] through the mesh handshake for [remoteId]. */
     private suspend fun handshakeRemote(theirs: Connection, remoteId: PeerId, nonce: ByteArray = meshNonce(0)) {
         theirs.incoming.first() // consume the mesh's MeshHello preamble
-        theirs.send(MeshHello.encode(remoteId, nonce))
+        theirs.send(MeshWire.encodeHello(remoteId, nonce))
     }
 
     /**

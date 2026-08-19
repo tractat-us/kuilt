@@ -67,14 +67,21 @@ class SeamPayloadBudgetTest {
             PeerId("unknown") to unknownTheirs,
         ).mapIndexed { index, (id, conn) ->
             async {
-                conn.send(MeshHello.encode(id, meshNonce(index.toByte())))
-                MeshHello.decode(conn.incoming.first())
+                conn.send(MeshWire.encodeHello(id, meshNonce(index.toByte())))
+                meshHelloOf(conn.incoming.first())
             }
         }
         val mesh = meshDeferred.await()
         handshakes.forEach { it.await() }
 
-        assertEquals(1024, mesh.maxPayloadBytes, "one payload must fit every link, so the tightest wins")
+        // The tightest link ceiling LESS the mesh's own frame-type byte (#2474): what the seam
+        // publishes is what a caller may hand it, and the type byte is spent out of that budget
+        // rather than added to the wire.
+        assertEquals(
+            1024 - MeshWire.TYPE_BYTES,
+            mesh.maxPayloadBytes,
+            "one payload must fit every link, so the tightest wins — less the frame-type byte",
+        )
         mesh.close()
     }
 
@@ -85,8 +92,8 @@ class SeamPayloadBudgetTest {
 
         val meshDeferred = async { hubMesh(PeerId("self"), listOf(mine), dispatcher, random = Random(0)) }
         val handshake = async {
-            theirs.send(MeshHello.encode(PeerId("other"), meshNonce(0)))
-            MeshHello.decode(theirs.incoming.first())
+            theirs.send(MeshWire.encodeHello(PeerId("other"), meshNonce(0)))
+            meshHelloOf(theirs.incoming.first())
         }
         val mesh = meshDeferred.await()
         handshake.await()

@@ -60,7 +60,7 @@ class MeshSeamConcurrencyTest {
         private val frames = Channel<ByteArray>(Channel.UNLIMITED)
 
         init {
-            frames.trySend(MeshHello.encode(remoteId, meshNonce(0)))
+            frames.trySend(MeshWire.encodeHello(remoteId, meshNonce(0)))
         }
 
         override val incoming: Flow<ByteArray> = frames.receiveAsFlow()
@@ -80,7 +80,7 @@ class MeshSeamConcurrencyTest {
         private val admitted = AtomicBoolean(false)
 
         init {
-            frames.trySend(MeshHello.encode(remoteId, meshNonce(0)))
+            frames.trySend(MeshWire.encodeHello(remoteId, meshNonce(0)))
         }
 
         override val incoming: Flow<ByteArray> = frames.receiveAsFlow()

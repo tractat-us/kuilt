@@ -84,7 +84,7 @@ class MeshSeamStaleConnEvictionTest {
         // ...and it must still deliver: a frame from connB's far end reaches incoming, sender == peer.
         val delivered = async { mesh.incoming.first() }
         val liveFrame = byteArrayOf(9, 8, 7)
-        theirsB.send(liveFrame)
+        theirsB.send(MeshWire.encodeData(liveFrame))
         val swatch = delivered.await()
         assertContentEquals(liveFrame, swatch.toByteArray(), "replacement link must keep delivering frames")
         assertEquals(peer, swatch.sender, "delivered frame must be attributed to the peer")
@@ -93,7 +93,7 @@ class MeshSeamStaleConnEvictionTest {
     /** Read the mesh's preamble off [theirs], then reply with [remoteId] + [nonce]. */
     private suspend fun driveFarEnd(theirs: Connection, remoteId: PeerId, nonce: ByteArray) {
         theirs.incoming.first() // the mesh's MeshHello preamble
-        theirs.send(MeshHello.encode(remoteId, nonce))
+        theirs.send(MeshWire.encodeHello(remoteId, nonce))
     }
 
     /**
