@@ -234,9 +234,15 @@ private class Link(
  * **Dedup (cross-node agreement):** if two connections resolve the same remote id (duplicate links from
  * a simultaneous dial), both ends keep the link with the lexicographically smallest *link nonce* —
  * a canonical, order-independent function of the two per-connection nonces. Because both ends see
- * both nonces, they derive the same survivor and close the same loser, with no coordination. The
+ * both nonces, they derive the same survivor and displace the same loser, with no coordination. The
  * old self-relative `selfId < remoteId` rule could leave a link half-open (the two ends disagreed
  * on the survivor); the nonce-based rule cannot.
+ *
+ * The loser is **drained, not closed** (#2485): it keeps a read loop, is sent one in-band goodbye, and
+ * is disposed of only once the remote's goodbye comes back — so the frames a remote that deduped first
+ * had already written are still delivered, ahead of the surviving link's, rather than dying at a close.
+ * This is the same treatment [Mesh.addLink] gives a later duplicate; passing duplicate connections here
+ * is supported, not merely tolerated.
  *
  * **Per-link failure:** if a link's remote peer disconnects or errors, that peer is removed from
  * [Seam.peers] and the mesh continues operating. The seam remains [SeamState.Woven] until
