@@ -28,9 +28,11 @@ import kotlin.test.assertTrue
  * explicit, logged, refused cases, and a third frame type exists that positional classification had
  * nowhere to put: `GOODBYE`.
  *
- * `GOODBYE` is **defined and decoded but sent nowhere** in this slice. It terminates the loser's
- * drain in slice 2; until that lands a received one is a no-op, and this file pins that — a drain
- * arriving early would be a behaviour change nobody asked for yet.
+ * `GOODBYE` now means something: the seam writes exactly one on a link its dedup displaced, and a
+ * received one ends that link's drain. What this file pins about it is the wire-level half — that
+ * formation puts one on each end and nothing else, and that a `GOODBYE` on a link this seam is NOT
+ * draining is a reported no-op rather than a teardown. The drain's own behaviour is
+ * `NwPublishSwapWindowTest`'s subject.
  */
 class NwSeamWireTest {
 
@@ -159,10 +161,20 @@ class NwSeamWireTest {
             )
         }
 
-    // ── GOODBYE: decoded, and deliberately inert until slice 2 ──────────────────
+    // ── GOODBYE on a link this seam is NOT draining ─────────────────────────────
 
+    /**
+     * A `GOODBYE` is scoped to the link it arrives on, and this seam has exactly one link to this peer
+     * — nothing is being drained, so there is nothing to terminate.
+     *
+     * This is a real field state rather than a degenerate one: both ends dedup onto the same link, but
+     * they do so independently, so the remote can reach its verdict before our second hello has even
+     * arrived. Acting on its goodbye would mean evicting a peer, or moving it, on a decision this seam
+     * cannot yet verify — and the remote goes on READING that link for its whole drain, so writes made
+     * in the interval still land. The seam therefore reports the condition and does nothing else.
+     */
     @Test
-    fun aReceivedGoodbyeIsANoOpInThisSlice() =
+    fun aGoodbyeOnALinkThisSeamIsNotDrainingEvictsNothingAndTearsNothing() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val rig = rig()
             val conn = rig.weave("c-1", "peer-1")
@@ -172,13 +184,13 @@ class NwSeamWireTest {
             val peersAfterGoodbye = rig.seam.peers.value
             val stateAfterGoodbye = rig.seam.state.value
 
-            // The link is untouched, so it still carries traffic. Slice 2 gives GOODBYE meaning; if
-            // draining or a link teardown ever lands here early, this is what reds.
+            // The link is untouched, so it still carries traffic. If a drain or a teardown ever fires
+            // for a link that was never displaced, this is what reds.
             rig.api.emitBytesReceived(NwBytesReceived(conn, encodeFrame(NwWire.encodeData(ALIVE))))
             rig.pumpUntil { rig.received.isNotEmpty() }
 
             assertAll(
-                { assertEquals(setOf(rig.self, PeerId("peer-1")), peersAfterGoodbye, "GOODBYE evicts nobody yet") },
+                { assertEquals(setOf(rig.self, PeerId("peer-1")), peersAfterGoodbye, "GOODBYE evicts nobody") },
                 { assertEquals(SeamState.Woven, stateAfterGoodbye, "…and moves no state") },
                 {
                     assertEquals(
@@ -235,7 +247,11 @@ class NwSeamWireTest {
                 pumpUntil { seamA.peers.value.size == 2 && seamB.peers.value.size == 2 },
                 "the pair must converge before its frames can be read off the ledger",
             )
-            val helloTypes = radio.sentFrames.map { it.typeByte }.toSet()
+            // Pump on until the dedup has actually disposed of the loser, so the formation ledger is
+            // COMPLETE. Reading it at convergence would sample it mid-dedup, and the goodbye count below
+            // would then depend on how many pumps `peers` happened to take.
+            assertTrue(pumpUntil { radio.liveLinkCount == 1 }, "the dedup must settle at one live link")
+            val formation = radio.sentFrames.map { it.typeByte }
 
             seamA.broadcast(PAYLOAD)
             assertTrue(pumpUntil { atB.isNotEmpty() }, "the broadcast must cross")
@@ -243,9 +259,27 @@ class NwSeamWireTest {
             assertAll(
                 {
                     assertEquals(
-                        setOf(NwFrameType.Hello.code),
-                        helloTypes,
-                        "everything sent during formation is a typed HELLO",
+                        setOf(NwFrameType.Hello.code, NwFrameType.Goodbye.code),
+                        formation.toSet(),
+                        "formation is typed HELLOs and the drain's typed GOODBYEs — and nothing else; a " +
+                            "DATA byte here would mean the seam wrote a payload nobody asked it to",
+                    )
+                },
+                {
+                    // Both ends dedup onto the same link, so each end displaces one connection and writes
+                    // exactly one goodbye on it (#2425). A count rather than "at least one": two is what
+                    // says BOTH arms drained, and one would mean only the replace arm did.
+                    assertEquals(
+                        2,
+                        formation.count { it == NwFrameType.Goodbye.code },
+                        "one GOODBYE per end — the replace arm's loser AND the keep arm's: $formation",
+                    )
+                },
+                {
+                    assertEquals(
+                        4,
+                        formation.count { it == NwFrameType.Hello.code },
+                        "one HELLO per connection end, and a double dial has four: $formation",
                     )
                 },
                 {
@@ -260,12 +294,6 @@ class NwSeamWireTest {
                         PAYLOAD.decodeToString(),
                         atB.single().decodeToString(),
                         "the type byte is stripped before delivery — the consumer sees its own bytes",
-                    )
-                },
-                {
-                    assertTrue(
-                        radio.sentFrames.none { it.typeByte == NwFrameType.Goodbye.code },
-                        "GOODBYE is DEFINED but SENT NOWHERE in this slice — slice 2 gives it meaning",
                     )
                 },
             )

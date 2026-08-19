@@ -3852,6 +3852,18 @@ val forbidDemotedFieldTrail by tasks.registering {
         "nw.seam.registry.orphan",
         "nw.seam.inbound-silent",
         "nw.seam.publish-swap",
+        // The graceful displacement drain (#2425). `drain-end` is the mechanism's own receipt — `drained=`
+        // says the drain carried something rather than merely ran, and `via=` says which of its three
+        // terminators fired, which is the difference between "the goodbye works" and "the zombie backstop
+        // is carrying every formation". Its ABSENCE from a capture is the report too: a drain that never
+        // ended is the one shape this mechanism can fail in, and it looks like silence from every other
+        // angle. `hold-overflow` is the ordering hold admitting it gave up on send order for a peer;
+        // `goodbye-unmatched` is the two ends' dedups running out of step, which is the only thing that
+        // would explain them disagreeing about which link survived.
+        "nw.seam.drain-end",
+        "nw.seam.drain.hold-overflow",
+        "nw.seam.drain.goodbye-unmatched",
+        "nw.seam.drain.goodbye-refused",
         // The transport's own account, which is the only place a browse result or a path change appears.
         "nw.api.browse-result",
         "nw.path.update",

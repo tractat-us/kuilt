@@ -48,6 +48,9 @@ class NwSeamWedgeDiagnosticsTest {
         /** The watchdog cadence under test. Small, and virtual — nothing here waits on a wall clock. */
         val PROBE: Duration = 1.seconds
 
+        /** The injected #2425 zombie-link backstop. Virtual, and driven by hand where it is reached. */
+        val DRAIN_BOUND: Duration = 2.seconds
+
         fun TestScope.pumpUntil(maxPumps: Int = 500, cond: () -> Boolean): Boolean {
             repeat(maxPumps) {
                 if (cond()) return true
@@ -732,6 +735,288 @@ class NwSeamWedgeDiagnosticsTest {
     /** The `connId=` field of a diagnostic line, so an assertion can compare LINKS rather than counts. */
     private fun connIdOf(line: String): String =
         line.substringAfter("connId=").substringBefore(' ')
+
+    // ── the displacement drain's own trail (#2425) ──────────────────────────────
+
+    /**
+     * A double-dialled pair with the loser's GOODBYEs withheld on BOTH ends, so a drain in progress is
+     * observable at all — with them flowing it begins and ends in the same pump. `dev-0` writes into its
+     * publish-then-swap window, on a link whose sends are frozen, so the frame is genuinely in flight when
+     * the dedup runs and its delivery is genuinely the drain's doing.
+     *
+     * Returns the radio plus the two devices; the caller decides which holds to release and when.
+     */
+    private class DrainRig(
+        val radio: FakeNwRadio,
+        val dial: DoubleDial,
+        val writer: Device,
+        val reader: Device,
+        val writerLoserEnd: NwConnectionId,
+        val readerLoserEnd: NwConnectionId,
+    )
+
+    private suspend fun TestScope.drainRig(tag: String, holdCapacity: Int): DrainRig {
+        val radio = FakeNwRadio()
+        val devices = (0..1).map { i ->
+            val api = FakeNwApi(radio, deviceId = "$tag-dev-$i", serviceName = "$tag-svc-$i")
+            val id = PeerId("$tag-peer-$i")
+            Device(
+                id,
+                api,
+                NwSeam(
+                    selfId = id,
+                    api = api,
+                    scope = seamScope(),
+                    // Seeds that make the SECOND-resolving link the survivor on both ends, so both
+                    // rebind. The `dedup.replace` count below is what proves the rig fired.
+                    random = Random(i.toLong()),
+                    inboundSilenceProbe = Duration.ZERO, // no watchdog: this test is about the drain trail
+                    drainBound = DRAIN_BOUND,
+                    orderingHoldCapacity = holdCapacity,
+                ),
+            )
+        }
+        for (d in devices) {
+            backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { d.seam.incoming.collect { } }
+        }
+        testScheduler.runCurrent()
+
+        val dial = radio.injectDoubleDial("$tag-dev-0", "$tag-dev-1")
+        // Silence the OUTBOUND link entirely, so both ends publish the peer on the INBOUND one and the
+        // dedup then moves them off it — the field's shape.
+        radio.holdSends(dial.outbound.dialerConnectionId)
+        radio.holdSends(dial.outbound.accepterConnectionId)
+        assertTrue(
+            pumpUntil { devices.all { it.seam.peers.value.size == 2 } },
+            "$tag: both ends must publish on the link left speaking: " +
+                "${devices.map { it.peerId to it.seam.peers.value }}",
+        )
+        // The two ends of the link the dedup will displace. `endOn` is nullable only for a device that is
+        // not one of the link's two ends, which these are by construction — assert rather than `!!`, so a
+        // renamed device id fails by name instead of by NullPointerException.
+        val writerLoserEnd = assertNotNull(dial.inbound.endOn("$tag-dev-0"), "dev-0 must own an end of the inbound link")
+        val readerLoserEnd = assertNotNull(dial.inbound.endOn("$tag-dev-1"), "dev-1 must own an end of the inbound link")
+        return DrainRig(radio, dial, devices[0], devices[1], writerLoserEnd, readerLoserEnd)
+    }
+
+    /**
+     * The `nw.seam.publish-swap` WARN is emitted at DRAIN-END and carries the outcome, because a window
+     * measured without knowing what the drain that followed it delivered is the half a field capture
+     * already had (#2425).
+     *
+     * Both ends report the same frame from opposite sides — `frames-written-to-published-link=1` on the
+     * end that wrote it, `drained=1` on the end that received it — which is what makes the pair readable
+     * as one event across two devices' captures rather than two unrelated ones.
+     *
+     * The two `via=` values in one run are deliberate. `dev-1` disposes of its end on `dev-0`'s goodbye;
+     * `dev-0`'s own drain then ends on the close that produces — so a single formation exercises the
+     * in-band terminator and the terminal-error one, and neither is inferred from the other.
+     */
+    @Test
+    fun theDrainReportsWhatItCarriedAndWhichTerminatorEndedIt() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            withCapture { appender ->
+                val tag = "drainrep"
+                val rig = drainRig(tag, holdCapacity = NwSeam.DEFAULT_ORDERING_HOLD_CAPACITY)
+                // Freeze BOTH ends of the loser: dev-0's so its window write is in flight when the dedup
+                // runs, dev-1's so its goodbye cannot reach dev-0 while dev-0 still has bytes queued.
+                rig.radio.holdSends(rig.writerLoserEnd)
+                rig.radio.holdSends(rig.readerLoserEnd)
+                rig.writer.seam.broadcast("in-the-window".encodeToByteArray())
+                pumpUntil { false }
+
+                // Release the silenced link: both ends resolve it, both rebind, both drain.
+                rig.radio.releaseSends(rig.dial.outbound.dialerConnectionId)
+                rig.radio.releaseSends(rig.dial.outbound.accepterConnectionId)
+                pumpUntil { false }
+                // …then let the window write and the goodbye behind it out.
+                rig.radio.releaseSends(rig.writerLoserEnd)
+                pumpUntil { false }
+
+                val swaps = appender.lines(Level.WARN, "nw.seam.publish-swap", "$tag-")
+                val ends = appender.lines(Level.INFO, "nw.seam.drain-end", "$tag-")
+                val writerLine = swaps.firstOrNull { it.contains("self=$tag-peer-0") } ?: ""
+                val readerLine = swaps.firstOrNull { it.contains("self=$tag-peer-1") } ?: ""
+
+                assertAll(
+                    {
+                        // Rig receipt: both ends must actually have taken the REPLACE arm, or "the window
+                        // was drained" is a claim about a swap that never happened. If this reds, the
+                        // harness's nonce ordering changed — pick seeds that produce a replace rather
+                        // than deleting the arm.
+                        assertEquals(
+                            2,
+                            appender.lines(Level.INFO, "nw.seam.dedup.replace", "$tag-").size,
+                            "both ends must rebind: ${appender.lines(Level.INFO, "nw.seam.dedup", "$tag-")}",
+                        )
+                    },
+                    { assertEquals(2, swaps.size, "one window report per end: $swaps") },
+                    { assertEquals(2, ends.size, "one uniform drain receipt per end: $ends") },
+                    {
+                        assertTrue(
+                            writerLine.contains("frames-written-to-published-link=1"),
+                            "the writer counts what it put into the window: $writerLine",
+                        )
+                    },
+                    {
+                        assertTrue(
+                            readerLine.contains("drained=1"),
+                            "…and the reader counts the same frame arriving on the drained link — the " +
+                                "other side of one event, which is what makes the two captures joinable: " +
+                                "$readerLine",
+                        )
+                    },
+                    {
+                        assertTrue(
+                            writerLine.contains("drained=0"),
+                            "`drained=` must be a MEASUREMENT, not a constant: the end nobody wrote to " +
+                                "reports zero: $writerLine",
+                        )
+                    },
+                    {
+                        assertTrue(
+                            readerLine.contains("via=goodbye"),
+                            "the reader's drain ends in-band, on the writer's GOODBYE: $readerLine",
+                        )
+                    },
+                    {
+                        assertTrue(
+                            writerLine.contains("via=error"),
+                            "…and the writer's ends on the close the reader's disposal produces, so one " +
+                                "formation exercises both terminators: $writerLine",
+                        )
+                    },
+                    {
+                        assertEquals(
+                            2,
+                            ends.count { it.contains("arm=replace") },
+                            "the uniform receipt names which dedup arm displaced the link: $ends",
+                        )
+                    },
+                    {
+                        assertEquals(
+                            0,
+                            appender.lines(Level.WARN, "nw.seam.drain.hold-overflow", "$tag-").size,
+                            "a hold that fits its cap must not report an overflow — the arm below is what " +
+                                "makes that WARN a measurement rather than an unconditional line",
+                        )
+                    },
+                )
+            }
+        }
+
+    /**
+     * The two backstops, in one run: a drain whose GOODBYE never arrives is ended by [DRAIN_BOUND], and an
+     * ordering hold that fills before that releases early and says so.
+     *
+     * Both are reported conditions rather than silent policy. `via=bound` in a field capture means the
+     * in-band terminator did not work on that formation; `nw.seam.drain.hold-overflow` means
+     * `Seam.incoming`'s send-order promise was traded for liveness on that peer. Neither is something a
+     * reader should have to infer from an absence.
+     */
+    @Test
+    fun aBackstoppedDrainAndAnOverflowingHoldBothReportThemselves() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            withCapture { appender ->
+                val tag = "drainbound"
+                val rig = drainRig(tag, holdCapacity = 2)
+                rig.radio.holdSends(rig.writerLoserEnd)
+                rig.radio.holdSends(rig.readerLoserEnd)
+
+                rig.radio.releaseSends(rig.dial.outbound.dialerConnectionId)
+                rig.radio.releaseSends(rig.dial.outbound.accepterConnectionId)
+                pumpUntil { false }
+
+                // Three frames onto the live link while dev-1's hold is armed: two fit, the third overflows.
+                repeat(3) { rig.writer.seam.broadcast("live-$it".encodeToByteArray()) }
+                pumpUntil { false }
+                val overflows = appender.lines(Level.WARN, "nw.seam.drain.hold-overflow", "$tag-")
+
+                // Neither goodbye can cross, so only the clock can end either drain.
+                val boundedBefore = appender.lines(Level.INFO, "nw.seam.drain-end", "$tag-")
+                testScheduler.advanceTimeBy(DRAIN_BOUND + 1.seconds)
+                pumpUntil { false }
+                val ends = appender.lines(Level.INFO, "nw.seam.drain-end", "$tag-")
+
+                assertAll(
+                    {
+                        assertEquals(
+                            1,
+                            overflows.size,
+                            "one WARN per overflow episode, on the end whose hold filled: $overflows",
+                        )
+                    },
+                    {
+                        assertTrue(
+                            overflows.single().contains("buffered=2") && overflows.single().contains("capacity=2"),
+                            "…naming the cap it hit and what it was holding when it did: ${overflows.single()}",
+                        )
+                    },
+                    {
+                        assertEquals(
+                            emptyList(),
+                            boundedBefore,
+                            "no drain may end before the bound expires — with both goodbyes withheld the " +
+                                "clock is the only thing that can end one: $boundedBefore",
+                        )
+                    },
+                    { assertEquals(2, ends.size, "both ends' drains are backstopped: $ends") },
+                    {
+                        assertEquals(
+                            2,
+                            ends.count { it.contains("via=bound") },
+                            "…and both say the BOUND ended them, not the goodbye: $ends",
+                        )
+                    },
+                )
+            }
+        }
+
+    /**
+     * The audit's second arm (#2425): a [registry] entry naming a link this seam is DRAINING.
+     *
+     * `broadcast`/`sendTo` route through `registry`, so such an entry would write into a socket the seam
+     * has already said goodbye on — a send that goes nowhere, silently, which is #2425's whole shape one
+     * level up. `NwSeam` makes the state unreachable (the dedup writes the loser into `draining` in the
+     * same critical section that points `registry` at the winner), which is exactly why the arm needs a
+     * rig: a guard that never fires passes identically whether or not it works.
+     */
+    @Test
+    fun aRegistryEntryNamingADrainingLinkIsReportedAsAContractViolation() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            withCapture { appender ->
+                val (a, b) = buildPair("drainbind")
+
+                // CONTROL: a healthy pair, swept, reports nothing. Without it the subject below would be
+                // satisfied by a check that fires unconditionally.
+                oneProbe(count = 3)
+                val healthy = appender.lines(Level.ERROR, "nw.seam.registry.orphan", "drainbind-")
+
+                val poisoned = a.seam.markWinnerDrainingForAuditRig(b.peerId)
+                assertNotNull(poisoned, "rig did not fire: B was not registered on A")
+                oneProbe()
+                val reported = appender.lines(Level.ERROR, "nw.seam.registry.orphan", "drainbind-")
+
+                assertAll(
+                    { assertEquals(0, healthy.size, "a healthy binding reports nothing: $healthy") },
+                    { assertEquals(1, reported.size, "the poisoned binding is reported once: $reported") },
+                    {
+                        assertTrue(
+                            reported.single().contains("binding=draining"),
+                            "…and says WHICH way it is unusable — tracked but drained, not untracked, " +
+                                "which are different bugs with different next steps: ${reported.single()}",
+                        )
+                    },
+                    {
+                        assertTrue(
+                            reported.single().contains("connId=${poisoned.value}") &&
+                                reported.single().contains("draining=["),
+                            "the binding identity plus the draining key set: ${reported.single()}",
+                        )
+                    },
+                )
+            }
+        }
 
     // ── capture plumbing ────────────────────────────────────────────────────────
 
