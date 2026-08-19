@@ -33,10 +33,11 @@ internal enum class NwFrameType(val code: Byte) {
     /**
      * "I have finished writing on this link."
      *
-     * **Defined here, sent nowhere.** #2467 proved the platform will not surface a TCP FIN on the
-     * TLS-PSK binding, so the drain of a deduplicated double-dial loser (#2425) needs an
-     * application-layer FIN one layer up. Slice 2 sends it and gives it meaning; until then a
-     * received `GOODBYE` is a debug-logged no-op, which is what keeps this slice a pure wire change.
+     * The application-layer FIN. #2467 proved the platform will not surface a TCP FIN on the TLS-PSK
+     * binding, so the drain of a deduplicated double-dial loser (#2425) builds one a layer up, where
+     * TLS cannot eat it. `NwSeam` writes exactly one on a link its dedup displaced, as the last thing
+     * it ever puts there — FIFO behind every byte written into the publish-then-swap window, which is
+     * what makes its arrival a sound end-of-tail marker for the receiver's ordering hold.
      */
     Goodbye(0x03),
     ;
@@ -64,7 +65,12 @@ internal sealed interface NwWireFrame {
      */
     data object Data : NwWireFrame
 
-    /** A [NwFrameType.Goodbye]. Carries nothing this build reads; see [NwFrameType.Goodbye]. */
+    /**
+     * A [NwFrameType.Goodbye] — the remote has finished writing on this link.
+     *
+     * Carries nothing this build reads: which link it arrived on is the whole message, and `NwSeam`
+     * already knows that. See [NwFrameType.Goodbye].
+     */
     data object Goodbye : NwWireFrame
 }
 
@@ -150,7 +156,7 @@ internal object NwWire {
             payload.copyInto(it, destinationOffset = TYPE_BYTES)
         }
 
-    /** `[GOODBYE]`, and nothing else. Not sent anywhere yet — see [NwFrameType.Goodbye]. */
+    /** `[GOODBYE]`, and nothing else — see [NwFrameType.Goodbye]. */
     fun encodeGoodbye(): ByteArray = byteArrayOf(NwFrameType.Goodbye.code)
 
     /**
@@ -158,9 +164,9 @@ internal object NwWire {
      * build cannot.
      *
      * A [NwFrameType.Goodbye] carrying a trailing body is **accepted and its trailing bytes
-     * ignored**: the body is reserved (slice 2 may add a drain reason), and a build that does not
-     * know a reserved field must skip it rather than tear the link over it. The type byte is the one
-     * thing that is never reserved — an unclassifiable frame cannot be routed at all, so it is
+     * ignored**: the body is reserved (a future build may add a drain reason), and a build that does
+     * not know a reserved field must skip it rather than tear the link over it. The type byte is the
+     * one thing that is never reserved — an unclassifiable frame cannot be routed at all, so it is
      * refused.
      */
     fun decode(frame: ByteArray): NwWireFrame {

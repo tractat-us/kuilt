@@ -18,6 +18,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock as withMutex
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.FabricAvailability
@@ -70,7 +72,7 @@ private val seamMonotonicMillis: () -> Long = kotlin.time.TimeSource.Monotonic.m
  *     [NwFrameType.Data] on a resolved one is stamped with that sender and handed to the bounded
  *     [deliveryStage] (drained by [deliveryDrainLoop] into [incoming]) so a slow local consumer never
  *     wedges this shared loop's reads for other connections' handshakes (#1415), and a
- *     [NwFrameType.Goodbye] is a no-op until slice 2. **Either type in the wrong position is refused**,
+ *     [NwFrameType.Goodbye] on a draining link ends that drain. **Either type in the wrong position is refused**,
  *     which is what the type byte bought: classification used to be POSITIONAL ("the first frame is the
  *     hello"), so a duplicate hello reached the consumer as data and an early data frame was fed to
  *     `NwHello.decode`.
@@ -109,10 +111,57 @@ private val seamMonotonicMillis: () -> Long = kotlin.time.TimeSource.Monotonic.m
  * — `canonicalLinkNonce(myNonce, remoteNonce)`, an order-independent function of the two nonces
  * (sort their hex, join `"lo:hi"`). Because both ends see the same two nonces, both compute the same
  * canonical value and pick the same survivor with **no coordination and no dependence on dial
- * direction or collector ordering**; the loser is disconnected and its later close is a no-op
+ * direction or collector ordering**; the loser is **drained** (below) and its later close is a no-op
  * (conn-identity guard). This is a port of `:kuilt-core`'s `MeshSeam` rule — the old direction-based
  * rule could wedge a pair to zero under a multi-threaded dispatcher (direction was written by one
  * collector and read by another with no happens-before); the nonce rule cannot.
+ *
+ * ## The graceful displacement drain (#2425)
+ * The loser used to be dropped from [conns] and cancelled in the same breath. That is the field defect:
+ * the seam publishes a peer on the first link to resolve, may rebind it ~10 ms later, and the abrupt
+ * cancel destroys whatever the consumer wrote into that window — measured on hardware as 182 bytes lost
+ * with `peers` still naming the peer and `state` still [SeamState.Woven] throughout. Since #2425 a
+ * displaced link is instead marked **draining** ([draining], keyed by connId because redial churn can
+ * produce concurrent drains to one peer):
+ *
+ *  - it **stays in [conns] and stays resolved**, so its inbound [NwFrameType.Data] is still attributed to
+ *    its peer — the #1528 misparse hazard does not apply, because we know whose it is;
+ *  - it is **never selected for a send**: [broadcast]/[sendTo] route through [registry], which names the
+ *    winner, and [auditRegistryLocked] reports a [registry] entry that ever names a draining connId;
+ *  - it is sent exactly **one [NwFrameType.Goodbye]**, outside [lock], as the last thing written to it;
+ *  - it terminates on the remote's `GOODBYE` | a terminal close/receive error | the injected [drainBound],
+ *    and only THEN is it disconnected, removed from [conns] and tombstoned. Every #1528 tombstone
+ *    obligation is relocated to drain-end, not removed.
+ *
+ * **Both dedup arms drain.** The keep arm also dropped its loser abruptly, and since both ends dedup onto
+ * the same physical link, *our* keep-arm loser is the *remote's* replace-arm loser — with its window
+ * frames in flight toward us. Fixing only the replace arm would leave the bug half-fixed in a way no
+ * single-ended test can show.
+ *
+ * The `GOODBYE` is what makes the drain sound rather than an optimisation of it. #2467 proved the TLS-PSK
+ * binding surfaces no TCP FIN, so terminating on "the remote cancelled" is self-defeating: that signal
+ * exists only while the remote still cancels abruptly, and once both ends drain neither sends it — every
+ * formation's drain would then run to the full bound and the ordering hold below would stall the healthy
+ * path for that entire bound. [drainBound] is a **zombie-link backstop**, not the mechanism.
+ *
+ * ## The receiver ordering hold (#2425)
+ * [Seam.incoming] promises frames in send order. The remote's stream is strictly loser-then-winner — it
+ * writes on the link it published, rebinds, then writes on the winner — but *cross-link* ordering is not a
+ * transport guarantee, so draining without a hold would trade silent loss for silent reordering. So a
+ * per-peer hold ([orderingHolds]) is armed at the dedup and released at that peer's last drain-end;
+ * while it is armed, frames arriving on the peer's WINNER link are buffered and frames arriving on its
+ * DRAINING link are delivered immediately.
+ *
+ * **The hold buffers and continues; it can never suspend the demux loop.** Both links' bytes arrive
+ * through the single [bytesReceivedLoop], so a hold that suspended that loop on a winner frame could
+ * never process the `GOODBYE` that would release it — the seam would wedge permanently. [stageInboundData]
+ * is therefore append-and-return whenever the hold is armed and has room; the only lock it takes is
+ * [stageMutex], whose other holders ([armOrderingHold], [releaseOrderingHold]) wait on nothing the demux
+ * loop produces.
+ *
+ * **Sequence is stamped at release time**, inside [stageMutex], so stamped order is delivery order.
+ * The buffer is bounded ([orderingHoldCapacity]); on overflow it **releases early with a WARN and accepts
+ * the reorder** rather than backpressuring, which would reintroduce the deadlock by another route.
  *
  * ## Thread-safety
  * The [registry] and [conns] maps are shared across the four lifecycle collectors (each `collect` is
@@ -178,6 +227,16 @@ private val seamMonotonicMillis: () -> Long = kotlin.time.TimeSource.Monotonic.m
  *   [Duration.ZERO] or negative disables the sweep entirely (the audit still runs at every mutation site).
  *   Production default [DEFAULT_INBOUND_SILENCE_PROBE]; tests inject a small value and drive it with
  *   `advanceTimeBy`.
+ * @param drainBound how long a deduplicated loser is drained before the seam gives up on the remote's
+ *   `GOODBYE` and disconnects it anyway (#2425). A **zombie-link backstop**, never the mechanism: the
+ *   healthy path terminates in-band on the goodbye, milliseconds after the swap, with no timer involved.
+ *   Production default [DEFAULT_DRAIN_BOUND]; tests inject a small value and drive it with `advanceTimeBy`.
+ *   Injected via [scope]'s (test) dispatcher, so it advances under virtual time.
+ * @param orderingHoldCapacity how many winner-link frames the per-peer ordering hold will buffer for a
+ *   peer with a drain in progress before it releases early, WARNs, and accepts the reorder (#2425).
+ *   Bounded, never unbounded; backpressuring instead would put the demux loop back in the deadlock the
+ *   hold exists to avoid. Production default [DEFAULT_ORDERING_HOLD_CAPACITY] — the same shape as
+ *   [DELIVERY_STAGING_CAPACITY], since it absorbs the same kind of transient.
  * @param nowMillis monotonic-milliseconds provider, injected because time is a dependency. Read only by
  *   the `nw.seam.publish-swap` diagnostic, to measure how long a peer was published on a link before the
  *   seam moved it (#2420); production default [seamMonotonicMillis], tests pass a controlled counter.
@@ -198,6 +257,8 @@ internal class NwSeam(
     private val policy: DeliveryPolicy = DeliveryPolicy.Reliable,
     private val wovenPathGrace: Duration = DEFAULT_WOVEN_PATH_GRACE,
     private val inboundSilenceProbe: Duration = DEFAULT_INBOUND_SILENCE_PROBE,
+    private val drainBound: Duration = DEFAULT_DRAIN_BOUND,
+    private val orderingHoldCapacity: Int = DEFAULT_ORDERING_HOLD_CAPACITY,
     private val nowMillis: () -> Long = seamMonotonicMillis,
     // ROLES ONLY — deliberately NOT a TransportCapability. The loom's `availability()` answers "is this
     // fabric usable on this runtime" (a platform question); routing it in here is what let a seam publish
@@ -277,6 +338,63 @@ internal class NwSeam(
      * Guarded by [lock] like [conns]/[registry].
      */
     private val graceJobs = mutableMapOf<NwConnectionId, Job>()
+
+    /** Which dedup arm displaced a link — the only thing that differs between the two drains (#2425). */
+    private enum class DrainArm(val label: String) {
+        /** The peer was PUBLISHED on this link and has been moved off it: the publish-then-swap window. */
+        Replace("replace"),
+
+        /** This link resolved second and lost; the peer was never published on it locally. */
+        Keep("keep"),
+    }
+
+    /** How a drain ended (#2425) — the field that says whether the mechanism worked or was backstopped. */
+    private enum class DrainOutcome(val label: String) {
+        /** The remote's in-band `GOODBYE` arrived: everything it wrote on this link is now behind us. */
+        Goodbye("goodbye"),
+
+        /** The link died under the drain — a close event, a `Closed` state, a send failure, a refused frame. */
+        LinkLoss("error"),
+
+        /** [drainBound] expired with no goodbye and no close: a zombie link, backstopped. */
+        Bound("bound"),
+    }
+
+    /**
+     * A deduplicated loser being drained rather than cancelled (#2425).
+     *
+     * Everything the `nw.seam.publish-swap` WARN reports is captured HERE, at the swap, and reported at
+     * drain END — because the outcome is the half of that report a field capture could not previously
+     * get, and a window measured at the swap is meaningless without knowing whether the drain that
+     * followed it actually delivered anything.
+     */
+    private class Drain(
+        val peer: PeerId,
+        val arm: DrainArm,
+        /** The winner the peer is (or stayed) bound to, for the report's `now-on=`. */
+        val winner: NwConnectionId,
+        val loserDialled: String,
+        val winnerDialled: String,
+        /** How long the peer was published on the drained link before it was displaced; 0 on [DrainArm.Keep]. */
+        val visibleForMillis: Long,
+        /** Frames this seam handed to the drained link before the drain began — the window's writes. */
+        val framesWritten: Long,
+    ) {
+        /** The [drainBound] backstop. Set once, immediately after the drain is registered. */
+        var boundJob: Job? = null
+
+        /** DATA frames the remote delivered on this link AFTER the drain began — what the drain saved. */
+        var drainedFrames: Long = 0
+    }
+
+    /**
+     * Connections currently DRAINING (#2425): connId → its [Drain]. Keyed by connId, never by peer —
+     * redial churn can leave two drains to one peer in flight at once, and a peer-keyed map would let the
+     * second silently discard the first's bookkeeping. Guarded by [lock] like [conns]/[registry].
+     *
+     * A connId in here is still in [conns] and still resolved; it is never in [registry].
+     */
+    private val draining = mutableMapOf<NwConnectionId, Drain>()
 
     /**
      * Bounded FIFO of connIds recently removed from [conns] (#1528). A late/buffered data frame can arrive
@@ -372,6 +490,32 @@ internal class NwSeam(
      * [Swatch]'s sequence in arrival order and enqueues it in that order.
      */
     private val deliveryStage: Channel<Swatch> = Channel(capacity = DELIVERY_STAGING_CAPACITY)
+
+    /**
+     * Serialises **every** write to [deliveryStage] with the ordering-hold decision that precedes it
+     * (#2425), so a flush and a fresh arrival can never interleave into the stage out of order.
+     *
+     * A coroutine [Mutex], not the seam-wide [lock]: the guarded region contains [Channel.send], which
+     * suspends when the (bounded) stage is full. That is the exact opposite of [lock]'s no-suspend rule,
+     * and the reason the two are separate primitives rather than one. **[lock] is never held while this
+     * is acquired, and this is never held while [lock] is acquired** — the two are strictly disjoint, so
+     * there is no ordering to invert.
+     *
+     * It cannot deadlock the demux loop against itself: [stageInboundData] is called only from
+     * [bytesReceivedLoop], and the only other holders ([armOrderingHold], [releaseOrderingHold]) wait on
+     * nothing but [deliveryDrainLoop]'s consumption — which the demux loop is not needed for.
+     */
+    private val stageMutex = Mutex()
+
+    /**
+     * Peers whose winner-link frames are being held pending a drain-end (#2425): peer → the frames
+     * buffered so far, in arrival order. **Guarded by [stageMutex] only** — never by [lock] — so the
+     * hold decision and the [deliveryStage] write it guards are one atomic step.
+     *
+     * A peer's presence as a key IS the armed flag; the list may be empty. Bounded by
+     * [orderingHoldCapacity], after which the hold releases early (see [stageInboundData]).
+     */
+    private val orderingHolds = mutableMapOf<PeerId, MutableList<ByteArray>>()
 
     // Single latch flag, read/written across every path (receive/close/send).
     private val closed = atomic(false)
@@ -506,21 +650,42 @@ internal class NwSeam(
         }
     }
 
+    /** What identity resolution asks the caller to do OUTSIDE [lock] (#2425). */
+    private sealed interface ResolveAction {
+        /**
+         * Disconnect [connId] outright, with no drain: the self-connection guard's link. There is no peer
+         * whose frames could be in flight on it and nothing that could ever attribute them, so draining it
+         * would only keep a socket alive that nobody can read.
+         */
+        data class Disconnect(val connId: NwConnectionId) : ResolveAction
+
+        /** [connId] lost the dedup and is now DRAINING toward [peer] (#2425): send its `GOODBYE`, arm its bound. */
+        data class Drain(val connId: NwConnectionId, val peer: PeerId) : ResolveAction
+    }
+
     /** Outcome of classifying one frame under [lock]; the suspend action runs OUTSIDE the lock. */
     private sealed interface FrameOutcome {
-        /** A [NwFrameType.Data] frame on an already-resolved connection, attributed to [sender]. */
-        data class Data(val sender: PeerId) : FrameOutcome
+        /**
+         * A [NwFrameType.Data] frame on an already-resolved connection, attributed to [sender].
+         *
+         * [fromDrainingLink] decides whether the ordering hold applies: a frame on the DRAINING link is
+         * part of the tail the hold exists to let through first, so it is delivered immediately; a frame
+         * on the peer's live link is what gets buffered (#2425).
+         */
+        data class Data(val sender: PeerId, val fromDrainingLink: Boolean) : FrameOutcome
 
-        /** Just-resolved identity: [loser] (if any) is the dedup loser to disconnect. */
-        data class Resolved(val loser: NwConnectionId?) : FrameOutcome
+        /** Just-resolved identity: [action] (if any) is what the caller must do outside [lock]. */
+        data class Resolved(val action: ResolveAction?) : FrameOutcome
 
         /**
-         * A [NwFrameType.Goodbye] arrived. **Inert in this slice** (#2425 slice 1): it is defined and
-         * decoded so the wire has a place for it, and slice 2 is what makes it terminate the drain of a
-         * deduplicated double-dial loser. Until then it is a debug-logged no-op — no drain, no
-         * `draining` state, no ordering hold.
+         * A [NwFrameType.Goodbye] arrived — the remote has finished writing on this link (#2425).
+         *
+         * [endsDrain] is true when this connection is one we are draining, which is the case the frame
+         * exists for: it is FIFO behind every byte the remote wrote into the publish-then-swap window, so
+         * its arrival is the in-band proof that the tail is complete. On any other link it is reported and
+         * otherwise ignored — see the arm in [processFrame] for why that is not a defect.
          */
-        data class Goodbye(val peer: PeerId?) : FrameOutcome
+        data class Goodbye(val peer: PeerId?, val endsDrain: Boolean) : FrameOutcome
 
         /**
          * A [NwFrameType.Hello] on a connection that has ALREADY resolved (#2425 slice 1).
@@ -645,10 +810,13 @@ internal class NwSeam(
                             cs.silenceReported = false
                             wakeWatchdogLocked()
                         }
-                        FrameOutcome.Data(resolved)
+                        // #2425: count what the drain actually SAVED, so the report is a quantity rather
+                        // than a claim that a mechanism ran.
+                        val drain = draining[connId]?.also { it.drainedFrames += 1 }
+                        FrameOutcome.Data(resolved, fromDrainingLink = drain != null)
                     }
 
-                    NwWireFrame.Goodbye -> FrameOutcome.Goodbye(resolved)
+                    NwWireFrame.Goodbye -> FrameOutcome.Goodbye(resolved, endsDrain = connId in draining)
                 }
             }
         }
@@ -662,27 +830,41 @@ internal class NwSeam(
             // `dropFirst` strips the type byte as a ZERO-COPY view (the pattern `Swatch` documents for
             // framing layers) — the alternative, materialising the body in NwWire.decode, would copy every
             // received payload a second time on this loop.
-            is FrameOutcome.Data -> deliveryStage.send(
-                Swatch(payload = frame, sender = outcome.sender, sequence = seq.incrementAndGet())
-                    .dropFirst(NwWire.TYPE_BYTES),
-            )
-            // Dedup loser (if any) — disconnect OUTSIDE the lock (best-effort). The loser's ConnState was
-            // just removed from `conns` in resolveIdentity; cancel any grace timer armed for it too, for
-            // symmetry with connectionClosedLoop/removeByConn. Normally the loser's own connectionClosed
-            // would cancel it; doing it here means a dropped close can't leave a stray timer that later
-            // fires a no-op disconnect/eviction against a connId the seam no longer tracks.
-            is FrameOutcome.Resolved -> outcome.loser?.let { loserId ->
-                val graceJob = lock.withLock { graceJobs.remove(loserId) }
-                graceJob?.cancel()
-                runCatchingCancellable { api.disconnect(loserId) }
-                    .onFailure { log.debug { "nw.dedup disconnect failed connId=${loserId.value}" } }
+            is FrameOutcome.Data -> stageInboundData(outcome.sender, frame, outcome.fromDrainingLink)
+            // Whatever the resolution decided, acted on OUTSIDE the lock.
+            is FrameOutcome.Resolved -> when (val action = outcome.action) {
+                null -> Unit
+                // A self-connection: disconnect it outright. Its ConnState was just removed from `conns`
+                // in resolveIdentity; cancel any grace timer armed for it too, for symmetry with
+                // connectionClosedLoop/removeByConn. Normally the loser's own connectionClosed would
+                // cancel it; doing it here means a dropped close can't leave a stray timer that later
+                // fires a no-op disconnect/eviction against a connId the seam no longer tracks.
+                is ResolveAction.Disconnect -> {
+                    val graceJob = lock.withLock { graceJobs.remove(action.connId) }
+                    graceJob?.cancel()
+                    runCatchingCancellable { api.disconnect(action.connId) }
+                        .onFailure { log.debug { "nw.dedup disconnect failed connId=${action.connId.value}" } }
+                }
+                // The dedup loser: drained, not cancelled (#2425).
+                is ResolveAction.Drain -> startDrain(action.connId, action.peer)
             }
-            // #2425 slice 1: GOODBYE is DEFINED and DECODED but means nothing yet. Slice 2 makes it end a
-            // dedup loser's drain; landing any of that here early would be the behaviour change this slice
-            // exists to avoid.
-            is FrameOutcome.Goodbye -> log.debug {
-                "nw.seam.wire.goodbye connId=${connId.value} self=${selfId.value} peer=${outcome.peer?.value} " +
-                    "→ no-op (the drain it terminates is not implemented yet, #2425)"
+            // The remote has finished writing on this link (#2425).
+            is FrameOutcome.Goodbye -> if (outcome.endsDrain) {
+                endDrain(connId, DrainOutcome.Goodbye)
+            } else {
+                // A goodbye on a link we are NOT draining. Both ends dedup onto the same link, so this is
+                // the remote having deduped before us: our own second hello has not arrived yet, so from
+                // here this link is still the live one. Deliberately no action — rebinding on the remote's
+                // say-so would mean acting on a decision we cannot yet verify, and the remote keeps READING
+                // this link for its whole drain, so writes we make in the interval still land. Our own
+                // dedup runs when the second hello arrives, milliseconds later, and reaches the same
+                // verdict by construction. INFO because it is bounded (at most one per connection) and it
+                // is the one line that would explain a formation where the two ends' dedups disagreed.
+                log.info {
+                    "nw.seam.drain.goodbye-unmatched connId=${connId.value} self=${selfId.value} " +
+                        "peer=${outcome.peer?.value} state=${_state.value} " +
+                        "→ the remote is draining this link and this seam has not deduped it yet (#2425)"
+                }
             }
             // A frame whose TYPE contradicts the connection's state. Both arms log a LITERAL tag for the
             // same reason the decode-failure arms above do.
@@ -739,18 +921,22 @@ internal class NwSeam(
     }
 
     /**
-     * Resolve [connId]'s identity to [remoteId] under [lock]. Returns the connId to disconnect (a
-     * dedup loser) or `null`. Adds the peer + flips Weaving→Woven when this is the first connection
-     * to [remoteId]; on a duplicate, keeps the canonical survivor (the smaller [canonicalLinkNonce]
-     * of the two connections' nonces) — the peer set is unchanged either way. Direction-free: both
-     * ends see the same two nonces and pick the same survivor with no coordination.
+     * Resolve [connId]'s identity to [remoteId] under [lock]. Returns the [ResolveAction] the caller must
+     * perform outside the lock, or `null`. Adds the peer + flips Weaving→Woven when this is the first
+     * connection to [remoteId]; on a duplicate, keeps the canonical survivor (the smaller
+     * [canonicalLinkNonce] of the two connections' nonces) — the peer set is unchanged either way.
+     * Direction-free: both ends see the same two nonces and pick the same survivor with no coordination.
+     *
+     * Since #2425 **both** duplicate arms return [ResolveAction.Drain] rather than dropping the loser:
+     * the losing link stays in [conns], stays resolved, and is disposed of only at drain-end. Only the
+     * self-connection guard still returns [ResolveAction.Disconnect].
      */
     private fun resolveIdentity(
         connId: NwConnectionId,
         cs: ConnState,
         remoteId: PeerId,
         remoteNonce: ByteArray,
-    ): NwConnectionId? {
+    ): ResolveAction? {
         // Self-connection guard (#1466). A peer's own advertisement appears in its own browse results
         // (real mDNS returns it, #1485), so `NwLoom` can dial it — a connection whose remote resolves to
         // `selfId`. Historically the election mesh made this routine, because every peer advertised the
@@ -798,7 +984,7 @@ internal class NwSeam(
                     "dialled=${dialled?.id} resolved=${dialled?.identityResolved} settled-as-self=$dialledIsOurs " +
                     "→ dropped (dialed own endpoint)"
             }
-            return connId
+            return ResolveAction.Disconnect(connId)
         }
         cs.resolvedPeerId = remoteId
         // Learn this peer's endpoint from ANY connection that carried one (winner OR dedup-loser), so the
@@ -852,7 +1038,7 @@ internal class NwSeam(
         if (existing.connId == connId) {
             return null // idempotent; same connection re-resolving
         }
-        // Duplicate link to remoteId. Keep the SMALLER canonical nonce; disconnect the loser.
+        // Duplicate link to remoteId. Keep the SMALLER canonical nonce; DRAIN the loser (#2425).
         //
         // BOTH verdicts are INFO, and the level is the whole point (#2420). This pair records WHICH of the
         // two links to a peer each end kept, and the direction it kept it in — the only way to compare two
@@ -866,11 +1052,11 @@ internal class NwSeam(
         return if (canonical < existing.canonicalNonce) {
             // THE PUBLISH-THEN-SWAP WINDOW (#2425). This arm is the one that MOVES a peer that the consumer
             // can already see: `resolved.first` published it on `existing.connId`, `peers` went `Woven`, and
-            // the consumer was free to write to it — and now that link is being closed. Measured on hardware:
-            // ~10 ms wide, and 182 bytes were written into it, to a socket the far end had already closed.
-            // The fabric does not retry them and, on the Apple binding, does not even report the failure, so
-            // the write is lost in complete silence. Read the loser's outbound count BEFORE dropping its
-            // ConnState — that count is what makes this a quantity rather than a hypothesis.
+            // the consumer was free to write to it — and now that link is being displaced. Measured on
+            // hardware: ~10 ms wide, and 182 bytes were written into it, to a socket the far end had already
+            // closed. Since #2425 the displaced link is DRAINED rather than cancelled, so those writes are
+            // carried instead of destroyed; read its outbound count here, at the swap, because that count is
+            // what makes the report a quantity rather than a hypothesis.
             val displaced = conns[existing.connId]
             // ONE reading of the clock, used for both the window that is closing and the one that is
             // opening — so the two cannot disagree by however long this critical section takes.
@@ -886,38 +1072,283 @@ internal class NwSeam(
             // gets a brand-new link that is NEVER watched — which is precisely the post-swap wedge this
             // whole class exists to make legible.
             wakeWatchdogLocked()
-            conns.remove(existing.connId) // drop the displaced incumbent's state
-            tombstoneLocked(existing.connId) // #1528: late bytes on the displaced link must not resurrect it
+            // NOT removed from `conns` and NOT tombstoned (#2425): the displaced link keeps its ConnState so
+            // its inbound frames stay attributed to this peer, and both obligations move to drain-end.
+            draining[existing.connId] = Drain(
+                peer = remoteId,
+                arm = DrainArm.Replace,
+                winner = connId,
+                loserDialled = displaced?.endpoint?.id ?: INBOUND_LINK,
+                winnerDialled = cs.endpoint?.id ?: INBOUND_LINK,
+                visibleForMillis = visibleForMillis,
+                framesWritten = writtenToDisplaced,
+            )
             log.info {
                 "nw.seam.dedup.replace remote=${remoteId.value} self=${selfId.value} " +
-                    "winner=${connId.value}(nonce=$canonical, dialled=${cs.endpoint?.id ?: "<inbound>"}) " +
-                    "loser=${existing.connId.value}(nonce=${existing.canonicalNonce}) → disconnect loser"
+                    "winner=${connId.value}(nonce=$canonical, dialled=${cs.endpoint?.id ?: INBOUND_LINK}) " +
+                    "loser=${existing.connId.value}(nonce=${existing.canonicalNonce}) → drain loser"
             }
-            // WARN, and separate from the verdict above, because it reports a CONDITION rather than a
-            // decision: the decision is routine and correct, the window it opens is the hazard. Always
-            // emitted on this arm — a zero count records a benign window and its width, which is what makes
-            // a non-zero one legible as the anomaly it is. Bounded: at most one per peer per re-resolution.
-            log.warn {
-                "nw.seam.publish-swap self=${selfId.value} peer=${remoteId.value} " +
-                    "published-on=${existing.connId.value}(dialled=${displaced?.endpoint?.id ?: "<inbound>"}) " +
-                    "now-on=${connId.value}(dialled=${cs.endpoint?.id ?: "<inbound>"}) " +
-                    "visible-for=${visibleForMillis}ms frames-written-to-published-link=$writtenToDisplaced " +
-                    "state=${_state.value} peers=${_peers.value.map { it.value }} " +
-                    "→ the peer was reachable on a link this seam is now closing; anything written in that " +
-                    "window went to a socket the far end may already have closed, and is not retried (#2425)"
-            }
-            existing.connId // disconnect the displaced incumbent
+            ResolveAction.Drain(existing.connId, remoteId)
         } else {
-            conns.remove(connId) // drop this loser's state
-            tombstoneLocked(connId) // #1528: late bytes on this loser link must not resurrect it
+            // The KEEP arm drains too (#2425). It looks like the harmless half — the peer was never
+            // published on this link locally, so there is no local window — but both ends dedup onto the
+            // SAME physical link, so this loser is the REMOTE's replace-arm loser, with its window frames in
+            // flight toward us. Cancelling it here destroys exactly the bytes the remote's drain is trying
+            // to hand over.
+            draining[connId] = Drain(
+                peer = remoteId,
+                arm = DrainArm.Keep,
+                winner = existing.connId,
+                loserDialled = cs.endpoint?.id ?: INBOUND_LINK,
+                winnerDialled = conns[existing.connId]?.endpoint?.id ?: INBOUND_LINK,
+                // The peer was never published here, so there is no local window to measure and nothing was
+                // ever routed to this link. Zeroes are the honest reading, not placeholders.
+                visibleForMillis = 0,
+                framesWritten = 0,
+            )
             log.info {
                 "nw.seam.dedup.keep remote=${remoteId.value} self=${selfId.value} " +
                     "winner=${existing.connId.value}(nonce=${existing.canonicalNonce}, " +
-                    "dialled=${conns[existing.connId]?.endpoint?.id ?: "<inbound>"}) " +
-                    "loser=${connId.value}(nonce=$canonical) → disconnect loser"
+                    "dialled=${conns[existing.connId]?.endpoint?.id ?: INBOUND_LINK}) " +
+                    "loser=${connId.value}(nonce=$canonical) → drain loser"
             }
-            connId // this connection loses; disconnect it, incumbent stays
+            ResolveAction.Drain(connId, remoteId)
         }
+    }
+
+    // ── the graceful displacement drain (#2425) ─────────────────────────────────
+
+    /**
+     * Begin draining [connId], the link [peer]'s dedup just displaced. Runs OUTSIDE [lock].
+     *
+     * Three things happen, in this order, and the order is load-bearing:
+     *  1. **arm the ordering hold** for [peer], so the very next winner-link frame this demux loop
+     *     classifies is already buffered rather than delivered ahead of the drained link's tail;
+     *  2. **arm [drainBound]**, the zombie-link backstop — attached to the [Drain] under [lock] so a drain
+     *     that already ended (a close that raced this) cannot leave a stray timer behind;
+     *  3. **write exactly one [NwFrameType.Goodbye]**, the last thing this seam ever puts on this link. It
+     *     is FIFO behind every window frame, which is what makes it a sound end-of-tail marker one layer
+     *     above a transport that (#2467) will not give us a FIN at all.
+     *
+     * A goodbye the transport refuses outright means the link is already gone, so the drain ends
+     * immediately rather than waiting out a bound on a link that can never deliver anything.
+     */
+    private suspend fun startDrain(connId: NwConnectionId, peer: PeerId) {
+        armOrderingHold(peer)
+        val bound = scope.launch(start = CoroutineStart.LAZY) {
+            delay(drainBound)
+            endDrain(connId, DrainOutcome.Bound)
+        }
+        val armed = lock.withLock {
+            val drain = draining[connId] ?: return@withLock false
+            drain.boundJob = bound
+            true
+        }
+        if (!armed) {
+            // The drain ended between resolveIdentity releasing the lock and this line — a close event or a
+            // Closed state on the loser. Nothing to arm; the timer would fire against a tombstoned connId.
+            bound.cancel()
+            log.debug { "nw.seam.drain.start-raced connId=${connId.value} self=${selfId.value} (drain already ended)" }
+            return
+        }
+        bound.start()
+        val sent = runCatchingCancellable {
+            api.send(connId, encodeFrame(NwWire.encodeGoodbye(), maxFrameBytes))
+        }
+        if (sent.isFailure) {
+            log.info {
+                "nw.seam.drain.goodbye-refused connId=${connId.value} self=${selfId.value} peer=${peer.value} " +
+                    ": ${sent.exceptionOrNull()} → ending the drain now (#2425)"
+            }
+            endDrain(connId, DrainOutcome.LinkLoss)
+        }
+    }
+
+    /**
+     * What a just-ended drain still owes, computed under [lock] and settled outside it — the same
+     * compute-under-the-lock / act-outside-it shape every other path in this class uses.
+     */
+    private class EndedDrain(
+        val connId: NwConnectionId,
+        val drain: Drain,
+        val outcome: DrainOutcome,
+        /** No OTHER drain to this peer is still running, so the peer's ordering hold may be released. */
+        val lastForPeer: Boolean,
+    )
+
+    /**
+     * Remove any drain on [connId] under [lock], returning what the caller must settle outside it, or
+     * `null` when [connId] was not draining. **Called under [lock].**
+     *
+     * [EndedDrain.lastForPeer] is computed here rather than at release time because redial churn can leave
+     * two drains to one peer in flight: releasing the hold on the first would deliver winner frames ahead
+     * of the second drain's tail, which is the reordering the hold exists to prevent.
+     */
+    private fun takeDrainLocked(connId: NwConnectionId, outcome: DrainOutcome): EndedDrain? {
+        val drain = draining.remove(connId) ?: return null
+        return EndedDrain(connId, drain, outcome, lastForPeer = draining.values.none { it.peer == drain.peer })
+    }
+
+    /**
+     * End the drain of [connId] and dispose of the link: remove it from [conns], tombstone it (the #1528
+     * obligation, relocated here from the dedup arms), disconnect it, and release the peer's ordering hold.
+     *
+     * Reached from the two terminators that own the link's disposal — the remote's `GOODBYE` and
+     * [drainBound]. A drain whose link died under it does NOT come through here: [removeByConn] and
+     * [connectionClosedLoop] already remove and tombstone the connection on every arm, so they take the
+     * drain in their own critical section and call [settleDrain] directly.
+     *
+     * ## The residual this cannot close, recorded rather than hidden
+     * Disposing on the remote's goodbye can still destroy bytes of OUR OWN that the transport has accepted
+     * but not yet put on the wire: `nw_connection_cancel` discards them, and `RealNwApi.send` is
+     * fire-and-forget, so the seam has no send-completion to wait on. It is a far smaller window than the
+     * one this fix closes — today's cancel lands ~1 ms after publish, this one lands after a full goodbye
+     * exchange — but it is not zero, and the honest bound on it is the transport's, not ours.
+     */
+    private suspend fun endDrain(connId: NwConnectionId, outcome: DrainOutcome) {
+        var graceJob: Job? = null
+        val ended = lock.withLock {
+            val taken = takeDrainLocked(connId, outcome) ?: return@withLock null
+            graceJob = graceJobs.remove(connId) // any pending path-loss timer on the drained link is moot
+            conns.remove(connId)
+            tombstoneLocked(connId) // #1528, relocated: late bytes on the drained link must not resurrect it
+            auditRegistryLocked("drain-end")
+            taken
+        } ?: return
+        graceJob?.cancel()
+        runCatchingCancellable { api.disconnect(connId) }
+            .onFailure { log.debug { "nw.seam.drain.disconnect-failed connId=${connId.value}: ${it.message}" } }
+        settleDrain(ended)
+    }
+
+    /**
+     * Settle an [EndedDrain] outside [lock]: cancel its backstop, release the peer's ordering hold, report.
+     *
+     * The bound job is cancelled only when it is not the job currently running — the same deadline-race
+     * guard [onGraceExpired] uses. Cancelling ourselves here would abort the rest of this function, which
+     * is precisely the reporting and the hold release the [DrainOutcome.Bound] path exists to perform.
+     */
+    private suspend fun settleDrain(ended: EndedDrain) {
+        val thisJob = currentCoroutineContext()[Job]
+        ended.drain.boundJob?.takeIf { it !== thisJob }?.cancel()
+        val released = if (ended.lastForPeer) releaseOrderingHold(ended.drain.peer) else -1
+        val drain = ended.drain
+        // The uniform mechanism receipt, on BOTH arms and at INFO: `drained=` is what proves the drain
+        // carried something rather than merely ran, and `via=` says which of the three terminators fired.
+        // A field capture with no line here at all is a drain that never ended — the one shape this
+        // mechanism can fail in.
+        log.info {
+            "nw.seam.drain-end connId=${ended.connId.value} self=${selfId.value} peer=${drain.peer.value} " +
+                "arm=${drain.arm.label} via=${ended.outcome.label} drained=${drain.drainedFrames} " +
+                "hold-released=${if (released < 0) "no(another drain to this peer is still running)" else released} " +
+                "live-link=${drain.winner.value}(dialled=${drain.winnerDialled}) " +
+                "state=${_state.value} peers=${_peers.value.map { it.value }}"
+        }
+        if (drain.arm != DrainArm.Replace) return
+        // WARN, and separate from the verdict above, because it reports a CONDITION rather than a decision:
+        // the decision is routine and correct, the window it opens is the hazard. Emitted at DRAIN-END
+        // rather than at the swap so it carries the outcome: a window measured without knowing whether the
+        // drain that followed it delivered anything is the half of the report a field capture already had.
+        // Always emitted on this arm — a zero count records a benign window and its width, which is what
+        // makes a non-zero one legible as the anomaly it is. Bounded: one per peer per re-resolution.
+        log.warn {
+            "nw.seam.publish-swap self=${selfId.value} peer=${drain.peer.value} " +
+                "published-on=${ended.connId.value}(dialled=${drain.loserDialled}) " +
+                "now-on=${drain.winner.value}(dialled=${drain.winnerDialled}) " +
+                "visible-for=${drain.visibleForMillis}ms frames-written-to-published-link=${drain.framesWritten} " +
+                "drained=${drain.drainedFrames} via=${ended.outcome.label} " +
+                "state=${_state.value} peers=${_peers.value.map { it.value }} " +
+                "→ the peer was moved off a link it was reachable on; that link was DRAINED rather than " +
+                "cancelled, so what was written into the window was carried across (#2425)"
+        }
+    }
+
+    // ── the receiver ordering hold (#2425) ──────────────────────────────────────
+
+    /**
+     * Arm [peer]'s ordering hold: from now until its last drain ends, frames arriving on its LIVE link are
+     * buffered instead of delivered. Idempotent — a second concurrent drain to one peer keeps the first
+     * hold and its contents rather than starting a fresh, empty one.
+     */
+    private suspend fun armOrderingHold(peer: PeerId) {
+        stageMutex.withMutex { orderingHolds.getOrPut(peer) { mutableListOf() } }
+    }
+
+    /**
+     * Release [peer]'s ordering hold, flushing everything it buffered into [deliveryStage] in arrival
+     * order, and return how many frames that was (0 if no hold was armed).
+     *
+     * The flush happens under [stageMutex], so a frame arriving on the demux loop mid-flush queues behind
+     * the buffer rather than overtaking it. That is the entire reason the mutex exists.
+     */
+    private suspend fun releaseOrderingHold(peer: PeerId): Int = stageMutex.withMutex {
+        val held = orderingHolds.remove(peer) ?: return@withMutex 0
+        for (frame in held) sendStagedLocked(peer, frame)
+        held.size
+    }
+
+    /**
+     * The ONE path from [bytesReceivedLoop] to [deliveryStage], and the place the ordering hold is applied.
+     *
+     * ## Buffer-and-continue, never suspend — the deadlock this shape exists to make impossible
+     * Both links' bytes arrive through the single [bytesReceivedLoop]. A hold that SUSPENDED that loop on a
+     * winner frame could never process the `GOODBYE` that would release it, and the seam would wedge
+     * permanently. So when the hold is armed and has room this appends and returns; it never waits on
+     * anything the demux loop is itself responsible for producing.
+     *
+     * A frame from the DRAINING link is never held — it is the tail the hold is waiting for.
+     *
+     * ## Overflow releases EARLY rather than backpressuring
+     * A bounded buffer must do something at the bound, and backpressure is the one option that is not
+     * available: suspending here would reintroduce the deadlock by another route. So the hold is released
+     * early, the reorder is accepted, and it is reported at WARN — a loud, bounded admission that
+     * [Seam.incoming]'s send-order promise was traded for liveness on this peer, in preference to a silent
+     * wedge.
+     *
+     * ## Sequence is stamped HERE, at release time
+     * [Swatch.sequence] is assigned inside [stageMutex] immediately before the stage write, so stamped
+     * order is delivery order for held and unheld frames alike. Stamping at classify time (as this used to)
+     * would have numbered a held frame ahead of the winner frames delivered while it waited.
+     */
+    private suspend fun stageInboundData(sender: PeerId, frame: ByteArray, fromDrainingLink: Boolean) {
+        var overflowed = 0
+        stageMutex.withMutex {
+            val hold = if (fromDrainingLink) null else orderingHolds[sender]
+            if (hold != null) {
+                if (hold.size < orderingHoldCapacity) {
+                    hold += frame
+                    return@withMutex
+                }
+                overflowed = hold.size
+                orderingHolds.remove(sender)
+                for (buffered in hold) sendStagedLocked(sender, buffered)
+            }
+            sendStagedLocked(sender, frame)
+        }
+        if (overflowed > 0) {
+            log.warn {
+                "nw.seam.drain.hold-overflow self=${selfId.value} peer=${sender.value} " +
+                    "buffered=$overflowed capacity=$orderingHoldCapacity " +
+                    "→ the drained link's tail has not arrived within one hold's worth of live-link frames; " +
+                    "releasing early and DELIVERING OUT OF SEND ORDER for this peer rather than " +
+                    "backpressuring the shared receive loop, which would wedge it (#2425)"
+            }
+        }
+    }
+
+    /**
+     * Stamp [frame] and hand it to [deliveryStage]. **Called only under [stageMutex]**, which is what makes
+     * the stamp order and the stage order the same order.
+     *
+     * `dropFirst` strips the type byte as a ZERO-COPY view (the pattern [Swatch] documents for framing
+     * layers) — the alternative, materialising the body in [NwWire.decode], would copy every received
+     * payload a second time on this loop.
+     */
+    private suspend fun sendStagedLocked(sender: PeerId, frame: ByteArray) {
+        deliveryStage.send(
+            Swatch(payload = frame, sender = sender, sequence = seq.incrementAndGet())
+                .dropFirst(NwWire.TYPE_BYTES),
+        )
     }
 
     /** Add [remoteId] to the peer set and flip Weaving→Woven. Called under [lock]. */
@@ -1005,12 +1436,18 @@ internal class NwSeam(
             // tears (#1513): [evictPeerLocked] re-forms Woven→Weaving when the last remote drops.
             var verdict = "no-op"
             var graceJob: Job? = null
+            var endedDrain: EndedDrain? = null
             lock.withLock {
                 // `run` so every early exit still falls through to the #2420 audit below: this block
                 // removes from `conns` on EVERY arm, including the two that deliberately do not evict, so
                 // it is the site where a registry entry could be orphaned.
                 run {
                     graceJob = graceJobs.remove(event.connectionId) // any pending path-loss timer is moot now
+                    // #2425: a drain whose link died under it. Taken here rather than left to expire on its
+                    // own bound — this block removes and tombstones the connection on every arm, so a drain
+                    // left behind would hold the peer's ordering hold open for the whole bound with nothing
+                    // left that could ever release it.
+                    endedDrain = takeDrainLocked(event.connectionId, DrainOutcome.LinkLoss)
                     val cs = conns.remove(event.connectionId)
                     tombstoneLocked(event.connectionId) // #1528: a closed conn is dead — drop any late/buffered bytes on it
                     if (cs == null) { verdict = "unknown-conn"; return@run }
@@ -1029,6 +1466,7 @@ internal class NwSeam(
             }
             graceJob?.cancel()
             log.info { "nw.seam.closed connId=${event.connectionId.value} self=${selfId.value}: $verdict" }
+            endedDrain?.let { settleDrain(it) }
         }
     }
 
@@ -1159,7 +1597,7 @@ internal class NwSeam(
      * into a deliberately level-triggered reconcile, for a strictly weaker liveness guarantee. Noted here so it
      * isn't rediscovered as a "bug".
      */
-    private fun reconcileStates() {
+    private suspend fun reconcileStates() {
         val toCancel = mutableListOf<Pair<NwConnectionId, Job>>()
         val armed = mutableListOf<Pair<NwConnectionId, Job>>()
         val armSkipped = mutableListOf<NwConnectionId>()
@@ -1300,17 +1738,29 @@ internal class NwSeam(
     private fun auditRegistryLocked(site: String) {
         reportedOrphans.retainAll(registry.keys)
         for ((peer, winner) in registry) {
-            if (winner.connId in conns) {
+            // Two ways one binding can be unusable, reported through one bound (#2420/#2425): the connId is
+            // not tracked at all, or it IS tracked but is DRAINING — a link this seam has already told the
+            // remote it has finished writing on. The second is what makes "a draining conn is never
+            // selected for sends" an enforced property rather than an argument about [registry] and
+            // [draining] being disjoint by construction: [broadcast]/[sendTo] route through exactly this
+            // map, so an entry naming a draining link would send into a goodbye'd socket.
+            val binding = when {
+                winner.connId !in conns -> "not-tracked"
+                winner.connId in draining -> "draining"
+                else -> null
+            }
+            if (binding == null) {
                 reportedOrphans.remove(peer)
                 continue
             }
             if (!reportedOrphans.add(peer)) continue
             log.error {
                 "nw.seam.registry.orphan self=${selfId.value} peer=${peer.value} connId=${winner.connId.value} " +
-                    "site=$site nonce=${winner.canonicalNonce} tombstoned=${winner.connId in tombstones} " +
+                    "site=$site binding=$binding nonce=${winner.canonicalNonce} " +
+                    "tombstoned=${winner.connId in tombstones} " +
                     "state=${_state.value} peers=${_peers.value.map { it.value }} " +
                     "registry=${registry.map { (p, w) -> "${p.value}→${w.connId.value}" }} " +
-                    "conns=${conns.keys.map { it.value }} " +
+                    "conns=${conns.keys.map { it.value }} draining=${draining.keys.map { it.value }} " +
                     "→ CONTRACT VIOLATION: this seam still routes ${peer.value} over a connection it no " +
                     "longer tracks, so every send to it is written to a link nothing owns (#2420)"
             }
@@ -1421,6 +1871,10 @@ internal class NwSeam(
     private fun sweepInboundSilence(): List<String> {
         val lines = mutableListOf<String>()
         lock.withLock {
+            // Iterating [registry] is what confines this to WINNERS: a draining loser (#2425) is in [conns]
+            // but never in [registry], so it is structurally out of scope here — which is right, because a
+            // link this seam has already said goodbye on is EXPECTED to go quiet, and reporting it would
+            // manufacture a wedge warning out of the fix for one.
             for ((peer, winner) in registry) {
                 // A registry entry with no ConnState is an ORPHAN, not a silent link — auditRegistryLocked
                 // below owns that report, and reporting it here too would say "quiet" about a connection
@@ -1532,6 +1986,14 @@ internal class NwSeam(
         // #2420: count what is handed to each link in the SAME locked snapshot that chooses the targets, so
         // the count and the routing decision cannot disagree. The over-budget drop already returned above,
         // so nothing counted here is a frame this seam declined to send.
+        //
+        // #2425: the snapshot is taken from [registry], which names WINNERS only — a draining loser is in
+        // [conns] but never here, so it can never be selected. [auditRegistryLocked] asserts that rather
+        // than leaving it to this comment. The residual it does NOT close is the one this seam cannot:
+        // a broadcast whose targets were snapshotted just before a dedup can still put one frame on a link
+        // a concurrent [startDrain] then says goodbye on, so that frame races past the goodbye. Its
+        // ordering was undefined anyway — it was issued concurrently with the swap — and the drain still
+        // carries it, so the frame is delivered; only its position relative to the goodbye is unpinned.
         val targets = lock.withLock {
             registry.values.map { winner ->
                 conns[winner.connId]?.let { it.outboundFrames += 1 }
@@ -1585,15 +2047,25 @@ internal class NwSeam(
      * loss re-forms Woven→Weaving (recoverable, #1513) rather than tearing — [incoming] stays open and
      * `NwLoom` redials. The decision is computed under [lock]; any pending grace timer for [connId] is
      * cancelled after releasing it.
+     *
+     * Suspending since #2425, because a connection being torn here may be one that is DRAINING — a
+     * displaced link whose #1478 grace timer expired, whose send failed, or whose frame was refused — and
+     * ending that drain releases the peer's ordering hold, which writes to [deliveryStage].
      */
-    private fun removeByConn(connId: NwConnectionId) {
+    private suspend fun removeByConn(connId: NwConnectionId) {
         var verdict = "no-op"
         var graceJob: Job? = null
+        var endedDrain: EndedDrain? = null
         lock.withLock {
             // `run` for the same reason as [connectionClosedLoop]'s: every arm removes from `conns`, so
             // every arm must reach the #2420 audit.
             run {
                 graceJob = graceJobs.remove(connId)
+                // #2425: the drain's link is being torn out from under it — see [connectionClosedLoop] for
+                // why this cannot be left to the bound. `onGraceExpired` → here is the path that made this
+                // mandatory: a grace timer armed on a now-draining connection must END the drain, not
+                // orphan it.
+                endedDrain = takeDrainLocked(connId, DrainOutcome.LinkLoss)
                 val cs = conns.remove(connId)
                 tombstoneLocked(connId) // #1528: this conn is being torn — drop any late/buffered bytes on it
                 if (cs == null) { verdict = "unknown-conn"; return@run }
@@ -1610,6 +2082,7 @@ internal class NwSeam(
         }
         graceJob?.cancel()
         log.info { "nw.seam.removeByConn connId=${connId.value} self=${selfId.value}: $verdict" }
+        endedDrain?.let { settleDrain(it) }
     }
 
     // ── close ─────────────────────────────────────────────────────────────────
@@ -1619,8 +2092,12 @@ internal class NwSeam(
         // Single-shot: if a self-driven Torn (last-peer drop) already fired, this no-ops.
         if (!latchTorn(reason)) return
         val targets = lock.withLock {
-            val snapshot = registry.values.map { it.connId }
+            // Draining losers are torn down too — they are live sockets this seam owns, and `registry` (the
+            // winners) does not name them. Their bound jobs die with [scope] in [latchTorn]; their ordering
+            // holds die with the [spool] the same call closes, so nothing is left to release them to.
+            val snapshot = registry.values.map { it.connId } + draining.keys
             registry.clear()
+            draining.clear()
             conns.keys.forEach { tombstoneLocked(it) } // #1528: every cleared conn is dead — no resurrection on a late frame
             conns.clear()
             graceJobs.clear() // scope cancellation (in latchTorn) stops the jobs; just drop the refs
@@ -1738,8 +2215,36 @@ internal class NwSeam(
     }
 
     internal companion object {
+        /** How a link the far end opened is named in a diagnostic — it carries no dialled endpoint. */
+        const val INBOUND_LINK: String = "<inbound>"
+
         /** Default grace given a path-lost (`ready → waiting`) connection to recover before the seam tears it (#1478). */
         val DEFAULT_WOVEN_PATH_GRACE: Duration = 10.seconds
+
+        /**
+         * Default zombie-link backstop for the displacement drain (#2425).
+         *
+         * It is deliberately NOT the mechanism: the healthy path ends in-band on the remote's
+         * [NwFrameType.Goodbye], milliseconds after the swap, with no timer consulted at all. This only
+         * bounds the pathological case — a link that has stopped delivering in the drained direction and
+         * will never produce that goodbye.
+         *
+         * Two seconds, because the drain holds two things open while it runs: a socket, and the peer's
+         * receiver ordering hold. Frame-scale transport hiccups are milliseconds, so this never truncates a
+         * real drain; and it is a small fraction of the ~8 s bound a consuming application applies to
+         * formation (#2425), so a zombie link cannot consume a meaningful share of that budget.
+         */
+        val DEFAULT_DRAIN_BOUND: Duration = 2.seconds
+
+        /**
+         * Default depth of a peer's receiver ordering hold (#2425) — the same shape as
+         * [DELIVERY_STAGING_CAPACITY], because it absorbs the same kind of transient: how far the live link
+         * may run ahead of a drained link's tail before the seam gives up on ordering the two.
+         *
+         * Bounded, never unbounded. Backpressuring at the bound is the one option that is not available —
+         * it would suspend the shared demux loop on a release only that loop can perform.
+         */
+        const val DEFAULT_ORDERING_HOLD_CAPACITY: Int = DeliveryPolicy.DEFAULT_CAPACITY
 
         /**
          * Default sweep interval for the wedge watchdog (#2420).
