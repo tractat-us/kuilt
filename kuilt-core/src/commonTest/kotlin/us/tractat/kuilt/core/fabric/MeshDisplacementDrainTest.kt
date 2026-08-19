@@ -266,6 +266,9 @@ class MeshDisplacementDrainTest {
      * adopted and then torn down, its frames delivered out of order, silently and with no overflow
      * report. Keying each claim on the link that armed it makes that unrepresentable, and this is
      * what says so: with two drains in flight, releasing the first delivers nothing at all.
+     *
+     * Mutation receipt: deleting the `waitingOn` check from `MeshSeam.releaseOrderingHold` — i.e.
+     * restoring the peer-keyed release — reds THIS property and nothing else in the class (1 of 9).
      */
     @Test
     fun endingOneDrainDoesNotReleaseASiblingDrainsHold() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
