@@ -20,7 +20,8 @@ import kotlin.time.Duration.Companion.seconds
  * **subscribed by the time its construction site returns** — before anything can trigger the event
  * (#2478).
  *
- * Six launches carry that obligation, and each is `CoroutineStart.UNDISPATCHED` for this reason alone:
+ * Seven launches state that obligation, and each is `CoroutineStart.UNDISPATCHED` for this reason
+ * alone:
  *
  * | launch | flow | site |
  * |---|---|---|
@@ -28,8 +29,18 @@ import kotlin.time.Duration.Companion.seconds
  * | `bytesReceivedLoop` | [NwApi.bytesReceived] | `NwSeam`'s `init` |
  * | `connectionClosedLoop` | [NwApi.connectionClosed] | `NwSeam`'s `init` |
  * | `connectionStatesLoop` | [NwApi.connectionStates] | `NwSeam`'s `init` |
+ * | `pathStateLoop` | [NwApi.pathState] | `NwSeam`'s `init` |
  * | `endpointFound` collector | [NwApi.endpointFound] | `RedialCoordinator.start()` |
  * | `endpointLost` collector | [NwApi.endpointLost] | `RedialCoordinator.start()` |
+ *
+ * ## Two of the seven are STATE, and their obligation is weaker — pinned anyway
+ * [NwApi.connectionStates] and [NwApi.pathState] are `StateFlow`s, so a late subscriber is handed the
+ * current value on attach and cannot lose an event outright the way the three no-replay `SharedFlow`s
+ * can; the most it can miss is an intermediate value conflated away, and `reconcileStates` re-reads
+ * `api.connectionStates.value` under the lock regardless. Their launches are `UNDISPATCHED` all the
+ * same, and stating that in the source without pinning it is how the claim goes stale — so both are
+ * asserted here, with this paragraph recording that a red on either means "the shipped intent
+ * changed", not "an event was lost".
  *
  * ## Why this asserts the SUBSCRIPTION and not the lost event
  * The obvious test — emit an event during the window and show it is dropped — cannot be written here,
@@ -57,11 +68,12 @@ import kotlin.time.Duration.Companion.seconds
  * everywhere — so the canary reddens instead.
  *
  * ## What it does not cover
- * It pins the six launches that carry the obligation, not the two that do not: `deliveryDrainLoop`
- * subscribes to nothing external, and `inboundSilenceLoop` is deliberately `DEFAULT`. It says nothing
- * about `RealNwApi`, whose flows live behind Network.framework. And it proves the collector is
- * *attached*, not that a real transport's first event lands after construction — that ordering is the
- * production claim this attachment is the precondition for.
+ * It pins the seven launches that state the obligation, not the two that do not: `deliveryDrainLoop`
+ * is `UNDISPATCHED` but subscribes to no [NwApi] flow (it drains an internal channel), and
+ * `inboundSilenceLoop` is deliberately `DEFAULT`. It says nothing about `RealNwApi`, whose flows live
+ * behind Network.framework. And it proves the collector is *attached*, not that a real transport's
+ * first event lands after construction — that ordering is the production claim this attachment is the
+ * precondition for.
  */
 class NwSubscribeBeforeTriggerTest {
 
@@ -81,8 +93,8 @@ class NwSubscribeBeforeTriggerTest {
     }
 
     /**
-     * `NwSeam`'s `init` block subscribes all four lifecycle flows synchronously, before the constructor
-     * returns — so `NwLoom` cannot advertise, browse or dial into an unsubscribed seam.
+     * `NwSeam`'s `init` block subscribes every [NwApi] flow it collects synchronously, before the
+     * constructor returns — so `NwLoom` cannot advertise, browse or dial into an unsubscribed seam.
      */
     @Test
     fun seamConstructionSubscribesEveryLifecycleFlowBeforeItReturns() = runTest(StandardTestDispatcher()) {
@@ -101,6 +113,7 @@ class NwSubscribeBeforeTriggerTest {
             { assertTrue(api.bytesReceivedSubscriberCountForTest() >= 1, missing("bytesReceived", "NwSeam(…)")) },
             { assertTrue(api.connectionClosedSubscriberCountForTest() >= 1, missing("connectionClosed", "NwSeam(…)")) },
             { assertTrue(api.connectionStatesSubscriberCountForTest() >= 1, missing("connectionStates", "NwSeam(…)")) },
+            { assertTrue(api.pathStateSubscriberCountForTest() >= 1, missing("pathState", "NwSeam(…)")) },
         )
     }
 

@@ -141,6 +141,9 @@ internal class FakeNwApi(
     /** Test-only: collectors currently attached to [connectionStates]. Not part of the fabric contract. */
     internal fun connectionStatesSubscriberCountForTest(): Int = _connectionStates.subscriptionCount.value
 
+    /** Test-only: collectors currently attached to [pathState]. Not part of the fabric contract. */
+    internal fun pathStateSubscriberCountForTest(): Int = _pathState.subscriptionCount.value
+
     /**
      * Test hook for #2420: model mDNS resolving an instance-name collision by renaming **this** device's
      * advertisement (`"alice"` → `"alice (2)"`), which on hardware arrives on
