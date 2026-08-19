@@ -15,10 +15,10 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.channels.ClosedSendChannelException
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.SeamState
-import us.tractat.kuilt.core.runConcurrencyStress
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import us.tractat.kuilt.test.runConcurrencyStress
 
 /**
  * Thread-safety probe for [LinkSeam] (#409).

@@ -1,7 +1,7 @@
 @file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 @file:Suppress("ForbiddenImport") // deliberate real-OS-thread harness — see the concurrency probes that use it.
 
-package us.tractat.kuilt.core
+package us.tractat.kuilt.test
 
 import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-OS-thread harness — see the concurrency probes that use it.
 import kotlinx.coroutines.TimeoutCancellationException
@@ -21,9 +21,10 @@ import kotlin.time.Duration.Companion.minutes
  * wall-clock cap.
  *
  * ### Why this exists (#1135)
- * The seam concurrency probes ([us.tractat.kuilt.core.fabric.LinkSeamConcurrencyTest],
- * `MeshSeamConcurrencyTest`, `CompositeSeamConcurrencyTest`) hammer a seam from several threads
- * while its own progress-making pumps (read loops, reconcile, announce, peers) run on the *same*
+ * The seam concurrency probes (`LinkSeamConcurrencyTest`, `MeshSeamConcurrencyTest` and
+ * `CompositeSeamConcurrencyTest` in `:kuilt-core`, `NwSeamConcurrencyTest` in `:kuilt-nw`) hammer a
+ * seam from several threads while its own progress-making pumps (read loops, reconcile, announce,
+ * peers) run on the *same*
  * shared [Dispatchers.Default]. Each test loops hundreds of iterations and, at several points,
  * waits on an **unbounded** condition — `peers.first { it.size == 2 }`, `state.first { it is Torn }`,
  * `awaitAll(...)`. There was previously **no timeout anywhere**: a single iteration that fails to
@@ -59,14 +60,14 @@ import kotlin.time.Duration.Companion.minutes
  * Creation stack traces are deliberately **off** — they are the expensive part of `DebugProbes`
  * (a captured stack per coroutine created, and these probes create millions), and the *last observed*
  * stack is the one that answers the question. The probes are `-P`-gated out of the normal build
- * (`kuilt-core/build.gradle.kts`) and run alone on a dedicated CI runner, so this instrumentation is
+ * (each consuming module's `build.gradle.kts`) and run alone on a dedicated CI runner, so this is
  * confined to the run that needs it.
  *
  * The cap tolerates a slow-but-recovering run (kept well above observed recoverable near-hangs); it
  * only fires on a true stall. It does **not** weaken the real-multi-threaded race coverage the
  * probes exist for — it only bounds how long a stall may burn.
  */
-internal fun runConcurrencyStress(
+public fun runConcurrencyStress(
     cap: Duration = 5.minutes,
     body: suspend (stage: StageTracker) -> Unit,
 ) {
@@ -312,9 +313,9 @@ private const val MAX_DUMP_CHARS = 200_000
  * two numbers separate "the system wedged dead" from "the box was so slow the cap expired mid-run",
  * which is the same fork [dispatcherVerdict] answers from the other side (#1158 vs #1784).
  */
-internal class StageTracker {
+public class StageTracker {
     @Volatile
-    var current: String = "start"
+    public var current: String = "start"
         private set
 
     @Volatile
@@ -333,7 +334,7 @@ internal class StageTracker {
      * system-under-test's observed state if this stage hangs. [snapshot] is evaluated **only** on
      * timeout, on the harness thread; keep it cheap and side-effect-free (read a few `StateFlow`s).
      */
-    fun at(label: String, snapshot: () -> String = { "(no snapshot registered for this stage)" }) {
+    public fun at(label: String, snapshot: () -> String = { "(no snapshot registered for this stage)" }) {
         current = label
         this.snapshot = snapshot
         stageEnteredAtNanos = System.nanoTime()
@@ -341,7 +342,7 @@ internal class StageTracker {
     }
 
     /** Evaluate the latest registered snapshot, tolerating a throwing supplier. Called on timeout only. */
-    fun diagnosticSnapshot(): String =
+    public fun diagnosticSnapshot(): String =
         // ALLOW-runCatching: non-suspend diagnostic over a non-suspend `() -> String` supplier, evaluated on the harness thread — no coroutine context, and a throwing supplier must degrade to text rather than replace the hang report.
         runCatching { snapshot() }.getOrElse { "<snapshot supplier threw: ${it::class.simpleName}: ${it.message}>" }
 
@@ -350,7 +351,7 @@ internal class StageTracker {
      * nearly the whole cap is a **wedge**; a run that merely crawled through many stages until the cap
      * expired is **slow**, and the two want different investigations.
      */
-    fun progress(): String {
+    public fun progress(): String {
         val now = System.nanoTime()
         val inStageMs = (now - stageEnteredAtNanos) / 1_000_000
         val totalMs = (now - startedAtNanos) / 1_000_000

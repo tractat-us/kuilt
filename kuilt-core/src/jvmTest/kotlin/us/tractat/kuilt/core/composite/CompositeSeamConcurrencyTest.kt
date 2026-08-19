@@ -17,9 +17,9 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PlyId
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Seam
-import us.tractat.kuilt.core.runConcurrencyStress
 import kotlin.test.Test
 import kotlin.test.assertIs
+import us.tractat.kuilt.test.runConcurrencyStress
 
 /**
  * Thread-safety probe for [CompositeSeam] (#411).

@@ -816,6 +816,83 @@ jobs:
             kuilt-core/build/reports/tests/
             kuilt-core/build/test-results/
 
+  # ── nw-concurrency-probes ───────────────────────────────────────────────────
+  # `:kuilt-nw`'s real-threaded probes (#2481). Same shape as concurrency-probes
+  # above — dedicated runner, no sibling test forks, the same -P un-gate, the same
+  # docs-only guard — and, like it, **NOT** in ci-required's needs/aggregation.
+  #
+  # NON-GATING FIRST, deliberately. #1768's split says the entrance fee for the
+  # gate is a determinism receipt, and this lane is new: it has no failure history
+  # here at all, and the argument for letting a job block merges has to be made
+  # from observed behaviour on this runner rather than from a local measurement on
+  # a workstation. Graduating it to capability-probes is a one-line change (add it
+  # to ci-required's needs + success clauses) once a stated window of runs shows a
+  # lone-failure rate near zero — measure it and quote the time span, not just a
+  # sample count, for the reason concurrency-probes' own header records.
+  #
+  # ROUND COUNT, recorded here as capability-probes demands of its members.
+  # `:kuilt-nw` ships exactly ONE probe:
+  #
+  #   - NwSeamConcurrencyTest.broadcastNeverLeaksARaceExceptionWhilePeersAreEvicted
+  #     — `broadcast` snapshots `registry` (and increments the chosen link's
+  #     outbound counter) in one critical section while `connectionClosedLoop` and
+  #     `reconcileStates` evict out of the same map. 80 rounds; each round is a
+  #     6-node star, 4 broadcasters × 200 sends, 5 staggered departures.
+  #     RECEIPT: with the `lock.withLock` around `broadcast`'s target snapshot
+  #     deleted, it fails 6 of 6 consecutive runs with a
+  #     ConcurrentModificationException raised out of `broadcast`. Restored: green.
+  #
+  # The three other hazards #2481 named are deliberately NOT here, and the class
+  # KDoc carries the measurements: each asks a collector to race itself, and every
+  # NwSeam collector is a single coroutine, so deleting their guards leaves a probe
+  # green (5/5, 0/6, 0/6). A probe that cannot be made to red is green by absence.
+  # Do not "restore coverage" by adding them back without a fresh receipt.
+  nw-concurrency-probes:
+    needs: detect
+    if: needs.detect.outputs.docs-only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      S3_BUILD_CACHE_ACCESS_KEY_ID: ${{ secrets.S3_BUILD_CACHE_ACCESS_KEY_ID }}
+      S3_BUILD_CACHE_SECRET_KEY: ${{ secrets.S3_BUILD_CACHE_SECRET_KEY }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: wrapper
+          cache-read-only: false
+
+      # Configuring :kuilt-nw's Android library variant needs an SDK.
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Run :kuilt-nw concurrency probes (isolated runner, NON-BLOCKING)
+        # -Pconcurrency.stress.tests=true drops the build-defined `*ConcurrencyTest`
+        # exclusion (kuilt-nw/build.gradle.kts); --tests then scopes the JVM test task
+        # to exactly them. The -P flag is required for the include to match at all — a
+        # build-defined exclude wins over a command-line include, so without it this
+        # job would be green by vacuity.
+        run: >-
+          ./gradlew :kuilt-nw:jvmTest -Pconcurrency.stress.tests=true
+          --tests "*ConcurrencyTest"
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports-nw-concurrency-probes
+          path: |
+            kuilt-nw/build/reports/tests/
+            kuilt-nw/build/test-results/
+
   # ── spike-compile ───────────────────────────────────────────────────────────
   # Compiles `:spike` — the two-iPhone hardware-validation harness — for its Apple
   # targets. THE ONLY macOS job in the per-PR lane, and path-filtered so it stays

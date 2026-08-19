@@ -10,6 +10,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlin.test.Test
 import kotlin.test.assertIs
+import us.tractat.kuilt.test.runConcurrencyStress
 
 /**
  * Real-threaded stress probe for [SeamStateGate] (design 2026-07-10-seam-terminal-lifecycle).

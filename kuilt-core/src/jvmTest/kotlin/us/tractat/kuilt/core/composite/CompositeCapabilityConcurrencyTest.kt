@@ -21,10 +21,10 @@ import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.TransportRole
-import us.tractat.kuilt.core.runConcurrencyStress
 import us.tractat.kuilt.test.FakeSeam
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import us.tractat.kuilt.test.runConcurrencyStress
 
 /**
  * Real-threaded stress probe for [CompositeSeam]'s capability rollup (#1712).
