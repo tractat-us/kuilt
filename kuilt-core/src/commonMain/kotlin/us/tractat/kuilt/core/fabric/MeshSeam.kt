@@ -451,8 +451,8 @@ private suspend fun buildMesh(
     // `init`. They are not closed here, and `buildMesh` must not close them: disposal is owed at drain
     // end, by `MeshSeam.endDrain`, exactly as it is for a loser displaced by `Mesh.addLink`.
     //
-    // What this closes is narrower than `addLink`'s window and worth stating precisely: no peer has been
-    // published locally yet, so there is no LOCAL publish-then-swap window at all. The residual is the
+    // The window it recovers is narrower than `addLink`'s, and worth stating precisely: no peer has been
+    // published locally yet, so there is no LOCAL publish-then-swap window at all. What was lost is the
     // REMOTE's — it deduped first and wrote into the link before this seam existed — and on a
     // simultaneous dial caught at construction it is the symmetric case, where BOTH ends drain and
     // "terminate on the remote's abrupt close" is therefore no termination condition at all. That is
@@ -728,7 +728,8 @@ private class MeshSeam(
     /**
      * Peers whose live-link frames are being held pending a drain-end (#2474). **Guarded by
      * [stageMutex] only** — never by [lock] — so the hold decision and the delivery it guards are one
-     * atomic step.
+     * atomic step. The single exception is [armOrderingHoldAtConstruction], which writes this map from
+     * `init`, where exclusivity is structural and there is nothing yet to be guarded against.
      *
      * A peer's presence as a key IS the armed flag. Bounded by [orderingHoldCapacity], after which
      * the hold releases early and is removed outright (see [stageInbound]).
