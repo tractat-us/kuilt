@@ -3646,6 +3646,603 @@ val forbidCoroutineLaunchInPropertyInitializer by tasks.registering {
     }
 }
 
+// Locates a suspend-shaped call inside a THREAD-BOUND lock body, for `forbidSuspendCallUnderLock`
+// below (#2480). Same `object` rationale as the sibling scanners: it is invoked from inside `doLast`,
+// where a script-level function reference would capture the unserializable `Build_gradle` instance.
+//
+// THE DEFECT. `kotlinx.atomicfu.locks.reentrantLock` is a THREAD-bound mutex: the thread that locked
+// it must be the thread that unlocks it. `withLock` is `inline` with a NON-`crossinline` block, so a
+// `suspend` call written inside it compiles silently whenever the enclosing function is `suspend` —
+// the compiler raises nothing. If that call actually suspends, the coroutine resumes wherever the
+// dispatcher puts it, and the `finally { unlock() }` runs on a thread that never owned the lock.
+//
+// Nothing in this repo's suite can reach it. Every `:kuilt-nw` test runs on a `StandardTestDispatcher`,
+// which resumes on the same thread, so the illegal unlock never happens and the defect is
+// STRUCTURALLY unreachable. Only a real multi-threaded dispatcher reaches it, and then only
+// probabilistically (#2466). `NwSeam` states the rule in its own KDoc — "No `suspend`/`api.*` call
+// ever runs under the lock; targets are snapshotted under the lock, then sent/disconnected/delivered
+// outside it" — and until #2480 nothing enforced it.
+//
+// WHY THE RULE IS BLUNT AND NOT PRECISE, per #2465's reasoning: the precise question — does this call
+// transitively suspend? — needs a call graph, and the tool that could compute one is detekt with type
+// resolution, which reaches neither `appleMain` nor `commonTest` (see CLAUDE.md). A file scan reaches
+// every source set on every platform at no build cost. So the token list below over-approximates on
+// purpose, and the per-file count ratchet absorbs it.
+//
+// WHAT IT IS NOT BLUNT ABOUT, because being blunt there would make it USELESS rather than merely
+// noisy. Two distinctions are load-bearing, and both were derived by measurement rather than reasoned
+// in; the issue's premise named neither, and taking it literally produced 13 findings of which all 13
+// were false:
+//
+//   * A `kotlinx.coroutines.sync.Mutex` is COROUTINE-bound, not thread-bound. Holding one across a
+//     suspension point is its entire purpose — ownership follows the coroutine, so resuming on
+//     another thread is harmless. It is spelled `withLock` too, and 18 production files import it.
+//     Flagging those is not over-approximation, it is a category error, and the fix this guard
+//     prescribes ("snapshot, then act outside the lock") is wrong advice for a `Mutex`. So the
+//     receiver is resolved per call site — `= reentrantLock()`/`: ReentrantLock` is thread-bound,
+//     `= Mutex()`/`: Mutex` is not — rather than keying on the method name or the file's imports.
+//     Six files import BOTH, three of them UNALIASED (`WarpMetricExporter` and its two siblings), so
+//     the name genuinely cannot decide it; and `NearbySeam` imports the atomicfu one ALIASED
+//     (`withReentrantLock`) while leaving the bare `withLock` bound to `Mutex`, which is the exact
+//     inversion a name-keyed rule gets backwards. Resolving the receiver makes aliasing a non-issue.
+//
+//   * A lambda CONSTRUCTED under the lock does not RUN under it. `scope.launch { … }` is dispatched
+//     later; a SAM constructor (`OutboundSender { payload -> rawSeam.broadcast(…) }` in
+//     `MuxServerLoom`) is stored and invoked by someone else. Both bodies are outside the critical
+//     section, and both are the PRESCRIBED fix — `NwLoom` writes the argument inline at its own
+//     redial site ("Eager launch: the body is dispatched (never runs inline under this lock — no
+//     suspend under the lock)"). Counting them would have baselined `NwSeam` at 5, `SeamRoom` at 4
+//     and `NwLoom` at 2 — grandfathering the three files this guard most exists to protect, so that
+//     the next REAL violation added to any of them lands green under the ratchet. That is the
+//     "fixture config picks the vacuous case" failure arriving through the front door: the blunter
+//     rule is the WEAKER one here, not the safer one. `forEach`/`let`/`getOrPut` are deliberately NOT
+//     treated as deferring — those run inline, under the lock, and a suspend call in one is real.
+//
+// WHAT IT CANNOT DISTINGUISH, stated rather than papered over:
+//   * `.close(` is not a token. `Seam.close()` IS suspend and `Channel.close()` is NOT, they are
+//     lexically identical, and the one in-tree instance is the safe one (`spool.close()` under
+//     `NwSeam`'s lock). Including it would grandfather `NwSeam` at 1 forever to catch a shape that
+//     the same-file-`suspend fun` rule already catches whenever the close goes through a helper.
+//   * `.first(` IS a token, and `List.first()` is not suspend. It fires nowhere in the tree today, so
+//     it costs nothing now; if it ever false-positives, the shape to reach for is the same one the
+//     deferring mask uses — decide it structurally, do not silently drop the token.
+//   * A lock reached through a helper, a superclass, or another file. The receiver must be resolvable
+//     in the SAME file. Rather than skip such a site silently, `unresolvedLockReceivers` reports it
+//     and the task fails: an unresolvable receiver is the guard's single largest silent-miss mode, so
+//     it is made loud. The remedy is to give the property an explicit type (`private val lock:
+//     ReentrantLock`), which is also what makes it readable. Zero sites need this today.
+//   * A capitalised identifier before `{` is read as a SAM constructor and masked, so a suspend call
+//     inside a capitalised INLINE helper's lambda would be missed. No such helper exists in tree.
+object LockBodyScanner {
+    /** One offending site: the suspend-shaped call, and the lock whose body it sits in. */
+    data class Violation(val line: Int, val call: String, val holder: String, val lockLine: Int)
+
+    /** A lock-shaped call whose receiver this file does not declare, so the scanner cannot judge it. */
+    data class Unresolved(val line: Int, val receiver: String, val call: String)
+
+    // `.` and `:` in the lookbehinds are load-bearing for the same reason the sibling scanner records:
+    // a qualified name is not a declaration, and `a.val` / `Foo::class` must not open one.
+    private val threadBoundInit =
+        Regex(
+            """(?<![A-Za-z0-9_.:])(?:val|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*[^=\n]+?)?=\s*""" +
+                """(?:reentrantLock|ReentrantLock|SynchronizedObject)\s*\(""",
+        )
+    private val threadBoundTyped =
+        Regex(
+            """(?<![A-Za-z0-9_.:])(?:val|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*""" +
+                """(?:ReentrantLock|SynchronizedObject)(?![A-Za-z0-9_])""",
+        )
+    private val coroutineBoundInit =
+        Regex(
+            """(?<![A-Za-z0-9_.:])(?:val|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*[^=\n]+?)?=\s*""" +
+                """Mutex\s*\(""",
+        )
+    private val coroutineBoundTyped =
+        Regex(
+            """(?<![A-Za-z0-9_.:])(?:val|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*Mutex(?![A-Za-z0-9_])""",
+        )
+
+    /** `receiver.method {` — the shape every `withLock` call site takes, whatever the alias. */
+    private val trailingLambdaCall =
+        Regex("""(?<![A-Za-z0-9_.])([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)\s*\{""")
+
+    /** A method name that can only be a lock acquisition, for the unresolved-receiver report. */
+    private val lockMethod = Regex("""^with[A-Za-z0-9_]*(?:Lock|Mutex)$""")
+
+    private val synchronizedCall = Regex("""(?<![A-Za-z0-9_.:])synchronized\s*\(""")
+
+    /**
+     * A `suspend fun` declared in this file. Modifiers precede `suspend` (`private suspend fun`), and
+     * `inline`/`operator` can follow it, so the run between `suspend` and `fun` stays open. The name
+     * is the last identifier before the parameter list, which strips both a generic parameter list
+     * and an extension receiver (`suspend fun <T> Foo.bar(` → `bar`).
+     */
+    private val suspendFunDecl = Regex("""(?<![A-Za-z0-9_.:])suspend\s+(?:[A-Za-z]+\s+)*fun\b([^(\n]*)\(""")
+    private val trailingIdentifier = Regex("""([A-Za-z_][A-Za-z0-9_]*)\s*$""")
+
+    /**
+     * Lambdas that do NOT execute under the lock: the coroutine builders (dispatched onto a scope) and
+     * cold-flow builders (run on collection). A SAM constructor is handled separately, by the
+     * capitalised-identifier test — it is stored and invoked by its consumer.
+     */
+    private val deferring = setOf("launch", "async", "flow", "channelFlow", "callbackFlow", "produce", "lazy")
+
+    /**
+     * Calls the scanner can see are suspending. Over-approximate by design; the two exceptions where
+     * precision was bought deliberately are on the object's KDoc. `api.x(` is a CALL rather than the
+     * issue's bare `api.`, because `api.connectionStates.value` is a `StateFlow` field read that does
+     * not suspend and appears twice under `NwSeam`'s lock — the bare token flags both.
+     */
+    private val suspendShapes: List<Pair<String, Regex>> = listOf(
+        "delay(" to Regex("""(?<![A-Za-z0-9_.])delay\s*\("""),
+        "withContext(" to Regex("""(?<![A-Za-z0-9_.])withContext\s*\("""),
+        "withTimeout(" to Regex("""(?<![A-Za-z0-9_.])withTimeout(?:OrNull)?\s*\("""),
+        "coroutineScope {" to Regex("""(?<![A-Za-z0-9_.])(?:coroutineScope|supervisorScope)\s*\{"""),
+        ".send(" to Regex("""\.send\s*\("""),
+        ".emit(" to Regex("""\.emit\s*\("""),
+        ".collect(" to Regex("""\.collect\s*[({]"""),
+        ".first(" to Regex("""\.first\s*[({]"""),
+        ".await(" to Regex("""\.await\s*\("""),
+        ".join()" to Regex("""\.join\s*\(\s*\)"""),
+        ".receive(" to Regex("""\.receive\s*\("""),
+        ".broadcast(" to Regex("""\.broadcast\s*\("""),
+        ".sendTo(" to Regex("""\.sendTo\s*\("""),
+        "api.x(" to Regex("""(?<![A-Za-z0-9_.])api\s*\.\s*[A-Za-z_][A-Za-z0-9_]*\s*\("""),
+    )
+
+    /** In source order, over already-stripped [code]. */
+    fun violations(code: String): List<Violation> {
+        val threadBound = threadBoundHolders(code)
+        val localSuspend = suspendFunDecl.findAll(code)
+            .mapNotNull { trailingIdentifier.find(it.groupValues[1])?.groupValues?.get(1) }
+            .toSet()
+        val out = mutableListOf<Violation>()
+        for ((brace, holder) in lockRegions(code, threadBound)) {
+            val end = matchingBrace(code, brace) ?: continue
+            val body = maskDeferredLambdas(code, brace + 1, end)
+            val lockLine = code.take(brace).count { it == '\n' } + 1
+            fun record(at: Int, call: String) {
+                out += Violation(
+                    line = code.take(brace + 1 + at).count { it == '\n' } + 1,
+                    call = call,
+                    holder = holder,
+                    lockLine = lockLine,
+                )
+            }
+            suspendShapes.forEach { (name, rx) -> rx.findAll(body).forEach { record(it.range.first, name) } }
+            // A call to a `suspend fun` of the same file, UNQUALIFIED. Requiring no leading `.` is what
+            // keeps a file that declares `suspend fun close()` from flagging its own `channel.close()`.
+            localSuspend.forEach { name ->
+                Regex("""(?<![A-Za-z0-9_.])${Regex.escape(name)}\s*\(""")
+                    .findAll(body)
+                    .forEach { record(it.range.first, "$name(") }
+            }
+        }
+        return out.sortedWith(compareBy({ it.line }, { it.call }))
+    }
+
+    /**
+     * Lock acquisitions whose receiver this file does not declare. The scanner cannot tell a
+     * thread-bound lock from a `Mutex` there, and a site it cannot judge must not be silently skipped
+     * — that is the whole failure mode #2480 exists to end.
+     */
+    fun unresolvedLockReceivers(code: String): List<Unresolved> {
+        val known = threadBoundHolders(code) + coroutineBoundHolders(code)
+        return trailingLambdaCall.findAll(code)
+            .filter { it.groupValues[1] !in known && lockMethod.matches(it.groupValues[2]) }
+            .map {
+                Unresolved(
+                    line = code.take(it.range.first).count { c -> c == '\n' } + 1,
+                    receiver = it.groupValues[1],
+                    call = it.groupValues[2],
+                )
+            }
+            .toList()
+    }
+
+    /** Identifiers bound to a THREAD-bound lock. A name resolved as a `Mutex` always wins. */
+    private fun threadBoundHolders(code: String): Set<String> {
+        val declared = (threadBoundInit.findAll(code) + threadBoundTyped.findAll(code))
+            .map { it.groupValues[1] }
+            .toSet()
+        return declared - coroutineBoundHolders(code)
+    }
+
+    private fun coroutineBoundHolders(code: String): Set<String> =
+        (coroutineBoundInit.findAll(code) + coroutineBoundTyped.findAll(code))
+            .map { it.groupValues[1] }
+            .toSet()
+
+    /** Index of the `{` opening each thread-bound critical section, paired with how it was acquired. */
+    private fun lockRegions(code: String, threadBound: Set<String>): List<Pair<Int, String>> {
+        val out = mutableListOf<Pair<Int, String>>()
+        trailingLambdaCall.findAll(code)
+            .filter { it.groupValues[1] in threadBound }
+            .forEach { out += (it.range.last) to "${it.groupValues[1]}.${it.groupValues[2]}" }
+        // `synchronized(x) { … }`: step over the balanced argument list to reach the body's `{`.
+        for (m in synchronizedCall.findAll(code)) {
+            var i = m.range.last
+            var depth = 0
+            while (i < code.length) {
+                if (code[i] == '(') depth++
+                if (code[i] == ')') { depth--; if (depth == 0) break }
+                i++
+            }
+            while (i < code.length && code[i] != '{' && code[i] != '\n') i++
+            if (i < code.length && code[i] == '{') out += i to "synchronized"
+        }
+        return out.sortedBy { it.first }
+    }
+
+    /**
+     * The lock body from [from] to [end], with every DEFERRED lambda blanked out (newlines kept, so
+     * line numbers survive). A body dispatched by `launch`/`async` or stored behind a SAM constructor
+     * runs outside the critical section, and counting it would grandfather the very files this guard
+     * protects — see the object's KDoc.
+     */
+    private fun maskDeferredLambdas(code: String, from: Int, end: Int): String {
+        val body = StringBuilder(code.substring(from, end))
+        var i = from
+        while (i < end) {
+            if (code[i] == '{' && isDeferredOpener(code, i)) {
+                val close = matchingBrace(code, i) ?: break
+                for (k in i..minOf(close, end - 1)) {
+                    if (code[k] != '\n') body[k - from] = ' '
+                }
+                i = close + 1
+            } else {
+                i++
+            }
+        }
+        return body.toString()
+    }
+
+    /**
+     * True when the lambda opening at [brace] is dispatched or stored rather than run inline. Read by
+     * walking back over an optional balanced argument list to the identifier that owns the lambda, so
+     * `scope.launch(start = CoroutineStart.LAZY) { … }` resolves to `launch`. Anything unrecognised is
+     * treated as running INLINE, which is the conservative direction: `if`/`when`/`else`/`try` and
+     * `forEach`/`let`/`getOrPut` all land there and keep their contents in scope.
+     */
+    private fun isDeferredOpener(code: String, brace: Int): Boolean {
+        var i = brace - 1
+        while (i >= 0 && code[i].isWhitespace()) i--
+        if (i >= 0 && code[i] == ')') {
+            var depth = 0
+            while (i >= 0) {
+                if (code[i] == ')') depth++
+                if (code[i] == '(') { depth--; if (depth == 0) break }
+                i--
+            }
+            i--
+            while (i >= 0 && code[i].isWhitespace()) i--
+        }
+        val name = trailingIdentifier.find(code.take(i + 1))?.groupValues?.get(1) ?: return false
+        return name in deferring || name.first().isUpperCase()
+    }
+
+    /** Index OF the `}` matching the `{` at [open], or null if unbalanced. */
+    private fun matchingBrace(code: String, open: Int): Int? {
+        var depth = 0
+        var i = open
+        while (i < code.length) {
+            when (code[i]) {
+                '{' -> depth++
+                '}' -> { depth--; if (depth == 0) return i }
+            }
+            i++
+        }
+        return null
+    }
+}
+
+// The guard's own POSITIVE CONTROL, run at the head of every execution of `forbidSuspendCallUnderLock`
+// below. Same rationale as the sibling's, and MORE load-bearing here than anywhere else in this file:
+// the tree is CLEAN, so the baseline is EMPTY, and an empty baseline is exactly what a scanner that
+// matches nothing also produces. Without these arms a green means "no file matched", which is
+// indistinguishable from "every regex broke". The arms are two-sided on purpose — a scanner that
+// flagged everything would pass a firing-only control, and the `deferred`/`mutex` arms are precisely
+// where the 13 measured false positives came from.
+object LockBodyControls {
+    /** Genuinely under the lock: an inline `forEach`, a direct call, and a same-file `suspend fun`. */
+    private val defect = """
+        class NwSeam(private val api: NwApi) {
+            private val lock = reentrantLock()
+            private val conns = mutableMapOf<String, Conn>()
+
+            suspend fun evict(id: String) = lock.withLock {
+                api.disconnect(id)
+                conns.values.forEach { it.link.send(farewell) }
+                drainSpool()
+                delay(100)
+            }
+
+            private suspend fun drainSpool() { }
+        }
+    """.trimIndent()
+
+    /** The prescribed fix: snapshot under the lock, act outside it. Must be silent. */
+    private val fixed = """
+        class NwSeam(private val api: NwApi) {
+            private val lock = reentrantLock()
+            private val conns = mutableMapOf<String, Conn>()
+
+            suspend fun evict(id: String) {
+                val targets = lock.withLock {
+                    val snapshot = conns.values.toList()
+                    conns.remove(id)
+                    snapshot
+                }
+                api.disconnect(id)
+                targets.forEach { it.link.send(farewell) }
+            }
+        }
+    """.trimIndent()
+
+    /**
+     * Every measured false positive, in one file: a dispatched `launch` body, a stored SAM
+     * constructor, and a `StateFlow` field read through `api`. All three are real in-tree shapes
+     * (`NwSeam`, `NwLoom`, `MuxServerLoom`) and all three must be silent — counting them would
+     * baseline the three files this guard most exists to protect.
+     */
+    private val deferred = """
+        class NwLoom(private val api: NwApi, private val scope: CoroutineScope) {
+            private val lock = reentrantLock()
+
+            fun arm(id: String) = lock.withLock {
+                val states = api.connectionStates.value
+                redialers[id] = scope.launch(start = CoroutineStart.LAZY) {
+                    delay(grace)
+                    onGraceExpired(id)
+                }
+                senders[id] = OutboundSender { payload -> rawSeam.broadcast(payload) }
+                states
+            }
+
+            private suspend fun onGraceExpired(id: String) { }
+        }
+    """.trimIndent()
+
+    /**
+     * A `kotlinx.coroutines.sync.Mutex` is COROUTINE-bound; holding it across a suspension point is
+     * its purpose. Must be silent — 18 production files do exactly this.
+     */
+    private val mutex = """
+        class RoomHost(private val seam: Seam) {
+            private val startMutex = Mutex()
+
+            suspend fun start() = startMutex.withLock {
+                seam.broadcast(hello)
+                delay(50)
+                seam.incoming.first { it.isWelcome }
+            }
+        }
+    """.trimIndent()
+
+    /**
+     * The lock arrives as a typed CONSTRUCTOR PROPERTY rather than an initialiser
+     * (`JoinerResumeMachine`). Measured as a silent MISS of 17 whole lock regions before
+     * `threadBoundTyped` went in — the failure direction an empty baseline cannot show you.
+     */
+    private val typedProperty = """
+        internal class JoinerResumeMachine(
+            private val seam: Seam,
+            private val lock: ReentrantLock,
+        ) {
+            fun attempt() = lock.withLock {
+                seam.broadcast(resume)
+            }
+        }
+    """.trimIndent()
+
+    /**
+     * `NearbySeam`'s inversion: the atomicfu lock is ALIASED and the bare `withLock` is the `Mutex`.
+     * A rule keyed on the method name gets this exactly backwards, so only the aliased call may fire.
+     */
+    private val aliased = """
+        class NearbySeam(private val endpointPeersMutex: Mutex) {
+            private val peersLock = reentrantLock()
+
+            suspend fun send(payload: ByteArray) {
+                endpointPeersMutex.withLock { link.send(payload) }
+                peersLock.withReentrantLock { link.send(payload) }
+            }
+        }
+    """.trimIndent()
+
+    /** A JVM monitor is thread-bound too (`NsdBrowser`, `BridgeNwApi`). Must fire. */
+    private val synchronized = """
+        class NsdBrowser(private val lock: Any) {
+            suspend fun drain() {
+                synchronized(lock) {
+                    queue.forEach { it.emit(pending) }
+                }
+            }
+        }
+    """.trimIndent()
+
+    /** A lock this file does not declare: judged by nobody, so it must be REPORTED, not skipped. */
+    private val unresolvable = """
+        class Downstream {
+            suspend fun run() = borrowed.withLock { link.send(payload) }
+        }
+    """.trimIndent()
+
+    /**
+     * Throws with a legible diff when any arm's verdict is wrong; returns how many arms RAN, so the
+     * stamp reports a number the code produced rather than one a comment claims.
+     */
+    fun verify(): Int {
+        fun scan(source: String) = LockBodyScanner.violations(KotlinCodeScanner.stripNonCode(source))
+        val failures = mutableListOf<String>()
+        var arms = 0
+        fun expect(arm: String, source: String, want: Int, wantCalls: List<String> = emptyList()) {
+            arms++
+            val got = scan(source)
+            if (got.size != want || (wantCalls.isNotEmpty() && got.map { it.call }.sorted() != wantCalls.sorted())) {
+                failures += "  $arm — expected $want violation(s)" +
+                    (if (wantCalls.isEmpty()) "" else " $wantCalls") +
+                    ", got ${got.size}: ${got.map { "${it.call}@${it.line}(${it.holder})" }}"
+            }
+        }
+        expect(
+            "defect (suspend calls genuinely under a reentrantLock)",
+            defect,
+            4,
+            listOf("api.x(", ".send(", "drainSpool(", "delay("),
+        )
+        expect("fixed (snapshot under the lock, act outside it)", fixed, 0)
+        expect("deferred (launch body, SAM constructor, api StateFlow read)", deferred, 0)
+        expect("mutex (coroutine-bound: holding across suspension is its purpose)", mutex, 0)
+        expect("typedProperty (lock as a constructor property)", typedProperty, 1, listOf(".broadcast("))
+        expect("aliased (NearbySeam's inverted alias: only the atomicfu one fires)", aliased, 1, listOf(".send("))
+        expect("synchronized (JVM monitor, inline forEach)", synchronized, 1, listOf(".emit("))
+        // The unresolved-receiver report is the guard's silent-miss detector, so it gets both arms too.
+        arms++
+        val unresolved = LockBodyScanner.unresolvedLockReceivers(KotlinCodeScanner.stripNonCode(unresolvable))
+        if (unresolved.map { it.receiver } != listOf("borrowed")) {
+            failures += "  unresolvable — expected the receiver `borrowed` to be REPORTED, got $unresolved"
+        }
+        arms++
+        val resolved = LockBodyScanner.unresolvedLockReceivers(KotlinCodeScanner.stripNonCode(mutex))
+        if (resolved.isNotEmpty()) {
+            failures += "  mutex/unresolved — a declared `Mutex` receiver must NOT be reported, got $resolved"
+        }
+        if (failures.isNotEmpty()) {
+            error(
+                "forbidSuspendCallUnderLock's OWN POSITIVE CONTROL failed (#2480).\n" +
+                    "The scanner no longer agrees with the shapes it exists to decide, so its verdict on " +
+                    "the tree means nothing. That matters more here than on any sibling guard: the tree " +
+                    "is CLEAN and the baseline is EMPTY, so a broken scanner and a healthy repo produce " +
+                    "the identical green. Fix the scanner, or, if a fixture is genuinely wrong, fix the " +
+                    "fixture and say in the PR why the new expectation is the correct one.\n" +
+                    failures.joinToString("\n"),
+            )
+        }
+        return arms
+    }
+}
+
+// Guard: forbid a `suspend` call inside a THREAD-BOUND lock body. #2480.
+//
+// The rule, the rationale and every boundary it does and does not decide are on `LockBodyScanner`
+// above; the positive control that keeps it from going green by absence is on `LockBodyControls`, and
+// runs first on every execution.
+//
+// THE BASELINE IS A PER-FILE COUNT RATCHET, the shape `forbidTightRunTestTimeout` uses and for the
+// same reason: a file allowlist exempts exactly the file that has already proved it attracts the
+// shape. A count fails on an increase, so a file at its baseline is not a licence to add one more.
+// It is EMPTY today, and that is a measured result rather than an aspiration — 419 thread-bound lock
+// regions across 62 production files, none of them holding a suspend call. Keep it that way: the
+// correct response to a red is to snapshot under the lock and act outside it, never to add an entry.
+//
+// It also fails on a baselined path that is no longer scanned at all — deleted, renamed, or moved out
+// of a production source set — for the reason `verifyModuleTable` and `forbidUnlintedModule` check
+// their own stale direction: an entry naming a file nobody has is a grandfathering claim about
+// nothing, and no other check can catch it.
+val forbidSuspendCallUnderLock by tasks.registering {
+    group = "verification"
+    description =
+        "Fails when a suspend call runs inside a thread-bound lock body — snapshot under the lock, then act outside it (#2480)."
+    // Both production layouts, for the reason the sibling guards give — one pattern expresses either,
+    // and the KMP one silently drops `:kuilt-scale`, `:demo-cli` and `:examples`.
+    val sources = kotlinSourcesIn(
+        subprojects.map { it.projectDir.resolve("src") },
+        listOf("*Main/**/*.kt", "main/**/*.kt"),
+    )
+    inputs.files(sources).withPropertyName("kotlinProductionSources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    val stamp = layout.buildDirectory.file("verification/forbid-suspend-call-under-lock.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    val rootPath = rootDir
+    // The baseline MUST stay a literal here. Per "Guard plumbing" above it is covered by the cache key
+    // only because it is folded into the task-action implementation hash; moving it to
+    // `gradle.properties` or a resource would silently drop it out and reintroduce the stale-green
+    // class the stamps were made safe against. Derived by running with it EMPTY, never hand-written.
+    val baseline = mapOf<String, Int>()
+    doLast {
+        val arms = LockBodyControls.verify()
+        val found = sortedMapOf<String, List<LockBodyScanner.Violation>>()
+        val unresolved = sortedMapOf<String, List<LockBodyScanner.Unresolved>>()
+        val scanned = mutableSetOf<String>()
+        var regions = 0
+        sources.files.forEach { file ->
+            val path = file.relativeTo(rootPath).invariantSeparatorsPath
+            scanned += path
+            val raw = file.readText()
+            if ("withLock" !in raw && "synchronized(" !in raw && "withMutex" !in raw) return@forEach
+            val code = KotlinCodeScanner.stripNonCode(raw)
+            regions++
+            LockBodyScanner.violations(code).takeIf { it.isNotEmpty() }?.let { found[path] = it }
+            LockBodyScanner.unresolvedLockReceivers(code).takeIf { it.isNotEmpty() }?.let { unresolved[path] = it }
+        }
+        if (unresolved.isNotEmpty()) {
+            error(
+                "forbidSuspendCallUnderLock cannot tell whether these locks are THREAD-bound (#2480).\n" +
+                    "The receiver is not declared in the same file, so the scanner can see neither " +
+                    "`reentrantLock()` nor `Mutex()` behind it — and a lock it cannot judge is its " +
+                    "largest silent-miss mode, so it fails here rather than skipping quietly.\n" +
+                    "  THE FIX IS ONE TYPE ANNOTATION on the declaration, which is also what makes the " +
+                    "call site readable:\n" +
+                    "      private val lock: ReentrantLock,   // thread-bound — this guard applies\n" +
+                    "      private val lock: Mutex,           // coroutine-bound — it does not\n" +
+                    unresolved.entries.joinToString("\n") { (path, hits) ->
+                        "  $path\n" + hits.joinToString("\n") { "    :${it.line}  ${it.receiver}.${it.call}" }
+                    },
+            )
+        }
+        val stale = baseline.keys.filter { it !in scanned }.sorted()
+        if (stale.isNotEmpty()) {
+            error(
+                "forbidSuspendCallUnderLock's baseline names production source that no longer exists " +
+                    "(#2480). A grandfathering entry for a file nobody has is a claim about nothing — if " +
+                    "the file was swept, renamed or moved, delete its entry in the same edit:\n  " +
+                    stale.joinToString("\n  "),
+            )
+        }
+        val regressions = found.filter { (path, hits) -> hits.size > (baseline[path] ?: 0) }
+        if (regressions.isNotEmpty()) {
+            val detail = regressions.entries.joinToString("\n") { (path, hits) ->
+                val was = baseline[path]
+                val from = if (was == null) "no baseline (this file is new to the ratchet)" else "baseline $was"
+                "  $path — $from, now ${hits.size}\n" +
+                    hits.joinToString("\n") { "    :${it.line}  ${it.call} under ${it.holder} taken at :${it.lockLine}" }
+            }
+            error(
+                "A suspend call runs inside a THREAD-BOUND lock body (#2480).\n" +
+                    "`reentrantLock()` must be unlocked by the thread that locked it. `withLock` is " +
+                    "`inline` with a non-`crossinline` block, so a suspend call inside it COMPILES " +
+                    "SILENTLY in a suspend function — and if it suspends, the coroutine resumes wherever " +
+                    "the dispatcher puts it and a non-owner performs the unlock.\n" +
+                    "  No test here can catch this. Every `:kuilt-nw` test runs on a " +
+                    "`StandardTestDispatcher`, which resumes on the SAME thread, so the illegal unlock is " +
+                    "structurally unreachable; only a real multi-threaded dispatcher reaches it, and only " +
+                    "probabilistically (#2466).\n" +
+                    "  THE FIX: SNAPSHOT UNDER THE LOCK, THEN ACT OUTSIDE IT. Take what you need out of " +
+                    "the guarded state, release the lock, and do the suspending work on the snapshot:\n" +
+                    "      val targets = lock.withLock { conns.values.toList() }   // snapshot\n" +
+                    "      targets.forEach { it.send(frame) }                      // act, unlocked\n" +
+                    "  `NwSeam` states exactly this rule in its own KDoc, and `NwLoom` shows the other " +
+                    "legitimate shape: hand the work to `scope.launch { … }` from inside the lock, whose " +
+                    "body is DISPATCHED and so never runs under it.\n" +
+                    "  If the state must stay guarded across the suspension, the lock is the wrong " +
+                    "primitive — a `kotlinx.coroutines.sync.Mutex` is coroutine-bound and may be held " +
+                    "across a suspension point.\n" +
+                    "  Do NOT add a baseline entry: it is empty by measurement, not by grandfathering.\n" +
+                    detail,
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText(
+            "ok — ${sources.files.size} production Kotlin sources scanned, $regions holding a lock; " +
+                "${found.size} file(s) at or below baseline (${found.values.sumOf { it.size }} sites); " +
+                "positive control agreed on all $arms arms\n",
+        )
+    }
+}
+
 // Locates a structured EVENT NAME inside a logging call and reports the LEVEL that call was made at,
 // for `forbidDemotedFieldTrail` below (#2420). Same `object` rationale as the sibling scanners: it is
 // invoked from inside `doLast`, where a script-level function reference would capture the
@@ -5200,6 +5797,7 @@ allprojects {
         dependsOn(rootProject.tasks.named("forbidProductionDispatcherInTests"))
         dependsOn(rootProject.tasks.named("forbidTightRunTestTimeout"))
         dependsOn(rootProject.tasks.named("forbidCoroutineLaunchInPropertyInitializer"))
+        dependsOn(rootProject.tasks.named("forbidSuspendCallUnderLock"))
         dependsOn(rootProject.tasks.named("forbidDemotedFieldTrail"))
     }
 }
