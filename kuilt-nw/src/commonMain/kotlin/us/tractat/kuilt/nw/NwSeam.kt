@@ -587,9 +587,12 @@ internal class NwSeam(
                         "→ disconnect + evict (loop preserved); the remote is on the other side of the " +
                         "#2425 wire flag day and the two cannot form a session"
                 }
+                // The offending byte is NOT repeated as a field: `e.code` is a signed `Byte`, so it would
+                // render 0xFF as `-1` right beside the message's own `0xff`, and a reader would have to
+                // work out which of the two to believe.
                 is NwUnknownFrameTypeException -> log.warn {
-                    "nw.seam.wire.unknown-type connId=${connId.value} self=${selfId.value} " +
-                        "code=${e.code} : ${e.message} → disconnect + evict (loop preserved)"
+                    "nw.seam.wire.unknown-type connId=${connId.value} self=${selfId.value} : ${e.message} " +
+                        "→ disconnect + evict (loop preserved)"
                 }
                 is NwTruncatedFrameException -> log.warn {
                     "nw.seam.wire.truncated connId=${connId.value} self=${selfId.value} " +
