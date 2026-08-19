@@ -35,6 +35,7 @@ class CrdtSamplesRunTest {
             "sampleMVRegister" to ::sampleMVRegister,
             "sampleLWWMap" to ::sampleLWWMap,
             "sampleORMap" to ::sampleORMap,
+            "sampleJsonCrdt" to ::sampleJsonCrdt,
             "sampleBoundedCounter" to ::sampleBoundedCounter,
             "sampleCausal" to ::sampleCausal,
             "sampleResettableCounter" to ::sampleResettableCounter,

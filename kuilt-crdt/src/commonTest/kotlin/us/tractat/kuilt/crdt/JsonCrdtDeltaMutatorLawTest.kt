@@ -3,31 +3,131 @@ package us.tractat.kuilt.crdt
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.test.assertAll
+import kotlin.random.Random
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * The delta-mutator law for [JsonCrdt], asserted **on encoded bytes**, and — the part no law can
- * see — the measurement that a write's frame does not grow with the document.
+ * The delta-mutator law for [JsonCrdt], asserted **on encoded bytes**:
  *
- * `JsonCrdt` is a thin wrapper over `ORMap<String, JsonNode>`, whose mutators already return the
- * change rather than the whole map. Until #2111 the wrapper threw that away: `set`/`remove`
+ * ```
+ * X.piece(mᵟ(X)) == m(X)
+ * ```
+ *
+ * for every document `X` and every mutator `m` — [JsonCrdt.set]'s delta against
+ * [JsonCrdt.setWhole], [JsonCrdt.remove]'s against [JsonCrdt.removeWhole]. The reference side is
+ * deliberately the internal whole-document form: comparing the delta path against itself would
+ * prove nothing.
+ *
+ * **What #2111 was.** `JsonCrdt` is a thin wrapper over `ORMap<String, JsonNode>`, whose mutators
+ * already return the change rather than the whole map. The wrapper threw that away: `set`/`remove`
  * absorbed the `ORMap` delta locally and handed back a whole new document, so
- * `Patch(doc.set(k, v))` put every key *and every key's subtree* on the wire on every write.
+ * `Patch(doc.set(k, v))` put every key **and every key's subtree** on the wire on every write.
+ * Measured before the fix, at 100 vs 1,000 keys: a `set` frame grew 12,632 b → 127,678 b, a
+ * `remove` frame 12,385 b → 127,431 b, against a whole document of 127,553 b.
  *
- * @see ORMapDeltaMutatorLawTest for the same shape one level down, and for why the reference side
- *   is deliberately the internal whole-state form rather than the delta path compared against
- *   itself.
+ * **Why the law alone cannot see that.** `Patch(doc.setWhole(…))` satisfies
+ * `X.piece(mᵟ(X)) == m(X)` perfectly — that is exactly what shipped. So the law tests are paired
+ * with the flat-frame measurements below, which are the only assertions standing between this
+ * change and a no-op that looks fully pinned.
+ *
+ * **The shuffle/duplication property is verified here, not assumed.** #2111 was filed while
+ * `ORMap.piece` — and therefore `JsonCrdt.piece` — was non-associative on the value axis, so the
+ * issue asked for the stronger property to be *checked* rather than carried over from the other
+ * three types. #2086 has since made the join associative at every depth of the document
+ * (`JsonCrdtTest.pieceIsAssociativeOverCausallyRelatedTrajectories` measures 0 violations in
+ * 39,232 ancestor triples, against 280 before). [setDeltasConvergeUnderShuffledAndDuplicatedDelivery]
+ * and [removeDeltasConvergeUnderShuffledAndDuplicatedDelivery] confirm the consequence directly:
+ * deltas delivered shuffled **and duplicated** encode identically to the whole-document fold. The
+ * property holds.
+ *
+ * @see ORMapDeltaMutatorLawTest for the same shape one level down.
  */
 @OptIn(ExperimentalSerializationApi::class)
 class JsonCrdtDeltaMutatorLawTest {
 
     private val alpha = ReplicaId("alpha")
     private val bravo = ReplicaId("bravo")
+    private val charlie = ReplicaId("charlie")
 
     private val cbor = Cbor {}
 
+    /** The leaf a nested write adds at [FRESH_FIELD]. */
+    private val addition: JsonNode.Leaf = scalar("W-fresh", "v")
+
     private fun bytes(doc: JsonCrdt): ByteArray = cbor.encodeToByteArray(JsonCrdt.serializer(), doc)
+
+    // ── the law ───────────────────────────────────────────────────────────────────
+
+    @Test
+    fun setDeltaSatisfiesTheMutatorLawOnBytes() {
+        val random = Random(2111)
+        var uid = 0
+        var multiTagTrials = 0
+
+        repeat(LAW_TRIALS) { trial ->
+            val state = randomState(random) { uid++ }
+            val key = KEYS.random(random)
+            val node = randomNode(random, uid++)
+            if (state.tagsOn(key).size > 1) multiTagTrials++
+
+            val viaFull = state.setWhole(key, node)
+            val viaDelta = state.piece(state.set(key, node))
+
+            assertEquals(viaFull, viaDelta, "trial $trial: set law by equality, key=$key")
+            assertTrue(
+                bytes(viaFull).contentEquals(bytes(viaDelta)),
+                "trial $trial: set law by bytes, key=$key — documents are equal but encode differently",
+            )
+        }
+
+        assertNonVacuous(multiTagTrials, "set")
+    }
+
+    @Test
+    fun removeDeltaSatisfiesTheMutatorLawOnBytes() {
+        val random = Random(2111)
+        var uid = 0
+        var multiTagTrials = 0
+
+        repeat(LAW_TRIALS) { trial ->
+            val state = randomState(random) { uid++ }
+            val key = KEYS.random(random)
+            if (state.tagsOn(key).size > 1) multiTagTrials++
+
+            val viaFull = state.removeWhole(key)
+            val viaDelta = state.piece(state.remove(key))
+
+            assertEquals(viaFull, viaDelta, "trial $trial: remove law by equality, key=$key")
+            assertTrue(
+                bytes(viaFull).contentEquals(bytes(viaDelta)),
+                "trial $trial: remove law by bytes, key=$key — documents are equal but encode differently",
+            )
+        }
+
+        assertNonVacuous(multiTagTrials, "remove")
+    }
+
+    /** Removing a key the document never held is the lattice identity: absorbing it does nothing. */
+    @Test
+    fun removingAnAbsentKeyYieldsTheLatticeIdentity() {
+        val state = JsonCrdt.empty(alpha)
+            .setWhole("kept", scalar("W0", "x"))
+            .setWhole("also-kept", scalar("W1", "y"))
+        val identity = state.remove("never-set")
+
+        assertAll(
+            { assertEquals(emptySet<String>(), identity.delta.keys, "the delta itself holds no key") },
+            { assertEquals(state, state.piece(identity), "absorbing it must change nothing") },
+            {
+                assertTrue(
+                    bytes(state).contentEquals(bytes(state.piece(identity))),
+                    "absorbing it must not even change the encoding",
+                )
+            },
+        )
+    }
 
     // ── the frame is flat in document size ────────────────────────────────────────
 
@@ -45,7 +145,7 @@ class JsonCrdtDeltaMutatorLawTest {
     fun aSetsFrameIsFlatInDocumentSize() {
         val small = documentOfSize(SMALL_STATE)
         val large = documentOfSize(LARGE_STATE)
-        val written = leaf(bravo, "fresh")
+        val written = scalar("W-fresh", "fresh")
 
         assertFlat(
             small = setFrame(small.withReplica(bravo), "k-0", written),
@@ -69,6 +169,225 @@ class JsonCrdtDeltaMutatorLawTest {
         )
     }
 
+    /**
+     * …and flat in the size of **what another replica has already stored under the key**.
+     *
+     * A `set` is additive over the node lattice, so the *receiver* ends up holding its own subtree
+     * merged with the one written. The delta must carry only the node the caller passed: shipping
+     * the locally merged result converges just as well and puts the receiver's own subtree back on
+     * the wire, which is an O(stored subtree) frame wearing a delta's name.
+     */
+    @Test
+    fun aSetsFrameIsFlatInTheStoredSubtreesSize() {
+        val written = objectNode("W-fresh", "fresh" to scalar("W-fresh", "v"))
+        val small = documentWithSubtreeOfSize(SMALL_STATE)
+        val large = documentWithSubtreeOfSize(LARGE_STATE)
+
+        assertAll(
+            {
+                assertFlat(
+                    small = setFrame(small.withReplica(bravo), SUBTREE_KEY, written),
+                    large = setFrame(large.withReplica(bravo), SUBTREE_KEY, written),
+                    whole = bytes(large),
+                    what = "set frame over a $SMALL_STATE-field vs a $LARGE_STATE-field stored subtree",
+                )
+            },
+            {
+                assertEquals(
+                    written,
+                    large.withReplica(bravo).set(SUBTREE_KEY, written).delta[SUBTREE_KEY],
+                    "the delta must carry the caller's node verbatim, not the locally merged one",
+                )
+            },
+            {
+                // …and the receiver still lands on the merged subtree, because it re-does the merge.
+                val author = large.withReplica(bravo)
+                assertTrue(
+                    bytes(author.setWhole(SUBTREE_KEY, written))
+                        .contentEquals(bytes(author.piece(author.set(SUBTREE_KEY, written)))),
+                    "the receiver re-does the node merge, so the law still holds — byte for byte",
+                )
+            },
+        )
+    }
+
+    /**
+     * **The one place the frame is *not* flat, measured rather than asserted away** — and the
+     * reason #2469 exists.
+     *
+     * A write *inside* an existing [JsonNode.Object] has no mutator of its own. The obvious
+     * spelling rebuilds the enclosing node and hands it to [JsonCrdt.set], so the frame is one key
+     * whose value is the **whole rebuilt subtree** — O(the subtree), not O(the write). Everything
+     * above is still true: the frame is one key, and flat in the rest of the document. This is the
+     * remaining term.
+     */
+    @Test
+    fun aNestedWritesFrameGrowsWithTheRebuiltSubtree() {
+        val small = rebuiltNestedFrame(SMALL_STATE)
+        val large = rebuiltNestedFrame(LARGE_STATE)
+
+        assertTrue(
+            large.size > small.size * NESTED_GROWTH_FLOOR,
+            "rebuilding the enclosing object is O(subtree): the frame grew from ${small.size} b to " +
+                "${large.size} b across $SMALL_STATE\u2192$LARGE_STATE fields. If this has gone flat, a " +
+                "path-addressed mutator landed and #2469 can close",
+        )
+    }
+
+    /**
+     * The cheaper spelling, and **why it is not simply the answer**.
+     *
+     * The minimal nested frame is already expressible today: hand [JsonCrdt.set] the nested
+     * [ORMap]'s own delta rather than the rebuilt map
+     * (`JsonNode.Object(profile.map.put(…).delta)`). It is flat, and it reads back as the same
+     * document. So #2469 is not a missing mechanism.
+     *
+     * But the two spellings are **not the same write**, which was worth finding out rather than
+     * assuming — an earlier version of this test asserted they encoded identically, and they do
+     * not. The rebuild parks the *whole merged subtree* on the tag it mints; the nested delta parks
+     * only the field written. The difference is invisible until a concurrent [JsonCrdt.remove]
+     * retires the *other* replica's tag: what survives is whatever the surviving tag was carrying,
+     * so the rebuild keeps the entire subtree and the cheap spelling keeps one field. Neither is
+     * wrong — they are different writes with different costs — and picking which one a
+     * path-addressed mutator should mean is part of what #2469 has to settle.
+     */
+    @Test
+    fun theCheapNestedSpellingIsFlatButKeepsLessAcrossAConcurrentRemove() {
+        val doc = documentWithSubtreeOfSize(SMALL_STATE)
+        val map = subtreeOf(doc)
+        val viaRebuild = absorb(doc, JsonNode.Object(map.piece { it.put(bravo, FRESH_FIELD, addition) }))
+        val viaNested = absorb(doc, JsonNode.Object(map.put(bravo, FRESH_FIELD, addition).delta))
+
+        // alpha removes the key from its own copy, retiring the only tag it holds — bravo's write is
+        // concurrent, so add-wins keeps the key, holding bravo's contribution alone.
+        val removal = doc.remove(SUBTREE_KEY)
+        val expected = (0 until SMALL_STATE).map { "f-$it" }.toSet() + FRESH_FIELD
+
+        assertAll(
+            {
+                assertFlat(
+                    small = nestedDeltaFrame(SMALL_STATE),
+                    large = nestedDeltaFrame(LARGE_STATE),
+                    whole = bytes(documentWithSubtreeOfSize(LARGE_STATE)),
+                    what = "set frame carrying the nested ORMap's own delta",
+                )
+            },
+            {
+                assertEquals(expected, subtreeOf(viaRebuild).keys, "the rebuild reads back whole")
+            },
+            {
+                assertEquals(expected, subtreeOf(viaNested).keys, "\u2026and so does the cheap spelling")
+            },
+            {
+                assertEquals(
+                    expected,
+                    subtreeOf(viaRebuild.piece(removal)).keys,
+                    "past a concurrent remove the rebuild keeps the whole subtree \u2014 it is sitting on " +
+                        "the tag that survived",
+                )
+            },
+            {
+                assertEquals(
+                    setOf(FRESH_FIELD),
+                    subtreeOf(viaNested.piece(removal)).keys,
+                    "\u2026while the cheap spelling keeps only the field it wrote. Same document today, " +
+                        "different document after a concurrent remove",
+                )
+            },
+        )
+    }
+
+    // ── delivery-order independence (the property #2111 asked to check, not assume) ─
+
+    /**
+     * Three replicas, random **set** streams, every delta delivered **shuffled and duplicated**,
+     * and the result compared byte-for-byte against the same op script folded through the
+     * **whole-document mutators** — the path that shipped before this change.
+     *
+     * The reference is deliberately the whole-document fold and not the in-order *delta* fold. A
+     * delta fold compared against itself is self-consistent under any mutation of the delta shape.
+     */
+    @Test
+    fun setDeltasConvergeUnderShuffledAndDuplicatedDelivery() {
+        val random = Random(23)
+        var uid = 0
+
+        repeat(CONVERGENCE_TRIALS) { trial ->
+            val (deltas, fullStates) = randomStream(random, { uid++ }, withRemoves = false)
+
+            val reference = fold(fullStates)
+            val outOfOrder = fold((deltas + deltas).shuffled(random))
+
+            assertTrue(
+                bytes(reference).contentEquals(bytes(outOfOrder)),
+                "trial $trial: ${deltas.size} set deltas, delivered shuffled and duplicated, must " +
+                    "encode identically to the whole-document fold (reference=${reference.keys}, " +
+                    "jumbled=${outOfOrder.keys})",
+            )
+        }
+    }
+
+    /** The same with removes mixed in — the arm that would have failed while #2086 was open. */
+    @Test
+    fun removeDeltasConvergeUnderShuffledAndDuplicatedDelivery() {
+        val random = Random(29)
+        var uid = 0
+        var removeDeltas = 0
+
+        repeat(CONVERGENCE_TRIALS) { trial ->
+            val (deltas, fullStates) = randomStream(random, { uid++ }, withRemoves = true) { removeDeltas++ }
+
+            val reference = fold(fullStates)
+            val outOfOrder = fold((deltas + deltas).shuffled(random))
+
+            assertTrue(
+                bytes(reference).contentEquals(bytes(outOfOrder)),
+                "trial $trial: ${deltas.size} deltas, delivered shuffled and duplicated, must encode " +
+                    "identically to the whole-document fold (reference=${reference.keys}, " +
+                    "jumbled=${outOfOrder.keys})",
+            )
+        }
+
+        assertTrue(
+            removeDeltas > 0,
+            "vacuous: no remove delta was generated in $CONVERGENCE_TRIALS trials",
+        )
+    }
+
+    /**
+     * A concurrent set delta survives a remove delta in either order — add-wins on the key holds
+     * through the delta path, and both orders encode identically.
+     */
+    @Test
+    fun aConcurrentSetDeltaSurvivesARemoveDeltaInEitherOrder() {
+        val start = JsonCrdt.empty(alpha)
+            .setWhole("bystander", scalar("W0", "b"))
+            .setWhole(KEY, scalar("W1", "v1"))
+
+        val removal = start.remove(KEY).delta
+        val concurrent = start.withReplica(bravo).set(KEY, scalar("W2", "v2")).delta
+
+        val removeFirst = start.piece(removal).piece(concurrent)
+        val setFirst = start.piece(concurrent).piece(removal)
+
+        assertAll(
+            { assertTrue(KEY in removeFirst.keys, "the set must win when the remove lands first") },
+            { assertTrue(KEY in setFirst.keys, "the set must win when the set lands first") },
+            {
+                assertTrue(
+                    "bystander" in removeFirst.keys && "bystander" in setFirst.keys,
+                    "a remove delta must not retire tags belonging to any other key",
+                )
+            },
+            {
+                assertTrue(
+                    bytes(removeFirst).contentEquals(bytes(setFirst)),
+                    "both orders must encode identically, or the root-hash gate is off for the pair",
+                )
+            },
+        )
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────────
 
     /**
@@ -76,27 +395,162 @@ class JsonCrdtDeltaMutatorLawTest {
      * broadcast verbatim, so this is the frame.
      */
     private fun setFrame(doc: JsonCrdt, key: String, node: JsonNode): ByteArray =
-        bytes(doc.set(key, node))
+        bytes(doc.set(key, node).delta)
 
     /** The bytes a replicator would broadcast for `doc.remove(key)`. */
     private fun removeFrame(doc: JsonCrdt, key: String): ByteArray =
-        bytes(doc.remove(key))
+        bytes(doc.remove(key).delta)
 
-    /**
-     * The whole-document write — the O(document) spelling the fixtures are built from, so a
-     * generator never depends on the mechanism under test.
-     */
-    private fun JsonCrdt.writeWhole(key: String, node: JsonNode): JsonCrdt = set(key, node)
+    /** The root map's presence tags for [key] — how a trial knows it exercised a multi-tag key. */
+    private fun JsonCrdt.tagsOn(key: String): Set<Dot> = root.tagsOn(key)
+
+    /** The nested object stored at [SUBTREE_KEY]. */
+    private fun subtreeOf(doc: JsonCrdt): ORMap<String, JsonNode> =
+        (doc[SUBTREE_KEY] as JsonNode.Object).map
+
+    /** [doc] with `bravo`'s write of [node] at [SUBTREE_KEY] absorbed. */
+    private fun absorb(doc: JsonCrdt, node: JsonNode): JsonCrdt =
+        doc.withReplica(bravo).let { it.piece(it.set(SUBTREE_KEY, node)) }
+
+    /** The frame for the rebuild-the-enclosing-object spelling over a [fields]-field subtree. */
+    private fun rebuiltNestedFrame(fields: Int): ByteArray {
+        val doc = documentWithSubtreeOfSize(fields).withReplica(bravo)
+        val map = subtreeOf(doc)
+        return setFrame(doc, SUBTREE_KEY, JsonNode.Object(map.piece { it.put(bravo, FRESH_FIELD, addition) }))
+    }
+
+    /** The frame for the pass-the-nested-delta spelling over a [fields]-field subtree. */
+    private fun nestedDeltaFrame(fields: Int): ByteArray {
+        val doc = documentWithSubtreeOfSize(fields).withReplica(bravo)
+        val map = subtreeOf(doc)
+        return setFrame(doc, SUBTREE_KEY, JsonNode.Object(map.put(bravo, FRESH_FIELD, addition).delta))
+    }
 
     /** A scalar leaf whose register dot is minted by [writer]. */
-    private fun leaf(writer: ReplicaId, value: String): JsonNode.Leaf =
-        JsonNode.Leaf(MVRegister.empty<JsonValue>().set(writer, JsonValue.Str(value)))
+    private fun scalar(writer: String, value: String): JsonNode.Leaf =
+        JsonNode.Leaf(MVRegister.empty<JsonValue>().set(ReplicaId(writer), JsonValue.Str(value)))
+
+    /** An object node whose keys are minted by [writer], so nested dot spaces stay disjoint. */
+    private fun objectNode(writer: String, vararg pairs: Pair<String, JsonNode>): JsonNode.Object =
+        JsonNode.Object(
+            pairs.fold(ORMap.empty<String, JsonNode>()) { acc, (k, v) ->
+                acc.piece { it.put(ReplicaId(writer), k, v) }
+            },
+        )
+
+    /** An array node whose insert ops are minted by [writer]. */
+    private fun arrayNode(writer: String, vararg elements: JsonNode): JsonNode.Array =
+        JsonNode.Array(
+            elements.fold(Rga.empty<JsonNode>()) { acc, element ->
+                acc.insertAfter(ReplicaId(writer), acc.sequence.lastOrNull() ?: RgaId.HEAD, element).first
+            },
+        )
+
+    /**
+     * A node of one of the three shapes, every dot minted under a [uid]-unique writer.
+     *
+     * All three shapes matter: `JsonNode` merges structurally, so a generator that only ever wrote
+     * scalars would leave the recursive paths — a nested `ORMap`, a nested `Rga` — out of the law
+     * entirely, and those are exactly where a delta that confused two dot spaces would show.
+     */
+    private fun randomNode(random: Random, uid: Int): JsonNode {
+        val writer = "W$uid"
+        val value = VALUES.random(random)
+        return when (random.nextInt(3)) {
+            0 -> scalar(writer, value)
+            1 -> objectNode(writer, "p" to scalar(writer, value))
+            else -> arrayNode(writer, scalar(writer, value))
+        }
+    }
+
+    /**
+     * A random document, built as the merge of two independently-grown branches so that keys both
+     * branches touched carry **more than one** tag.
+     *
+     * That is the whole point of the shape: a set mints a single tag and supersedes the key's
+     * previous ones *from the same replica*, so a document built by one replica alone never has a
+     * multi-tag key, [ORMap.put]'s superseded-tags term is always a singleton, and the law would
+     * hold vacuously against precisely the defect it exists to catch.
+     *
+     * Built with the whole-document mutators so the generator never depends on the mechanism the
+     * law is testing.
+     */
+    private fun randomState(random: Random, uid: () -> Int): JsonCrdt {
+        var left = JsonCrdt.empty(alpha)
+        var right = JsonCrdt.empty(bravo)
+        repeat(random.nextInt(2, 8)) {
+            left = left.setWhole(KEYS.random(random), randomNode(random, uid()))
+            right = right.setWhole(KEYS.random(random), randomNode(random, uid()))
+        }
+        var merged = left.piece(right).withReplica(charlie)
+        repeat(random.nextInt(0, 3)) {
+            val key = KEYS.random(random)
+            merged = if (random.nextBoolean()) {
+                merged.setWhole(key, randomNode(random, uid()))
+            } else {
+                merged.removeWhole(key)
+            }
+        }
+        return merged
+    }
+
+    /**
+     * One random op script run by three replicas writing concurrently, emitted **twice**: once as
+     * the minimal deltas and once as the whole documents [JsonCrdt.setWhole] produces. Each op's
+     * full document is delivered eagerly to a random subset of peers, so later operations supersede
+     * tags minted elsewhere.
+     */
+    private fun randomStream(
+        random: Random,
+        uid: () -> Int,
+        withRemoves: Boolean,
+        onRemove: () -> Unit = {},
+    ): Pair<List<JsonCrdt>, List<JsonCrdt>> {
+        val replicas = listOf(alpha, bravo, charlie)
+        val local = replicas.associateWith { JsonCrdt.empty(it) }.toMutableMap()
+        val deltas = mutableListOf<JsonCrdt>()
+        val fullStates = mutableListOf<JsonCrdt>()
+
+        repeat(random.nextInt(3, 10)) {
+            val author = replicas.random(random)
+            val key = KEYS.random(random)
+            val state = local.getValue(author)
+
+            val advanced = if (withRemoves && key in state.keys && random.nextInt(3) == 0) {
+                onRemove()
+                deltas += state.remove(key).delta
+                state.removeWhole(key)
+            } else {
+                val node = randomNode(random, uid())
+                deltas += state.set(key, node).delta
+                state.setWhole(key, node)
+            }
+            local[author] = advanced
+            fullStates += advanced
+
+            replicas.filter { it != author && random.nextBoolean() }.forEach { peer ->
+                local[peer] = local.getValue(peer).piece(advanced)
+            }
+        }
+        return deltas to fullStates
+    }
+
+    private fun fold(states: List<JsonCrdt>): JsonCrdt =
+        states.fold(JsonCrdt.empty(alpha)) { acc, state -> acc.piece(state) }
 
     /** A document of [keyCount] scalar keys, all written by [alpha]. */
     private fun documentOfSize(keyCount: Int): JsonCrdt =
         (0 until keyCount).fold(JsonCrdt.empty(alpha)) { doc, index ->
-            doc.writeWhole("k-$index", leaf(alpha, "v-$index"))
+            doc.setWhole("k-$index", scalar("W-$index", "v-$index"))
         }
+
+    /** A one-key document whose value is a [JsonNode.Object] of [fieldCount] fields. */
+    private fun documentWithSubtreeOfSize(fieldCount: Int): JsonCrdt {
+        val subtree = (0 until fieldCount).fold(ORMap.empty<String, JsonNode>()) { map, index ->
+            map.piece { it.put(alpha, "f-$index", scalar("W-$index", "v-$index")) }
+        }
+        return JsonCrdt.empty(alpha).setWhole(SUBTREE_KEY, JsonNode.Object(subtree))
+    }
 
     /**
      * Asserts a frame's encoded size does not grow with the document it was built from: [large]
@@ -122,8 +576,47 @@ class JsonCrdtDeltaMutatorLawTest {
         )
     }
 
+    /** Fails if too few trials exercised a key carrying concurrent tags. */
+    private fun assertNonVacuous(multiTagTrials: Int, mutator: String) {
+        assertTrue(
+            multiTagTrials >= MIN_MULTI_TAG_TRIALS,
+            "$mutator law ran vacuously: only $multiTagTrials of $LAW_TRIALS trials mutated a key " +
+                "carrying more than one tag, so the superseded-tags term was never exercised",
+        )
+    }
+
     private companion object {
-        /** The two document sizes the flat-frame tests measure across — an order of magnitude apart. */
+        /** Trials per law test. */
+        const val LAW_TRIALS = 400
+
+        /** Trials per delivery-order test. */
+        const val CONVERGENCE_TRIALS = 200
+
+        /**
+         * The floor the generator must clear for a law test to mean anything. **Measured: 139 of
+         * 400 for `set` and 136 of 400 for `remove`** on seed 2111. Set at roughly half of that, so
+         * an incidental generator tweak does not red-light the suite, but a generator that stopped
+         * producing concurrent tags — and with it every case in which [ORMap.put]'s superseded-tags
+         * term does any work — fails loudly instead of passing vacuously.
+         */
+        const val MIN_MULTI_TAG_TRIALS = 65
+
+        /** A small pool, so branches collide and keys accumulate concurrent tags. */
+        val KEYS = listOf("a", "b", "c", "d", "e", "f")
+
+        /** Scalar payloads. Small — the value lattice is not what these tests are about. */
+        val VALUES = listOf("p", "q", "r", "s")
+
+        /** The single key the scenario tests use. */
+        const val KEY = "k"
+
+        /** The key holding a nested object when a test needs the stored subtree to be expensive. */
+        const val SUBTREE_KEY = "profile"
+
+        /** The field a nested write adds, and the leaf it writes there. */
+        const val FRESH_FIELD = "fresh"
+
+        /** The two sizes the frame tests measure across — an order of magnitude apart. */
         const val SMALL_STATE = 100
         const val LARGE_STATE = 1_000
 
@@ -133,5 +626,13 @@ class JsonCrdtDeltaMutatorLawTest {
          * this is a term that scales with the document.
          */
         const val FLAT_TOLERANCE_PERCENT = 120
+
+        /**
+         * The factor the rebuild-the-enclosing-object spelling must grow the frame by across
+         * [SMALL_STATE]→[LARGE_STATE] fields. **Measured at 12,507 b → 127,553 b, 10.2×.** Set well
+         * below that, so the assertion fails when the frame has gone *flat* — which would mean a
+         * path-addressed mutator landed and #2469 is done — rather than on encoding noise.
+         */
+        const val NESTED_GROWTH_FLOOR = 4
     }
 }

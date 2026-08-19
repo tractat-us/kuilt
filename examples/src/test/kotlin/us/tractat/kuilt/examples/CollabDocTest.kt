@@ -16,7 +16,6 @@ import us.tractat.kuilt.crdt.JsonNode
 import us.tractat.kuilt.crdt.JsonValue
 import us.tractat.kuilt.crdt.MVRegister
 import us.tractat.kuilt.crdt.ORMap
-import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.piece
 import us.tractat.kuilt.quilter.Quilter
@@ -82,12 +81,12 @@ class CollabDocTest {
 
             // Alice sets the document title.
             aliceDoc.mutate { doc ->
-                Patch(doc.withReplica(aliceDoc.replica).set("title", strLeaf(aliceDoc.replica, "Quarterly Report")))
+                doc.withReplica(aliceDoc.replica).set("title", strLeaf(aliceDoc.replica, "Quarterly Report"))
             }
 
             // Bob concurrently sets the author field.
             bobDoc.mutate { doc ->
-                Patch(doc.withReplica(bobDoc.replica).set("author", strLeaf(bobDoc.replica, "Bob")))
+                doc.withReplica(bobDoc.replica).set("author", strLeaf(bobDoc.replica, "Bob"))
             }
 
             delay(10) // advance virtual time so all delta broadcasts deliver
@@ -128,7 +127,7 @@ class CollabDocTest {
                         it.put(aliceDoc.replica, "name", strLeaf(aliceDoc.replica, "Alice"))
                     },
                 )
-                Patch(doc.withReplica(aliceDoc.replica).set("profile", profile))
+                doc.withReplica(aliceDoc.replica).set("profile", profile)
             }
             bobDoc.mutate { doc ->
                 val profile = JsonNode.Object(
@@ -136,7 +135,7 @@ class CollabDocTest {
                         it.put(bobDoc.replica, "location", strLeaf(bobDoc.replica, "London"))
                     },
                 )
-                Patch(doc.withReplica(bobDoc.replica).set("profile", profile))
+                doc.withReplica(bobDoc.replica).set("profile", profile)
             }
 
             delay(10) // advance virtual time so all delta broadcasts deliver

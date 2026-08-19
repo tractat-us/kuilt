@@ -40,25 +40,25 @@ internal class JsonCrdtConvergenceTest : LatticeLawSuite<JsonCrdt>() {
         alphabet = listOf(
             LatticeOp("set-leaf", OpKind.ASSERT) { state, replicaIndex, random ->
                 val r = replicaIds[replicaIndex]
-                state.withReplica(r).set(focusKey, leafNode(r, "v${random.nextInt(4)}"))
+                state.withReplica(r).piece { it.set(focusKey, leafNode(r, "v${random.nextInt(4)}")) }
             },
             LatticeOp("set-obj", OpKind.ASSERT) { state, replicaIndex, _ ->
                 val r = replicaIds[replicaIndex]
-                state.withReplica(r).set(focusKey, objNode(r, "f" to leafNode(r, "obj")))
+                state.withReplica(r).piece { it.set(focusKey, objNode(r, "f" to leafNode(r, "obj"))) }
             },
             LatticeOp("set-leaf-roam", OpKind.ASSERT) { state, replicaIndex, random ->
                 val r = replicaIds[replicaIndex]
-                state.withReplica(r).set(keys[random.nextInt(keys.size)], leafNode(r, "v${random.nextInt(4)}"))
+                state.withReplica(r).piece { it.set(keys[random.nextInt(keys.size)], leafNode(r, "v${random.nextInt(4)}")) }
             },
             LatticeOp("set-arr-roam", OpKind.ASSERT) { state, replicaIndex, random ->
                 val r = replicaIds[replicaIndex]
-                state.withReplica(r).set(keys[random.nextInt(keys.size)], arrNode(r, leafNode(r, "item")))
+                state.withReplica(r).piece { it.set(keys[random.nextInt(keys.size)], arrNode(r, leafNode(r, "item"))) }
             },
             LatticeOp("remove", OpKind.RETIRE) { state, replicaIndex, _ ->
-                state.withReplica(replicaIds[replicaIndex]).remove(focusKey)
+                state.withReplica(replicaIds[replicaIndex]).piece { it.remove(focusKey) }
             },
             LatticeOp("remove-roam", OpKind.RETIRE) { state, replicaIndex, random ->
-                state.withReplica(replicaIds[replicaIndex]).remove(keys[random.nextInt(keys.size)])
+                state.withReplica(replicaIds[replicaIndex]).piece { it.remove(keys[random.nextInt(keys.size)]) }
             },
         ),
         serializer = JsonCrdt.serializer(),

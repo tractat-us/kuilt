@@ -826,8 +826,8 @@ class RgaCompactedFloorTest {
     @Test
     fun aJsonDocumentRaisesItsFloorToTheArraysBeneathIt() {
         val doc = JsonCrdt.empty(me)
-            .set("mine", flooredArray(me, leaf("x")))
-            .set("theirs", flooredArray(peer, leaf("y")))
+            .piece { it.set("mine", flooredArray(me, leaf("x"))) }
+            .piece { it.set("theirs", flooredArray(peer, leaf("y"))) }
 
         assertEquals(
             VersionVector.of(mapOf(me to 1L, peer to 1L)),
