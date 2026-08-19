@@ -84,11 +84,20 @@ class MeshSeamBestEffortCloseTest {
     }
 
     /**
-     * Construction's duplicate-link dedup must close every loser even when one mints a cancellation.
+     * Construction's duplicate-link dedup must dispose of every loser even when one mints a cancellation.
      *
      * Three connections resolve to the SAME remote id, so one wins and two lose. Every conn mints, so
-     * the assertion does not depend on *which* one wins: pre-fix exactly one loser was reached before
-     * the rethrow aborted `hubMesh` outright; post-fix both are.
+     * the assertion does not depend on *which* one wins.
+     *
+     * **The site moved in #2485, exactly as `addLink`'s did in #2474.** `buildMesh` no longer closes its
+     * losers at all — it hands them to the seam, which drains them from `init` — so the close is owed at
+     * **drain end**, in `endDrain`, and the one thing that must survive it is each drained link being
+     * disposed of independently of what its siblings' closes did. Hence the shape below: assert nothing
+     * is closed at construction (a loser is draining, not closed), then drive every drain to its in-band
+     * terminator and assert both losers were still reached.
+     *
+     * There is no `closeSwallowingCalleeCancellation` around `hubMesh` any more, deliberately: it closes
+     * nothing, so a wrapper there would absorb nothing and read as protection the call does not need.
      */
     @Test
     fun dedupReachesEveryLoserAfterOneMintsACancellation() = runTest {
@@ -102,20 +111,35 @@ class MeshSeamBestEffortCloseTest {
             CloseRecordingConnection(PeerId("conn-$index"), pair.first, closed, mintsCancellation = true)
         }
 
-        val meshDeferred = async { closeSwallowingCalleeCancellation { hubMesh(self, conns, dispatcher, Random(7)) } }
+        val meshDeferred = async { hubMesh(self, conns, dispatcher, Random(7)) }
         val handshakes = pairs.map { async { handshakeRemote(it.second, duplicate) } }
         val mesh = meshDeferred.await()
         handshakes.forEach { it.await() }
 
         assertEquals(
-            2,
-            closed.value.size,
-            "both dedup losers must be closed; a callee-minted cancellation on the first must not " +
-                "leave the second one open. Reached: ${closed.value}",
+            emptyList(),
+            closed.value,
+            "precondition: a construction-time dedup loser is DRAINED, not closed (#2485) — if anything " +
+                "is already closed here, the drive below is not what reaches the closes",
         )
-        // The survivor is still a live link, and construction completed rather than throwing.
-        assertEquals(setOf(self, duplicate), mesh?.peers?.value, "the dedup winner must still be linked")
-        closeSwallowingCalleeCancellation { mesh?.close() }
+
+        // Every far end says goodbye. On the two losing links that is the drain's terminator, and it is
+        // `endDrain`'s close — the one that mints — that must still reach both.
+        pairs.forEach { it.second.send(MeshWire.encodeGoodbye()) }
+        testScheduler.runCurrent()
+
+        assertAll(
+            {
+                assertEquals(
+                    2,
+                    closed.value.size,
+                    "both dedup losers must be closed at drain end; a callee-minted cancellation on one " +
+                        "must not leave the other open. Reached: ${closed.value}",
+                )
+            },
+            { assertEquals(setOf(self, duplicate), mesh.peers.value, "the dedup winner must still be linked") },
+        )
+        closeSwallowingCalleeCancellation { mesh.close() }
     }
 
     /**
