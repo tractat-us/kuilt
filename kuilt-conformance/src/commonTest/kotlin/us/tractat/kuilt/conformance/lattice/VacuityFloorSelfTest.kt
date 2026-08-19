@@ -227,6 +227,101 @@ internal class VacuityFloorSelfTest {
     }
 
     /**
+     * **Retirement dead on two of three replicas must red the binding** — #2158's shape, asserted
+     * rather than described.
+     *
+     * This is the check #2158 asked for and did not have: its complaint was that the harness's
+     * ability to catch this shape was *prose*, and the six bindings that did catch it caught it by
+     * accident, on a shared 25% ceiling their own healthy rates happened to sit far below. #2145
+     * removed that accident by removing the waste it rested on. The per-binding
+     * [VacuityFloors.maxNoOpSteps] constants put it back deliberately, and this test is what stops
+     * the next edit to one of those constants from quietly undoing it again.
+     *
+     * The mechanism is the **no-op ceiling**, not the retirement floor: a retiring op that has gone
+     * dead still gets drawn, and every draw of it is now a step that changes nothing. The retirement
+     * floor cannot see it, because replica 0's shape plus replica 0's own exploration clear 10% on
+     * their own (see [VacuityFloors]).
+     *
+     * `JsonCrdt` is excluded and the exclusion is the honest part: its healthy and crippled rates
+     * are 11.5% and 13.7%, 2.2 points apart, and a ceiling between them would red on any generator
+     * edit. Its constant targets the leading-assert pin instead, and its binding comment says so.
+     */
+    @Test
+    fun retirementDeadOffReplicaZeroBreachesEveryBindingThatCanSeparateIt() {
+        assertAll(
+            *bindingsWhoseCeilingCatchesDeadRetirement().map { (name, harness) ->
+                {
+                    val crippled = retirementDeadOffReplicaZero(harness)
+                    val measured = crippled.measureVacuity(seeds)
+                    assertTrue(
+                        measured.noOpRate > crippled.floors.maxNoOpSteps,
+                        "$name with retirement dead off replica 0 must BREACH its no-op ceiling — " +
+                            "that is the whole of what #2158 asked for. Measured " +
+                            "${measured.noOpSteps}/${measured.steps} = ${measured.noOpRate}, ceiling " +
+                            "${crippled.floors.maxNoOpSteps}. If you have just raised this binding's " +
+                            "`maxNoOpSteps`, you have re-opened #2158 on it; if you have made its " +
+                            "generator waste fewer steps, re-measure with " +
+                            "`-Plattice.vacuity.breakdown=true` and lower the ceiling to match.",
+                    )
+                    assertFailsWith<IllegalStateException>(
+                        "the harness must ENFORCE it, not merely measure it",
+                    ) { crippled.checkVacuityFloors(seeds) }
+                    Unit
+                }
+            }.toTypedArray(),
+        )
+    }
+
+    /**
+     * Every retiring binding whose ceiling is set to separate the crippled arm — all twelve except
+     * `JsonCrdt`, for the reason given on the test above.
+     *
+     * Listed rather than derived. A registry that walked the package would silently shrink to
+     * nothing if the derivation broke, and a test that asserts over an empty list is the vacuity
+     * shape this whole file exists to argue against.
+     */
+    private fun bindingsWhoseCeilingCatchesDeadRetirement(): List<Pair<String, LatticeLawHarness<*>>> = listOf(
+        "CausalDotMap" to CausalDotMapConvergenceTest().newHarness(),
+        "CausalDotSet" to CausalDotSetConvergenceTest().newHarness(),
+        "EphemeralMap" to EphemeralMapConvergenceTest().newHarness(),
+        "Fugue" to FugueConvergenceTest().newHarness(),
+        "LWWMap" to LWWMapConvergenceTest().newHarness(),
+        "LWWRegister" to LWWRegisterConvergenceTest().newHarness(),
+        "MovableTree" to MovableTreeConvergenceTest().newHarness(),
+        "ORMap" to ORMapConvergenceTest().newHarness(),
+        "ORSet" to ORSetConvergenceTest().newHarness(),
+        "Rga" to RgaConvergenceTest().newHarness(),
+        "TwoPhaseSet" to TwoPhaseSetConvergenceTest().newHarness(),
+    )
+
+    /**
+     * [harness] with every [OpKind.RETIRE] op effective on replica 0 only.
+     *
+     * The critical shape survives by construction — shapes run on replica 0 — so the shape's own
+     * no-op check still passes and the arm differs from the control in exactly one thing: what the
+     * *other two replicas* can retire.
+     */
+    private fun <S : us.tractat.kuilt.crdt.Quilted<S>> retirementDeadOffReplicaZero(
+        harness: LatticeLawHarness<S>,
+    ): LatticeLawHarness<S> = LatticeLawHarness(
+        initial = harness.initial,
+        alphabet = harness.alphabet.map { op ->
+            if (op.kind != OpKind.RETIRE) {
+                op
+            } else {
+                LatticeOp(op.name, op.kind) { state, replicaIndex, random ->
+                    if (replicaIndex == 0) op.apply(state, replicaIndex, random) else state
+                }
+            }
+        },
+        serializer = harness.serializer,
+        criticalShapes = harness.criticalShapes,
+        floors = harness.floors,
+        replicaCount = harness.replicaCount,
+        opsPerReplica = harness.opsPerReplica,
+    )
+
+    /**
      * The floor is not merely breached in the numbers — the harness **enforces** it, and names it.
      *
      * [vacuousArmBreachesTheRetirementFloorAndNoOther] reads the rates and compares them to
