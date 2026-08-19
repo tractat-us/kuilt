@@ -1,5 +1,9 @@
 package us.tractat.kuilt.nw
 
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
+import kotlin.concurrent.Volatile
+
 /**
  * In-memory switchboard wiring together N distinct [FakeNwApi] devices — the JVM
  * test vehicle that lets the transport-logic TCK run without Network.framework.
@@ -121,10 +125,27 @@ package us.tractat.kuilt.nw
  * A hold also splits [send]'s "there is no link" case in two, and the halves must stay divergent
  * ([SendFate.Refused] vs [SendFate.DroppedLinkGone]) — the argument is on [deliverOrDrop].
  *
- * ## Threading
- * Driven under `runTest`'s single virtual thread; every emit is a `suspend` call on the caller's
- * coroutine (no private [kotlinx.coroutines.CoroutineScope]). The registry/link maps are only ever
- * touched from that one test coroutine, so plain mutable maps are correct here and need no lock.
+ * ## Threading — real primitives, because a probe may drive this from real OS threads (#2481)
+ * Every emit is a `suspend` call on the caller's coroutine (there is no private
+ * [kotlinx.coroutines.CoroutineScope]), so the radio inherits whatever dispatcher its caller runs on.
+ * Under `runTest` that is one virtual thread; under `NwSeamConcurrencyTest` it is
+ * `Dispatchers.Default`, with four `NwSeam` lifecycle collectors and the caller's own
+ * `broadcast`/`close` all reaching this switchboard at once.
+ *
+ * This class used to say the maps "are only ever touched from that one test coroutine, so plain
+ * mutable maps are correct here and need no lock". That was true of the callers that existed, and it
+ * is exactly the property a concurrency probe destroys: an unguarded `mutableMapOf` under real threads
+ * produces a `ConcurrentModificationException` or a lost write **in the harness**, which a reader
+ * would attribute to the system under test. So every field below is guarded by one [lock] (atomicfu
+ * `reentrantLock`) — a real primitive, never `limitedParallelism(1)` confinement, which is banned
+ * repo-wide precisely because it conflates scheduling with locking.
+ *
+ * The rule is `NwSeam`'s own, and it is what keeps the guarding behaviour-preserving: **no `suspend`
+ * call ever runs under [lock]**. Each entry point mutates its maps under the lock, snapshots the
+ * `(device, event)` pairs it owes, releases, and only then emits. Under `runTest` that is
+ * indistinguishable from the previous emit-while-iterating shape in every case that was not already a
+ * `ConcurrentModificationException` waiting to happen — the snapshot preserves iteration order, and
+ * nothing between the mutation and the emits observes intermediate state.
  */
 /**
  * What became of one [FakeNwRadio.send] (#2425). A frame's fate is decided when it is issued and may
@@ -189,10 +210,17 @@ internal class SentFrame(
     /** The frame's leading bytes, truncated to [FakeNwRadio.LEDGER_PREVIEW_BYTES]. */
     val bytes: ByteArray,
 ) {
+    /**
+     * [Volatile] because the write and the read are on different threads under a concurrency probe:
+     * [FakeNwRadio] writes this under its own lock, but a test reads `frame.fate` off the record
+     * itself, outside that lock. Without it a probe could read a stale fate and blame the seam.
+     */
+    @Volatile
     var fate: SendFate = SendFate.Delivered
         internal set
 
     /** Whether this frame was ever queued by a [FakeNwRadio.holdSends] — the hold's own rig receipt. */
+    @Volatile
     var wasHeld: Boolean = false
         internal set
 
@@ -272,6 +300,13 @@ internal class FakeNwRadio {
     /** One end of an open link: which device, and the handle that device sees. */
     private data class LinkEnd(val deviceId: String, val connectionId: NwConnectionId)
 
+    /**
+     * The ONE guard over every field below (#2481). See the class KDoc's *Threading* section: no
+     * `suspend` call ever runs under it, so a caller on a real multi-threaded dispatcher gets mutual
+     * exclusion without the emits ever being serialised behind it.
+     */
+    private val lock = reentrantLock()
+
     private val devices = mutableMapOf<String, FakeNwApi>()
     private val listening = mutableMapOf<String, Listening>()
     private val browsing = mutableMapOf<String, Browsing>()
@@ -305,6 +340,7 @@ internal class FakeNwRadio {
      * last-writer-wins, making the ambiguity — the whole of #2416 — unreachable from a test. A
      * reference harness that cannot reach a failure guarantees no property is written for it.
      */
+    @Volatile
     var resolutionBias: (name: String, candidates: List<String>) -> String = { _, c -> c.first() }
 
     /** connId string of one end -> the OTHER end. Populated for BOTH directions. */
@@ -322,8 +358,14 @@ internal class FakeNwRadio {
      */
     private val opened = mutableListOf<Link>()
 
-    /** @see opened */
-    val openedLinks: List<Link> get() = opened
+    /**
+     * @see opened
+     *
+     * A **snapshot**, not the live list: a caller iterating the backing list while another thread's
+     * dial appends to it is a `ConcurrentModificationException` in the harness (#2481). Every existing
+     * reader indexes or compares it, so the copy is invisible to them.
+     */
+    val openedLinks: List<Link> get() = lock.withLock { opened.toList() }
 
     /**
      * Links the radio has EVER opened — one per successful [connect], never decremented (#2390).
@@ -333,7 +375,7 @@ internal class FakeNwRadio {
      * also assert that MORE links than that were opened in the first place: on a full mesh built by
      * dialling every ordered pair, `openedLinkCount == 2 * liveLinkCount` is the double-dial firing.
      */
-    val openedLinkCount: Int get() = opened.size
+    val openedLinkCount: Int get() = lock.withLock { opened.size }
 
     /** Sending ends currently held by [holdSends] — a [send] on one of these queues instead of delivering. */
     private val heldEnds = mutableSetOf<String>()
@@ -356,7 +398,7 @@ internal class FakeNwRadio {
      * (#2425). The ledger a test reads to answer "which link did that frame go out on, and did it
      * arrive?" — neither of which the receiving end can distinguish from "nothing was sent".
      */
-    val sentFrames: List<SentFrame> get() = sent
+    val sentFrames: List<SentFrame> get() = lock.withLock { sent.toList() }
 
     /**
      * Links currently open on the switchboard — the fake's stand-in for live sockets/file
@@ -374,15 +416,16 @@ internal class FakeNwRadio {
      * holding.
      */
     val liveLinkCount: Int
-        get() {
+        get() = lock.withLock {
             check(links.size % 2 == 0) { "links map holds ${links.size} ends — every link must have exactly two" }
-            return links.size / 2
+            links.size / 2
         }
 
     /** Register a device on construction. Ids must be distinct. */
-    fun register(api: FakeNwApi) {
+    fun register(api: FakeNwApi) = lock.withLock {
         require(api.deviceId !in devices) { "device '${api.deviceId}' already registered" }
         devices[api.deviceId] = api
+        Unit
     }
 
     private fun endpointIdFor(listenerDeviceId: String) = "ep-$listenerDeviceId"
@@ -448,6 +491,28 @@ internal class FakeNwRadio {
         return NwConnectionId("conn-$deviceId-$n")
     }
 
+    /**
+     * One `endpointFound`/`endpointLost` this radio owes a browser, captured under [lock] and emitted
+     * after releasing it (#2481).
+     *
+     * The list this builds is what makes the guarding behaviour-preserving. The pre-#2481 shape emitted
+     * *while iterating* [browsing]/[listening]; because an emit is a suspension point, a concurrent
+     * [markBrowsing] could mutate the map mid-iteration and blow up the iterator — under `runTest` as
+     * much as under real threads. Snapshotting preserves the iteration order every existing test depends
+     * on and removes that hazard outright.
+     */
+    private class Delivery(val browser: FakeNwApi, val endpoint: NwEndpoint)
+
+    /**
+     * Every browser of [serviceType] paired with the endpoint IT would see for [l] — the id depends on
+     * whether that browser requested TXT (#1706). **Called under [lock].**
+     */
+    private fun deliveriesFor(l: Listening, serviceType: String): List<Delivery> =
+        browsing.mapNotNull { (browserId, b) ->
+            if (b.serviceType != serviceType) null
+            else Delivery(devices.getValue(browserId), endpointFor(l, b.includeTxtRecord))
+        }
+
     // ── discovery ────────────────────────────────────────────────────────────
 
     /**
@@ -465,19 +530,19 @@ internal class FakeNwRadio {
         peerId: String? = null,
         txtResolved: Boolean = true,
     ) {
-        val l = Listening(serviceName, serviceType, peerId, txtResolved)
-        listening[deviceId] = l
-        // Register the id → device mappings (the fake twin of RealNwApi.endpointsById). Under a shared
-        // serviceName with no peerId, a later listener OVERWRITES an earlier one on the same id — the
-        // self/peer collapse Option A prevents.
-        registerOwnership(deviceId, l)
-        // Announce this new listener to every device already browsing the type — INCLUDING
-        // itself if it also browses `serviceType` (real mDNS returns self; see class KDoc / #1485).
-        // The id each browser sees depends on whether IT requested TXT (#1706).
-        for ((browserId, b) in browsing) {
-            if (b.serviceType != serviceType) continue
-            devices.getValue(browserId).emitEndpointFound(endpointFor(l, b.includeTxtRecord))
+        val deliveries = lock.withLock {
+            val l = Listening(serviceName, serviceType, peerId, txtResolved)
+            listening[deviceId] = l
+            // Register the id → device mappings (the fake twin of RealNwApi.endpointsById). Under a shared
+            // serviceName with no peerId, a later listener OVERWRITES an earlier one on the same id — the
+            // self/peer collapse Option A prevents.
+            registerOwnership(deviceId, l)
+            // Announce this new listener to every device already browsing the type — INCLUDING
+            // itself if it also browses `serviceType` (real mDNS returns self; see class KDoc / #1485).
+            // The id each browser sees depends on whether IT requested TXT (#1706).
+            deliveriesFor(l, serviceType)
         }
+        for (d in deliveries) d.browser.emitEndpointFound(d.endpoint)
     }
 
     /**
@@ -488,15 +553,15 @@ internal class FakeNwRadio {
      * a device that is not listening, that published no TXT PeerId, or whose TXT already resolved.
      */
     suspend fun resolveTxt(deviceId: String) {
-        val l = listening[deviceId] ?: return
-        if (l.txtResolved || l.txtPeerId == null) return
-        val resolved = l.copy(txtResolved = true)
-        listening[deviceId] = resolved
-        registerOwnership(deviceId, resolved)
-        for ((browserId, b) in browsing) {
-            if (b.serviceType != l.serviceType) continue
-            devices.getValue(browserId).emitEndpointFound(endpointFor(resolved, b.includeTxtRecord))
+        val deliveries = lock.withLock {
+            val l = listening[deviceId] ?: return@withLock emptyList()
+            if (l.txtResolved || l.txtPeerId == null) return@withLock emptyList()
+            val resolved = l.copy(txtResolved = true)
+            listening[deviceId] = resolved
+            registerOwnership(deviceId, resolved)
+            deliveriesFor(resolved, l.serviceType)
         }
+        for (d in deliveries) d.browser.emitEndpointFound(d.endpoint)
     }
 
     /**
@@ -509,33 +574,35 @@ internal class FakeNwRadio {
      * `peerId` and never on `serviceName`. No-op if the device is not listening.
      */
     suspend fun renameService(deviceId: String, newServiceName: String) {
-        val old = listening[deviceId] ?: return
-        if (old.serviceName == newServiceName) return
-        releaseOwnership(deviceId, old)
-        val renamed = old.copy(serviceName = newServiceName)
-        listening[deviceId] = renamed
-        registerOwnership(deviceId, renamed)
-        for ((browserId, b) in browsing) {
-            if (b.serviceType != old.serviceType) continue
-            val browser = devices.getValue(browserId)
-            browser.emitEndpointLost(endpointFor(old, b.includeTxtRecord))
-            browser.emitEndpointFound(endpointFor(renamed, b.includeTxtRecord))
+        // Paired per browser — lost(old) then found(renamed), in the same order as the pre-#2481 loop.
+        val renames = lock.withLock {
+            val old = listening[deviceId] ?: return@withLock emptyList()
+            if (old.serviceName == newServiceName) return@withLock emptyList()
+            releaseOwnership(deviceId, old)
+            val renamed = old.copy(serviceName = newServiceName)
+            listening[deviceId] = renamed
+            registerOwnership(deviceId, renamed)
+            deliveriesFor(old, old.serviceType).zip(deliveriesFor(renamed, old.serviceType))
+        }
+        for ((lost, found) in renames) {
+            lost.browser.emitEndpointLost(lost.endpoint)
+            found.browser.emitEndpointFound(found.endpoint)
         }
     }
 
     suspend fun markStopListening(deviceId: String) {
-        val gone = listening.remove(deviceId) ?: return
-        // Only relinquish ownership of ids this device still owns — a collided id may have been
-        // overwritten by another listener, whose entry must survive this device's departure.
-        releaseOwnership(deviceId, gone)
-        // Symmetric with [markListening]: a listener that stops advertising is reported as REMOVED to every
-        // device still browsing its type — real Bonjour/mDNS fires the browser's removed-result callback,
-        // which RealNwApi surfaces as [NwApi.endpointLost]. This is what prunes a departed ghost from a
-        // discovery roster (#1447 item 2).
-        for ((browserId, b) in browsing) {
-            if (b.serviceType != gone.serviceType) continue
-            devices.getValue(browserId).emitEndpointLost(endpointFor(gone, b.includeTxtRecord))
+        val deliveries = lock.withLock {
+            val gone = listening.remove(deviceId) ?: return@withLock emptyList()
+            // Only relinquish ownership of ids this device still owns — a collided id may have been
+            // overwritten by another listener, whose entry must survive this device's departure.
+            releaseOwnership(deviceId, gone)
+            // Symmetric with [markListening]: a listener that stops advertising is reported as REMOVED to every
+            // device still browsing its type — real Bonjour/mDNS fires the browser's removed-result callback,
+            // which RealNwApi surfaces as [NwApi.endpointLost]. This is what prunes a departed ghost from a
+            // discovery roster (#1447 item 2).
+            deliveriesFor(gone, gone.serviceType)
         }
+        for (d in deliveries) d.browser.emitEndpointLost(d.endpoint)
     }
 
     /**
@@ -547,47 +614,66 @@ internal class FakeNwRadio {
      * a test models the omission by constructing the device with `browserIncludesTxtRecord = false`.
      */
     suspend fun markBrowsing(deviceId: String, serviceType: String, includeTxtRecord: Boolean = false) {
-        browsing[deviceId] = Browsing(serviceType, includeTxtRecord)
-        // Deliver every device already listening on the type to this browser — INCLUDING
-        // itself if it also advertises `serviceType` (real mDNS returns self; see class KDoc / #1485).
-        for ((_, l) in listening) {
-            if (l.serviceType != serviceType) continue
-            devices.getValue(deviceId).emitEndpointFound(endpointFor(l, includeTxtRecord))
+        val deliveries = lock.withLock {
+            browsing[deviceId] = Browsing(serviceType, includeTxtRecord)
+            // Deliver every device already listening on the type to this browser — INCLUDING
+            // itself if it also advertises `serviceType` (real mDNS returns self; see class KDoc / #1485).
+            val browser = devices.getValue(deviceId)
+            listening.values
+                .filter { it.serviceType == serviceType }
+                .map { Delivery(browser, endpointFor(it, includeTxtRecord)) }
         }
+        for (d in deliveries) d.browser.emitEndpointFound(d.endpoint)
     }
 
     fun markStopBrowsing(deviceId: String) {
-        browsing.remove(deviceId)
+        lock.withLock { browsing.remove(deviceId) }
     }
 
     // ── connect / data / close ─────────────────────────────────────────────────
 
-    suspend fun connect(dialerDeviceId: String, endpoint: NwEndpoint) {
-        // Resolve the endpoint back to its listening device through the id → device registry
-        // (populated on [markListening]); fall back to the `"ep-<deviceId>"` naming for a
-        // manually-constructed endpoint that was never advertised (the direct-connect seam tests).
-        val owners = endpointOwners[endpoint.id]
-        val accepterId = when {
-            owners.isNullOrEmpty() -> listenerDeviceIdOf(endpoint.id)
-            owners.size == 1 -> owners.single()
-            // AMBIGUOUS: several devices advertise this name. Real mDNS picks one at connect time.
-            else -> resolutionBias(endpoint.id, owners.toList())
-        }
-        require(accepterId in devices) { "no device for endpoint '${endpoint.id}'" }
-        val connIdDialer = nextConnId(dialerDeviceId)
-        val connIdAccepter = nextConnId(accepterId)
-        opened += Link(dialerDeviceId, connIdDialer, accepterId, connIdAccepter, endpoint.id)
+    /**
+     * Open a link from [dialerDeviceId] to whichever device [endpoint] resolves to, and RETURN it.
+     *
+     * The return value is what lets [injectDoubleDial] name its two links without indexing [opened]
+     * positionally (#2481): two concurrent dials interleave their appends, so `opened[before + 1]` can
+     * name another thread's link. Same links, same order, no positional assumption.
+     */
+    suspend fun connect(dialerDeviceId: String, endpoint: NwEndpoint): Link {
+        // Resolution and handle allocation are ONE critical section: two dials racing on a contended
+        // name must not both take the same counter value, and the link they record must be the one
+        // whose accepter they resolved.
+        val opening = lock.withLock {
+            // Resolve the endpoint back to its listening device through the id → device registry
+            // (populated on [markListening]); fall back to the `"ep-<deviceId>"` naming for a
+            // manually-constructed endpoint that was never advertised (the direct-connect seam tests).
+            val owners = endpointOwners[endpoint.id]
+            val accepterId = when {
+                owners.isNullOrEmpty() -> listenerDeviceIdOf(endpoint.id)
+                owners.size == 1 -> owners.single()
+                // AMBIGUOUS: several devices advertise this name. Real mDNS picks one at connect time.
+                else -> resolutionBias(endpoint.id, owners.toList())
+            }
+            require(accepterId in devices) { "no device for endpoint '${endpoint.id}'" }
+            val connIdDialer = nextConnId(dialerDeviceId)
+            val connIdAccepter = nextConnId(accepterId)
+            val link = Link(dialerDeviceId, connIdDialer, accepterId, connIdAccepter, endpoint.id)
+            opened += link
 
-        // Record the link in both directions.
-        links[connIdDialer.value] = LinkEnd(accepterId, connIdAccepter)
-        links[connIdAccepter.value] = LinkEnd(dialerDeviceId, connIdDialer)
+            // Record the link in both directions.
+            links[connIdDialer.value] = LinkEnd(accepterId, connIdAccepter)
+            links[connIdAccepter.value] = LinkEnd(dialerDeviceId, connIdDialer)
+            Opening(link, devices.getValue(dialerDeviceId), devices.getValue(accepterId))
+        }
 
         // Dialler carries the dialled endpoint; accepter has none.
-        devices.getValue(dialerDeviceId)
-            .emitConnectionOpened(NwConnectionOpened(connIdDialer, endpoint))
-        devices.getValue(accepterId)
-            .emitConnectionOpened(NwConnectionOpened(connIdAccepter, endpoint = null))
+        opening.dialer.emitConnectionOpened(NwConnectionOpened(opening.link.dialerConnectionId, endpoint))
+        opening.accepter.emitConnectionOpened(NwConnectionOpened(opening.link.accepterConnectionId, endpoint = null))
+        return opening.link
     }
+
+    /** A link recorded under [lock], with the two devices whose `connectionOpened` is owed outside it. */
+    private class Opening(val link: Link, val dialer: FakeNwApi, val accepter: FakeNwApi)
 
     /**
      * Form BOTH links of a **double dial** between [deviceId] and [peerDeviceId] (#2425), returning
@@ -614,10 +700,9 @@ internal class FakeNwRadio {
      */
     suspend fun injectDoubleDial(deviceId: String, peerDeviceId: String): DoubleDial {
         require(deviceId != peerDeviceId) { "a double dial needs two distinct devices, got '$deviceId' twice" }
-        val before = opened.size
-        connect(deviceId, NwEndpoint(id = endpointIdFor(peerDeviceId), serviceName = peerDeviceId))
-        connect(peerDeviceId, NwEndpoint(id = endpointIdFor(deviceId), serviceName = deviceId))
-        return DoubleDial(outbound = opened[before], inbound = opened[before + 1])
+        val outbound = connect(deviceId, NwEndpoint(id = endpointIdFor(peerDeviceId), serviceName = peerDeviceId))
+        val inbound = connect(peerDeviceId, NwEndpoint(id = endpointIdFor(deviceId), serviceName = deviceId))
+        return DoubleDial(outbound = outbound, inbound = inbound)
     }
 
     /**
@@ -628,7 +713,7 @@ internal class FakeNwRadio {
      * conformance harness's `injectSelfDial` hook to prove the guard on a *live* seam.
      */
     suspend fun injectSelfDial(deviceId: String) {
-        require(deviceId in devices) { "no device '$deviceId' to self-dial" }
+        lock.withLock { require(deviceId in devices) { "no device '$deviceId' to self-dial" } }
         connect(deviceId, NwEndpoint(id = endpointIdFor(deviceId), serviceName = deviceId))
     }
 
@@ -657,20 +742,24 @@ internal class FakeNwRadio {
         dialledEndpointId: String,
         identityResolved: Boolean = true,
     ) {
-        require(deviceId in devices) { "no device '$deviceId' to dial from" }
-        val connIdDialer = nextConnId(deviceId)
-        val connIdAccepter = nextConnId(deviceId)
-        opened += Link(deviceId, connIdDialer, deviceId, connIdAccepter, dialledEndpointId)
-        links[connIdDialer.value] = LinkEnd(deviceId, connIdAccepter)
-        links[connIdAccepter.value] = LinkEnd(deviceId, connIdDialer)
+        val opening = lock.withLock {
+            require(deviceId in devices) { "no device '$deviceId' to dial from" }
+            val connIdDialer = nextConnId(deviceId)
+            val connIdAccepter = nextConnId(deviceId)
+            val link = Link(deviceId, connIdDialer, deviceId, connIdAccepter, dialledEndpointId)
+            opened += link
+            links[connIdDialer.value] = LinkEnd(deviceId, connIdAccepter)
+            links[connIdAccepter.value] = LinkEnd(deviceId, connIdDialer)
+            Opening(link, devices.getValue(deviceId), devices.getValue(deviceId))
+        }
         // Dialler carries the dialled endpoint — the REAL peer's id; accepter has none (inbound).
-        devices.getValue(deviceId).emitConnectionOpened(
+        opening.dialer.emitConnectionOpened(
             NwConnectionOpened(
-                connIdDialer,
+                opening.link.dialerConnectionId,
                 NwEndpoint(id = dialledEndpointId, serviceName = deviceId, identityResolved = identityResolved),
             ),
         )
-        devices.getValue(deviceId).emitConnectionOpened(NwConnectionOpened(connIdAccepter, endpoint = null))
+        opening.accepter.emitConnectionOpened(NwConnectionOpened(opening.link.accepterConnectionId, endpoint = null))
     }
 
     /**
@@ -689,7 +778,7 @@ internal class FakeNwRadio {
      * [listenerDeviceIdOf] leans on for endpoints; both ends of each link are removed, so [liveLinkCount]'s
      * even-parity invariant still holds.
      */
-    fun severLinksSilently(deviceId: String) {
+    fun severLinksSilently(deviceId: String) = lock.withLock {
         require(deviceId in devices) { "no device '$deviceId' whose links could be severed" }
         val doomed = links.keys.filter { it.startsWith("conn-$deviceId-") }
         require(doomed.isNotEmpty()) { "device '$deviceId' holds no live link to sever" }
@@ -712,7 +801,7 @@ internal class FakeNwRadio {
      * the intended idiom is to dial first and take the handle from [openedLinks]).
      */
     fun holdSends(connectionId: NwConnectionId) {
-        heldEnds += connectionId.value
+        lock.withLock { heldEnds += connectionId.value }
     }
 
     /**
@@ -722,17 +811,19 @@ internal class FakeNwRadio {
      * that was never held.
      */
     suspend fun releaseSends(connectionId: NwConnectionId) {
-        heldEnds -= connectionId.value
-        val queued = inFlight.remove(connectionId.value) ?: return
+        val queued = lock.withLock {
+            heldEnds -= connectionId.value
+            inFlight.remove(connectionId.value)
+        } ?: return
         for (entry in queued) deliverOrDrop(entry.record, entry.payload)
     }
 
     /** Frames currently queued on [connectionId] by [holdSends] — the hold's live rig receipt. */
     fun inFlightOn(connectionId: NwConnectionId): List<SentFrame> =
-        inFlight[connectionId.value].orEmpty().map { it.record }
+        lock.withLock { inFlight[connectionId.value].orEmpty().map { it.record } }
 
     /** Whether the radio still holds a link for [connectionId] — how a test names the dedup's SURVIVOR. */
-    fun isLive(connectionId: NwConnectionId): Boolean = connectionId.value in links
+    fun isLive(connectionId: NwConnectionId): Boolean = lock.withLock { connectionId.value in links }
 
     /**
      * Deliver each payload to the receiving device in emissions of at most this many bytes (#2479), or —
@@ -770,7 +861,16 @@ internal class FakeNwRadio {
      */
     var betweenChunks: (suspend (receiverConnectionId: NwConnectionId, chunkIndex: Int) -> Unit)? = null
 
-    /** @see betweenChunks — the re-entrancy guard, so a hook that sends may itself be chunked. */
+    /**
+     * @see betweenChunks — the re-entrancy guard, so a hook that sends may itself be chunked.
+     *
+     * [Volatile] for the same reason as [SentFrame.fate] (#2481): it arrived (#2479) documented as
+     * touched only from the delivering coroutine, which is the single-virtual-thread contract this
+     * class no longer makes. It cannot live inside [lock] — it must span the emits, and no suspend
+     * call may run under that lock — so volatile is the guard that fits. It is a re-entrancy *hint*,
+     * not a mutual-exclusion primitive: a torn read costs an extra nested hook, never a corrupt map.
+     */
+    @Volatile
     private var inBetweenChunks = false
 
     private suspend fun runBetweenChunks(receiverConnectionId: NwConnectionId, chunkIndex: Int) {
@@ -809,29 +909,37 @@ internal class FakeNwRadio {
      * is the fake's remaining model of a silent loss, and deliberately so.
      */
     private suspend fun deliverOrDrop(record: SentFrame, payload: ByteArray) {
-        val other = links[record.connectionId.value]
-        if (other == null) {
-            record.fate = SendFate.DroppedLinkGone
-            return
-        }
-        record.fate = SendFate.Delivered
-        val receiver = devices.getValue(other.deviceId)
+        // The link lookup, the fate write and the receiver resolution are ONE critical section; every
+        // emit — and the [betweenChunks] hook, which suspends — is outside it, per this class's
+        // no-suspend-under-[lock] rule (#2481). The chunk count is irrelevant to the lock: it is
+        // released before the first emit either way (#2479).
+        val target = lock.withLock {
+            val other = links[record.connectionId.value]
+            if (other == null) {
+                record.fate = SendFate.DroppedLinkGone
+                null
+            } else {
+                record.fate = SendFate.Delivered
+                devices.getValue(other.deviceId) to other.connectionId
+            }
+        } ?: return
+        val (receiver, connectionId) = target
         val chunk = maxChunkBytes
         // DEFAULT-OFF, and structurally so: with no chunk budget, or a payload that fits one, this is
         // byte-identical to the single emission the fake has always made — same array instance, same event.
         if (chunk == null || payload.size <= chunk) {
-            receiver.emitBytesReceived(NwBytesReceived(other.connectionId, payload))
+            receiver.emitBytesReceived(NwBytesReceived(connectionId, payload))
             return
         }
         var offset = 0
         var index = 0
         while (offset < payload.size) {
             val end = minOf(offset + chunk, payload.size)
-            receiver.emitBytesReceived(NwBytesReceived(other.connectionId, payload.copyOfRange(offset, end)))
+            receiver.emitBytesReceived(NwBytesReceived(connectionId, payload.copyOfRange(offset, end)))
             offset = end
             // Between, not after: the last chunk completes the frame, and a hook there would be acting on a
             // seam that has already seen the whole thing — the state every other test can already reach.
-            if (offset < payload.size) runBetweenChunks(other.connectionId, index)
+            if (offset < payload.size) runBetweenChunks(connectionId, index)
             index += 1
         }
     }
@@ -855,48 +963,70 @@ internal class FakeNwRadio {
             sizeBytes = bytes.size,
             bytes = bytes.copyOf(minOf(bytes.size, LEDGER_PREVIEW_BYTES)),
         )
-        sent += record
-        // Liveness FIRST, before the hold: a stale hold must never launder a dead link into a live
-        // queue, and the caller is owed the refusal whether or not this end happens to be held.
-        if (connectionId.value !in links) {
-            record.fate = SendFate.Refused
-            throw NwSendFailedException(
-                "no live link for '${connectionId.value}' on device '$fromDeviceId' — unknown or already closed",
-            )
+        // The ledger append, the liveness check and the hold's queueing are ONE critical section (#2481) —
+        // split, two concurrent sends could both find the end unheld and interleave into `inFlight`.
+        // `withLock` releases on the throw, so the refusal below still leaves the ledger entry it wrote.
+        val queued = lock.withLock {
+            sent += record
+            // Liveness FIRST, before the hold: a stale hold must never launder a dead link into a live
+            // queue, and the caller is owed the refusal whether or not this end happens to be held.
+            if (connectionId.value !in links) {
+                record.fate = SendFate.Refused
+                throw NwSendFailedException(
+                    "no live link for '${connectionId.value}' on device '$fromDeviceId' — unknown or already closed",
+                )
+            }
+            if (connectionId.value in heldEnds) {
+                record.fate = SendFate.InFlight
+                record.wasHeld = true
+                inFlight.getOrPut(connectionId.value) { mutableListOf() } += Queued(record, bytes)
+                true
+            } else {
+                false
+            }
         }
-        if (connectionId.value in heldEnds) {
-            record.fate = SendFate.InFlight
-            record.wasHeld = true
-            inFlight.getOrPut(connectionId.value) { mutableListOf() } += Queued(record, bytes)
-            return
-        }
+        if (queued) return
         deliverOrDrop(record, bytes)
     }
 
-    /** The bytes a torn-down socket destroys: everything [holdSends] still had queued on [connectionId]. */
+    /**
+     * The bytes a torn-down socket destroys: everything [holdSends] still had queued on [connectionId].
+     * **Called under [lock].**
+     */
     private fun discardInFlight(connectionId: NwConnectionId) {
         inFlight.remove(connectionId.value)?.forEach { it.record.fate = SendFate.DiscardedOnClose }
     }
 
     suspend fun disconnect(fromDeviceId: String, connectionId: NwConnectionId) {
-        val other = links.remove(connectionId.value) ?: return
-        // Drop the reverse mapping too so the link is fully torn down.
-        links.remove(other.connectionId.value)
-        // Bytes still in flight on EITHER end die with the link, silently — no error reaches the sender
-        // and nothing reaches the receiver (#2425). Both ends, because a cancelled connection destroys
-        // the queues at both, not only at the peer that asked for the close.
-        discardInFlight(connectionId)
-        discardInFlight(other.connectionId)
+        val teardown = lock.withLock {
+            val other = links.remove(connectionId.value) ?: return@withLock null
+            // Drop the reverse mapping too so the link is fully torn down.
+            links.remove(other.connectionId.value)
+            // Bytes still in flight on EITHER end die with the link, silently — no error reaches the sender
+            // and nothing reaches the receiver (#2425). Both ends, because a cancelled connection destroys
+            // the queues at both, not only at the peer that asked for the close.
+            discardInFlight(connectionId)
+            discardInFlight(other.connectionId)
+            Teardown(devices[fromDeviceId], devices.getValue(other.deviceId), other.connectionId)
+        } ?: return
         // #1522/#1539: latch the closure into the drop-tolerant [connectionStates] as Closed on BOTH sides —
         // mirrors RealNwApi, where each side's own `closeConnection` marks its own connId closed. Closed
         // supersedes any prior Viable/PathLost entry (no separate viability prune needed), and this STATE is
         // what evicts a zombie peer even when the remote's connectionClosed EVENT is dropped (`dropCloseEvents`).
-        devices[fromDeviceId]?.markConnectionClosed(connectionId, reason = null)
-        devices.getValue(other.deviceId).markConnectionClosed(other.connectionId, reason = null)
+        // Outside [lock]: these mutate [FakeNwApi] state under ITS lock, and nesting the two would introduce a
+        // lock order this class otherwise does not have.
+        teardown.from?.markConnectionClosed(connectionId, reason = null)
+        teardown.other.markConnectionClosed(teardown.otherConnectionId, reason = null)
         // Only the REMOTE side observes the close EVENT (the fast reason-carrying path); it may be dropped.
-        devices.getValue(other.deviceId)
-            .emitConnectionClosed(NwConnectionClosed(other.connectionId, reason = null))
+        teardown.other.emitConnectionClosed(NwConnectionClosed(teardown.otherConnectionId, reason = null))
     }
+
+    /** The two ends a [disconnect] must notify, resolved under [lock] and notified outside it. */
+    private class Teardown(
+        val from: FakeNwApi?,
+        val other: FakeNwApi,
+        val otherConnectionId: NwConnectionId,
+    )
 
     internal companion object {
         /**

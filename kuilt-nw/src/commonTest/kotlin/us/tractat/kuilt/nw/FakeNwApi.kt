@@ -1,5 +1,7 @@
 package us.tractat.kuilt.nw
 
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -8,6 +10,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import us.tractat.kuilt.core.FabricAvailability
+import kotlin.concurrent.Volatile
 
 /**
  * Fake [NwApi] for ONE simulated device, backed by a shared [FakeNwRadio].
@@ -29,6 +32,18 @@ import us.tractat.kuilt.core.FabricAvailability
  * ## No private scope
  * There is no private [kotlinx.coroutines.CoroutineScope]. Every emit is a `suspend` call
  * on the caller's coroutine, keeping all work on the test dispatcher with no coroutine leaks.
+ *
+ * ## Threading (#2481)
+ * Like [FakeNwRadio], this device inherits its caller's dispatcher, which under
+ * `NwSeamConcurrencyTest` is `Dispatchers.Default` — so its plain `var` counters and mutable
+ * collections are genuinely shared. The flows already are safe ([MutableSharedFlow] /
+ * [MutableStateFlow] are), so what needed guarding is the bookkeeping around them: [lock] covers
+ * [liveConnIds], [closedOrder], the device-path edge-tracking pair and the call counters; the test
+ * HOOKS are [Volatile] because they are written at setup and read from every collector thread.
+ *
+ * [lock] is never held across a `suspend` call and never held while calling into [radio] — and the
+ * radio, symmetrically, releases its own lock before calling back in here. So the two locks are
+ * never nested in either direction and there is no order to invert.
  */
 internal class FakeNwApi(
     private val radio: FakeNwRadio,
@@ -60,6 +75,9 @@ internal class FakeNwApi(
      */
     private val txtResolvedOnAdvertise: Boolean = true,
 ) : NwApi {
+
+    /** Guards this device's own bookkeeping — see the class KDoc's *Threading* section (#2481). */
+    private val lock = reentrantLock()
 
     private val _endpointFound = MutableSharedFlow<NwEndpoint>(extraBufferCapacity = 16)
     private val _endpointLost = MutableSharedFlow<NwEndpoint>(extraBufferCapacity = 16)
@@ -93,11 +111,12 @@ internal class FakeNwApi(
 
     // #1618 Track A: the live connIds this device currently holds (open→closed), mirroring RealNwApi's
     // `connections` registry — the set a device-path-unsatisfied event demotes to PathLost. Added on
-    // [emitConnectionOpened], removed on [markConnectionClosed]. Touched only from the one test coroutine.
+    // [emitConnectionOpened], removed on [markConnectionClosed]. Guarded by [lock] (#2481).
     private val liveConnIds = mutableSetOf<NwConnectionId>()
 
     // #1618 Track A edge-tracking, mirroring RealNwApi.onDevicePathState: whether the last device path was
     // unsatisfied, and the connIds we demoted on that edge so the matching recovery restores exactly those.
+    // Guarded by [lock] (#2481).
     private var devicePathUnsatisfied = false
     private val devicePathLostConns = mutableSetOf<NwConnectionId>()
 
@@ -174,20 +193,27 @@ internal class FakeNwApi(
     internal fun emitPathState(state: NwPathState?) {
         _pathState.value = state
         val unsatisfied = state?.status == NwPathStatus.Unsatisfied
-        when {
-            unsatisfied && !devicePathUnsatisfied -> {
-                devicePathUnsatisfied = true
-                devicePathLostConns.clear()
-                devicePathLostConns.addAll(liveConnIds)
-                devicePathLostConns.forEach { emitConnectionViability(it, viable = false) }
-            }
-            !unsatisfied && devicePathUnsatisfied -> {
-                devicePathUnsatisfied = false
-                val restore = devicePathLostConns.toList()
-                devicePathLostConns.clear()
-                restore.forEach { emitConnectionViability(it, viable = true) }
+        // The edge test and the set it reads/writes are ONE critical section (#2481); the viability
+        // updates are CAS writes on a StateFlow and are taken outside it, so no lock is held across them.
+        val (demote, restore) = lock.withLock {
+            when {
+                unsatisfied && !devicePathUnsatisfied -> {
+                    devicePathUnsatisfied = true
+                    devicePathLostConns.clear()
+                    devicePathLostConns.addAll(liveConnIds)
+                    devicePathLostConns.toList() to emptyList()
+                }
+                !unsatisfied && devicePathUnsatisfied -> {
+                    devicePathUnsatisfied = false
+                    val restoring = devicePathLostConns.toList()
+                    devicePathLostConns.clear()
+                    emptyList<NwConnectionId>() to restoring
+                }
+                else -> emptyList<NwConnectionId>() to emptyList()
             }
         }
+        demote.forEach { emitConnectionViability(it, viable = false) }
+        restore.forEach { emitConnectionViability(it, viable = true) }
     }
 
     init {
@@ -205,6 +231,7 @@ internal class FakeNwApi(
      * [FakeNwRadio.send], which now throws for an unknown/closed link exactly as `RealNwApi` does;
      * [FakeNwRadio.severLinksSilently] is how a test reaches that state.
      */
+    @Volatile
     var failSend: Boolean = false
 
     /**
@@ -213,6 +240,7 @@ internal class FakeNwApi(
      * drop-tolerant STATE via [markConnectionClosed]. This deterministically reproduces the scenario where a
      * peer would be stranded as a zombie if the seam relied on the event alone — the STATE backstop must evict.
      */
+    @Volatile
     var dropCloseEvents: Boolean = false
 
     /**
@@ -227,6 +255,7 @@ internal class FakeNwApi(
      * `connectionClosedLoop`'s half can be deleted outright and every test stays green, because
      * `reconcileStates` → `removeByConn` silently covers for it (#2425).
      */
+    @Volatile
     var reportsCloseStates: Boolean = true
 
     override fun availability(): FabricAvailability = FabricAvailability.Available
@@ -240,9 +269,11 @@ internal class FakeNwApi(
      * fake that cannot fail twice: every retry would come up Ready, the consecutive-failure counter would
      * reset each round, and the bounded-give-up property could never be exercised at all.
      */
+    @Volatile
     var listenFailure: NwListenerState.Failed? = null
 
     /** Test hook: total [startListening] calls — lets a test count re-listens after a listener failure (#2449). */
+    @Volatile
     var startListeningCalls: Int = 0
         private set
 
@@ -252,6 +283,7 @@ internal class FakeNwApi(
      * verdict at all. The interesting case precisely because the campaign has nothing to await: a
      * supervisor that only ever waits on [listenerState] parks here forever.
      */
+    @Volatile
     var listenThrows: Boolean = false
 
     /**
@@ -264,10 +296,11 @@ internal class FakeNwApi(
      * permanent and expected has to be excluded explicitly, or the bound would turn every such binding into
      * a perpetual re-listen loop. That is a behaviour regression a test elsewhere in this file cannot see.
      */
+    @Volatile
     var reportsListenerState: Boolean = true
 
     override suspend fun startListening(serviceName: String, serviceType: String) {
-        startListeningCalls += 1
+        lock.withLock { startListeningCalls += 1 }
         // Mirrors RealNwApi.startListening: publish Starting BEFORE the listener can report, so a watcher
         // never reads the previous listener's terminal Failed as this attempt's verdict.
         if (reportsListenerState) _listenerState.value = NwListenerState.Starting
@@ -295,11 +328,12 @@ internal class FakeNwApi(
     }
 
     /** Test hook: total [stopListening] calls — lets a test prove `NwSeam.close()` stops advertising (#1419). */
+    @Volatile
     var stopListeningCalls: Int = 0
         private set
 
     override suspend fun stopListening() {
-        stopListeningCalls += 1
+        lock.withLock { stopListeningCalls += 1 }
         _advertisedName.value = null // nothing is advertised any more; "unknown" is the honest answer
         radio.markStopListening(deviceId)
     }
@@ -311,20 +345,22 @@ internal class FakeNwApi(
     }
 
     /** Test hook: total [stopBrowsing] calls — lets a test prove `NwSeam.close()` stops browsing (#1419). */
+    @Volatile
     var stopBrowsingCalls: Int = 0
         private set
 
     override suspend fun stopBrowsing() {
-        stopBrowsingCalls += 1
+        lock.withLock { stopBrowsingCalls += 1 }
         radio.markStopBrowsing(deviceId)
     }
 
     /** Test hook: total outbound [connect] calls issued on this device — lets a test count redials (#1513). */
+    @Volatile
     var connectCalls: Int = 0
         private set
 
     override suspend fun connect(endpoint: NwEndpoint) {
-        connectCalls += 1
+        lock.withLock { connectCalls += 1 }
         radio.connect(deviceId, endpoint)
     }
 
@@ -342,7 +378,7 @@ internal class FakeNwApi(
     internal suspend fun emitEndpointFound(event: NwEndpoint) = _endpointFound.emit(event)
     internal suspend fun emitEndpointLost(event: NwEndpoint) = _endpointLost.emit(event)
     internal suspend fun emitConnectionOpened(event: NwConnectionOpened) {
-        liveConnIds += event.connectionId // #1618: track liveness for the device-path self-loss demotion
+        lock.withLock { liveConnIds += event.connectionId } // #1618: track liveness for the device-path self-loss demotion
         _connectionOpened.emit(event)
     }
     internal suspend fun emitBytesReceived(event: NwBytesReceived) = _bytesReceived.emit(event)
@@ -383,17 +419,19 @@ internal class FakeNwApi(
      * evicted via STATE even when the close EVENT drops.
      */
     internal fun markConnectionClosed(connectionId: NwConnectionId, reason: String?) {
-        liveConnIds -= connectionId // #1618: a closed conn is no longer demotable by a device-path event
-        // A binding that wires no state callback publishes nothing here — see [reportsCloseStates]. The
-        // liveConnIds bookkeeping above still runs: that models the transport's own view of the link,
-        // not the signal it chooses to publish.
-        if (!reportsCloseStates) return
-        closedOrder.addLast(connectionId)
-        if (closedOrder.size > CLOSED_RETENTION_CAP) {
+        // The two collections are guarded (#2481); the [_connectionStates] writes are CAS and stay
+        // outside, so no lock is held while another thread's `update` retries against ours.
+        val evicted = lock.withLock {
+            liveConnIds -= connectionId // #1618: a closed conn is no longer demotable by a device-path event
+            // A binding that wires no state callback publishes nothing here — see [reportsCloseStates]. The
+            // liveConnIds bookkeeping above still runs: that models the transport's own view of the link,
+            // not the signal it chooses to publish.
+            if (!reportsCloseStates) return
+            closedOrder.addLast(connectionId)
             // Hoist the FIFO mutation OUT of the CAS lambda (see RealNwApi.markClosed).
-            val evicted = closedOrder.removeFirst()
-            _connectionStates.update { it - evicted }
+            if (closedOrder.size > CLOSED_RETENTION_CAP) closedOrder.removeFirst() else null
         }
+        if (evicted != null) _connectionStates.update { it - evicted }
         _connectionStates.update { it + (connectionId to NwConnState.Closed(reason)) }
     }
 
