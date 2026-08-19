@@ -791,8 +791,11 @@ class NwSeamWedgeDiagnosticsTest {
             "$tag: both ends must publish on the link left speaking: " +
                 "${devices.map { it.peerId to it.seam.peers.value }}",
         )
-        val writerLoserEnd = dial.inbound.endOn("$tag-dev-0")!!
-        val readerLoserEnd = dial.inbound.endOn("$tag-dev-1")!!
+        // The two ends of the link the dedup will displace. `endOn` is nullable only for a device that is
+        // not one of the link's two ends, which these are by construction — assert rather than `!!`, so a
+        // renamed device id fails by name instead of by NullPointerException.
+        val writerLoserEnd = assertNotNull(dial.inbound.endOn("$tag-dev-0"), "dev-0 must own an end of the inbound link")
+        val readerLoserEnd = assertNotNull(dial.inbound.endOn("$tag-dev-1"), "dev-1 must own an end of the inbound link")
         return DrainRig(radio, dial, devices[0], devices[1], writerLoserEnd, readerLoserEnd)
     }
 
