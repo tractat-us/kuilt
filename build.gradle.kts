@@ -3648,6 +3648,286 @@ val forbidUnlintedAndroidMain by tasks.registering {
     }
 }
 
+// Locates the not-null assertion operator `!!` in Kotlin CODE, for
+// `forbidNotNullAssertionInUnresolvedSource` below (#2039). Same `object` rationale as the sibling
+// scanners: the caller invokes it from inside `doLast`, where a script-level function reference
+// would capture the unserializable `Build_gradle` instance.
+//
+// It expects text already put through `KotlinCodeScanner.stripNonCode`, and that dependency is what
+// keeps a `!!` written in PROSE from being reported as code. Not a hypothetical: `!!` appears in
+// prose ten times in this tree today — `Assertions.kt`, `MappedBolt.kt`, `CardState.kt`,
+// `EntitlementLedger.kt`, `MetricTapClient.kt`, `ServerClusterReconnect.kt`, `MultiNodeRaftSim.kt`
+// — every one of them inside KDoc or a `//` comment, several of them saying "never write `!!`".
+// A naive grep reports all ten. The stripper also RE-ENTERS code mode inside a string-template
+// hole, so `"len=${value!!}"` is a real violation and is still reported.
+//
+// `selfTestFailures()` pins both directions on every execution of the guard, rather than in a
+// review comment. `KotlinCodeScanner`'s own note asks whoever edits it to "re-verify BOTH
+// directions with a mutation receipt on EVERY guard that calls it" — only one of those directions
+// is loud, so this turns that standing obligation into a mechanism: weaken the stripper and this
+// guard names the shape that broke, at the cost of a few microseconds per build.
+object NotNullAssertionScanner {
+    /** 1-based line numbers of every `!!` in already-stripped Kotlin code. */
+    fun violations(code: String): List<Int> {
+        val hits = ArrayList<Int>()
+        var line = 1
+        var i = 0
+        while (i < code.length) {
+            val c = code[i]
+            when {
+                c == '\n' -> { line++; i++ }
+                // Non-overlapping, so `!!!` is one assertion plus a stray negation rather than two.
+                c == '!' && i + 1 < code.length && code[i + 1] == '!' -> { hits += line; i += 2 }
+                else -> i++
+            }
+        }
+        return hits
+    }
+
+    // name → (source, expected line numbers). Written with escapes rather than raw strings so the
+    // fixture can contain a raw-string case without fighting its own delimiters.
+    private val cases: List<Triple<String, String, List<Int>>> = listOf(
+        Triple("a bare assertion", "val n = value!!.length\n", listOf(1)),
+        Triple("two on one line", "val n = a!!.b!!.c\n", listOf(1, 1)),
+        Triple("a string literal", "val s = \"never write !! here\"\n", emptyList()),
+        Triple("a line comment", "// never write !! here\nval n = 1\n", emptyList()),
+        Triple("a block comment", "/* never write !! here */\nval n = 1\n", emptyList()),
+        Triple("a nested block comment", "/* /* !! */ !! */\nval n = 1\n", emptyList()),
+        Triple("KDoc", "/**\n * Never reach for `!!` here.\n */\nval n = 1\n", emptyList()),
+        Triple("a raw string", "val s = \"\"\"\nnot !! code\n\"\"\"\n", emptyList()),
+        Triple("a char literal", "val c = '!'\nval d = !flag\n", emptyList()),
+        // The two template directions. A hole is CODE — an assertion there is real and must fire;
+        // the literal text around it is not, and must not.
+        Triple("a string-template hole", "val s = \"len=\${value!!.length}\"\n", listOf(1)),
+        Triple("literal text beside a hole", "val s = \"\${a}!! literal\"\n", emptyList()),
+        // Line numbers must survive stripping, or every report points at the wrong place.
+        Triple("line numbers survive", "// !!\n\n/* !!\n !! */\nval n = value!!\n", listOf(5)),
+    )
+
+    fun selfTestFailures(): List<String> = cases.mapNotNull { (name, source, expected) ->
+        val actual = violations(KotlinCodeScanner.stripNonCode(source))
+        if (actual == expected) null else "$name — expected line(s) $expected, got $actual"
+    }
+}
+
+// Guard: forbid `!!` in source sets that NO type-resolved detekt task covers (#2039).
+//
+// THE FACT THIS EXISTS FOR. Every rule `config/detekt/detekt.yml` enables — `UnsafeCallOnNullableType`,
+// `UnnecessaryNotNullOperator`, `MapGetWithNotNullAssertionOperator`, `CastNullableToNonNullableType`
+// — requires TYPE RESOLUTION, and detekt resolves types only against a JVM classpath. A detekt task
+// for a wasm or native source set therefore parses the files and fires nothing at all. The receipt
+// is in #2039: an `internal fun probe(v: String?): Int = v!!.length` appended to
+// `demo/web/src/wasmJsMain` leaves `:demo-web:detektWasmJsMain --rerun-tasks` at
+// "0 number of total code smells, BUILD SUCCESSFUL", while the same line fails
+// `:demo-shared:detektJvmMain` immediately. `:spike` (#1863) has no detekt plugin at all.
+//
+// So `appleMain`, `iosMain`, `macosMain`, `wasmJsMain` and their test siblings are where all
+// non-JVM platform code sits, and a green there means "nobody looked", which a reader cannot tell
+// from "clean". This is the same false-green class as #2005 and #2334, one tier further out.
+//
+// WHAT IT IS AND IS NOT. It is a LEXICAL guard on one operator, and the limits are inherent, not
+// oversights — say them out loud rather than let the next reader find them:
+//   * It cannot see through a TYPEALIAS or a HELPER. `fun <T> T?.orDie(): T = this ?: error("…")`
+//     is invisible to it, and so is any `!!` that has been moved behind a function. So is
+//     `checkNotNull`-shaped code that is actually wrong. It buys the OBVIOUS case, not the class.
+//   * It is a TOKEN match, not a semantic one. It knows nothing about nullability, so it cannot
+//     distinguish a genuinely unsafe `!!` from one a human has proved safe — and it cannot fire on
+//     the other three rules at all (`UnnecessaryNotNullOperator`, `CastNullableToNonNullableType`
+//     and `MapGetWithNotNullAssertionOperator` all need types; the last is a strict subset of `!!`
+//     and so is covered incidentally).
+//   * `!!` reached by a `!` immediately followed by a unary `!` (`if (!!flag)`) reads as an
+//     assertion here. It is one line in the whole tree's worth of risk and the shape is worth a
+//     second look anyway; no attempt is made to tell them apart.
+// Its value is exactly this: in source sets that today get NOTHING, the one rule that matters most
+// now costs something to break. A rule set that does not need type resolution (option 1 in #2039)
+// would cover more; it also costs a second config file and a repo-wide sweep, and was not chosen.
+//
+// HOW SCOPE IS DERIVED, and why it is not a list of source-set names. An include-list of
+// `appleMain`/`wasmJsMain`/… is exactly the blind spot it is trying to close: the source set that
+// needs adding to it is by definition the one nobody thought of, and a `linuxX64Main` or a
+// `watchosMain` would land uncovered and silent. So the scope is subtractive and EMPIRICAL —
+// every `**/*.kt` under a module's `src/`, MINUS every file in the `source` of a type-resolved
+// detekt task. A new target is in scope on arrival; a source set that GAINS type-resolved coverage
+// leaves scope automatically, so this can never double-report against detekt.
+//
+// The type-resolved set is named by TASK, and that name list is the one thing here that can rot,
+// so it is checked: every name below must resolve in at least one module, or the guard fails
+// rather than silently widening its own scope to the whole repo. The names mirror the two
+// convention plugins' own `detektAllTaskNames` — `kuilt.detekt-kmp`'s five (`detektMetadataCommonMain`
+// is deliberately NOT among them: it is the parse-only task, and `commonMain` earns its coverage by
+// being FOLDED into `detektJvmMain`) plus `kuilt.detekt-jvm`'s two.
+//
+// WHAT IS DELIBERATELY OUT OF SCOPE: `commonTest`, `commonSamples` and the `jvmAndAndroidTest`
+// intermediate. detekt generates no type-resolved task for any of them either, so the subtraction
+// above leaves them in — and they are carved back out by name, because they are #1960's gap, not
+// #2039's. The distinction is not cosmetic: theirs is JVM-path code whose FIX is to fold it into
+// `detektJvmTest` and get all four real rules, and pre-empting that with a lexical ban on one
+// operator would trade a fixable gap for a permanent approximation. It is also 433 sites across 83
+// files against this guard's whole population of 7 — a baseline that size is indistinguishable
+// from no guard, which is the objection `forbidUnlintedAndroidMain` records about allowlists.
+// The carve-out checks its own stale direction: an entry matching nothing left in scope fails,
+// so closing #1960 red-lights the entry that has become a lie instead of leaving it as decoration.
+//
+// `spike/src` is added by PATH, not through `subprojects`. `:spike` is a subproject only under
+// `-PincludeSpike`, which CI does not pass, so a scope derived from the module set would cover it
+// on nobody's build. Its `appleMain` is the module #1863 tracks and it is in scope on every build.
+//
+// THE BASELINE IS A PER-FILE COUNT RATCHET, for `forbidTightRunTestTimeout`'s reason and not a
+// weaker one: under a file ALLOWLIST the file with the most `!!` — the one whose local convention
+// is teaching the next contributor — is the one that becomes exempt. A count only ever moves down.
+// Sweep a file all-or-none and delete its entry.
+val typeResolvedDetektTaskNames = listOf(
+    // kuilt.detekt-kmp — the tier that carries a JVM/Android compile classpath. `detektJvmMain`
+    // also carries commonMain and any jvmAndAndroid* MAIN intermediate, folded in by that plugin.
+    "detektJvmMain",
+    "detektAndroidRelease",
+    "detektJvmTest",
+    "detektAndroidDebugUnitTest",
+    "detektAndroidReleaseUnitTest",
+    // kuilt.detekt-jvm — plain Kotlin/JVM modules (`:kuilt-scale`, `:examples`, `:kuilt-warp-ksp`,
+    // the demo apps). Both tasks carry the compile classpath.
+    "detektMain",
+    "detektTest",
+)
+
+// The #1960 tier — see the carve-out paragraph above.
+val commonTierSourceSets = listOf("commonTest", "commonSamples", "jvmAndAndroidTest")
+
+// Everything under a module's `src/` that no type-resolved detekt task analyses, and the subset of
+// it this guard actually scans (the same set minus the #1960 tier). Filled in `projectsEvaluated`,
+// once every module's detekt tasks exist and carry their folded source.
+val notTypeResolvedSources = objects.fileCollection()
+val notTypeResolvedScannedSources = objects.fileCollection()
+val typeResolvedDetektTasksFound = objects.setProperty(String::class.java)
+
+gradle.projectsEvaluated {
+    val found = LinkedHashSet<String>()
+    val analysed = rootProject.subprojects.flatMap { sub ->
+        typeResolvedDetektTaskNames.mapNotNull { name ->
+            (sub.tasks.findByName(name) as? SourceTask)?.also { found += name }?.source
+        }
+    }
+    typeResolvedDetektTasksFound.set(found)
+    // `spike/src` by path — see the note above; `files()` de-duplicates it under `-PincludeSpike`.
+    val roots = rootProject.subprojects.map { it.projectDir.resolve("src") } + rootDir.resolve("spike/src")
+    val uncovered = kotlinSourcesIn(roots).minus(files(analysed))
+    notTypeResolvedSources.from(uncovered)
+    // A local copy, not the script-level `val`: a lambda that closed over the property directly
+    // would capture the `Build_gradle` instance, which the configuration cache cannot serialize.
+    val carveOut = commonTierSourceSets
+    notTypeResolvedScannedSources.from(
+        uncovered.filter { file ->
+            carveOut.none { "/src/$it/" in file.invariantSeparatorsPath }
+        },
+    )
+}
+
+val forbidNotNullAssertionInUnresolvedSource by tasks.registering {
+    group = "verification"
+    description = "Fails on a `!!` in a source set no type-resolved detekt task covers — apple/native/wasm and :spike, where all four nullability rules are silently inert (#2039)."
+    // See "Guard plumbing" above: the stamp is what makes UP-TO-DATE possible (#1827). The verdict
+    // is a function of file PATHS (the baseline keys, and the carve-out's staleness check) and file
+    // CONTENTS, both captured by a RELATIVE fingerprint. The declared set is the UNFILTERED one, so
+    // a file entering or leaving the carve-out invalidates the cached success too.
+    inputs.files(notTypeResolvedSources).withPropertyName("sourcesWithoutTypeResolvedDetekt")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.property("typeResolvedDetektTasksFound", typeResolvedDetektTasksFound)
+    val stamp = layout.buildDirectory.file("verification/forbid-notnull-assertion-in-unresolved-source.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    val rootPath = rootDir
+    val scanned = notTypeResolvedScannedSources
+    val uncovered = notTypeResolvedSources
+    val carveOut = commonTierSourceSets
+    val expectedTaskNames = typeResolvedDetektTaskNames
+    val tasksFound = typeResolvedDetektTasksFound
+    // The baseline MUST stay a literal here. Per "Guard plumbing" above it is covered by the cache
+    // key only because it is folded into the task-action implementation hash; moving it to
+    // `gradle.properties` or a resource would silently drop it out and reintroduce the stale-green
+    // class the stamps were made safe against. Entries are paths relative to the root, violation
+    // counts as of #2039's first PR. Regenerate after a sweep with this scanner, not by hand.
+    val baseline = mapOf<String, Int>()
+    doLast {
+        val selfTest = NotNullAssertionScanner.selfTestFailures()
+        if (selfTest.isNotEmpty()) {
+            error(
+                "The `!!` scanner does not agree with its own fixture, so this guard's verdict — in " +
+                    "EITHER direction — means nothing. Almost always the cause is an edit to " +
+                    "`KotlinCodeScanner.stripNonCode`, which every one of these cases depends on:\n  " +
+                    selfTest.joinToString("\n  "),
+            )
+        }
+        val missingTasks = expectedTaskNames - tasksFound.get()
+        if (missingTasks.isNotEmpty()) {
+            error(
+                "This guard derives its scope by SUBTRACTING the source of the type-resolved detekt " +
+                    "tasks, and these names now resolve in no module: ${missingTasks.joinToString(", ")}.\n" +
+                    "  A name that stops matching does not narrow the guard, it WIDENS it — every file " +
+                    "that task covered silently becomes \"uncovered\", and the next `!!` written in " +
+                    "ordinary jvm/common code is reported here instead of by detekt, which is the rule " +
+                    "that should have caught it.\n" +
+                    "  THE FIX is to re-sync `typeResolvedDetektTaskNames` in `build.gradle.kts` with " +
+                    "`detektAllTaskNames` in `build-logic/src/main/kotlin/kuilt.detekt-kmp.gradle.kts` " +
+                    "and `kuilt.detekt-jvm.gradle.kts` — minus `detektMetadataCommonMain`, which is the " +
+                    "PARSE-ONLY task and must never be counted as coverage.",
+            )
+        }
+        val uncoveredPaths = uncovered.files.map { it.invariantSeparatorsPath }
+        val staleCarveOut = carveOut.filter { name -> uncoveredPaths.none { "/src/$name/" in it } }
+        if (staleCarveOut.isNotEmpty()) {
+            error(
+                "`commonTierSourceSets` carves ${staleCarveOut.joinToString(", ")} out of this guard " +
+                    "because #1960 leaves it with no type-resolved detekt task — and it now has one, " +
+                    "or has gone away. Either way the entry has become a lie about why that source is " +
+                    "unscanned.\n" +
+                    "  THE FIX is to delete the entry, then re-run and burn down whatever it was hiding " +
+                    "(if the source set is now type-resolved, it will be subtracted anyway and nothing " +
+                    "moves).",
+            )
+        }
+        val found = sortedMapOf<String, List<Int>>()
+        val bySourceSet = sortedMapOf<String, Int>()
+        scanned.files.forEach { file ->
+            val path = file.relativeTo(rootPath).invariantSeparatorsPath
+            bySourceSet.merge(path.substringAfter("/src/").substringBefore('/'), 1, Int::plus)
+            val raw = file.readText()
+            if ("!!" !in raw) return@forEach
+            val hits = NotNullAssertionScanner.violations(KotlinCodeScanner.stripNonCode(raw))
+            if (hits.isNotEmpty()) found[path] = hits
+        }
+        val regressions = found.filter { (path, hits) -> hits.size > (baseline[path] ?: 0) }
+        if (regressions.isNotEmpty()) {
+            val detail = regressions.entries.joinToString("\n") { (path, hits) ->
+                val was = baseline[path]
+                val from = if (was == null) "no baseline (this file is new to the ratchet)" else "baseline $was"
+                "  $path — $from, now ${hits.size}\n    line(s): ${hits.joinToString(", ")}"
+            }
+            error(
+                "A `!!` was written in a source set NO type-resolved detekt task covers (#2039).\n" +
+                    "detekt resolves types only against a JVM classpath, so every rule in " +
+                    "`config/detekt/detekt.yml` — `UnsafeCallOnNullableType` among them — parses these " +
+                    "files and fires nothing. `./gradlew detektAll` is green on them whatever they " +
+                    "contain, which is indistinguishable from clean.\n" +
+                    "  THE FIX is to remove the assertion, not to suppress it — there is no hatch:\n" +
+                    "      requireNotNull(x) { \"…\" } / checkNotNull(x) { \"…\" }   // fail fast, with a diagnostic\n" +
+                    "      x ?: error(\"…\")                                       // same, at an expression\n" +
+                    "      x?.let { … } / x ?: default                           // when absence is legal\n" +
+                    "  This is a per-file COUNT ratchet: a file already over baseline is not an excuse to " +
+                    "add one more. Do NOT raise the baseline in `build.gradle.kts` — sweep the file " +
+                    "(all-or-none, so the next contributor copies the shape rather than a neighbour) and " +
+                    "delete its entry.\n" + detail,
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText(
+            "ok — ${scanned.files.size} Kotlin source(s) with no type-resolved detekt coverage scanned " +
+                "(${bySourceSet.entries.joinToString(", ") { "${it.key} ${it.value}" }}), " +
+                "${found.size} file(s) at or below baseline (${found.values.sumOf { it.size }} sites)\n",
+        )
+    }
+}
+
 // Guard: forbid `:kuilt-bolt` rejoining the CRDT lattice (#2212, epic #2210).
 //
 // A bolt is a WRITE-ONLY archive. Its whole reason to exist is that it consumes operations, never
@@ -4306,6 +4586,7 @@ allprojects {
         dependsOn(rootProject.tasks.named("forbidBoltRejoiningTheLattice"))
         dependsOn(rootProject.tasks.named("forbidUnlintedModule"))
         dependsOn(rootProject.tasks.named("forbidUnlintedAndroidMain"))
+        dependsOn(rootProject.tasks.named("forbidNotNullAssertionInUnresolvedSource"))
         dependsOn(rootProject.tasks.named("forbidSourcelessKmpTarget"))
         dependsOn(rootProject.tasks.named("forbidPortProbeRebind"))
         dependsOn(rootProject.tasks.named("verifyDocCitations"))
