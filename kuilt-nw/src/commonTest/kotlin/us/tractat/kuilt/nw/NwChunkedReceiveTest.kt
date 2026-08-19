@@ -125,16 +125,20 @@ class NwChunkedReceiveTest {
                     )
                 },
                 {
+                    // `firstOrNull`, not `single`: a broken accumulator delivers NOTHING, and a `single()`
+                    // on an empty list raises a NoSuchElementException that `assertAll` promotes over every
+                    // named failure beside it — so the diagnosis becomes "List is empty" instead of the
+                    // assertion that says what was expected.
                     assertContentEquals(
                         SPLIT_PAYLOAD,
-                        hub.received.single().toByteArray(),
+                        hub.received.firstOrNull()?.toByteArray(),
                         "…and it is byte-for-byte the payload that was written",
                     )
                 },
                 {
                     assertEquals(
                         alice.peerId,
-                        hub.received.single().sender,
+                        hub.received.firstOrNull()?.sender,
                         "…attributed to the peer whose connection carried it, not to the other resolved peer",
                     )
                 },
@@ -228,7 +232,7 @@ class NwChunkedReceiveTest {
                 {
                     assertContentEquals(
                         SPLIT_PAYLOAD,
-                        hub.received.last().toByteArray(),
+                        hub.received.lastOrNull()?.toByteArray(),
                         "…and alice's payload is intact, with none of bob's bytes spliced into it",
                     )
                 },
@@ -418,7 +422,7 @@ class NwChunkedReceiveTest {
             pump()
             val liveDuringDrain = radio.liveLinkCount
 
-            val winnerAtJoiner = dial.outbound.endOn(joinerDevice)!!
+            val winnerAtJoiner = checkNotNull(dial.outbound.endOn(joinerDevice))
             val frame = encodeFrame(NwWire.encodeData(SPLIT_PAYLOAD))
             // Mark BEFORE arming the knob: formation put a whole HELLO on this same link, and counting
             // from zero would fold it into the split count.
@@ -475,14 +479,14 @@ class NwChunkedReceiveTest {
                 {
                     assertContentEquals(
                         SPLIT_PAYLOAD,
-                        atJoiner.single().toByteArray(),
+                        atJoiner.firstOrNull()?.toByteArray(),
                         "…carrying the whole payload, reassembled across the boundary it was held over",
                     )
                 },
                 {
                     assertEquals(
                         host.selfId,
-                        atJoiner.single().sender,
+                        atJoiner.firstOrNull()?.sender,
                         "…attributed to the host, whose link it arrived on",
                     )
                 },
