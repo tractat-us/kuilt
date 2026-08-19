@@ -270,11 +270,23 @@ class NwChunkedReceiveTest {
      * consumer has been handed the prelude — which is only possible if the demux loop consumed
      * chunk 0 — before tearing the link down. So at the moment of the tombstone the accumulator
      * provably holds a partial frame, rather than that being inferred from the emission order.
+     *
+     * ## Why [FakeNwApi.reportsCloseStates] is off
+     * The resurrection is guarded twice over, and only one of the two is the bytes loop's own. With a
+     * binding that publishes a [NwConnState.Closed] STATE, a resurrected connection is a NEW entry in
+     * `conns`, which trips the #1509 lost-wakeup `reconcileStates` and is removed again in the same
+     * breath — so deleting the tombstone check from `getOrCreateConnForBytes` changes nothing
+     * observable and this test goes green on a guard it is not testing. [NwApi.connectionStates]
+     * carries a shared empty default, so a binding that publishes no state at all is supported by
+     * construction; for THAT binding the tombstone check is the only thing standing between a buried
+     * connId and a leaked `ConnState`. This is the arm that can tell the two apart — the same reason
+     * `NwPublishSwapWindowTest` runs one of its drain arms against a state-less binding.
      */
     @Test
     fun aConnIdTombstonedBetweenTwoChunksNeitherResurrectsNorMisparsesTheTail() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val hub = hub("tombstone")
+            hub.api.reportsCloseStates = false
             val alice = hub.attach("dev-alice", "peer-alice")
             val control = hub.attach("dev-control", "peer-control")
             hub.hello(alice, fill = 1)
@@ -337,6 +349,14 @@ class NwChunkedReceiveTest {
                         setOf(hub.selfId, control.peerId),
                         peersWhenHookRan,
                         "rig check: alice really was evicted and tombstoned BETWEEN the two chunks",
+                    )
+                },
+                {
+                    assertEquals(
+                        emptyMap(),
+                        hub.api.connectionStates.value,
+                        "rig check: this binding must publish NO connection state, or `reconcileStates` " +
+                            "un-does the resurrection for us and the tombstone check below is unpinned",
                     )
                 },
 
@@ -519,6 +539,7 @@ class NwChunkedReceiveTest {
      */
     private class Hub(
         val radio: FakeNwRadio,
+        val api: FakeNwApi,
         val seam: NwSeam,
         val selfId: PeerId,
         val deviceId: String,
@@ -588,7 +609,7 @@ class NwChunkedReceiveTest {
         backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seam.incoming.collect { received += it } }
         backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { api.bytesReceived.collect { chunks += it } }
         testScheduler.runCurrent()
-        return Hub(radio, seam, selfId, deviceId, received, chunks, this)
+        return Hub(radio, api, seam, selfId, deviceId, received, chunks, this)
     }
 
     /** A child scope with its OWN Job, so one seam's teardown cannot cancel another's loops. */
