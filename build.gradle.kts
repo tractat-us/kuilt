@@ -3775,7 +3775,11 @@ object NotNullAssertionScanner {
 // THE BASELINE IS A PER-FILE COUNT RATCHET, for `forbidTightRunTestTimeout`'s reason and not a
 // weaker one: under a file ALLOWLIST the file with the most `!!` — the one whose local convention
 // is teaching the next contributor — is the one that becomes exempt. A count only ever moves down.
-// Sweep a file all-or-none and delete its entry.
+// Sweep a file all-or-none and delete its entry. It does NOT auto-tighten: sweeping a file without
+// deleting its entry leaves the baseline loose for that path until someone notices, and failing on
+// a DECREASE would red-light the branch doing the sweeping. What IS checked is the entry that has
+// stopped meaning anything — a key naming a file no longer in scope fails, so a deleted or renamed
+// path cannot sit there grandfathering whatever lands on it next.
 val typeResolvedDetektTaskNames = listOf(
     // kuilt.detekt-kmp — the tier that carries a JVM/Android compile classpath. `detektJvmMain`
     // also carries commonMain and any jvmAndAndroid* MAIN intermediate, folded in by that plugin.
@@ -3900,6 +3904,26 @@ val forbidNotNullAssertionInUnresolvedSource by tasks.registering {
             if ("!!" !in raw) return@forEach
             val hits = NotNullAssertionScanner.violations(KotlinCodeScanner.stripNonCode(raw))
             if (hits.isNotEmpty()) found[path] = hits
+        }
+        // The baseline's own stale direction — a DANGLING key, i.e. a path that is no longer in
+        // scope at all (deleted, renamed, or moved into a source set detekt now type-resolves). That
+        // entry has stopped grandfathering anything and become a claim about a file that is not
+        // there, which is the shape `forbidUnlintedModule` and the carve-out above both refuse.
+        // A mere DECREASE is deliberately tolerated, for `forbidTightRunTestTimeout`'s reason: a
+        // half-swept file would otherwise red-light the branch doing the sweeping.
+        val dangling = baseline.keys.filterNot { key ->
+            scanned.files.any { it.relativeTo(rootPath).invariantSeparatorsPath == key }
+        }
+        if (dangling.isNotEmpty()) {
+            error(
+                "The baseline grandfathers file(s) this guard no longer scans:\n    " +
+                    dangling.sorted().joinToString("\n    ") +
+                    "\n  Deleted, renamed, or moved into a source set a type-resolved detekt task now " +
+                    "covers — either way the entry is a claim about a file that is not there, and it " +
+                    "would silently grandfather a NEW file that later lands on the same path.\n" +
+                    "  THE FIX is to delete the entry (or re-key it to the new path with the count this " +
+                    "scanner reports).",
+            )
         }
         val regressions = found.filter { (path, hits) -> hits.size > (baseline[path] ?: 0) }
         if (regressions.isNotEmpty()) {

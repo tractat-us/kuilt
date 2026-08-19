@@ -146,8 +146,13 @@ afterEvaluate {
     // nullability rules cannot fire (verified — an injected `!!` in
     // `demo/web/src/wasmJsMain` leaves `detektWasmJsMain` at "0 code smells"). It is the
     // same tier every module's own wasm/native source sets sit in today; making it
-    // reachable at all is the improvement. Real coverage here needs a rule set that does
-    // not depend on type resolution — that gap, shared with `:spike` (#1863), is #2039.
+    // reachable at all is the improvement. Real coverage here would need a rule set that
+    // does not depend on type resolution; #2039 weighed that and did NOT choose it. What
+    // shipped instead is `forbidNotNullAssertionInUnresolvedSource` in the root build — a
+    // lexical `check`-wired ban on `!!` in every source set no type-resolved detekt task
+    // covers, this tier and `:spike` (#1863) included. It buys the one rule that matters
+    // most and nothing else, so everything above about what a green here means still
+    // holds for the other three rules.
     // The discriminator is the existence of `detektJvmMain` itself, not a target-type
     // predicate: it is exactly the task the folding above needs and exactly the task the
     // name set below names, so the two cannot drift apart.
