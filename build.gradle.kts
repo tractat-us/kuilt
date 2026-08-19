@@ -3738,9 +3738,8 @@ object NotNullAssertionScanner {
 //     the other three rules at all (`UnnecessaryNotNullOperator`, `CastNullableToNonNullableType`
 //     and `MapGetWithNotNullAssertionOperator` all need types; the last is a strict subset of `!!`
 //     and so is covered incidentally).
-//   * `!!` reached by a `!` immediately followed by a unary `!` (`if (!!flag)`) reads as an
-//     assertion here. It is one line in the whole tree's worth of risk and the shape is worth a
-//     second look anyway; no attempt is made to tell them apart.
+//   * A doubled unary negation (`if (!!flag)`) reads as an assertion here. No attempt is made to
+//     tell the two apart, and the shape is worth a second look anyway.
 // Its value is exactly this: in source sets that today get NOTHING, the one rule that matters most
 // now costs something to break. A rule set that does not need type resolution (option 1 in #2039)
 // would cover more; it also costs a second config file and a repo-wide sweep, and was not chosen.
@@ -3765,9 +3764,10 @@ object NotNullAssertionScanner {
 // above leaves them in — and they are carved back out by name, because they are #1960's gap, not
 // #2039's. The distinction is not cosmetic: theirs is JVM-path code whose FIX is to fold it into
 // `detektJvmTest` and get all four real rules, and pre-empting that with a lexical ban on one
-// operator would trade a fixable gap for a permanent approximation. It is also 433 sites across 83
-// files against this guard's whole population of 7 — a baseline that size is indistinguishable
-// from no guard, which is the objection `forbidUnlintedAndroidMain` records about allowlists.
+// operator would trade a fixable gap for a permanent approximation. It is also, by raw grep, 423
+// lines across 83 files against this guard's whole population of 7 — a baseline that size is
+// indistinguishable from no guard, which is the objection `forbidUnlintedAndroidMain` records
+// about allowlists.
 // The carve-out checks its own stale direction: an entry matching nothing left in scope fails,
 // so closing #1960 red-lights the entry that has become a lie instead of leaving it as decoration.
 //
