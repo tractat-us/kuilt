@@ -470,9 +470,11 @@ private suspend fun buildMesh(
     // (`connections` empty) requested nothing, so it is NOT born-dead: it stays Woven and grows via
     // addLink. Hubs never latch, so bornDead is always false for them (latchTornWhenDrained = false).
     //
-    // `winners.isEmpty()` also implies `losers.isEmpty()`: a loser is only ever produced against an
-    // incumbent winner for the same peer, and that peer keeps a winner thereafter. So a born-dead seam
-    // never carries a drain, and the two never interact.
+    // `winners.isEmpty()` also implies `losers.isEmpty()`, so a born-dead seam never carries a drain and
+    // the two paths never interact. It holds because `winners` above is ASSIGN-ONLY — nothing is ever
+    // removed from it — and both loser-producing branches of that `when` require `existing != null`,
+    // i.e. a winner already recorded for that peer, which they then leave recorded (one overwrites it
+    // with the new winner, the other keeps it). So a loser existing implies a winner existing.
     val bornDead = latchTornWhenDrained && connections.isNotEmpty() && winners.isEmpty()
     return MeshSeam(
         selfId, winners, losers, dispatcher, random, policy, admission, latchTornWhenDrained, bornDead,
@@ -623,7 +625,7 @@ private suspend fun admitLink(selfId: PeerId, admission: LinkAdmission, link: Li
  * link, so *our* keep-arm loser is the *remote's* replace-arm loser, with its window frames in flight
  * toward us. [buildMesh]'s losers are the same case one step earlier: nothing is published locally at
  * construction, so they are all reported as [MeshDisplacement.Arm.Keep], and the remote's window is
- * still in flight. Their drains start from `init` — see [armOrderingHoldAtConstruction].
+ * still in flight. Their drains start from `init`, which arms every hold before launching any read loop.
  *
  * The goodbye is what makes the drain sound rather than an optimisation of it. Terminating on "the
  * link died" is self-defeating once both ends drain: that signal exists only while the remote still
@@ -651,7 +653,7 @@ private class MeshSeam(
     override val selfId: PeerId,
     initialLinks: Map<PeerId, Link>,
     // Links [buildMesh]'s dedup displaced before this seam existed (#2485). Drained from `init`, never
-    // published, never closed by the caller — see [armOrderingHoldAtConstruction].
+    // published, never closed by the caller — see `init`.
     displacedAtConstruction: List<Link>,
     private val dispatcher: CoroutineContext,
     private val random: Random,
@@ -734,8 +736,9 @@ private class MeshSeam(
     /**
      * Peers whose live-link frames are being held pending a drain-end (#2474). **Guarded by
      * [stageMutex] only** — never by [lock] — so the hold decision and the delivery it guards are one
-     * atomic step. The single exception is [armOrderingHoldAtConstruction], which writes this map from
-     * `init`, where exclusivity is structural and there is nothing yet to be guarded against.
+     * atomic step. The single exception is `init`, which writes this map inline — there exclusivity is
+     * structural and there is nothing yet to be guarded against. It is written inline, and not extracted
+     * into a helper, precisely so that exception cannot be invoked from anywhere the argument fails.
      *
      * A peer's presence as a key IS the armed flag. Bounded by [orderingHoldCapacity], after which
      * the hold releases early and is removed outright (see [stageInbound]).
@@ -794,9 +797,22 @@ private class MeshSeam(
         // Register construction's dedup losers as draining and arm their peers' ordering holds — ALL of
         // it before a single read loop is launched below, so no live-link frame can outrun a hold (#2485).
         // This is the arm `addLink`'s keep arm cannot have: there the winner has been reading all along.
+        //
+        // The `orderingHolds` write is the ONE place that map is touched without [stageMutex], and it is
+        // written INLINE here rather than behind a helper on purpose. Its safety is a property of *this
+        // position* — no read loop exists, `scope` has launched nothing, the seam is unpublished, so
+        // exclusivity is structural rather than acquired (the same argument `links.putAll` above rests
+        // on, and `launch` publishes these writes to the coroutines that follow). A private
+        // `armOrderingHoldAtConstruction()` would have been callable from `addLink`, where every word of
+        // that argument is false: it would compile, pass under a test dispatcher that serialises the race
+        // away, and reintroduce an unguarded write. There is no method to call, so there is nothing to
+        // misuse — the constraint is structural instead of a caller obligation nothing checks.
+        //
+        // It is also why this needs no `startDrain` undo: that undo exists for a terminator ending the
+        // drain across `armOrderingHold`'s suspension, and nothing here suspends.
         displacedAtConstruction.forEach { loser ->
             draining[loser] = Drain(loser.remoteId, MeshDisplacement.Arm.Keep, boundFor(loser))
-            armOrderingHoldAtConstruction(loser)
+            orderingHolds.getOrPut(loser.remoteId) { OrderingHold() }.waitingOn += loser
         }
 
         // Launch a supervised reader for each initial link.
@@ -1144,28 +1160,6 @@ private class MeshSeam(
      */
     private suspend fun armOrderingHold(loser: Link) {
         stageMutex.withMutex { orderingHolds.getOrPut(loser.remoteId) { OrderingHold() }.waitingOn += loser }
-    }
-
-    /**
-     * [armOrderingHold] without [stageMutex] — **callable from `init` and nowhere else** (#2485).
-     *
-     * The mutex exists to make the hold decision and the delivery it guards one atomic step against
-     * concurrent read loops. In `init` there are no read loops: this seam has not been published to its
-     * caller, `scope` has launched nothing, and every drain registration and arm happens before the first
-     * `scope.launch`. Exclusivity is therefore **structural** rather than acquired — the same argument the
-     * `links.putAll(initialLinks)` above rests on, and the reason `orderingHolds`'s "guarded by
-     * [stageMutex] only" is not weakened by this: there is nothing here to be guarded against. `launch`
-     * publishes these writes to the coroutines that follow.
-     *
-     * This is what lets construction arm before ANY read loop starts, which is strictly tighter than
-     * [startDrain] manages on either [addLink] arm — and it is why `init` needs no `startDrain` undo: the
-     * race that undo exists for is a terminator ending the drain across [armOrderingHold]'s suspension,
-     * and this does not suspend.
-     *
-     * Calling it after construction would be a data race on [orderingHolds]. Use [armOrderingHold].
-     */
-    private fun armOrderingHoldAtConstruction(loser: Link) {
-        orderingHolds.getOrPut(loser.remoteId) { OrderingHold() }.waitingOn += loser
     }
 
     /**
