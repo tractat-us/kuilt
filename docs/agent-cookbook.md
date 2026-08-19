@@ -388,6 +388,30 @@ bravo = bravo.piece(change)
 check(alpha == bravo)
 ```
 
+**Intent:** a shared **JSON document** — nested objects, arrays and scalars — edited concurrently by several peers and converging without a merge step.
+**Primitive:** `JsonCrdt` (`us.tractat.kuilt.crdt`).
+
+`set`/`remove` return a `Patch` carrying the one key they touched, so editing one field of a
+1,000-field document sends 177 bytes rather than the 127 KB the whole document weighs. A change
+*inside* a nested object is still expressed by rebuilding that object and setting it at the top —
+one key, but that key's value is the whole rebuilt subtree
+([#2469](https://github.com/tractat-us/kuilt/issues/2469)).
+
+<!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleJsonCrdt -->
+```kotlin
+// Two peers have converged on a document with a title and a long body.
+var alpha = JsonCrdt.empty(a)
+    .piece { it.set("title", text(a, "Draft")) }
+    .piece { it.set("body", text(a, "a very long document body")) }
+var bravo = alpha.withReplica(b)
+
+// B retitles the document and puts only that key on the wire. The body does not travel —
+// that is the whole saving, and it holds however large the rest of the document gets.
+val retitle = bravo.set("title", text(b, "Final"))
+check(retitle.delta.keys == setOf("title"))
+check(retitle.delta["body"] == null)
+```
+
 **Intent:** replicating a CRDT live over a `Seam` by hand — collecting inbound deltas, merging them, broadcasting outbound deltas, and exposing the converged value as a `StateFlow`.
 **Primitive:** `Quilter` (`us.tractat.kuilt.quilter`). Don't drive `Seam.incoming` and delta merge/broadcast yourself.
 

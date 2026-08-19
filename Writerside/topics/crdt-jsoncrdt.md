@@ -18,7 +18,35 @@ JsonNode = Object(ORMap<String, JsonNode>)   // add-wins keys, recursive values
 
 A key added concurrently with a remove survives — the add wins. When two replicas write different scalars to the same key concurrently, the leaf becomes a multi-value register holding both, so no write is silently lost; the caller picks a winner.
 
+## What each edit costs to send
+
+Renaming the title of a long document should cost about as much as the title. So `set` and `remove`
+hand you back **the change** — the one field you touched — and that is what travels to the other
+devices. The size of what travels does not depend on how many fields the document holds. Editing one
+field of a 1,000-field document sends 177 bytes rather than the 127 KB the whole document weighs.
+
+In code, both mutators return a `Patch<JsonCrdt>`. Hand it to a replicator with
+`quilter.mutate { it.set(key, node) }`; to hold the resulting whole document outside a replicator,
+absorb the patch: `doc.piece { it.set(key, node) }`.
+
+One thing this does *not* yet make cheap. Changing a field **inside** a nested object means
+rebuilding that object and setting it at the top, so the frame is one key whose value is the whole
+rebuilt subtree. A path-addressed edit would make that cost depend on the depth rather than the size
+of the subtree; that is [issue 2469](https://github.com/tractat-us/kuilt/issues/2469).
+
 ## Code examples
+
+**Ship the field, not the document:**
+
+<!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleJsonCrdt -->
+```kotlin
+// B retitles the document and puts only that key on the wire. The body does not travel —
+// that is the whole saving, and it holds however large the rest of the document gets.
+val retitle = bravo.set("title", text(b, "Final"))
+check(retitle.delta.keys == setOf("title"))
+check(retitle.delta["body"] == null)
+```
+
 
 **Set and read a scalar:**
 

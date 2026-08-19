@@ -496,6 +496,14 @@ subtree is silently discarded; see `JsonNode` KDoc for the v1 rationale.
 arrays, so `Quilter`'s causal-stability GC barrier fires correctly for
 nested array tombstones.
 
+`set` and `remove` return a `Patch<JsonCrdt>` built from the root `ORMap`'s own
+minimal delta, so one write puts one key on the wire regardless of how large the
+document is. The remaining cost is *within* the node written: a change nested
+inside an existing `JsonNode.Object`/`JsonNode.Array` is expressed by rebuilding
+that node and setting it at the top, so the frame is one key whose value is the
+whole rebuilt subtree. A path-addressed mutator would make that O(depth) —
+[#2469](https://github.com/tractat-us/kuilt/issues/2469).
+
 ## Presence/awareness CRDT (`kuilt-crdt`)
 
 `EphemeralMap<V>` is a presence and awareness CRDT — it models the set of replicas
