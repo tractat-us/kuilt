@@ -3,6 +3,7 @@ package us.tractat.kuilt.conformance.lattice
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ORMap
 import us.tractat.kuilt.test.assertAll
+import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -148,6 +149,177 @@ internal class VacuityFloorSelfTest {
             },
         )
     }
+
+    /**
+     * **A retire at the lattice bottom is not always inert**, and nothing the harness does may
+     * assume it is.
+     *
+     * #2145's leading asserts exist because a retiring draw on a replica still holding `initial`
+     * usually *cannot* be effective — there is nothing yet to retire — and on eight of the twelve
+     * retiring bindings every single bottom-state no-op was exactly that. The tempting shortcut is
+     * to read that as a law and act on it directly: skip a retiring draw at the bottom, or re-draw
+     * until an asserting op comes up. It is not a law. `TwoPhaseSet.remove` and `LWWRegister.unset`
+     * both write a **tombstone**, so on an empty state they change it — and both bindings measured
+     * **0** bottom-state no-ops for that reason. A harness that suppressed the draw would delete
+     * real coverage from precisely these two, and would do it silently, because the rates it
+     * reports would only improve.
+     *
+     * So the fix leads with an assert rather than filtering the draw, and this test pins the premise
+     * that makes the distinction matter. The `ORSet` arm is the control: without it the test passes
+     * on a world where every retire everywhere is effective, which is the world the shortcut would
+     * be safe in.
+     *
+     * **What the leading assert does cost those two, stated exactly.** The states `⊥ · remove` and
+     * `⊥ · unset-high` leave the randomised pool, and three passes build from that pool, so be
+     * precise about which still see them:
+     *
+     * - `runExhaustiveSmall` **does** — it walks every word of length `1..L` from `initial` on
+     *   replica 0, so `[remove]`, `[unset-high]` and every continuation within the bound are still
+     *   searched exhaustively on every run. That is the bracketing pair (associativity and
+     *   canonicality), which is the pass the whole suite is built around.
+     * - `runOtherJoinLaws` and `runCodecLaws` **do not** — both build from `causalPool`. The codec
+     *   pass calls itself "the one seam every test above skips", so this is a real narrowing and not
+     *   a technicality. What still covers the shape there is `:kuilt-crdt`'s cross-target golden
+     *   vectors: `CanonicalGoldenVectorTest`'s `TwoPhaseSet` fixture joins in
+     *   `TwoPhaseSet.empty().remove("delta")` — a tombstone for an element never added — so a
+     *   codec that dropped it fails there. That is byte-level pinning of one constructed state, not
+     *   the three codec arms over a pool, and it is what the tree has.
+     *
+     * Restoring it here would mean naming those words in a critical shape, which on `TwoPhaseSet`
+     * is not spellable: its elements are single-shot, so `remove · add · remove` no-ops on its third
+     * step and the harness rejects the shape as decoration.
+     */
+    @Test
+    fun aBottomStateRetireIsEffectiveOnTheBindingsThatWriteATombstone() {
+        assertAll(
+            { assertBottomRetires("TwoPhaseSet", TwoPhaseSetConvergenceTest().newHarness(), effective = true) },
+            { assertBottomRetires("LWWRegister", LWWRegisterConvergenceTest().newHarness(), effective = true) },
+            { assertBottomRetires("ORSet", ORSetConvergenceTest().newHarness(), effective = false) },
+        )
+    }
+
+    /**
+     * Every [OpKind.RETIRE] op of [harness]'s alphabet, applied to `initial`, either changes the
+     * state ([effective] true) or is absorbed by it ([effective] false).
+     *
+     * A fixed [Random] because a roaming op draws its target from the stream; the claim is about the
+     * op's behaviour at the bottom, and one draw is enough to make it.
+     */
+    private fun <S : us.tractat.kuilt.crdt.Quilted<S>> assertBottomRetires(
+        name: String,
+        harness: LatticeLawHarness<S>,
+        effective: Boolean,
+    ) {
+        val retires = harness.alphabet.filter { it.kind == OpKind.RETIRE }
+        assertTrue(retires.isNotEmpty(), "$name declares no RETIRE op, so this arm asserts nothing")
+        for (op in retires) {
+            val after = op.apply(harness.initial, 0, Random(0))
+            assertEquals(
+                effective,
+                after != harness.initial,
+                "$name's '${op.name}' at the lattice bottom: expected it to " +
+                    (if (effective) "CHANGE" else "leave unchanged") +
+                    " `initial`. Read the KDoc on this test before touching the number — the two " +
+                    "answers are what stops the leading-assert fix from being written as a filter " +
+                    "on the draw. initial=${harness.initial}, after=$after",
+            )
+        }
+    }
+
+    /**
+     * **Retirement dead on two of three replicas must red the binding** — #2158's shape, asserted
+     * rather than described.
+     *
+     * This is the check #2158 asked for and did not have: its complaint was that the harness's
+     * ability to catch this shape was *prose*, and the six bindings that did catch it caught it by
+     * accident, on a shared 25% ceiling their own healthy rates happened to sit far below. #2145
+     * removed that accident by removing the waste it rested on. The per-binding
+     * [VacuityFloors.maxNoOpSteps] constants put it back deliberately, and this test is what stops
+     * the next edit to one of those constants from quietly undoing it again.
+     *
+     * The mechanism is the **no-op ceiling**, not the retirement floor: a retiring op that has gone
+     * dead still gets drawn, and every draw of it is now a step that changes nothing. The retirement
+     * floor cannot see it, because replica 0's shape plus replica 0's own exploration clear 10% on
+     * their own (see [VacuityFloors]).
+     *
+     * `JsonCrdt` is excluded and the exclusion is the honest part: its healthy and crippled rates
+     * are 11.5% and 13.7%, 2.2 points apart, and a ceiling between them would red on any generator
+     * edit. Its constant targets the leading-assert pin instead, and its binding comment says so.
+     */
+    @Test
+    fun retirementDeadOffReplicaZeroBreachesEveryBindingThatCanSeparateIt() {
+        assertAll(
+            *bindingsWhoseCeilingCatchesDeadRetirement().map { (name, harness) ->
+                {
+                    val crippled = retirementDeadOffReplicaZero(harness)
+                    val measured = crippled.measureVacuity(seeds)
+                    assertTrue(
+                        measured.noOpRate > crippled.floors.maxNoOpSteps,
+                        "$name with retirement dead off replica 0 must BREACH its no-op ceiling — " +
+                            "that is the whole of what #2158 asked for. Measured " +
+                            "${measured.noOpSteps}/${measured.steps} = ${measured.noOpRate}, ceiling " +
+                            "${crippled.floors.maxNoOpSteps}. If you have just raised this binding's " +
+                            "`maxNoOpSteps`, you have re-opened #2158 on it; if you have made its " +
+                            "generator waste fewer steps, re-measure with " +
+                            "`-Plattice.vacuity.breakdown=true` and lower the ceiling to match.",
+                    )
+                    assertFailsWith<IllegalStateException>(
+                        "the harness must ENFORCE it, not merely measure it",
+                    ) { crippled.checkVacuityFloors(seeds) }
+                    Unit
+                }
+            }.toTypedArray(),
+        )
+    }
+
+    /**
+     * Every retiring binding whose ceiling is set to separate the crippled arm — all twelve except
+     * `JsonCrdt`, for the reason given on the test above.
+     *
+     * Listed rather than derived. A registry that walked the package would silently shrink to
+     * nothing if the derivation broke, and a test that asserts over an empty list is the vacuity
+     * shape this whole file exists to argue against.
+     */
+    private fun bindingsWhoseCeilingCatchesDeadRetirement(): List<Pair<String, LatticeLawHarness<*>>> = listOf(
+        "CausalDotMap" to CausalDotMapConvergenceTest().newHarness(),
+        "CausalDotSet" to CausalDotSetConvergenceTest().newHarness(),
+        "EphemeralMap" to EphemeralMapConvergenceTest().newHarness(),
+        "Fugue" to FugueConvergenceTest().newHarness(),
+        "LWWMap" to LWWMapConvergenceTest().newHarness(),
+        "LWWRegister" to LWWRegisterConvergenceTest().newHarness(),
+        "MovableTree" to MovableTreeConvergenceTest().newHarness(),
+        "ORMap" to ORMapConvergenceTest().newHarness(),
+        "ORSet" to ORSetConvergenceTest().newHarness(),
+        "Rga" to RgaConvergenceTest().newHarness(),
+        "TwoPhaseSet" to TwoPhaseSetConvergenceTest().newHarness(),
+    )
+
+    /**
+     * [harness] with every [OpKind.RETIRE] op effective on replica 0 only.
+     *
+     * The critical shape survives by construction — shapes run on replica 0 — so the shape's own
+     * no-op check still passes and the arm differs from the control in exactly one thing: what the
+     * *other two replicas* can retire.
+     */
+    private fun <S : us.tractat.kuilt.crdt.Quilted<S>> retirementDeadOffReplicaZero(
+        harness: LatticeLawHarness<S>,
+    ): LatticeLawHarness<S> = LatticeLawHarness(
+        initial = harness.initial,
+        alphabet = harness.alphabet.map { op ->
+            if (op.kind != OpKind.RETIRE) {
+                op
+            } else {
+                LatticeOp(op.name, op.kind) { state, replicaIndex, random ->
+                    if (replicaIndex == 0) op.apply(state, replicaIndex, random) else state
+                }
+            }
+        },
+        serializer = harness.serializer,
+        criticalShapes = harness.criticalShapes,
+        floors = harness.floors,
+        replicaCount = harness.replicaCount,
+        opsPerReplica = harness.opsPerReplica,
+    )
 
     /**
      * The floor is not merely breached in the numbers — the harness **enforces** it, and names it.

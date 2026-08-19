@@ -725,11 +725,16 @@ public class LatticeLawHarness<S : Quilted<S>>(
      * the corrected lattice is green on 64 of 64 either way, so the prefix is not manufacturing the
      * red.
      *
+     * **Then every other replica gets one leading assert** — see [leadEveryReplicaWithAnAssert],
+     * which is the whole of #2145: a shape runs on replica 0 only, so without this the other
+     * replicas entered the loop below still holding [initial], where a retiring draw *cannot* be
+     * effective.
+     *
      * Trimmed to [POOL_LIMIT] entries — the triple loop is cubic, and the interesting shapes all
      * appear within a handful of ops. **The prefix is counted inside that cap, not added to it**, so
      * constructed shapes cost random exploration rather than wall clock. That is the intended trade:
      * a constructed step is informative on every seed, and the random step it displaces was
-     * informative on roughly half.
+     * informative on roughly half. The leading asserts are counted inside it on the same terms.
      */
     private fun causalPool(random: Random): PoolRun<S> {
         val latest = MutableList(replicaCount) { initial }
@@ -737,6 +742,7 @@ public class LatticeLawHarness<S : Quilted<S>>(
         val pool = mutableListOf(Tracked(initial, "initial"))
         val steps = mutableListOf<Step>()
         applyCriticalShapes(latest, words, pool, steps, random)
+        leadEveryReplicaWithAnAssert(latest, words, pool, steps, random)
         outer@ for (op in 0 until opsPerReplica) {
             for (r in 0 until replicaCount) {
                 if (random.nextInt(GOSSIP_ONE_IN) == 0) {
@@ -785,9 +791,11 @@ public class LatticeLawHarness<S : Quilted<S>>(
      *
      * Every step is asserted to have **changed the state**, because a shape that no-ops is
      * decoration that reads like coverage. This is not hypothetical: `ORMapConvergenceTest`'s
-     * generator burns **10 of 29** steps removing a key the state does not hold, so a third of its
-     * budget already buys nothing by accident. A constructed shape that did the same would be worse,
+     * generator once burned **10 of 29** steps removing a key the state did not hold, so a third of
+     * its budget bought nothing by accident. A constructed shape that did the same would be worse,
      * because someone wrote it down on purpose and the next reader would trust it.
+     * ([leadEveryReplicaWithAnAssert] and the binding's own roaming ops have since taken that rate
+     * to 5.7% over seeds `0..63`; the point the check makes is unchanged.)
      */
     private fun applyCriticalShapes(
         latest: MutableList<S>,
@@ -813,6 +821,69 @@ public class LatticeLawHarness<S : Quilted<S>>(
             }
         }
     }
+
+    /**
+     * Give every replica the leading assert [applyCriticalShapes] has already given replica 0, so
+     * **no replica enters the exploration loop at the lattice bottom** (#2145, #2158).
+     *
+     * A shape runs on replica 0 only. The others therefore used to take their first exploration draw
+     * from [initial] — and on a retiring alphabet roughly half that alphabet is retiring, so their
+     * first draw was a coin flip on an op that *cannot* be effective, because there is nothing yet to
+     * retire. Measured over seeds `0..63` before this existed, **every single no-op taken from the
+     * bottom state was a RETIRE and no ASSERT ever no-opped there** — 85 of `ORSet`'s 139 no-ops,
+     * 94 of `CausalDotSet`'s 143, 92 of `MovableTree`'s 120. Those are gone: all twelve retiring
+     * bindings now read **0** bottom-state no-ops, and `ORSet`'s no-op rate falls 19.5% → 7.7%.
+     *
+     * **Only on an alphabet that has something to retire.** A grow-only binding cannot draw an op
+     * that is vacuous by construction, so the leading assert would buy it nothing and cost it pool
+     * budget — `GSet` measured 23.2% → 32.8% exploration no-ops when it was included. This is the
+     * same precondition [defaultCriticalShapes] applies when it declines to construct a prefix at
+     * all, and the seven grow-only bindings' trajectories are byte-for-byte what they were.
+     *
+     * **The op is drawn, not fixed, and that is a measurement rather than a taste.** Leading every
+     * replica with `alphabet.first { it.kind == ASSERT }` is the obvious spelling and it collapses
+     * the pool on any binding whose asserting op ignores `replicaIndex`: `TwoPhaseSet`'s `add` puts
+     * the *identical* state on all three replicas, which took its concurrent-pair rate from 22.0% to
+     * **7.6%** — through the 15% floor — while its equal-pair rate doubled to 14.4%. Drawing
+     * uniformly from the asserting ops keeps the replicas apart (concurrency 20.0%, equal pairs
+     * 9.4%) and costs nothing elsewhere.
+     *
+     * Every step is asserted to have **changed the state**, for the reason [applyCriticalShapes]
+     * gives: a leading assert that no-ops would silently reinstate the bottom-state vacuity this
+     * exists to remove. No live binding trips it — the bottom is where an assert is least likely to
+     * be absorbed.
+     */
+    private fun leadEveryReplicaWithAnAssert(
+        latest: MutableList<S>,
+        words: MutableList<List<String>>,
+        pool: MutableList<Tracked<S>>,
+        steps: MutableList<Step>,
+        random: Random,
+    ) {
+        if (alphabet.none { it.kind == OpKind.RETIRE }) return
+        val asserts = alphabet.filter { it.kind == OpKind.ASSERT }
+        if (asserts.isEmpty()) return
+        for (r in 0 until replicaCount) {
+            if (words[r].isNotEmpty()) continue
+            val op = if (asserts.size == 1) asserts[0] else asserts[random.nextInt(asserts.size)]
+            val before = latest[r]
+            val after = op.apply(before, r, random)
+            check(after != before) { leadingAssertNoOpFailure(op, before) }
+            latest[r] = after
+            steps += Step(op.kind, changed = true)
+            words[r] = words[r] + op.name
+            pool += Tracked(after, provenance(r, words[r]))
+        }
+    }
+
+    private fun leadingAssertNoOpFailure(op: LatticeOp<S>, before: S): String =
+        "Leading assert '${op.name}' left the state unchanged at the lattice bottom.\n" +
+            "  state $before\n" +
+            "  Every replica is led with one asserting op so that a retiring draw can be effective " +
+            "(#2145). An ASSERT that is absorbed by `initial` puts the replica straight back where " +
+            "that is impossible, so the alphabet is declaring as ASSERT something that adds no " +
+            "observation — check the op's kind against `OpKind`, and check its precondition holds " +
+            "on `initial`."
 
     private fun criticalShapeNoOpFailure(shape: List<String>, op: LatticeOp<S>, before: S): String =
         "Critical shape $shape is decoration: step '${op.name}' left the state unchanged.\n" +

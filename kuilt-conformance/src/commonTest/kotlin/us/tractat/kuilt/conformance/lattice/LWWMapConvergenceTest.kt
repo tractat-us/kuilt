@@ -121,6 +121,13 @@ internal class LWWMapConvergenceTest : LatticeLawSuite<LWWMap<String, String>>()
         // a join that kept the retirement reads back null and one that dropped the re-assert reads
         // back the first value. Neither is the right answer, so neither can hide.
         criticalShapes = listOf(listOf("set-focus", "remove-focus", "set-focus")),
+        // No-op ceiling tightened from the shared 25% default. Measured over seeds `0..15` — the
+        // window `generatorIsNotVacuous` runs — this binding reads **0.0%**; the ceiling sits at
+        // 9%, a 9.0-point margin. See `VacuityFloors.maxNoOpSteps` for the rule and for why the
+        // shared default cannot do this job. What the 9% catches that 25% did not:
+        //  - NOT the leading assert: this binding reads 0.0% either way, so no ceiling can pin it.
+        //  - retirement dead off replica 0 (#2158's shape): 18.4%, reds by 9.4 points.
+        floors = VacuityFloors(maxNoOpSteps = 0.09),
         serializer = LWWMap.serializer(String.serializer(), String.serializer()),
         replicaCount = 3,
         opsPerReplica = 8,

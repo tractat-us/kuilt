@@ -56,6 +56,13 @@ internal class EphemeralMapConvergenceTest : LatticeLawSuite<EphemeralMap<String
         // The default shape, `put · leave · put`, and it now lands on every seed: clocks c, c+1,
         // c+2 on replica 0. The re-assert outranks the departure, so a final null can only mean the
         // join kept a tombstone the higher-clocked presence entry should have replaced.
+        // No-op ceiling tightened from the shared 25% default. Measured over seeds `0..15` — the
+        // window `generatorIsNotVacuous` runs — this binding reads **0.0%**; the ceiling sits at
+        // 10%, a 10.0-point margin. See `VacuityFloors.maxNoOpSteps` for the rule and for why the
+        // shared default cannot do this job. What the 10% catches that 25% did not:
+        //  - NOT the leading assert: this binding reads 0.0% either way, so no ceiling can pin it.
+        //  - retirement dead off replica 0 (#2158's shape): 20.4%, reds by 10.4 points.
+        floors = VacuityFloors(maxNoOpSteps = 0.10),
         serializer = EphemeralMap.serializer(String.serializer()),
         replicaCount = 3,
         opsPerReplica = 8,

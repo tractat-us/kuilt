@@ -51,6 +51,13 @@ internal class CausalDotMapConvergenceTest : LatticeLawSuite<Causal<DotMap<Strin
         // is the shape that matters — `add` mints a fresh dot, so a lattice that let the retired dot
         // survive keeps `k-0 → {d1, d2}` where a correct one keeps `k-0 → {d2}`.
         criticalShapes = listOf(listOf("add", "remove", "add")),
+        // No-op ceiling tightened from the shared 25% default. Measured over seeds `0..15` — the
+        // window `generatorIsNotVacuous` runs — this binding reads **9.1%**; the ceiling sits at
+        // 15%, a 5.9-point margin. See `VacuityFloors.maxNoOpSteps` for the rule and for why the
+        // shared default cannot do this job. What the 15% catches that 25% did not:
+        //  - the leading assert removed from the pool builder: 20.8%, reds by 5.8 points.
+        //  - retirement dead off replica 0 (#2158's shape): 21.4%, reds by 6.4 points.
+        floors = VacuityFloors(maxNoOpSteps = 0.15),
         serializer = Causal.serializer(DotMap.serializer(String.serializer(), DotSet.serializer())),
         replicaCount = 3,
         opsPerReplica = 8,

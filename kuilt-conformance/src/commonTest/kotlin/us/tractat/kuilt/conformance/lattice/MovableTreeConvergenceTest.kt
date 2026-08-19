@@ -65,6 +65,13 @@ internal class MovableTreeConvergenceTest : LatticeLawSuite<MovableTree<String>>
         criticalShapes = listOf(
             listOf("add-under-root", "add-under-root", "move-last-under-first", "add-under-root"),
         ),
+        // No-op ceiling tightened from the shared 25% default. Measured over seeds `0..15` — the
+        // window `generatorIsNotVacuous` runs — this binding reads **9.2%**; the ceiling sits at
+        // 12%, a 2.8-point margin. See `VacuityFloors.maxNoOpSteps` for the rule and for why the
+        // shared default cannot do this job. What the 12% catches that 25% did not:
+        //  - the leading assert removed from the pool builder: 20.0%, reds by 8.0 points.
+        //  - retirement dead off replica 0 (#2158's shape): 15.2%, reds by 3.2 points.
+        floors = VacuityFloors(maxNoOpSteps = 0.12),
         serializer = MovableTree.serializer(String.serializer()),
         replicaCount = 3,
         opsPerReplica = 8,

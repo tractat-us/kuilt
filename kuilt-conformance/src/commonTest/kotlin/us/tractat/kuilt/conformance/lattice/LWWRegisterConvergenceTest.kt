@@ -81,7 +81,14 @@ internal class LWWRegisterConvergenceTest : LatticeLawSuite<LWWRegister<String>>
         //
         // So the 1.7% was not concurrency the fix destroyed; it was the violation, being counted.
         // Ancestry reads 48.1%, against a 50% ceiling only a chain can reach.
-        floors = VacuityFloors(totalOrder = true),
+        // No-op ceiling tightened from the shared 25% default. Measured over seeds `0..15` — the
+        // window `generatorIsNotVacuous` runs — this binding reads **6.6%**; the ceiling sits at
+        // 13%, a 6.4-point margin. See `VacuityFloors.maxNoOpSteps` for the rule and for why the
+        // shared default cannot do this job. What the 13% catches that 25% did not:
+        //  - NOT the leading assert: without it this binding reads 2.2%, *below* its own healthy
+        //    rate, so the pin is unreachable here in the direction a ceiling can see.
+        //  - retirement dead off replica 0 (#2158's shape): 20.3%, reds by 7.3 points.
+        floors = VacuityFloors(totalOrder = true, maxNoOpSteps = 0.13),
         serializer = LWWRegister.serializer(String.serializer()),
         replicaCount = 3,
         opsPerReplica = 8,

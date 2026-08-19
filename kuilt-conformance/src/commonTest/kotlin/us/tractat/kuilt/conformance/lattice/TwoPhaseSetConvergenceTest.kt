@@ -54,6 +54,13 @@ internal class TwoPhaseSetConvergenceTest : LatticeLawSuite<TwoPhaseSet<String>>
                 state.piece(state.remove(element))
             },
         ),
+        // No-op ceiling tightened from the shared 25% default. Measured over seeds `0..15` — the
+        // window `generatorIsNotVacuous` runs — this binding reads **19.3%**; the ceiling sits at
+        // 22%, a 2.7-point margin. See `VacuityFloors.maxNoOpSteps` for the rule and for why the
+        // shared default cannot do this job. What the 22% catches that 25% did not:
+        //  - the leading assert removed from the pool builder: 23.8%, reds by 1.8 points.
+        //  - retirement dead off replica 0 (#2158's shape): 35.3%, reds by 13.3 points.
+        floors = VacuityFloors(maxNoOpSteps = 0.22),
         serializer = TwoPhaseSet.serializer(String.serializer()),
         replicaCount = 3,
         opsPerReplica = 8,
