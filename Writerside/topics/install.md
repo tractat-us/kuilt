@@ -34,9 +34,9 @@ Without the BOM, pin each module explicitly (for example, `us.tractat.kuilt:kuil
 
 The fabric and session modules re-export the `kuilt-core` contract
 (`Loom`/`Seam`/`Swatch`), so you do not need to list `kuilt-core` separately
-alongside them. The data modules are different: `kuilt-crdt` and `kuilt-bolt` are
-plain serializable value types that work with no network at all, so they do not
-bring the contract with them — add `kuilt-core` yourself if you want it too. If
+alongside them. The data modules are different: `kuilt-crdt`, `kuilt-bolt` and
+`kuilt-store` work with no network at all, so they do not bring the contract with
+them — add `kuilt-core` yourself if you want it too. If
 you only need in-memory message passing, `kuilt-core` alone is enough.
 
 If you're unsure where to start, begin with one transport module
