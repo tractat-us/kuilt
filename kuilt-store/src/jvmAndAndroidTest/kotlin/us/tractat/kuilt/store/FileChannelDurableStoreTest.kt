@@ -1,142 +1,67 @@
 package us.tractat.kuilt.store
 
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.conformance.DurableStoreConformanceSuite
+import us.tractat.kuilt.conformance.RestartFixture
 import us.tractat.kuilt.test.assertAll
-import kotlin.io.path.createTempDirectory
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
-import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
 /**
- * Crash-recovery tests for [FileChannelDurableStore].
+ * Verifies [FileChannelDurableStore] satisfies the whole [DurableStoreConformanceSuite], **on both
+ * the JVM and Android**, and keeps the filename-level tests the suite cannot reach.
  *
- * "Crash" is simulated by constructing a second [FileChannelDurableStore] instance
- * over the same directory — there is no shared in-memory state, so the second
- * instance must read everything from disk.
+ * In `jvmAndAndroidTest`, not `jvmTest`, because `FileChannelDurableStore` lives in
+ * `jvmAndAndroidMain` and Android is the target an app actually depends on for durable storage.
+ * A subclass in `jvmTest` would leave the Android variant compiled and never run — the suite would
+ * be green on a target it had never executed against.
+ *
+ * Every test this class used to hold by hand — absent key, round trip, overwrite, delete, the
+ * defensive copy, the large and empty payloads, independent keys, and the "crash" simulated by a
+ * second instance over the same directory — is now a property of the shared contract, checked here
+ * and on the other three backends alike. Nothing was dropped; the suite states each of them at least
+ * as strongly, and several considerably more so (an overwrite that *shrinks*, a key set built to
+ * collide, a restart that also has to remember a delete).
+ *
+ * What stays is what is genuinely about *this backend's filenames* (#2506): the legacy fold, the
+ * orphaned legacy files the fix deliberately does not migrate, the `.tmp` sidecar namespace, and the
+ * case-insensitive filesystem. None of them are expressible against [DurableStore] — the contract
+ * exposes no medium — so they stay here, where the medium is reachable.
  */
-class FileChannelDurableStoreTest {
+class FileChannelDurableStoreTest : DurableStoreConformanceSuite() {
 
-    private fun tempStore(): FileChannelDurableStore =
-        FileChannelDurableStore(createTempDirectory("kuilt-store-test").toFile())
+    /**
+     * The directory each store was given, so [restart] can reopen it.
+     *
+     * Keyed on the store instance rather than tracked in a single field because the suite's
+     * [twoFreshStoresDoNotShareState] holds two live stores at once, and a single field would hand
+     * the second store's directory back for a restart of the first.
+     */
+    private val directories = mutableMapOf<DurableStore, File>()
+
+    override suspend fun newStore(): DurableStore {
+        val dir = freshTempDir("kuilt-store-conformance")
+        return FileChannelDurableStore(dir).also { directories[it] = dir }
+    }
+
+    /**
+     * A restart, modelled the way this store's own contract defines one: a **brand-new instance over
+     * the same directory**. It shares no in-memory state with the original, so everything it answers
+     * came off the disk the original wrote to.
+     */
+    override suspend fun restart(store: DurableStore): RestartFixture =
+        RestartFixture.Durable(
+            FileChannelDurableStore(
+                requireNotNull(directories[store]) { "restart() was handed a store this fixture did not create" },
+            ),
+        )
 
     private fun storeAt(dir: java.io.File): FileChannelDurableStore =
         FileChannelDurableStore(dir)
 
-    // ---- missing key → null ----
-
-    @Test
-    fun readReturnsNullForAbsentKey() = runTest {
-        assertNull(tempStore().read(StoreKey("missing")))
-    }
-
-    // ---- write then read ----
-
-    @Test
-    fun writeAndReadRoundTrips() = runTest {
-        val store = tempStore()
-        val key = StoreKey("key")
-        val bytes = byteArrayOf(1, 2, 3)
-        store.write(key, bytes)
-        assertContentEquals(bytes, store.read(key))
-    }
-
-    // ---- crash recovery ----
-
-    @Test
-    fun crashRecoveryRoundTrip() = runTest {
-        val dir = createTempDirectory("kuilt-store-crash").toFile()
-        val key = StoreKey("spans")
-        val bytes = byteArrayOf(10, 20, 30)
-
-        // Write with first store instance.
-        storeAt(dir).write(key, bytes)
-
-        // Simulate restart: brand-new instance, same directory.
-        val recovered = storeAt(dir).read(key)
-        assertContentEquals(bytes, recovered)
-    }
-
-    // ---- overwrite ----
-
-    @Test
-    fun secondWriteOverwritesFirst() = runTest {
-        val dir = createTempDirectory("kuilt-store-overwrite").toFile()
-        val key = StoreKey("k")
-        storeAt(dir).write(key, byteArrayOf(1))
-        storeAt(dir).write(key, byteArrayOf(2))
-        assertContentEquals(byteArrayOf(2), storeAt(dir).read(key))
-    }
-
-    // ---- overwrite survives simulated restart ----
-
-    @Test
-    fun overwritePersistedAfterRestart() = runTest {
-        val dir = createTempDirectory("kuilt-store-overwrite2").toFile()
-        val key = StoreKey("k")
-        storeAt(dir).write(key, byteArrayOf(1))
-        storeAt(dir).write(key, byteArrayOf(99))
-
-        val recovered = FileChannelDurableStore(dir).read(key)
-        assertContentEquals(byteArrayOf(99), recovered)
-    }
-
-    // ---- delete ----
-
-    @Test
-    fun deleteRemovesKey() = runTest {
-        val store = tempStore()
-        val key = StoreKey("k")
-        store.write(key, byteArrayOf(42))
-        store.delete(key)
-        assertNull(store.read(key))
-    }
-
-    @Test
-    fun deleteIdsNoOpForAbsentKey() = runTest {
-        // No exception thrown when deleting a key that never existed.
-        tempStore().delete(StoreKey("ghost"))
-    }
-
-    @Test
-    fun deletePersistedAfterRestart() = runTest {
-        val dir = createTempDirectory("kuilt-store-delete").toFile()
-        val key = StoreKey("k")
-        storeAt(dir).write(key, byteArrayOf(1))
-        storeAt(dir).delete(key)
-
-        assertNull(FileChannelDurableStore(dir).read(key))
-    }
-
-    // ---- multiple keys are independent ----
-
-    @Test
-    fun multipleKeysAreIndependent() = runTest {
-        val dir = createTempDirectory("kuilt-store-multi").toFile()
-        val k1 = StoreKey("a")
-        val k2 = StoreKey("b")
-        storeAt(dir).write(k1, byteArrayOf(1))
-        storeAt(dir).write(k2, byteArrayOf(2))
-
-        val store = FileChannelDurableStore(dir)
-        assertContentEquals(byteArrayOf(1), store.read(k1))
-        assertContentEquals(byteArrayOf(2), store.read(k2))
-    }
-
     // ---- a key is stored losslessly: distinct keys are distinct entries (#2506) ----
-
-    @Test
-    fun keysWithSimilarNamesDontCollide() = runTest {
-        val dir = createTempDirectory("kuilt-store-similar").toFile()
-        val k1 = StoreKey("otel.spans")
-        val k2 = StoreKey("otel.metrics")
-        storeAt(dir).write(k1, byteArrayOf(10))
-        storeAt(dir).write(k2, byteArrayOf(20))
-
-        val store = FileChannelDurableStore(dir)
-        assertContentEquals(byteArrayOf(10), store.read(k1))
-        assertContentEquals(byteArrayOf(20), store.read(k2))
-    }
 
     /**
      * Five distinct keys the legacy filename mapping folded onto **one** file.
@@ -149,7 +74,7 @@ class FileChannelDurableStoreTest {
      */
     @Test
     fun keysThatFoldedOntoOneFilenameAddressDistinctEntries() = runTest {
-        val dir = createTempDirectory("kuilt-store-fold").toFile()
+        val dir = freshTempDir("kuilt-store-fold")
         val names = listOf("a.b", "a/b", "a b", "a:b", "a_b")
         names.forEachIndexed { index, name ->
             storeAt(dir).write(StoreKey(name), byteArrayOf(index.toByte()))
@@ -175,7 +100,7 @@ class FileChannelDurableStoreTest {
      */
     @Test
     fun keysDifferingOnlyInANonAsciiLetterAddressDistinctEntries() = runTest {
-        val dir = createTempDirectory("kuilt-store-nonascii").toFile()
+        val dir = freshTempDir("kuilt-store-nonascii")
         val peace = StoreKey("мир")
         val moment = StoreKey("миг")
         storeAt(dir).write(peace, byteArrayOf(1))
@@ -204,7 +129,7 @@ class FileChannelDurableStoreTest {
      */
     @Test
     fun keysDifferingOnlyInCaseAddressDistinctEntries() = runTest {
-        val dir = createTempDirectory("kuilt-store-case").toFile()
+        val dir = freshTempDir("kuilt-store-case")
         val lower = StoreKey("a")
         val upper = StoreKey("A")
         storeAt(dir).write(lower, byteArrayOf(1))
@@ -232,7 +157,7 @@ class FileChannelDurableStoreTest {
      */
     @Test
     fun aKeyNeverAdoptsAnotherKeysLegacyOrphan() = runTest {
-        val dir = createTempDirectory("kuilt-store-orphan").toFile()
+        val dir = freshTempDir("kuilt-store-orphan")
         // Exactly the filenames the legacy sanitiser produced for "otel.logs" and "otel.spans".
         java.io.File(dir, "otel_logs").writeBytes(byteArrayOf(11))
         java.io.File(dir, "otel_spans").writeBytes(byteArrayOf(22))
@@ -253,7 +178,7 @@ class FileChannelDurableStoreTest {
      */
     @Test
     fun aKeyAlreadyInsideTheSafeSetStillFindsItsOwnFile() = runTest {
-        val dir = createTempDirectory("kuilt-store-carryover").toFile()
+        val dir = freshTempDir("kuilt-store-carryover")
         java.io.File(dir, "spans").writeBytes(byteArrayOf(33))
         java.io.File(dir, "span-state").writeBytes(byteArrayOf(44))
 
@@ -277,7 +202,7 @@ class FileChannelDurableStoreTest {
      */
     @Test
     fun anEntryNeverLandsOnAnotherEntrysTempSidecar() = runTest {
-        val dir = createTempDirectory("kuilt-store-sidecar").toFile()
+        val dir = freshTempDir("kuilt-store-sidecar")
         val plain = StoreKey("x")
         val sidecarShaped = StoreKey("x.tmp")
         storeAt(dir).write(plain, byteArrayOf(1))
@@ -292,38 +217,19 @@ class FileChannelDurableStoreTest {
             { assertContentEquals(byteArrayOf(2), second, "key \"x.tmp\" survived x's write") },
         )
     }
+}
 
-    // ---- read returns defensive copy ----
-
-    @Test
-    fun readReturnsCopy() = runTest {
-        val store = tempStore()
-        val key = StoreKey("k")
-        store.write(key, byteArrayOf(1, 2, 3))
-        val first = requireNotNull(store.read(key)) { "expected non-null bytes after write" }
-        first[0] = 99
-        assertContentEquals(byteArrayOf(1, 2, 3), store.read(key))
-    }
-
-    // ---- large payload ----
-
-    @Test
-    fun largePayloadSurvivesRoundTrip() = runTest {
-        val dir = createTempDirectory("kuilt-store-large").toFile()
-        val key = StoreKey("big")
-        val big = ByteArray(512 * 1024) { it.toByte() } // 512 KiB
-        storeAt(dir).write(key, big)
-        assertContentEquals(big, FileChannelDurableStore(dir).read(key))
-    }
-
-    // ---- empty payload ----
-
-    @Test
-    fun emptyPayloadRoundTrips() = runTest {
-        val store = tempStore()
-        val key = StoreKey("empty")
-        store.write(key, ByteArray(0))
-        val read = store.read(key)
-        assertEquals(0, read?.size)
-    }
+/**
+ * A directory named for [prefix], under the system temp root, that no other store in this run shares.
+ *
+ * `java.io.File`, not `kotlin.io.path.createTempDirectory`: this source set compiles for Android at
+ * `minSdk 24` and `java.nio.file.Files.createTempDirectory` is API 26. The unit-test variant runs on
+ * the host JVM so it would work in practice, but a test that only compiles by accident of where it
+ * runs is not a thing to leave lying in a source set whose whole point is that it targets both.
+ */
+private fun freshTempDir(prefix: String): File {
+    val stem = File.createTempFile(prefix, "")
+    check(stem.delete()) { "could not clear the placeholder temp file at $stem" }
+    check(stem.mkdirs()) { "could not create the temp directory at $stem" }
+    return stem
 }
