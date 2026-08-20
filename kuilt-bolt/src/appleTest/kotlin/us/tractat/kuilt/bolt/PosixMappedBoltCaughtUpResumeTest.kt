@@ -57,8 +57,16 @@ import kotlin.time.Instant
  *
  * The gap is #2504, and it was measured rather than assumed: forcing `firstUnpruned` to `0` on
  * `appleMain` disables this short-circuit as a side effect, and under that mutation the whole of
- * `macosArm64Test` — 156 tests across 14 classes — reddened exactly one test, on its byte counts.
- * Nothing anywhere exercised a caught-up resume over an archive with damage below the cursor.
+ * `macosArm64Test` — then 156 tests across 14 classes — reddened exactly one test, and only on byte
+ * counts that say nothing about a verdict. Nothing anywhere exercised a caught-up resume over an
+ * archive carrying damage below the cursor.
+ *
+ * With this file the tree is 157 tests across 15 classes, and under **either** mutation recorded
+ * below exactly one of them reds — this one. All three of this backend's `BoltConformanceSuite`
+ * subclasses stay green, and so do `PosixMappedBoltTest` and `PosixMappedBoltPruningTest`. That is
+ * the warrant for a separate file rather than a stronger conformance property: no fixture in the
+ * suite hands a backend an archive-end cursor *and* damage below it, and #2331 settled that the suite
+ * cannot ask the other half of the question at all.
  *
  * The JVM twin is `MappedBoltPruningTest.aCaughtUpResumeAnswersTheSameWhereverTheDamageIs`. The byte
  * half is **stronger here**: that backend copies its newest segment out of the live mapping, so one
