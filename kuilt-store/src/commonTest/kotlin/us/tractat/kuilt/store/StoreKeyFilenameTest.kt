@@ -153,6 +153,23 @@ class StoreKeyFilenameTest {
         assertTrue(overlaps.isEmpty(), "new and legacy namespaces must be disjoint across keys, but: $overlaps")
     }
 
+    @Test
+    fun noKeyAdoptsADifferentKeysLegacyFilenameEvenOnACaseFoldingFilesystem() {
+        val overlaps = buildList {
+            for (legacyKey in corpus) {
+                for (scheme in listOf(::legacyJvmName, ::legacyAppleName)) {
+                    val legacy = scheme(legacyKey)
+                    for (newKey in corpus) {
+                        if (newKey != legacyKey && encodeStoreKeyName(newKey).equals(legacy, ignoreCase = true)) {
+                            add("\"$newKey\" encodes to a case-variant of \"$legacy\", the legacy file of \"$legacyKey\"")
+                        }
+                    }
+                }
+            }
+        }
+        assertTrue(overlaps.isEmpty(), "new and legacy namespaces must be disjoint across keys, but: $overlaps")
+    }
+
     /**
      * Where the two namespaces *do* overlap, they overlap on the same key — so the
      * "orphan" is that key's own file and reading it is correct rather than wrong.
@@ -272,6 +289,11 @@ class StoreKeyFilenameTest {
             { assertFailsWith<IllegalArgumentException> { decodeStoreKeyName("A") } },
             // Lowercase hex: a second spelling of an escape the encoder emits uppercase.
             { assertFailsWith<IllegalArgumentException> { decodeStoreKeyName("%2e") } },
+            // Over-escaped: the encoder emits a safe byte verbatim, never as an escape,
+            // so accepting these would map two filenames onto one key name.
+            { assertFailsWith<IllegalArgumentException> { decodeStoreKeyName("%61") } },
+            { assertFailsWith<IllegalArgumentException> { decodeStoreKeyName("%2D") } },
+            { assertFailsWith<IllegalArgumentException> { decodeStoreKeyName("%30") } },
             { assertFailsWith<IllegalArgumentException> { decodeStoreKeyName("%zz") } },
             { assertFailsWith<IllegalArgumentException> { decodeStoreKeyName("%2") } },
             { assertFailsWith<IllegalArgumentException> { decodeStoreKeyName("%") } },
