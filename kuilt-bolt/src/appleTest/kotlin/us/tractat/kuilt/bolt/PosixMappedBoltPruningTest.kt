@@ -96,8 +96,9 @@ class PosixMappedBoltPruningTest {
      *
      * **And nothing else in this backend's tree reds under it — measured, not assumed.** The whole
      * of `macosArm64Test` under that mutation is 156 tests across 14 classes, of which exactly one
-     * fails, this one. All three `BoltConformanceSuite` subclasses stay green, matching the row
-     * `MappedBolt.firstSegmentToRead`'s own table records for the same mutation, and so does
+     * fails, this one. All three of this backend's `BoltConformanceSuite` subclasses stay green —
+     * matching the "reds in `BoltConformanceSuite`: none" the same mutation earns in
+     * `MappedBoltPruningTest.aResumeOverAHoleReadsNothingBelowTheBoundary`'s table — and so does
      * `PosixMappedBoltTest`. That is the whole warrant for a second copy of this file: "prune
      * nothing" is a performance regression that answers every question correctly, and no property
      * that can only ask what a replay *said* will ever notice it.
