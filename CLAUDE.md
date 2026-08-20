@@ -186,6 +186,14 @@ still compiles but self-skips at runtime, so `./gradlew build` doesn't run it.
   Kotlin/JVM module, **`kuilt.detekt-kmp`** for a plain KMP one (declare it last
   in `plugins { }`, so it applies after the Kotlin plugin). `forbidUnlintedModule`
   in the root build fails on a module with Kotlin source and none of the three.
+  A published module needs a third edit beyond `settings.gradle.kts` and its
+  module-table row (above): a branch in `moduleDescription()` in
+  `build-logic/src/main/kotlin/kuilt.publish.gradle.kts`, the POM description
+  Maven Central search and klibs.io show a reader. It has no fallback — the
+  `else -> error(...)` arm fires at the eager, configuration-time call site
+  (`description.set(moduleDescription(project.name))`), so an omitted module
+  fails *before* any task runs, including `verifyModuleTable` itself. Hit for
+  real extracting `:kuilt-store` (see #2498).
 - **KMP source-set hierarchy is wired by hand in `:kuilt-websocket`** — a manual
   `jvmAndAndroidMain` intermediate (Ktor server is JVM/Android-only) disables the
   plugin's default auto-wiring, so `iosMain`/`macosMain` intermediates are also
