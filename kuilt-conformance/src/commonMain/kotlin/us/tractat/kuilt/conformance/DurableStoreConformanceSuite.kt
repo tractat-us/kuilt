@@ -60,16 +60,23 @@ import kotlin.test.assertNull
  *
  * ## Mutation receipts
  *
- * Measured over `:kuilt-store:jvmTest` — 32 tests, `InMemoryDurableStoreConformanceTest` and
- * `FileChannelDurableStoreTest` — with `--no-build-cache --rerun-tasks`, the results XML deleted
- * before every run and the log grepped for compile errors, because a mutation that does not compile
- * leaves Gradle serving the previous run's XML and fabricates a plausible copy of the row above it.
- * Each mutation applied alone, reverted, the revert verified with `git status`.
+ * Measured over `:kuilt-store:jvmTest` — 53 tests: `InMemoryDurableStoreConformanceTest` (this
+ * suite's 16), `FileChannelDurableStoreTest` (those 16 again, plus 6 filename tests of its own),
+ * `StoreKeyFilenameTest` (14, the shared encoder's own guards) and `StoreSamplesRunTest` — with
+ * `--no-build-cache --rerun-tasks`, the results XML deleted before every run and the log grepped for
+ * compile errors, because a mutation that does not compile leaves Gradle serving the previous run's
+ * XML and fabricates a plausible copy of the row above it. Each mutation applied alone, reverted, the
+ * revert verified with `git status`.
  *
- * **The baseline is not all-green**, and that is the suite working rather than a caveat: at the time
- * of measurement `distinctKeysAddressDistinctEntries` failed on `FileChannelDurableStore` (5 of its 8
- * assertions) and on `NSFileManagerDurableStore` (4 of 8, a *different* 4). That pre-existing failure
- * is excluded from every "reds" entry below.
+ * **The baseline is all-green — and it was not when this suite was written.** On its first run
+ * `distinctKeysAddressDistinctEntries` failed on `FileChannelDurableStore` (5 of its assertions) and
+ * on `NSFileManagerDurableStore` (4 of them, a *different* 4): two independently written sanitisers,
+ * each folding a different set of distinct keys onto one file, and neither backend's own tests
+ * noticing. That was this suite doing the thing it exists for, on the day it landed. #2511 is the
+ * fix — one shared lossless encoder, `encodeStoreKeyName`, with no migration — so the exclusion that
+ * used to sit here has been retired rather than carried: every "reds" entry below is now measured
+ * against a genuinely green baseline, with nothing held out of it, and a row naming a red is naming a
+ * red its own mutation caused.
  *
  * | Mutation | Reds, at assertion granularity |
  * |---|---|
@@ -81,7 +88,9 @@ import kotlin.test.assertNull
  * | **`FileChannelDurableStore.read`:** truncate at 8 KiB | [aLargeValueRoundTripsWhole], both assertions (262144 against 8192) — and nothing else |
  * | **`FileChannelDurableStore.read`:** a zero-length file decodes to `null` | [anEmptyValueIsAValueAndNotAnAbsence], both assertions — and nothing else |
  * | **`FileChannelDurableStore.write`:** append rather than atomically replace | [aSecondWriteReplacesTheFirstWhole] all three; [whatWasWrittenBeforeARestartIsReadableAfterIt] the **`overwritten`** assertion only, not `kept` |
- * | **`FileChannelDurableStore.sanitize`:** truncate to 64 characters | [aLongKeyIsStillAKey] a1 — and nothing else |
+ * | **`StoreKey.filename`:** truncate the encoded name to 64 characters | [aLongKeyIsStillAKey] a1 (expected `1`, got `2`) — and nothing else. The one-sided shape is the point: both keys encode to the same 64-character prefix, so the second write lands on the first's entry and only the *first* key's read is wrong. a2 reads what it wrote and stays green |
+ * | **`StoreKey.filename`:** `lowercase()` the key name before encoding | [distinctKeysAddressDistinctEntries] the `"a-b"` assertion only (expected `4`, got `5` — `"a-B"` landed on it), plus `FileChannelDurableStoreTest.keysDifferingOnlyInCaseAddressDistinctEntries`. This is the case pair's receipt, and it reds **on every filesystem**, because the fold is the store's own |
+ * | **`encodeStoreKeyName`'s safe set:** put `A`–`Z` back in it (undo #2511's uppercase escaping) | the same `"a-b"` assertion — **but only because the measuring box's temp root is APFS.** `a-b` and `a-B` become two distinct *filenames* that a case-folding filesystem makes one *file*; on a case-sensitive one this mutation reds nothing in this suite at all. It does red four of `StoreKeyFilenameTest`'s encoder guards, which is where that boundary is pinned target-independently, and is why the suite is not the place to rely on it |
  * | **`FileChannelDurableStore`:** drop `FileChannel.force(true)` | **nothing.** See the residual below |
  * | **Fixture:** `restart` returns the store it was given | both restart properties, on the [assertNotSame] precondition — no durability assertion is reached |
  * | **Fixture:** `restart` opens an empty directory | [whatWasWrittenBeforeARestartIsReadableAfterIt] both `Durable` assertions; [whatWasDeletedBeforeARestartIsStillAbsentAfterIt] the **sibling** assertion only |
@@ -102,9 +111,12 @@ import kotlin.test.assertNull
  *
  * **What the fixture rows are and are not.** The six fixture rows mutate a subclass in
  * `:kuilt-store`'s own tests, which nothing else references, so their "and nothing else" is
- * *structural* — no other test could see them. The ten production rows mutate code that also backs
+ * *structural* — no other test could see them. The twelve production rows mutate code that also backs
  * `:kuilt-otel` and everything downstream of it, and were measured **only** within
- * `:kuilt-store:jvmTest`; their true blast radius is larger than the rows say, not smaller.
+ * `:kuilt-store:jvmTest`; their true blast radius is larger than the rows say, not smaller. The three
+ * filename rows understate it by a whole backend: `StoreKey.filename` and `encodeStoreKeyName` are
+ * `commonMain`, so `NSFileManagerDurableStore` is mutated too and none of its tests are in the
+ * measured run.
  *
  * **What the suite itself now rests on**, since a fix is only as good as what nothing checks: the
  * fixture, in exactly two places, and both are checked rather than assumed. [newStore] really
@@ -112,6 +124,13 @@ import kotlin.test.assertNull
  * one — and [restart] really crossing a handle boundary, which [assertNotSame] and the two wrong-arm
  * rows cover. What stays unpinned is a [restart] that hands back a thin delegating wrapper, and the
  * page-cache residual above.
+ *
+ * And what the newest addition rests on: the case pair in [distinctKeysAddressDistinctEntries] has
+ * **one** of its two failure modes pinned unconditionally and the other pinned only by the filesystem
+ * the run happens to sit on — the third row above is that dependency, measured rather than asserted.
+ * So a green here on a case-sensitive runner is worth exactly the first mode and nothing more, and a
+ * reader who wants the second must look at `StoreKeyFilenameTest`, which decides it from the encoded
+ * strings and needs no filesystem at all.
  */
 public abstract class DurableStoreConformanceSuite {
 
