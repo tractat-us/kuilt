@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.ScopedCloseable
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.Swatch
@@ -102,12 +103,29 @@ public data class BoundedCounterTransferConfig(
  * default) leaves the reactive targeted-borrow path fully correct. The equalizer only
  * reduces how often reactive borrows fire.
  *
+ * ## Lifecycle
+ *
+ * [AutoCloseable.close] is inherited from [ScopedCloseable]: it cancels the coordinator's own
+ * child job — the quota observer, the incoming-frame collector, the optional equalizer loop, and
+ * **any borrow currently retrying** — without touching the `scope` passed at construction, so
+ * other coroutines the caller parked there stay alive. It is idempotent and thread-safe.
+ *
+ * The last item in that list is why this class extends [ScopedCloseable] rather than tracking a
+ * job list by hand. A borrow is launched *reactively*, on a low-water event, long after the
+ * constructor has run; a hand-maintained list cannot contain it, so `close()` cancelled the
+ * observer while the borrow it had already started went on calling [Seam.sendTo] through its
+ * whole retry backoff (#2502). Under [ScopedCloseable] every `scope.launch` in this class is
+ * structurally a child of the job `close()` cancels, so that drift is not merely fixed but
+ * unrepresentable.
+ *
  * @param coordSeam a [us.tractat.kuilt.core.MuxSeam] channel — must be pre-wired by the caller.
  * @param state live [BoundedCounter] state (updated whenever [Quilter] applies a patch).
  * @param self this replica's [ReplicaId].
  * @param applyTransfer called by the donor side with a transfer [Patch]; the caller is expected to
  *   invoke [Quilter.apply] so the delta propagates to peers.
- * @param scope the [CoroutineScope] for background coroutines. The periodic equalizer loop
+ * @param scope the caller's [CoroutineScope]. The coordinator launches nothing directly into it —
+ *   [ScopedCloseable] interposes an owned child job, so cancelling this scope still stops the
+ *   coordinator but closing the coordinator leaves this scope alone. The periodic equalizer loop
  *   uses [delay] on this scope's dispatcher — inject a test dispatcher for virtual-time control.
  * @param config reactive-borrow tuning parameters.
  * @param equalizerConfig proactive equalizer parameters, or `null` to disable the equalizer.
@@ -117,16 +135,24 @@ public class BoundedCounterTransferCoordinator(
     private val state: StateFlow<BoundedCounter>,
     private val self: ReplicaId,
     private val applyTransfer: (Patch<BoundedCounter>) -> Unit,
-    private val scope: CoroutineScope,
+    scope: CoroutineScope,
     private val config: BoundedCounterTransferConfig = BoundedCounterTransferConfig(),
     private val equalizerConfig: BoundedCounterEqualizerConfig? = null,
-) : AutoCloseable {
+) : ScopedCloseable(scope) {
     private val serializer = BoundedCounterCoordMessage.serializer()
     private val lock = reentrantLock()
 
     private val backgroundJobs: List<Job>
 
-    /** Exposed internally so tests can verify [close] cancels both background jobs. */
+    /**
+     * The jobs started in the constructor, exposed internally for
+     * `CloseableLifecycleConformanceSuite.backgroundJobsOf`.
+     *
+     * **This list is not the set of coroutines [close] stops, and must not be read as one.** The
+     * reactive borrow is launched on a low-water event and never appears here; what stops it is
+     * [ScopedCloseable] ownership, not membership of this list. Asserting that every job here is
+     * inactive is exactly the property that stayed green throughout #2502.
+     */
     internal val backgroundJobsForTest: List<Job> get() = backgroundJobs
 
     init {
@@ -134,18 +160,6 @@ public class BoundedCounterTransferCoordinator(
         val incomingJob = observeIncoming()
         val equalizerJob = equalizerConfig?.let { startEqualizer(it) }
         backgroundJobs = listOfNotNull(quotaJob, incomingJob, equalizerJob)
-    }
-
-    /**
-     * Cancels the quota-observer and incoming-frame-collector background jobs. Idempotent —
-     * safe to call more than once.
-     *
-     * After [close], no further transfer requests are sent and incoming coordination frames are
-     * ignored. The [scope] passed at construction is **not** cancelled — only the jobs owned
-     * by this coordinator are stopped, leaving other coroutines in that scope alive.
-     */
-    override fun close() {
-        backgroundJobs.forEach { it.cancel() }
     }
 
     private fun observeQuota(): Job {
@@ -161,9 +175,25 @@ public class BoundedCounterTransferCoordinator(
                 }
             }
             if (shouldLaunch) {
+                // `scope` resolves to ScopedCloseable's owned child scope, NOT the constructor's
+                // `scope` parameter — a primary-constructor parameter is out of scope in a member
+                // function body. That is precisely what makes this borrow a child of the job
+                // close() cancels; parented to the caller's scope it outlived close() and went on
+                // retrying against a closed coordinator (#2502).
                 scope.launch {
-                    sendRequestWithRetries()
-                    lock.withLock { requestInFlight = false }
+                    // `finally`, not a trailing statement. The borrow ends abnormally on two live
+                    // paths: close()/parent cancellation, and a CancellationException the *callee*
+                    // minted (a seam whose sendTo wraps an internal withTimeout), which
+                    // runCatchingCancellable rethrows by contract. Either skips a trailing reset
+                    // and latches the flag true forever — and on the second path the quota
+                    // observer is still running, so the replica silently stops asking for quota
+                    // with nothing to signal why. `withLock` does not suspend, so it still runs
+                    // while the coroutine unwinds.
+                    try {
+                        sendRequestWithRetries()
+                    } finally {
+                        lock.withLock { requestInFlight = false }
+                    }
                 }
             }
         }.launchIn(scope)
