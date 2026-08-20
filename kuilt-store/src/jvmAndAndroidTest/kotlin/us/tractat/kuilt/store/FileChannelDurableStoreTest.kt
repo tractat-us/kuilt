@@ -5,14 +5,18 @@ import us.tractat.kuilt.conformance.DurableStoreConformanceSuite
 import us.tractat.kuilt.conformance.RestartFixture
 import us.tractat.kuilt.test.assertAll
 import java.io.File
-import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertNull
 
 /**
- * Verifies [FileChannelDurableStore] satisfies the whole [DurableStoreConformanceSuite], and keeps
- * the filename-level tests the suite cannot reach.
+ * Verifies [FileChannelDurableStore] satisfies the whole [DurableStoreConformanceSuite], **on both
+ * the JVM and Android**, and keeps the filename-level tests the suite cannot reach.
+ *
+ * In `jvmAndAndroidTest`, not `jvmTest`, because `FileChannelDurableStore` lives in
+ * `jvmAndAndroidMain` and Android is the target an app actually depends on for durable storage.
+ * A subclass in `jvmTest` would leave the Android variant compiled and never run — the suite would
+ * be green on a target it had never executed against.
  *
  * Every test this class used to hold by hand — absent key, round trip, overwrite, delete, the
  * defensive copy, the large and empty payloads, independent keys, and the "crash" simulated by a
@@ -38,7 +42,7 @@ class FileChannelDurableStoreTest : DurableStoreConformanceSuite() {
     private val directories = mutableMapOf<DurableStore, File>()
 
     override suspend fun newStore(): DurableStore {
-        val dir = createTempDirectory("kuilt-store-conformance").toFile()
+        val dir = freshTempDir("kuilt-store-conformance")
         return FileChannelDurableStore(dir).also { directories[it] = dir }
     }
 
@@ -70,7 +74,7 @@ class FileChannelDurableStoreTest : DurableStoreConformanceSuite() {
      */
     @Test
     fun keysThatFoldedOntoOneFilenameAddressDistinctEntries() = runTest {
-        val dir = createTempDirectory("kuilt-store-fold").toFile()
+        val dir = freshTempDir("kuilt-store-fold")
         val names = listOf("a.b", "a/b", "a b", "a:b", "a_b")
         names.forEachIndexed { index, name ->
             storeAt(dir).write(StoreKey(name), byteArrayOf(index.toByte()))
@@ -96,7 +100,7 @@ class FileChannelDurableStoreTest : DurableStoreConformanceSuite() {
      */
     @Test
     fun keysDifferingOnlyInANonAsciiLetterAddressDistinctEntries() = runTest {
-        val dir = createTempDirectory("kuilt-store-nonascii").toFile()
+        val dir = freshTempDir("kuilt-store-nonascii")
         val peace = StoreKey("мир")
         val moment = StoreKey("миг")
         storeAt(dir).write(peace, byteArrayOf(1))
@@ -125,7 +129,7 @@ class FileChannelDurableStoreTest : DurableStoreConformanceSuite() {
      */
     @Test
     fun keysDifferingOnlyInCaseAddressDistinctEntries() = runTest {
-        val dir = createTempDirectory("kuilt-store-case").toFile()
+        val dir = freshTempDir("kuilt-store-case")
         val lower = StoreKey("a")
         val upper = StoreKey("A")
         storeAt(dir).write(lower, byteArrayOf(1))
@@ -153,7 +157,7 @@ class FileChannelDurableStoreTest : DurableStoreConformanceSuite() {
      */
     @Test
     fun aKeyNeverAdoptsAnotherKeysLegacyOrphan() = runTest {
-        val dir = createTempDirectory("kuilt-store-orphan").toFile()
+        val dir = freshTempDir("kuilt-store-orphan")
         // Exactly the filenames the legacy sanitiser produced for "otel.logs" and "otel.spans".
         java.io.File(dir, "otel_logs").writeBytes(byteArrayOf(11))
         java.io.File(dir, "otel_spans").writeBytes(byteArrayOf(22))
@@ -174,7 +178,7 @@ class FileChannelDurableStoreTest : DurableStoreConformanceSuite() {
      */
     @Test
     fun aKeyAlreadyInsideTheSafeSetStillFindsItsOwnFile() = runTest {
-        val dir = createTempDirectory("kuilt-store-carryover").toFile()
+        val dir = freshTempDir("kuilt-store-carryover")
         java.io.File(dir, "spans").writeBytes(byteArrayOf(33))
         java.io.File(dir, "span-state").writeBytes(byteArrayOf(44))
 
@@ -198,7 +202,7 @@ class FileChannelDurableStoreTest : DurableStoreConformanceSuite() {
      */
     @Test
     fun anEntryNeverLandsOnAnotherEntrysTempSidecar() = runTest {
-        val dir = createTempDirectory("kuilt-store-sidecar").toFile()
+        val dir = freshTempDir("kuilt-store-sidecar")
         val plain = StoreKey("x")
         val sidecarShaped = StoreKey("x.tmp")
         storeAt(dir).write(plain, byteArrayOf(1))
@@ -213,4 +217,19 @@ class FileChannelDurableStoreTest : DurableStoreConformanceSuite() {
             { assertContentEquals(byteArrayOf(2), second, "key \"x.tmp\" survived x's write") },
         )
     }
+}
+
+/**
+ * A directory named for [prefix], under the system temp root, that no other store in this run shares.
+ *
+ * `java.io.File`, not `kotlin.io.path.createTempDirectory`: this source set compiles for Android at
+ * `minSdk 24` and `java.nio.file.Files.createTempDirectory` is API 26. The unit-test variant runs on
+ * the host JVM so it would work in practice, but a test that only compiles by accident of where it
+ * runs is not a thing to leave lying in a source set whose whole point is that it targets both.
+ */
+private fun freshTempDir(prefix: String): File {
+    val stem = File.createTempFile(prefix, "")
+    check(stem.delete()) { "could not clear the placeholder temp file at $stem" }
+    check(stem.mkdirs()) { "could not create the temp directory at $stem" }
+    return stem
 }

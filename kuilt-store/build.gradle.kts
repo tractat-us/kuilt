@@ -32,6 +32,15 @@ kotlin {
         jvmMain.get().dependsOn(jvmAndAndroidMain)
         androidMain.get().dependsOn(jvmAndAndroidMain)
 
+        // jvmAndAndroidTest: FileChannelDurableStore ships on BOTH JVM and Android, so its
+        // conformance subclass has to run on both — in jvmTest it would be compiled for Android and
+        // never executed there, which is the "un-pinned is not the same as unreachable" trap: the
+        // Android variant is the one an app actually depends on. Wired by hand for the same reason
+        // as jvmAndAndroidMain above, and mirroring :kuilt-websocket.
+        val jvmAndAndroidTest by creating { dependsOn(commonTest.get()) }
+        jvmTest.get().dependsOn(jvmAndAndroidTest)
+        androidUnitTest.get().dependsOn(jvmAndAndroidTest)
+
         // appleMain: NSFileManagerDurableStore uses platform.Foundation, which is available
         // on all Apple targets without an explicit dependency (built into the K/N distribution).
         val appleMain by creating { dependsOn(commonMain.get()) }
