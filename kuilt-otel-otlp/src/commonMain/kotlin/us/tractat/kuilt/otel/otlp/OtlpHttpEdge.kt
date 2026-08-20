@@ -17,7 +17,6 @@ import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.protobuf.ProtoBuf
 import us.tractat.kuilt.core.runCatchingCancellable
-import us.tractat.kuilt.otel.DurableStore
 import us.tractat.kuilt.otel.LogDigest
 import us.tractat.kuilt.otel.LogRecord
 import us.tractat.kuilt.otel.MetricDigest
@@ -27,7 +26,8 @@ import us.tractat.kuilt.otel.OtlpEdge
 import us.tractat.kuilt.otel.SpanDigest
 import us.tractat.kuilt.otel.SpanLink
 import us.tractat.kuilt.otel.SpanRecord
-import us.tractat.kuilt.otel.StoreKey
+import us.tractat.kuilt.store.DurableStore
+import us.tractat.kuilt.store.StoreKey
 
 /** Which OTLP/HTTP wire encoding an [OtlpHttpEdge] emits. */
 public enum class OtlpWireFormat {

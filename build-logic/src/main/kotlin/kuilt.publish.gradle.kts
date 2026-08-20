@@ -113,6 +113,9 @@ fun moduleDescription(module: String): String = when (module) {
     "kuilt-quilter" ->
         "Live CRDT replication over a kuilt Seam: delta exchange, causal garbage collection " +
             "and anti-entropy."
+    "kuilt-store" ->
+        "Durable key-to-bytes storage for Kotlin Multiplatform: a write returns only once the " +
+            "bytes will survive a crash, with a crash-safe implementation per platform."
     "kuilt-bolt" ->
         "Write-only history archive kept beside a live CRDT replica, so a server can keep a " +
             "year of edits while the phone feeding it keeps an hour."

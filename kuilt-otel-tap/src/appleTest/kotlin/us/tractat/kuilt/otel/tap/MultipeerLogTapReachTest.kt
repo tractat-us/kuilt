@@ -11,7 +11,6 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.multipeer.MultipeerPeerLinkFactory
-import us.tractat.kuilt.otel.InMemoryDurableStore
 import us.tractat.kuilt.otel.LogRecord
 import us.tractat.kuilt.otel.MetricKey
 import us.tractat.kuilt.otel.MetricKind
@@ -19,6 +18,7 @@ import us.tractat.kuilt.otel.WarpLogRecordExporter
 import us.tractat.kuilt.otel.WarpMetricExporter
 import us.tractat.kuilt.otel.tap.admit.LogTapJoinToken
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.store.InMemoryDurableStore
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.AfterTest

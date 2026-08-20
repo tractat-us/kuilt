@@ -13,6 +13,9 @@ import us.tractat.kuilt.bolt.frames
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.RgaId
 import us.tractat.kuilt.crdt.RgaOp
+import us.tractat.kuilt.store.DurableStore
+import us.tractat.kuilt.store.InMemoryDurableStore
+import us.tractat.kuilt.store.StoreKey
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test

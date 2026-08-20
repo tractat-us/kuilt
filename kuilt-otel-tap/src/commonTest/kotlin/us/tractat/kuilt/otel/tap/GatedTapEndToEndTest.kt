@@ -9,11 +9,11 @@ import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.crdt.ReplicaId
-import us.tractat.kuilt.otel.InMemoryDurableStore
 import us.tractat.kuilt.otel.LogRecord
 import us.tractat.kuilt.otel.WarpLogRecordExporter
 import us.tractat.kuilt.otel.tap.admit.LogTapJoinToken
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.store.InMemoryDurableStore
 import kotlin.random.Random
 import kotlin.test.AfterTest
 import kotlin.test.Test

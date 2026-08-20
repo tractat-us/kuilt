@@ -2,6 +2,9 @@ package us.tractat.kuilt.otel
 
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.store.DurableStore
+import us.tractat.kuilt.store.InMemoryDurableStore
+import us.tractat.kuilt.store.StoreKey
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs

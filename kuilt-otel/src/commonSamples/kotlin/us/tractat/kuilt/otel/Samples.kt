@@ -9,6 +9,7 @@ import us.tractat.kuilt.bolt.ReplayScope
 import us.tractat.kuilt.bolt.frames
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.Rga
+import us.tractat.kuilt.store.InMemoryDurableStore
 import kotlin.time.Clock
 
 /** @suppress — sample only */

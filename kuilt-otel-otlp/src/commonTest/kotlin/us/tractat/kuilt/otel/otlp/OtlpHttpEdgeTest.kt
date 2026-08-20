@@ -7,9 +7,9 @@ import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.core.runCatchingCancellable
-import us.tractat.kuilt.otel.InMemoryDurableStore
 import us.tractat.kuilt.otel.SpanKind
 import us.tractat.kuilt.otel.SpanRecord
+import us.tractat.kuilt.store.InMemoryDurableStore
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue

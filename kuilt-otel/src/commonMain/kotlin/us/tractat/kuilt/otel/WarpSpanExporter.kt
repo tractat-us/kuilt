@@ -12,6 +12,9 @@ import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.crdt.ORSet
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.piece
+import us.tractat.kuilt.store.DurableStore
+import us.tractat.kuilt.store.InMemoryDurableStore
+import us.tractat.kuilt.store.StoreKey
 
 private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpSpanExporter")
 

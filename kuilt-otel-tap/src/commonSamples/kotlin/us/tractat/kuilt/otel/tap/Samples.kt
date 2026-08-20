@@ -5,12 +5,12 @@ import kotlinx.coroutines.flow.Flow
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.crdt.ReplicaId
-import us.tractat.kuilt.otel.InMemoryDurableStore
 import us.tractat.kuilt.otel.LogRecord
 import us.tractat.kuilt.otel.WarpLogRecordExporter
 import us.tractat.kuilt.otel.WarpMetricExporter
 import us.tractat.kuilt.otel.tap.admit.LogTapJoinToken
 import us.tractat.kuilt.otel.tap.admit.cryptoRandom
+import us.tractat.kuilt.store.InMemoryDurableStore
 import kotlin.time.Clock
 
 /** @suppress — sample only */

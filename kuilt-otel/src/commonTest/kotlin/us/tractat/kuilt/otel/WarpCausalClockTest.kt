@@ -4,6 +4,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.crdt.Dot
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.store.InMemoryDurableStore
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue

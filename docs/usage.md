@@ -29,9 +29,9 @@ dependencies {
 
 The fabric and session modules re-export the `kuilt-core` contract
 (`Loom`/`Seam`/`Swatch`), so you don't list `kuilt-core` separately alongside
-them. `kuilt-crdt` and `kuilt-bolt` don't — they're plain value types with no
-dependency on the networking contract — so add `kuilt-core` explicitly if you
-want both.
+them. `kuilt-crdt`, `kuilt-bolt` and `kuilt-store` don't — they're plain value
+types and a storage interface, with no dependency on the networking contract — so
+add `kuilt-core` explicitly if you want both.
 
 Without the BOM, pin each module explicitly (`us.tractat.kuilt:kuilt-core:VERSION`).
 Replace `VERSION` with the [latest release](https://central.sonatype.com/artifact/us.tractat.kuilt/kuilt-core).

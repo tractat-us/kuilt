@@ -11,6 +11,9 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.store.DurableStore
+import us.tractat.kuilt.store.InMemoryDurableStore
+import us.tractat.kuilt.store.StoreKey
 import kotlin.test.Test
 import kotlin.test.assertEquals
 

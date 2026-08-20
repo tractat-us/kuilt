@@ -10,6 +10,8 @@ import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.crdt.Dot
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.store.DurableStore
+import us.tractat.kuilt.store.StoreKey
 
 private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpCausalClock")
 

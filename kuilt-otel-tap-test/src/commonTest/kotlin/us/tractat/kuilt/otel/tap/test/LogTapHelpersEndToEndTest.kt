@@ -10,7 +10,6 @@ import kotlinx.io.readString
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.crdt.ReplicaId
-import us.tractat.kuilt.otel.InMemoryDurableStore
 import us.tractat.kuilt.otel.WarpLogRecordExporter
 import us.tractat.kuilt.otel.logging.CaptureConfig
 import us.tractat.kuilt.otel.logging.installLogCapture
@@ -18,6 +17,7 @@ import us.tractat.kuilt.otel.tap.LogTapClient
 import us.tractat.kuilt.otel.tap.LogTapConfig
 import us.tractat.kuilt.otel.tap.installLogTap
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.store.InMemoryDurableStore
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test

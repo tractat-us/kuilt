@@ -8,6 +8,10 @@ kotlin {
         commonMain.dependencies {
             // Public surface consumes kuilt-otel types (OtlpEdge, records, digests).
             api(project(":kuilt-otel"))
+            // OtlpHttpEdge's constructor takes a DurableStore for its sent-set persistence,
+            // so the type is on this module's own public surface — declared here rather than
+            // leaned on transitively through :kuilt-otel's api edge.
+            api(project(":kuilt-store"))
             // runCatchingCancellable — cancellation-safe sends and digest reads.
             implementation(project(":kuilt-core"))
             implementation(libs.kotlinx.coroutines.core)

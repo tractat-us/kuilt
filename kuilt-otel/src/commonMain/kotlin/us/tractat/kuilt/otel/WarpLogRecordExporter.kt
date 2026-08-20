@@ -19,6 +19,9 @@ import us.tractat.kuilt.crdt.RgaId
 import us.tractat.kuilt.crdt.RgaOp
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.piece
+import us.tractat.kuilt.store.DurableStore
+import us.tractat.kuilt.store.InMemoryDurableStore
+import us.tractat.kuilt.store.StoreKey
 
 // Explicit, package-qualified name — NOT the `logger {}` lambda form. On
 // Kotlin/Native the lambda form resolves to an EMPTY logger name, which would make

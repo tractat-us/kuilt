@@ -6,6 +6,8 @@ import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.crdt.Rga
+import us.tractat.kuilt.store.DurableStore
+import us.tractat.kuilt.store.StoreKey
 
 /**
  * [DurableStore] fakes shared by the tests that exercise [WarpLogRecordExporter]'s segmented

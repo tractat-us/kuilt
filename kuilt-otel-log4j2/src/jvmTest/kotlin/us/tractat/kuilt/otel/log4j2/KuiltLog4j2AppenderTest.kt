@@ -8,7 +8,6 @@ import org.apache.logging.log4j.ThreadContext
 import org.apache.logging.log4j.core.LoggerContext
 import org.apache.logging.log4j.core.config.Configurator
 import us.tractat.kuilt.crdt.ReplicaId
-import us.tractat.kuilt.otel.InMemoryDurableStore
 import us.tractat.kuilt.otel.WarpLogRecordExporter
 import us.tractat.kuilt.otel.logging.ActiveTrace
 import us.tractat.kuilt.otel.logging.CaptureConfig
@@ -17,6 +16,7 @@ import us.tractat.kuilt.otel.logging.LOGGER_NAME_ATTRIBUTE
 import us.tractat.kuilt.otel.logging.LogCapture
 import us.tractat.kuilt.otel.logging.LogLevel
 import us.tractat.kuilt.otel.logging.TraceContextProvider
+import us.tractat.kuilt.store.InMemoryDurableStore
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.AfterTest

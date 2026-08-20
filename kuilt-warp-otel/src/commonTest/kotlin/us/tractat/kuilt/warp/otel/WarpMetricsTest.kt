@@ -16,10 +16,10 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.piece
-import us.tractat.kuilt.otel.InMemoryDurableStore
 import us.tractat.kuilt.otel.MetricKey
 import us.tractat.kuilt.otel.MetricKind
 import us.tractat.kuilt.otel.WarpMetricExporter
+import us.tractat.kuilt.store.InMemoryDurableStore
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.warp.ClaimStrategy

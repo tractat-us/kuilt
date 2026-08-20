@@ -8,10 +8,10 @@ import io.github.oshai.kotlinlogging.Level
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.crdt.ReplicaId
-import us.tractat.kuilt.otel.DurableStore
-import us.tractat.kuilt.otel.InMemoryDurableStore
-import us.tractat.kuilt.otel.StoreKey
 import us.tractat.kuilt.otel.WarpLogRecordExporter
+import us.tractat.kuilt.store.DurableStore
+import us.tractat.kuilt.store.InMemoryDurableStore
+import us.tractat.kuilt.store.StoreKey
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random

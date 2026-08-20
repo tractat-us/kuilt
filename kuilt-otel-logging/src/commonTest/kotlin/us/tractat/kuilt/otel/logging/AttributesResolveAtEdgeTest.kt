@@ -3,8 +3,8 @@ package us.tractat.kuilt.otel.logging
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.crdt.ReplicaId
-import us.tractat.kuilt.otel.InMemoryDurableStore
 import us.tractat.kuilt.otel.WarpLogRecordExporter
+import us.tractat.kuilt.store.InMemoryDurableStore
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
