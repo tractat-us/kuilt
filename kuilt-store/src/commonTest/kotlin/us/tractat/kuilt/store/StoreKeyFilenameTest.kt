@@ -19,20 +19,28 @@ class StoreKeyFilenameTest {
     /**
      * Keys the encoder has to keep apart. Three groups, each earning its place:
      *
-     * - **the shipped keyspace** — every `StoreKey` `:kuilt-otel` actually
-     *   constructs, so a regression is measured against real names, not invented ones;
+     * - **the shipped keyspace** — every `StoreKey` `:kuilt-otel` and
+     *   `:kuilt-otel-otlp` actually construct, so a regression is measured against
+     *   real names rather than invented ones. Note every one of them contains a
+     *   `.`: nothing kuilt ships is inside the safe set;
      * - **collision witnesses** — pairs the legacy scheme folded together
      *   (punctuation onto `_`, non-ASCII onto `_`, `a` onto `A`);
      * - **hazard witnesses** — a legacy filename used as a key (`otel_logs`), a
      *   path escape, a bare `%`, an entry shaped like a `.tmp` sidecar.
      */
     private val corpus = listOf(
-        // The shipped keyspace.
+        // The shipped keyspace: every StoreKey :kuilt-otel and :kuilt-otel-otlp
+        // construct in a *Main source. Every one contains a '.', so every one moves.
         "otel.causal.clock", "otel.logs", "otel.logs.idx", "otel.logs.seg.0", "otel.logs.seg.17",
         "otel.metrics", "otel.metrics.sums", "otel.metrics.sums.double", "otel.metrics.gauges",
-        "otel.metrics.histograms", "otel.metrics.cardinalities", "otel.spans", "otel/spans.v1",
+        "otel.metrics.histograms", "otel.metrics.cardinalities", "otel.spans",
         "otlp.sent.logs@-1274839", "otlp.sent.metrics@0", "otlp.sent.spans@42",
+        // Safe-set fixtures — NOT shipped keys. They exist to exercise the carry-over
+        // arm, which no key kuilt itself stores can reach.
         "span-state", "spans",
+        // A key shaped like a path. Invented, not shipped — kuilt stores nothing
+        // with a '/' in it.
+        "otel/spans.v1",
         // Collision witnesses: the legacy scheme folded these five onto "a_b".
         "a.b", "a/b", "a b", "a:b", "a_b", "a-b",
         // Case: one file on APFS under the legacy scheme.
@@ -153,27 +161,51 @@ class StoreKeyFilenameTest {
         assertTrue(overlaps.isEmpty(), "new and legacy namespaces must be disjoint across keys, but: $overlaps")
     }
 
+    /**
+     * The same disjointness, re-asked under the equality a **case-insensitive
+     * filesystem** actually uses — which is the one that matters, since escaping
+     * uppercase is justified above precisely by APFS folding case.
+     *
+     * It does **not** hold absolutely here, and this test says so in the only
+     * honest way: by measuring the boundary instead of asserting an empty set.
+     * The overlap is exactly the case-variant pairs — an old key inside
+     * `[A-Za-z0-9-]` and a new key that is its lowercase form. `StoreKey("config")`
+     * really can read `StoreKey("Config")`'s orphan on APFS.
+     *
+     * Written as an equality against the enumerated set, not a filter that merely
+     * tolerates such pairs: if a change introduced an overlap of any *other* shape
+     * — the dangerous kind — this reds, whereas `overlaps.all { isCaseVariant(it) }`
+     * would also pass on an empty set and so could not tell a fix from a regression.
+     */
     @Test
     fun noKeyAdoptsADifferentKeysLegacyFilenameEvenOnACaseFoldingFilesystem() {
-        val overlaps = buildList {
-            for (legacyKey in corpus) {
-                for (scheme in listOf(::legacyJvmName, ::legacyAppleName)) {
-                    val legacy = scheme(legacyKey)
-                    for (newKey in corpus) {
-                        if (newKey != legacyKey && encodeStoreKeyName(newKey).equals(legacy, ignoreCase = true)) {
-                            add("\"$newKey\" encodes to a case-variant of \"$legacy\", the legacy file of \"$legacyKey\"")
-                        }
+        val overlaps = mutableSetOf<String>()
+        for (legacyKey in corpus) {
+            for (scheme in listOf(::legacyJvmName, ::legacyAppleName)) {
+                val legacy = scheme(legacyKey)
+                for (newKey in corpus) {
+                    if (newKey != legacyKey && encodeStoreKeyName(newKey).equals(legacy, ignoreCase = true)) {
+                        overlaps.add("\"$newKey\" -> \"$legacy\" (legacy file of \"$legacyKey\")")
                     }
                 }
             }
         }
-        assertTrue(overlaps.isEmpty(), "new and legacy namespaces must be disjoint across keys, but: $overlaps")
+        assertEquals(
+            listOf("\"a\" -> \"A\" (legacy file of \"A\")"),
+            overlaps.sorted(),
+            "the only cross-key overlap a case-folding filesystem may introduce is a case-variant pair",
+        )
     }
 
     /**
-     * Where the two namespaces *do* overlap, they overlap on the same key — so the
-     * "orphan" is that key's own file and reading it is correct rather than wrong.
-     * `spans` and `span-state` are the shipped keys this carries over for free.
+     * Where the two namespaces *do* overlap under `==`, they overlap on the same
+     * key — so the "orphan" is that key's own file and reading it is correct.
+     *
+     * This benefits **consumers only**. No key kuilt itself stores is inside the
+     * safe set: every one of them contains a `.`, so every one of them moves and
+     * loses its data. `spans` and `span-state` below are fixtures chosen to sit in
+     * the safe set, not shipped keys — an earlier version of this file called them
+     * shipped and was wrong.
      */
     @Test
     fun aKeyInsideTheSafeSetKeepsItsOwnLegacyFile() {
@@ -248,12 +280,14 @@ class StoreKeyFilenameTest {
     }
 
     /**
-     * `otel/spans.v1` is a real shipped key with a path separator in it. Pinned
-     * literally because it is the one key whose *old* behaviour a reader is most
-     * likely to assume is unchanged.
+     * A key containing a path separator stays one filename rather than becoming a
+     * directory. Pinned literally because it is the shape whose *old* behaviour a
+     * reader is most likely to assume is unchanged.
+     *
+     * `otel/spans.v1` is invented, not shipped — kuilt stores no key with a `/`.
      */
     @Test
-    fun theShippedKeyWithAPathSeparatorEncodesWithoutOne() {
+    fun aKeyWithAPathSeparatorEncodesWithoutOne() {
         assertEquals("otel%2Fspans%2Ev1", encodeStoreKeyName("otel/spans.v1"))
     }
 

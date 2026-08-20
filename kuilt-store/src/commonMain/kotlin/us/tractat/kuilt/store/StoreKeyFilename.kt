@@ -49,9 +49,24 @@ internal val StoreKey.filename: String
  *   safe, a future key literally named `otel_logs` would adopt it. Because an
  *   encoded name never contains `_`, and a legacy name contains no `_` only when
  *   the key was already inside `[A-Za-z0-9-]` (where the legacy map was the
- *   identity), the two namespaces overlap **only** where both schemes are the
+ *   identity), the two namespaces meet **only** where both schemes are the
  *   identity on the same key — and there the "orphan" is that key's own file, so
- *   reading it is correct. `spans` and `span-state` carry over for free.
+ *   reading it is correct.
+ *
+ *   **That disjointness holds up to ASCII case folding, not absolutely.** On a
+ *   case-insensitive filesystem — APFS by default — case folding, not equality,
+ *   is what decides whether two names are one file, so the guarantee has to be
+ *   read there too. The residual overlap is exactly the case-variants of those
+ *   identity keys: a consumer that once stored `StoreKey("Config")` has an orphan
+ *   at `Config`, and a **new, never-written** `StoreKey("config")` encodes to
+ *   `config`, which on APFS *is* that file. Nothing kuilt itself stores is
+ *   exposed — every one of its keys contains a `.`, so every one of them moves —
+ *   but a consumer whose old key was inside `[A-Za-z0-9-]` must not introduce a
+ *   case-variant of it. `noKeyAdoptsADifferentKeysLegacyFilenameEvenOnA`
+ *   `CaseFoldingFilesystem` pins that boundary as a measurement rather than
+ *   leaving it unstated. Closing it outright would mean forcing an escape into
+ *   *every* encoded name, which forfeits the carry-over above; that is a larger
+ *   trade than this encoding needs to make, and is deliberately not made.
  * - **The `.tmp` sidecar namespace is disjoint for free.** Both file backends write
  *   `<name>.tmp` beside `<name>`. Since an encoded name never contains `.`, no
  *   entry's filename can equal another entry's temp filename.
@@ -126,7 +141,15 @@ internal fun decodeStoreKeyName(filename: String): String {
             }
             val high = hexValue(filename[index + 1], filename)
             val low = hexValue(filename[index + 2], filename)
-            bytes[length++] = ((high shl NIBBLE_BITS) or low).toByte()
+            val value = (high shl NIBBLE_BITS) or low
+            // Over-escaped: the encoder writes a safe byte verbatim and never as an
+            // escape, so `%61` is not something it could have produced. Accepting it
+            // would decode both `a` and `%61` to "a" — the many-to-one fold this
+            // decoder exists to refuse, arriving from the filename side.
+            require(!isSafe(value.toChar())) {
+                "\"$filename\" escapes '${value.toChar()}' at index $index, which the encoder emits verbatim"
+            }
+            bytes[length++] = value.toByte()
             index += ESCAPE_LENGTH
         } else {
             require(isSafe(char)) { "\"$filename\" contains '$char' at index $index, which is outside the safe set" }

@@ -57,8 +57,17 @@ That scheme folded every unusual character onto `_`, which meant `a.b` and `a/b`
 one file and writing either destroyed the other (#2506); the files it left behind are
 abandoned rather than renamed, and the new escaping is chosen so that an abandoned file
 can never be picked up as some *other* key's data. A key that was already plain
-lowercase letters, digits and dashes — `spans`, `span-state` — is unaffected and keeps
-its data.
+lowercase letters, digits and dashes is unaffected and keeps its data — though none of
+the keys kuilt's own telemetry stores is in that shape, so all of those do move.
+
+Two smaller edges. On a **case-insensitive filesystem** (APFS by default) the "never
+picked up as another key's data" guarantee holds up to case: if you previously stored
+`Config` and now introduce a *new* key `config`, the new one will find the old one's
+abandoned file. Don't introduce a case-variant of a key you used to store. And the
+file-backed stores **reject a key name that is not well-formed text** — a lone
+surrogate has no UTF-8 form, so it throws rather than being quietly mangled; the
+in-memory and IndexedDB stores accept it, so build key names from data with that in
+mind.
 
 ## What it deliberately is not
 

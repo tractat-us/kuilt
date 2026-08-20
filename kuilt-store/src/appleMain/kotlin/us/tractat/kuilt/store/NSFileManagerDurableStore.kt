@@ -105,6 +105,14 @@ import platform.posix.strerror_r
  * `NSFileManager.defaultManager` operations and `NSData.create(contentsOfFile:)`
  * are documented thread-safe on Apple platforms. No additional locking is needed.
  *
+ * Every method **throws [IllegalArgumentException] if the key's name is not
+ * well-formed text** — an unpaired surrogate has no UTF-8 encoding and so no
+ * filename. Note this is a property of the *file-backed* stores only:
+ * `InMemoryDurableStore` and `IndexedDbDurableStore` accept such a key happily,
+ * so a key that passes against an in-memory fake can throw in production. Keys
+ * are normally fixed literals, where the question does not arise; it arises when
+ * they are built from data.
+ *
  * @param directory Absolute path to the directory where files are stored.
  *   A trailing slash is accepted; the implementation normalises it.
  */

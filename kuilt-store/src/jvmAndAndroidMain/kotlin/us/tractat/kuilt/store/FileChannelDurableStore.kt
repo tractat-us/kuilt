@@ -36,6 +36,14 @@ import java.nio.file.StandardCopyOption
  * other. An explicit per-key lock is used (not `limitedParallelism(1)` —
  * confinement-as-mutex is banned by kuilt policy).
  *
+ * Every method **throws [IllegalArgumentException] if the key's name is not
+ * well-formed text** — an unpaired surrogate has no UTF-8 encoding and so no
+ * filename. Note this is a property of the *file-backed* stores only:
+ * `InMemoryDurableStore` and `IndexedDbDurableStore` accept such a key happily,
+ * so a key that passes against an in-memory fake can throw in production. Keys
+ * are normally fixed literals, where the question does not arise; it arises when
+ * they are built from data.
+ *
  * @param dir The directory that holds the store's files. Created if it does
  *   not exist. Must be writable.
  */
