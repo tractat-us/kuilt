@@ -28,9 +28,9 @@ most programs, but *when* a write became permanent usually is.
 
 | Type | Targets | What it does |
 |---|---|---|
-| [DurableStore] | all | The interface: `read`, `write`, `delete`, keyed by [StoreKey]. |
-| [StoreKey] | all | A named key. A `value class` over `String`, so two keys cannot be swapped by accident. |
-| [InMemoryDurableStore] | all | Keeps everything in a map. **Not** crash-safe — for tests and anywhere a restart doesn't matter. |
+| `DurableStore` | all | The interface: `read`, `write`, `delete`, keyed by `StoreKey`. |
+| `StoreKey` | all | A named key. A `value class` over `String`, so two keys cannot be swapped by accident. |
+| `InMemoryDurableStore` | all | Keeps everything in a map. **Not** crash-safe — for tests and anywhere a restart doesn't matter. |
 | `FileChannelDurableStore` | JVM, Android | Temp file → `FileChannel.force(true)` → atomic rename. |
 | `NSFileManagerDurableStore` | iOS, macOS | `NSData.writeToFile` → POSIX `rename(2)`. |
 | `IndexedDbDurableStore` | wasmJs | An IndexedDB transaction, awaited to its `complete` event. |

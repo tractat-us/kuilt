@@ -56,23 +56,23 @@ see that module's documentation for the durability contract and the four backend
 
 | Type | What it does |
 |---|---|
-| [WarpSpanExporter] | CRDT-backed span buffer (ORSet). Idempotent export + merge. |
-| [WarpMetricExporter] | CRDT-backed metric buffer: sums (GCounter), gauges (LWWRegister), cardinality (HyperLogLog). |
-| [WarpLogRecordExporter] | CRDT-backed log buffer (Rga). Ordered, idempotent export + merge. |
-| [WarpTelemetry] | Facade that composes all exporters under one surface. |
-| [WarpTelemetry.clear] | The supported reset: empties every signal's buffer and its persisted state on a **live** instance — no restart, no per-platform directory delete. Logs and spans suppress what they drop, so a peer cannot re-merge it back; metrics forget only locally (a monotonic join has no merge-safe forget). |
-| [WarpOtlpBridge] | Drains converged CRDTs to an OTLP edge, reconciling by digest. |
-| [OtlpEdge] | Interface your backend implements to receive spans. |
-| [SpanDigest] | Compact set of span ids the edge already holds; drives delta computation. |
-| [DrainResult] | Typed result of [WarpOtlpBridge.drain]: spans sent or failure. |
-| [SpanRecord] | OTLP-shaped span data model. |
-| [LogRecord] | OTLP-shaped log-record data model with optional trace correlation. |
-| [MetricKey] | Identity of one metric time series (name + kind + label set). |
-| [MetricKind] | SUM / GAUGE / CARDINALITY. |
-| [ExportResult] | Typed result of span/log `export()` / `merge()`. |
-| [MetricExportResult] | Typed result of metric mutations. |
-| [BufferPolicy] | Span/log bounded-buffer eviction strategy (spans log each drop; log records count them on [ExporterHealth]). |
-| [MetricBufferPolicy] | Metric bounded-buffer eviction strategy (always logs what it drops). |
+| `WarpSpanExporter` | CRDT-backed span buffer (ORSet). Idempotent export + merge. |
+| `WarpMetricExporter` | CRDT-backed metric buffer: sums (GCounter), gauges (LWWRegister), cardinality (HyperLogLog). |
+| `WarpLogRecordExporter` | CRDT-backed log buffer (Rga). Ordered, idempotent export + merge. |
+| `WarpTelemetry` | Facade that composes all exporters under one surface. |
+| `WarpTelemetry.clear` | The supported reset: empties every signal's buffer and its persisted state on a **live** instance — no restart, no per-platform directory delete. Logs and spans suppress what they drop, so a peer cannot re-merge it back; metrics forget only locally (a monotonic join has no merge-safe forget). |
+| `WarpOtlpBridge` | Drains converged CRDTs to an OTLP edge, reconciling by digest. |
+| `OtlpEdge` | Interface your backend implements to receive spans. |
+| `SpanDigest` | Compact set of span ids the edge already holds; drives delta computation. |
+| `DrainResult` | Typed result of `WarpOtlpBridge.drain`: spans sent or failure. |
+| `SpanRecord` | OTLP-shaped span data model. |
+| `LogRecord` | OTLP-shaped log-record data model with optional trace correlation. |
+| `MetricKey` | Identity of one metric time series (name + kind + label set). |
+| `MetricKind` | SUM / GAUGE / CARDINALITY. |
+| `ExportResult` | Typed result of span/log `export()` / `merge()`. |
+| `MetricExportResult` | Typed result of metric mutations. |
+| `BufferPolicy` | Span/log bounded-buffer eviction strategy (spans log each drop; log records count them on `ExporterHealth`). |
+| `MetricBufferPolicy` | Metric bounded-buffer eviction strategy (always logs what it drops). |
 
 ## Deferred (follow-up PRs)
 
