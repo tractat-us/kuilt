@@ -100,30 +100,50 @@ class PosixMappedBoltCaughtUpResumeTest {
      * **Not covered, deliberately: damage in the newest segment.** That is not damage *below* an
      * archive-end cursor at all — re-opening scans the last segment for its append cursor, finds the
      * torn frame and **repairs** the tail by zeroing it, so by the time any replay runs the archive
-     * is healthy and shorter. [DAMAGE_POSITIONS] measures that rather than asserting it: sweeping
-     * `0 until TAIL_FIXTURE_FRAMES` instead reds assertion 5 on unmutated production code.
+     * is healthy and shorter. [DAMAGE_POSITIONS] measures that rather than asserting it.
      *
      * ### Mutation receipts
      *
-     * Both applied alone to `PosixMappedBolt.replay`, reverted, the revert grep-verified, and the
-     * build log checked for a compile failure — a mutation that does not compile leaves Gradle
-     * serving the *previous* run's XML.
+     * Both applied alone to `PosixMappedBolt.replay`, reverted, the revert grep-verified, the results
+     * XML deleted before each run, and the build log checked for `compileKotlinMacosArm64 FAILED` and
+     * `e: file` — a mutation that does not compile leaves Gradle serving the *previous* run's XML, and
+     * the verdict it fabricates is a plausible copy of the row before it.
      *
-     * | Mutation | Reds | Verdicts | Bytes |
+     * Each segment file here is 243 bytes, so every count below is a whole number of them.
+     *
+     * | Mutation | Reds | Verdicts across the five positions | Bytes |
      * |---|---|---|---|
-     * | Delete `if (firstUnpruned < 0) return@flow emit(CleanTail)` | 3 and 4 | five `Truncated`, one per position | `2214` … `11070` |
-     * | …and start the walk at the newest two segments instead (`if (it < 0) views.size - 1 else it`) | 3 and 4 | four [CleanTail]s and **one** `Truncated` | `4428` everywhere |
+     * | Delete `if (firstUnpruned < 0) return@flow emit(CleanTail)` | 3 and 4 | `Truncated(0)`, `(139)`, `(275)`, `(411)`, `(547)`, all `Frame` | `243, 486, 729, 972, 1215` |
+     * | …and start the walk at the newest two segments instead — `.let { if (it < 0) views.size - 1 else it }` | 3 and 4 | `CleanTail ×4`, then `Truncated(547, Frame)` | `486, 486, 486, 486, 243` |
      *
-     * The second row is the shape this test exists to rule out, and the reason the sweep is six
-     * segments deep: a "read the newest `k`" formulation answers *correctly* at four of the five
-     * damage positions. A single-position fixture at depth 0 would have called it green.
+     * **The second row is the shape this test exists to rule out, and it is why the sweep is six
+     * segments deep.** A "read the newest `k`" formulation answers *correctly* at four of the five
+     * damage positions — one entry of five differs — so a fixture damaging a single segment anywhere
+     * above depth 4 would have called it green. Assertion 4 is what keeps that honest: the byte count
+     * reds at **every** position under it, including the four whose verdict is right.
+     *
+     * The first row reads the archive from segment 0 and stops at the damage, so its byte counts climb
+     * with depth. That is the *easy* mutation; it is here only to show the two are distinguishable.
      *
      * **Assertions 1, 2 and 5 stay green under both, and that is right.** 1 and 2 are the fixture's
      * own preconditions — nothing about which segments a `FromOffset` replay walks changes how many
-     * files the fixture wrote or what adoption cost. 5 is the [ReplayScope.All] control, and
-     * `skippable` is false for every scope that is not [ReplayScope.FromOffset], so `firstUnpruned`
-     * is `0` on that arm and neither mutation is reachable from it. A control that moved with the
-     * mutation would not be one.
+     * files the fixture wrote or what adoption cost, and both mutations are downstream of the open. 5
+     * is the [ReplayScope.All] control: `skippable` is false for every scope that is not
+     * [ReplayScope.FromOffset], so `firstUnpruned` is `0` on that arm and neither mutation is
+     * reachable from it. A control that moved with the mutation would not be one — it would be a
+     * second copy of the claim.
+     *
+     * ### Fixture boundaries, measured on unmutated production code
+     *
+     * Both knobs that decide whether this test can fail are **self-guarding**, and which way they fail
+     * was measured rather than argued:
+     *
+     * | Change | Reds | How |
+     * |---|---|---|
+     * | [DAMAGE_POSITIONS] widened to `0 until TAIL_FIXTURE_FRAMES` | 5, and nothing else | `CleanTail` where `Truncated(683, Frame)` was expected — adoption repaired the torn newest segment before any replay ran |
+     * | [TAIL_FIXTURE_FRAMES] lowered to `3` | 1, and nothing else | `it swept [0, 1]` — no depth left that a two-segment walk does not reach anyway |
+     *
+     * Neither goes silently vacuous, which is the failure mode this epic keeps shipping.
      */
     @Test
     fun aCaughtUpResumeAnswersTheSameWhereverTheDamageIs() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
@@ -309,7 +329,8 @@ class PosixMappedBoltCaughtUpResumeTest {
          * very confusion this test exists to rule out. Six leaves four depths that the second mutation
          * receipt above never reaches and exactly one that it does, which is why that receipt is one
          * changed entry rather than a wholesale flip. Assertion 1 is what refuses a smaller value
-         * rather than letting it quietly narrow the claim.
+         * rather than letting it quietly narrow the claim: at `3` it is **red on unmutated production
+         * code**, alone, saying `it swept [0, 1]`.
          */
         const val TAIL_FIXTURE_FRAMES = 6
 
@@ -321,9 +342,9 @@ class PosixMappedBoltCaughtUpResumeTest {
          * scans that segment for the append cursor, classifies the corrupt frame as a torn tail and
          * **zeroes it**, so every replay afterwards sees a healthy, shorter archive. Sweeping
          * `0 until TAIL_FIXTURE_FRAMES` instead is **red on unmutated production code**, at assertion
-         * 5 and nothing else — the [ReplayScope.All] control finds [CleanTail] where it expected
-         * `Truncated`, because by then there is nothing left to find. Not silently vacuous, and in
-         * the informative direction: the repair is a different mechanism with its own coverage
+         * 5 and nothing else, with `CleanTail` where `Truncated(atOffset=683, reason=Frame)` was
+         * expected — because by then there is nothing left to find. Not silently vacuous, and in the
+         * informative direction: the repair is a different mechanism with its own coverage
          * (`PosixMappedBolt.repairedTailAt`), not a hole in this one.
          */
         val DAMAGE_POSITIONS = 0 until TAIL_FIXTURE_FRAMES - 1
