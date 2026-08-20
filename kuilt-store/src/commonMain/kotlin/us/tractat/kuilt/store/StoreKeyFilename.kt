@@ -79,10 +79,14 @@ internal val StoreKey.filename: String
  * @throws IllegalArgumentException if [name] is not well-formed text — an unpaired
  *   surrogate has no UTF-8 encoding, and silently substituting `U+FFFD` for it
  *   would reintroduce exactly the many-to-one fold this function exists to remove.
+ *   Deliberately **not** the stdlib's `CharacterCodingException`: on JVM that is a
+ *   `java.io.IOException`, so a caller with the obvious `try { store.write(…) }
+ *   catch (e: IOException)` around a durable write would file a malformed key name
+ *   under "the disk was unhappy" and retry it forever. It is a bad argument.
  */
 internal fun encodeStoreKeyName(name: String): String =
     buildString(name.length) {
-        for (byte in name.encodeToByteArray(throwOnInvalidSequence = true)) {
+        for (byte in name.toUtf8OrThrow()) {
             val value = byte.toInt() and BYTE_MASK
             val char = value.toChar()
             if (isSafe(char)) {
@@ -130,8 +134,24 @@ internal fun decodeStoreKeyName(filename: String): String {
             index++
         }
     }
-    return bytes.decodeToString(0, length, throwOnInvalidSequence = true)
+    return bytes.utf8ToStringOrThrow(length, filename)
 }
+
+/** @see encodeStoreKeyName for why this is an [IllegalArgumentException] and not the stdlib's type. */
+private fun String.toUtf8OrThrow(): ByteArray =
+    try {
+        encodeToByteArray(throwOnInvalidSequence = true)
+    } catch (malformed: CharacterCodingException) {
+        throw IllegalArgumentException("\"$this\" is not well-formed text and has no UTF-8 encoding", malformed)
+    }
+
+/** @see encodeStoreKeyName for why this is an [IllegalArgumentException] and not the stdlib's type. */
+private fun ByteArray.utf8ToStringOrThrow(length: Int, filename: String): String =
+    try {
+        decodeToString(0, length, throwOnInvalidSequence = true)
+    } catch (malformed: CharacterCodingException) {
+        throw IllegalArgumentException("\"$filename\" decodes to bytes that are not valid UTF-8", malformed)
+    }
 
 private fun hexValue(char: Char, filename: String): Int {
     val value = HEX_DIGITS.indexOf(char)
