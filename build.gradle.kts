@@ -5259,8 +5259,8 @@ val forbidNotNullAssertionInUnresolvedSource by tasks.registering {
     val baseline = mapOf(
         "kuilt-nw/src/appleMain/kotlin/us/tractat/kuilt/nw/RealNwApi.kt" to 1,
         "kuilt-nw/src/appleTest/kotlin/us/tractat/kuilt/nw/NwHalfCloseProbeTest.kt" to 2,
-        "kuilt-otel/src/appleTest/kotlin/us/tractat/kuilt/otel/NSFileManagerDurableStoreTest.kt" to 4,
-        "kuilt-otel/src/wasmJsTest/kotlin/us/tractat/kuilt/otel/IndexedDbDurableStoreTest.kt" to 1,
+        "kuilt-store/src/appleTest/kotlin/us/tractat/kuilt/store/NSFileManagerDurableStoreTest.kt" to 4,
+        "kuilt-store/src/wasmJsTest/kotlin/us/tractat/kuilt/store/IndexedDbDurableStoreTest.kt" to 1,
         "spike/src/appleMain/kotlin/spike/nw/SpikeNw.kt" to 1,
     )
     doLast {

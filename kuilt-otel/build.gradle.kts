@@ -7,6 +7,9 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             api(project(":kuilt-crdt"))
+            // api, not implementation: WarpTelemetry's constructor takes a DurableStore, so the
+            // type is on this module's public surface and every consumer must be able to name it.
+            api(project(":kuilt-store"))
             // kuilt-core provides runCatchingCancellable and will be needed for
             // WarpOtlpBridge (A5) once that is built. Keep as an implementation dep
             // (not api) — the kuilt-otel surface does not expose Seam/Swatch types.
@@ -31,28 +34,11 @@ kotlin {
             implementation(project(":kuilt-bolt"))
         }
 
-        // jvmAndAndroidMain: FileChannelDurableStore uses java.io / java.nio.channels,
-        // which are available on both JVM and Android but not on iOS/macOS/wasmJs.
-        // Adding this intermediate disables KMP's hierarchy auto-wiring, so all other
-        // intermediates are declared explicitly below (mirroring kuilt-tcp / kuilt-multipeer).
-        val jvmAndAndroidMain by creating { dependsOn(commonMain.get()) }
-        jvmMain.get().dependsOn(jvmAndAndroidMain)
-        androidMain.get().dependsOn(jvmAndAndroidMain)
-
-        // appleMain: NSFileManagerDurableStore uses platform.Foundation, which is available
-        // on all Apple targets without an explicit dependency (built into the K/N distribution).
-        val appleMain by creating { dependsOn(commonMain.get()) }
-        val iosMain by creating { dependsOn(appleMain) }
-        val iosArm64Main by getting { dependsOn(iosMain) }
-        val iosSimulatorArm64Main by getting { dependsOn(iosMain) }
-        val macosMain by creating { dependsOn(appleMain) }
-        val macosArm64Main by getting { dependsOn(macosMain) }
-
-        // appleTest: tests for NSFileManagerDurableStore that use NSTemporaryDirectory().
-        val appleTest by creating { dependsOn(commonTest.get()) }
-        val iosArm64Test by getting { dependsOn(appleTest) }
-        val iosSimulatorArm64Test by getting { dependsOn(appleTest) }
-        val macosArm64Test by getting { dependsOn(appleTest) }
+        // No hand-wired source-set hierarchy here. The four platform `DurableStore`
+        // implementations — the only reason this module ever had a `jvmAndAndroidMain`
+        // intermediate and the explicit `appleMain`/`iosMain`/`macosMain`/`appleTest`
+        // chain that creating one forces — now live in `:kuilt-store` (#2497), and
+        // every source in this module is common. KMP's default hierarchy applies.
 
         jvmTest.dependencies {
             runtimeOnly(libs.logback)
