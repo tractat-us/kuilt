@@ -448,13 +448,36 @@ public abstract class DurableStoreConformanceSuite {
      * non-Latin letter to `_`, while a `Char.isLetterOrDigit()` test keeps them, because
      * `isLetterOrDigit` is true for Cyrillic. Keys derived from anything a person typed reach this.
      *
+     * ## The case pair, and what a green on it does not prove
+     *
+     * `a-b` and `a-B` are the pair whose absence let the #2506 defect survive longest on the file
+     * backends: every sanitiser in the tree passed a letter through unchanged, so the two keys were
+     * distinct *strings* and one *file*. Nobody wrote the pair, so nobody measured it.
+     *
+     * It is worth stating here rather than only in each file backend's own tests, because there are
+     * **two** ways to fail it and only one of them is about filesystems:
+     *
+     * - A backend that folds case **itself** — a `lowercase()` on the way to a filename, an
+     *   IndexedDB key normalised before it is stored — fails this everywhere, on every target and
+     *   every filesystem. That is the failure this suite genuinely establishes the absence of, and
+     *   it is reachable by any backend, file-backed or not.
+     * - A backend that hands both keys to a **case-insensitive filesystem** fails it only where the
+     *   filesystem folds: APFS by default, exFAT, NTFS — but not ext4. So a green on a Linux runner
+     *   is *no evidence at all* about that second failure, and must not be read as any. Only a run
+     *   on a case-folding filesystem discriminates, which is exactly why the defect went unmeasured:
+     *   the CI most projects run cannot see it.
+     *
+     * Stated the other way round: this property is unconditional about the store's own behaviour and
+     * conditional about its medium's. It is kept here anyway because the first failure is the one a
+     * *new* backend is most likely to introduce, and because the pair costs one entry.
+     *
      * Each key gets a distinct one-byte value and every one is read back, so the failure names
      * *which* keys collided rather than only that something did.
      */
     @Test
     public fun distinctKeysAddressDistinctEntries(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val store = newStore()
-        val keys = listOf("a.b", "a/b", "a b", "a:b", "a-b", "a_b", "мир", "миг")
+        val keys = listOf("a.b", "a/b", "a b", "a:b", "a-b", "a-B", "a_b", "мир", "миг")
         keys.forEachIndexed { index, name -> store.write(StoreKey(name), byteArrayOf(index.toByte())) }
 
         val readBack = keys.map { store.read(StoreKey(it)) }
