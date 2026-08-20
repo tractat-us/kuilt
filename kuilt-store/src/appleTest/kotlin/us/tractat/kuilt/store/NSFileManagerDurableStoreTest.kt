@@ -357,9 +357,11 @@ class NSFileManagerDurableStoreTest {
     fun destinationSurvivesARenameThatCannotCommit() = runTest {
         val dir = tempDir()
         val fm = NSFileManager.defaultManager
-        // "otel.spans" sanitises to "otel_spans" — the path write() will target.
         val key = StoreKey("otel.spans")
-        val dest = dir + "otel_spans"
+        // The path write() will target. Derived rather than spelled out, so an
+        // encoding change moves the rig with it; `assertNotNull(failure)` below is
+        // what catches a rig that stopped blocking the destination.
+        val dest = dir + encodeStoreKeyName(key.name)
         val marker = "$dest/marker"
         fm.createDirectoryAtPath(dest, withIntermediateDirectories = true, attributes = null, error = null)
         fm.createFileAtPath(marker, contents = null, attributes = null)
