@@ -122,9 +122,14 @@ import kotlin.test.assertNull
  * *structural* — no other test could see them. The twelve production rows mutate code that also backs
  * `:kuilt-otel` and everything downstream of it, and were measured **only** within
  * `:kuilt-store:jvmTest`; their true blast radius is larger than the rows say, not smaller. The three
- * filename rows understate it by a whole backend: `StoreKey.filename` and `encodeStoreKeyName` are
- * `commonMain`, so `NSFileManagerDurableStore` is mutated too and none of its tests are in the
- * measured run.
+ * filename rows reach a whole backend that run does not contain: `StoreKey.filename` and
+ * `encodeStoreKeyName` are `commonMain`, so `NSFileManagerDurableStore` is mutated too. The
+ * `lowercase()` row was therefore re-run against `:kuilt-store:macosArm64Test`, where it reds the
+ * same two things — [distinctKeysAddressDistinctEntries]' `"a-b"` assertion, and that backend's own
+ * `keysDifferingOnlyInCaseAddressDistinctEntries`. That second red is the one worth having: it is
+ * what establishes that the six filename tests kept beside this suite still bite in their new
+ * conformance-subclass shape, rather than having been carried across into a fixture that cannot
+ * fail them.
  *
  * **What the suite itself now rests on**, since a fix is only as good as what nothing checks: the
  * fixture, in exactly two places, and both are checked rather than assumed. [newStore] really
