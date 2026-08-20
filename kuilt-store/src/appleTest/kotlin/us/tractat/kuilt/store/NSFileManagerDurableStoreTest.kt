@@ -10,11 +10,13 @@ import platform.Foundation.NSTemporaryDirectory
 import platform.posix.fclose
 import platform.posix.fopen
 import platform.posix.fwrite
+import us.tractat.kuilt.conformance.DurableStoreConformanceSuite
+import us.tractat.kuilt.conformance.RestartFixture
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertContentEquals
-import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -22,15 +24,40 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Crash-recovery and correctness tests for [NSFileManagerDurableStore].
+ * Verifies [NSFileManagerDurableStore] satisfies the whole [DurableStoreConformanceSuite], and keeps
+ * the tests the suite cannot reach.
  *
- * Each test creates a fresh temporary directory under `NSTemporaryDirectory()` so
- * there is no cross-test state. The crash-recovery test verifies the durability
- * contract by constructing a second store instance over the *same directory* and
- * confirming the previously-written bytes are returned — simulating a process
- * restart.
+ * The round-trip, overwrite, delete, defensive-copy, large-payload, independent-key and
+ * second-instance-over-the-same-directory tests this class used to hold by hand are now properties of
+ * the shared contract. What stays is what is genuinely this backend's own, in two groups. The
+ * **filename-level** ones (#2506) — the legacy fold, the orphaned legacy files the fix deliberately
+ * does not migrate, the `.tmp` sidecar namespace, and the case-insensitive filesystem — are about how
+ * a key becomes a path, which [DurableStore] does not expose. The **failure-path** ones are a write
+ * failure that has to name its cause (#1860) and a rename that cannot commit having to leave the
+ * destination alone (#2120); neither is expressible against [DurableStore] either, since the contract
+ * has no failure injection and no view of the medium. Both groups stay here, where the medium is
+ * reachable.
  */
-class NSFileManagerDurableStoreTest {
+class NSFileManagerDurableStoreTest : DurableStoreConformanceSuite() {
+
+    private val directories = mutableMapOf<DurableStore, String>()
+
+    override suspend fun newStore(): DurableStore {
+        val dir = freshTempDir()
+        return NSFileManagerDurableStore(dir).also { directories[it] = dir }
+    }
+
+    /**
+     * A restart, modelled the way this store's own contract defines one: a **brand-new instance over
+     * the same directory**, holding no state from the original, so everything it answers came off the
+     * file system the original wrote to.
+     */
+    override suspend fun restart(store: DurableStore): RestartFixture =
+        RestartFixture.Durable(
+            NSFileManagerDurableStore(
+                requireNotNull(directories[store]) { "restart() was handed a store this fixture did not create" },
+            ),
+        )
 
     /**
      * Run a [DurableStore.write] and hand back the failure it reported, or `null`
@@ -64,90 +91,6 @@ class NSFileManagerDurableStoreTest {
         fclose(handle)
     }
 
-    private fun tempDir(): String {
-        val base = NSTemporaryDirectory()
-        val dir = base + "kuilt-store-test-${kotlin.random.Random.nextLong()}/"
-        NSFileManager.defaultManager.createDirectoryAtPath(dir, withIntermediateDirectories = true, attributes = null, error = null)
-        return dir
-    }
-
-    @Test
-    fun crashRecoveryRoundTrip() = runTest {
-        val dir = tempDir()
-        val key = StoreKey("spans")
-        val bytes = byteArrayOf(1, 2, 3, 4, 5)
-
-        // First store instance — write then let it go out of scope (simulates process exit).
-        NSFileManagerDurableStore(dir).write(key, bytes)
-
-        // Second store instance over the same directory — simulates process restart.
-        val recovered = NSFileManagerDurableStore(dir).read(key)
-        assertContentEquals(bytes, recovered)
-    }
-
-    @Test
-    fun readReturnsNullForAbsentKey() = runTest {
-        val store = NSFileManagerDurableStore(tempDir())
-        assertNull(store.read(StoreKey("never-written")))
-    }
-
-    @Test
-    fun overwriteReturnsLatestBytes() = runTest {
-        val dir = tempDir()
-        val key = StoreKey("k")
-        val store = NSFileManagerDurableStore(dir)
-        store.write(key, byteArrayOf(1))
-        store.write(key, byteArrayOf(2, 3))
-        assertContentEquals(byteArrayOf(2, 3), store.read(key))
-    }
-
-    @Test
-    fun deleteRemovesKey() = runTest {
-        val dir = tempDir()
-        val key = StoreKey("k")
-        val store = NSFileManagerDurableStore(dir)
-        store.write(key, byteArrayOf(42))
-        store.delete(key)
-        assertNull(store.read(key))
-    }
-
-    @Test
-    fun deleteOfAbsentKeyIsNoOp() = runTest {
-        val store = NSFileManagerDurableStore(tempDir())
-        // Must not throw.
-        store.delete(StoreKey("never-written"))
-    }
-
-    @Test
-    fun readReturnsCopyNotReference() = runTest {
-        val dir = tempDir()
-        val key = StoreKey("k")
-        val store = NSFileManagerDurableStore(dir)
-        store.write(key, byteArrayOf(1, 2, 3))
-        val read = store.read(key)!!
-        read[0] = 99
-        // A fresh read must still return the original bytes.
-        assertEquals(1, store.read(key)!![0])
-    }
-
-    /**
-     * A key containing a path separator is still exactly one key.
-     *
-     * `otel/spans.v1` is a real shipped key. Nothing in [DurableStore]'s contract
-     * says a key may not look like a path, so the store must not let the `/` become
-     * a subdirectory write — which is why the raw key name can never be used as a
-     * filename directly.
-     */
-    @Test
-    fun aKeyThatLooksLikeAPathIsJustAKey() = runTest {
-        val dir = tempDir()
-        val key = StoreKey("otel/spans.v1")
-        val bytes = byteArrayOf(7, 8, 9)
-        val store = NSFileManagerDurableStore(dir)
-        store.write(key, bytes)
-        assertContentEquals(bytes, store.read(key))
-    }
-
     // ---- a key is stored losslessly: distinct keys are distinct entries (#2506) ----
 
     /**
@@ -161,7 +104,7 @@ class NSFileManagerDurableStoreTest {
      */
     @Test
     fun keysThatFoldedOntoOneFilenameAddressDistinctEntries() = runTest {
-        val dir = tempDir()
+        val dir = freshTempDir()
         val names = listOf("a.b", "a/b", "a b", "a:b", "a_b")
         val store = NSFileManagerDurableStore(dir)
         names.forEachIndexed { index, name -> store.write(StoreKey(name), byteArrayOf(index.toByte())) }
@@ -185,7 +128,7 @@ class NSFileManagerDurableStoreTest {
      */
     @Test
     fun keysDifferingOnlyInANonAsciiLetterAddressDistinctEntries() = runTest {
-        val dir = tempDir()
+        val dir = freshTempDir()
         val store = NSFileManagerDurableStore(dir)
         val peace = StoreKey("мир")
         val moment = StoreKey("миг")
@@ -212,7 +155,7 @@ class NSFileManagerDurableStoreTest {
      */
     @Test
     fun keysDifferingOnlyInCaseAddressDistinctEntries() = runTest {
-        val dir = tempDir()
+        val dir = freshTempDir()
         val store = NSFileManagerDurableStore(dir)
         val lower = StoreKey("a")
         val upper = StoreKey("A")
@@ -239,7 +182,7 @@ class NSFileManagerDurableStoreTest {
      */
     @Test
     fun aKeyNeverAdoptsAnotherKeysLegacyOrphan() = runTest {
-        val dir = tempDir()
+        val dir = freshTempDir()
         // Exactly the filenames the legacy sanitiser produced for "otel.logs" and "otel.spans".
         plantFile(dir + "otel_logs", byteArrayOf(11))
         plantFile(dir + "otel_spans", byteArrayOf(22))
@@ -260,7 +203,7 @@ class NSFileManagerDurableStoreTest {
      */
     @Test
     fun aKeyAlreadyInsideTheSafeSetStillFindsItsOwnFile() = runTest {
-        val dir = tempDir()
+        val dir = freshTempDir()
         plantFile(dir + "spans", byteArrayOf(33))
         plantFile(dir + "span-state", byteArrayOf(44))
 
@@ -284,7 +227,7 @@ class NSFileManagerDurableStoreTest {
      */
     @Test
     fun anEntryNeverLandsOnAnotherEntrysTempSidecar() = runTest {
-        val dir = tempDir()
+        val dir = freshTempDir()
         val store = NSFileManagerDurableStore(dir)
         val plain = StoreKey("x")
         val sidecarShaped = StoreKey("x.tmp")
@@ -311,8 +254,8 @@ class NSFileManagerDurableStoreTest {
      * diagnosed from the device's own logs.
      */
     @Test
-    fun writeFailureNamesItsCause() = runTest {
-        val blocker = NSTemporaryDirectory() + "kuilt-store-blocker-${kotlin.random.Random.nextLong()}"
+    fun writeFailureNamesItsCause() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val blocker = freshTempPath("kuilt-store-blocker")
         NSFileManager.defaultManager.createFileAtPath(blocker, contents = null, attributes = null)
         // `blocker` is a regular file, so nothing can live underneath it.
         val store = NSFileManagerDurableStore("$blocker/nested/")
@@ -345,17 +288,17 @@ class NSFileManagerDurableStoreTest {
      * The removed implementation unlinked the destination unconditionally, before
      * anything knew whether the rename would commit — `removeItemAtPath` deletes a
      * directory tree recursively, so `marker` was destroyed and the subsequent move
-     * then succeeded against the now-vacant path. [write] returned normally having
-     * eaten the destination. That is the same shape as the field failure: every
-     * previously committed record gone rather than merely stale.
+     * then succeeded against the now-vacant path. [DurableStore.write] returned
+     * normally having eaten the destination. That is the same shape as the field
+     * failure: every previously committed record gone rather than merely stale.
      *
      * A round-trip test cannot see this — it passes identically either way. This
      * test is the one that distinguishes, which is why the assertions are on the
      * *destination*, not on the bytes just written.
      */
     @Test
-    fun destinationSurvivesARenameThatCannotCommit() = runTest {
-        val dir = tempDir()
+    fun destinationSurvivesARenameThatCannotCommit() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val dir = freshTempDir()
         val fm = NSFileManager.defaultManager
         val key = StoreKey("otel.spans")
         // The path write() will target. Derived rather than spelled out, so an
@@ -386,48 +329,43 @@ class NSFileManagerDurableStoreTest {
             { assertFalse(failure?.message.orEmpty().contains("(unknown)"), "the errno resolved to readable text") },
         )
     }
-
-    /**
-     * The rest of this suite tops out at a 5-byte payload, which exercises no
-     * buffering or chunking at all. 256 KiB crosses every page and I/O-buffer
-     * boundary the write path could hide a truncation behind.
-     */
-    @Test
-    fun largePayloadRoundTrips() = runTest {
-        val dir = tempDir()
-        val key = StoreKey("otel.spans")
-        val bytes = ByteArray(256 * 1024) { (it * 31 + 7).toByte() }
-        val store = NSFileManagerDurableStore(dir)
-        store.write(key, bytes)
-        assertContentEquals(bytes, store.read(key))
-    }
-
-    /**
-     * An overwrite must replace the destination wholesale. The second payload is
-     * deliberately *shorter* than the first: an in-place write would leave the
-     * first payload's tail behind, and only a length-changing overwrite catches it.
-     */
-    @Test
-    fun largeOverwriteLeavesNoTailOfThePreviousPayload() = runTest {
-        val dir = tempDir()
-        val key = StoreKey("otel.spans")
-        val first = ByteArray(128 * 1024) { 0xA5.toByte() }
-        val second = ByteArray(64 * 1024) { 0x5A.toByte() }
-        val store = NSFileManagerDurableStore(dir)
-        store.write(key, first)
-        store.write(key, second)
-        assertContentEquals(second, store.read(key))
-    }
-
-    @Test
-    fun independentKeysDoNotInterfere() = runTest {
-        val dir = tempDir()
-        val store = NSFileManagerDurableStore(dir)
-        val k1 = StoreKey("alpha")
-        val k2 = StoreKey("beta")
-        store.write(k1, byteArrayOf(1))
-        store.write(k2, byteArrayOf(2))
-        assertEquals(1, store.read(k1)!![0])
-        assertEquals(2, store.read(k2)!![0])
-    }
 }
+
+/**
+ * A path under `NSTemporaryDirectory()` that nothing else in this run uses, and that nothing left
+ * behind by a *previous* run occupies either.
+ *
+ * Both halves matter. The counter is what keeps two stores alive inside one test apart — the suite's
+ * `twoFreshStoresDoNotShareState` holds two at once and asserts they share nothing, which a reused
+ * path would make false by construction. Removing whatever is already there is what keeps a fresh
+ * store fresh across runs: `NSTemporaryDirectory()` outlives the process, so a name derived from a
+ * counter alone comes back on the next run holding the last run's files, and every absence assertion
+ * in the suite would then be checking yesterday's state.
+ *
+ * A counter rather than a random name, because a test's randomness is a dependency like any other and
+ * an unseeded one here would make a failure unreproducible.
+ */
+private fun freshTempPath(prefix: String): String {
+    val path = NSTemporaryDirectory() + "$prefix-${nextTempId++}"
+    NSFileManager.defaultManager.removeItemAtPath(path, error = null)
+    return path
+}
+
+/** [freshTempPath] as a directory, created and ready to be written into. */
+private fun freshTempDir(): String {
+    val dir = freshTempPath("kuilt-store-conformance") + "/"
+    NSFileManager.defaultManager.createDirectoryAtPath(
+        dir,
+        withIntermediateDirectories = true,
+        attributes = null,
+        error = null,
+    )
+    return dir
+}
+
+/**
+ * File-level, not a class property: the test framework builds a fresh instance of the test class for
+ * every test function, so a per-instance counter would restart at zero in each of them and hand every
+ * test the same directory.
+ */
+private var nextTempId = 0

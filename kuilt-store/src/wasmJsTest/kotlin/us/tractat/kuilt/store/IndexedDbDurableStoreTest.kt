@@ -2,161 +2,75 @@
 
 package us.tractat.kuilt.store
 
-import kotlinx.coroutines.test.runTest
-import kotlin.test.Test
-import kotlin.test.assertContentEquals
-import kotlin.test.assertEquals
-import kotlin.test.assertNull
+import kotlinx.coroutines.CompletableDeferred
+import us.tractat.kuilt.conformance.DurableStoreConformanceSuite
+import us.tractat.kuilt.conformance.RestartFixture
+import kotlin.JsFun
 
 /**
- * Browser-only round-trip tests for [IndexedDbDurableStore].
+ * Verifies [IndexedDbDurableStore] satisfies the whole [DurableStoreConformanceSuite] — in a real
+ * browser, which is the only place IndexedDB exists.
  *
- * Each test uses a unique database name so tests are isolated and
- * cannot interfere with each other through shared IDB state.
- *
- * The "crash-recovery" model is simulated by closing the first store
- * instance and opening a fresh one against the same database name —
- * this exercises the durability contract: bytes survive across
- * store-object lifetimes (and, by extension, process restarts).
+ * Every test this class used to hold by hand — absent key, round trip, overwrite, delete, independent
+ * keys, all 256 byte values, and the "crash" simulated by closing one connection and opening another
+ * against the same database — is now a property of the shared contract, checked here and on the other
+ * three backends alike. Nothing was dropped; several are now stated more strongly.
  */
-class IndexedDbDurableStoreTest {
+class IndexedDbDurableStoreTest : DurableStoreConformanceSuite() {
 
-    // ---- helpers ----
+    private val databases = mutableMapOf<DurableStore, String>()
 
-    private var dbCounter = 0
-
-    /** Each call returns a fresh unique DB name so tests don't share state. */
-    private fun uniqueDb(): String = "kuilt-store-test-${dbCounter++}"
-
-    // ---- read returns null for absent key ----
-
-    @Test
-    fun missingKeyReturnsNull() = runTest {
-        val store = IndexedDbDurableStore.open(uniqueDb())
-        assertNull(store.read(StoreKey("absent")))
-        store.close()
+    override suspend fun newStore(): DurableStore {
+        val name = "kuilt-store-conformance-${nextDatabaseId++}"
+        // A browser's IndexedDB outlives the page, so a name derived from a counter alone comes back
+        // on the next run holding the last run's records — and every absence assertion in the suite
+        // would then be checking a previous run's state. Wipe first; the counter is what keeps two
+        // stores alive inside one test apart.
+        deleteDatabase(name)
+        return IndexedDbDurableStore.open(name).also { databases[it] = name }
     }
 
-    // ---- write then read in same instance ----
-
-    @Test
-    fun writeAndReadInSameInstance() = runTest {
-        val store = IndexedDbDurableStore.open(uniqueDb())
-        val key = StoreKey("k")
-        val bytes = byteArrayOf(10, 20, 30)
-        store.write(key, bytes)
-        assertContentEquals(bytes, store.read(key))
-        store.close()
-    }
-
-    // ---- crash-recovery round-trip ----
-
-    @Test
-    fun crashRecoveryRoundTrip() = runTest {
-        val dbName = uniqueDb()
-        val key = StoreKey("span-state")
-        val bytes = byteArrayOf(1, 2, 3, 4, 5)
-
-        // First store instance: write and close (simulates process exit after durable commit).
-        val store1 = IndexedDbDurableStore.open(dbName)
-        store1.write(key, bytes)
-        store1.close()
-
-        // Second store instance against the same DB: simulates a process restart.
-        val store2 = IndexedDbDurableStore.open(dbName)
-        assertContentEquals(bytes, store2.read(key))
-        store2.close()
-    }
-
-    // ---- overwrite replaces previous value ----
-
-    @Test
-    fun overwriteReplacesValue() = runTest {
-        val dbName = uniqueDb()
-        val key = StoreKey("k")
-        val first = byteArrayOf(1, 2, 3)
-        val second = byteArrayOf(9, 8, 7, 6)
-
-        val store1 = IndexedDbDurableStore.open(dbName)
-        store1.write(key, first)
-        store1.close()
-
-        val store2 = IndexedDbDurableStore.open(dbName)
-        store2.write(key, second)
-        store2.close()
-
-        val store3 = IndexedDbDurableStore.open(dbName)
-        assertContentEquals(second, store3.read(key))
-        store3.close()
-    }
-
-    // ---- delete removes the key ----
-
-    @Test
-    fun deleteRemovesKey() = runTest {
-        val dbName = uniqueDb()
-        val key = StoreKey("k")
-
-        val store1 = IndexedDbDurableStore.open(dbName)
-        store1.write(key, byteArrayOf(42))
-        store1.close()
-
-        val store2 = IndexedDbDurableStore.open(dbName)
-        store2.delete(key)
-        store2.close()
-
-        val store3 = IndexedDbDurableStore.open(dbName)
-        assertNull(store3.read(key))
-        store3.close()
-    }
-
-    // ---- delete is a no-op for absent keys ----
-
-    @Test
-    fun deleteIsNoOpForAbsentKey() = runTest {
-        val store = IndexedDbDurableStore.open(uniqueDb())
-        // Must not throw.
-        store.delete(StoreKey("nonexistent"))
-        store.close()
-    }
-
-    // ---- multiple keys are stored independently ----
-
-    @Test
-    fun multipleKeysAreIndependent() = runTest {
-        val dbName = uniqueDb()
-        val keyA = StoreKey("a")
-        val keyB = StoreKey("b")
-        val bytesA = byteArrayOf(1)
-        val bytesB = byteArrayOf(2)
-
-        val store1 = IndexedDbDurableStore.open(dbName)
-        store1.write(keyA, bytesA)
-        store1.write(keyB, bytesB)
-        store1.close()
-
-        val store2 = IndexedDbDurableStore.open(dbName)
-        assertContentEquals(bytesA, store2.read(keyA))
-        assertContentEquals(bytesB, store2.read(keyB))
-        store2.close()
-    }
-
-    // ---- byte integrity: all 256 byte values survive round-trip ----
-
-    @Test
-    fun allByteValuesRoundTrip() = runTest {
-        val dbName = uniqueDb()
-        val key = StoreKey("full-range")
-        val bytes = ByteArray(256) { it.toByte() }
-
-        val store1 = IndexedDbDurableStore.open(dbName)
-        store1.write(key, bytes)
-        store1.close()
-
-        val store2 = IndexedDbDurableStore.open(dbName)
-        val recovered = store2.read(key)!!
-        assertEquals(256, recovered.size)
-        assertContentEquals(bytes, recovered)
-        store2.close()
+    /**
+     * A restart, modelled the way this store's own contract defines one: **close the connection and
+     * open a fresh one against the same database**. The new handle shares no state with the closed
+     * one, so everything it answers came out of IndexedDB.
+     */
+    override suspend fun restart(store: DurableStore): RestartFixture {
+        val name = requireNotNull(databases[store]) { "restart() was handed a store this fixture did not create" }
+        (store as IndexedDbDurableStore).close()
+        return RestartFixture.Durable(IndexedDbDurableStore.open(name))
     }
 }
+
+/** Drop the whole database at [name], whether or not it exists. */
+private suspend fun deleteDatabase(name: String) {
+    val done = CompletableDeferred<Unit>()
+    idbDeleteDatabase(name) { done.complete(Unit) }
+    done.await()
+}
+
+/**
+ * Delete the IndexedDB database [name], calling [onDone] once the request settles.
+ *
+ * `onblocked` completes too, not just `onsuccess`: a delete blocked by a still-open connection would
+ * otherwise never call back and hang the test rather than failing it. Nothing here holds a connection
+ * to a name it is about to delete, so that path is a backstop rather than an expected one.
+ */
+@JsFun(
+    """
+    (name, onDone) => {
+        const req = indexedDB.deleteDatabase(name);
+        req.onsuccess = () => onDone();
+        req.onerror = () => onDone();
+        req.onblocked = () => onDone();
+    }
+    """,
+)
+private external fun idbDeleteDatabase(name: String, onDone: () -> Unit)
+
+/**
+ * File-level, not a class property: the test framework builds a fresh instance of the test class for
+ * every test function, so a per-instance counter would restart at zero in each of them and hand every
+ * test the same database.
+ */
+private var nextDatabaseId = 0

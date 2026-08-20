@@ -1,3 +1,5 @@
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+
 plugins {
     id("kuilt.kmp-library")
 }
@@ -14,6 +16,11 @@ kotlin {
         }
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
+            // The DurableStore TCK. `:kuilt-conformance` api's THIS module in its main source set,
+            // and this is a TEST-only edge back the other way, so the task graph stays acyclic:
+            // :kuilt-store main -> :kuilt-conformance main -> :kuilt-store test. Same shape as
+            // :kuilt-quilter / :kuilt-gossip, which also subclass a suite from their own tests.
+            implementation(project(":kuilt-conformance"))
             implementation(libs.kotlinx.coroutines.test)
         }
 
@@ -39,5 +46,17 @@ kotlin {
         val iosArm64Test by getting { dependsOn(appleTest) }
         val iosSimulatorArm64Test by getting { dependsOn(appleTest) }
         val macosArm64Test by getting { dependsOn(appleTest) }
+    }
+}
+
+// kuilt-conformance ships kotlin-test-junit in commonMain; resolve the
+// kotlin-test-framework-impl capability conflict to the JUnit4 variant so
+// kuilt-conformance and the default kotlin-test wiring don't clash.
+configurations.configureEach {
+    resolutionStrategy.capabilitiesResolution.withCapability(
+        "org.jetbrains.kotlin:kotlin-test-framework-impl",
+    ) {
+        candidates.firstOrNull { (it.id as? ModuleComponentIdentifier)?.module == "kotlin-test-junit" }
+            ?.let { select(it) }
     }
 }

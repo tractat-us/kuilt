@@ -26,6 +26,7 @@ kotlin {
             api(project(":kuilt-session"))
             api(project(":kuilt-raft"))
             api(project(":kuilt-crdt"))
+            api(project(":kuilt-store"))
             api(project(":kuilt-test"))
             // The lattice-law harness asserts byte-level canonicality of encoded CRDT
             // states (#1957), so it needs a concrete BinaryFormat. CBOR matches Quilter's
