@@ -129,6 +129,7 @@ Replace `0.7.3` with the [latest release](https://central.sonatype.com/artifact/
 | Module | Targets | What it gives you |
 |--------|---------|-------------------|
 | `kuilt-crdt` | all | Delta-state CRDT zoo (`GCounter`, `ORSet`, `LWWMap`, `Rga`, `JsonCrdt`, `EphemeralMap`, …). Plain value types — no network needed. Live replication over a `Seam` is `kuilt-quilter`'s `Quilter`. |
+| `kuilt-store` | all | Put some bytes somewhere they will still be after a restart (`DurableStore`, `StoreKey`): a write returns only once the bytes are committed. `InMemoryDurableStore` everywhere (not crash-safe — tests); `FileChannelDurableStore` on JVM/Android, `NSFileManagerDurableStore` on iOS/macOS, `IndexedDbDurableStore` on wasmJs. |
 | `kuilt-bolt` | all | Write-only history archive kept beside a live replica (`Bolt`, `BoltDecorator`): a server can keep a year of edits while the phone that fed it keeps an hour. `InMemoryBolt` everywhere; memory-mapped files on JVM/Android (`MappedBolt`) and Apple (`PosixMappedBolt`). |
 | `kuilt-gossip` | all | Partial-mesh overlay (`GossipSeam`): each peer gossips with ~k neighbours so broadcast and GC scale O(k), not O(N), for large sessions. |
 | `kuilt-deal` | all | Cryptographically fair card dealing (`DealSession`, `SraScheme`) + dealer-less fair-random seed agreement (`FairRandom`). |

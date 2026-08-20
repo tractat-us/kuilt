@@ -27,7 +27,7 @@ deliberately small; the cleverness is all in the substrate.
 // A kuilt-backed, offline-first OpenTelemetry exporter (Kotlin Multiplatform).
 class WarpTelemetry(
     replica: ReplicaId,    // this device's stable identity
-    store: DurableStore,   // local WAL: SQLite/file (JVM/Android), IndexedDB (wasm), NSFileManager (iOS/macOS)
+    store: DurableStore,   // from `:kuilt-store` — file (JVM/Android), NSFileManager (iOS/macOS), IndexedDB (wasm)
 ) {
     // The OTel SDK plugs these in as its exporters — standard instrumentation, unchanged:
     val spans  : WarpSpanExporter        // span records → ORSet<Span> keyed by spanId  (idempotent union)

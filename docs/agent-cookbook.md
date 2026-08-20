@@ -30,6 +30,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | checking two peers hold the same state across a process/socket boundary — hand-hashing a replicated state so you can compare it as one number | `canonicalDigest` | [Replicated data](#replicated-data) |
 | splitting a big blob into frames — picking a chunk size, or chasing a `FrameTooLargeException` that only appears once a peer drops | `Room.maxPayloadBytes` / `Seam.maxPayloadBytes` | [Payload limits](#payload-limits) |
 | a `seenIds` set to skip already-handled messages | `GSet` / kuilt dedup | [Dedup](#dedup) |
+| saving bytes so they survive a restart — a write-temp-then-`fsync`-then-atomic-rename dance, a per-platform file helper, an IndexedDB wrapper, "did that write actually land before we crashed?" | `DurableStore` + `StoreKey` | [Durable storage](#durable-storage) |
 | a per-line flush loop in a log/telemetry exporter — or a fix for "capturing logs is slow", "the app stalls when it logs a lot" | `WarpLogRecordExporter.export(records)` + `installLogCapture` | [Telemetry & log capture](#telemetry--log-capture) |
 | deleting a telemetry store's files to reset it, or a "clear on next launch" flag so the delete lands before recovery | `WarpTelemetry.clear()` | [Telemetry & log capture](#telemetry--log-capture) |
 | a second, longer-retention copy of a replicated log — "keep a year on the server beside an hour on the phone", "gossiped records vanish when the peer forgets them", a hand-rolled tee of what a replica applied | `BoltDecorator` + `AppliedOpSink` | [Telemetry & log capture](#telemetry--log-capture) |
@@ -1242,6 +1243,34 @@ var set = GSet.empty<String>()
 set = set.piece(set.add("alice"))
 set = set.piece(set.add("bob"))
 check(set.elements == setOf("alice", "bob"))
+```
+
+## Durable storage
+
+**Intent:** keep a blob of bytes under a name so it is still there after a restart or a crash — "save this to disk", "persist it across launches", "write it somewhere it won't be lost". Don't hand-roll a write-temp-then-`fsync`-then-atomic-rename dance, an `expect`/`actual` file helper per platform, or an IndexedDB wrapper.
+**Primitive:** `DurableStore` (`:kuilt-store`) — `read` / `write` / `delete` under a `StoreKey`. `InMemoryDurableStore` in tests; `FileChannelDurableStore` (JVM/Android), `NSFileManagerDurableStore` (iOS/macOS) and `IndexedDbDurableStore` (wasmJs) in production.
+
+The contract is about *timing*, not just storage: **`write` returns only once the bytes are committed**, so the caller can report its own success at that moment rather than holding everything open until something downstream confirms. That is what makes an offline-first exporter possible — and each implementation's KDoc names the exact instant it treats as the commit, plus where its guarantee stops (the Apple store does not force before its rename, so power loss can differ from process death — #2141).
+
+It is deliberately small: no iteration, no query, no transaction across two keys, no opinion about what the bytes mean. If you want history you can replay and forget, that is `Bolt` (`:kuilt-bolt`); if you want state that merges across peers, that is the CRDT zoo (`:kuilt-crdt`).
+
+<!-- verbatim from kuilt-store/src/commonSamples/kotlin/us/tractat/kuilt/store/Samples.kt#sampleDurableStore -->
+```kotlin
+// Every platform has its own crash-safe implementation; a test uses the in-memory one.
+val store: DurableStore = InMemoryDurableStore()
+val key = StoreKey("draft")
+
+// `write` returns only once the bytes are committed — that is the whole contract.
+store.write(key, byteArrayOf(1, 2, 3))
+
+// A later session (a fresh store over the same backing directory or database)
+// reads back exactly what was committed; an unwritten key reads back null.
+val recovered: ByteArray? = store.read(key)
+check(recovered.contentEquals(byteArrayOf(1, 2, 3)))
+check(store.read(StoreKey("never-written")) == null)
+
+store.delete(key)
+check(store.read(key) == null)
 ```
 
 ## Telemetry & log capture
