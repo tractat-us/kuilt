@@ -78,6 +78,14 @@ import kotlin.test.assertNull
  * against a genuinely green baseline, with nothing held out of it, and a row naming a red is naming a
  * red its own mutation caused.
  *
+ * Retiring an exclusion re-asserts every row that was measured under it, so the **four file-backend
+ * rows were re-measured** rather than inherited — the ones whose "and nothing else" had been stated
+ * while a failure on that very backend was being held out. Three came back unchanged. The fourth had
+ * drifted: `append rather than atomically replace` now reds a third property, because #2511 added the
+ * test that reaches it. The five `InMemoryDurableStore` rows and the six fixture rows are untouched
+ * by any of this — the excluded failure was never on their backend, and a mutation to one class
+ * cannot red another.
+ *
  * | Mutation | Reds, at assertion granularity |
  * |---|---|
  * | **`InMemoryDurableStore.write`:** keep the caller's array | [theStoreDoesNotAliasTheArrayItWasGiven], its one assertion — and nothing else |
@@ -87,7 +95,7 @@ import kotlin.test.assertNull
  * | **`InMemoryDurableStore.write`:** mask the high bit off every byte | [everyByteValueSurvivesTheRoundTrip] a2, first mismatch at **index 128**; [aLargeValueRoundTripsWhole] a2. **[writtenBytesComeBackExactly] stays green** — every byte in its payload is below `0x80`, which is why those two are not one property |
  * | **`FileChannelDurableStore.read`:** truncate at 8 KiB | [aLargeValueRoundTripsWhole], both assertions (262144 against 8192) — and nothing else |
  * | **`FileChannelDurableStore.read`:** a zero-length file decodes to `null` | [anEmptyValueIsAValueAndNotAnAbsence], both assertions — and nothing else |
- * | **`FileChannelDurableStore.write`:** append rather than atomically replace | [aSecondWriteReplacesTheFirstWhole] all three; [whatWasWrittenBeforeARestartIsReadableAfterIt] the **`overwritten`** assertion only, not `kept` |
+ * | **`FileChannelDurableStore.write`:** append rather than atomically replace | [aSecondWriteReplacesTheFirstWhole] all three; [whatWasWrittenBeforeARestartIsReadableAfterIt] the **`overwritten`** assertion only, not `kept`; and `FileChannelDurableStoreTest.anEntryNeverLandsOnAnotherEntrysTempSidecar` on its `"x"` assertion (`[1, 3]` where `[3]` was written). That third red is **new since this row was first measured** — #2511 added the test that reaches it — which is why the row states its reds rather than claiming "and nothing else" |
  * | **`StoreKey.filename`:** truncate the encoded name to 64 characters | [aLongKeyIsStillAKey] a1 (expected `1`, got `2`) — and nothing else. The one-sided shape is the point: both keys encode to the same 64-character prefix, so the second write lands on the first's entry and only the *first* key's read is wrong. a2 reads what it wrote and stays green |
  * | **`StoreKey.filename`:** `lowercase()` the key name before encoding | [distinctKeysAddressDistinctEntries] the `"a-b"` assertion only (expected `4`, got `5` — `"a-B"` landed on it), plus `FileChannelDurableStoreTest.keysDifferingOnlyInCaseAddressDistinctEntries`. This is the case pair's receipt, and it reds **on every filesystem**, because the fold is the store's own |
  * | **`encodeStoreKeyName`'s safe set:** put `A`–`Z` back in it (undo #2511's uppercase escaping) | the same `"a-b"` assertion — **but only because the measuring box's temp root is APFS.** `a-b` and `a-B` become two distinct *filenames* that a case-folding filesystem makes one *file*; on a case-sensitive one this mutation reds nothing in this suite at all. It does red four of `StoreKeyFilenameTest`'s encoder guards, which is where that boundary is pinned target-independently, and is why the suite is not the place to rely on it |
