@@ -2,9 +2,14 @@
 
 package us.tractat.kuilt.store
 
+import kotlinx.cinterop.addressOf
+import kotlinx.cinterop.usePinned
 import kotlinx.coroutines.test.runTest
 import platform.Foundation.NSFileManager
 import platform.Foundation.NSTemporaryDirectory
+import platform.posix.fclose
+import platform.posix.fopen
+import platform.posix.fwrite
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertContains
@@ -44,6 +49,20 @@ class NSFileManagerDurableStoreTest {
         } catch (failure: IllegalStateException) {
             failure
         }
+
+    /**
+     * Write [bytes] straight to [path], bypassing the store entirely.
+     *
+     * Staging a *legacy* filename is the whole point: it is a name the store can no
+     * longer produce, so it cannot be created through [DurableStore.write]. POSIX
+     * rather than Foundation because `NSData.create(bytes:length:)` needs
+     * `BetaInteropApi` that nothing else in this file wants.
+     */
+    private fun plantFile(path: String, bytes: ByteArray) {
+        val handle = fopen(path, "wb") ?: error("could not create $path")
+        bytes.usePinned { pinned -> fwrite(pinned.addressOf(0), 1uL, bytes.size.toULong(), handle) }
+        fclose(handle)
+    }
 
     private fun tempDir(): String {
         val base = NSTemporaryDirectory()
@@ -111,14 +130,174 @@ class NSFileManagerDurableStoreTest {
         assertEquals(1, store.read(key)!![0])
     }
 
+    /**
+     * A key containing a path separator is still exactly one key.
+     *
+     * `otel/spans.v1` is a real shipped key. Nothing in [DurableStore]'s contract
+     * says a key may not look like a path, so the store must not let the `/` become
+     * a subdirectory write — which is why the raw key name can never be used as a
+     * filename directly.
+     */
     @Test
-    fun keyWithSpecialCharsSanitisedSafely() = runTest {
+    fun aKeyThatLooksLikeAPathIsJustAKey() = runTest {
         val dir = tempDir()
         val key = StoreKey("otel/spans.v1")
         val bytes = byteArrayOf(7, 8, 9)
         val store = NSFileManagerDurableStore(dir)
         store.write(key, bytes)
         assertContentEquals(bytes, store.read(key))
+    }
+
+    // ---- a key is stored losslessly: distinct keys are distinct entries (#2506) ----
+
+    /**
+     * Five distinct keys the legacy filename mapping folded onto **one** file.
+     *
+     * `Char.isLetterOrDigit()` kept letters and digits and sent everything else to
+     * `_`, so `a.b`, `a/b`, `a b` and `a:b` all became `a_b` — which is itself a
+     * key. Four of the five writes below destroyed a value written under a
+     * *different* key, silently, with no listing surface for a caller to notice it
+     * through.
+     */
+    @Test
+    fun keysThatFoldedOntoOneFilenameAddressDistinctEntries() = runTest {
+        val dir = tempDir()
+        val names = listOf("a.b", "a/b", "a b", "a:b", "a_b")
+        val store = NSFileManagerDurableStore(dir)
+        names.forEachIndexed { index, name -> store.write(StoreKey(name), byteArrayOf(index.toByte())) }
+
+        val readBack = names.map { store.read(StoreKey(it)) }
+        assertAll(
+            *names.mapIndexed { index, name ->
+                { assertContentEquals(byteArrayOf(index.toByte()), readBack[index], "key \"$name\"") }
+            }.toTypedArray(),
+        )
+    }
+
+    /**
+     * Two keys differing only in a non-ASCII letter.
+     *
+     * This backend's `Char.isLetterOrDigit()` is true for Cyrillic, so `мир` and
+     * `миг` survived here — while `FileChannelDurableStore`'s `[^a-zA-Z0-9_-]` folded
+     * both to `___`. Two sanitisers that each read as correct, disagreeing on
+     * non-ASCII, is why the encoding is now one shared thing rather than two that
+     * must agree by inspection; this test is the Apple half of that agreement.
+     */
+    @Test
+    fun keysDifferingOnlyInANonAsciiLetterAddressDistinctEntries() = runTest {
+        val dir = tempDir()
+        val store = NSFileManagerDurableStore(dir)
+        val peace = StoreKey("мир")
+        val moment = StoreKey("миг")
+        store.write(peace, byteArrayOf(1))
+        store.write(moment, byteArrayOf(2))
+
+        val first = store.read(peace)
+        val second = store.read(moment)
+        assertAll(
+            { assertContentEquals(byteArrayOf(1), first, "key \"мир\"") },
+            { assertContentEquals(byteArrayOf(2), second, "key \"миг\"") },
+        )
+    }
+
+    /**
+     * Two keys differing only in case.
+     *
+     * `StoreKey("a")` and `StoreKey("A")` are distinct keys, and the legacy mapping
+     * passed both letters straight through — so on APFS, which is case-insensitive
+     * by default, they shared one file. That made this the *same* #2506 defect, on
+     * the same backend, that nobody had measured: a case-differing pair simply never
+     * appeared in a test. Escaping uppercase closes it, and closes it on every
+     * filesystem rather than only the case-sensitive ones.
+     */
+    @Test
+    fun keysDifferingOnlyInCaseAddressDistinctEntries() = runTest {
+        val dir = tempDir()
+        val store = NSFileManagerDurableStore(dir)
+        val lower = StoreKey("a")
+        val upper = StoreKey("A")
+        store.write(lower, byteArrayOf(1))
+        store.write(upper, byteArrayOf(2))
+
+        val first = store.read(lower)
+        val second = store.read(upper)
+        assertAll(
+            { assertContentEquals(byteArrayOf(1), first, "key \"a\"") },
+            { assertContentEquals(byteArrayOf(2), second, "key \"A\"") },
+        )
+    }
+
+    /**
+     * A file left behind by the legacy scheme must never be readable as a
+     * **different** key.
+     *
+     * The fix ships no migration, so legacy files stay on disk in the same
+     * directory. `otel.logs` was stored as `otel_logs`; a scheme that treated `_` as
+     * a safe character would hand a future `StoreKey("otel_logs")` the abandoned
+     * buffer of `otel.logs` — silent wrong-key data, strictly worse than the loss
+     * orphaning already accepts.
+     */
+    @Test
+    fun aKeyNeverAdoptsAnotherKeysLegacyOrphan() = runTest {
+        val dir = tempDir()
+        // Exactly the filenames the legacy sanitiser produced for "otel.logs" and "otel.spans".
+        plantFile(dir + "otel_logs", byteArrayOf(11))
+        plantFile(dir + "otel_spans", byteArrayOf(22))
+
+        val store = NSFileManagerDurableStore(dir)
+        val logs = store.read(StoreKey("otel_logs"))
+        val spans = store.read(StoreKey("otel_spans"))
+        assertAll(
+            { assertNull(logs, "StoreKey(\"otel_logs\") must not adopt otel.logs' orphaned file") },
+            { assertNull(spans, "StoreKey(\"otel_spans\") must not adopt otel.spans' orphaned file") },
+        )
+    }
+
+    /**
+     * The one case where reading a legacy file *is* correct: the key was already
+     * inside the safe set, so both schemes are the identity on it and the "orphan"
+     * is that key's own file. `spans` and `span-state` carry over for free.
+     */
+    @Test
+    fun aKeyAlreadyInsideTheSafeSetStillFindsItsOwnFile() = runTest {
+        val dir = tempDir()
+        plantFile(dir + "spans", byteArrayOf(33))
+        plantFile(dir + "span-state", byteArrayOf(44))
+
+        val store = NSFileManagerDurableStore(dir)
+        val spans = store.read(StoreKey("spans"))
+        val spanState = store.read(StoreKey("span-state"))
+        assertAll(
+            { assertContentEquals(byteArrayOf(33), spans, "key \"spans\"") },
+            { assertContentEquals(byteArrayOf(44), spanState, "key \"span-state\"") },
+        )
+    }
+
+    /**
+     * An entry's filename can never equal another entry's `.tmp` sidecar.
+     *
+     * [NSFileManagerDurableStore] writes `<path>.tmp` beside `<path>`, so if a key
+     * could encode to a name ending in `.tmp` its entry would sit exactly where
+     * another key's in-flight write lands. Escaping `.` closes it: no encoded name
+     * contains a dot. The pair below is the smallest witness — `x` owns the sidecar
+     * `x.tmp`, and `x.tmp` is a key in its own right.
+     */
+    @Test
+    fun anEntryNeverLandsOnAnotherEntrysTempSidecar() = runTest {
+        val dir = tempDir()
+        val store = NSFileManagerDurableStore(dir)
+        val plain = StoreKey("x")
+        val sidecarShaped = StoreKey("x.tmp")
+        store.write(plain, byteArrayOf(1))
+        store.write(sidecarShaped, byteArrayOf(2))
+        store.write(plain, byteArrayOf(3))
+
+        val first = store.read(plain)
+        val second = store.read(sidecarShaped)
+        assertAll(
+            { assertContentEquals(byteArrayOf(3), first, "key \"x\"") },
+            { assertContentEquals(byteArrayOf(2), second, "key \"x.tmp\" survived x's write") },
+        )
     }
 
     /**
@@ -178,9 +357,11 @@ class NSFileManagerDurableStoreTest {
     fun destinationSurvivesARenameThatCannotCommit() = runTest {
         val dir = tempDir()
         val fm = NSFileManager.defaultManager
-        // "otel.spans" sanitises to "otel_spans" — the path write() will target.
         val key = StoreKey("otel.spans")
-        val dest = dir + "otel_spans"
+        // The path write() will target. Derived rather than spelled out, so an
+        // encoding change moves the rig with it; `assertNotNull(failure)` below is
+        // what catches a rig that stopped blocking the destination.
+        val dest = dir + encodeStoreKeyName(key.name)
         val marker = "$dest/marker"
         fm.createDirectoryAtPath(dest, withIntermediateDirectories = true, attributes = null, error = null)
         fm.createFileAtPath(marker, contents = null, attributes = null)

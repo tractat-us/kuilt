@@ -78,18 +78,40 @@ import platform.posix.strerror_r
  * of `NSApplicationSupportDirectory` or a temporary directory in tests). The
  * directory is created automatically on first write if it does not already exist.
  *
- * ## Key sanitization
+ * ## Key encoding
  *
- * [StoreKey.name] is sanitized before being used as a filename: characters
- * outside `[a-zA-Z0-9_-]` are replaced with `_`. Keys that differ only in their
- * sanitized form will collide — callers should ensure keys are unique after
- * sanitization. A caller with a handful of fixed, hand-written key names (the
- * expected shape) will not hit this; one deriving key names from user data can.
+ * The filename is [encodeStoreKeyName] of [StoreKey.name] — a lossless, path-safe
+ * percent-encoding shared with `FileChannelDurableStore`. **Distinct keys are
+ * always distinct files**, so a caller owes this store nothing about its key names:
+ * a key may contain dots, spaces, a `/`, a `%`, non-ASCII text, or differ from
+ * another key only in case, and it still addresses its own entry.
+ *
+ * That is a repair, not a long-standing promise. This class used to fold every
+ * character outside `[a-zA-Z0-9_-]` onto `_` and document the resulting collision
+ * as the *caller's* problem to avoid — under which `a.b`, `a/b`, `a b` and `a:b`
+ * all shared one file and a write under one destroyed the value under another,
+ * silently (#2506). The two file backends did not even agree with each other:
+ * `Char.isLetterOrDigit()` is true for Cyrillic and `[^a-zA-Z0-9_-]` is not, so a
+ * key that survived here collided on JVM. Hence one shared encoder rather than two
+ * that must agree by inspection.
+ *
+ * Files written under the old scheme are **orphaned, not migrated**. The encoding's
+ * safe set is deliberately narrow (`[a-z0-9-]`) so that an orphan can never be
+ * misread as some other key's entry; [encodeStoreKeyName] carries that argument,
+ * and states what is *not* promised — filename length.
  *
  * ## Thread safety
  *
  * `NSFileManager.defaultManager` operations and `NSData.create(contentsOfFile:)`
  * are documented thread-safe on Apple platforms. No additional locking is needed.
+ *
+ * Every method **throws [IllegalArgumentException] if the key's name is not
+ * well-formed text** — an unpaired surrogate has no UTF-8 encoding and so no
+ * filename. Note this is a property of the *file-backed* stores only:
+ * `InMemoryDurableStore` and `IndexedDbDurableStore` accept such a key happily,
+ * so a key that passes against an in-memory fake can throw in production. Keys
+ * are normally fixed literals, where the question does not arise; it arises when
+ * they are built from data.
  *
  * @param directory Absolute path to the directory where files are stored.
  *   A trailing slash is accepted; the implementation normalises it.
@@ -149,17 +171,10 @@ public class NSFileManagerDurableStore(private val directory: String) : DurableS
     // ---- helpers ----
 
     private fun filePath(key: StoreKey): String =
-        normalizedDirectory() + sanitize(key.name)
+        normalizedDirectory() + key.filename
 
     private fun normalizedDirectory(): String =
         if (directory.endsWith("/")) directory else "$directory/"
-
-    private fun sanitize(name: String): String =
-        buildString {
-            for (ch in name) {
-                append(if (ch.isLetterOrDigit() || ch == '-' || ch == '_') ch else '_')
-            }
-        }
 
     /**
      * Create [directory] if absent, returning the `NSError` if that failed.

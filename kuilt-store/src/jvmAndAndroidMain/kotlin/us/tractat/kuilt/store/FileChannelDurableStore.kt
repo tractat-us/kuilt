@@ -23,10 +23,26 @@ import java.nio.file.StandardCopyOption
  * the `.tmp` file, which is ignored on the next open. There is no window
  * where neither the old nor the new value is visible.
  *
+ * The filename is [encodeStoreKeyName] of the key's name — a lossless, path-safe
+ * percent-encoding shared with `NSFileManagerDurableStore`, so **distinct keys are
+ * always distinct files** and a key that looks like a path is still just a key.
+ * The scheme it replaced folded everything outside `[a-zA-Z0-9_-]` onto `_`, which
+ * silently merged distinct keys (#2506); files written under those names are
+ * orphaned rather than migrated, and the encoding is chosen so that one can never
+ * be misread as a different key's entry.
+ *
  * Thread-safe: each call acquires a per-key lock via `synchronized` on a
  * canonical key string — `read` and `write` for different keys never block each
  * other. An explicit per-key lock is used (not `limitedParallelism(1)` —
  * confinement-as-mutex is banned by kuilt policy).
+ *
+ * Every method **throws [IllegalArgumentException] if the key's name is not
+ * well-formed text** — an unpaired surrogate has no UTF-8 encoding and so no
+ * filename. Note this is a property of the *file-backed* stores only:
+ * `InMemoryDurableStore` and `IndexedDbDurableStore` accept such a key happily,
+ * so a key that passes against an in-memory fake can throw in production. Keys
+ * are normally fixed literals, where the question does not arise; it arises when
+ * they are built from data.
  *
  * @param dir The directory that holds the store's files. Created if it does
  *   not exist. Must be writable.
@@ -61,19 +77,9 @@ public class FileChannelDurableStore(private val dir: File) : DurableStore {
 
     // ---- private helpers ----
 
-    private fun fileFor(key: StoreKey): File = File(dir, sanitize(key.name))
+    private fun fileFor(key: StoreKey): File = File(dir, key.filename)
 
-    private fun tmpFileFor(key: StoreKey): File = File(dir, sanitize(key.name) + ".tmp")
-
-    /**
-     * Sanitizes a [StoreKey.name] to a safe filename.
-     *
-     * Dots (used in dotted keys like `app.spans`) are replaced with `_` to avoid
-     * confusion with file extensions. Characters outside `[a-zA-Z0-9_-]` are
-     * replaced with `_` so the filename is safe on all JVM/Android filesystems.
-     */
-    private fun sanitize(name: String): String =
-        name.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+    private fun tmpFileFor(key: StoreKey): File = File(dir, key.filename + ".tmp")
 
     private fun writeAtomically(tmp: File, dest: File, bytes: ByteArray) {
         FileOutputStream(tmp).use { fos ->
@@ -99,13 +105,19 @@ public class FileChannelDurableStore(private val dir: File) : DurableStore {
 
     /**
      * Returns a lock object that is canonical for the given key within this
-     * store instance. Intern on the sanitized name so that two calls with the
-     * same key always lock on the same object.
+     * store instance. Intern on the **encoded filename** so that two calls with
+     * the same key always lock on the same object.
+     *
+     * It has to be the same string the entry is addressed by, not the raw key
+     * name: the lock's whole job is to serialize access to one file, so two keys
+     * sharing a file must share a lock and two keys with distinct files must not.
+     * Encoding is injective, so under this scheme those two facts coincide — one
+     * lock per key — but the coupling is what keeps it true if either ever changes.
      *
      * Using [String.intern] here is safe and intentional: the set of keys is
      * small and application-controlled. The alternative — a
      * `ConcurrentHashMap<String, Any>` of locks — is heavier and adds no
      * meaningful benefit for this use case.
      */
-    private fun lockFor(key: StoreKey): String = sanitize(key.name).intern()
+    private fun lockFor(key: StoreKey): String = key.filename.intern()
 }
