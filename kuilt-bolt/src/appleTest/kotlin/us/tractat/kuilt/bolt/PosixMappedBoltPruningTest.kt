@@ -104,8 +104,9 @@ class PosixMappedBoltPruningTest {
      *
      * The same run also settles a thing the mutation makes tempting to assume the other way: forcing
      * `firstUnpruned` to `0` disables the caught-up `CleanTail` short-circuit as a side effect, and
-     * **that** still reddens nothing either. So the short-circuit is unpinned on this backend too —
-     * out of scope here, since it is a different claim from the one this test measures.
+     * when that was measured **it reddened nothing either**. That is a second, separate gap — the
+     * JVM twin's `aCaughtUpResumeAnswersTheSameWhereverTheDamageIs` has no port here — and it is
+     * #2504 rather than this file, because it is a different claim from the one measured above.
      */
     @Test
     fun aResumeReadsFarLessThanThePrefixItPrunes() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
