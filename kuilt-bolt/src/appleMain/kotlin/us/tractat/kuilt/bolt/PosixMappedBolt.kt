@@ -2,6 +2,7 @@
 
 package us.tractat.kuilt.bolt
 
+import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.cinterop.ByteVar
@@ -253,6 +254,15 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
     private var riggedFlushFailure: Boolean = false
 
     /**
+     * Bytes this bolt has pulled off segment **files** with `read(2)`, ever.
+     *
+     * Deliberately **not** guarded by [lock]: [replay] reads its segments *outside* the lock, which is
+     * the whole reason a slow reader does not stall appends, so two replays can be counting at once.
+     * See [segmentFileBytesRead].
+     */
+    private val fileBytesRead = atomic(0L)
+
+    /**
      * The most recent posix failure that **no return value could carry**, or `null` if there has been
      * none.
      *
@@ -327,6 +337,32 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
      * durability ledger.
      */
     internal fun rigFlushFailure(rigged: Boolean): Unit = lock.withLock { riggedFlushFailure = rigged }
+
+    /**
+     * How many bytes this bolt has read back off its segment **files**, across everything it has done
+     * so far. **Test-only.**
+     *
+     * The quantity #2236 is about, and the only one that can settle it. [replay] prunes a *prefix* of
+     * segment files on a [ReplayScope.FromOffset] resume, and that is a claim about **I/O**: every
+     * cheaper observable is one inference away from it. A pruned segment's frames never being
+     * *emitted* is already true of the scope filter, and its bytes never being *parsed* would still be
+     * true of an implementation that read every file whole and then threw the frames away — which is
+     * exactly the cost the pruning exists to remove. A wall-clock assertion would say the same thing
+     * far less reliably, and on a contended box would say it wrongly.
+     *
+     * Counted at [readFile], which is this backend's single `read(2)` choke point, so it covers
+     * adoption as well as replay. Adoption happens once, on the first open, and a test that wants a
+     * replay's cost alone opens the archive first (`availability()`) and measures from there.
+     *
+     * **This backend's active segment is counted like any other**, unlike `MappedBolt.segmentFileBytesRead`
+     * — [replay] reads every segment with `read(2)` rather than copying the newest out of the live
+     * mapping (see "Replay reads, it does not map"), so there is no free segment here and the two
+     * backends' numbers are not comparable term by term.
+     *
+     * Monotonic for the life of the instance, so a test measures a **difference** across one replay
+     * rather than trusting an absolute — which also makes it immune to a fixture that replays twice.
+     */
+    internal fun segmentFileBytesRead(): Long = fileBytesRead.value
 
     /**
      * The append offset a torn tail was discarded at when this archive was re-opened, or `null` if
@@ -1268,6 +1304,8 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
      * corruption — and the caller, having nothing to tell them apart by, treated all of them as
      * permanent damage. It also discarded the errno, in a class whose whole failure-reporting rule is
      * to name identities and state rather than report that something went wrong.
+     *
+     * Every byte it hands back is counted against [segmentFileBytesRead].
      */
     private fun readFile(path: String, limit: Long = Long.MAX_VALUE): FileBytes {
         val fd = platform.posix.open(path, O_RDONLY)
@@ -1292,6 +1330,9 @@ public class PosixMappedBolt<Id : Any, V, Op : Any>(
                     filled += n.toInt()
                 }
             }
+            // Counted here rather than at each call site: this is the only `read(2)` in the class, so
+            // a later caller cannot acquire segment bytes without the count following it.
+            fileBytesRead += filled.toLong()
             return FileBytes(if (filled == out.size) out else out.copyOf(filled), size)
         } finally {
             platform.posix.close(fd)
