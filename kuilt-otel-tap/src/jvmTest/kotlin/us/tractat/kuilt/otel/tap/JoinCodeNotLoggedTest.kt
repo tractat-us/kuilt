@@ -13,13 +13,13 @@ import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.crdt.ReplicaId
-import us.tractat.kuilt.otel.InMemoryDurableStore
 import us.tractat.kuilt.otel.LogRecord
 import us.tractat.kuilt.otel.WarpLogRecordExporter
 import us.tractat.kuilt.otel.tap.admit.LogTapJoinToken
 import us.tractat.kuilt.quilter.QuilterConfig
 import org.slf4j.LoggerFactory
 import org.slf4j.Logger.ROOT_LOGGER_NAME
+import us.tractat.kuilt.store.InMemoryDurableStore
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals

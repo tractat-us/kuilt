@@ -1,6 +1,8 @@
 package us.tractat.kuilt.otel
 
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.store.DurableStore
+import us.tractat.kuilt.store.InMemoryDurableStore
 
 /**
  * A CRDT-backed, offline-first telemetry surface for Kotlin Multiplatform.

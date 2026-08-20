@@ -16,8 +16,8 @@ import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.RgaId
 import us.tractat.kuilt.otel.LogRecord
-import us.tractat.kuilt.otel.NSFileManagerDurableStore
 import us.tractat.kuilt.otel.WarpLogRecordExporter
+import us.tractat.kuilt.store.NSFileManagerDurableStore
 import kotlin.time.TimeSource
 
 /**

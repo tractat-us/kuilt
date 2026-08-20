@@ -8,7 +8,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.demo.TapWire
-import us.tractat.kuilt.otel.InMemoryDurableStore
 import us.tractat.kuilt.otel.MetricKey
 import us.tractat.kuilt.otel.MetricKind
 import us.tractat.kuilt.otel.WarpLogRecordExporter
@@ -17,6 +16,7 @@ import us.tractat.kuilt.otel.logging.CaptureConfig
 import us.tractat.kuilt.otel.logging.installLogCapture
 import us.tractat.kuilt.otel.tap.installLogTap
 import us.tractat.kuilt.otel.tap.installMetricTap
+import us.tractat.kuilt.store.InMemoryDurableStore
 import us.tractat.kuilt.websocket.KtorServerLoom
 import kotlin.coroutines.coroutineContext
 import kotlin.random.Random

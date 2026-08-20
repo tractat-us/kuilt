@@ -4,8 +4,8 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.crdt.ReplicaId
-import us.tractat.kuilt.otel.InMemoryDurableStore
 import us.tractat.kuilt.otel.WarpLogRecordExporter
+import us.tractat.kuilt.store.InMemoryDurableStore
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals

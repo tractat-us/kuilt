@@ -5,6 +5,7 @@ import us.tractat.kuilt.crdt.DDSketch
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.GCounterDouble
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.store.InMemoryDurableStore
 import kotlin.test.Test
 import kotlin.test.assertEquals
 

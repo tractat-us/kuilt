@@ -7,11 +7,11 @@ import org.slf4j.ILoggerFactory
 import org.slf4j.LoggerFactory
 import org.slf4j.MDC
 import us.tractat.kuilt.crdt.ReplicaId
-import us.tractat.kuilt.otel.InMemoryDurableStore
 import us.tractat.kuilt.otel.WarpLogRecordExporter
 import us.tractat.kuilt.otel.logging.CaptureConfig
 import us.tractat.kuilt.otel.logging.LOGGER_NAME_ATTRIBUTE
 import us.tractat.kuilt.otel.logging.LogLevel
+import us.tractat.kuilt.store.InMemoryDurableStore
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.AfterTest

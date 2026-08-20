@@ -45,13 +45,17 @@ segment is split across turns, so a failure means "stop", not "none of it landed
 (#2194). Dedup and the buffer cap remain per-record decisions. Its KDoc carries a
 worked example.
 
-## What's here (slices A1–A5 + WAL-JVM + WAL-iOS + WAL-wasm)
+## Where the bytes actually land
+
+Every exporter here writes through a `DurableStore` — a small "keep these bytes safe"
+interface with a crash-safe implementation per platform. It lives in its own module,
+**`kuilt-store`**, because a durable key→bytes store has nothing to do with telemetry;
+see that module's documentation for the durability contract and the four backends.
+
+## What's here
 
 | Type | What it does |
 |---|---|
-| [DurableStore] | Write-through persistence interface. Plug in any WAL. |
-| [InMemoryDurableStore] | Non-durable, test-safe store. |
-| [FileChannelDurableStore] | Crash-safe JVM/Android WAL: temp-write + `force(true)` + atomic rename. |
 | [WarpSpanExporter] | CRDT-backed span buffer (ORSet). Idempotent export + merge. |
 | [WarpMetricExporter] | CRDT-backed metric buffer: sums (GCounter), gauges (LWWRegister), cardinality (HyperLogLog). |
 | [WarpLogRecordExporter] | CRDT-backed log buffer (Rga). Ordered, idempotent export + merge. |
@@ -73,7 +77,6 @@ worked example.
 ## Deferred (follow-up PRs)
 
 - **Histogram metrics** — DDSketch or t-digest for merge-able quantile estimates.
-- **Platform WALs** — NSFileManager (iOS/macOS, #802), IndexedDB (wasmJs, #801).
 
 ## Honest limits
 

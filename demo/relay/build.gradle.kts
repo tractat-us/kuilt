@@ -27,6 +27,7 @@ dependencies {
     implementation(project(":kuilt-otel"))
     implementation(project(":kuilt-otel-logging"))
     implementation(project(":kuilt-otel-tap"))
+    implementation(project(":kuilt-store")) // InMemoryDurableStore, named directly in RelayObservability
     implementation(libs.kotlin.logging) // the relay's own "patchwork.relay" application logger
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.ktor.serverCore)

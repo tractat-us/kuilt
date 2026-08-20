@@ -17,6 +17,9 @@ import us.tractat.kuilt.crdt.GCounterDouble
 import us.tractat.kuilt.crdt.HyperLogLog
 import us.tractat.kuilt.crdt.LWWRegister
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.store.DurableStore
+import us.tractat.kuilt.store.InMemoryDurableStore
+import us.tractat.kuilt.store.StoreKey
 
 private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpMetricExporter")
 

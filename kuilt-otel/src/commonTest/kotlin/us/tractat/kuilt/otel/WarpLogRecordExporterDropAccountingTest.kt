@@ -3,6 +3,7 @@ package us.tractat.kuilt.otel
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.store.InMemoryDurableStore
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test

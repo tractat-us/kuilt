@@ -19,10 +19,10 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.crdt.ReplicaId
-import us.tractat.kuilt.otel.InMemoryDurableStore
 import us.tractat.kuilt.otel.MetricKey
 import us.tractat.kuilt.otel.MetricKind
 import us.tractat.kuilt.otel.WarpMetricExporter
+import us.tractat.kuilt.store.InMemoryDurableStore
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue

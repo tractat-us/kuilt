@@ -12,7 +12,6 @@ import io.ktor.server.routing.routing
 import kotlinx.coroutines.runBlocking
 import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.crdt.ReplicaId
-import us.tractat.kuilt.otel.InMemoryDurableStore
 import us.tractat.kuilt.otel.LogRecord
 import us.tractat.kuilt.otel.MetricKey
 import us.tractat.kuilt.otel.MetricKind
@@ -20,6 +19,7 @@ import us.tractat.kuilt.otel.SpanKind
 import us.tractat.kuilt.otel.SpanRecord
 import us.tractat.kuilt.otel.WarpOtlpBridge
 import us.tractat.kuilt.otel.WarpTelemetry
+import us.tractat.kuilt.store.InMemoryDurableStore
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue

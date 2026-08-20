@@ -10,6 +10,8 @@ import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.RgaId
 import us.tractat.kuilt.crdt.RgaOp
 import us.tractat.kuilt.crdt.VersionVector
+import us.tractat.kuilt.store.DurableStore
+import us.tractat.kuilt.store.StoreKey
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals

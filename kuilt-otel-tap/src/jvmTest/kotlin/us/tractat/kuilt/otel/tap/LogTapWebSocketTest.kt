@@ -11,9 +11,9 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.withTimeout
 import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.crdt.ReplicaId
-import us.tractat.kuilt.otel.InMemoryDurableStore
 import us.tractat.kuilt.otel.LogRecord
 import us.tractat.kuilt.otel.WarpLogRecordExporter
+import us.tractat.kuilt.store.InMemoryDurableStore
 import us.tractat.kuilt.websocket.KtorClientLoom
 import us.tractat.kuilt.websocket.KtorServerLoom
 import us.tractat.kuilt.websocket.WebSocketAdvertisement
