@@ -93,6 +93,19 @@ class PosixMappedBoltPruningTest {
      * that an over-eager prune would be a *wrong* answer while this mutation is only an expensive
      * one. The red is two of six, so a reader checking the shape rather than the presence of the red
      * should see exactly those two byte-count lines and no verdict or frame-list failure.
+     *
+     * **And nothing else in this backend's tree reds under it — measured, not assumed.** The whole
+     * of `macosArm64Test` under that mutation is 156 tests across 14 classes, of which exactly one
+     * fails, this one. All three `BoltConformanceSuite` subclasses stay green, matching the row
+     * `MappedBolt.firstSegmentToRead`'s own table records for the same mutation, and so does
+     * `PosixMappedBoltTest`. That is the whole warrant for a second copy of this file: "prune
+     * nothing" is a performance regression that answers every question correctly, and no property
+     * that can only ask what a replay *said* will ever notice it.
+     *
+     * The same run also settles a thing the mutation makes tempting to assume the other way: forcing
+     * `firstUnpruned` to `0` disables the caught-up `CleanTail` short-circuit as a side effect, and
+     * **that** still reddens nothing either. So the short-circuit is unpinned on this backend too —
+     * out of scope here, since it is a different claim from the one this test measures.
      */
     @Test
     fun aResumeReadsFarLessThanThePrefixItPrunes() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
