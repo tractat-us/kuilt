@@ -307,7 +307,9 @@ class PosixMappedBoltPruningTest {
          * of writing it down.** There, pruning costs a header probe per pruned segment, so a small
          * payload makes the assertion measure the header size rather than the pruning. Here the
          * pruning decision reads nothing at all, so both arms are whole segment files and assertion 3
-         * is the ratio `4 files < 8 files` at any payload whatever.
+         * is essentially `4 files < 8 files` — which survives a payload far smaller than this one,
+         * since the only thing that could upset it is the later segments being *bigger*, and these
+         * frames grow by a few bytes across the whole fixture.
          *
          * It is kept for two honest reasons rather than an inherited one: the counts stay dominated
          * by frames rather than headers, and the receipt above can be read against
