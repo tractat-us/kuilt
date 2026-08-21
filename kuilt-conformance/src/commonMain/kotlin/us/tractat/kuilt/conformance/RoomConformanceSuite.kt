@@ -158,6 +158,9 @@ import kotlin.time.Instant
  * against unmutated `main`, and that is correct** — `SeamRoom.leave` calls `seam.close(...)`
  * unguarded, so nothing mints today; these are live guards, not regression tests for a fix.
  *
+ * Every row below was **re-measured** after [theTeardownFaultReallyFires] moved its arms onto links
+ * no [Room] owns. One verdict changed, and it changed to a *narrower* one — see the T7 note.
+ *
  * | # | Mutation | Kind | verdict |
  * |---|----------|------|---------|
  * | T1 | `SeamRoom.leave` wraps its `seam.close(...)` in `withTimeout(100.milliseconds)` | real | **RED — [leaveDoesNotMintACancellationWhenTeardownIsSlow]**, 1 of its 2 assertions: `Got: kotlinx.coroutines.TimeoutCancellationException: Timed out after 100ms of _virtual_ … time`. Nothing else moves. |
@@ -166,7 +169,7 @@ import kotlin.time.Instant
  * | T4 | [TeardownFault.Fails] delegates but does not throw | rig | **RED — [theTeardownFaultReallyFires]**, 1 of 4: `Got: no exception — the close completed`. **[leaveIsIdempotentEvenWhenTeardownFails] goes GREEN BY ABSENCE.** |
  * | T5 | [TeardownFault.Slow] does not delay | rig | **RED — [theTeardownFaultReallyFires]**, 1 of 4: `Expected at least 1000 ms of virtual time to pass, got 0 ms`. |
  * | T6 | T1 **and** T5 together | rig | **RED — [theTeardownFaultReallyFires]** only. [leaveDoesNotMintACancellationWhenTeardownIsSlow] is **GREEN** — T1's real defect has gone invisible. |
- * | T7 | `leave` throws `IllegalStateException("already left")` on a second call | synthetic | **RED — [leaveIsIdempotent]**, [leaveDoesNotReportFailureAsCancellation], [leaveIsIdempotentEvenWhenTeardownFails] and `aDeclaredGapDoesNotExcuseTheUngatedObligations`, each on the raw throw. |
+ * | T7 | `leave` throws `IllegalStateException("already left")` on a second call | synthetic | **RED — [leaveIsIdempotent]**, [leaveDoesNotReportFailureAsCancellation], [leaveIsIdempotentEvenWhenTeardownFails] and `aDeclaredGapDoesNotExcuseTheUngatedObligations`, each on the raw throw. [theTeardownFaultReallyFires] **is not among them** — see below. |
  *
  * **T3 is the measurement of the gap this whole section closes, and it is the most damning row.**
  * Deleting `leave`'s idempotency guard *entirely* is invisible to [leaveIsIdempotent] — because on
@@ -195,10 +198,16 @@ import kotlin.time.Instant
  * warn about, caught by asking of the fix what the fix was now unpinned on.
  *
  * **T7 is marked synthetic because no real implementation refuses a second leave on purpose** — it
- * is here to show the two ungated properties *can* red, since T1–T6 never touch them. Its hit on
- * [theTeardownFaultReallyFires] is blast radius, not a diagnosis: that test closes a link out from
- * under its room, the room self-leaves in reaction, and the explicit `leave()` afterwards is then
- * the *second* one.
+ * is here to show the two ungated properties *can* red, since T1–T6 never touch them.
+ *
+ * **T7's blast radius is the receipt for [theTeardownFaultReallyFires]'s bare links.** As first
+ * measured, T7 *also* reddened that test: the fixture then armed its fault on a seam a room owned,
+ * so closing it made the room self-leave in reaction and the trailing explicit `leave()` was the
+ * *second* one. That was blast radius rather than a diagnosis — the row said four tests while the
+ * prose explained a fifth, which is a receipt disagreeing with itself. Re-measured after the
+ * fixture moved to links no [Room] owns, the fifth hit is **gone**: nothing self-leaves, because
+ * nothing owns the links being closed. The row is four, and it is four for a structural reason
+ * rather than because the number was edited to agree with a prediction.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 public abstract class RoomConformanceSuite {
