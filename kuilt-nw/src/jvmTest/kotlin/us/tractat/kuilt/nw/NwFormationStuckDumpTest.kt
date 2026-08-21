@@ -319,6 +319,93 @@ class NwFormationStuckDumpTest {
             }
         }
 
+    /**
+     * The state must reach the **exception message**, not only the WARN log (#2386).
+     *
+     * #2484 put [logFormationStuck] on the weave-timeout path, which is what a *field capture* reads. A
+     * CI failure is read from somewhere else entirely: a Kotlin/Native test renders through the results
+     * XML, and whether log capture reaches that XML is not guaranteed — on the two K/N lanes of
+     * `apple-nightly` it does not. So the one artifact a CI reader is certain to have is the throwable,
+     * and a bare `"no peer reached … within 30s"` names the deadline and nothing else. That is the whole
+     * reason #2386 read as "a contended host is indistinguishable from a broken fabric".
+     *
+     * The last assertion is the load-bearing one, and it is not a duplicate of the others: the log line
+     * is emitted **before** `discardUnreturnedSeam` and the exception is thrown **after** it, and `close`
+     * wipes `settledEndpoints` and cancels every redialer. So two independent `render(formation)` calls
+     * would disagree — the exception would carry a blameless empty seam while the log carried the real
+     * one. Requiring the exception to contain the log's exact rendered tail pins that the render is
+     * computed **once** and shared, which is the only shape in which the two cannot diverge.
+     */
+    @Test
+    fun theWeaveTimeoutFailureCarriesTheFormationStateAndNotJustTheDeadline() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            withCapture { appender ->
+                val tag = "xmsg"
+                val radio = FakeNwRadio()
+                val loomApi = FakeNwApi(radio, deviceId = "$tag-dev-a", serviceName = "$tag-peer-a")
+                val peerApi = FakeNwApi(radio, deviceId = "$tag-dev-b", serviceName = "$tag-ep-b")
+                peerApi.startListening("$tag-ep-b", TYPE)
+                val loom = NwLoom(
+                    loomApi,
+                    serviceType = TYPE,
+                    selfId = PeerId("$tag-peer-a"),
+                    random = Random(0),
+                    weaveTimeout = 4.seconds,
+                )
+                var failure: Throwable? = null
+                val weaveJob = launch(start = CoroutineStart.UNDISPATCHED) {
+                    failure = runCatchingCancellable {
+                        loom.join(InMemoryTag(sessionName = "lobby", peerKey = "$tag-peer-a"))
+                    }.exceptionOrNull()
+                }
+                assertTrue(pumpUntil { loomApi.connectCalls >= 1 }, "rig: the loom must discover and dial the advertiser")
+
+                advance(5.seconds)
+                pumpUntil { failure != null }
+                val onTimeout = appender.lines(Level.WARN, STUCK, tag).single { it.contains("reason=weave-timeout") }
+
+                endWeave(weaveJob)
+
+                val message = assertNotNull(
+                    (failure as? NwUnreachableException)?.message,
+                    "rig: the weave must have failed as NwUnreachableException, got: $failure",
+                )
+                // Everything the ONE render produced, with the log's own prefix stripped off.
+                val renderedInLog = onTimeout.substringAfter("reason=weave-timeout after=4s ")
+
+                assertAll(
+                    {
+                        assertTrue(
+                            message.contains("within 4s") && message.contains("serviceType=$TYPE"),
+                            "the deadline and the type must survive — this adds state, it does not replace " +
+                                "what was there: $message",
+                        )
+                    },
+                    {
+                        assertTrue(
+                            message.contains("state=Weaving") && message.contains("settled=[]"),
+                            "the wedge itself must be readable from the throwable alone: $message",
+                        )
+                    },
+                    {
+                        assertTrue(
+                            message.contains("$tag-ep-b(name=$tag-ep-b backoff="),
+                            "…including WHICH endpoint was being dialled to no effect, which is what " +
+                                "separates a busy box from a broken fabric: $message",
+                        )
+                    },
+                    {
+                        assertTrue(
+                            message.contains(renderedInLog),
+                            "the log line and the exception must carry the SAME render, or a reader " +
+                                "correlating the two is reading a seam that was closed in between — " +
+                                "log=<$renderedInLog> message=<$message>",
+                        )
+                    },
+                )
+            }
+        }
+
     // ── the schedule: cancelled on Woven, re-armed geometrically on the re-form ──
 
     /**

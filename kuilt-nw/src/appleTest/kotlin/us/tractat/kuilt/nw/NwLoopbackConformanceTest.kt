@@ -4,16 +4,11 @@ package us.tractat.kuilt.nw
 
 import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-network loopback conformance harness — a real Network.framework socket needs a real IO dispatcher; there is no virtual-time option here
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Loom
-import us.tractat.kuilt.core.Rendezvous
-import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Tag
-import us.tractat.kuilt.core.TransportCapability
-import kotlin.random.Random
 import kotlin.test.AfterTest
 
 /**
@@ -40,19 +35,31 @@ import kotlin.test.AfterTest
  * runs the full `NwLoom.weave` (advertise + browse + auto-dial), so exactly one host↔joiner link
  * forms with no double-dial.
  *
- * ## Real dispatcher (not virtual time)
+ * ## Real dispatcher, and a real-clock deadline ([loopbackLoomPair])
  * [NwLoom.weave] derives its seam scope from `currentCoroutineContext()`, so under the suite's
  * `runTest` virtual clock its `withTimeout` would fast-forward and spuriously time out before the
- * real GCD sockets connect. [realDispatchLoom] wraps each loom so `weave` runs on a real
+ * real GCD sockets connect. [loopbackLoomPair] therefore dispatches each `weave` onto
  * [Dispatchers.Default] — the seam's timers and collectors then run in real wall-clock time, while
  * the suite still collects the resulting flows from its test dispatcher (a real-IO test cannot be
  * driven by a test scheduler).
+ *
+ * Because the weave really does run on the wall clock, the deadline it fails at is a *test gate*, and
+ * the same factory injects [LOOPBACK_CONFORMANCE_WEAVE_BACKSTOP] in place of production's shipped 30 s
+ * so a contended runner is not indistinguishable from a broken fabric (#2386). It also arms [FAIL_FAST],
+ * which is what keeps a deadline that generous affordable when the fabric really is broken. All three
+ * live in that one factory precisely so this suite cannot forget any of them.
  */
 class NwLoopbackConformanceTest : SeamConformanceSuite() {
 
     private companion object {
         const val SERVICE_TYPE = "_kuilt._tcp"
         const val ROOM_KEY = "loopback-secret"
+
+        /**
+         * Suite-scoped, so it must live here: `kotlin.test` builds a fresh test-class instance per test
+         * method, and an instance field would reset between the 30 tests and latch nothing.
+         */
+        val FAIL_FAST = LoopbackWeaveFailFast("NwLoopbackConformanceTest")
     }
 
     /** The real APIs built for the current test, torn down (listeners/browsers cancelled) in [tearDown]. */
@@ -78,9 +85,13 @@ class NwLoopbackConformanceTest : SeamConformanceSuite() {
         val joinerApi = RealNwApi(psk, NwLoopbackConfig(dial = true, rendezvous = rendezvous))
         apis += hostApi
         apis += joinerApi
-        val host = NwLoom(hostApi, serviceType = SERVICE_TYPE, random = Random(0))
-        val joiner = NwLoom(joinerApi, serviceType = SERVICE_TYPE, random = Random(1))
-        return realDispatchLoom(host) to realDispatchLoom(joiner)
+        return loopbackLoomPair(
+            failFast = FAIL_FAST,
+            serviceType = SERVICE_TYPE,
+            hostApi = hostApi,
+            joinerApi = joinerApi,
+            weaveDispatcher = Dispatchers.Default,
+        )
     }
 
     override fun joinTag(): Tag = InMemoryTag(sessionName = "host", peerKey = "nw-loopback-joiner")
@@ -99,15 +110,4 @@ class NwLoopbackConformanceTest : SeamConformanceSuite() {
      */
     override fun payloadBudgetGap(): String? = null
 
-    /**
-     * Wrap [delegate] so `weave` runs on a real [Dispatchers.Default]. [NwLoom] captures its seam
-     * scope from `currentCoroutineContext()`, so without this the suite's virtual-time test dispatcher
-     * would drive the seam's `withTimeout`/timers and fast-forward past the real socket connect.
-     */
-    private fun realDispatchLoom(delegate: Loom): Loom = object : Loom {
-        override suspend fun weave(rendezvous: Rendezvous): Seam =
-            withContext(Dispatchers.Default) { delegate.weave(rendezvous) }
-
-        override fun capability(): TransportCapability = delegate.capability()
-    }
 }
