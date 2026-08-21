@@ -47,12 +47,24 @@ import kotlin.test.AfterTest
  * [Dispatchers.Default] — the seam's timers and collectors then run in real wall-clock time, while
  * the suite still collects the resulting flows from its test dispatcher (a real-IO test cannot be
  * driven by a test scheduler).
+ *
+ * ## Real-clock deadline (injected, not inherited)
+ * Because the weave really does run on the wall clock, the deadline it fails at is a *test gate*. This
+ * suite injects [LOOPBACK_CONFORMANCE_WEAVE_BACKSTOP] rather than inheriting production's shipped 30 s,
+ * so a contended runner is not indistinguishable from a broken fabric (#2386); [FAIL_FAST] is what keeps
+ * a generous deadline affordable when the fabric really is broken.
  */
 class NwLoopbackConformanceTest : SeamConformanceSuite() {
 
     private companion object {
         const val SERVICE_TYPE = "_kuilt._tcp"
         const val ROOM_KEY = "loopback-secret"
+
+        /**
+         * Suite-scoped, so it must live here: `kotlin.test` builds a fresh test-class instance per test
+         * method, and an instance field would reset between the 30 tests and latch nothing.
+         */
+        val FAIL_FAST = LoopbackWeaveFailFast("NwLoopbackConformanceTest")
     }
 
     /** The real APIs built for the current test, torn down (listeners/browsers cancelled) in [tearDown]. */
@@ -71,6 +83,7 @@ class NwLoopbackConformanceTest : SeamConformanceSuite() {
     }
 
     override fun newLoomPair(): Pair<Loom, Loom> {
+        FAIL_FAST.failIfAlreadyBroken()
         val psk = NwPsk.derive(ROOM_KEY, SERVICE_TYPE)
         // One shared rendezvous per pair: the host publishes its real bound port, the joiner awaits it.
         val rendezvous = NwLoopbackRendezvous()
@@ -78,8 +91,18 @@ class NwLoopbackConformanceTest : SeamConformanceSuite() {
         val joinerApi = RealNwApi(psk, NwLoopbackConfig(dial = true, rendezvous = rendezvous))
         apis += hostApi
         apis += joinerApi
-        val host = NwLoom(hostApi, serviceType = SERVICE_TYPE, random = Random(0))
-        val joiner = NwLoom(joinerApi, serviceType = SERVICE_TYPE, random = Random(1))
+        val host = NwLoom(
+            hostApi,
+            serviceType = SERVICE_TYPE,
+            random = Random(0),
+            weaveTimeout = LOOPBACK_CONFORMANCE_WEAVE_BACKSTOP,
+        )
+        val joiner = NwLoom(
+            joinerApi,
+            serviceType = SERVICE_TYPE,
+            random = Random(1),
+            weaveTimeout = LOOPBACK_CONFORMANCE_WEAVE_BACKSTOP,
+        )
         return realDispatchLoom(host) to realDispatchLoom(joiner)
     }
 
@@ -103,10 +126,15 @@ class NwLoopbackConformanceTest : SeamConformanceSuite() {
      * Wrap [delegate] so `weave` runs on a real [Dispatchers.Default]. [NwLoom] captures its seam
      * scope from `currentCoroutineContext()`, so without this the suite's virtual-time test dispatcher
      * would drive the seam's `withTimeout`/timers and fast-forward past the real socket connect.
+     *
+     * Also the arming point for [FAIL_FAST]: this is the one place every weave in the suite passes
+     * through, so a timeout here is what tells the remaining tests not to bother (#2386).
      */
     private fun realDispatchLoom(delegate: Loom): Loom = object : Loom {
         override suspend fun weave(rendezvous: Rendezvous): Seam =
-            withContext(Dispatchers.Default) { delegate.weave(rendezvous) }
+            withContext(Dispatchers.Default) {
+                FAIL_FAST.recordingWeaveFailure { delegate.weave(rendezvous) }
+            }
 
         override fun capability(): TransportCapability = delegate.capability()
     }
