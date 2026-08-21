@@ -847,6 +847,14 @@ public abstract class RoomConformanceSuite {
      * fails by name for the same reason: a fixture that does not do what the properties behind it
      * assume must red *here*, loudly, not evaporate into two quiet greens over there.
      *
+     * **Both arms, not just the failing one, and the second one is here because it was missing.**
+     * The first draft of this test measured only [TeardownFault.Fails] — and a mutation that made
+     * [TeardownFault.Slow] stop delaying was **green everywhere in the tree**, because
+     * `SeamRoom.leave` bounds nothing today so a teardown of zero duration mints no cancellation
+     * either. The `Slow` arm would have quietly stopped being about a *slow* teardown, and the
+     * property built on it would have gone on passing. Virtual time is the direct measurement, so
+     * that is what is measured.
+     *
      * The identity check (`===`, not a type match) is deliberate — a rig that threw *some*
      * exception, or wrapped the injected one, would still be lying about what a transport's close
      * does, and a type match would wave both through.
@@ -858,35 +866,70 @@ public abstract class RoomConformanceSuite {
             val faultyLoom = h.faults.injectorOrDeclaredGap("the teardown fault injector really fails a close")
                 ?: return@runTest
 
-            val room = h.hostFactory.host(Pattern("Alice"))
-            val seam = faultyLoom.requireLink()
-            val injected = IllegalStateException(INJECTED_TEARDOWN_FAILURE)
-            seam.setTeardownFault(TeardownFault.Fails(injected))
+            // A host and a joiner, so each arm is measured on a fresh link rather than on one seam
+            // the previous arm has already closed. Index 0 is the host's seam and index 1 the
+            // joiner's — the ordering [FaultInjection.Supported] documents and the partition
+            // obligations already rely on. (Two `host()` calls would be the obvious alternative and
+            // is not available: a flat in-memory mesh refuses to carry two rooms.)
+            val failingRoom = h.hostFactory.host(Pattern("Alice"))
+            val slowRoom = h.joinerFactory.join(InMemoryTag("Alice"))
+            val failingSeam = faultyLoom.requireLink(0)
+            val slowSeam = faultyLoom.requireLink(1)
 
-            val failure = failureOf { seam.close() }
+            val injected = IllegalStateException(INJECTED_TEARDOWN_FAILURE)
+            failingSeam.setTeardownFault(TeardownFault.Fails(injected))
+            val failure = failureOf { failingSeam.close() }
+            // Sampled AT the close, and disarmed AT the close — both because a room whose link is
+            // torn out from under it reacts on a background coroutine and closes its own seam again
+            // on the way down. The claim here is about ONE close, and a second throw on that
+            // coroutine is an uncaught exception rather than a diagnosis. Neither line may yield:
+            // the background coroutine can only run at a suspension point, so doing this before the
+            // next one is what keeps the measurement the room's own teardown cannot disturb.
+            val firedByFailure = failingSeam.teardownFaultsFired
+            failingSeam.setTeardownFault(TeardownFault.None)
+
+            slowSeam.setTeardownFault(TeardownFault.Slow(SLOW_TEARDOWN))
+            val before = testScheduler.currentTime
+            slowSeam.close()
+            val elapsed = testScheduler.currentTime - before
+            val firedBySlow = slowSeam.teardownFaultsFired
+            slowSeam.setTeardownFault(TeardownFault.None)
 
             assertAll(
                 {
                     assertTrue(
                         failure === injected,
                         "harness contract: FaultInjection.Supported's FaultyLoom must produce links whose " +
-                            "close FAILS when TeardownFault.Fails is armed — otherwise the two properties " +
-                            "built on it are satisfied by a teardown that never failed. Got: " +
+                            "close FAILS when TeardownFault.Fails is armed — otherwise the property built " +
+                            "on it is satisfied by a teardown that never failed. Got: " +
                             (failure ?: "no exception — the close completed"),
                     )
                 },
                 {
                     assertEquals(
                         1L,
-                        seam.teardownFaultsFired,
+                        firedByFailure,
                         "the armed teardown fault must be counted exactly once per close, so a property " +
                             "downstream can assert its rig fired instead of inferring it",
                     )
                 },
+                {
+                    assertTrue(
+                        elapsed >= SLOW_TEARDOWN.inWholeMilliseconds,
+                        "harness contract: TeardownFault.Slow must actually SUSPEND the close — the " +
+                            "property built on it is about a teardown with a suspension point in it, and a " +
+                            "zero-duration one mints no cancellation whether or not the room bounds its " +
+                            "close. Expected at least ${SLOW_TEARDOWN.inWholeMilliseconds} ms of virtual " +
+                            "time to pass, got $elapsed ms",
+                    )
+                },
+                {
+                    assertEquals(1L, firedBySlow, "the suspending arm must be counted too")
+                },
             )
 
-            seam.setTeardownFault(TeardownFault.None)
-            room.leave()
+            failingRoom.leave()
+            slowRoom.leave()
         }
 
     /**
