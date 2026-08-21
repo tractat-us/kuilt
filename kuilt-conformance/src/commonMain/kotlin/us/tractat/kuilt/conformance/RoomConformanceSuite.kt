@@ -1,8 +1,11 @@
 package us.tractat.kuilt.conformance
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.onEach
@@ -14,6 +17,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.test.Direction
 import us.tractat.kuilt.test.FaultProfile
 import us.tractat.kuilt.test.FaultyLoom
+import us.tractat.kuilt.test.FaultySeam
+import us.tractat.kuilt.test.TeardownFault
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
@@ -750,6 +755,253 @@ public abstract class RoomConformanceSuite {
             hostRoom.leave()
         }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    //  (11) Room.leave's TWO documented obligations — #2501
+    //
+    //  `Room.leave` is documented "Idempotent", and a leave failure "must not be reported as a
+    //  cancellation" (#1826, the obligation `Seam.close` states in full and whose exhaustive list of
+    //  carrying surfaces names `Room.leave`). Neither had a property here. They were UNREACHABLE
+    //  rather than merely unwritten: this suite's one subclass is the reference, whose `InMemorySeam`
+    //  close contains no suspension point and cannot fail, and `FaultySeam.close` was an
+    //  unconditional passthrough — so the one component in the tree whose job is to make a transport
+    //  misbehave could not make a teardown slow, suspend, or fail. See [TeardownFault].
+    //
+    //  The first two are UNGATED CORE, mirroring `SeamConformanceSuite.closeIsIdempotent` and
+    //  `closeDoesNotReportFailureAsCancellation`: no fabric may excuse either. Minting a cancellation
+    //  is a *choice* (`withTimeout` instead of `withTimeoutOrNull` plus an explicit throw), never a
+    //  property of a transport.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * **UNGATED CORE.** `leave()` twice must not throw — on a host and on a joiner, whose paths
+     * differ: a joiner's leave announces a `Goodbye` on the still-live seam first.
+     *
+     * No fault injection needed, and none wanted: this is the happy-path half, and it is the half a
+     * room gets wrong by forgetting a closed-flag entirely.
+     * [leaveIsIdempotentEvenWhenTeardownFails] is the other half — idempotency that survives a first
+     * call which *failed* — and only that one needs a fault.
+     */
+    @Test
+    public fun leaveIsIdempotent(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newHarness(backgroundScope)
+            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val joinerRoom = h.joinerFactory.join(InMemoryTag("Alice"))
+
+            hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }
+            joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
+
+            joinerRoom.leave()
+            joinerRoom.leave() // must not throw
+
+            hostRoom.leave()
+            hostRoom.leave() // must not throw
+        }
+
+    /**
+     * **UNGATED CORE.** No `leave()` may report its failure as a cancellation (#1826).
+     *
+     * A caller cannot tell a callee-minted `CancellationException` from its own by type, so one that
+     * escapes here **cancels** the caller rather than failing it: no handler runs, no stack trace,
+     * and every obligation behind the call is skipped. A host calls `leave` from a teardown path
+     * that is itself usually already cancelled, under a best-effort guard, so the cost is the rest
+     * of that host's cleanup rather than one leave — which is why both `RoomHost` implementations
+     * hand-write a `catch (Throwable)` around it.
+     *
+     * **Honest limit, carried over from the `Seam` analogue.** This proves the obligation on the
+     * paths a 2-peer harness can reach with no fault at all — a live leave, the idempotent second
+     * leave, and a leave whose remote has already gone (the one most likely to be bounded by a
+     * timeout). It cannot reach a leave racing a genuinely wedged transport;
+     * [leaveDoesNotMintACancellationWhenTeardownIsSlow] is the arm that reaches the *suspending*
+     * teardown, and it needs the injector.
+     */
+    @Test
+    public fun leaveDoesNotReportFailureAsCancellation(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newHarness(backgroundScope)
+            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val joinerRoom = h.joinerFactory.join(InMemoryTag("Alice"))
+
+            hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }
+            joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
+
+            assertNoMintedCancellation("leave() on a live room") { hostRoom.leave() }
+            assertNoMintedCancellation("a second, idempotent leave()") { hostRoom.leave() }
+            // The joiner's remote is already gone: bounding teardown on a peer that will never answer
+            // is exactly where an implementation reaches for `withTimeout`.
+            assertNoMintedCancellation("leave() after the host has gone") { joinerRoom.leave() }
+        }
+
+    /**
+     * **The precondition** of [leaveIsIdempotentEvenWhenTeardownFails] and
+     * [leaveDoesNotMintACancellationWhenTeardownIsSlow], asserted rather than assumed.
+     *
+     * Those two properties are satisfied by a room that never sees a failing teardown at all — a rig
+     * whose [TeardownFault] arms were quietly no-ops, or a `FaultyLoom` that is simply not the loom
+     * the harness's factories weave through. Either makes both pass **for the wrong reason**, which
+     * is the vacuity this whole axis exists to remove rather than relocate. So this measures the
+     * fixture *directly*: arm a link, close it, and check that the close threw the very throwable
+     * that was injected and that the seam counted the arm firing.
+     *
+     * Same role as `MeshDisplacementDrainConformanceSuite.theFixtureReallyDiscardsOnClose`, and it
+     * fails by name for the same reason: a fixture that does not do what the properties behind it
+     * assume must red *here*, loudly, not evaporate into two quiet greens over there.
+     *
+     * The identity check (`===`, not a type match) is deliberate — a rig that threw *some*
+     * exception, or wrapped the injected one, would still be lying about what a transport's close
+     * does, and a type match would wave both through.
+     */
+    @Test
+    public fun theTeardownFaultReallyFires(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newHarness(backgroundScope)
+            val faultyLoom = h.faults.injectorOrDeclaredGap("the teardown fault injector really fails a close")
+                ?: return@runTest
+
+            val room = h.hostFactory.host(Pattern("Alice"))
+            val seam = faultyLoom.requireLink()
+            val injected = IllegalStateException(INJECTED_TEARDOWN_FAILURE)
+            seam.setTeardownFault(TeardownFault.Fails(injected))
+
+            val failure = failureOf { seam.close() }
+
+            assertAll(
+                {
+                    assertTrue(
+                        failure === injected,
+                        "harness contract: FaultInjection.Supported's FaultyLoom must produce links whose " +
+                            "close FAILS when TeardownFault.Fails is armed — otherwise the two properties " +
+                            "built on it are satisfied by a teardown that never failed. Got: " +
+                            (failure ?: "no exception — the close completed"),
+                    )
+                },
+                {
+                    assertEquals(
+                        1L,
+                        seam.teardownFaultsFired,
+                        "the armed teardown fault must be counted exactly once per close, so a property " +
+                            "downstream can assert its rig fired instead of inferring it",
+                    )
+                },
+            )
+
+            seam.setTeardownFault(TeardownFault.None)
+            room.leave()
+        }
+
+    /**
+     * **Idempotent even when the first call FAILED** — the half [leaveIsIdempotent] cannot reach.
+     *
+     * A room that marks itself closed only *after* a successful teardown is idempotent on the happy
+     * path and not idempotent at all where it matters: the caller retries, the whole teardown runs
+     * again, and it throws again. That is the shape of a leave whose closed-flag sits at the bottom
+     * of the method instead of the top, and it is invisible to every test whose teardown succeeds.
+     *
+     * **What is asserted, and what deliberately is not.** The obligation is "a second `leave()` must
+     * not throw", so that is the assertion. Whether the *first* one propagates the transport's
+     * failure is **not** asserted: a room may legitimately swallow a close failure it can do nothing
+     * about, and demanding a throw would fail a conforming room. Nor is "the second call must not
+     * re-run the teardown" — a room that retried and succeeded is not obviously non-conforming, and
+     * inventing that demand here would be over-specification. The first call's outcome is carried
+     * into the failure message instead, where it is diagnosis rather than contract.
+     *
+     * The rig-fired count is what stops the remaining assertion from being vacuous: without it, a
+     * harness whose injected fault never reached the room's seam passes by absence — an unexercised
+     * rig is green, and green by absence is the failure mode this suite's own KDoc warns about.
+     */
+    @Test
+    public fun leaveIsIdempotentEvenWhenTeardownFails(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newHarness(backgroundScope)
+            val faultyLoom =
+                h.faults.injectorOrDeclaredGap("leave() stays idempotent when the transport's teardown fails")
+                    ?: return@runTest
+
+            val room = h.hostFactory.host(Pattern("Alice"))
+            val seam = faultyLoom.requireLink()
+            seam.setTeardownFault(TeardownFault.Fails(IllegalStateException(INJECTED_TEARDOWN_FAILURE)))
+
+            val first = failureOf { room.leave() }
+            val second = failureOf { room.leave() }
+
+            assertAll(
+                {
+                    assertTrue(
+                        seam.teardownFaultsFired > 0L,
+                        "precondition: the injected teardown fault never fired, so this room's leave() " +
+                            "did not close the FaultyLoom's link and idempotency-under-failure was never " +
+                            "exercised. Check that the harness's factories weave through the loom it " +
+                            "returns as FaultInjection.Supported. First leave() gave: " +
+                            (first ?: "no exception"),
+                    )
+                },
+                {
+                    assertTrue(
+                        second == null,
+                        "Room.leave is documented idempotent, and that must hold when the FIRST call " +
+                            "failed: a room whose closed-flag is set only after a successful teardown " +
+                            "re-runs the whole thing and throws again, so every caller retrying a failed " +
+                            "leave gets the same failure forever. First leave() gave: " +
+                            (first ?: "no exception") + "; second threw: $second",
+                    )
+                },
+            )
+        }
+
+    /**
+     * **No cancellation may be minted when the transport's teardown SUSPENDS** — the #2286 mechanism,
+     * reachable only with the injector.
+     *
+     * [leaveDoesNotReportFailureAsCancellation] proves the obligation on teardowns that return
+     * promptly, which is every teardown a 2-peer in-memory harness can produce. The trap it cannot
+     * reach is the one that actually happened: a `seam.close` that suspends, bounded by a
+     * `withTimeout`, throwing a `TimeoutCancellationException` **to its caller** while that caller's
+     * job stays perfectly alive. `SeamRoom.leave` calls `seam.close(...)` unguarded today, so this is
+     * a **live guard** against someone later bounding it — not a regression test for a fix.
+     *
+     * [TeardownFault.Slow] suspends through `delay`, so the whole thing runs in virtual time and
+     * costs no wall clock. A harness whose fabric does real I/O gets a virtual delay here too, which
+     * is the same trade [FaultProfile.DelayAll] already makes: what is being modelled is a teardown
+     * with a suspension point in it, not a slow socket.
+     */
+    @Test
+    public fun leaveDoesNotMintACancellationWhenTeardownIsSlow(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newHarness(backgroundScope)
+            val faultyLoom =
+                h.faults.injectorOrDeclaredGap("leave() mints no cancellation when the transport's teardown suspends")
+                    ?: return@runTest
+
+            val room = h.hostFactory.host(Pattern("Alice"))
+            val seam = faultyLoom.requireLink()
+            seam.setTeardownFault(TeardownFault.Slow(SLOW_TEARDOWN))
+
+            val failure = failureOf { room.leave() }
+
+            assertAll(
+                {
+                    assertTrue(
+                        seam.teardownFaultsFired > 0L,
+                        "precondition: the suspending teardown never fired, so leave() did not close the " +
+                            "FaultyLoom's link and nothing below was exercised. Check that the harness's " +
+                            "factories weave through the loom it returns as FaultInjection.Supported. " +
+                            "leave() gave: " + (failure ?: "no exception"),
+                    )
+                },
+                {
+                    assertFalse(
+                        failure is CancellationException,
+                        "leave() must not report failure as a cancellation (Room.leave / Seam.close, " +
+                            "#1826): a caller cannot distinguish it from its own cancellation, so it " +
+                            "CANCELS the caller instead of failing it — every best-effort teardown loop " +
+                            "stops there, leaking the rest. A suspending seam.close bounded by " +
+                            "withTimeout is exactly how one gets minted; convert it before it escapes " +
+                            "(withTimeoutOrNull plus an explicit throw). Got: $failure",
+                    )
+                },
+            )
+        }
+
     // ── Declared gaps ─────────────────────────────────────────────────────────
 
     /**
@@ -783,6 +1035,23 @@ public abstract class RoomConformanceSuite {
         }
 
     /**
+     * The [FaultySeam] this loom wove at [index], or fail naming what it actually has.
+     *
+     * A **loud precondition**, like [requireResumeToken] and for the same reason: an empty (or
+     * short) link list at this point means the harness's factories do not weave through the loom it
+     * returned as [FaultInjection.Supported], so no teardown fault it arms can reach the room under
+     * test. Left as an `IndexOutOfBoundsException` that would read as a suite bug.
+     */
+    private fun FaultyLoom.requireLink(index: Int = 0): FaultySeam =
+        links.getOrNull(index) ?: throw AssertionError(
+            "RoomConformanceSuite: FaultInjection.Supported's FaultyLoom has no link at index $index — " +
+                "it has ${links.size}.\n" +
+                "  The harness's RoomFactory must weave THROUGH this loom. A loom the factories do not " +
+                "use can neither partition a link nor fault its teardown, so every fault-gated " +
+                "obligation here would run against a room it cannot touch.",
+        )
+
+    /**
      * This joiner's [Room.resumeToken], or fail naming the room.
      *
      * A **loud precondition**, not a skip, because the missing state is the *room's* fault and not
@@ -806,6 +1075,55 @@ public abstract class RoomConformanceSuite {
                 "whole resume/reconnect obligation; there is no gap hook for it because it is a contract " +
                 "violation, not a harness limitation.",
         )
+
+    // ── Cancellation discrimination ───────────────────────────────────────────
+    //
+    // Lifted from `SeamConformanceSuite`, which carries the same two helpers for the same obligation
+    // on `Seam.close`/`sendTo`. The discrimination is done by **state**, not by type: a
+    // `CancellationException` caught here is this coroutine's own only if this coroutine is in fact
+    // cancelled, and `ensureActive()` is the exact test for that. If it is ours it propagates (never
+    // swallow a structured-concurrency cancel); if it is not, the callee minted it.
+
+    /**
+     * Run [op] and fail — rather than be cancelled — if it reports its failure as a cancellation.
+     *
+     * Rethrowing a callee-minted one would inflict on this test precisely the damage the obligation
+     * forbids: a silent cancel with no assertion failure and no stack trace. So it is converted to a
+     * failure instead. Anything that is *not* a cancellation propagates untouched — this helper has
+     * no opinion about whether an operation may fail, only about how it reports failing.
+     */
+    private suspend inline fun assertNoMintedCancellation(what: String, op: () -> Unit) {
+        try {
+            op()
+        } catch (e: CancellationException) {
+            currentCoroutineContext().ensureActive()
+            throw AssertionError(
+                "RoomConformanceSuite: $what must not report failure as a cancellation " +
+                    "(Room.leave / Seam.close, #1826): a caller cannot distinguish it from its own " +
+                    "cancellation, so it CANCELS the caller instead of failing it — every best-effort " +
+                    "teardown loop stops there. Convert it before it escapes (withTimeoutOrNull plus " +
+                    "an explicit throw). Got: $e",
+            )
+        }
+    }
+
+    /**
+     * Run [op] and hand back whatever it threw, or `null` if it completed.
+     *
+     * The capture form, used where the verdict has to be read *alongside* something else — a
+     * rig-fired count, a second call's outcome — so both land in one [assertAll] instead of the
+     * first failure shadowing the diagnosis that explains it. `ensureActive()` does the same job it
+     * does above: this test's own cancellation still propagates, a minted one is returned as a value
+     * for an assertion to name.
+     */
+    private suspend inline fun failureOf(op: () -> Unit): Throwable? =
+        try {
+            op()
+            null
+        } catch (failure: Throwable) {
+            currentCoroutineContext().ensureActive()
+            failure
+        }
 
     // ── Bounded waits ─────────────────────────────────────────────────────────
     //
@@ -934,5 +1252,24 @@ public abstract class RoomConformanceSuite {
             clock = clock,
             advanceClock = { ms -> clockMs += ms },
         )
+    }
+
+    private companion object {
+        /**
+         * How long [TeardownFault.Slow] suspends a teardown in
+         * [leaveDoesNotMintACancellationWhenTeardownIsSlow] — **virtual** time, so it costs nothing.
+         *
+         * Generous relative to the suite's own timescale ([fastHeartbeatConfig] ticks every 100 ms)
+         * for one reason: the property is falsified by an implementation bounding `seam.close` in a
+         * `withTimeout`, and it can only be falsified if that bound is *shorter* than this. A value
+         * near the tick rate would let a plausible one-second bound pass, which is a fixture
+         * configured at exactly the setting where the assertion cannot fail. Well under
+         * [awaitBudget], so it can never be the thing that expires a wait.
+         */
+        val SLOW_TEARDOWN = 1.seconds
+
+        /** The message on the throwable the failing-teardown properties inject, so a red names itself. */
+        const val INJECTED_TEARDOWN_FAILURE =
+            "injected by RoomConformanceSuite: the transport's close() threw"
     }
 }

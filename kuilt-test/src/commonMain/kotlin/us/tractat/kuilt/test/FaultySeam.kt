@@ -36,8 +36,12 @@ import us.tractat.kuilt.core.TransportCapability
  * [kotlinx.coroutines.delay] so [kotlinx.coroutines.test.runTest] controls
  * virtual time.
  *
- * **Inspection hooks:** [framesDropped], [framesDelayed], and
- * [framesDelivered] counters are updated atomically so tests can assert on
+ * **Teardown is a second, orthogonal axis** — [TeardownFault], swappable via [setTeardownFault] and
+ * defaulting to [TeardownFault.None]. A [FaultProfile] describes what happens to *frames* and is
+ * never consulted by [close]; see [TeardownFault]'s KDoc for why the two are not one hierarchy.
+ *
+ * **Inspection hooks:** [framesDropped], [framesDelayed], [framesDelivered] and
+ * [teardownFaultsFired] counters are updated atomically so tests can assert on
  * fault behaviour without inspecting internal channels.
  *
  * Consumed by partition / reconnect test suites. Exposes the same
@@ -48,9 +52,17 @@ public class FaultySeam(
     private val scope: CoroutineScope,
     initialProfile: FaultProfile = FaultProfile.Healthy,
     policy: DeliveryPolicy = DeliveryPolicy.Reliable,
+    initialTeardownFault: TeardownFault = TeardownFault.None,
 ) : Seam {
     private val faultState = FaultState(initialProfile)
     private val mutex = Mutex()
+
+    // An AtomicRef rather than a plain `var`: [close] is reachable from any thread (a teardown path,
+    // a best-effort cleanup loop, a test's own scope) while a test swaps the arm from another, and
+    // this type must be correct under a multi-threaded dispatcher. `FaultState.profile` is a plain
+    // `var` guarded by [mutex] on every read; a teardown has no such critical section to join, so it
+    // gets its own primitive rather than inheriting a lock it does not need.
+    private val _teardownFault = atomic<TeardownFault>(initialTeardownFault)
 
     // Incoming — bounded per the injected DeliveryPolicy (the Spool invariant, #701).
     private val spool = Spool<Swatch>(policy)
@@ -59,10 +71,23 @@ public class FaultySeam(
     private val _framesDropped = atomic(0L)
     private val _framesDelayed = atomic(0L)
     private val _framesDelivered = atomic(0L)
+    private val _teardownFaultsFired = atomic(0L)
 
     public val framesDropped: Long get() = _framesDropped.value
     public val framesDelayed: Long get() = _framesDelayed.value
     public val framesDelivered: Long get() = _framesDelivered.value
+
+    /**
+     * How many times [close] has **selected** a non-[TeardownFault.None] arm — counted at selection,
+     * before the arm runs.
+     *
+     * At selection, not at completion, so a caller that bounds [close] in a `withTimeout` and never
+     * lets [TeardownFault.Slow] finish still leaves evidence the rig fired. A test asserting on
+     * teardown behaviour reads this as its **precondition**: a suite whose fault never reached the
+     * seam under test would otherwise pass by absence, which is the vacuity this knob exists to
+     * remove rather than relocate.
+     */
+    public val teardownFaultsFired: Long get() = _teardownFaultsFired.value
 
     init {
         // Pipe from the delegate's incoming flow through fault injection.
@@ -82,6 +107,16 @@ public class FaultySeam(
 
     /** Shorthand for [setFaultProfile] with [FaultProfile.DropAll]. */
     public fun partition(direction: Direction = Direction.Both): Unit = setFaultProfile(FaultProfile.DropAll(direction))
+
+    /**
+     * Replace the active [TeardownFault] atomically.
+     *
+     * Independent of [setFaultProfile]: a link can be partitioned and have a failing teardown at the
+     * same time, and healing one leaves the other alone.
+     */
+    public fun setTeardownFault(fault: TeardownFault) {
+        _teardownFault.value = fault
+    }
 
     // ── Seam ─────────────────────────────────────────────────────────────────
 
@@ -111,7 +146,30 @@ public class FaultySeam(
         applyOutboundDecision(decision) { delegate.sendTo(peer, it) }
     }
 
-    override suspend fun close(reason: CloseReason): Unit = delegate.close(reason)
+    /**
+     * Close the link, applying the active [TeardownFault].
+     *
+     * [FaultProfile] is deliberately **not** consulted here — it describes frame handling, and a
+     * teardown has no frame and no [Direction]. With the default [TeardownFault.None] this is the
+     * unconditional passthrough it has always been.
+     */
+    override suspend fun close(reason: CloseReason) {
+        when (val fault = _teardownFault.value) {
+            is TeardownFault.None -> delegate.close(reason)
+            is TeardownFault.Slow -> {
+                _teardownFaultsFired.incrementAndGet()
+                delay(fault.delay)
+                delegate.close(reason)
+            }
+            is TeardownFault.Fails -> {
+                _teardownFaultsFired.incrementAndGet()
+                // Delegate FIRST, then throw — see TeardownFault.Fails' KDoc. The link underneath is
+                // genuinely closed, so the rest of the harness stays assertable after the failure.
+                delegate.close(reason)
+                throw fault.cause
+            }
+        }
+    }
 
     // ── Internal outbound dispatch ────────────────────────────────────────────
 
@@ -175,6 +233,9 @@ public class FaultySeam(
  * A [defaultProfile] applies to every link the factory creates. Individual
  * links can override their profile via [FaultySeam.setFaultProfile].
  *
+ * [defaultTeardownFault] is the same idea on the orthogonal teardown axis, overridable per-link via
+ * [FaultySeam.setTeardownFault].
+ *
  * Useful for fault scenarios where **all** links should start partitioned
  * or delayed, then selectively healed per-peer.
  *
@@ -185,6 +246,7 @@ public class FaultyLoom(
     private val delegate: Loom,
     private val scope: CoroutineScope,
     private val defaultProfile: FaultProfile = FaultProfile.Healthy,
+    private val defaultTeardownFault: TeardownFault = TeardownFault.None,
 ) : Loom {
     private val _links = MutableStateFlow<List<FaultySeam>>(emptyList())
 
@@ -214,8 +276,13 @@ public class FaultyLoom(
         _links.value.forEach { it.setFaultProfile(profile) }
     }
 
+    /** Apply [fault] to every link the factory has created so far. */
+    public fun setTeardownFaultOnAll(fault: TeardownFault) {
+        _links.value.forEach { it.setTeardownFault(fault) }
+    }
+
     private fun wrap(delegate: Seam): FaultySeam {
-        val link = FaultySeam(delegate, scope, defaultProfile)
+        val link = FaultySeam(delegate, scope, defaultProfile, initialTeardownFault = defaultTeardownFault)
         _links.value = _links.value + link
         return link
     }
