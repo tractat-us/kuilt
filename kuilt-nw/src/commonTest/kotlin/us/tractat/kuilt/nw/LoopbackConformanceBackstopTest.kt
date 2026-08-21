@@ -14,7 +14,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
-import kotlin.random.Random
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -95,33 +95,43 @@ class LoopbackConformanceBackstopTest {
     )
 
     /**
-     * The injected value is the one [NwLoom.weave] actually enforces — a measurement, not a comparison of
-     * two constants.
+     * The deadline a **suite's own construction path** enforces — the assertion the first cut of #2386
+     * was missing.
      *
-     * The middle arm is the load-bearing one: at the shipped 30 s default plus a second, a loom carrying
-     * the injected backstop is **still waiting**. That is what the suites' un-injected state could not
-     * produce, and it fails if a future change routes the knob back into
-     * [NwLoom.DEFAULT_WEAVE_TIMEOUT]. The outer two bracket the deadline to within 2 ms of exactly
-     * [LOOPBACK_CONFORMANCE_WEAVE_BACKSTOP] from both sides, so "enforced" means the injected number and
-     * not merely *some* larger number.
+     * This drives [loopbackLoomPair], the single factory both loopback suites call, rather than a
+     * hand-rolled [NwLoom]. That distinction is the entire point: a test that builds its own loom proves
+     * something about `NwLoom`'s `weaveTimeout` parameter, which was never in doubt, and stays green
+     * while a suite quietly drops the argument. Driving the factory means a regression in what the suites
+     * actually construct reds *here*, on every lane, in 0.3 s.
+     *
+     * The middle arm is the load-bearing one: at the shipped 30 s default plus a second, the pair is
+     * **still waiting**. That is precisely what the un-injected state could not produce. The outer two
+     * bracket the deadline to within 2 ms of exactly [LOOPBACK_CONFORMANCE_WEAVE_BACKSTOP] from both
+     * sides, so "enforced" means the injected number and not merely *some* larger number.
+     *
+     * [EmptyCoroutineContext] as the weave dispatcher keeps the factory's `withContext` on this test's
+     * scheduler — the real suites pass `Dispatchers.Default` because their sockets are real, and a
+     * virtual-time assertion about a 120 s deadline is only possible on virtual time.
      *
      * A lone device with nobody around is the rig on purpose: nothing is ever discovered, so the
      * formation-stuck loop parks on `armedEndpoints` and arms no re-arming timer that could keep the test
      * scheduler from going idle.
      */
     @Test
-    fun theInjectedBackstopIsTheDeadlineWeaveEnforces() =
+    fun theBackstopIsTheDeadlineASuitesOwnConstructionPathEnforces() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
-            val loom = NwLoom(
-                FakeNwApi(FakeNwRadio(), deviceId = "solo", serviceName = "solo"),
+            val radio = FakeNwRadio()
+            val (host, _) = loopbackLoomPair(
+                failFast = LoopbackWeaveFailFast("SuiteUnderTest"),
                 serviceType = TYPE,
-                random = Random(0),
-                weaveTimeout = LOOPBACK_CONFORMANCE_WEAVE_BACKSTOP,
+                hostApi = FakeNwApi(radio, deviceId = "solo-a", serviceName = "solo-a"),
+                joinerApi = FakeNwApi(radio, deviceId = "solo-b", serviceName = "solo-b"),
+                weaveDispatcher = EmptyCoroutineContext,
             )
 
             var result: Result<Seam>? = null
             launch(start = CoroutineStart.UNDISPATCHED) {
-                result = runCatchingCancellable { loom.weave(Rendezvous.New(Pattern("solo"))) }
+                result = runCatchingCancellable { host.weave(Rendezvous.New(Pattern("solo"))) }
             }
 
             // Past the SHIPPED default, which is what an un-injected suite would have failed at.

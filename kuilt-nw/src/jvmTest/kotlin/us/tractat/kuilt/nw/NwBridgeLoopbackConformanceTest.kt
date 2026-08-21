@@ -4,18 +4,13 @@ package us.tractat.kuilt.nw
 
 import com.sun.jna.Pointer
 import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-network loopback conformance harness — a real Network.framework socket driven through the dylib needs a real IO dispatcher; there is no virtual-time option here
-import kotlinx.coroutines.withContext
 import org.junit.AssumptionViolatedException
 import us.tractat.kuilt.conformance.CapabilityGaps
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Loom
-import us.tractat.kuilt.core.Rendezvous
-import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Tag
-import us.tractat.kuilt.core.TransportCapability
-import kotlin.random.Random
 import kotlin.test.AfterTest
 
 /**
@@ -40,16 +35,16 @@ import kotlin.test.AfterTest
  * dylib is absent — JUnit treats a thrown assumption violation as **skipped**, not failed. On a
  * macOS-arm64 host with the bundled dylib it genuinely RUNS.
  *
- * ## Real dispatcher (not virtual time)
+ * ## Real dispatcher, and a real-clock deadline ([loopbackLoomPair])
  * [NwLoom.weave] derives its seam scope from `currentCoroutineContext()`, so under the suite's
  * `runTest` virtual clock its `withTimeout` would fast-forward past the real socket connect.
- * [realDispatchLoom] wraps each loom so `weave` runs on a real [Dispatchers.Default].
+ * [loopbackLoomPair] therefore dispatches each `weave` onto [Dispatchers.Default].
  *
- * ## Real-clock deadline (injected, not inherited)
- * Because the weave really does run on the wall clock, the deadline it fails at is a *test gate*. This
- * suite injects [LOOPBACK_CONFORMANCE_WEAVE_BACKSTOP] rather than inheriting production's shipped 30 s,
- * so a contended runner is not indistinguishable from a broken fabric (#2386); [FAIL_FAST] is what keeps
- * a generous deadline affordable when the fabric really is broken.
+ * Because the weave really does run on the wall clock, the deadline it fails at is a *test gate*, and
+ * the same factory injects [LOOPBACK_CONFORMANCE_WEAVE_BACKSTOP] in place of production's shipped 30 s
+ * so a contended runner is not indistinguishable from a broken fabric (#2386). It also arms [FAIL_FAST],
+ * which is what keeps a deadline that generous affordable when the fabric really is broken. All three
+ * live in that one factory precisely so this suite cannot forget any of them.
  */
 class NwBridgeLoopbackConformanceTest : SeamConformanceSuite() {
 
@@ -85,10 +80,6 @@ class NwBridgeLoopbackConformanceTest : SeamConformanceSuite() {
     }
 
     override fun newLoomPair(): Pair<Loom, Loom> {
-        // Before the dylib load, so a latched failure is reported as a failure rather than racing the
-        // skip. It can only ever be armed on a host where the suite genuinely ran, so the two never
-        // actually compete.
-        FAIL_FAST.failIfAlreadyBroken()
         val loaded = NwNativeLib.load()
             ?: throw AssumptionViolatedException("libkuilt.dylib is macOS-only; this suite no-ops elsewhere.")
         lib = loaded
@@ -115,19 +106,13 @@ class NwBridgeLoopbackConformanceTest : SeamConformanceSuite() {
         bridges += hostBridge
         bridges += joinerBridge
 
-        val host = NwLoom(
-            hostBridge,
+        return loopbackLoomPair(
+            failFast = FAIL_FAST,
             serviceType = SERVICE_TYPE,
-            random = Random(0),
-            weaveTimeout = LOOPBACK_CONFORMANCE_WEAVE_BACKSTOP,
+            hostApi = hostBridge,
+            joinerApi = joinerBridge,
+            weaveDispatcher = Dispatchers.Default,
         )
-        val joiner = NwLoom(
-            joinerBridge,
-            serviceType = SERVICE_TYPE,
-            random = Random(1),
-            weaveTimeout = LOOPBACK_CONFORMANCE_WEAVE_BACKSTOP,
-        )
-        return realDispatchLoom(host) to realDispatchLoom(joiner)
     }
 
     override fun joinTag(): Tag = InMemoryTag(sessionName = "host", peerKey = "nw-bridge-loopback-joiner")
@@ -158,20 +143,4 @@ class NwBridgeLoopbackConformanceTest : SeamConformanceSuite() {
      */
     override fun payloadBudgetGap(): String? = null
 
-    /**
-     * Wrap [delegate] so `weave` runs on a real [Dispatchers.Default]. [NwLoom] captures its seam
-     * scope from `currentCoroutineContext()`, so without this the suite's virtual-time test dispatcher
-     * would drive the seam's `withTimeout`/timers and fast-forward past the real socket connect.
-     *
-     * Also the arming point for [FAIL_FAST]: this is the one place every weave in the suite passes
-     * through, so a timeout here is what tells the remaining tests not to bother (#2386).
-     */
-    private fun realDispatchLoom(delegate: Loom): Loom = object : Loom {
-        override suspend fun weave(rendezvous: Rendezvous): Seam =
-            withContext(Dispatchers.Default) {
-                FAIL_FAST.recordingWeaveFailure { delegate.weave(rendezvous) }
-            }
-
-        override fun capability(): TransportCapability = delegate.capability()
-    }
 }

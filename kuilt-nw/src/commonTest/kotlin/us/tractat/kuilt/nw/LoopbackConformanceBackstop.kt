@@ -1,6 +1,13 @@
 package us.tractat.kuilt.nw
 
+import kotlinx.coroutines.withContext
+import us.tractat.kuilt.core.Loom
+import us.tractat.kuilt.core.Rendezvous
+import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.TransportCapability
 import kotlin.concurrent.Volatile
+import kotlin.coroutines.CoroutineContext
+import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
@@ -60,6 +67,75 @@ import kotlin.time.Duration.Companion.seconds
 val LOOPBACK_CONFORMANCE_WEAVE_BACKSTOP: Duration = 120.seconds
 
 /**
+ * Build the host/joiner [Loom] pair a loopback conformance suite hands back from `newLoomPair()` — the
+ * **only** way either suite builds one.
+ *
+ * ## Why a factory rather than two call sites
+ *
+ * The first cut of #2386 injected [LOOPBACK_CONFORMANCE_WEAVE_BACKSTOP] at two `NwLoom(…)` call sites,
+ * one per suite, and *nothing reds if one of them drops the argument*: the suites pass at the shipped
+ * 30 s on a healthy box, which is the entire premise of #2386. The fix was silently un-pinned on the two
+ * places it was applied. Concentrating construction here leaves one call site, and
+ * [LoopbackConformanceBackstopTest] drives **this function** rather than a hand-rolled loom — so the
+ * test is a statement about what the suites actually do.
+ *
+ * It owns three things a suite must not be able to forget:
+ *  - the [LOOPBACK_CONFORMANCE_WEAVE_BACKSTOP] deadline, in place of production's shipped 30 s;
+ *  - the `Random(0)`/`Random(1)` symmetry-breaking seeds, so the pair's dedup tiebreak is deterministic
+ *    and the two ends cannot be handed the same seed;
+ *  - the [failFast] arming, without which the backstop is unaffordable — see [LoopbackWeaveFailFast].
+ *
+ * **Honest limit:** this makes omission *harder*, not impossible. A suite that constructs [NwLoom]
+ * directly still compiles and still goes green at 30 s. What is gone is the *silent drift* of two
+ * call sites; a bypass is now a visible, deliberate edit rather than a missing named argument.
+ *
+ * @param weaveDispatcher the context `weave` is dispatched on — **required**, never defaulted, per this
+ *   repo's rule that a helper owning dispatch makes the caller choose. [NwLoom] captures its seam scope
+ *   from `currentCoroutineContext()`, so the real suites pass `Dispatchers.Default` (their real sockets
+ *   cannot be driven by a test scheduler) while a virtual-time test passes
+ *   [kotlin.coroutines.EmptyCoroutineContext] to stay on its own scheduler. A wrong value here fails
+ *   loudly and immediately, which is why it is a parameter rather than a fourth thing this owns.
+ */
+fun loopbackLoomPair(
+    failFast: LoopbackWeaveFailFast,
+    serviceType: String,
+    hostApi: NwApi,
+    joinerApi: NwApi,
+    weaveDispatcher: CoroutineContext,
+): Pair<Loom, Loom> {
+    failFast.failIfAlreadyBroken()
+    val host = NwLoom(
+        hostApi,
+        serviceType = serviceType,
+        random = Random(0),
+        weaveTimeout = LOOPBACK_CONFORMANCE_WEAVE_BACKSTOP,
+    )
+    val joiner = NwLoom(
+        joinerApi,
+        serviceType = serviceType,
+        random = Random(1),
+        weaveTimeout = LOOPBACK_CONFORMANCE_WEAVE_BACKSTOP,
+    )
+    return failFast.dispatching(host, weaveDispatcher) to failFast.dispatching(joiner, weaveDispatcher)
+}
+
+/**
+ * Wrap [delegate] so `weave` is dispatched on [weaveDispatcher] and a timeout arms this latch.
+ *
+ * The two are one wrapper because they wrap the same call: this is the single point every weave in a
+ * loopback suite passes through, which is what lets the latch see a fabric failure at all.
+ */
+private fun LoopbackWeaveFailFast.dispatching(delegate: Loom, weaveDispatcher: CoroutineContext): Loom =
+    object : Loom {
+        override suspend fun weave(rendezvous: Rendezvous): Seam =
+            withContext(weaveDispatcher) {
+                recordingWeaveFailure { delegate.weave(rendezvous) }
+            }
+
+        override fun capability(): TransportCapability = delegate.capability()
+    }
+
+/**
  * Suite-scoped latch that turns the *first* loopback weave failure into an immediate failure of every
  * remaining test in the same suite run — the half of #2386 that makes
  * [LOOPBACK_CONFORMANCE_WEAVE_BACKSTOP] affordable at all.
@@ -102,8 +178,13 @@ class LoopbackWeaveFailFast(private val suiteName: String) {
     private var firstFailure: NwUnreachableException? = null
 
     /**
-     * Call at the top of `newLoomPair()`. Throws immediately if an earlier weave in this suite run
-     * already timed out, so this test does not spend another [LOOPBACK_CONFORMANCE_WEAVE_BACKSTOP].
+     * Throws immediately if an earlier weave in this suite run already timed out, so this test does not
+     * spend another [LOOPBACK_CONFORMANCE_WEAVE_BACKSTOP].
+     *
+     * Called by [loopbackLoomPair], which is early enough: the suites build their `NwApi`s first, but
+     * neither starts a listener or a browser until `weave`, so a fast-failed test does no real IO. It is
+     * deliberately *not* left for each suite to call — that is the same two-call-sites-pinned-by-nothing
+     * shape the factory exists to remove.
      */
     fun failIfAlreadyBroken() {
         val first = firstFailure
