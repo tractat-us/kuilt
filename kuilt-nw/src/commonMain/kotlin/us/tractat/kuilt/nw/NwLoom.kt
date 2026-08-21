@@ -50,6 +50,10 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwLoom")
  * the earlier code rethrew the raw [TimeoutCancellationException], so a caller wrapping [NwLoom.weave]
  * in `runCatchingCancellable` saw it as its OWN structured cancellation and rethrew — an unreachable
  * fabric masqueraded as caller cancellation. This distinct type lets callers catch a fabric failure.
+ *
+ * Its [message] carries the deadline **and** the formation state that explains it — the same
+ * `key=value` line [NwLoom.dumpFormationState] renders, appended after a ` | ` (#2386). Treat it as
+ * diagnostic text, not a parseable format: read [NwLoom.dumpFormationState] if you want the state.
  */
 public class NwUnreachableException(message: String) : Exception(message)
 
@@ -215,9 +219,15 @@ public class NwLoom(
      * WARN: it fires only when something is already wrong, and WARN is retained by a release device's
      * store — measured during the #2425 wedge, a field capture held 664 INFO / 7 WARN / 1 ERROR and **zero**
      * DEBUG records, in a store that had not wrapped.
+     *
+     * Takes an already-[render]ed [state] rather than the [Formation], because the timeout path below needs
+     * the *same* string in two places — this line and the [NwUnreachableException] — and rendering twice
+     * there would produce two different answers: the log is written before `discardUnreturnedSeam` and the
+     * throw happens after it, and `close` wipes `settledEndpoints` and cancels every redialer. One render,
+     * two readers, no way for them to disagree (#2386).
      */
-    private fun logFormationStuck(formation: Formation, reason: String) {
-        log.warn { "nw.loom.formation-stuck reason=$reason ${render(formation)}" }
+    private fun logFormationStuck(reason: String, state: String) {
+        log.warn { "nw.loom.formation-stuck reason=$reason $state" }
     }
 
     /**
@@ -267,7 +277,7 @@ public class NwLoom(
                 if (wove != null) break // woven → stop dumping and re-arm from the top on the next un-weave
                 if (formation.seam.state.value is SeamState.Torn) return
                 if (formation.redial.snapshot().sawSomebody) {
-                    logFormationStuck(formation, "stuck-for>=$interval")
+                    logFormationStuck("stuck-for>=$interval", render(formation))
                 }
                 interval = (interval * FORMATION_DUMP_GROWTH).coerceAtMost(MAX_FORMATION_DUMP_INTERVAL)
             }
@@ -357,10 +367,17 @@ public class NwLoom(
             // failed, and "we saw nobody at all for the whole timeout" is itself the finding. Before the
             // discard because `close` wipes `settledEndpoints` and cancels every redialer, so a dump taken
             // afterwards would report an empty, blameless seam.
-            logFormationStuck(formation, "weave-timeout after=$weaveTimeout")
+            // ONE render, read twice: the WARN line a field capture reads, and the exception message a CI
+            // reader reads (#2386). A Kotlin/Native failure renders through the results XML and log capture
+            // is not guaranteed to reach it — on the two K/N lanes of `apple-nightly` it does not — so the
+            // throwable is the only artifact that is always there, and a bare "no peer reached … within 30s"
+            // makes a contended host indistinguishable from a broken fabric. Computed BEFORE the discard for
+            // the same reason the log line is: `close` wipes `settledEndpoints` and cancels every redialer.
+            val state = render(formation)
+            logFormationStuck("weave-timeout after=$weaveTimeout", state)
             discardUnreturnedSeam(seam)
             throw NwUnreachableException(
-                "nw weave timed out: no peer reached for serviceType=$serviceType within $weaveTimeout",
+                "nw weave timed out: no peer reached for serviceType=$serviceType within $weaveTimeout | $state",
             )
         } catch (e: Throwable) {
             log.info { "nw.loom.weave-aborted self=${selfId.value} serviceType=$serviceType reason=${e::class.simpleName} → closing seam so redial stops" }
