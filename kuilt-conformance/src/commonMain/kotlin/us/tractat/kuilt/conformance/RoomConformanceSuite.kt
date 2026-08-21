@@ -66,7 +66,7 @@ import kotlin.time.Instant
  * `backgroundScope` from [runTest]) so [FaultyLoom] and [SeamRoomFactory] are
  * correctly structured under the test's virtual-time scheduler.
  *
- * **Fault injection:** tests that require partition behaviour go through [RoomHarness.faults], a
+ * **Fault injection:** tests that require partition or teardown behaviour go through [RoomHarness.faults], a
  * two-armed [FaultInjection] fixture. A harness that cannot break its own links declares
  * [FaultInjection.Unsupported] **with a tracking URL** — it cannot decline silently, because the
  * arm has nowhere to put a refusal that is not also a declaration (#2306).
@@ -124,7 +124,7 @@ import kotlin.time.Instant
  * | # | Mutation | Kind | after | before |
  * |---|----------|------|-------|--------|
  * | M1 | `SeamRoom.resumeToken` returns `null` — a room opting out of resume entirely | real | RED: [resumeWithinWindowFiresResumed] and [aTokenMintedForAnotherRoomIsRefused] on the loud precondition, naming `role=Joiner … roster=1 member(s)` | [joinerLearnsHostRoomIdOnAdmission] RED — but [resumeWithinWindowFiresResumed] **green by absence** |
- * | M2 | [injectorOrDeclaredGap] drops its assertion — i.e. the pre-#2306 silent `?: return@runTest`, exactly | rig | RED: all four `blankTrackingUrl*` | all green; the four gated obligations passed under a gap declaring nothing |
+ * | M2 | [injectorOrDeclaredGap] drops its assertion — i.e. the pre-#2306 silent `?: return@runTest`, exactly | rig | RED: all four `blankTrackingUrl*` **as measured — the set is seven since #2501** | all green; the four gated obligations passed under a gap declaring nothing |
  * | M3 | delete the `token.roomId != roomId` guard in `DefaultJoinerReconnectController.tryResume` | real | RED: [aTokenMintedForAnotherRoomIsRefused], all 4 assertions — `got Success`, then a refusal for the genuine token | every pre-existing test of this suite **green** |
  * | M4 | the host drops a foreign token silently instead of refusing it | synthetic | RED: [aTokenMintedForAnotherRoomIsRefused], 2 of 3 — `Got TimedOut` | all green |
  *
@@ -272,8 +272,15 @@ public abstract class RoomConformanceSuite {
         public data class Supported(val loom: FaultyLoom) : FaultInjection
 
         /**
-         * The harness cannot reach the links under its rooms, so this suite's partition, resume and
-         * host-loss obligations are **unproven** on it.
+         * The harness cannot reach the links under its rooms, so this suite's partition, resume,
+         * host-loss **and teardown-fault** obligations are **unproven** on it.
+         *
+         * That last group is the one most worth reading before declaring this arm, because it
+         * includes [leaveIsIdempotentEvenWhenTeardownFails] — and the mutation receipt below records
+         * that deleting `SeamRoom.leave`'s idempotency guard outright is invisible to the *ungated*
+         * [leaveIsIdempotent] and caught **only** there. Declining fault injection therefore gives up
+         * the only place `Room.leave`'s idempotency is actually testable, not merely the partition
+         * scenarios.
          *
          * [trackingUrl] is not optional and not defaulted: an umbrella constant would let every
          * subclass point at the same permanently-open issue, which is how a declaration decays back
@@ -907,6 +914,31 @@ public abstract class RoomConformanceSuite {
      * The identity check (`===`, not a type match) is deliberate — a rig that threw *some*
      * exception, or wrapped the injected one, would still be lying about what a transport's close
      * does, and a type match would wave both through.
+     *
+     * ## The links measured here carry no [Room], and that is load-bearing
+     *
+     * An earlier draft armed the fault on the seams *under the harness's rooms*, and its
+     * exactly-once assertions passed only because of the reference's shape — the third instance in
+     * this change of a fix resting on the thing it was fixing. Two windows were open in it, both
+     * closed by `InMemoryLoom` alone:
+     *
+     *  - **The [TeardownFault.Fails] window.** The delegate's close runs while the arm is still
+     *    live. `InMemorySeam.close` publishes `Torn` and then does only non-suspending work, so the
+     *    room's torn-watcher cannot interleave. Any fabric whose close genuinely *suspends* after
+     *    publishing `Torn` — a WebSocket close handshake, a TCP shutdown — lets that watcher
+     *    re-enter `close` with `Fails` still armed: the count becomes 2, and the injected throwable
+     *    is thrown a second time on a coroutine where nothing catches it.
+     *  - **The [TeardownFault.Slow] window.** [SLOW_TEARDOWN] is several times
+     *    [fastHeartbeatConfig]'s timeout and twice its reconnect window. It is inert only because
+     *    the default harness keeps its injected clock decoupled from virtual time; a harness wiring
+     *    the two together — defensible, arguably more faithful — has a peer reach
+     *    [MembershipEvent.HostLost] *inside* the delay and leave, closing again.
+     *
+     * Either way the red would arrive blaming the **fixture** for a fault of the room, which is the
+     * wrong diagnosis handed to the wrong reader. So both arms are measured on links woven straight
+     * off the injector with no [Room] attached: nothing can race a close nobody owns, and
+     * "exactly once per close" becomes a property of `FaultySeam` rather than an accident of
+     * `SeamRoom`'s teardown. The host room exists only so the fabric has something to join.
      */
     @Test
     public fun theTeardownFaultReallyFires(): TestResult =
@@ -915,34 +947,23 @@ public abstract class RoomConformanceSuite {
             val faultyLoom = h.faults.injectorOrDeclaredGap("the teardown fault injector really fails a close")
                 ?: return@runTest
 
-            // A host and a joiner, so each arm is measured on a fresh link rather than on one seam
-            // the previous arm has already closed. Index 0 is the host's seam and index 1 the
-            // joiner's — the ordering [FaultInjection.Supported] documents and the partition
-            // obligations already rely on. (Two `host()` calls would be the obvious alternative and
-            // is not available: a flat in-memory mesh refuses to carry two rooms.)
-            val failingRoom = h.hostFactory.host(Pattern("Alice"))
-            val slowRoom = h.joinerFactory.join(InMemoryTag("Alice"))
-            val failingSeam = faultyLoom.requireLink(0)
-            val slowSeam = faultyLoom.requireLink(1)
+            // One room, purely so the fabric is joinable; the two links measured below are woven
+            // straight off the injector and no Room owns either. See the KDoc — this is what makes
+            // the exactly-once claims measurements of the fixture rather than of the reference.
+            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val failingSeam = faultyLoom.join(InMemoryTag("Alice"))
+            val slowSeam = faultyLoom.join(InMemoryTag("Alice"))
 
             val injected = IllegalStateException(INJECTED_TEARDOWN_FAILURE)
             failingSeam.setTeardownFault(TeardownFault.Fails(injected))
             val failure = failureOf { failingSeam.close() }
-            // Sampled AT the close, and disarmed AT the close — both because a room whose link is
-            // torn out from under it reacts on a background coroutine and closes its own seam again
-            // on the way down. The claim here is about ONE close, and a second throw on that
-            // coroutine is an uncaught exception rather than a diagnosis. Neither line may yield:
-            // the background coroutine can only run at a suspension point, so doing this before the
-            // next one is what keeps the measurement the room's own teardown cannot disturb.
             val firedByFailure = failingSeam.teardownFaultsFired
-            failingSeam.setTeardownFault(TeardownFault.None)
 
             slowSeam.setTeardownFault(TeardownFault.Slow(SLOW_TEARDOWN))
             val before = testScheduler.currentTime
             slowSeam.close()
             val elapsed = testScheduler.currentTime - before
             val firedBySlow = slowSeam.teardownFaultsFired
-            slowSeam.setTeardownFault(TeardownFault.None)
 
             assertAll(
                 {
@@ -977,8 +998,7 @@ public abstract class RoomConformanceSuite {
                 },
             )
 
-            failingRoom.leave()
-            slowRoom.leave()
+            hostRoom.leave()
         }
 
     /**
@@ -1100,7 +1120,7 @@ public abstract class RoomConformanceSuite {
      * The [FaultyLoom] to partition with, or `null` after **asserting** that the harness declared
      * why it has none.
      *
-     * This is what stops the three partition obligations from returning silently. On
+     * This is what stops the gated obligations from returning silently. On
      * [FaultInjection.Unsupported] the caller still skips — nobody can partition links they cannot
      * reach — but it skips *through an assertion that can fail*, so the weakest thing this suite
      * says about such a harness is "its gap is on record", never nothing at all.
