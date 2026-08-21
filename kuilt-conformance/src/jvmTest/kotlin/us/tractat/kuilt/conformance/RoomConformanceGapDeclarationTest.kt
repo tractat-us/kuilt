@@ -8,7 +8,7 @@ import kotlin.test.assertFailsWith
 import kotlin.time.Instant
 
 /**
- * Runs [RoomConformanceSuite]'s four fault-injection-gated obligations against a harness that
+ * Runs [RoomConformanceSuite]'s seven fault-injection-gated obligations against a harness that
  * declares [RoomConformanceSuite.FaultInjection.Unsupported] — **the first time in this suite's
  * life that its skip path has been executed at all** (#2306).
  *
@@ -24,7 +24,7 @@ import kotlin.time.Instant
  *  - a **blank** tracking URL fails every gated obligation — this is the one runtime hole the sealed
  *    fixture leaves, since `Unsupported("")` is the only way left to write a declaration that
  *    declares nothing;
- *  - a **real** tracking URL lets all four skip cleanly, which is the survivability check above.
+ *  - a **real** tracking URL lets all seven skip cleanly, which is the survivability check above.
  *
  * ## Why `jvmTest` and not `commonTest`
  *
@@ -100,14 +100,32 @@ class RoomConformanceGapDeclarationTest {
         assertFailsWith<AssertionError> { suite.hostLostIsTerminalBroadcastIsNoOp() }
     }
 
+    @Test
+    fun blankTrackingUrlFailsTheTeardownFixturePrecondition() {
+        val suite = unsupported("")
+        assertFailsWith<AssertionError> { suite.theTeardownFaultReallyFires() }
+    }
+
+    @Test
+    fun blankTrackingUrlFailsTheFailingTeardownIdempotencyObligation() {
+        val suite = unsupported("")
+        assertFailsWith<AssertionError> { suite.leaveIsIdempotentEvenWhenTeardownFails() }
+    }
+
+    @Test
+    fun blankTrackingUrlFailsTheSlowTeardownCancellationObligation() {
+        val suite = unsupported("")
+        assertFailsWith<AssertionError> { suite.leaveDoesNotMintACancellationWhenTeardownIsSlow() }
+    }
+
     // ── A declared gap skips cleanly — the survivability half ──
 
     /**
-     * All four gated obligations skip without throwing, without hanging and without leaking a
+     * All seven gated obligations skip without throwing, without hanging and without leaking a
      * coroutine, so a harness that genuinely cannot partition its links can still subclass this
-     * suite. Deliberately **one** test over all four rather than four: what is under assertion is
+     * suite. Deliberately **one** test over all seven rather than seven: what is under assertion is
      * that the declared-gap path is survivable as a whole, and a per-obligation split would report
-     * four identical greens for one property.
+     * seven identical greens for one property.
      *
      * Note what this cannot do: it cannot tell a harness that *truly* cannot fault-inject from one
      * that could and declared otherwise. Nothing at this layer can — the declaration is a claim
@@ -121,16 +139,21 @@ class RoomConformanceGapDeclarationTest {
         suite.resumeWithinWindowFiresResumed()
         suite.aTokenMintedForAnotherRoomIsRefused()
         suite.hostLostIsTerminalBroadcastIsNoOp()
+        suite.theTeardownFaultReallyFires()
+        suite.leaveIsIdempotentEvenWhenTeardownFails()
+        suite.leaveDoesNotMintACancellationWhenTeardownIsSlow()
     }
 
     // ── The ungated obligations are unaffected by the declaration ──
 
     /**
-     * A declared fault-injection gap excuses **only** the four obligations that need to break a
-     * link. The rest of the suite still runs against such a harness — checked here on two of them,
-     * one that touches the resume surface ([RoomConformanceSuite.joinerLearnsHostRoomIdOnAdmission],
-     * which asserts against `resumeToken?.roomId` and so is the test that made the old
-     * `resumeToken ?: return@runTest` skip self-contradictory) and one plain membership property.
+     * A declared fault-injection gap excuses **only** the obligations that need to break a link. The
+     * rest of the suite still runs against such a harness — checked here on four of them: one that
+     * touches the resume surface ([RoomConformanceSuite.joinerLearnsHostRoomIdOnAdmission], which
+     * asserts against `resumeToken?.roomId` and so is the test that made the old
+     * `resumeToken ?: return@runTest` skip self-contradictory), one plain membership property, and
+     * `Room.leave`'s two documented obligations, which are ungated core precisely because no fabric
+     * may excuse them (#2501).
      *
      * Without this, a future change that widened the gap to cover the whole suite would be green
      * here and nobody would notice that "declares a gap" had quietly become "opts out".
@@ -140,5 +163,7 @@ class RoomConformanceGapDeclarationTest {
         val suite = unsupported(tracked)
         suite.joinerLearnsHostRoomIdOnAdmission()
         suite.leaveNormalFiresLeftEventAndShrinksRoster()
+        suite.leaveIsIdempotent()
+        suite.leaveDoesNotReportFailureAsCancellation()
     }
 }
