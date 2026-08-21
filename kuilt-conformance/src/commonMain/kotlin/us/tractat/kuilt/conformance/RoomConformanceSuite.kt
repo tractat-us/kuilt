@@ -150,6 +150,55 @@ import kotlin.time.Instant
  * future edit that moves work *above* the gate (a suspending wait, a `links[0]` access), not any
  * defect present today. Stating it rather than hiding it: an all-red table would mean the table was
  * measuring blast radius instead of diagnoses.
+ *
+ * ### Mutation receipt — `Room.leave`'s two obligations (#2501)
+ *
+ * JVM, `--rerun-tasks`, subjects `InMemoryRoomConformanceTest` (19 tests) and
+ * `RoomConformanceGapDeclarationTest` (9). Same kinds as above. **All five new properties are green
+ * against unmutated `main`, and that is correct** — `SeamRoom.leave` calls `seam.close(...)`
+ * unguarded, so nothing mints today; these are live guards, not regression tests for a fix.
+ *
+ * | # | Mutation | Kind | verdict |
+ * |---|----------|------|---------|
+ * | T1 | `SeamRoom.leave` wraps its `seam.close(...)` in `withTimeout(100.milliseconds)` | real | **RED — [leaveDoesNotMintACancellationWhenTeardownIsSlow]**, 1 of its 2 assertions: `Got: kotlinx.coroutines.TimeoutCancellationException: Timed out after 100ms of _virtual_ … time`. Nothing else moves. |
+ * | T2 | `closed = true` moves out of `leave`'s opening `lock.withLock` to after `seam.close(...)` | real | **RED — [leaveIsIdempotentEvenWhenTeardownFails]**, 1 of 2, naming both calls' failures. **[leaveIsIdempotent] stays GREEN.** |
+ * | T3 | `leave`'s `if (closed) return` fast path deleted outright | real | **RED — [leaveIsIdempotentEvenWhenTeardownFails]** *only*. Both ungated properties GREEN. |
+ * | T4 | [TeardownFault.Fails] delegates but does not throw | rig | **RED — [theTeardownFaultReallyFires]**, 1 of 4: `Got: no exception — the close completed`. **[leaveIsIdempotentEvenWhenTeardownFails] goes GREEN BY ABSENCE.** |
+ * | T5 | [TeardownFault.Slow] does not delay | rig | **RED — [theTeardownFaultReallyFires]**, 1 of 4: `Expected at least 1000 ms of virtual time to pass, got 0 ms`. |
+ * | T6 | T1 **and** T5 together | rig | **RED — [theTeardownFaultReallyFires]** only. [leaveDoesNotMintACancellationWhenTeardownIsSlow] is **GREEN** — T1's real defect has gone invisible. |
+ * | T7 | `leave` throws `IllegalStateException("already left")` on a second call | synthetic | **RED — [leaveIsIdempotent]**, [leaveDoesNotReportFailureAsCancellation], [leaveIsIdempotentEvenWhenTeardownFails] and `aDeclaredGapDoesNotExcuseTheUngatedObligations`, each on the raw throw. |
+ *
+ * **T3 is the measurement of the gap this whole section closes, and it is the most damning row.**
+ * Deleting `leave`'s idempotency guard *entirely* is invisible to [leaveIsIdempotent] — because on
+ * a reference whose `close` is synchronous and infallible, re-running the whole teardown is simply
+ * harmless. Only the fault-gated companion sees it. That is the #2244 shape stated as a measurement
+ * rather than as a worry: a property whose reference cannot reach the failure does not test the
+ * failure, and the ungated half of an obligation is not a substitute for the gated half.
+ *
+ * **T2 says the same thing from the other side.** A successful teardown still reaches the flag, so
+ * the happy-path property cannot distinguish "idempotent" from "idempotent only when the first call
+ * succeeded". The contrast between T2/T3 and T7 is why both halves are here.
+ *
+ * **T4 is exactly what [theTeardownFaultReallyFires] exists for, and it also shows what the
+ * rig-fired counter alone does not buy.** Under T4 the counter still increments — the arm *was*
+ * selected — so [leaveIsIdempotentEvenWhenTeardownFails]'s own precondition holds and its remaining
+ * assertion passes on a leave that never failed. The two mechanisms divide the labour cleanly:
+ * `FaultySeam.teardownFaultsFired` proves the fault **reached this seam**, and only this test proves
+ * the fault **does anything**. Neither subsumes the other.
+ *
+ * **T5 and T6 are why the `Slow` arm is measured at all — and T5 was GREEN in the first draft.**
+ * This test originally measured only [TeardownFault.Fails], and a no-op `Slow` reddened nothing
+ * anywhere in the tree: `SeamRoom.leave` bounds nothing today, so a zero-duration teardown mints no
+ * cancellation either. T6 is the proof that the omission mattered rather than a guess about it —
+ * with `Slow` silently no-op, T1's genuine defect stops being detectable at all. The fix for one
+ * vacuity had landed one level up inside itself, which is the recurrence this repo's conventions
+ * warn about, caught by asking of the fix what the fix was now unpinned on.
+ *
+ * **T7 is marked synthetic because no real implementation refuses a second leave on purpose** — it
+ * is here to show the two ungated properties *can* red, since T1–T6 never touch them. Its hit on
+ * [theTeardownFaultReallyFires] is blast radius, not a diagnosis: that test closes a link out from
+ * under its room, the room self-leaves in reaction, and the explicit `leave()` afterwards is then
+ * the *second* one.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 public abstract class RoomConformanceSuite {
