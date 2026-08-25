@@ -95,6 +95,24 @@ import kotlin.test.assertTrue
  * of a case-folding filesystem, and this suite is the only place the model is checked against a
  * real one.
  *
+ * **Which lane executes which arm.** `ci-required`'s jobs all run on `ubuntu-latest`, so the only
+ * binding of this suite that *executes* there is the JVM/Android one, on a Linux filesystem — the
+ * case-sensitive arm. The Apple binding executes in `apple-nightly.yml` (a `macos-latest` runner,
+ * `0 7 * * *` plus `workflow_dispatch`), which is deliberately **not** a required check: that
+ * workflow's header records why, and it is a concurrency ceiling rather than a judgement about this
+ * code — GitHub caps a plan at five concurrent macOS jobs, and an Apple lane on every PR would sit
+ * at that cap and queue every merge behind it.
+ *
+ * The consequence to hold on to: **a green PR check is not evidence about the case-folding arm.** A
+ * regression in it merges, and the nightly off `main` catches it within about a day, opening or
+ * refreshing a tracking issue. Nothing here is *unrun* — it is run late, off the gate, which is a
+ * weaker thing than a required check and a stronger thing than "only on a developer's machine".
+ *
+ * Note the suite never *assumes* any of this: it measures the filesystem it is on and asserts the
+ * arm that measurement licenses, so a lane whose filesystem is not what this paragraph expects
+ * still gets a correct verdict. What the paragraph governs is how much a given green is worth, not
+ * whether it is sound.
+ *
  * **Containment.** Nothing here establishes that a write landed *inside* the store's directory.
  * [DurableStore] exposes no root and no listing, and [plantRawFile] is a fixture hook rather than
  * an observation of the medium, so a write that escaped and a write that was contained read back
@@ -166,8 +184,16 @@ public abstract class DurableStoreFilenameConformanceSuite<DIR> {
     /**
      * A store of this backend reading and writing entries in [dir], and nowhere else.
      *
-     * Called more than once per property with the same [dir], deliberately: the second handle is
-     * what keeps an in-memory cache from answering a read that should have gone to the medium.
+     * Called **more than once with the same [dir]** by every property that *writes* through the
+     * store: the second handle is what keeps an in-memory cache from answering a read that should
+     * have gone to the medium. The plant-only properties
+     * ([aKeyNeverAdoptsAnotherKeysLegacyOrphan], [aKeyAlreadyInsideTheSafeSetStillFindsItsOwnFile],
+     * [theLegacyOverlapACaseFoldingFilesystemExposesIsExactlyTheDocumentedOne]) open exactly one
+     * handle, after the plants — there is no write for a cache to have absorbed, so a second handle
+     * would assert nothing.
+     *
+     * So an implementation must tolerate two live handles onto one directory, but is never asked to
+     * hold more than two, and is never asked to reopen a directory it has already closed.
      *
      * `suspend` for the same reason [DurableStoreConformanceSuite.newStore] is — opening a medium
      * can suspend, and a hook that forbade it would make this suite unimplementable for a backend
@@ -490,8 +516,16 @@ public abstract class DurableStoreFilenameConformanceSuite<DIR> {
             val caseFolding = probe.contentEquals(byteArrayOf(CASE_FOLDING_MARK))
             assertAll(
                 {
+                    // Deliberately re-derived from `probe`, NOT written as `caseFolding || …`.
+                    // `caseFolding` is the value this assertion exists to license, so guarding it
+                    // with itself makes the message a claim about the branch rather than about the
+                    // probe — and the two disagree exactly when the branch is what broke, which is
+                    // the moment a reader most needs the message to be true. Measured: with the
+                    // branch inverted, the `caseFolding || …` spelling reported "read back 102,
+                    // which is neither planted value" about a byte that *is* a planted value.
                     assertTrue(
-                        caseFolding || probe.contentEquals(byteArrayOf(CASE_SENSITIVE_MARK)),
+                        probe.contentEquals(byteArrayOf(CASE_FOLDING_MARK)) ||
+                            probe.contentEquals(byteArrayOf(CASE_SENSITIVE_MARK)),
                         "PRECONDITION: the case-folding probe read back ${probe?.firstOrNull()}, which is " +
                             "neither planted value, so the arm chosen below was chosen on no evidence. " +
                             "Either plantRawFile does not write the name it is given, verbatim, into the " +
@@ -578,8 +612,8 @@ private const val CONTROL_NAME = "spans"
  */
 private const val PROBE_NAME = "casefoldprobe"
 
-/** The probe value a **case-sensitive** filesystem leaves readable at `casefold-probe`. */
+/** The probe value a **case-sensitive** filesystem leaves readable at [PROBE_NAME]. */
 private const val CASE_SENSITIVE_MARK: Byte = 101
 
-/** The probe value a **case-folding** filesystem leaves readable at `casefold-probe`. */
+/** The probe value a **case-folding** filesystem leaves readable at [PROBE_NAME]. */
 private const val CASE_FOLDING_MARK: Byte = 102
