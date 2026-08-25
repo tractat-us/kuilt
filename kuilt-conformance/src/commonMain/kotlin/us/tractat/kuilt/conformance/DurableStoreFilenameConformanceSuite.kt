@@ -151,7 +151,7 @@ import kotlin.test.assertTrue
  * | **Fixture:** [newStore] ignores the directory it was handed | **all seven**, and the three plant-dependent ones on their preconditions |
  * | **Fixture:** [newDirectory] hands back one directory shared by every property | **nothing.** See below |
  * | **Fixture (positive control):** [newDirectory] hands back a directory a previous run left entries in | [keysThatFoldedOntoOneFilenameAddressDistinctEntries], [keysDifferingOnlyInANonAsciiLetterAddressDistinctEntries], [keysDifferingOnlyInCaseAddressDistinctEntries] and [anEntryNeverLandsOnAnotherEntrysTempSidecar], each on its own freshness precondition, each naming its own key |
- * | **Suite:** flip the measured case-folding branch | [theLegacyOverlapACaseFoldingFilesystemExposesIsExactlyTheDocumentedOne] on the probe precondition *and* the arm — confirming which arm a given box takes rather than leaving it inferred |
+ * | **Suite:** flip the measured case-folding branch | [theLegacyOverlapACaseFoldingFilesystemExposesIsExactlyTheDocumentedOne] on **the arm only** — confirming which arm a given box takes rather than leaving it inferred. This row is also what found the precondition bug it now cannot reproduce: written as `caseFolding || …` the guard reported *"read back 102, which is neither planted value"* about a byte that **is** a planted value, because it was guarding the branch with the branch. Re-derived from `probe` it reds one honest assertion instead of two, one of which lied |
  *
  * **The row that reds nothing is the one worth reading.** A fixture handing back one shared
  * directory for every property moves no assertion at all, and the two rows below it are why that is
