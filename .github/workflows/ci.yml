@@ -831,7 +831,7 @@ jobs:
   # sample count, for the reason concurrency-probes' own header records.
   #
   # ROUND COUNT, recorded here as capability-probes demands of its members.
-  # `:kuilt-nw` ships exactly ONE probe:
+  # `:kuilt-nw` ships TWO probes, and neither subsumes the other:
   #
   #   - NwSeamConcurrencyTest.broadcastNeverLeaksARaceExceptionWhilePeersAreEvicted
   #     — `broadcast` snapshots `registry` (and increments the chosen link's
@@ -841,6 +841,32 @@ jobs:
   #     RECEIPT: with the `lock.withLock` around `broadcast`'s target snapshot
   #     deleted, it fails 6 of 6 consecutive runs with a
   #     ConcurrentModificationException raised out of `broadcast`. Restored: green.
+  #
+  #   - NwSeamConcurrencyTest.noLifecycleCollectorLeaksARaceWhileTheRegistryChurns
+  #     (#2481) — the COLLECTOR-side half. The probe above catches on the caller's
+  #     own call, so it can only see the two critical sections a caller enters; a
+  #     race in any of the seam's seven collectors is raised on a coroutine nobody
+  #     awaits, killing that loop while the seam still looks healthy. This one
+  #     records every escape via a CoroutineExceptionHandler on each node's scope,
+  #     and samples the `registry`/`conns` binding invariant mid-flight for the
+  #     failures that corrupt without throwing. 60 rounds; each round is a 6-node
+  #     star, 8 redials per peer 3 ms apart (every one drives the dedup), 2
+  #     broadcasters, a 1 ms watchdog. ~2.6 s.
+  #     RECEIPT (deleting one `lock.withLock` per row; churn probe / broadcast
+  #     probe): connectionClosedLoop 3/3 / 3/3 · removeByConn 3/3 / 3/3 ·
+  #     processFrame's classify section 2/3 / 0/3 · sweepInboundSilence 5/11 / 0/5.
+  #     GREEN rows, stated because they are the informative half: reconcileStates
+  #     0/3, latchTorn 0/3, close's teardown 0/3 are pinned by NEITHER probe, and
+  #     `broadcast`'s own snapshot is 0/3 here (this probe's caller-side load is
+  #     deliberately light — the row belongs to its sibling).
+  #     The sweepInboundSilence rate is LOAD-DEPENDENT: 3/3 at box load ~60-69 on
+  #     16 cores, 0/2 at ~24, 2/6 at ~16-18. Same direction as #2466. Quote the
+  #     load beside any re-measurement; a quiet-box green carries no information.
+  #     It ships anyway because three OTHER rows red 3/3 — but that row alone would
+  #     not have earned it.
+  #     The probe prints `nw-probe.rig-receipt …` on every run (links opened,
+  #     dial/send overlaps, mutations observed under load, audit samples) so a green
+  #     leaves its own rig numbers in this job's artifact rather than only a pass.
   #
   # The three other hazards #2481 named are deliberately NOT here, and the class
   # KDoc carries the measurements: each asks a collector to race itself, and every

@@ -44,16 +44,54 @@ import kotlin.test.assertTrue
  * suite** — the only thing that had ever run them truly concurrently was the real-transport
  * conformance suites, and only probabilistically.
  *
- * ## ONE probe, because one hazard turned out to be a genuine two-writer race
- * #2481 named four: the double-dial dedup, `broadcast` against eviction, `close()` against a remote
- * departure, and a drain's start against its own end. Each was built and then **mutation-tested** by
- * deleting the specific `withLock` that makes it safe. Only the second reddens reliably, and only it
- * ships — a probe that cannot be made to red is green by absence, and shipping one inflates the
- * apparent coverage of exactly the file it is supposed to protect.
+ * ## TWO probes, and neither subsumes the other
+ * #2481 named four hazards; #2494 built all four, mutation-tested each by deleting the `withLock` that
+ * makes it safe, and shipped the one that reddens —
+ * [broadcastNeverLeaksARaceExceptionWhilePeersAreEvicted]. With `broadcast`'s target snapshot
+ * un-guarded it fails **6 of 6 rounds** (independently re-measured at 5/6), with a
+ * `ConcurrentModificationException` raised out of `broadcast` while a lifecycle collector evicts from
+ * `registry` underneath its iteration.
  *
- * [broadcastNeverLeaksARaceExceptionWhilePeersAreEvicted] is that probe: with `broadcast`'s target
- * snapshot un-guarded it fails **6 of 6 rounds**, with a `ConcurrentModificationException` raised out
- * of `broadcast` while a lifecycle collector evicts from `registry` underneath its iteration.
+ * That closed the *caller's* half and left #2481's broad question — "is every `NwSeam` field access
+ * lock-covered?" — untouched, because its detector is a `catch` on the caller's own call and can
+ * therefore only see the two critical sections a caller enters. Everything else this class locks runs
+ * on a coroutine nobody awaits. [noLifecycleCollectorLeaksARaceWhileTheRegistryChurns] is the other
+ * half: a redial storm, and three detectors that watch the seam from the *inside*.
+ *
+ * ## The mutation table, measured, with the greens called out
+ * Each row deletes exactly one `lock.withLock` (rewritten to a bare inline block, so only the mutual
+ * exclusion goes). 60 rounds per run of the churn probe, 80 per run of the broadcast probe.
+ *
+ * | `withLock` deleted from | churn probe | broadcast probe |
+ * |---|---|---|
+ * | `sweepInboundSilence` — the watchdog sweep | **5/11**, load-dependent (below) | 0/5 |
+ * | `processFrame`'s classify section — the dedup | **2/3** | 0/3 |
+ * | `connectionClosedLoop` | **3/3** | **3/3** |
+ * | `removeByConn` | **3/3** | **3/3** |
+ * | `broadcast`'s target snapshot | 0/3 | **3/3** |
+ * | `reconcileStates` | 0/3 | 0/3 |
+ * | `latchTorn` | 0/3 | 0/3 |
+ * | `close`'s teardown section | 0/3 | 0/3 |
+ *
+ * Read the **greens**, they are the informative half. Three sites are pinned by nothing here:
+ * `reconcileStates` iterates an immutable `StateFlow` snapshot and its `graceJobs` writes converge
+ * whatever the interleaving; `latchTorn`'s four lines are a clobber window so narrow that a concurrent
+ * `evictPeerLocked` has to straddle exactly it; and `close`'s teardown is the site #2494 already
+ * measured as structurally hard to reach, because `latchTorn` cancels [scope] *first* and the
+ * collectors are usually gone before the teardown critical section runs. Naming them is the point —
+ * **each green row names a `withLock` that no test in this repo will notice you deleting.**
+ *
+ * The `broadcast` row shows the two probes are complementary rather than nested: the churn probe's
+ * caller-side load is deliberately light (2 broadcasters, 1 ms apart) because its subject is the dedup
+ * churn, so it does not reach that window and must not be read as covering it.
+ *
+ * ## The watchdog row is LOAD-DEPENDENT — do not inherit the 3/3
+ * `sweepInboundSilence` measured **3/3 at box load ~60–69** (16 cores), then **0/2 at ~24** and
+ * **2/6 at ~16–18**: 5 of 11 overall, and the split is not noise, it is the mechanism. The unguarded
+ * `for ((peer, winner) in registry)` walk is a sub-microsecond window; what widens it is a *preemption*
+ * inside the walk, and an oversubscribed box supplies those. The repo has recorded the same direction
+ * before (#2466: 0/6 quiet, 6/6 loaded). So this row is a rate, not a property — quote the load beside
+ * any re-measurement, and treat a quiet-box green as carrying no information.
  *
  * ## Why the other three are not probes, which is a finding about the issue rather than an omission
  * All three ask a collector to race *itself*, and `NwSeam` gives each collector exactly one coroutine:
@@ -267,6 +305,10 @@ class NwSeamConcurrencyTest {
      * ## Two independent detectors, because they fail differently
      *  - **[assertNoCollectorLeaked]** catches the LOUD failure: an unguarded `LinkedHashMap` iterated
      *    while another coroutine structurally modifies it throws, and the throw lands in the handler.
+     *    Measured shape, with the watchdog's guard deleted:
+     *    `a throwable escaped a NwSeam lifecycle collector … peer-0: ConcurrentModificationException`
+     *    — raised inside `inboundSilenceLoop`, on a seam that then reported a perfectly clean
+     *    `Torn(reason=Normal)`. Nothing else in this repo can see that.
      *  - **[assertRegistryAndConnsAgree], sampled DURING the churn** catches the QUIET one: two maps
      *    mutated without mutual exclusion can also just end up disagreeing, with nothing thrown at all.
      *    `formationSnapshot()` is taken under the seam's own lock, so a sample is atomic and the
