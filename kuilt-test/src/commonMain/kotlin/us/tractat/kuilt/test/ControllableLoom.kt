@@ -10,7 +10,6 @@ import kotlinx.coroutines.sync.withLock
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.FabricAvailability
-import us.tractat.kuilt.core.LatchingStateFlow
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PeerNotConnected
@@ -20,6 +19,7 @@ import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.TransportCapability
+import us.tractat.kuilt.core.latchingTo
 
 /**
  * A drop-in replacement for [us.tractat.kuilt.core.InMemoryLoom] with
@@ -205,13 +205,13 @@ public class ControllableSeam internal constructor(
      * a torn seam kept naming every remaining remote, and [close] removes this peer from that registry
      * so its own id went missing too.
      *
-     * A [LatchingStateFlow] rather than a mapped view: the registry is **shared**, so it keeps changing
-     * after this seam tears, and a constant transform over it would re-publish `{ selfId }` to every
+     * [latchingTo] rather than a mapped view: the registry is **shared**, so it keeps changing after
+     * this seam tears, and a constant transform over it would re-publish `{ selfId }` to every
      * surviving collector on each of those changes. Identical to `InMemorySeam`, which this loom is a
      * drop-in replacement for and which was fixed the same way in #1849.
      */
     override val peers: StateFlow<Set<PeerId>> =
-        LatchingStateFlow(source = loom.peersState, latched = closed, terminal = setOf(selfId))
+        loom.peersState.latchingTo(latched = closed, terminal = setOf(selfId))
 
     private val _state = MutableStateFlow<SeamState>(SeamState.Woven)
     override val state: StateFlow<SeamState> = _state.asStateFlow()

@@ -14,6 +14,7 @@ import us.tractat.kuilt.test.FakeSeam
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 
@@ -99,12 +100,25 @@ class RaceCollapseTest {
         }
 
     /**
-     * The seam starts on the **collapsed** roster, which is the only roster a `Torn` seam can have
-     * ([Seam.peers], #1816) — and since #2432 the only one [FakeSeam] will construct one with. So both
-     * eager entry checks in [raceCollapse] hold here, and what distinguishes this case from the
-     * already-*drained* one below is no longer the roster but the `reason`: `Normal` proves the torn
-     * check ran **first**, `Unreachable` would prove the drain check pre-empted it. That is the honest
-     * discriminator, because in production the two conditions always arrive together.
+     * The **eager torn check** — [raceCollapse]'s first line — and `abortWhen = { false }` is what makes
+     * that the subject rather than a coincidence.
+     *
+     * A `Torn` seam's roster is `{ selfId }` ([Seam.peers], #1816), and since #2432 that is the only
+     * roster [FakeSeam] will construct a `Torn` seam with. Under the **default** `abortWhen { it.size < 2 }`
+     * that means the drain check fires too — and `collapseReason()` reads the seam's own state, so it
+     * reports `Normal` as well. Both entry checks then produce the *identical* exception, deleting either
+     * one leaves the test green, and no assertion here can tell them apart. (This test previously relied
+     * on a two-peer roster to keep the drain check from firing; #2432 made that roster unconstructible,
+     * which removed the discrimination along with the illegal state — so the discriminator had to move.)
+     *
+     * Disarming `abortWhen` leaves the eager torn check as the only thing that can throw *before the body
+     * runs*, which is what the name claims. Mutation-verified: commenting out the eager torn check reds
+     * [assertFalse]`(bodyStarted)` — the always-present torn *watcher* still completes `outcome`, so an
+     * exception is still thrown, but `body` has already been entered by then.
+     *
+     * A sibling case using the default `abortWhen` was considered and **rejected**: per the above, no
+     * mutation reds it. The `?: Unreachable` fallback in `collapseReason()` is pinned by the
+     * already-*drained* case below, whose seam never tears.
      */
     @Test
     fun `already-torn at entry throws eagerly without starting body`() =
@@ -112,10 +126,10 @@ class RaceCollapseTest {
             val seam = FakeSeam(selfId = self, initialState = SeamState.Torn(CloseReason.Normal))
             var bodyStarted = false
             val ex = assertFailsWith<SeamCollapsedException> {
-                seam.raceCollapse { bodyStarted = true; 1 }
+                seam.raceCollapse(abortWhen = { false }) { bodyStarted = true; 1 }
             }
-            assertEquals(CloseReason.Normal, ex.reason, "the tear must be reported, not the drain that accompanies it")
-            assertFalse(bodyStarted)
+            assertEquals(CloseReason.Normal, ex.reason)
+            assertFalse(bodyStarted, "the eager torn check must throw BEFORE body is entered")
         }
 
     @Test
@@ -167,6 +181,4 @@ class RaceCollapseTest {
             assertEquals(7, withTimeout(5.seconds) { result.await() })
             assertTrue(seam.state.value is SeamState.Woven)
         }
-
-    private fun assertFalse(condition: Boolean) = assertTrue(!condition)
 }

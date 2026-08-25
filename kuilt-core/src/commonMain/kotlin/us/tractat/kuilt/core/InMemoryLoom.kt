@@ -180,12 +180,12 @@ private class InMemorySeam(
      * seam must not read a remote peer out of it, and `selfId` must not go missing either — which
      * it would if this stayed the raw registry, since `close()` removes this peer from it.
      *
-     * A [LatchingStateFlow] rather than a mapped view: the registry is **shared**, so it keeps
-     * changing after this seam tears, and a constant transform over it would re-publish
-     * `{ selfId }` on every one of those changes. See that class's KDoc.
+     * [latchingTo] rather than a mapped view: the registry is **shared**, so it keeps changing after
+     * this seam tears, and a constant transform over it would re-publish `{ selfId }` on every one of
+     * those changes. See that function's KDoc.
      */
     override val peers: StateFlow<Set<PeerId>> =
-        LatchingStateFlow(source = factory.peers, latched = closed, terminal = setOf(selfId))
+        factory.peers.latchingTo(latched = closed, terminal = setOf(selfId))
 
     // In-memory fabric is immediately live — no async link establishment.
     private val _state = MutableStateFlow<SeamState>(Woven)

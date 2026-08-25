@@ -1,6 +1,6 @@
 @file:OptIn(kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi::class)
 
-package us.tractat.kuilt.core
+package us.tractat.kuilt.core.internal
 
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.FlowCollector
@@ -19,8 +19,8 @@ import kotlinx.coroutines.flow.takeWhile
  *    guarantee (below).
  *  - [terminal] is a constant, and is the only value observable once [latched] is `true`.
  *
- * ## Why this is not a mapped view
- * The `MappedStateFlow` shape — a state-dependent `transform` over [source] — cannot express this
+ * ## Why this is not [MappedStateFlow]
+ * The [MappedStateFlow] shape — a state-dependent `transform` over [source] — cannot express this
  * safely. Its own precondition is that `transform` is **injective** on [source]'s distinct values,
  * and a transform collapsing every input onto one constant is the opposite of injective. The
  * consequence is concrete rather than notational: [source] may keep changing after the latch (a
@@ -45,16 +45,6 @@ import kotlinx.coroutines.flow.takeWhile
  * `{ selfId }`, so tearing it must publish nothing at all. Same for a seam whose only remote left
  * before it closed.
  *
- * ## Why this is public API
- * The shape it solves is not one implementation's: it is *any* seam whose `peers` reads a registry
- * **shared** with the peers it is leaving. Those cannot collapse by writing their own `MutableStateFlow`
- * the way `LinkSeam` and `MeshSeam` do, and they cannot spin up a mirroring coroutine either, because a
- * `Seam` that owns no [kotlinx.coroutines.CoroutineScope] has nowhere to run one. `InMemorySeam` was the
- * first (#1849) and `ControllableSeam` in `:kuilt-test` the second (#2443) — at which point keeping this
- * `internal` to `:kuilt-core` would have meant copying a subtle distinct-until-changed argument into a
- * second module, which is the drift this repo generally refuses. A third-party fabric layered on a shared
- * registry needs it for the same reason and has no way to re-derive it correctly by accident.
- *
  * ## Cancellation
  * [collect] on a [StateFlow] returns `Nothing` — it never completes normally — so after emitting
  * [terminal] this suspends in [awaitCancellation] rather than returning. That leaves the collector
@@ -63,7 +53,7 @@ import kotlinx.coroutines.flow.takeWhile
  * Owns no [kotlinx.coroutines.CoroutineScope]: everything happens inside the *collector's* own
  * coroutine, which is what lets a scope-free type (`InMemorySeam`) expose it as its `peers`.
  */
-public class LatchingStateFlow<T : Any>(
+internal class LatchingStateFlow<T : Any>(
     private val source: StateFlow<T>,
     private val latched: StateFlow<Boolean>,
     private val terminal: T,
