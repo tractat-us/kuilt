@@ -157,7 +157,8 @@ internal class GossipDedup(private val maxReorder: Int = DEFAULT_MAX_REORDER) {
         released: MutableList<GossipFrame>,
     ) {
         val lowest = state.pending.keys.min()
-        released += state.pending.remove(lowest)!!
+        released += state.pending.remove(lowest)
+            ?: error("reorder window lost seq $lowest; held seqs were ${state.pending.keys}")
         state.high = lowest
         releaseContiguous(state, released)
     }
