@@ -93,6 +93,33 @@ internal class FakeMCSessionBus {
         return true
     }
 
+    /**
+     * Hand [peer]'s own endpoint a connection whose remote identity is **itself** — the #1466
+     * self-dial (#2445). A symmetric advertise+browse fabric is delivered its own advertisement,
+     * dials it, and the resulting connection resolves to its own `selfId`; the link's
+     * self-connection guard must drop it. Returns `false` if no endpoint carries that display name,
+     * so a caller reports honestly rather than claiming an injection it never performed.
+     *
+     * Two details make this the *hard* version of the injection rather than a straw man:
+     *
+     * 1. The peer object is a **freshly minted `MCPeerID` carrying the same `displayName`**, never
+     *    the endpoint's own instance. That is what MC would hand back — a self-sighting arrives via
+     *    `MCNearbyServiceBrowser.foundPeer`, so it is a different object, and `MCPeerID` equality is
+     *    by an opaque internal id rather than by name. A guard keying on object identity
+     *    (`peer === localPeerId`) would pass against the endpoint's own instance and fail here.
+     * 2. It is added to the endpoint's `connected` list, so `session.connectedPeers` really does
+     *    name it. On this fabric the delegate's roster and the send targets are **decoupled** — the
+     *    send paths read `connectedPeers` directly — so an injection that only fired the delegate
+     *    callback could not reach the loopback half of the defect at all.
+     */
+    fun injectSelfDial(peer: MCPeerID): Boolean {
+        val local = endpoints.firstOrNull { it.peer.displayName == peer.displayName } ?: return false
+        val selfSighting = MCPeerID(displayName = local.peer.displayName)
+        local.session.connected = local.session.connected + selfSighting
+        local.session.delegate?.session(local.session, selfSighting, MCSessionState.MCSessionStateConnected)
+        return true
+    }
+
     /** Deliver [data] from [from] to every endpoint named in [toPeers]. */
     fun route(from: MCPeerID, data: NSData, toPeers: List<*>) {
         val targets = toPeers.filterIsInstance<MCPeerID>().map { it.displayName }.toSet()

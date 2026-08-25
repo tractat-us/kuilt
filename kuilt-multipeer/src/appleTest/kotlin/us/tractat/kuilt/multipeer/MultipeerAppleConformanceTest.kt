@@ -122,27 +122,23 @@ class MultipeerAppleConformanceTest : SeamConformanceSuite() {
     override fun midSessionDeathGap(): String? = null
 
     /**
-     * **Not** the usual harness gap. [FakeMCSessionBus] *can* deliver the host a connection
-     * resolving to its own `MCPeerID`, and when it did, the obligation reded on the
-     * live-self-loopback arm:
+     * Hand the host a connection whose remote identity is its own `MCPeerID` — the #1466 self-dial.
+     * [FakeMCSessionBus.injectSelfDial] both fires the `MCSessionStateConnected` callback and adds
+     * the sighting to the session's `connectedPeers`, because on this fabric the delegate's roster
+     * and the send targets are decoupled and only the second reaches the loopback.
      *
-     * ```
-     * a rejected self-dial must not register a self-link: the host's own broadcast must never
-     * loop back to it attributed to selfId. Expected value to be null, but was:
-     *   <Swatch(payloadSize=2, sender=PeerId(value=conformance-host#aaaaaaaa), sequence=0)>
-     * ```
-     *
-     * `MCSessionLink`'s `didChangeState` has no `if (peerId == selfId) return`, the line
-     * `BridgePeerLink.peerStateCallback` has carried since #1494 — and on this fabric that line
-     * alone would not close it, because the send paths read `session.connectedPeers` directly
-     * rather than the roster the delegate maintains. Both halves are needed and neither is
-     * provable alone, which is why #2445 owns the fix instead of this PR, and why the injector
-     * itself lives in that issue rather than as an uncalled method here.
-     *
-     * So the URL below is a **fabric** gap, not a harness one: this harness reaches the state and
-     * the link fails it.
+     * Declared as a gap until #2445: `MCSessionLink` had neither the `if (peerId == selfId) return`
+     * that `BridgePeerLink` has carried since #1494, nor a self-filter on the `connectedPeers` the
+     * send paths read, and this obligation reded on the live-self-loopback arm. Note what this arm
+     * of the suite can and cannot see: the roster assertion is **structurally blind** on this
+     * fabric — the delegate republishes `registry.peers + selfId`, so `peers` is identical whether
+     * or not self was bound. [MCSessionLinkSelfDialTest] is what pins the delegate guard, via the
+     * `state` a lone self-dialled link must not move.
      */
-    override fun selfDialGap(): String = "https://github.com/tractat-us/kuilt/issues/2445"
+    override suspend fun injectSelfDial(host: Seam): Boolean = pair?.injectSelfDial() ?: false
+
+    /** Proven: this harness offers the host a connection to its own identity, so no gap. */
+    override fun selfDialGap(): String? = null
 }
 
 /**
@@ -193,6 +189,9 @@ internal class MCSessionLinkLoomPair(private val testScope: TestScope?) {
      * its own `SupervisorJob` scope for the delegate→spool drain coroutine, and the production
      * default is `Dispatchers.Default`, which would run that drain off the virtual clock.
      */
+    /** Offer the host endpoint a connection to its own identity; `false` if no host link exists yet. */
+    fun injectSelfDial(): Boolean = bus.injectSelfDial(hostPeer)
+
     private fun link(peer: MCPeerID): MCSessionLink {
         val scope = requireNotNull(testScope) {
             "MCSessionLinkLoomPair.weave needs a TestScope — use newLoomPair(testScope)"
