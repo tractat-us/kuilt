@@ -16,7 +16,7 @@ only the *missing* deltas — not a full queue replay — so a brief reconnectio
 is kind to a flaky link.
 
 The trick that makes this correct (not just buffered): every signal is stored as
-a **CRDT**. Spans are an [ORSet] keyed by span id; sending the same span twice
+a **CRDT**. Spans are an `ORSet` keyed by span id; sending the same span twice
 is a set union and therefore idempotent. Metrics are mergeable counters. Logs
 are an ordered append-only sequence. A resend **cannot double-count** — the
 delta-temporality retry bug is structurally impossible.
@@ -38,8 +38,8 @@ Nothing is delayed to make that happen. A batch is only ever what the caller alr
 had in hand, and it is on disk before the call returns — a lone line on a quiet app
 is written just as promptly as before.
 
-[WarpLogRecordExporter.export] takes either a single record or a list of them. The
-list overload admits the whole run to the [Rga], encodes the active segment once and
+`WarpLogRecordExporter.export` takes either a single record or a list of them. The
+list overload admits the whole run to the `Rga`, encodes the active segment once and
 writes it once, rather than repeating that per record; a run too large for one
 segment is split across turns, so a failure means "stop", not "none of it landed"
 (#2194). Dedup and the buffer cap remain per-record decisions. Its KDoc carries a
@@ -88,36 +88,36 @@ see that module's documentation for the durability contract and the four backend
 - **Late traces.** A trace straddling an offline and an online producer only
   assembles when the offline half syncs. Collectors accept late spans within a
   configurable assembly window.
-- **Bounded buffer.** The span and log buffers are capped ([DEFAULT_MAX_SPANS],
-  [DEFAULT_MAX_LOG_RECORDS]); the metric buffer at [DEFAULT_MAX_METRICS] distinct series.
+- **Bounded buffer.** The span and log buffers are capped (`DEFAULT_MAX_SPANS`,
+  `DEFAULT_MAX_LOG_RECORDS`); the metric buffer at `DEFAULT_MAX_METRICS` distinct series.
   Eviction is never silent, but it is reported differently by rate: spans and metrics
-  log each drop; log records are counted exactly on [ExporterHealth.dropped] /
-  [ExporterHealth.refused] with one rate-limited summary line, because at
-  [DEFAULT_MAX_LOG_RECORDS] every exported record evicts one and a per-record line
+  log each drop; log records are counted exactly on `ExporterHealth.dropped` /
+  `ExporterHealth.refused` with one rate-limited summary line, because at
+  `DEFAULT_MAX_LOG_RECORDS` every exported record evicts one and a per-record line
   would narrate the cap doing its job. Counters are O(1) regardless of offline
   duration (a counter compresses losslessly).
 - **For logs, the total settles on the export path and still grows on the gossip path.**
-  [WarpLogRecordExporter] persists its op-log in segments of [DEFAULT_LOG_SEGMENT_OPS]
+  `WarpLogRecordExporter` persists its op-log in segments of `DEFAULT_LOG_SEGMENT_OPS`
   operations, so one export rewrites one segment rather than the whole log; it then
   periodically drops everything outside the retained window from memory and deletes any
   sealed segment the resulting suppression state fully covers. A device fed only by its own
-  [WarpLogRecordExporter.export] calls therefore holds O([DEFAULT_MAX_LOG_RECORDS]) ops and
+  `WarpLogRecordExporter.export` calls therefore holds O(`DEFAULT_MAX_LOG_RECORDS`) ops and
   a flat number of keys however long it runs, and startup reads that many keys rather than
   one per segment ever written (#2127).
   **That is one arm of the claim, not the whole of it — and the other arm costs whole
   records, not a small note.** A record that arrived from a *peer* through
-  [WarpLogRecordExporter.merge] cannot fold into the per-author floor — raising another
+  `WarpLogRecordExporter.merge` cannot fold into the per-author floor — raising another
   author's floor would annihilate records it has not written yet — so each one windowed away
   is suppressed by an explicit compaction record instead. *In memory* that is one bodiless
   `(id -> id)` pair per element. *On disk it is not bodiless at all:* nothing prunes a
   compaction record, so a segment carrying one is pinned, and a pinned segment is retained
   **entire** — every record it holds, bodies included, permanently. Two shapes reach it. A
   sealed segment that happened to be active when a pass minted one keeps its full
-  [DEFAULT_LOG_SEGMENT_OPS] operations (~123 KB at the defaults) forever. And
-  [WarpLogRecordExporter.merge] persists the peer's op-log verbatim under a key of its own,
+  `DEFAULT_LOG_SEGMENT_OPS` operations (~123 KB at the defaults) forever. And
+  `WarpLogRecordExporter.merge` persists the peer's op-log verbatim under a key of its own,
   so merging from a peer that has itself windowed a foreign author's records — which is any
   peer in a steady-state mesh — pins that peer's whole log: megabytes per merge at the
-  default [DEFAULT_MAX_LOG_RECORDS]. So the gossip path is growth, not a bound, and a replica
+  default `DEFAULT_MAX_LOG_RECORDS`. So the gossip path is growth, not a bound, and a replica
   that gossips accumulates it for as long as the process lives. Bounding it needs the same
   causal-stability argument tombstone collection does; consolidation — rewriting a pinned
   segment's compaction record forward so the segment can go — was considered and declined,

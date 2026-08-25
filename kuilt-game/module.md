@@ -19,7 +19,7 @@ val session = backgroundScope.gameNode(seam, voterIds, raftConfig = raftConfig)
 
 Exactly one peer calls `gameHost`; every other peer calls `gameJoin`. The host
 bootstraps a singleton-voter cluster, detects duplicate-host declarations via lobby
-presence ([`DuplicateHostException`]), and admits each connecting peer as
+presence (`DuplicateHostException`), and admits each connecting peer as
 learner → voter until the cluster reaches `peerCount` voters.
 
 ```kotlin
@@ -140,7 +140,7 @@ calls:
 | Method | Role |
 |--------|------|
 | `apply(state, action): S` | Advance the state by one action — must be **pure and deterministic**. |
-| `snapshot(state): S` | Capture an independent checkpoint (deep-copy if [S] is mutable). |
+| `snapshot(state): S` | Capture an independent checkpoint (deep-copy if `S` is mutable). |
 | `restore(snapshot): S` | Reinstate a snapshot before replaying the pending buffer. |
 | `fromSnapshot(bytes): S` | Rebuild state from a Raft snapshot install — only needed with log compaction. |
 
