@@ -95,11 +95,34 @@ abstract class GenerateKarmaOrphanGuard : DefaultTask() {
             |    var originalSpawn = childProcess.spawn;
             |    var spawned = new Set();
             |
+            |    // Diagnostic trail. A guard that fails silently is indistinguishable from a
+            |    // guard that worked, so every step and every error is recorded next to the
+            |    // Karma config. Cheap, bounded, and the only way a future failure is legible.
+            |    var trail = require('path').join(process.cwd(), 'karma-orphan-guard.log');
+            |    function note(message) {
+            |        try {
+            |            require('fs').appendFileSync(trail, Date.now() + ' [' + process.pid + '] ' + message + '\n');
+            |        } catch (ignored) {
+            |            // Never let diagnostics fail the build.
+            |        }
+            |    }
+            |    function describe(error) {
+            |        return error && error.stack ? error.stack : String(error);
+            |    }
+            |    note('guard loaded; execPath=' + process.execPath);
+            |
             |    // Runs as `node -e`. Reads "+pid" / "-pid" lines from stdin; when that pipe
             |    // closes — which the kernel guarantees the moment the Karma process dies, by
             |    // any signal including SIGKILL — it kills whatever PIDs are still recorded.
             |    var watchdogSource = [
             |        "var pids = new Set(), buf = '';",
+            |        "var trail = process.argv[1];",
+            |        "function note(message) {",
+            |        "  try {",
+            |        "    require('fs').appendFileSync(trail, Date.now() + ' [wd ' + process.pid + '] ' + message + '\n');",
+            |        "  } catch (ignored) {}",
+            |        "}",
+            |        "note('watchdog up');",
             |        "process.stdin.on('data', function (chunk) {",
             |        "  buf += chunk;",
             |        "  var i;",
@@ -110,31 +133,33 @@ abstract class GenerateKarmaOrphanGuard : DefaultTask() {
             |        "    else if (line.charAt(0) === '-') { pids.delete(Number(line.slice(1))); }",
             |        "  }",
             |        "});",
-            |        "function reap() {",
+            |        "function reap(why) {",
             |        "  var reaped = [];",
             |        "  pids.forEach(function (pid) {",
             |        "    try { process.kill(pid, 'SIGKILL'); reaped.push(pid); } catch (ignored) {}",
             |        "  });",
-            |        "  var receipt = process.env.KUILT_KARMA_GUARD_LOG;",
-            |        "  if (receipt) {",
-            |        "    try {",
-            |        "      require('fs').appendFileSync(receipt, 'reaped:' + reaped.join(',') + '\n');",
-            |        "    } catch (ignored) {}",
-            |        "  }",
+            |        "  note('reap(' + why + ') killed=' + reaped.join(','));",
             |        "  process.exit(0);",
             |        "}",
-            |        "process.stdin.on('end', reap);",
-            |        "process.stdin.on('close', reap);",
-            |        "process.stdin.on('error', reap);",
+            |        "process.stdin.on('end', function () { reap('end'); });",
+            |        "process.stdin.on('close', function () { reap('close'); });",
+            |        "process.stdin.on('error', function (e) { reap('error:' + e.code); });",
             |    ].join('\n');
             |
             |    var watchdog = null;
             |    function watchdogInput() {
             |        if (watchdog === null) {
             |            // originalSpawn, so the watchdog never records itself.
-            |            watchdog = originalSpawn(process.execPath, ['-e', watchdogSource], {
+            |            watchdog = originalSpawn(process.execPath, ['-e', watchdogSource, trail], {
             |                detached: true,
             |                stdio: ['pipe', 'ignore', 'ignore'],
+            |            });
+            |            note('watchdog spawned pid=' + watchdog.pid);
+            |            watchdog.on('exit', function (code, signal) {
+            |                note('watchdog exited code=' + code + ' signal=' + signal);
+            |            });
+            |            watchdog.on('error', function (error) {
+            |                note('watchdog error: ' + describe(error));
             |            });
             |            // Neither the child nor its stdin may hold this process's event loop
             |            // open, or a passing build would never exit.
@@ -147,9 +172,15 @@ abstract class GenerateKarmaOrphanGuard : DefaultTask() {
             |    function tell(message) {
             |        try {
             |            var input = watchdogInput();
-            |            if (input && input.writable) { input.write(message); }
-            |        } catch (ignored) {
-            |            // A guard that cannot start its watchdog must not fail the build.
+            |            if (input && input.writable) {
+            |                input.write(message);
+            |            } else {
+            |                note('watchdog stdin not writable for ' + message.trim());
+            |            }
+            |        } catch (error) {
+            |            // A guard that cannot start its watchdog must not fail the build — but
+            |            // it must not hide why either.
+            |            note('tell(' + message.trim() + ') failed: ' + describe(error));
             |        }
             |    }
             |
@@ -158,18 +189,22 @@ abstract class GenerateKarmaOrphanGuard : DefaultTask() {
             |        if (child && typeof child.pid === 'number') {
             |            var pid = child.pid;
             |            spawned.add(pid);
+            |            note('spawn intercepted pid=' + pid + ' argv0=' + arguments[0]);
             |            tell('+' + pid + '\n');
             |            child.once('exit', function () {
             |                spawned.delete(pid);
             |                // Un-record promptly, so a run that ends cleanly leaves the
             |                // watchdog holding nothing and PID reuse has no target.
+            |                note('child exited pid=' + pid);
             |                tell('-' + pid + '\n');
             |            });
             |        }
             |        return child;
             |    };
+            |    note('spawn patched; patch installed=' + (childProcess.spawn !== originalSpawn));
             |
             |    process.on('exit', function () {
+            |        note('process exit; still recorded=' + Array.from(spawned).join(','));
             |        spawned.forEach(function (pid) {
             |            try { process.kill(pid, 'SIGKILL'); } catch (ignored) {}
             |        });
