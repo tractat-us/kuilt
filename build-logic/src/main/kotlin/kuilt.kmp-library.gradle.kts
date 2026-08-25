@@ -167,12 +167,22 @@ val generateKarmaTimeouts = tasks.register<GenerateKarmaTimeouts>("generateKarma
     outputFile.set(layout.buildDirectory.file("karma-config.d/timeouts.js"))
 }
 
+// Companion to the timeouts above, into the same config directory: the guard that stops a
+// headless browser outliving the build that spawned it (#2461). Kotlin's Karma integration
+// concatenates every file in the config directory into karma.conf.js, so this needs no wiring
+// beyond being generated alongside — see GenerateKarmaOrphanGuard for the mechanism.
+val generateKarmaOrphanGuard = tasks.register<GenerateKarmaOrphanGuard>("generateKarmaOrphanGuard") {
+    group = "build setup"
+    description = "Writes the wasmJs Karma orphan guard into build/karma-config.d/."
+    outputFile.set(layout.buildDirectory.file("karma-config.d/orphan-guard.js"))
+}
+
 afterEvaluate {
     val wasmBrowserTest = tasks.findByName("wasmJsBrowserTest") as? KotlinJsTest ?: return@afterEvaluate
     val karma = wasmBrowserTest.testFramework as? KotlinKarma ?: return@afterEvaluate
     val configDir = layout.buildDirectory.dir("karma-config.d").get().asFile
     karma.useConfigDirectory(configDir)
-    wasmBrowserTest.dependsOn(generateKarmaTimeouts)
+    wasmBrowserTest.dependsOn(generateKarmaTimeouts, generateKarmaOrphanGuard)
 }
 
 // Serialize wasmJsBrowserTest across the whole build. `registerIfAbsent` makes
