@@ -181,6 +181,9 @@ internal class MCSessionLinkLoomPair(private val testScope: TestScope?) {
         }
     }
 
+    /** Offer the host endpoint a connection to its own identity; `false` if no host link exists yet. */
+    fun injectSelfDial(): Boolean = bus.injectSelfDial(hostPeer)
+
     /**
      * Build one link over a bus endpoint and install its delegate, exactly as
      * `MultipeerPeerLinkFactory.openSession`/`joinSession` do with a real `MCSession`.
@@ -189,9 +192,6 @@ internal class MCSessionLinkLoomPair(private val testScope: TestScope?) {
      * its own `SupervisorJob` scope for the delegate→spool drain coroutine, and the production
      * default is `Dispatchers.Default`, which would run that drain off the virtual clock.
      */
-    /** Offer the host endpoint a connection to its own identity; `false` if no host link exists yet. */
-    fun injectSelfDial(): Boolean = bus.injectSelfDial(hostPeer)
-
     private fun link(peer: MCPeerID): MCSessionLink {
         val scope = requireNotNull(testScope) {
             "MCSessionLinkLoomPair.weave needs a TestScope — use newLoomPair(testScope)"

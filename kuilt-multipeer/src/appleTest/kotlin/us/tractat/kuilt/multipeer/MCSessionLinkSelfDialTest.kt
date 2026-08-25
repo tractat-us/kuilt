@@ -29,11 +29,13 @@ import kotlin.test.assertTrue
  * `session.connectedPeers` straight from the framework. So there are two independent defects, and
  * each needs the arm that can see it:
  *
- * 1. [aSelfDialNeverWeavesTheSeamNorJoinsTheRoster] pins the **delegate guard**. The roster cannot
- *    see it — the delegate republishes `registry.peers + selfId`, which re-adds `selfId` whether or
- *    not self was bound, so `peers` is byte-identical either way. `state` is what tells them apart:
- *    a link that has met nobody must stay [SeamState.Weaving], and binding a self-peer flips it to
- *    [SeamState.Woven] — a lone device reporting a woven session with itself.
+ * 1. [aSelfDialNeverWeavesTheSeam] pins the **delegate guard**, and `state` is the whole of what
+ *    pins it. The roster cannot: the delegate republishes `registry.peers + selfId`, which re-adds
+ *    `selfId` whether or not self was bound, so `peers` is byte-identical either way — the roster
+ *    arm in that test is a labelled change-detector asserting nothing about the guard, and the name
+ *    deliberately does not claim otherwise. `state` is what tells the two apart: a link that has met
+ *    nobody must stay [SeamState.Weaving], and binding a self-peer flips it to [SeamState.Woven] —
+ *    a lone device reporting a woven session with itself.
  * 2. [aSelfDialledLinkDoesNotBroadcastToItself] pins the **send-path filter**, which is the
  *    live-self-loopback shape [us.tractat.kuilt.conformance.SeamConformanceSuite.selfDialIsRejected]
  *    asserts. Note the delegate guard alone does *not* close it: `connectedPeers` names the
@@ -51,7 +53,7 @@ import kotlin.test.assertTrue
 class MCSessionLinkSelfDialTest {
 
     @Test
-    fun aSelfDialNeverWeavesTheSeamNorJoinsTheRoster() =
+    fun aSelfDialNeverWeavesTheSeam() =
         runTest {
             val rig = SelfDialRig(this, withRemote = false)
             assertIs<SeamState.Weaving>(
@@ -72,7 +74,12 @@ class MCSessionLinkSelfDialTest {
                     assertEquals(
                         setOf(rig.link.selfId),
                         rig.link.peers.value,
-                        "a dropped self-dial must leave the roster at {selfId}",
+                        "a dropped self-dial must leave the roster at {selfId} — but note this arm is " +
+                            "STRUCTURALLY BLIND today and asserts nothing about the guard: `_peers` is only " +
+                            "ever written as `registry.peers + selfId`, and in this rig the only candidate " +
+                            "binding IS self, so it is {selfId} == {selfId} for every reachable state, guard " +
+                            "or no guard. Kept as a forward-looking change-detector: it reds only if the " +
+                            "roster spelling changes. The state arm above is the live one",
                     )
                 },
             )
