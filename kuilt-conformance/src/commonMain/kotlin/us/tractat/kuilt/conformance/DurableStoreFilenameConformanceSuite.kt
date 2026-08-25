@@ -104,6 +104,48 @@ import kotlin.test.assertTrue
  * operating system's page cache satisfies it whether or not the bytes ever reached a device. See
  * [DurableStoreConformanceSuite] for the same residual stated at length.
  *
+ * ## Mutation receipts
+ *
+ * Measured over `:kuilt-store:jvmTest --tests "*Filename*"` (21 tests: this suite's 7 bound by
+ * `FileChannelDurableStoreFilenameTest`, plus `StoreKeyFilenameTest`'s 14 encoder guards), with
+ * `--no-build-cache`, the results XML deleted before every run and the log grepped for compile
+ * errors — a mutation that does not compile leaves Gradle serving the previous run's XML, which
+ * reads as a verdict and is stale. Each applied alone and reverted, the revert verified with
+ * `git status`. Only this suite's reds are listed; the encoder guards red widely and are #2511's
+ * receipt, not this one's.
+ *
+ * "**APFS**" marks a red that depends on the filesystem. Every row was re-measured on a
+ * **case-sensitive** APFS volume created for the purpose, which is what a Linux CI runner behaves
+ * like; the two rows where the verdict differs say so.
+ *
+ * | Mutation | Reds in this suite, at assertion granularity |
+ * |---|---|
+ * | **`isSafe`:** put `_` back in the safe set | [aKeyNeverAdoptsAnotherKeysLegacyOrphan] both absence assertions; [theLegacyOverlapACaseFoldingFilesystemExposesIsExactlyTheDocumentedOne] its `otel_logs` assertion |
+ * | **`isSafe`:** put `A`–`Z` back in (undo #2511's uppercase escaping) | [theLegacyOverlapACaseFoldingFilesystemExposesIsExactlyTheDocumentedOne] on the `Config` assertion, **on both filesystems**; [keysDifferingOnlyInCaseAddressDistinctEntries] **only on APFS** — green on the case-sensitive volume. That asymmetry is the reason the `Config` assertion exists |
+ * | **`isSafe`:** put `.` back in | [anEntryNeverLandsOnAnotherEntrysTempSidecar] on `"x.tmp" survived x's write` — and nothing else here |
+ * | **`encodeStoreKeyName`:** `lowercase()` the name first | [keysDifferingOnlyInCaseAddressDistinctEntries] on `"a"`, **on both filesystems** — the fold is the store's own; [theLegacyOverlapACaseFoldingFilesystemExposesIsExactlyTheDocumentedOne] `Config` **only on APFS**. The mirror image of the row above, which is why neither property replaces the other |
+ * | **`encodeStoreKeyName`:** fold every byte ≥ `0x80` onto one escape | [keysDifferingOnlyInANonAsciiLetterAddressDistinctEntries] on `"мир"` — and nothing else here |
+ * | **`isSafe`:** take `-` *out* of the safe set | [aKeyAlreadyInsideTheSafeSetStillFindsItsOwnFile] on `"span-state"` — and nothing else here |
+ * | **`encodeStoreKeyName`:** the whole fix deleted — the legacy JVM sanitiser restored verbatim | [keysThatFoldedOntoOneFilenameAddressDistinctEntries] 4 of 5; [keysDifferingOnlyInANonAsciiLetterAddressDistinctEntries]; [keysDifferingOnlyInCaseAddressDistinctEntries]; [aKeyNeverAdoptsAnotherKeysLegacyOrphan] both; [theLegacyOverlapACaseFoldingFilesystemExposesIsExactlyTheDocumentedOne] 4 assertions. **[aKeyAlreadyInsideTheSafeSetStillFindsItsOwnFile] and [anEntryNeverLandsOnAnotherEntrysTempSidecar] stay green, correctly** — the legacy scheme is the identity on `spans`/`span-state` and maps `x.tmp` to `x_tmp`, so neither failure is present |
+ * | **`FileChannelDurableStore.write`:** append straight to the destination, no temp file, no rename | [anEntryNeverLandsOnAnotherEntrysTempSidecar] on `"x"` (`[1, 3]` where `[3]` was written) — and nothing else here. The receipt that this property still bites after moving into a suite |
+ * | **`FileChannelDurableStore`:** ignore [us.tractat.kuilt.store.StoreKey] `filename` and re-derive its own sanitiser | [keysThatFoldedOntoOneFilenameAddressDistinctEntries] 4 of 5; [keysDifferingOnlyInCaseAddressDistinctEntries]; [aKeyNeverAdoptsAnotherKeysLegacyOrphan] both; [theLegacyOverlapACaseFoldingFilesystemExposesIsExactlyTheDocumentedOne] 4. **Zero encoder guards red** — this is the row that justifies the suite existing: a backend re-deriving its own mapping is invisible to every test that checks the encoder in isolation. [keysDifferingOnlyInANonAsciiLetterAddressDistinctEntries] stays green because `isLetterOrDigit()` is true for Cyrillic, which is the historical fact of #2506 |
+ * | **Fixture:** [plantRawFile] does nothing | [aKeyNeverAdoptsAnotherKeysLegacyOrphan] on its control precondition; [aKeyAlreadyInsideTheSafeSetStillFindsItsOwnFile] both; [theLegacyOverlapACaseFoldingFilesystemExposesIsExactlyTheDocumentedOne] on its probe precondition. No absence assertion is reached — the preconditions fire first |
+ * | **Fixture:** [newStore] ignores the directory it was handed | **all seven**, and the three plant-dependent ones on their preconditions |
+ * | **Fixture:** [newDirectory] hands back one directory shared by every property | **nothing.** See below |
+ * | **Fixture (positive control):** [newDirectory] hands back a directory a previous run left entries in | [keysThatFoldedOntoOneFilenameAddressDistinctEntries], [keysDifferingOnlyInANonAsciiLetterAddressDistinctEntries], [keysDifferingOnlyInCaseAddressDistinctEntries] and [anEntryNeverLandsOnAnotherEntrysTempSidecar], each on its own freshness precondition, each naming its own key |
+ * | **Suite:** flip the measured case-folding branch | [theLegacyOverlapACaseFoldingFilesystemExposesIsExactlyTheDocumentedOne] on the probe precondition *and* the arm — confirming which arm a given box takes rather than leaving it inferred |
+ *
+ * **The row that reds nothing is the one worth reading.** A fixture handing back one shared
+ * directory for every property moves no assertion at all, and the two rows below it are why that is
+ * a fact about the suite rather than a dead assertion: the freshness precondition is demonstrably
+ * live (the positive-control row reds four properties on it), and the shared-directory fixture is
+ * simply not a defect *here*, because every property uses a key set disjoint from every other's and
+ * plants immediately before it reads. So what [newDirectory]'s freshness buys is protection against
+ * a **dirty** directory — a temp root that outlives the process, most of all, which is exactly the
+ * hazard the Apple fixture's own helper is built around — and not against sharing. Adding a
+ * property whose keys overlapped another's would change that, and is deliberately not done for the
+ * sake of a redder table.
+ *
  * @param DIR whatever this backend calls a directory — `java.io.File` on JVM/Android, a path
  *   `String` on Apple. Opaque to the suite: it is created by [newDirectory] and handed straight
  *   back to [newStore] and [plantRawFile], so no path-string convention is imposed on a backend.

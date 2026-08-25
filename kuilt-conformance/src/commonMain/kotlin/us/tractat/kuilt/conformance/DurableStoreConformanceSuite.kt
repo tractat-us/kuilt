@@ -60,8 +60,10 @@ import kotlin.test.assertNull
  *
  * ## Mutation receipts
  *
- * Measured over `:kuilt-store:jvmTest` — 53 tests: `InMemoryDurableStoreConformanceTest` (this
- * suite's 16), `FileChannelDurableStoreTest` (those 16 again, plus 6 filename tests of its own),
+ * Measured over `:kuilt-store:jvmTest` — 54 tests: `InMemoryDurableStoreConformanceTest` (this
+ * suite's 16), `FileChannelDurableStoreTest` (those 16 again) and `FileChannelDurableStoreFilenameTest`
+ * (7 filename properties, which #2515 moved out of `FileChannelDurableStoreTest` into
+ * [DurableStoreFilenameConformanceSuite] and re-measured there),
  * `StoreKeyFilenameTest` (14, the shared encoder's own guards) and `StoreSamplesRunTest` — with
  * `--no-build-cache --rerun-tasks`, the results XML deleted before every run and the log grepped for
  * compile errors, because a mutation that does not compile leaves Gradle serving the previous run's
@@ -95,9 +97,9 @@ import kotlin.test.assertNull
  * | **`InMemoryDurableStore.write`:** mask the high bit off every byte | [everyByteValueSurvivesTheRoundTrip] a2, first mismatch at **index 128**; [aLargeValueRoundTripsWhole] a2. **[writtenBytesComeBackExactly] stays green** — every byte in its payload is below `0x80`, which is why those two are not one property |
  * | **`FileChannelDurableStore.read`:** truncate at 8 KiB | [aLargeValueRoundTripsWhole], both assertions (262144 against 8192) — and nothing else |
  * | **`FileChannelDurableStore.read`:** a zero-length file decodes to `null` | [anEmptyValueIsAValueAndNotAnAbsence], both assertions — and nothing else |
- * | **`FileChannelDurableStore.write`:** append rather than atomically replace | [aSecondWriteReplacesTheFirstWhole] all three; [whatWasWrittenBeforeARestartIsReadableAfterIt] the **`overwritten`** assertion only, not `kept`; and `FileChannelDurableStoreTest.anEntryNeverLandsOnAnotherEntrysTempSidecar` on its `"x"` assertion (`[1, 3]` where `[3]` was written). That third red is **new since this row was first measured** — #2511 added the test that reaches it — which is why the row states its reds rather than claiming "and nothing else" |
+ * | **`FileChannelDurableStore.write`:** append rather than atomically replace | [aSecondWriteReplacesTheFirstWhole] all three; [whatWasWrittenBeforeARestartIsReadableAfterIt] the **`overwritten`** assertion only, not `kept`; and `FileChannelDurableStoreFilenameTest.anEntryNeverLandsOnAnotherEntrysTempSidecar` on its `"x"` assertion (`[1, 3]` where `[3]` was written). That third red is **new since this row was first measured** — #2511 added the test that reaches it — which is why the row states its reds rather than claiming "and nothing else" |
  * | **`StoreKey.filename`:** truncate the encoded name to 64 characters | [aLongKeyIsStillAKey] a1 (expected `1`, got `2`) — and nothing else. The one-sided shape is the point: both keys encode to the same 64-character prefix, so the second write lands on the first's entry and only the *first* key's read is wrong. a2 reads what it wrote and stays green |
- * | **`StoreKey.filename`:** `lowercase()` the key name before encoding | [distinctKeysAddressDistinctEntries] the `"a-b"` assertion only (expected `4`, got `5` — `"a-B"` landed on it), plus `FileChannelDurableStoreTest.keysDifferingOnlyInCaseAddressDistinctEntries`. This is the case pair's receipt, and it reds **on every filesystem**, because the fold is the store's own |
+ * | **`StoreKey.filename`:** `lowercase()` the key name before encoding | [distinctKeysAddressDistinctEntries] the `"a-b"` assertion only (expected `4`, got `5` — `"a-B"` landed on it), plus `FileChannelDurableStoreFilenameTest.keysDifferingOnlyInCaseAddressDistinctEntries`. This is the case pair's receipt, and it reds **on every filesystem**, because the fold is the store's own |
  * | **`encodeStoreKeyName`'s safe set:** put `A`–`Z` back in it (undo #2511's uppercase escaping) | the same `"a-b"` assertion — **but only because the measuring box's temp root is APFS.** `a-b` and `a-B` become two distinct *filenames* that a case-folding filesystem makes one *file*; on a case-sensitive one this mutation reds nothing in this suite at all. It does red four of `StoreKeyFilenameTest`'s encoder guards, which is where that boundary is pinned target-independently, and is why the suite is not the place to rely on it |
  * | **`FileChannelDurableStore`:** drop `FileChannel.force(true)` | **nothing.** See the residual below |
  * | **Fixture:** `restart` returns the store it was given | both restart properties, on the [assertNotSame] precondition — no durability assertion is reached |
@@ -125,11 +127,13 @@ import kotlin.test.assertNull
  * filename rows reach a whole backend that run does not contain: `StoreKey.filename` and
  * `encodeStoreKeyName` are `commonMain`, so `NSFileManagerDurableStore` is mutated too. The
  * `lowercase()` row was therefore re-run against `:kuilt-store:macosArm64Test`, where it reds the
- * same two things — [distinctKeysAddressDistinctEntries]' `"a-b"` assertion, and that backend's own
- * `keysDifferingOnlyInCaseAddressDistinctEntries`. That second red is the one worth having: it is
- * what establishes that the six filename tests kept beside this suite still bite in their new
- * conformance-subclass shape, rather than having been carried across into a fixture that cannot
- * fail them.
+ * same two things — [distinctKeysAddressDistinctEntries]' `"a-b"` assertion, and the Apple backend's
+ * `keysDifferingOnlyInCaseAddressDistinctEntries` (now
+ * `NSFileManagerDurableStoreFilenameTest`'s, via [DurableStoreFilenameConformanceSuite]). That second
+ * red is the one worth having: it is what establishes that the filename properties still bite in
+ * their new conformance-subclass shape, rather than having been carried across into a fixture that
+ * cannot fail them. #2515 re-ran it after moving them into a suite and it still reds, plus that
+ * suite's own case-folding property.
  *
  * **What the suite itself now rests on**, since a fix is only as good as what nothing checks: the
  * fixture, in exactly two places, and both are checked rather than assumed. [newStore] really
