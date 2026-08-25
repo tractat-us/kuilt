@@ -141,14 +141,24 @@ afterEvaluate {
     // the part it is missing is most of the classpath. detekt 1.23.8 pins
     // `kotlin-compiler-embeddable:{strictly 2.0.21}` and refuses to start against any other
     // ("detekt was compiled with Kotlin 2.0.21 but is currently running with 2.4.10. This is
-    // not supported."). A 2.0.21 frontend reads Kotlin binary metadata up to `mv=[1,9,0]`, and
-    // every Kotlin binary on the analysis classpath is past that — measured with `javap -v`,
-    // `[2,4,0]` for kotlin-stdlib-2.4.10, `kuilt-core-jvm.jar` and a module's own
-    // `build/classes` output, `[2,2,0]` for kotlinx-coroutines-1.11.0. (Not one number: a
-    // dependency's metadata version tracks the compiler that BUILT it, so the bound to check
-    // is `> [1,9,0]`, not equality with the repo's own.) Metadata a frontend cannot
-    // deserialize is not an error, it is SILENCE: the declaration simply does not exist for
-    // resolution.
+    // not supported."). That frontend's metadata READ CEILING is `[2,1,0]`: reflecting on
+    // `kotlin-compiler-embeddable-2.0.21.jar`, `JvmMetadataVersion.INSTANCE` is `[2,0,0]` and
+    // `INSTANCE_NEXT` is `[2,1,0]`, and non-strict binaries — this repo's are, the 0x8 bit of
+    // `xi` is clear — are checked against INSTANCE_NEXT. It accepts `[2,0,0]`/`[2,1,0]` and
+    // rejects `[2,2,0]`/`[2,3,0]`/`[2,4,0]`. Every Kotlin binary on the analysis classpath is
+    // past the ceiling — measured with `javap -v`, `[2,4,0]` for kotlin-stdlib-2.4.10,
+    // `kuilt-core-jvm.jar` and a module's own `build/classes` output, `[2,2,0]` for
+    // kotlinx-coroutines-1.11.0.
+    //
+    // TWO TRAPS in those numbers, both of which caught earlier drafts of this comment. A
+    // dependency's metadata version tracks the compiler that BUILT it, so the bound is never
+    // equality with the repo's own Kotlin; and the ceiling is the frontend's version plus ONE
+    // MINOR, so the bound is `> [frontendMajor, frontendMinor + 1, 0]` — never a literal, and
+    // emphatically not `[1,9,0]`, which is merely what a 2.0.21 compiler WRITES. A frontend one
+    // minor behind the project reads the project's binaries perfectly well.
+    //
+    // Metadata a frontend cannot deserialize is not an error, it is SILENCE: the declaration
+    // simply does not exist for resolution.
     //
     // So the tier resolves exactly three things — Kotlin BUILT-INS (`String`, `MutableMap`,
     // `Throwable` and their members, loaded from the compiler's own jar, not the classpath),
@@ -163,9 +173,13 @@ afterEvaluate {
     //     val m = mutableMapOf<Long, String>()               // type INFERRED from stdlib
     //     m.remove(k)!!                                      // -> SILENT
     //
-    // Two lines apart, same file, same task. There is no config that fixes this: detekt
-    // 1.23.8 is the newest release on Maven Central and 2.x (K2 Analysis API) is unreleased.
-    // Because of that, `forbidNotNullAssertionInUnresolvedSource` in the root build no longer
+    // Two lines apart, same file, same task. This is a TRADE, not an impossibility: detekt 2.x
+    // exists, having relocated to group `dev.detekt`, and `dev.detekt:detekt-cli:2.0.0-alpha.6`
+    // pins `kotlin-compiler {strictly 2.4.10}` — this repo's exact Kotlin, which would restore
+    // type resolution in full. It is deliberately not adopted (an alpha in a required lint gate,
+    // plus 2.0's KMP run-time regression, detekt/detekt#8882); #2534 tracks re-measuring that
+    // choice against what the skew actually costs. While the trade holds,
+    // `forbidNotNullAssertionInUnresolvedSource` in the root build no longer
     // subtracts this tier — the lexical `!!` ban is the floor EVERYWHERE, and detekt is a
     // bonus on top of it rather than the mechanism. Re-read that guard's scope, and this
     // comment, the day detekt can run a frontend that matches `libs.versions.toml`'s Kotlin;

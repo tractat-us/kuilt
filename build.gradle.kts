@@ -5134,10 +5134,15 @@ object NotNullAssertionScanner {
 // be false. It used to SUBTRACT the source of every type-resolved detekt task, on the argument that
 // `!!` there is detekt's job and double-reporting would be noise. Measured, detekt's job there is
 // mostly not being done: detekt 1.23.8 pins `kotlin-compiler-embeddable:{strictly 2.0.21}` and
-// refuses to run against any other, a 2.0.21 frontend deserializes Kotlin metadata only up to
-// `mv=[1,9,0]`, and every Kotlin binary on the analysis classpath is past that — `[2,4,0]` for
-// kotlin-stdlib-2.4.10, `kuilt-core-jvm.jar` and a module's own `build/classes` output, `[2,2,0]`
-// for kotlinx-coroutines-1.11.0, each tracking the compiler that built it rather than this repo's.
+// refuses to run against any other. That frontend's metadata READ CEILING is `[2,1,0]` — measured,
+// not inferred: reflecting on `kotlin-compiler-embeddable-2.0.21.jar`, `JvmMetadataVersion.INSTANCE`
+// is `[2,0,0]` and `INSTANCE_NEXT` is `[2,1,0]`, and non-strict binaries (this repo's are: the 0x8
+// bit of `xi` is clear) are checked against INSTANCE_NEXT. It accepts `[2,0,0]`/`[2,1,0]` and
+// rejects `[2,2,0]`/`[2,3,0]`/`[2,4,0]`. Every Kotlin binary on the analysis classpath is past the
+// ceiling — `[2,4,0]` for kotlin-stdlib-2.4.10, `kuilt-core-jvm.jar` and a module's own
+// `build/classes` output, `[2,2,0]` for kotlinx-coroutines-1.11.0, each tracking the compiler that
+// built it rather than this repo's. (Do not reach for `[1,9,0]` here: that is what a 2.0.21
+// compiler WRITES, which is a different axis from what it READS.)
 // Metadata a frontend cannot read is not an error, it is SILENCE — so type resolution sees only
 // compiler BUILT-INS, JAVA/JDK classes, and declarations in the source files being analysed.
 // kotlin-stdlib, kotlinx-coroutines and every sibling kuilt module are invisible, and a `!!` whose
@@ -5151,10 +5156,22 @@ object NotNullAssertionScanner {
 //
 // The live receipt is the one #2471 was filed on: `GossipDedup.forceForwardPastGap`'s
 // `state.pending.remove(lowest)!!` sat in shipped `commonMain` production code with
-// `UnsafeCallOnNullableType: active: true` and `detektAll` green. There is no config that fixes it
-// — 1.23.8 is the newest release on Maven Central and detekt 2.x (K2 Analysis API) is unreleased —
-// so the lexical ban became the FLOOR everywhere and detekt is a bonus on top of it. Double
-// reporting is now possible and is fine: both spellings of the verdict are a failed build.
+// `UnsafeCallOnNullableType: active: true` and `detektAll` green.
+//
+// This is a TRADE, not an impossibility — say it that way, because the first draft of this comment
+// said "no config fixes it" and that was simply wrong. detekt 2.x EXISTS: it relocated to group
+// `dev.detekt` (which is why searching the old group returns nothing), and
+// `dev.detekt:detekt-cli:2.0.0-alpha.6` pins `kotlin-compiler {strictly 2.4.10}` — this repo's
+// exact Kotlin, ceiling `[2,5,0]`, type resolution fully restored. It is deliberately not adopted:
+// it is an alpha in a required lint gate, and 2.0's type resolution regressed KMP run times badly
+// (detekt/detekt#8882 — an ~80k-LOC monorepo went ~1 min to ~24 min because it compiles every
+// Android variant). Weigh that honestly, though: the ~1 min baseline was a frontend that, on a
+// Kotlin 2.1+ codebase, resolves almost nothing off the classpath, so part of the "regression" is
+// the cost of doing the work at all. #2534 tracks re-measuring it.
+//
+// While that trade holds, the lexical ban is the FLOOR everywhere and detekt is a bonus on top of
+// it. Double reporting is now possible and is fine: both spellings of the verdict are a failed
+// build.
 // `forbidDetektFrontendSkew` below reds if the skew that forced this ever goes away, so this
 // paragraph cannot quietly become false in the other direction.
 //
@@ -5256,17 +5273,21 @@ val forbidNotNullAssertionInUnresolvedSource by tasks.registering {
     // class the stamps were made safe against. Entries are paths relative to the root, violation
     // counts as of the PR that added them. Regenerate after a sweep with this scanner, not by hand.
     //
-    // The first five are #2039's original population — apple/wasm/:spike, where detekt fires
-    // nothing at all. The rest arrived with #2471, which widened the scope to source sets detekt
-    // was believed to cover and found 11 more sites it had never reported. Every one of them is a
-    // TRUE POSITIVE `!!` on a genuinely nullable type, and all 11 are in test/example sources — the
-    // one production site the widening caught (`GossipDedup.forceForwardPastGap`) was FIXED in the
-    // same PR rather than grandfathered. Burning these down is #2530.
+    // The first three are what remains of #2039's original population — apple/wasm/:spike, where
+    // detekt fires nothing at all. (Two more, `kuilt-store`'s `NSFileManagerDurableStoreTest` and
+    // `IndexedDbDurableStoreTest`, were swept to zero by #2500 and are deleted here: both files are
+    // still scanned, so the `dangling` check below could not see them, and a decrease is tolerated
+    // — they were entries that had stopped grandfathering anything. Deleting them makes this map
+    // reconcile with the stamp's file/site counts.)
+    //
+    // The rest arrived with #2471, which widened the scope to source sets detekt was believed to
+    // cover and found 11 more sites it had never reported. Every one of them is a TRUE POSITIVE
+    // `!!` on a genuinely nullable type, and all 11 are in test/example sources — the one
+    // production site the widening caught (`GossipDedup.forceForwardPastGap`) was FIXED in the same
+    // PR rather than grandfathered. Burning these down is #2530.
     val baseline = mapOf(
         "kuilt-nw/src/appleMain/kotlin/us/tractat/kuilt/nw/RealNwApi.kt" to 1,
         "kuilt-nw/src/appleTest/kotlin/us/tractat/kuilt/nw/NwHalfCloseProbeTest.kt" to 2,
-        "kuilt-store/src/appleTest/kotlin/us/tractat/kuilt/store/NSFileManagerDurableStoreTest.kt" to 4,
-        "kuilt-store/src/wasmJsTest/kotlin/us/tractat/kuilt/store/IndexedDbDurableStoreTest.kt" to 1,
         "spike/src/appleMain/kotlin/spike/nw/SpikeNw.kt" to 1,
         // #2471 — detekt's type resolution never saw any of these.
         "examples/src/test/kotlin/us/tractat/kuilt/examples/ResumeTokenFailoverTest.kt" to 1,
@@ -5366,28 +5387,66 @@ val forbidNotNullAssertionInUnresolvedSource by tasks.registering {
 //
 // This is the PIN under the guard above, and under the tier comment in `kuilt.detekt-kmp`. Both now
 // assert something that is only true while a version skew holds: detekt 1.23.8 runs a Kotlin
-// 2.0.21 frontend, that frontend deserializes metadata only up to `mv=[1,9,0]`, and this repo ships
-// `mv=[2,4,0]` — so detekt's four nullability rules see built-ins, Java, and same-file source, and
-// nothing off the classpath. The widening above, the eleven grandfathered sites, and several
-// paragraphs of prose all rest on that.
+// 2.0.21 frontend, whose metadata READ CEILING is `[2,1,0]`, while this repo ships `[2,4,0]` (own
+// output, kotlin-stdlib) and `[2,2,0]` (kotlinx-coroutines) — so detekt's four nullability rules
+// see built-ins, Java, and the source files in their own task, and nothing off the classpath. The
+// widening above, the eleven grandfathered sites, and several paragraphs of prose all rest on that.
+//
+// THE CEILING IS THE FRONTEND'S OWN VERSION PLUS ONE MINOR, and that `+1` is the whole reason this
+// guard is not a naive `<`. Measured by reflecting on the exact jar detekt 1.23.8 pins
+// (`kotlin-compiler-embeddable-2.0.21.jar`): `JvmMetadataVersion.INSTANCE` is `[2,0,0]` and
+// `INSTANCE_NEXT` is `[2,1,0]`, and `isCompatibleWithCurrentCompilerVersion()` compares against
+// INSTANCE_NEXT for non-strict binaries — which this repo's are (`xi` has the 0x8 strict bit
+// clear). Empirically, that frontend accepts `[2,0,0]` and `[2,1,0]` and rejects `[2,2,0]`,
+// `[2,3,0]`, `[2,4,0]`.
+//
+// So a frontend ONE MINOR BEHIND the project reads the project's binaries perfectly well. This is
+// not hypothetical: `dev.detekt:detekt-cli:2.0.0-alpha.3` ships a Kotlin 2.3.21 frontend, whose
+// ceiling is `[2,4,0]` — exactly this repo's metadata. Adopting it would restore type resolution in
+// full while a `frontendMinor < projectMinor` test still called it "lagging" and stayed GREEN,
+// stamping a file that says the rules remain partial. That is the stale-claim state this guard
+// exists to red, so the comparison below is `frontendMinor + 1 < projectMinor`. Do not "simplify"
+// the `+1` away; the mutation receipt for it is the one-minor-behind case, not the equal case.
 //
 // A skew is a TEMPORARY fact, and the direction it moves in is the one nobody watches: the failure
 // this guards is not detekt getting worse, it is detekt getting BETTER while the repo keeps acting
-// as though it had not. When detekt ships a release whose frontend matches (2.x on the K2 Analysis
-// API, or a 1.23.x rebuilt on a newer compiler) somebody will bump `libs.versions.toml`, CI will be
-// green, and every claim above will be quietly false — the exact "indistinguishable from clean"
-// shape #2471 was filed about, inverted. So this fails on GOOD news, deliberately, and says what to
-// re-open. It is cheap: two version strings, no analysis.
+// as though it had not. When detekt ships a frontend that matches (see #2534) somebody will bump
+// `libs.versions.toml`, CI will be green, and every claim above will be quietly false — the exact
+// "indistinguishable from clean" shape #2471 was filed about, inverted. So this fails on GOOD news,
+// deliberately, and says what to re-open. It is cheap: two version strings, no analysis.
 //
-// It reads the frontend version out of a resolved `detekt-cli` graph rather than from a hardcoded
-// number, so a detekt bump moves it with no edit here. Not finding the jar at all is also a failure
-// — a guard that cannot locate its subject must not report success.
+// COORDINATES, not just the version, are what a detekt 2.x adoption changes: 2.0 moved to group
+// `dev.detekt` and renamed the frontend artifact from `kotlin-compiler-embeddable` to
+// `kotlin-compiler`. Both are handled — the group is derived from the catalog's own major, and the
+// jar pattern accepts either artifact — and the probe's coordinates are ASSERTED against the
+// catalog entry the build actually applies, so this cannot describe a detekt nobody runs. The case
+// that needs catching is a 2.x adopted under a NEW catalog alias while `libs.versions.detekt`
+// lingers at 1.23.8: the probe would resolve happily and report green about an absent frontend.
 //
-// The graph is resolved through a configuration of the ROOT project, declared from the same catalog
-// alias the convention plugins use, NOT by reaching into a subproject's own `detekt` configuration.
-// Resolving another project's configuration from here is rejected outright ("Resolution of the
-// configuration ':demo-cli:detekt' was attempted without an exclusive lock"), and it would have made
-// this guard's verdict depend on which subproject happened to sort first.
+// The assertion reads `gradle/libs.versions.toml`, and that is deliberate after a false start. The
+// obvious check — compare against a subproject's `detekt` configuration's declared dependencies —
+// is VACUOUS: detekt registers `detekt-cli` through `defaultDependencies`, which does not
+// materialise until the configuration is resolved, so at configuration time that set is empty and
+// an `isNotEmpty() &&` guard silently never fires. It was written that way first and the stamp,
+// which prints what was compared, is what caught it ("cross-checked against applied []"). The
+// catalog is the real authority anyway: `build-logic` takes the plugin from
+// `libs.detekt.gradlePlugin`, so that entry's group and `version.ref` are what every module runs.
+//
+// The frontend graph itself is resolved through a configuration of the ROOT project, NOT by
+// reaching into a subproject's. Resolving another project's configuration from here is rejected
+// outright ("Resolution of the configuration ':demo-cli:detekt' was attempted without an exclusive
+// lock").
+val detektCatalogVersion = libs.versions.detekt.get()
+
+// detekt 2.0 relocated to `dev.detekt`; 1.x stays on the old group.
+val detektProbeGroup =
+    if ((detektCatalogVersion.substringBefore('.').toIntOrNull() ?: 1) >= 2) {
+        "dev.detekt"
+    } else {
+        "io.gitlab.arturbosch.detekt"
+    }
+val detektProbeCoordinates = "$detektProbeGroup:detekt-cli:$detektCatalogVersion"
+
 val detektFrontendProbe: Configuration by configurations.creating {
     isCanBeConsumed = false
     isCanBeResolved = true
@@ -5395,7 +5454,34 @@ val detektFrontendProbe: Configuration by configurations.creating {
 }
 
 dependencies {
-    detektFrontendProbe("io.gitlab.arturbosch.detekt:detekt-cli:${libs.versions.detekt.get()}")
+    detektFrontendProbe(detektProbeCoordinates)
+}
+
+// The catalog entry `build-logic` actually applies, as `group` to `version`. Parsed rather than
+// read through the `libs` accessors because those expose the resolved coordinate but not which
+// alias supplied it, and the alias is precisely what drifts.
+//
+// An `object`, not a script-level `fun`, for the same reason `KotlinCodeScanner` is one (see "Guard
+// plumbing" above): a function reference from inside `doLast` captures the unserializable
+// `Build_gradle` instance, and the configuration cache rejects it — "cannot serialize Gradle script
+// object references". Written as a `fun` first; this is what that costs.
+//
+// It needs no `selfTestFailures()` fixture the way the `!!` scanner does, because its subject is a
+// single real file that every build parses: if the catalog's spelling changes, `pluginCoordinate`
+// returns null and the guard fails loudly on the next run. The fixture would be testing the same
+// string the production call already reads.
+object DetektCatalogScanner {
+    /** `group` to `version` for the detekt Gradle plugin the catalog declares, or null. */
+    fun pluginCoordinate(toml: String): Pair<String, String>? {
+        val entry = Regex(
+            """detekt-gradlePlugin\s*=\s*\{[^}]*module\s*=\s*"([^:"]+):detekt-gradle-plugin"[^}]*""" +
+                """version\.ref\s*=\s*"([^"]+)"""",
+        ).find(toml) ?: return null
+        val (group, versionRef) = entry.destructured
+        val version = Regex("""(?m)^\s*${Regex.escape(versionRef)}\s*=\s*"([^"]+)"""")
+            .find(toml)?.groupValues?.get(1) ?: return null
+        return group to version
+    }
 }
 
 val forbidDetektFrontendSkew by tasks.registering {
@@ -5408,37 +5494,70 @@ val forbidDetektFrontendSkew by tasks.registering {
         .withPathSensitivity(PathSensitivity.NAME_ONLY)
     val projectKotlin = libs.versions.kotlin.get()
     inputs.property("projectKotlinVersion", projectKotlin)
+    inputs.property("detektProbeCoordinates", detektProbeCoordinates)
+    val catalogFile = rootDir.resolve("gradle/libs.versions.toml")
+    inputs.file(catalogFile).withPropertyName("versionCatalog")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
     val stamp = layout.buildDirectory.file("verification/forbid-detekt-frontend-skew.ok")
     outputs.file(stamp)
     outputs.cacheIf { true }
     val frontendJars = detektFrontendProbe.incoming.files
+    val probeCoordinates = detektProbeCoordinates
+    val probeGroup = detektProbeGroup
+    val probeVersion = detektCatalogVersion
     doLast {
-        val pattern = Regex("""^kotlin-compiler-embeddable-(\d+)\.(\d+)\.(\d+)\.jar$""")
+        val applied = DetektCatalogScanner.pluginCoordinate(catalogFile.readText())
+            ?: error(
+                "Could not find a `detekt-gradlePlugin = { module = \"<group>:detekt-gradle-plugin\", " +
+                    "version.ref = \"…\" }` entry in `gradle/libs.versions.toml`, so this guard cannot " +
+                    "confirm it is probing the detekt the build actually applies — and an unconfirmed " +
+                    "probe must fail rather than pass.\n" +
+                    "  THE FIX is to re-sync the parser in `build.gradle.kts` with however that entry " +
+                    "is spelled now.",
+            )
+        if (applied != probeGroup to probeVersion) {
+            error(
+                "This guard probed `$probeCoordinates`, but `gradle/libs.versions.toml` applies " +
+                    "`${applied.first}:detekt-gradle-plugin:${applied.second}`. Its verdict would be " +
+                    "about a detekt that is not in the build.\n" +
+                    "  The usual cause is a detekt 2.x adoption under a NEW catalog alias while " +
+                    "`libs.versions.detekt` still names the old one — the probe resolves happily and " +
+                    "reports green about a frontend nobody runs.\n" +
+                    "  THE FIX is to point `detektCatalogVersion`/`detektProbeGroup` in " +
+                    "`build.gradle.kts` at whichever catalog entry the convention plugins apply.",
+            )
+        }
+        // `kotlin-compiler-embeddable` is 1.x's frontend artifact; 2.x renamed it `kotlin-compiler`.
+        val pattern = Regex("""^kotlin-compiler(?:-embeddable)?-(\d+)\.(\d+)\.(\d+)\.jar$""")
         val match = frontendJars.files.firstNotNullOfOrNull { pattern.find(it.name) }
             ?: error(
-                "Could not find `kotlin-compiler-embeddable-<version>.jar` on any module's resolved " +
-                    "`detekt` configuration, so this guard cannot tell whether detekt's frontend still " +
-                    "lags the project's Kotlin — and a guard that cannot see its subject must fail " +
-                    "rather than pass.\n" +
-                    "  Most likely detekt's packaging changed (a 2.x release runs on the K2 Analysis " +
-                    "API and may not ship this artifact at all), which is itself the event this guard " +
-                    "exists to catch — see the fix below.\n" +
+                "Could not find `kotlin-compiler[-embeddable]-<version>.jar` on the resolved " +
+                    "`$probeCoordinates` graph, so this guard cannot tell whether detekt's frontend " +
+                    "still lags the project's Kotlin — and a guard that cannot see its subject must " +
+                    "fail rather than pass.\n" +
+                    "  Most likely detekt's packaging changed again, which is itself the event this " +
+                    "guard exists to catch — see #2534.\n" +
                     "  Files on the configuration: " +
                     (frontendJars.files.map { it.name }.sorted().takeIf { it.isNotEmpty() }
                         ?.joinToString(", ") ?: "none"),
             )
+        val frontendVersion = match.groupValues.drop(1).take(3).joinToString(".")
         val (frontendMajor, frontendMinor) = match.groupValues.drop(1).take(2).map { it.toInt() }
         val projectParts = projectKotlin.split('.').mapNotNull { it.toIntOrNull() }
         val projectMajor = projectParts.getOrElse(0) { 0 }
         val projectMinor = projectParts.getOrElse(1) { 0 }
+        // `+ 1` because the read ceiling is `JvmMetadataVersion.INSTANCE_NEXT` — the frontend's own
+        // metadata version plus one minor. See the header: a frontend one minor behind reads the
+        // project's binaries fine, so it is NOT lagging in the sense this guard means.
         val frontendLags =
-            frontendMajor < projectMajor || (frontendMajor == projectMajor && frontendMinor < projectMinor)
+            frontendMajor < projectMajor ||
+                (frontendMajor == projectMajor && frontendMinor + 1 < projectMinor)
         if (!frontendLags) {
             error(
-                "detekt's frontend (Kotlin ${match.groupValues[0].removePrefix("kotlin-compiler-embeddable-")
-                    .removeSuffix(".jar")}) no longer lags the project's Kotlin ($projectKotlin), so it " +
-                    "can now read this repo's binary metadata — and the coverage claims written while " +
-                    "it could not are stale.\n" +
+                "detekt's frontend (Kotlin $frontendVersion) can now read this repo's binary metadata " +
+                    "— its ceiling is `[$frontendMajor,${frontendMinor + 1},0]` and the project's " +
+                    "Kotlin is $projectKotlin — so the coverage claims written while it could not are " +
+                    "stale.\n" +
                     "  THIS IS GOOD NEWS, and the failure is the point: nothing else would tell you. " +
                     "Three things to re-open, in this order:\n" +
                     "    1. Re-run #2471's probe — a `!!` on a type INFERRED from a stdlib call, e.g. " +
@@ -5457,7 +5576,9 @@ val forbidDetektFrontendSkew by tasks.registering {
         val out = stamp.get().asFile
         out.parentFile.mkdirs()
         out.writeText(
-            "ok — detekt frontend Kotlin $frontendMajor.$frontendMinor still lags project Kotlin " +
+            "ok — detekt frontend Kotlin $frontendVersion (probed via $probeCoordinates, confirmed " +
+                "against catalog ${applied.first}:detekt-gradle-plugin:${applied.second}) reads " +
+                "metadata up to [$frontendMajor,${frontendMinor + 1},0], below project Kotlin " +
                 "$projectKotlin, so detekt's nullability rules remain partial and the lexical `!!` " +
                 "guard remains the floor\n",
         )

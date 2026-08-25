@@ -156,9 +156,12 @@ internal class GossipDedup(private val maxReorder: Int = DEFAULT_MAX_REORDER) {
         state: Origin,
         released: MutableList<GossipFrame>,
     ) {
-        val lowest = state.pending.keys.min()
-        released += state.pending.remove(lowest)
-            ?: error("reorder window lost seq $lowest; held seqs were ${state.pending.keys}")
+        // One traversal, and no optionality to guard: taking the entry rather than the key means
+        // there is no second lookup that could fail. Still throws NoSuchElementException on an
+        // empty window, exactly as the previous `keys.min()` did — both callers establish non-empty.
+        val (lowest, frame) = state.pending.entries.minBy { it.key }
+        state.pending.remove(lowest)
+        released += frame
         state.high = lowest
         releaseContiguous(state, released)
     }
