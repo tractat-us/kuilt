@@ -205,8 +205,11 @@ internal class MCSessionLink(
         // suite's `assertFailsWith<IllegalStateException>` could not tell the two apart.
         // `MCSessionLinkTornSendTest` is what pins the distinction.
         check(_state.value !is SeamState.Torn) { "sendTo on a Torn seam" }
-        // `connectedPeers` is the remotes MC has connected, never this device, so without this a
-        // self-send fell out as PeerNotConnected — false for an id `peers` names (#2428).
+        // [remotes] never names this device, so without this a self-send fell out as
+        // PeerNotConnected — false for an id `peers` names (#2428). This comment used to justify
+        // itself with "`connectedPeers` is the remotes MC has connected, never this device", which
+        // is the very claim #2445 could not confirm; it is now true by CONSTRUCTION of [remotes]
+        // rather than by assumption about MC.
         require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
         // Reads [remotes] so both send paths share ONE notion of who is addressable (#2445). The
         // `require` above already refuses `selfId` by name, so this cannot change which peer is
