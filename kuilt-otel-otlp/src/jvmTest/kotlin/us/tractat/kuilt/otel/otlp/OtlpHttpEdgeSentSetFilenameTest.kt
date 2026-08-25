@@ -83,9 +83,16 @@ class OtlpHttpEdgeSentSetFilenameTest {
         "https://otel-collector-gateway.observability.platform.internal" +
             ".us-east-1.prod.example-corp.com:4318/otlp",
         "https://collector.example.com:4318/v1/T0kEnAbCdEfGhIjKlMnOpQrStUvWxYz012345",
-        // Pathological, and the arm that matters: a verbatim key here encodes past 251 and
-        // the entry becomes unwritable. Also carries a credential, which a verbatim key
-        // would have written into a directory listing.
+        // Credential-bearing but deliberately SHORT, and deliberately not containing
+        // "collector". The long entry below carries a credential too, but under a
+        // verbatim-key regression it is unwritable — its very first write throws, so no
+        // filename for it ever reaches the directory and the credential needles match
+        // nothing. Length would then mask the leak: the two properties have to be carried
+        // by different fixtures or the credential half of the leak assertion is pinned by
+        // nothing. Measured, not assumed — see this file's `leaked` arm.
+        "https://svc-account:S3cr3tT0k3n@otlp.example.com:4318",
+        // Pathological, and the arm that matters for length: a verbatim key here encodes
+        // past 251 and the entry becomes unwritable.
         "https://svc-account:S3cr3tT0k3n@[2001:0db8:85a3:0000:0000:8a2e:0370:7334]:4318" +
             "/v1/TENANT-A1B2C3D4E5F6/PROJECT-9Z8Y7X6W5V4U/INGEST-QWERTYUIOPASDFGHJKL" +
             "/otlp/COLLECTOR-ENDPOINT-WITH-A-DELIBERATELY-RIDICULOUS-PATH-PREFIX-0123456789",
