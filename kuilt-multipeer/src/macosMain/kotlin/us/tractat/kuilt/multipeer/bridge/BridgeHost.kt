@@ -70,7 +70,9 @@ public fun mc_session_close(session: COpaquePointer?) {
  * number of bytes sent (== [len] on success), or `-1` on null/invalid input.
  *
  * No connected peers is a non-error: returns `len`. The Apple-side
- * `MCSessionLink.broadcast` short-circuits when `connectedPeers` is empty.
+ * `MCSessionLink.broadcast` short-circuits when the session names no REMOTE
+ * peer — this device is filtered out of the send targets since #2445, so a
+ * session holding only a self-dial short-circuits here too.
  */
 @OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
 @CName("mc_session_broadcast")
