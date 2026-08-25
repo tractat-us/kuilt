@@ -2,6 +2,7 @@
 
 package us.tractat.kuilt.nw
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -282,9 +283,12 @@ class NwSeamConcurrencyTest {
      * so three counters are asserted rather than inferred from a side effect:
      *  - [linksOpened] — the rig's input volume (dials that really opened a link).
      *  - `dialsDuringSends` — dials that *began* while at least one `broadcast` was in flight.
-     *  - `rosterChangesDuringDials` — hub roster transitions observed while at least one dial was in
-     *    flight. This is the one that matters: it witnesses the seam mutating its own membership state
-     *    concurrently with the rig, which is the precondition for every race under test.
+     *  - `seamMutationsUnderLoad` — samples, taken only for the storm's duration, in which the hub's own
+     *    link view (connIds, each one's live/draining/unbound role, the peer it carries) had CHANGED
+     *    since the previous sample. This is the one that matters: it witnesses the seam mutating
+     *    `conns`/`registry` under load, which is the precondition for every race under test. It is
+     *    deliberately neither a `peers` watcher nor gated on a dial being in flight — the sampler's own
+     *    comment records what each of those two earlier formulations measured instead, and how badly.
      *  - `auditSamples` — how many times the quiet detector actually looked.
      *
      * Each is asserted against a floor at the END of the run rather than per iteration, so one quiet
@@ -294,7 +298,9 @@ class NwSeamConcurrencyTest {
      * [CHURN_ITERATIONS] — rounds; too few and the window is never sampled. [PEER_COUNT] — at 1 the
      * `registry` iteration is a single entry and the concurrent-modification window all but vanishes.
      * [REDIALS_PER_PEER] — at 0 there is no dedup churn at all and this becomes the shipped probe with
-     * extra steps. [CHURN_WATCHDOG_PROBE] — the knob most able to make it vacuous: at
+     * extra steps. [DIAL_SPACING] — the knob with a floor as well as a ceiling: too wide and the dials
+     * stop overlapping anything, too narrow and the storm passes the fake's own backpressure ceiling and
+     * the probe measures the harness. [CHURN_WATCHDOG_PROBE] — the knob most able to make it vacuous: at
      * `Duration.ZERO` the watchdog loop returns immediately and `sweepInboundSilence` is never entered,
      * so its guard becomes unpinned while everything still passes. [CHURN_BROADCASTERS] /
      * [CHURN_SENDS_PER_BROADCASTER] — at 0 the caller never contends and `dialsDuringSends` can only be
@@ -302,10 +308,9 @@ class NwSeamConcurrencyTest {
      */
     @Test
     fun noLifecycleCollectorLeaksARaceWhileTheRegistryChurns() = runConcurrencyStress { stage ->
-        val dialsInFlight = AtomicInteger()
         val sendsInFlight = AtomicInteger()
         val dialsDuringSends = AtomicLong()
-        val rosterChangesDuringDials = AtomicLong()
+        val seamMutationsUnderLoad = AtomicLong()
         val auditSamples = AtomicLong()
         var linksOpened = 0L
 
@@ -314,6 +319,15 @@ class NwSeamConcurrencyTest {
             val nodes = (0..PEER_COUNT).map { node(radio, it, iter.toLong() * 100, CHURN_WATCHDOG_PROBE) }
             val hub = nodes.first()
             val peers = nodes.drop(1)
+            // EVERY seam gets a consumer, and the first cut of this probe did not — which cost a
+            // 5-minute wedge and is worth recording. `DeliveryPolicy.Reliable` backpressures: with
+            // nothing collecting `incoming`, each peer's spool fills, `deliveryDrainLoop` parks in
+            // `Spool.deliver`, the bounded `deliveryStage` fills behind it and `bytesReceivedLoop`
+            // stops demuxing. The seam is then wedged on *backpressure* — a property this probe is
+            // not about — and every later stage inherits it. The sibling probe never notices because
+            // it only ever awaits the hub, and the hub receives nothing.
+            val consumers = CoroutineScope(Dispatchers.Default + SupervisorJob())
+            for (n in nodes) consumers.launch { n.seam.incoming.collect { /* discard: the point is that it drains */ } }
 
             stage.at("iter=$iter form star") { dump(iter, radio, nodes) }
             for (p in peers) hub.api.connect(endpointFor(nodes.indexOf(p)))
@@ -322,54 +336,85 @@ class NwSeamConcurrencyTest {
             stage.at("iter=$iter redial storm vs broadcast") { dump(iter, radio, nodes) }
             coroutineScope {
                 val ready = CompletableDeferred<Unit>()
-                // The two long-lived observers. Both are `launch`ed rather than `async`ed and cancelled
-                // explicitly below: neither ever completes on its own, so awaiting them would wedge the
-                // enclosing `coroutineScope` forever.
-                val rosterWatcher = launch(Dispatchers.Default) {
-                    hub.seam.peers.collect { if (dialsInFlight.get() > 0) rosterChangesDuringDials.incrementAndGet() }
-                }
+                val dialersRunning = AtomicInteger(peers.size)
+                // The quiet detector AND the mutation-rate witness, in one sampler. `launch`ed rather
+                // than `async`ed and cancelled explicitly below: it never completes on its own, so
+                // awaiting it would wedge the enclosing `coroutineScope` forever.
+                //
+                // It counts the hub's own link view CHANGING — connIds, each one's live/draining/unbound
+                // role, and the peer it carries — between two consecutive samples. The sampler exists
+                // only for the duration of the storm, so every change it sees is a mutation the seam
+                // made **under load**, which is the precondition for every race here.
+                //
+                // Two earlier formulations of this counter were wrong, and both were caught by their own
+                // floor rather than by inspection. Counting `peers` transitions measured 7 across 25
+                // rounds: a dedup rebind moves a peer onto a fresh connection without changing a
+                // `Set<PeerId>` at all, so a roster watcher is blind to precisely the mutation this storm
+                // produces. Gating the link-view counter on "a dial is in flight" measured 10 across 60
+                // rounds, and for a subtler reason: `api.connect` returns in microseconds while the
+                // collectors' reaction to it lands milliseconds later, so that gate was measuring the
+                // sampler's own duty cycle, not the system's. Caller/collector simultaneity is what
+                // `dialsDuringSends` is for; this counter measures the mutation rate and nothing else.
                 val auditor = launch(Dispatchers.Default) {
                     ready.await()
+                    var previous: List<String> = emptyList()
                     while (isActive) {
                         assertRegistryAndConnsAgree(nodes, iter, radio)
+                        val links = hub.seam.formationSnapshot().links
+                            .map { "${it.connId}:${it.role}:${it.resolvedPeer}" }
+                        if (links != previous) seamMutationsUnderLoad.incrementAndGet()
+                        previous = links
                         auditSamples.incrementAndGet()
                         delay(AUDIT_SAMPLE_INTERVAL)
                     }
                 }
+                // Senders run for as long as the DIALERS do, up to a cap. Fixed-count senders finished in
+                // the storm's first few milliseconds and left the rest of it with no caller-side
+                // contender at all — the overlap the probe depends on has to be structural, not a
+                // coincidence between two independently chosen counts.
                 val senders = (0 until CHURN_BROADCASTERS).map {
                     async(Dispatchers.Default) {
                         ready.await()
-                        repeat(CHURN_SENDS_PER_BROADCASTER) {
+                        var sent = 0
+                        while (dialersRunning.get() > 0 && sent < CHURN_SENDS_PER_BROADCASTER) {
                             sendsInFlight.incrementAndGet()
                             try {
                                 broadcastRefusingCleanly { hub.seam.broadcast(byteArrayOf(2)) }
                             } finally {
                                 sendsInFlight.decrementAndGet()
                             }
+                            sent++
+                            delay(SEND_SPACING)
                         }
                     }
                 }
                 val dialers = peers.mapIndexed { i, _ ->
                     async(Dispatchers.Default) {
                         ready.await()
-                        repeat(REDIALS_PER_PEER) {
-                            if (sendsInFlight.get() > 0) dialsDuringSends.incrementAndGet()
-                            dialsInFlight.incrementAndGet()
-                            try {
+                        try {
+                            repeat(REDIALS_PER_PEER) {
+                                if (sendsInFlight.get() > 0) dialsDuringSends.incrementAndGet()
                                 hub.api.connect(endpointFor(i + 1))
-                            } finally {
-                                dialsInFlight.decrementAndGet()
+                            // Spaced in REAL time, not with `yield()`. Two reasons, and the second cost
+                            // a 5-minute wedge on this branch before it was understood. (1) The sibling
+                            // probe's reason: a burst fires every dial before the senders are
+                            // mid-iteration. (2) `FakeNwApi`'s event flows are `MutableSharedFlow`s with
+                            // a small buffer, so an `emit` BLOCKS once a device's single demux loop falls
+                            // behind — and a dedup's `GOODBYE` travels hub→peer while the peer's own
+                            // hello travels peer→hub, so two saturated demux loops deadlock on each
+                            // other. That is the RIG's ceiling, not the seam's: past it the probe stops
+                            // measuring locking and measures the fake's backpressure instead. Spacing
+                            // keeps the storm below it while leaving the sweep/collector overlap intact.
+                                delay(DIAL_SPACING)
                             }
-                            // Spaced, not bursted, for the reason the sibling probe records about its
-                            // departures: a burst fires every dial before the senders are mid-iteration.
-                            repeat(DIAL_SPACING_YIELDS) { yield() }
+                        } finally {
+                            dialersRunning.decrementAndGet()
                         }
                     }
                 }
                 ready.complete(Unit)
                 awaitAll(*dialers.toTypedArray(), *senders.toTypedArray())
                 auditor.cancel()
-                rosterWatcher.cancel()
             }
 
             stage.at("iter=$iter close every node") { dump(iter, radio, nodes) }
@@ -384,15 +429,26 @@ class NwSeamConcurrencyTest {
                 { assertNoCollectorLeaked(nodes, iter, radio) },
                 { assertRegistryAndConnsAgree(nodes, iter, radio) },
             )
+            consumers.cancel()
             teardown(nodes)
         }
 
         // The rig receipt. A probe that never made the hammer overlap the seam's own mutations passes
         // for the wrong reason, so the overlap is COUNTED, and the counts are part of the verdict.
+        //
+        // Printed as well as asserted, so a GREEN run leaves the numbers in the CI artifact. A floor
+        // that passes tells a reader only that the rig cleared a bar someone once chose; the numbers
+        // tell them how far above it, which is what makes a slow drift toward vacuity visible before it
+        // reaches the floor.
+        println(
+            "nw-probe.rig-receipt rounds=$CHURN_ITERATIONS linksOpened=$linksOpened " +
+                "dialsDuringSends=${dialsDuringSends.get()} seamMutationsUnderLoad=${seamMutationsUnderLoad.get()} " +
+                "auditSamples=${auditSamples.get()}",
+        )
         assertAll(
             { assertTrue(linksOpened >= MIN_LINKS_OPENED, "rig did not fire: only $linksOpened links opened across $CHURN_ITERATIONS rounds (floor $MIN_LINKS_OPENED) — the redial storm never dialled") },
             { assertTrue(dialsDuringSends.get() >= MIN_OVERLAPS, "rig did not fire: only ${dialsDuringSends.get()} dials began while a broadcast was in flight (floor $MIN_OVERLAPS) — caller and collectors never contended") },
-            { assertTrue(rosterChangesDuringDials.get() >= MIN_OVERLAPS, "rig did not fire: only ${rosterChangesDuringDials.get()} hub roster transitions landed while a dial was in flight (floor $MIN_OVERLAPS) — the seam never mutated membership under contention") },
+            { assertTrue(seamMutationsUnderLoad.get() >= MIN_OVERLAPS, "rig did not fire: the hub's link view changed across only ${seamMutationsUnderLoad.get()} of the samples taken during the storm (floor $MIN_OVERLAPS) — the seam never mutated conns/registry under load") },
             { assertTrue(auditSamples.get() >= MIN_AUDIT_SAMPLES, "rig did not fire: the mid-flight binding audit looked only ${auditSamples.get()} times (floor $MIN_AUDIT_SAMPLES)") },
         )
     }
@@ -423,10 +479,16 @@ class NwSeamConcurrencyTest {
         )
     }
 
-    /** Run [close]; fail loudly on a race exception. `close` is idempotent, so nothing else is expected. */
+    /**
+     * Run [close]; fail loudly on a race exception. `close` is idempotent, so nothing else is expected.
+     * The cancellation arm is here for the reason [broadcastRefusingCleanly]'s KDoc gives — a guard
+     * around a call the harness may cancel must never be the thing that eats the cancellation.
+     */
     private suspend fun closeRefusingCleanly(close: suspend () -> Unit) {
         try {
             close()
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: ConcurrentModificationException) {
             throw AssertionError("close leaked a ConcurrentModificationException; registry/conns are not thread-safe", e)
         } catch (e: NoSuchElementException) {
@@ -465,10 +527,21 @@ class NwSeamConcurrencyTest {
      * Run [broadcast]; fail loudly the instant a race exception escapes. A clean closed-seam
      * [IllegalStateException] is the contract once the seam is torn — accept it. Any send that lands
      * before teardown simply succeeds.
+     *
+     * ## The `CancellationException` arm is load-bearing, and its absence cost a diagnosis
+     * `TimeoutCancellationException` extends `CancellationException` extends **`IllegalStateException`**,
+     * so without this rethrow the arm below catches the harness's own 5-minute cap firing. It then
+     * reports `unexpected IllegalStateException from broadcast: Timed out waiting for 300000 ms` — an
+     * assertion failure that reaches `runConcurrencyStress` *instead of* the
+     * `TimeoutCancellationException` it is watching for, so the entire hang report (stage, progress,
+     * dispatcher verdict, coroutine census) is never produced. Measured on this branch: a wedge in this
+     * probe's first cut surfaced with no stage label and no census at all. Rethrowing first restores it.
      */
     private suspend fun broadcastRefusingCleanly(broadcast: suspend () -> Unit) {
         try {
             broadcast()
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: ConcurrentModificationException) {
             throw AssertionError("broadcast leaked a ConcurrentModificationException; registry/conns are not thread-safe", e)
         } catch (e: NoSuchElementException) {
@@ -513,17 +586,28 @@ class NwSeamConcurrencyTest {
         // shapes. Sharing a constant would silently retune whichever probe was not being edited.
 
         /** Rounds for the redial-storm probe. Each round forms, storms and tears a 6-node star. */
-        const val CHURN_ITERATIONS = 40
+        const val CHURN_ITERATIONS = 60
 
         /** Extra dials the hub makes to EACH already-connected peer — every one drives the dedup. */
-        const val REDIALS_PER_PEER = 12
+        const val REDIALS_PER_PEER = 8
 
-        /** `yield()`s between one dialer's successive dials, so dials land throughout the send hammer. */
-        const val DIAL_SPACING_YIELDS = 4
+        /**
+         * Real-time gap between one dialer's successive dials. The knob that keeps the storm under the
+         * fake's inter-device backpressure ceiling — see the call site. Shrinking it toward zero does not
+         * make the probe stronger; past the ceiling it stops measuring `NwSeam` at all.
+         */
+        val DIAL_SPACING = kotlin.time.Duration.parse("3ms")
 
-        /** Concurrent `broadcast` callers during the storm. Fewer than the sibling probe: the dials are the load. */
-        const val CHURN_BROADCASTERS = 3
-        const val CHURN_SENDS_PER_BROADCASTER = 150
+        /**
+         * Concurrent `broadcast` callers during the storm, and how many sends each makes. Much smaller
+         * than the sibling probe's: there the sends ARE the subject, here they are only the caller-side
+         * contender against a dedup churn that is itself the load, and a flood tips the fake over.
+         */
+        const val CHURN_BROADCASTERS = 2
+        const val CHURN_SENDS_PER_BROADCASTER = 60
+
+        /** Real-time gap between one broadcaster's sends, so the caller contends for the whole storm. */
+        val SEND_SPACING = kotlin.time.Duration.parse("1ms")
 
         /**
          * Watchdog sweep interval during the storm — faster than [WATCHDOG_PROBE] because
