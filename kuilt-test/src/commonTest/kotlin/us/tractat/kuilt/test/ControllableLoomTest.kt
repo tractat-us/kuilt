@@ -1,14 +1,19 @@
 package us.tractat.kuilt.test
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.SeamState
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -249,5 +254,105 @@ class ControllableLoomTest {
         a.broadcast(byteArrayOf(2))
 
         assertEquals(2, loom.bufferedCount(b.selfId))
+    }
+
+    // ── A Torn seam's roster collapses to { selfId } (#2443) ──────────────────
+    //
+    // `ControllableSeam.peers` used to BE the loom's shared registry, handed straight through — and
+    // `close()` removes this peer from that registry. So a torn seam's roster was `registry − selfId`:
+    // it kept advertising every remaining remote AND had dropped its own id, both halves of the #1816
+    // obligation failing at once. `InMemoryLoom` — the loom this one is a drop-in replacement for —
+    // carried the identical defect until #1849.
+    //
+    // The VALUE half is also asserted portably by `SeamConformanceSuite.peersCollapseToSelfIdWhenTorn`
+    // via `ControllableLoomConformanceTest`. It is repeated here because this is where the ORDERING
+    // half has to live, and a red on the value beside it is what makes the ordering red legible.
+
+    @Test
+    fun `a torn seam advertises exactly its own id`() = runTest {
+        val loom = ControllableLoom()
+        val a = loom.host(Pattern("a"))
+        loom.join(InMemoryTag("b"))
+        assertTrue(PeerId("b") in a.peers.value, "precondition: a remote must be in the roster before the tear")
+
+        a.close()
+
+        val peers = a.peers.value
+        assertAll(
+            {
+                assertEquals(
+                    emptySet(),
+                    peers - a.selfId,
+                    "a Torn seam must advertise NO reachable remote peer (Seam.peers): the shared registry " +
+                        "outlives this seam, and a fixture that keeps handing it through names peers a torn " +
+                        "fabric cannot reach",
+                )
+            },
+            {
+                assertTrue(
+                    a.selfId in peers,
+                    "a Torn seam's collapsed roster is { selfId }, not empty — removing self from the shared " +
+                        "registry must not remove self from this seam's own view (got ${peers.map { it.value }})",
+                )
+            },
+        )
+    }
+
+    /**
+     * The ordering half, invisible to the portable suite: `peers` is a conflating `StateFlow`, so a
+     * dispatched collector resumed after `close()` returns always reads the settled value and would pass
+     * against any write order. Collecting on an [UnconfinedTestDispatcher] resumes the probe **inline**
+     * inside the `_state` write, so what it reads is the value at exactly the instant `Torn` became
+     * observable. Same shape, and same reason, as `CompositeCloseCollapseOrderTest` (#1816).
+     */
+    @Test
+    fun `the collapsed roster is already published when Torn becomes observable`() = runTest {
+        val loom = ControllableLoom()
+        val a = loom.host(Pattern("a"))
+        loom.join(InMemoryTag("b"))
+
+        val peersWhenTornBecameVisible = CompletableDeferred<Set<PeerId>>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            a.state.first { it is SeamState.Torn }
+            peersWhenTornBecameVisible.complete(a.peers.value)
+        }
+        runCurrent()
+
+        a.close()
+
+        assertAll(
+            {
+                assertTrue(
+                    peersWhenTornBecameVisible.isCompleted,
+                    "the probe must have observed the terminal Torn — close() did not latch it",
+                )
+            },
+            {
+                assertEquals(
+                    setOf(a.selfId),
+                    peersWhenTornBecameVisible.getCompleted(),
+                    "peers must ALREADY be collapsed at the instant Torn becomes observable (Seam.peers): " +
+                        "a consumer woken by the terminal state must not read the pre-tear roster",
+                )
+            },
+        )
+    }
+
+    /**
+     * The control the collapse assertions rest on: a *live* seam still follows the shared registry, so
+     * the collapse above is a latch rather than a permanent freeze at construction time. Without this a
+     * `peers` hardwired to `setOf(selfId)` would pass both tests above and break every consumer.
+     */
+    @Test
+    fun `a live seam still follows the shared registry as peers join and leave`() = runTest {
+        val loom = ControllableLoom()
+        val a = loom.host(Pattern("a"))
+        val b = loom.join(InMemoryTag("b"))
+        assertEquals(setOf(PeerId("a"), PeerId("b")), a.peers.value, "a must see b join")
+
+        b.close()
+
+        assertEquals(setOf(PeerId("a")), a.peers.value, "a must see b leave while staying Woven")
+        assertTrue(a.state.value !is SeamState.Torn, "a itself never closed")
     }
 }

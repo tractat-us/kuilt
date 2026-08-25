@@ -42,13 +42,15 @@ class ControllableLoomConformanceTest : SeamConformanceSuite() {
      * (#1712). Note this is the *seam's* surface: [ControllableLoom.capability] does report
      * `Available`, but that is the pre-connect [Loom] verdict, which is a different question.
      *
-     * `collapsesPeersOnTear = false` is a **fabric** gap and a real one, found by this binding:
-     * `ControllableSeam.peers` **is** the loom's shared registry, unfiltered, and `close()`
-     * removes this peer from that registry — so a torn seam advertises every remaining remote
-     * and has dropped its own `selfId`, which is both halves of the #1816 obligation at once.
-     * This is precisely the defect the reference `InMemoryLoom` carried until #1849, and the fix
-     * there was a `LatchingStateFlow` that is `internal` to `:kuilt-core`; reproducing it in
-     * `:kuilt-test` is a change to the fabric, not to this harness. Tracked by #2443.
+     * `collapsesPeersOnTear` is **true**, and this binding is why. It was declared `false` when the
+     * harness landed: `ControllableSeam.peers` **was** the loom's shared registry, unfiltered, and
+     * `close()` removes this peer from that registry — so a torn seam advertised every remaining
+     * remote and had dropped its own `selfId`, both halves of the #1816 obligation failing at once.
+     * That is precisely the defect the reference `InMemoryLoom` carried until #1849; #2443 applied
+     * the same `LatchingStateFlow` fix to `ControllableSeam`, which is what lets this read `true`.
+     * The *ordering* half the contract also asks for is invisible from here (a conflating
+     * `StateFlow` settles before any dispatched collector resumes) and is pinned per-fabric by
+     * `ControllableLoomTest` in `:kuilt-test`.
      *
      * `meshDelivery = true` is genuine rather than vacuous — an N-peer shared mesh, the same
      * claim [InMemoryLoomConformanceTest] makes — but it is recorded here as trusted by
@@ -60,13 +62,11 @@ class ControllableLoomConformanceTest : SeamConformanceSuite() {
     override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL.copy(
         securesTransport = false,
         reportsLiveCapability = false,
-        collapsesPeersOnTear = false,
     )
 
     override fun capabilityGaps(): Map<String, String> = mapOf(
         "securesTransport" to CapabilityGaps.SECURES_TRANSPORT,
         "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
-        "collapsesPeersOnTear" to "https://github.com/tractat-us/kuilt/issues/2443",
     )
 
     /**
