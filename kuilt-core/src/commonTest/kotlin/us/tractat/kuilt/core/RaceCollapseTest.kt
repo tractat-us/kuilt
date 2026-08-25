@@ -98,15 +98,23 @@ class RaceCollapseTest {
             driver.cancel()
         }
 
+    /**
+     * The seam starts on the **collapsed** roster, which is the only roster a `Torn` seam can have
+     * ([Seam.peers], #1816) — and since #2432 the only one [FakeSeam] will construct one with. So both
+     * eager entry checks in [raceCollapse] hold here, and what distinguishes this case from the
+     * already-*drained* one below is no longer the roster but the `reason`: `Normal` proves the torn
+     * check ran **first**, `Unreachable` would prove the drain check pre-empted it. That is the honest
+     * discriminator, because in production the two conditions always arrive together.
+     */
     @Test
     fun `already-torn at entry throws eagerly without starting body`() =
         runTest {
-            val seam = FakeSeam(selfId = self, initialPeers = setOf(self, other), initialState = SeamState.Torn(CloseReason.Normal))
+            val seam = FakeSeam(selfId = self, initialState = SeamState.Torn(CloseReason.Normal))
             var bodyStarted = false
             val ex = assertFailsWith<SeamCollapsedException> {
                 seam.raceCollapse { bodyStarted = true; 1 }
             }
-            assertEquals(CloseReason.Normal, ex.reason)
+            assertEquals(CloseReason.Normal, ex.reason, "the tear must be reported, not the drain that accompanies it")
             assertFalse(bodyStarted)
         }
 

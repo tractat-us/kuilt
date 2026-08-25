@@ -9,7 +9,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import us.tractat.kuilt.core.SeamState.Torn
 import us.tractat.kuilt.core.SeamState.Woven
-import us.tractat.kuilt.core.internal.LatchingStateFlow
 
 /**
  * In-memory implementation of [Loom] for use in tests and
@@ -181,9 +180,9 @@ private class InMemorySeam(
      * seam must not read a remote peer out of it, and `selfId` must not go missing either — which
      * it would if this stayed the raw registry, since `close()` removes this peer from it.
      *
-     * A [LatchingStateFlow] rather than a [us.tractat.kuilt.core.internal.MappedStateFlow]: the
-     * registry is **shared**, so it keeps changing after this seam tears, and a constant transform
-     * over it would re-publish `{ selfId }` on every one of those changes. See that class's KDoc.
+     * A [LatchingStateFlow] rather than a mapped view: the registry is **shared**, so it keeps
+     * changing after this seam tears, and a constant transform over it would re-publish
+     * `{ selfId }` on every one of those changes. See that class's KDoc.
      */
     override val peers: StateFlow<Set<PeerId>> =
         LatchingStateFlow(source = factory.peers, latched = closed, terminal = setOf(selfId))
