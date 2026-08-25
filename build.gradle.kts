@@ -5190,8 +5190,8 @@ object NotNullAssertionScanner {
 // to be that their fix — folding them into `detektJvmTest` — would buy all four real rules, so a
 // lexical ban would trade a fixable gap for a permanent approximation. #2471 measured what that
 // fold actually buys and the answer is "the built-in-typed subset", not the four rules. What still
-// holds is the arithmetic: by raw grep they are 423 lines across 83 files against this guard's
-// whole remaining population of 18 — a baseline that size is indistinguishable from no guard, which
+// holds is the arithmetic: by raw grep they are 424 lines across 83 files against this guard's
+// whole remaining population of 15 — a baseline that size is indistinguishable from no guard, which
 // is the objection `forbidUnlintedAndroidMain` records about allowlists. So they stay out until
 // somebody sweeps them, and #1960 is where that is tracked.
 // The carve-out checks its own stale direction: an entry matching nothing left in scope fails,
