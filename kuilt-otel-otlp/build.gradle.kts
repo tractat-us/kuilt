@@ -18,6 +18,10 @@ kotlin {
             implementation(libs.kotlinx.serialization.json)
             implementation(libs.kotlinx.serialization.protobuf) // OTLP/protobuf wire (selectable alongside JSON)
             implementation(libs.kotlinx.serialization.cbor) // producer-local sent-set persistence
+            // SHA-256 over the collector base URL, so the sent-set key's length is bounded and
+            // independent of the endpoint (#2513). KMP-uniform on every target this module builds
+            // for; :kuilt-deal's FairRandom uses the same artifact from commonMain.
+            implementation(libs.kotlincrypto.hash.sha2)
             implementation(libs.ktor.client.core)
             implementation(libs.ktor.client.contentNegotiation)
             implementation(libs.ktor.serialization.kotlinx.json)

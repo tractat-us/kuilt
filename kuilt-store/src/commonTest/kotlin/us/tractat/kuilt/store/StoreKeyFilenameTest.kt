@@ -19,10 +19,16 @@ class StoreKeyFilenameTest {
     /**
      * Keys the encoder has to keep apart. Three groups, each earning its place:
      *
-     * - **the shipped keyspace** — every `StoreKey` `:kuilt-otel` and
-     *   `:kuilt-otel-otlp` actually construct, so a regression is measured against
-     *   real names rather than invented ones. Note every one of them contains a
-     *   `.`: nothing kuilt ships is inside the safe set;
+     * - **the shipped keyspace** — real names rather than invented ones, so a
+     *   regression is measured against what kuilt stores. Two of the three groups are
+     *   families rather than lists, and both are bounded the same way — a fixed prefix
+     *   plus a variable part that lies entirely inside the safe set, so the entries
+     *   here differ from every other member only in safe characters and stand in for
+     *   all of them. `:kuilt-otel`'s are fixed literals apart from
+     *   `otel.logs.seg.<n>`, whose variable part is decimal digits, represented here
+     *   by `.seg.0` and `.seg.17`. `:kuilt-otel-otlp`'s are one per collector URL:
+     *   three fixed prefixes each followed by a 128-bit SHA-256 tag in lowercase hex.
+     *   Note every entry contains a `.`: nothing kuilt ships is inside the safe set;
      * - **collision witnesses** — pairs the legacy scheme folded together
      *   (punctuation onto `_`, non-ASCII onto `_`, `a` onto `A`);
      * - **hazard witnesses** — a legacy filename used as a key (`otel_logs`), a
@@ -34,7 +40,15 @@ class StoreKeyFilenameTest {
         "otel.causal.clock", "otel.logs", "otel.logs.idx", "otel.logs.seg.0", "otel.logs.seg.17",
         "otel.metrics", "otel.metrics.sums", "otel.metrics.sums.double", "otel.metrics.gauges",
         "otel.metrics.histograms", "otel.metrics.cardinalities", "otel.spans",
-        "otlp.sent.logs@-1274839", "otlp.sent.metrics@0", "otlp.sent.spans@42",
+        // The OTLP sent-set keys, `otlp.sent.<signal>@<128-bit SHA-256 of the collector
+        // base URL, hex>` (#2513). Real tags, not invented ones — respectively the
+        // trimmed bases `https://collector.example.com:4318`,
+        // `http://otel-collector.observability.svc.cluster.local:4318` and
+        // `https://[2001:0db8:85a3:0000:0000:8a2e:0370:7334]:4318/otlp`. The tag is
+        // inside the safe set, so only the `.` and `@` of the prefix move.
+        "otlp.sent.logs@75a77f9c45c56344fc6b18201684d108",
+        "otlp.sent.metrics@8c1c246af2a88ef0282fdd87c7d11770",
+        "otlp.sent.spans@e1c0b85b82d62daec00d66cda94d0e10",
         // Safe-set fixtures — NOT shipped keys. They exist to exercise the carry-over
         // arm, which no key kuilt itself stores can reach.
         "span-state", "spans",
