@@ -22,10 +22,10 @@ Worth knowing before you see it in a dashboard.
 "What have I already sent to this collector?" is a note kuilt keeps on the device,
 filed under a name built from the collector's address. This release rewrites that
 name twice over: entry names are now stored losslessly rather than squashed onto a
-narrower alphabet (#2506, #2511), and the collector's address goes into the name as
-itself rather than as a number derived from it (#2513). The old note is left where it
-lies rather than moved, so the first run after the upgrade finds no record of what was
-sent and offers up everything still sitting in the buffer.
+narrower alphabet (#2506, #2511), and the part identifying the collector is now a
+fingerprint wide enough that two collectors cannot be mistaken for one (#2513). The
+old note is left where it lies rather than moved, so the first run after the upgrade
+finds no record of what was sent and offers up everything still sitting in the buffer.
 
 What that looks like at the collector is one burst of records it has seen before. It
 is bounded by whatever the device's buffer still holds, it happens on the first flush

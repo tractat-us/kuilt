@@ -16,6 +16,7 @@ import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.protobuf.ProtoBuf
+import org.kotlincrypto.hash.sha2.SHA256
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.otel.LogDigest
 import us.tractat.kuilt.otel.LogRecord
@@ -60,16 +61,12 @@ public enum class OtlpWireFormat {
  *
  * @param client caller-owned Ktor [HttpClient] — it owns the engine, timeouts, TLS,
  *   and any auth headers. kuilt does not create or close it.
- * @param endpoint collector base URL, e.g. `https://collector:4318`. It goes into the
- *   sent-set [StoreKey] verbatim (minus any trailing `/`), so two collectors can never
- *   share one sent-set. On a file-backed [store] that name is percent-encoded against a
- *   filename limit of ~255 bytes, and every byte outside `[a-z0-9-]` costs three rather
- *   than one — so the ceiling is on the *encoded* length, not the URL's. Realistic
- *   collector URLs clear it with room to spare: a 104-character internal FQDN with a
- *   path prefix encodes to 152 bytes. An all-lowercase URL first fails around 190
- *   characters; one whose host or path is uppercase- or punctuation-heavy can fail from
- *   about 80. A caller who reaches it gets a loud write error out of the sent-set write,
- *   never silent data loss.
+ * @param endpoint collector base URL, e.g. `https://collector:4318`. Any trailing `/` is
+ *   trimmed, so `.../:4318/` and `.../:4318` are one collector. The sent-set [StoreKey]
+ *   identifies the endpoint by a 128-bit SHA-256 tag rather than by the URL, so two
+ *   collectors never share a sent-set, the key is a fixed width whatever the URL's
+ *   length, and a URL carrying credentials never reaches a filename. Length is
+ *   unconstrained here.
  * @param store durable persistence for the per-endpoint sent-set.
  * @param maxSentIds cap on the span/log sent-set size (drop-oldest). Metrics are
  *   naturally bounded by series count.
@@ -86,20 +83,32 @@ public class OtlpHttpEdge(
     private val base: String = endpoint.trimEnd('/')
     private val json = Json { encodeDefaults = false }
 
-    // Per-endpoint sent-set keys. Two properties, and the key is the *trimmed* base —
-    // the same URL the POSTs use — because both turn on it:
+    // Per-endpoint sent-set keys, tagged by a 128-bit SHA-256 of the *trimmed* base —
+    // the same URL the POSTs use. Three properties ride on that one expression:
     //
-    // - `".../:4318/"` and `".../:4318"` are one collector, so they share one sent-set
-    //   over a shared store rather than splitting into two (#1053).
-    // - Two *different* collectors never share one. The base went in verbatim in #2513,
-    //   replacing `base.hashCode()`: a 32-bit non-cryptographic hash has trivially
-    //   constructible collisions, and a collision here is silent under-delivery — the
-    //   losing endpoint skips records it never sent. `StoreKey` names are encoded
-    //   losslessly onto filenames (#2506/#2511), so the URL's `:` and `/` no longer
-    //   need hashing away; see the `endpoint` KDoc for the one cost that swaps in.
-    private val spanKey = StoreKey("otlp.sent.spans@$base")
-    private val logKey = StoreKey("otlp.sent.logs@$base")
-    private val metricKey = StoreKey("otlp.sent.metrics@$base")
+    // - `".../:4318/"` and `".../:4318"` are one collector, so they hash alike and share
+    //   one sent-set over a shared store rather than splitting into two (#1053).
+    // - Two *different* collectors never share one. This replaced `base.hashCode()` in
+    //   #2513: a 32-bit non-cryptographic hash has trivially constructible collisions,
+    //   and a collision here is silent under-delivery — the losing endpoint skips records
+    //   it never sent. 128 bits of SHA-256 puts a collision out of reach.
+    // - The key's length is **bounded and independent of the endpoint**. That is not
+    //   cosmetic. A file-backed store percent-encodes the key onto a filename, so an
+    //   endpoint-shaped key is endpoint-length, and past the filesystem's limit the
+    //   failure is not loud: `File.exists()` answers *false* for a too-long name rather
+    //   than throwing, so the read degrades to an empty digest while the write throws.
+    //   Every drain would then re-POST the whole buffer forever, diagnosed only at debug
+    //   level. Worse, the three prefixes differ in length, so there is a band where the
+    //   span key fits and the metric key does not — spans persist, metrics do not, and
+    //   `WarpOtlpBridge` still reports `DrainResult.Success` because a signal got
+    //   through. A fixed-width tag removes the whole class by construction.
+    //
+    // The tag is also why a credential-bearing endpoint (`https://user:pass@host`, or a
+    // token in the path) never reaches a filename, where directory listings, backup
+    // manifests and support bundles would carry it.
+    private val spanKey = StoreKey("otlp.sent.spans@${endpointTag(base)}")
+    private val logKey = StoreKey("otlp.sent.logs@${endpointTag(base)}")
+    private val metricKey = StoreKey("otlp.sent.metrics@${endpointTag(base)}")
 
     // ── Digests (producer-local, read from the persisted sent-set) ─────────────
 
@@ -205,6 +214,18 @@ public class OtlpHttpEdge(
     public companion object {
         /** Default cap on the span/log producer-local sent-set (drop-oldest). */
         public const val DEFAULT_MAX_SENT_IDS: Int = 50_000
+
+        /**
+         * Bytes of SHA-256 kept for the endpoint tag. 128 bits makes a collision
+         * unreachable for a keyspace of collector URLs, and fixes the tag at 32 hex
+         * characters — all of them inside the store's `[a-z0-9-]` safe set, so the
+         * encoded filename is the same length whatever the endpoint is.
+         */
+        private const val ENDPOINT_TAG_BYTES = 16
+
+        /** The per-endpoint sent-set tag: 128 bits of SHA-256 over [base], lowercase hex. */
+        private fun endpointTag(base: String): String =
+            ByteString(*SHA256().digest(base.encodeToByteArray()).copyOf(ENDPOINT_TAG_BYTES)).toHex()
 
         private val protobuf = ProtoBuf
         private val cbor = Cbor { alwaysUseByteString = true }
