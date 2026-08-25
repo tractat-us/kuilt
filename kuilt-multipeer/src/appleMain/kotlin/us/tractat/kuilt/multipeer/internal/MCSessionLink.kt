@@ -61,7 +61,10 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.multipeer.internal.MCSe
  * device identity through a [PeerIdentityRegistry]: a second distinct device
  * that still (pathologically) hit one id is REFUSED rather than merged, and a
  * disconnect only ever evicts the device that actually holds the id — so a drop
- * can never evict the wrong peer (#1494 / the #1466 class).
+ * can never evict the wrong peer (#1494 / the #1466 class). A connection whose
+ * remote identity is [selfId] is refused outright, in both places this fabric
+ * needs it refused: the delegate never binds it, and [remotes] keeps it out of
+ * the send targets (#2445).
  *
  * @param policy Governs the inbound [Spool]'s capacity and overflow behaviour.
  *   Defaults to [DeliveryPolicy.Reliable] (bounded, backpressured, lossless).
@@ -109,6 +112,34 @@ internal class MCSessionLink(
 
     val delegate: MCSessionDelegateProtocol = SessionDelegate()
 
+    /**
+     * The session's connected peers with **this device filtered out** — the send-path half of the
+     * self-connection guard (#2445 / the #1466 class).
+     *
+     * A symmetric advertise+browse fabric can be handed its own advertisement and dial it, ending
+     * up in a session whose remote identity is [selfId]. `BridgePeerLink` — the JVM half of this
+     * same fabric — refuses that in its state callback and is done, because it owns `_peers` and
+     * derives its send targets from it. Here the two are **decoupled**: the delegate maintains
+     * [registry]/[_peers], while the send paths read the framework's `connectedPeers` directly. So
+     * the delegate guard alone leaves the loopback wide open — the echo comes from this list, not
+     * from the roster — and this filter alone would still let a self-peer into the roster. Both are
+     * needed; neither is sufficient.
+     *
+     * Identity is spelled through [MultipeerPeerId.peerId], the same mapping the delegate uses, so
+     * the two guards cannot drift onto different notions of "is this us".
+     *
+     * Whether real MC ever lists a same-named peer here is **not** confirmed on hardware. It has no
+     * way to recognise it as us — an `MCPeerID` from `MCNearbyServiceBrowser.foundPeer` is a
+     * distinct object whose equality is by an opaque internal id, and `displayName` is the only
+     * cross-process handle MC exposes (see [MultipeerPeerId]) — so the filter is a no-op if MC
+     * excludes the sighting and load-bearing if it does not.
+     */
+    private val remotes: List<MCPeerID>
+        get() =
+            session.connectedPeers
+                .filterIsInstance<MCPeerID>()
+                .filterNot { MultipeerPeerId.peerId(it.displayName) == selfId }
+
     // Written by close() before disconnect(); read by the MC delegate callback.
     // Means "we issued session.disconnect() — suppress the .notConnected warn".
     // The self-driven drop path leaves it false (the drop IS unexpected, so it
@@ -148,7 +179,9 @@ internal class MCSessionLink(
         // can still name a peer MC has since lost and the send would look ordinary. Only a check
         // that runs before the read covers both.
         check(_state.value !is SeamState.Torn) { "broadcast on a Torn seam" }
-        val targets = session.connectedPeers
+        // [remotes], never `session.connectedPeers`: a self-dialled session lists this device among
+        // its own connected peers, and broadcasting to it loops the frame straight back (#2445).
+        val targets = remotes
         if (targets.isEmpty()) {
             log.warn { "mc.session.send dropped — no connected peers localPeer=${selfId.value} bytes=${payload.size}" }
             return
@@ -175,10 +208,12 @@ internal class MCSessionLink(
         // `connectedPeers` is the remotes MC has connected, never this device, so without this a
         // self-send fell out as PeerNotConnected — false for an id `peers` names (#2428).
         require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
+        // Reads [remotes] so both send paths share ONE notion of who is addressable (#2445). The
+        // `require` above already refuses `selfId` by name, so this cannot change which peer is
+        // found today — it is here so a future spelling of self-identity has a single place to
+        // change, not two that can disagree.
         val target =
-            session.connectedPeers
-                .filterIsInstance<MCPeerID>()
-                .firstOrNull { it.displayName == peer.value }
+            remotes.firstOrNull { it.displayName == peer.value }
                 ?: throw PeerNotConnected(peer)
         log.debug { "mc.session.send localPeer=${selfId.value} toPeer=${peer.value} bytes=${payload.size}" }
         session.sendData(
@@ -246,6 +281,23 @@ internal class MCSessionLink(
             didChangeState: MCSessionState,
         ) {
             val peerId = MultipeerPeerId.peerId(peer.displayName)
+            // Self-connection guard (#2445) — the line `BridgePeerLink.peerStateCallback` has
+            // carried since #1494, and the roster half of the pair the `remotes` filter completes.
+            // A peer that dialled its own advertisement must never be bound: `registry` would then
+            // hold `selfId`, and the `.notConnected` for that link would evict this peer from its
+            // own roster — the #1466 signature. It also stops a link that has met nobody real from
+            // flipping Weaving→Woven on a session with only itself in it.
+            //
+            // Ahead of the `when`, so it covers EVERY state rather than just `.connected`. A self
+            // `.notConnected` reaching the branch below would unbind nothing and then evaluate
+            // `remaining == setOf(selfId)`, tearing down a `Weaving` link that never had a peer.
+            if (peerId == selfId) {
+                log.info {
+                    "mc.session.self-dial localPeer=${selfId.value} peer=${peer.displayName} " +
+                        "state=$didChangeState → dropped (connected to own advertisement)"
+                }
+                return
+            }
             val stateName =
                 when (didChangeState) {
                     MCSessionState.MCSessionStateConnected -> "[Connected]"
