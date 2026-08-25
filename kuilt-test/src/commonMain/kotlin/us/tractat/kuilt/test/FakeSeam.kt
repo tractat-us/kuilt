@@ -39,6 +39,11 @@ import us.tractat.kuilt.core.Swatch
  * The inbound buffer is bounded via [policy] (default [DeliveryPolicy.Reliable]).
  * Unbounded delivery is structurally unrepresentable — pass a custom policy to
  * change capacity or overflow behaviour.
+ *
+ * **Constructing one already `Torn` is allowed, but only in the shape a real seam reaches**:
+ * `initialPeers` must be `setOf(selfId)` (the default), because [Seam.peers] requires a torn seam's
+ * roster to be exactly that. Anything else throws [IllegalArgumentException] — see the `init` block.
+ * A seam constructed `Torn` also starts with [incoming] already completed, as [tear] leaves it.
  */
 public class FakeSeam(
     override val selfId: PeerId = PeerId("self"),
@@ -58,6 +63,30 @@ public class FakeSeam(
     private val _broadcasts = mutableListOf<ByteArray>()
     private val _directed = mutableListOf<Pair<PeerId, ByteArray>>()
     private var sequenceCounter = 0L
+
+    init {
+        // The constructor is the OTHER entry into `Torn`, and fixing `tear()` left it open (#2432).
+        // `initialState` and `initialPeers` are independent parameters, so a caller could *start* in
+        // the state the transition can no longer reach: `Torn` alongside a roster naming a remote.
+        // A fake that can represent a state no conforming seam reaches is the permissive-fake shape
+        // one level up — a consumer test written against it passes while describing something
+        // production cannot produce, which makes its assertion unfalsifiable in the useful direction.
+        //
+        // Refused loudly rather than rewritten silently: deriving the roster from the state would
+        // discard what the caller wrote and teach a reader the wrong model of the contract.
+        val torn = initialState as? SeamState.Torn
+        require(torn == null || initialPeers == setOf(selfId)) {
+            "A Torn seam's peers is exactly { selfId } (Seam.peers, #1816) — a torn fabric can reach " +
+                "nobody, and selfId is never absent. Construct with initialPeers = setOf(selfId) (the " +
+                "default), or start Woven/Weaving and call tear(). Got state=$initialState, " +
+                "peers=${initialPeers.map { it.value }}, selfId=${selfId.value}"
+        }
+        // The spool dimension of the same obligation: every real seam completes `incoming` on tear, and
+        // `tear()` below closes the spool for exactly that reason. A seam that starts `Torn` with an
+        // open spool would suspend a collector forever on a fabric that can never deliver — and since
+        // `deliver` refuses once Torn, the spool is provably empty here.
+        if (torn != null) spool.close()
+    }
 
     /** All payloads passed to [broadcast], in call order. Each read returns a fresh defensive snapshot; two reads may observe different snapshots if a broadcast lands between them. */
     public val broadcasts: List<ByteArray> get() = _broadcasts.toList()

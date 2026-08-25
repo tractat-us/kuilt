@@ -19,6 +19,7 @@ import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.TransportCapability
+import us.tractat.kuilt.core.latchingTo
 
 /**
  * A drop-in replacement for [us.tractat.kuilt.core.InMemoryLoom] with
@@ -191,10 +192,26 @@ public class ControllableSeam internal constructor(
 ) : Seam {
 
     private val spool = Spool<Swatch>(policy)
-    private var closed = false
+
+    // Monotonic: flipped exactly once, by close(). A StateFlow rather than a plain `var` because
+    // `peers` below latches on it — and because an atomic compareAndSet is what makes close()
+    // idempotent under a multi-threaded dispatcher, which a read-then-write was not.
+    private val closed = MutableStateFlow(false)
     private var sequenceCounter = 0L
 
-    override val peers: StateFlow<Set<PeerId>> = loom.peersState
+    /**
+     * The loom's shared registry while this seam is live, and exactly `{ selfId }` once it has closed
+     * (#2443, obligation from #1816). Handing the raw registry through failed **both** halves at once:
+     * a torn seam kept naming every remaining remote, and [close] removes this peer from that registry
+     * so its own id went missing too.
+     *
+     * [latchingTo] rather than a mapped view: the registry is **shared**, so it keeps changing after
+     * this seam tears, and a constant transform over it would re-publish `{ selfId }` to every
+     * surviving collector on each of those changes. Identical to `InMemorySeam`, which this loom is a
+     * drop-in replacement for and which was fixed the same way in #1849.
+     */
+    override val peers: StateFlow<Set<PeerId>> =
+        loom.peersState.latchingTo(latched = closed, terminal = setOf(selfId))
 
     private val _state = MutableStateFlow<SeamState>(SeamState.Woven)
     override val state: StateFlow<SeamState> = _state.asStateFlow()
@@ -209,13 +226,20 @@ public class ControllableSeam internal constructor(
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
         checkNotClosed()
         require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
+        // Deliberately the loom's registry rather than `peers` above: `checkNotClosed` already refused
+        // a torn *self*, and a torn *addressee* has been removed from the registry by its own close().
+        // Making every fabric's `sendTo` read its own `peers` is #2456, and `InMemorySeam` has the
+        // identical shape — changing one of the pair here would only split them.
         if (peer !in loom.peersState.value) throw PeerNotConnected(peer)
         loom.dispatch(sender = selfId, payload = payload, recipient = peer)
     }
 
     override suspend fun close(reason: CloseReason) {
-        if (closed) return
-        closed = true
+        // Publish the roster collapse FIRST. `peers` latches the instant this flips, so a consumer
+        // woken by the terminal `Torn` below already reads `{ selfId }` and can never observe the
+        // pre-close roster through a torn seam (#1816). The compareAndSet also makes the close-once
+        // guard atomic rather than a read-then-write race.
+        if (!closed.compareAndSet(expect = false, update = true)) return
         _state.value = SeamState.Torn(reason)
         loom.remove(selfId)
         spool.close()
@@ -224,7 +248,7 @@ public class ControllableSeam internal constructor(
     internal fun nextSequence(): Long = ++sequenceCounter
 
     internal suspend fun deliver(frame: Swatch) {
-        if (!closed) spool.deliver(frame)
+        if (!closed.value) spool.deliver(frame)
     }
 
     private fun checkNotClosed() {

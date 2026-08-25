@@ -4,10 +4,14 @@ package us.tractat.kuilt.test
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeoutOrNull
+import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
@@ -16,6 +20,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
@@ -41,6 +46,13 @@ import kotlin.test.assertTrue
  * pre-tear roster froze, so it kept advertising a departed remote (first half red) while retaining its
  * own id (second half fine). A single set-equality assertion reports either as one opaque mismatch.
  * Same split, and same wording, as the TCK property and as `CoreSeamPeersCollapseOnTearTest`.
+ *
+ * ### Why the constructor gets its own section
+ * Fixing `tear()` closes the *transition* into the forbidden state; it leaves the *entry* open, because
+ * [FakeSeam]'s constructor took `initialState` and `initialPeers` independently. #2432 is that hole, and
+ * the section below is its standing check — including its two controls, since a guard that refuses every
+ * `Torn` construction, or every roster with a remote, would satisfy a one-sided test while deleting a
+ * shape consumers legitimately need.
  *
  * ### Why ordering needs its own probe
  * The *ordering* half is invisible to a dispatched collector: `peers` is a conflating `StateFlow`, so a
@@ -119,6 +131,97 @@ class TestFakePeersCollapseOnTearTest {
             },
         )
     }
+
+    // ── FakeSeam: the CONSTRUCTOR is the other entry point into `Torn` (#2432) ─────────────────
+    //
+    // [FakeSeam.tear] collapses the roster before latching, so the transition can no longer reach the
+    // forbidden state. The constructor could still *start* there: `initialState` and `initialPeers`
+    // were taken independently, so `Torn` alongside a two-peer roster was constructible — the exact
+    // combination #1816 forbids, and the one the `tear()` fix above spent a PR eliminating.
+    //
+    // Why the constructor hole is as bad as the transition one: a consumer test written against a
+    // `Torn`-with-remotes seam passes while describing a situation production can never produce, so
+    // the assertion it makes is unfalsifiable in the useful direction. That is the permissive-fake
+    // shape arriving one level up.
+    //
+    // The refusal is loud (`require`) rather than a silent rewrite of the caller's argument: a fake
+    // that quietly discards what it was handed teaches a reader the wrong model of the contract.
+
+    @Test
+    fun constructingATornFakeSeamWithARemoteInTheRosterIsRefused() {
+        val failure = assertFailsWith<IllegalArgumentException> {
+            FakeSeam(
+                selfId = self,
+                initialPeers = setOf(self, remote),
+                initialState = SeamState.Torn(CloseReason.Normal),
+            )
+        }
+        assertTrue(
+            failure.message.orEmpty().contains("selfId"),
+            "the refusal must name the obligation it enforces, not merely fail (got: ${failure.message})",
+        )
+    }
+
+    /**
+     * The positive control. Without it a `require(false)` — refusing *every* `Torn` construction —
+     * would satisfy the test above while deleting a shape consumer tests legitimately need.
+     */
+    @Test
+    fun aFakeSeamConstructedTornWithTheCollapsedRosterIsAccepted() {
+        val seam = FakeSeam(selfId = self, initialState = SeamState.Torn(CloseReason.RemoteRequested))
+        assertAll(
+            {
+                assertEquals(
+                    setOf(self),
+                    seam.peers.value,
+                    "a seam constructed Torn starts on the collapsed roster the contract requires",
+                )
+            },
+            {
+                assertEquals(
+                    SeamState.Torn(CloseReason.RemoteRequested),
+                    seam.state.value,
+                    "the reason handed to the constructor must survive it",
+                )
+            },
+        )
+    }
+
+    /**
+     * The other control: the guard must key on `Torn`, not on "has a remote". A live seam with peers
+     * is the fake's single most common shape, and a guard that over-reached would take it out.
+     */
+    @Test
+    fun aLiveFakeSeamMayStillBeConstructedWithARemoteInTheRoster() {
+        val seam = FakeSeam(selfId = self, initialPeers = setOf(self, remote), initialState = SeamState.Weaving)
+        assertEquals(setOf(self, remote), seam.peers.value)
+    }
+
+    /**
+     * The roster is not the only dimension on which a constructed `Torn` seam was unreachable-by-any-
+     * real-fabric: [FakeSeam.tear] also closes the spool, because every real seam completes `incoming`
+     * on tear. A seam that *starts* `Torn` with an open spool leaves a consumer collecting `incoming`
+     * suspended forever on a fabric that can never deliver again — and `deliver` already refuses, so
+     * the spool is provably empty.
+     *
+     * The inner [withTimeoutOrNull] is **virtual** time under `runTest`, so an uncollapsed spool fails
+     * this in microseconds of wall clock rather than hanging the suite; the outer backstop is the
+     * wedge budget, not an assertion.
+     */
+    @Test
+    fun aFakeSeamConstructedTornHasAlreadyCompletedIncoming() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val seam = FakeSeam(selfId = self, initialState = SeamState.Torn(CloseReason.Normal))
+
+            val collected = withTimeoutOrNull(TEST_WEDGE_BACKSTOP) { seam.incoming.toList() }
+
+            assertEquals(
+                emptyList(),
+                collected,
+                "a seam constructed Torn must have completed incoming already — null here means the flow " +
+                    "never terminated, which no real seam's post-tear incoming does",
+            )
+        }
 
     // ── FlakyLifecycleSeam ────────────────────────────────────────────────────────────────────
     //
