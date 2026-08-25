@@ -453,7 +453,7 @@ public abstract class DurableStoreFilenameConformanceSuite<DIR> {
      * ever made an encoded name collide with a legacy one outright.
      *
      * So the suite measures which filesystem it is on, using a probe pair of names **not otherwise
-     * used by this property**: `casefold-probe` planted first, then `CASEFOLD-PROBE`. On a folding
+     * used by this property** — a lowercase name planted first, then its `uppercase()`. On a folding
      * filesystem the second plant lands on the first file and the store reads the second value; on
      * a case-sensitive one it reads the first. Deriving the branch from an independent pair is what
      * keeps the third assertion from restating its own instrument — a branch computed from
