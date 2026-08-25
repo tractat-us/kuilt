@@ -5130,6 +5130,32 @@ object NotNullAssertionScanner {
 // non-JVM platform code sits, and a green there means "nobody looked", which a reader cannot tell
 // from "clean". This is the same false-green class as #2005 and #2334, one tier further out.
 //
+// #2471 WIDENED THIS GUARD TO THE WHOLE REPO, because the premise it used to rest on turned out to
+// be false. It used to SUBTRACT the source of every type-resolved detekt task, on the argument that
+// `!!` there is detekt's job and double-reporting would be noise. Measured, detekt's job there is
+// mostly not being done: detekt 1.23.8 pins `kotlin-compiler-embeddable:{strictly 2.0.21}` and
+// refuses to run against any other, a 2.0.21 frontend deserializes Kotlin metadata only up to
+// `mv=[1,9,0]`, and everything this repo compiles or depends on is `mv=[2,4,0]` (Kotlin 2.4.10).
+// Metadata a frontend cannot read is not an error, it is SILENCE — so type resolution sees only
+// compiler BUILT-INS, JAVA/JDK classes, and declarations in the source files being analysed.
+// kotlin-stdlib, kotlinx-coroutines and every sibling kuilt module are invisible, and a `!!` whose
+// base expression's type comes off the classpath gets an error type, is not `isNullable()`, and is
+// skipped without a word. Two lines in `kuilt-gossip/src/commonMain`, same file, same task:
+//
+//     val m: MutableMap<Long, String> = mutableMapOf()   // type DECLARED -> a built-in
+//     m.remove(k)!!                                      // -> REPORTED
+//     val m = mutableMapOf<Long, String>()               // type INFERRED from stdlib
+//     m.remove(k)!!                                      // -> SILENT
+//
+// The live receipt is the one #2471 was filed on: `GossipDedup.forceForwardPastGap`'s
+// `state.pending.remove(lowest)!!` sat in shipped `commonMain` production code with
+// `UnsafeCallOnNullableType: active: true` and `detektAll` green. There is no config that fixes it
+// — 1.23.8 is the newest release on Maven Central and detekt 2.x (K2 Analysis API) is unreleased —
+// so the lexical ban became the FLOOR everywhere and detekt is a bonus on top of it. Double
+// reporting is now possible and is fine: both spellings of the verdict are a failed build.
+// `forbidDetektFrontendSkew` below reds if the skew that forced this ever goes away, so this
+// paragraph cannot quietly become false in the other direction.
+//
 // WHAT IT IS AND IS NOT. It is a LEXICAL guard on one operator, and the limits are inherent, not
 // oversights — say them out loud rather than let the next reader find them:
 //   * It cannot see through a TYPEALIAS or a HELPER. `fun <T> T?.orDie(): T = this ?: error("…")`
@@ -5149,27 +5175,25 @@ object NotNullAssertionScanner {
 // HOW SCOPE IS DERIVED, and why it is not a list of source-set names. An include-list of
 // `appleMain`/`wasmJsMain`/… is exactly the blind spot it is trying to close: the source set that
 // needs adding to it is by definition the one nobody thought of, and a `linuxX64Main` or a
-// `watchosMain` would land uncovered and silent. So the scope is subtractive and EMPIRICAL —
-// every `**/*.kt` under a module's `src/`, MINUS every file in the `source` of a type-resolved
-// detekt task. A new target is in scope on arrival; a source set that GAINS type-resolved coverage
-// leaves scope automatically, so this can never double-report against detekt.
+// `watchosMain` would land uncovered and silent. So the scope is EMPIRICAL and now maximal —
+// every `**/*.kt` under a module's `src/`, minus only the #1960 carve-out below. A new target, a
+// new module and a new source set are all in scope on arrival, with nothing to remember.
 //
-// The type-resolved set is named by TASK, and that name list is the one thing here that can rot,
-// so it is checked: every name below must resolve in at least one module, or the guard fails
-// rather than silently widening its own scope to the whole repo. The names mirror the two
-// convention plugins' own `detektAllTaskNames` — `kuilt.detekt-kmp`'s five (`detektMetadataCommonMain`
-// is deliberately NOT among them: it is the parse-only task, and `commonMain` earns its coverage by
-// being FOLDED into `detektJvmMain`) plus `kuilt.detekt-jvm`'s two.
+// Before #2471 this subtracted the `source` of a named list of type-resolved detekt tasks, and that
+// list was the one thing here that could rot — a name that stopped resolving would silently widen
+// the guard. Deleting the subtraction deletes that failure mode with it: there is no longer any
+// task name, in this file or any other, that this guard's scope depends on.
 //
 // WHAT IS DELIBERATELY OUT OF SCOPE: `commonTest`, `commonSamples` and the `jvmAndAndroidTest`
-// intermediate. detekt generates no type-resolved task for any of them either, so the subtraction
-// above leaves them in — and they are carved back out by name, because they are #1960's gap, not
-// #2039's. The distinction is not cosmetic: theirs is JVM-path code whose FIX is to fold it into
-// `detektJvmTest` and get all four real rules, and pre-empting that with a lexical ban on one
-// operator would trade a fixable gap for a permanent approximation. It is also, by raw grep, 423
-// lines across 83 files against this guard's whole population of 7 — a baseline that size is
-// indistinguishable from no guard, which is the objection `forbidUnlintedAndroidMain` records
-// about allowlists.
+// intermediate, carved back out by name because they are #1960's gap. The reason is now purely one
+// of SIZE, and that is worth saying plainly since #2471 removed the reason it used to have. It used
+// to be that their fix — folding them into `detektJvmTest` — would buy all four real rules, so a
+// lexical ban would trade a fixable gap for a permanent approximation. #2471 measured what that
+// fold actually buys and the answer is "the built-in-typed subset", not the four rules. What still
+// holds is the arithmetic: by raw grep they are 423 lines across 83 files against this guard's
+// whole remaining population of 18 — a baseline that size is indistinguishable from no guard, which
+// is the objection `forbidUnlintedAndroidMain` records about allowlists. So they stay out until
+// somebody sweeps them, and #1960 is where that is tracked.
 // The carve-out checks its own stale direction: an entry matching nothing left in scope fails,
 // so closing #1960 red-lights the entry that has become a lie instead of leaving it as decoration.
 //
@@ -5185,47 +5209,24 @@ object NotNullAssertionScanner {
 // a DECREASE would red-light the branch doing the sweeping. What IS checked is the entry that has
 // stopped meaning anything — a key naming a file no longer in scope fails, so a deleted or renamed
 // path cannot sit there grandfathering whatever lands on it next.
-val typeResolvedDetektTaskNames = listOf(
-    // kuilt.detekt-kmp — the tier that carries a JVM/Android compile classpath. `detektJvmMain`
-    // also carries commonMain and any jvmAndAndroid* MAIN intermediate, folded in by that plugin.
-    "detektJvmMain",
-    "detektAndroidRelease",
-    "detektJvmTest",
-    "detektAndroidDebugUnitTest",
-    "detektAndroidReleaseUnitTest",
-    // kuilt.detekt-jvm — plain Kotlin/JVM modules (`:kuilt-scale`, `:examples`, `:kuilt-warp-ksp`,
-    // the demo apps). Both tasks carry the compile classpath.
-    "detektMain",
-    "detektTest",
-)
-
 // The #1960 tier — see the carve-out paragraph above.
 val commonTierSourceSets = listOf("commonTest", "commonSamples", "jvmAndAndroidTest")
 
-// Everything under a module's `src/` that no type-resolved detekt task analyses, and the subset of
-// it this guard actually scans (the same set minus the #1960 tier). Filled in `projectsEvaluated`,
-// once every module's detekt tasks exist and carry their folded source.
-val notTypeResolvedSources = objects.fileCollection()
-val notTypeResolvedScannedSources = objects.fileCollection()
-val typeResolvedDetektTasksFound = objects.setProperty(String::class.java)
+// Every Kotlin source under a module's `src/`, and the subset this guard scans (the same set minus
+// the #1960 tier). Filled in `projectsEvaluated` so a module registered late is still covered.
+val allKotlinSources = objects.fileCollection()
+val notNullAssertionScannedSources = objects.fileCollection()
 
 gradle.projectsEvaluated {
-    val found = LinkedHashSet<String>()
-    val analysed = rootProject.subprojects.flatMap { sub ->
-        typeResolvedDetektTaskNames.mapNotNull { name ->
-            (sub.tasks.findByName(name) as? SourceTask)?.also { found += name }?.source
-        }
-    }
-    typeResolvedDetektTasksFound.set(found)
     // `spike/src` by path — see the note above; `files()` de-duplicates it under `-PincludeSpike`.
     val roots = rootProject.subprojects.map { it.projectDir.resolve("src") } + rootDir.resolve("spike/src")
-    val uncovered = kotlinSourcesIn(roots).minus(files(analysed))
-    notTypeResolvedSources.from(uncovered)
+    val everything = kotlinSourcesIn(roots)
+    allKotlinSources.from(everything)
     // A local copy, not the script-level `val`: a lambda that closed over the property directly
     // would capture the `Build_gradle` instance, which the configuration cache cannot serialize.
     val carveOut = commonTierSourceSets
-    notTypeResolvedScannedSources.from(
-        uncovered.filter { file ->
+    notNullAssertionScannedSources.from(
+        everything.filter { file ->
             carveOut.none { "/src/$it/" in file.invariantSeparatorsPath }
         },
     )
@@ -5233,35 +5234,45 @@ gradle.projectsEvaluated {
 
 val forbidNotNullAssertionInUnresolvedSource by tasks.registering {
     group = "verification"
-    description = "Fails on a `!!` in a source set no type-resolved detekt task covers — apple/native/wasm and :spike, where all four nullability rules are silently inert (#2039)."
+    description = "Fails on a `!!` anywhere under a module's `src/` except the #1960 carve-out — detekt's nullability rules are inert on apple/native/wasm and only partial everywhere else (#2039, #2471)."
     // See "Guard plumbing" above: the stamp is what makes UP-TO-DATE possible (#1827). The verdict
     // is a function of file PATHS (the baseline keys, and the carve-out's staleness check) and file
     // CONTENTS, both captured by a RELATIVE fingerprint. The declared set is the UNFILTERED one, so
     // a file entering or leaving the carve-out invalidates the cached success too.
-    inputs.files(notTypeResolvedSources).withPropertyName("sourcesWithoutTypeResolvedDetekt")
+    inputs.files(allKotlinSources).withPropertyName("allKotlinSources")
         .withPathSensitivity(PathSensitivity.RELATIVE)
-    inputs.property("typeResolvedDetektTasksFound", typeResolvedDetektTasksFound)
     val stamp = layout.buildDirectory.file("verification/forbid-notnull-assertion-in-unresolved-source.ok")
     outputs.file(stamp)
     outputs.cacheIf { true }
     val rootPath = rootDir
-    val scanned = notTypeResolvedScannedSources
-    val uncovered = notTypeResolvedSources
+    val scanned = notNullAssertionScannedSources
+    val everything = allKotlinSources
     val carveOut = commonTierSourceSets
-    val expectedTaskNames = typeResolvedDetektTaskNames
-    val tasksFound = typeResolvedDetektTasksFound
     // The baseline MUST stay a literal here. Per "Guard plumbing" above it is covered by the cache
     // key only because it is folded into the task-action implementation hash; moving it to
     // `gradle.properties` or a resource would silently drop it out and reintroduce the stale-green
     // class the stamps were made safe against. Entries are paths relative to the root, violation
-    // counts as of #2039's first PR — 5 files, 9 sites, the whole grandfathered population.
-    // Regenerate after a sweep with this scanner, not by hand.
+    // counts as of the PR that added them. Regenerate after a sweep with this scanner, not by hand.
+    //
+    // The first five are #2039's original population — apple/wasm/:spike, where detekt fires
+    // nothing at all. The rest arrived with #2471, which widened the scope to source sets detekt
+    // was believed to cover and found 11 more sites it had never reported. Every one of them is a
+    // TRUE POSITIVE `!!` on a genuinely nullable type, and all 11 are in test/example sources — the
+    // one production site the widening caught (`GossipDedup.forceForwardPastGap`) was FIXED in the
+    // same PR rather than grandfathered. Burning these down is #2530.
     val baseline = mapOf(
         "kuilt-nw/src/appleMain/kotlin/us/tractat/kuilt/nw/RealNwApi.kt" to 1,
         "kuilt-nw/src/appleTest/kotlin/us/tractat/kuilt/nw/NwHalfCloseProbeTest.kt" to 2,
         "kuilt-store/src/appleTest/kotlin/us/tractat/kuilt/store/NSFileManagerDurableStoreTest.kt" to 4,
         "kuilt-store/src/wasmJsTest/kotlin/us/tractat/kuilt/store/IndexedDbDurableStoreTest.kt" to 1,
         "spike/src/appleMain/kotlin/spike/nw/SpikeNw.kt" to 1,
+        // #2471 — detekt's type resolution never saw any of these.
+        "examples/src/test/kotlin/us/tractat/kuilt/examples/ResumeTokenFailoverTest.kt" to 1,
+        "examples/src/test/kotlin/us/tractat/kuilt/examples/warp/WarpSpikeV2.kt" to 2,
+        "kuilt-otel-otlp/src/jvmTest/kotlin/us/tractat/kuilt/otel/otlp/OtlpHttpEdgeIntegrationTest.kt" to 3,
+        "kuilt-tcp/src/jvmTest/kotlin/us/tractat/kuilt/tcp/TcpLoomFactoryTest.kt" to 1,
+        "kuilt-tcp/src/jvmTest/kotlin/us/tractat/kuilt/tcp/TcpLoomTestDispatcherGuardTest.kt" to 3,
+        "kuilt-websocket/src/jvmTest/kotlin/us/tractat/kuilt/websocket/PublicWebSocketConnectionSpokeTest.kt" to 1,
     )
     doLast {
         val selfTest = NotNullAssertionScanner.selfTestFailures()
@@ -5273,32 +5284,15 @@ val forbidNotNullAssertionInUnresolvedSource by tasks.registering {
                     selfTest.joinToString("\n  "),
             )
         }
-        val missingTasks = expectedTaskNames - tasksFound.get()
-        if (missingTasks.isNotEmpty()) {
-            error(
-                "This guard derives its scope by SUBTRACTING the source of the type-resolved detekt " +
-                    "tasks, and these names now resolve in no module: ${missingTasks.joinToString(", ")}.\n" +
-                    "  A name that stops matching does not narrow the guard, it WIDENS it — every file " +
-                    "that task covered silently becomes \"uncovered\", and the next `!!` written in " +
-                    "ordinary jvm/common code is reported here instead of by detekt, which is the rule " +
-                    "that should have caught it.\n" +
-                    "  THE FIX is to re-sync `typeResolvedDetektTaskNames` in `build.gradle.kts` with " +
-                    "`detektAllTaskNames` in `build-logic/src/main/kotlin/kuilt.detekt-kmp.gradle.kts` " +
-                    "and `kuilt.detekt-jvm.gradle.kts` — minus `detektMetadataCommonMain`, which is the " +
-                    "PARSE-ONLY task and must never be counted as coverage.",
-            )
-        }
-        val uncoveredPaths = uncovered.files.map { it.invariantSeparatorsPath }
-        val staleCarveOut = carveOut.filter { name -> uncoveredPaths.none { "/src/$name/" in it } }
+        val allPaths = everything.files.map { it.invariantSeparatorsPath }
+        val staleCarveOut = carveOut.filter { name -> allPaths.none { "/src/$name/" in it } }
         if (staleCarveOut.isNotEmpty()) {
             error(
                 "`commonTierSourceSets` carves ${staleCarveOut.joinToString(", ")} out of this guard " +
-                    "because #1960 leaves it with no type-resolved detekt task — and it now has one, " +
-                    "or has gone away. Either way the entry has become a lie about why that source is " +
-                    "unscanned.\n" +
-                    "  THE FIX is to delete the entry, then re-run and burn down whatever it was hiding " +
-                    "(if the source set is now type-resolved, it will be subtracted anyway and nothing " +
-                    "moves).",
+                    "because #1960 leaves it unswept, and no such source set exists any more — it has " +
+                    "been renamed or removed, so the entry is now a claim about source that is not " +
+                    "there and would silently exempt whatever next lands on that name.\n" +
+                    "  THE FIX is to delete the entry, then re-run and burn down whatever it was hiding.",
             )
         }
         val found = sortedMapOf<String, List<Int>>()
@@ -5339,11 +5333,13 @@ val forbidNotNullAssertionInUnresolvedSource by tasks.registering {
                 "  $path — $from, now ${hits.size}\n    line(s): ${hits.joinToString(", ")}"
             }
             error(
-                "A `!!` was written in a source set NO type-resolved detekt task covers (#2039).\n" +
-                    "detekt resolves types only against a JVM classpath, so every rule in " +
-                    "`config/detekt/detekt.yml` — `UnsafeCallOnNullableType` among them — parses these " +
-                    "files and fires nothing. `./gradlew detektAll` is green on them whatever they " +
-                    "contain, which is indistinguishable from clean.\n" +
+                "A `!!` was written where detekt's nullability rules cannot be relied on (#2039, #2471).\n" +
+                    "On apple/native/wasm and `:spike` they fire NOTHING — detekt resolves types only " +
+                    "against a JVM classpath. Everywhere else they fire only on the built-in-typed " +
+                    "subset: detekt 1.23.8 runs a Kotlin 2.0.21 frontend, which cannot read this " +
+                    "repo's `mv=[2,4,0]` metadata, so anything typed from kotlin-stdlib, coroutines or " +
+                    "a sibling module is invisible to it. `./gradlew detektAll` is green either way, " +
+                    "which is indistinguishable from clean.\n" +
                     "  THE FIX is to remove the assertion, not to suppress it — there is no hatch:\n" +
                     "      requireNotNull(x) { \"…\" } / checkNotNull(x) { \"…\" }   // fail fast, with a diagnostic\n" +
                     "      x ?: error(\"…\")                                       // same, at an expression\n" +
@@ -5357,9 +5353,111 @@ val forbidNotNullAssertionInUnresolvedSource by tasks.registering {
         val out = stamp.get().asFile
         out.parentFile.mkdirs()
         out.writeText(
-            "ok — ${scanned.files.size} Kotlin source(s) with no type-resolved detekt coverage scanned " +
+            "ok — ${scanned.files.size} Kotlin source(s) scanned for `!!` " +
                 "(${bySourceSet.entries.joinToString(", ") { "${it.key} ${it.value}" }}), " +
                 "${found.size} file(s) at or below baseline (${found.values.sumOf { it.size }} sites)\n",
+        )
+    }
+}
+
+// Guard: notice when detekt's frontend catches up with the project's Kotlin (#2471).
+//
+// This is the PIN under the guard above, and under the tier comment in `kuilt.detekt-kmp`. Both now
+// assert something that is only true while a version skew holds: detekt 1.23.8 runs a Kotlin
+// 2.0.21 frontend, that frontend deserializes metadata only up to `mv=[1,9,0]`, and this repo ships
+// `mv=[2,4,0]` — so detekt's four nullability rules see built-ins, Java, and same-file source, and
+// nothing off the classpath. The widening above, the eleven grandfathered sites, and several
+// paragraphs of prose all rest on that.
+//
+// A skew is a TEMPORARY fact, and the direction it moves in is the one nobody watches: the failure
+// this guards is not detekt getting worse, it is detekt getting BETTER while the repo keeps acting
+// as though it had not. When detekt ships a release whose frontend matches (2.x on the K2 Analysis
+// API, or a 1.23.x rebuilt on a newer compiler) somebody will bump `libs.versions.toml`, CI will be
+// green, and every claim above will be quietly false — the exact "indistinguishable from clean"
+// shape #2471 was filed about, inverted. So this fails on GOOD news, deliberately, and says what to
+// re-open. It is cheap: two version strings, no analysis.
+//
+// It reads the frontend version out of a resolved `detekt-cli` graph rather than from a hardcoded
+// number, so a detekt bump moves it with no edit here. Not finding the jar at all is also a failure
+// — a guard that cannot locate its subject must not report success.
+//
+// The graph is resolved through a configuration of the ROOT project, declared from the same catalog
+// alias the convention plugins use, NOT by reaching into a subproject's own `detekt` configuration.
+// Resolving another project's configuration from here is rejected outright ("Resolution of the
+// configuration ':demo-cli:detekt' was attempted without an exclusive lock"), and it would have made
+// this guard's verdict depend on which subproject happened to sort first.
+val detektFrontendProbe: Configuration by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    isVisible = false
+}
+
+dependencies {
+    detektFrontendProbe("io.gitlab.arturbosch.detekt:detekt-cli:${libs.versions.detekt.get()}")
+}
+
+val forbidDetektFrontendSkew by tasks.registering {
+    group = "verification"
+    description = "Fails when detekt's embedded Kotlin frontend catches up with the project's Kotlin, so the coverage claims that rest on the skew get revisited (#2471)."
+    // See "Guard plumbing" above. The verdict is a function of two version strings: the project's
+    // Kotlin (a task input property) and detekt's frontend (read from the jar NAME in the resolved
+    // `detekt` configuration, declared here as a file input so resolution stays lazy).
+    inputs.files(detektFrontendProbe).withPropertyName("detektRuntimeClasspath")
+        .withPathSensitivity(PathSensitivity.NAME_ONLY)
+    val projectKotlin = libs.versions.kotlin.get()
+    inputs.property("projectKotlinVersion", projectKotlin)
+    val stamp = layout.buildDirectory.file("verification/forbid-detekt-frontend-skew.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    val frontendJars = detektFrontendProbe.incoming.files
+    doLast {
+        val pattern = Regex("""^kotlin-compiler-embeddable-(\d+)\.(\d+)\.(\d+)\.jar$""")
+        val match = frontendJars.files.firstNotNullOfOrNull { pattern.find(it.name) }
+            ?: error(
+                "Could not find `kotlin-compiler-embeddable-<version>.jar` on any module's resolved " +
+                    "`detekt` configuration, so this guard cannot tell whether detekt's frontend still " +
+                    "lags the project's Kotlin — and a guard that cannot see its subject must fail " +
+                    "rather than pass.\n" +
+                    "  Most likely detekt's packaging changed (a 2.x release runs on the K2 Analysis " +
+                    "API and may not ship this artifact at all), which is itself the event this guard " +
+                    "exists to catch — see the fix below.\n" +
+                    "  Files on the configuration: " +
+                    (frontendJars.files.map { it.name }.sorted().takeIf { it.isNotEmpty() }
+                        ?.joinToString(", ") ?: "none"),
+            )
+        val (frontendMajor, frontendMinor) = match.groupValues.drop(1).take(2).map { it.toInt() }
+        val projectParts = projectKotlin.split('.').mapNotNull { it.toIntOrNull() }
+        val projectMajor = projectParts.getOrElse(0) { 0 }
+        val projectMinor = projectParts.getOrElse(1) { 0 }
+        val frontendLags =
+            frontendMajor < projectMajor || (frontendMajor == projectMajor && frontendMinor < projectMinor)
+        if (!frontendLags) {
+            error(
+                "detekt's frontend (Kotlin ${match.groupValues[0].removePrefix("kotlin-compiler-embeddable-")
+                    .removeSuffix(".jar")}) no longer lags the project's Kotlin ($projectKotlin), so it " +
+                    "can now read this repo's binary metadata — and the coverage claims written while " +
+                    "it could not are stale.\n" +
+                    "  THIS IS GOOD NEWS, and the failure is the point: nothing else would tell you. " +
+                    "Three things to re-open, in this order:\n" +
+                    "    1. Re-run #2471's probe — a `!!` on a type INFERRED from a stdlib call, e.g. " +
+                    "`val m = mutableMapOf<Long, String>(); m.remove(k)!!` in some `commonMain` — and " +
+                    "confirm `detektAll` now REPORTS it. Until it does, the skew is not really gone " +
+                    "and this guard should be pinned, not deleted.\n" +
+                    "    2. Re-read the tier comment in " +
+                    "`build-logic/src/main/kotlin/kuilt.detekt-kmp.gradle.kts` and the " +
+                    "`forbidNotNullAssertionInUnresolvedSource` rationale above. Both describe a " +
+                    "partial tier; both would now be wrong.\n" +
+                    "    3. Decide whether that guard should go back to SUBTRACTING the type-resolved " +
+                    "source sets (it stopped in #2471 precisely because they were not covered), and " +
+                    "whether the eleven sites it grandfathered are now detekt's job — #2530.",
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText(
+            "ok — detekt frontend Kotlin $frontendMajor.$frontendMinor still lags project Kotlin " +
+                "$projectKotlin, so detekt's nullability rules remain partial and the lexical `!!` " +
+                "guard remains the floor\n",
         )
     }
 }
@@ -6023,6 +6121,7 @@ allprojects {
         dependsOn(rootProject.tasks.named("forbidUnlintedModule"))
         dependsOn(rootProject.tasks.named("forbidUnlintedAndroidMain"))
         dependsOn(rootProject.tasks.named("forbidNotNullAssertionInUnresolvedSource"))
+        dependsOn(rootProject.tasks.named("forbidDetektFrontendSkew"))
         dependsOn(rootProject.tasks.named("forbidSourcelessKmpTarget"))
         dependsOn(rootProject.tasks.named("forbidPortProbeRebind"))
         dependsOn(rootProject.tasks.named("verifyDocCitations"))

@@ -137,6 +137,37 @@ afterEvaluate {
     // tier where they can fire, and it is why detektAll deliberately ignores the
     // per-target native/wasm tasks: they would cost CI time and find nothing.
     //
+    // #2471: "TYPE-RESOLVED" IS A NAME, NOT A GUARANTEE — the tier is currently PARTIAL, and
+    // the part it is missing is most of the classpath. detekt 1.23.8 pins
+    // `kotlin-compiler-embeddable:{strictly 2.0.21}` and refuses to start against any other
+    // ("detekt was compiled with Kotlin 2.0.21 but is currently running with 2.4.10. This is
+    // not supported."). A 2.0.21 frontend reads Kotlin binary metadata up to `mv=[1,9,0]`;
+    // everything this repo compiles and depends on is `mv=[2,4,0]` (measured with `javap -v`
+    // on kotlin-stdlib-2.4.10, kotlinx-coroutines, kuilt-core-jvm.jar and a module's own
+    // build/classes output — all four). Metadata a frontend cannot deserialize is not an
+    // error, it is SILENCE: the declaration simply does not exist for resolution.
+    //
+    // So the tier resolves exactly three things — Kotlin BUILT-INS (`String`, `MutableMap`,
+    // `Throwable` and their members, loaded from the compiler's own jar, not the classpath),
+    // JAVA/JDK classes (no Kotlin metadata to read), and declarations in the SOURCE FILES
+    // BEING ANALYSED. Every stdlib top-level function, every typealias, kotlinx-coroutines,
+    // and every sibling kuilt module is invisible. A `!!` whose base expression's type comes
+    // off the classpath resolves to an error type, `isNullable()` is false, and all four
+    // rules skip it without a word. The receipt, in `kuilt-gossip/src/commonMain`:
+    //
+    //     val m: MutableMap<Long, String> = mutableMapOf()   // type DECLARED -> built-in
+    //     m.remove(k)!!                                      // -> REPORTED
+    //     val m = mutableMapOf<Long, String>()               // type INFERRED from stdlib
+    //     m.remove(k)!!                                      // -> SILENT
+    //
+    // Two lines apart, same file, same task. There is no config that fixes this: detekt
+    // 1.23.8 is the newest release on Maven Central and 2.x (K2 Analysis API) is unreleased.
+    // Because of that, `forbidNotNullAssertionInUnresolvedSource` in the root build no longer
+    // subtracts this tier — the lexical `!!` ban is the floor EVERYWHERE, and detekt is a
+    // bonus on top of it rather than the mechanism. Re-read that guard's scope, and this
+    // comment, the day detekt can run a frontend that matches `libs.versions.toml`'s Kotlin;
+    // `forbidDetektFrontendSkew` in the root build reds when that day arrives.
+    //
     // PARSE-ONLY (a module with NO jvm target, e.g. `:demo-web` — wasmJs only): there is
     // no type-resolved task to fold anything into. Falling through with the name set
     // above would leave detektAll depending on NOTHING, which is precisely the
