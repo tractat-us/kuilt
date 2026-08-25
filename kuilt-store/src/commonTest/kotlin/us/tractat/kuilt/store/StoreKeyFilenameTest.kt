@@ -34,7 +34,11 @@ class StoreKeyFilenameTest {
         "otel.causal.clock", "otel.logs", "otel.logs.idx", "otel.logs.seg.0", "otel.logs.seg.17",
         "otel.metrics", "otel.metrics.sums", "otel.metrics.sums.double", "otel.metrics.gauges",
         "otel.metrics.histograms", "otel.metrics.cardinalities", "otel.spans",
-        "otlp.sent.logs@-1274839", "otlp.sent.metrics@0", "otlp.sent.spans@42",
+        // The OTLP sent-set keys carry the collector's base URL verbatim (#2513), so the
+        // shipped keyspace includes `:`, `/` and `[`/`]` as well as `.` and `@`.
+        "otlp.sent.logs@https://collector.example.com:4318",
+        "otlp.sent.metrics@http://otel-collector.observability.svc.cluster.local:4318",
+        "otlp.sent.spans@https://[2001:0db8:85a3:0000:0000:8a2e:0370:7334]:4318/otlp",
         // Safe-set fixtures — NOT shipped keys. They exist to exercise the carry-over
         // arm, which no key kuilt itself stores can reach.
         "span-state", "spans",

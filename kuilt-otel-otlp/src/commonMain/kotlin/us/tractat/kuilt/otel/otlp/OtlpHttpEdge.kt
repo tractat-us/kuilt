@@ -60,7 +60,16 @@ public enum class OtlpWireFormat {
  *
  * @param client caller-owned Ktor [HttpClient] — it owns the engine, timeouts, TLS,
  *   and any auth headers. kuilt does not create or close it.
- * @param endpoint collector base URL, e.g. `https://collector:4318`.
+ * @param endpoint collector base URL, e.g. `https://collector:4318`. It goes into the
+ *   sent-set [StoreKey] verbatim (minus any trailing `/`), so two collectors can never
+ *   share one sent-set. On a file-backed [store] that name is percent-encoded against a
+ *   filename limit of ~255 bytes, and every byte outside `[a-z0-9-]` costs three rather
+ *   than one — so the ceiling is on the *encoded* length, not the URL's. Realistic
+ *   collector URLs clear it with room to spare: a 104-character internal FQDN with a
+ *   path prefix encodes to 152 bytes. An all-lowercase URL first fails around 190
+ *   characters; one whose host or path is uppercase- or punctuation-heavy can fail from
+ *   about 80. A caller who reaches it gets a loud write error out of the sent-set write,
+ *   never silent data loss.
  * @param store durable persistence for the per-endpoint sent-set.
  * @param maxSentIds cap on the span/log sent-set size (drop-oldest). Metrics are
  *   naturally bounded by series count.
@@ -77,12 +86,20 @@ public class OtlpHttpEdge(
     private val base: String = endpoint.trimEnd('/')
     private val json = Json { encodeDefaults = false }
 
-    // Per-endpoint sent-set keys. Hash the *trimmed* base — the same URL that POSTs use
-    // — so `".../:4318/"` and `".../:4318"` share one sent-set over a shared store
-    // rather than splitting into two (#1053).
-    private val spanKey = StoreKey("otlp.sent.spans@${base.hashCode()}")
-    private val logKey = StoreKey("otlp.sent.logs@${base.hashCode()}")
-    private val metricKey = StoreKey("otlp.sent.metrics@${base.hashCode()}")
+    // Per-endpoint sent-set keys. Two properties, and the key is the *trimmed* base —
+    // the same URL the POSTs use — because both turn on it:
+    //
+    // - `".../:4318/"` and `".../:4318"` are one collector, so they share one sent-set
+    //   over a shared store rather than splitting into two (#1053).
+    // - Two *different* collectors never share one. The base went in verbatim in #2513,
+    //   replacing `base.hashCode()`: a 32-bit non-cryptographic hash has trivially
+    //   constructible collisions, and a collision here is silent under-delivery — the
+    //   losing endpoint skips records it never sent. `StoreKey` names are encoded
+    //   losslessly onto filenames (#2506/#2511), so the URL's `:` and `/` no longer
+    //   need hashing away; see the `endpoint` KDoc for the one cost that swaps in.
+    private val spanKey = StoreKey("otlp.sent.spans@$base")
+    private val logKey = StoreKey("otlp.sent.logs@$base")
+    private val metricKey = StoreKey("otlp.sent.metrics@$base")
 
     // ── Digests (producer-local, read from the persisted sent-set) ─────────────
 
