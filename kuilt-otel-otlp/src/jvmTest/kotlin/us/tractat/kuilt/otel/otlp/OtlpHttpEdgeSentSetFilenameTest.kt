@@ -69,10 +69,11 @@ class OtlpHttpEdgeSentSetFilenameTest {
 
     /**
      * Endpoints chosen to span the *widest* range of encoded lengths a verbatim key would
-     * have produced — from a 21-character localhost URL to a 300-character one that mixes
+     * have produced — from a 21-character localhost URL to a 227-character one that mixes
      * every expensive case at once (uppercase, an embedded credential, an IPv6 literal, a
-     * long token path). Under a fixed-width tag they must all encode to one length; under
-     * a verbatim key the last one alone would have been unwritable.
+     * long token path), and which percent-encodes to 481 bytes. Under a fixed-width tag
+     * they must all encode to one length; under a verbatim key the last one alone would
+     * have been unwritable.
      */
     private val endpoints = listOf(
         "http://localhost:4318",
@@ -155,7 +156,19 @@ class OtlpHttpEdgeSentSetFilenameTest {
             {
                 // The tag must not be the endpoint wearing a hat: no filename may carry a
                 // recognisable piece of the URL, least of all the credential.
-                val leaked = files.filter { it.contains("collector", ignoreCase = true) || it.contains("S3cr3t") }
+                //
+                // Each needle is chosen to survive `encodeStoreKeyName`, which escapes every
+                // byte outside `[a-z0-9-]`. `collector` and `svc-account` are all-lowercase
+                // so they pass through verbatim; the password does not — `S3cr3tT0k3n`
+                // encodes to `%533cr3t%540k3n`, so the literal `S3cr3t` is absent under BOTH
+                // spellings and searching for it would assert nothing. `%533cr3t` is the
+                // form that actually appears. Each disjunct is verified to red on its own
+                // against a verbatim-key regression.
+                val leaked = files.filter {
+                    it.contains("collector", ignoreCase = true) ||
+                        it.contains("svc-account") ||
+                        it.contains("%533cr3t")
+                }
                 assertTrue(leaked.isEmpty(), "the endpoint must not appear in a filename, but these do: $leaked")
             },
         )

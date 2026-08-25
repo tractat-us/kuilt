@@ -20,12 +20,14 @@ class StoreKeyFilenameTest {
      * Keys the encoder has to keep apart. Three groups, each earning its place:
      *
      * - **the shipped keyspace** — real names rather than invented ones, so a
-     *   regression is measured against what kuilt stores. `:kuilt-otel`'s keys are
-     *   fixed literals and all of them are here. `:kuilt-otel-otlp`'s are a family
-     *   rather than a list — one per collector URL — but a bounded one: three fixed
-     *   prefixes each followed by a 128-bit SHA-256 tag in lowercase hex, every
-     *   character of which is inside the safe set. So the three below differ from
-     *   every other member only in safe characters, and stand in for all of them.
+     *   regression is measured against what kuilt stores. Two of the three groups are
+     *   families rather than lists, and both are bounded the same way — a fixed prefix
+     *   plus a variable part that lies entirely inside the safe set, so the entries
+     *   here differ from every other member only in safe characters and stand in for
+     *   all of them. `:kuilt-otel`'s are fixed literals apart from
+     *   `otel.logs.seg.<n>`, whose variable part is decimal digits, represented here
+     *   by `.seg.0` and `.seg.17`. `:kuilt-otel-otlp`'s are one per collector URL:
+     *   three fixed prefixes each followed by a 128-bit SHA-256 tag in lowercase hex.
      *   Note every entry contains a `.`: nothing kuilt ships is inside the safe set;
      * - **collision witnesses** — pairs the legacy scheme folded together
      *   (punctuation onto `_`, non-ASCII onto `_`, `a` onto `A`);
