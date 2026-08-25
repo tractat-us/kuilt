@@ -83,9 +83,37 @@ abstract class GenerateKarmaOrphanGuard : DefaultTask() {
 
     @TaskAction
     fun generate() {
+        verifyWatchdogSourceHasNoEscape()
         val file = outputFile.get().asFile
         file.parentFile.mkdirs()
         file.writeText(CONTENT)
+    }
+
+    /**
+     * Fail generation if a backslash has crept back into the watchdog source.
+     *
+     * The watchdog is JS *inside* a JS string literal, so a `\` there is consumed by the OUTER
+     * parser: `'\n'` becomes a real newline inside a single-quoted literal, the watchdog becomes
+     * a `SyntaxError` that exits 1 milliseconds after spawn, and the guard is silently disarmed
+     * while `wasmJsBrowserTest` stays green. That is not hypothetical — it shipped once in this
+     * very change (commit a1f1cedc) and was found only by hand-instrumenting and reading a log
+     * CI does not upload. The invariant was then written down in a comment, which is exactly the
+     * kind of prose rule this repo converts into something that reds.
+     */
+    private fun verifyWatchdogSourceHasNoEscape() {
+        val open = "var watchdogSource = ["
+        val close = "].join("
+        check(CONTENT.contains(open) && CONTENT.contains(close)) {
+            "Cannot locate the watchdog source block: this check keys on \"$open\" … \"$close\" " +
+                "and one of them moved. Re-point the check — do not delete it."
+        }
+        val watchdogSource = CONTENT.substringAfter(open).substringBefore(close)
+        check(!watchdogSource.contains('\\')) {
+            "The watchdog source is JS-inside-JS: a backslash is consumed by the OUTER parser " +
+                "and silently turns the watchdog into a SyntaxError, disarming the orphan guard " +
+                "while the build stays green (#2461, commit a1f1cedc). Re-express without an " +
+                "escape — ';' already separates PID records and os.EOL already ends a log line."
+        }
     }
 
     companion object {
