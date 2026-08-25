@@ -141,11 +141,14 @@ afterEvaluate {
     // the part it is missing is most of the classpath. detekt 1.23.8 pins
     // `kotlin-compiler-embeddable:{strictly 2.0.21}` and refuses to start against any other
     // ("detekt was compiled with Kotlin 2.0.21 but is currently running with 2.4.10. This is
-    // not supported."). A 2.0.21 frontend reads Kotlin binary metadata up to `mv=[1,9,0]`;
-    // everything this repo compiles and depends on is `mv=[2,4,0]` (measured with `javap -v`
-    // on kotlin-stdlib-2.4.10, kotlinx-coroutines, kuilt-core-jvm.jar and a module's own
-    // build/classes output — all four). Metadata a frontend cannot deserialize is not an
-    // error, it is SILENCE: the declaration simply does not exist for resolution.
+    // not supported."). A 2.0.21 frontend reads Kotlin binary metadata up to `mv=[1,9,0]`, and
+    // every Kotlin binary on the analysis classpath is past that — measured with `javap -v`,
+    // `[2,4,0]` for kotlin-stdlib-2.4.10, `kuilt-core-jvm.jar` and a module's own
+    // `build/classes` output, `[2,2,0]` for kotlinx-coroutines-1.11.0. (Not one number: a
+    // dependency's metadata version tracks the compiler that BUILT it, so the bound to check
+    // is `> [1,9,0]`, not equality with the repo's own.) Metadata a frontend cannot
+    // deserialize is not an error, it is SILENCE: the declaration simply does not exist for
+    // resolution.
     //
     // So the tier resolves exactly three things — Kotlin BUILT-INS (`String`, `MutableMap`,
     // `Throwable` and their members, loaded from the compiler's own jar, not the classpath),

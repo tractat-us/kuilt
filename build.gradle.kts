@@ -5135,7 +5135,9 @@ object NotNullAssertionScanner {
 // `!!` there is detekt's job and double-reporting would be noise. Measured, detekt's job there is
 // mostly not being done: detekt 1.23.8 pins `kotlin-compiler-embeddable:{strictly 2.0.21}` and
 // refuses to run against any other, a 2.0.21 frontend deserializes Kotlin metadata only up to
-// `mv=[1,9,0]`, and everything this repo compiles or depends on is `mv=[2,4,0]` (Kotlin 2.4.10).
+// `mv=[1,9,0]`, and every Kotlin binary on the analysis classpath is past that — `[2,4,0]` for
+// kotlin-stdlib-2.4.10, `kuilt-core-jvm.jar` and a module's own `build/classes` output, `[2,2,0]`
+// for kotlinx-coroutines-1.11.0, each tracking the compiler that built it rather than this repo's.
 // Metadata a frontend cannot read is not an error, it is SILENCE — so type resolution sees only
 // compiler BUILT-INS, JAVA/JDK classes, and declarations in the source files being analysed.
 // kotlin-stdlib, kotlinx-coroutines and every sibling kuilt module are invisible, and a `!!` whose
