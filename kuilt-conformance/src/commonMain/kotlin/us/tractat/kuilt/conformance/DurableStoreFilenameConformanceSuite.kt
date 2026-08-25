@@ -428,15 +428,18 @@ public abstract class DurableStoreFilenameConformanceSuite<DIR> {
             // The probe: two names differing only in case, planted lower-then-upper. Not used
             // anywhere else in this property, so the branch it decides is an independent
             // measurement of the filesystem rather than a restatement of the subject's own read.
-            plantRawFile(dir, "casefold-probe", byteArrayOf(CASE_SENSITIVE_MARK))
-            plantRawFile(dir, "CASEFOLD-PROBE", byteArrayOf(CASE_FOLDING_MARK))
+            // Bare lowercase ASCII, with no `-` or digit: that is the narrowest possible safe set,
+            // so the probe depends on as little of the encoder as a probe read through the store
+            // can. The precondition below is what catches it if even that stops holding.
+            plantRawFile(dir, PROBE_NAME, byteArrayOf(CASE_SENSITIVE_MARK))
+            plantRawFile(dir, PROBE_NAME.uppercase(), byteArrayOf(CASE_FOLDING_MARK))
             // A different key's legacy orphan, under a name the legacy schemes left alone.
             plantRawFile(dir, "Config", byteArrayOf(55))
             // A moved key's legacy orphan: "otel.logs" was stored here.
             plantRawFile(dir, "otel_logs", byteArrayOf(66))
 
             val store = newStore(dir)
-            val probe = store.read(StoreKey("casefold-probe"))
+            val probe = store.read(StoreKey(PROBE_NAME))
             val movedVariants = listOf("otel_logs", "OTEL_LOGS", "Otel_Logs")
             val movedReads = movedVariants.map { store.read(StoreKey(it)) }
             val atUppercaseKey = store.read(StoreKey("Config"))
@@ -448,8 +451,10 @@ public abstract class DurableStoreFilenameConformanceSuite<DIR> {
                     assertTrue(
                         caseFolding || probe.contentEquals(byteArrayOf(CASE_SENSITIVE_MARK)),
                         "PRECONDITION: the case-folding probe read back ${probe?.firstOrNull()}, which is " +
-                            "neither planted value — plantRawFile must write the name it is given, verbatim, " +
-                            "into the directory newStore reads from",
+                            "neither planted value, so the arm chosen below was chosen on no evidence. " +
+                            "Either plantRawFile does not write the name it is given, verbatim, into the " +
+                            "directory newStore reads from — or \"$PROBE_NAME\" is no longer a name the " +
+                            "encoder passes through unchanged, in which case the probe needs a new one",
                     )
                 },
                 *movedVariants.mapIndexed { index, name ->
@@ -518,6 +523,18 @@ public abstract class DurableStoreFilenameConformanceSuite<DIR> {
  * uses to prove a plant landed.
  */
 private const val CONTROL_NAME = "spans"
+
+/**
+ * The lowercase half of the probe pair
+ * [DurableStoreFilenameConformanceSuite.theLegacyOverlapACaseFoldingFilesystemExposesIsExactlyTheDocumentedOne]
+ * measures the filesystem's case sensitivity with; the uppercase half is `.uppercase()` of it.
+ *
+ * Bare lowercase ASCII letters on purpose. Any narrower and there is nothing an encoder could pass
+ * through; anything wider — a `-`, a digit — couples the probe to a wider safe set than it needs,
+ * and an encoder change that narrowed the set would make the probe unreadable for a reason that has
+ * nothing to do with the filesystem it is trying to measure.
+ */
+private const val PROBE_NAME = "casefoldprobe"
 
 /** The probe value a **case-sensitive** filesystem leaves readable at `casefold-probe`. */
 private const val CASE_SENSITIVE_MARK: Byte = 101
