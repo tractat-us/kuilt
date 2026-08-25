@@ -57,6 +57,24 @@ import org.gradle.api.tasks.TaskAction
  * Residual risk: PID reuse in the window between the Karma process dying and the watchdog
  * waking. The watchdog is woken by pipe closure rather than a poll, so that window is
  * sub-millisecond, and only PIDs of children still running at that instant are held at all.
+ *
+ * ## The diagnostic trail is load-bearing
+ *
+ * Every step and every error is appended to `karma-orphan-guard.log` beside the Karma config.
+ * This is not debug scaffolding to remove later. **A guard that silently fails to arm is
+ * indistinguishable from a guard that worked** — the build is green either way, and the leak
+ * only shows up days later on someone's process table. The first version of this guard shipped
+ * with each failure path behind a silent `catch` and was completely unarmed; the trail is what
+ * turned "no watchdog, no explanation" into a one-line diagnosis:
+ *
+ * ```
+ * … spawn intercepted pid=43308 argv0=…/Google Chrome
+ * … watchdog spawned pid=43309
+ * … [wd 43309] watchdog up
+ * … [wd 43309] reap(end) killed=43308
+ * ```
+ *
+ * A run whose trail lacks `watchdog up` is a disarmed guard, whatever the build says.
  */
 abstract class GenerateKarmaOrphanGuard : DefaultTask() {
 
@@ -111,26 +129,35 @@ abstract class GenerateKarmaOrphanGuard : DefaultTask() {
             |    }
             |    note('guard loaded; execPath=' + process.execPath);
             |
-            |    // Runs as `node -e`. Reads "+pid" / "-pid" lines from stdin; when that pipe
+            |    // Runs as `node -e`. Reads "+pid;" / "-pid;" records from stdin; when that pipe
             |    // closes — which the kernel guarantees the moment the Karma process dies, by
             |    // any signal including SIGKILL — it kills whatever PIDs are still recorded.
+            |    //
+            |    // These are JS strings holding JS source, so every backslash here has to survive
+            |    // two parsers. It did not: a '\n' record separator was eaten by the OUTER parser
+            |    // and emitted as a real newline inside a single-quoted literal, making the
+            |    // watchdog a SyntaxError that died 51 ms after spawn — silently disarming the
+            |    // guard while the build stayed green. So the watchdog source below contains NO
+            |    // backslash escape at all: ';' separates records and os.EOL ends a log line.
+            |    // Keep it that way; a nested escape here fails invisibly.
             |    var watchdogSource = [
             |        "var pids = new Set(), buf = '';",
             |        "var trail = process.argv[1];",
+            |        "var eol = require('os').EOL;",
             |        "function note(message) {",
             |        "  try {",
-            |        "    require('fs').appendFileSync(trail, Date.now() + ' [wd ' + process.pid + '] ' + message + '\\n');",
+            |        "    require('fs').appendFileSync(trail, Date.now() + ' [wd ' + process.pid + '] ' + message + eol);",
             |        "  } catch (ignored) {}",
             |        "}",
             |        "note('watchdog up');",
             |        "process.stdin.on('data', function (chunk) {",
             |        "  buf += chunk;",
             |        "  var i;",
-            |        "  while ((i = buf.indexOf('\\n')) >= 0) {",
-            |        "    var line = buf.slice(0, i).trim();",
+            |        "  while ((i = buf.indexOf(';')) >= 0) {",
+            |        "    var record = buf.slice(0, i).trim();",
             |        "    buf = buf.slice(i + 1);",
-            |        "    if (line.charAt(0) === '+') { pids.add(Number(line.slice(1))); }",
-            |        "    else if (line.charAt(0) === '-') { pids.delete(Number(line.slice(1))); }",
+            |        "    if (record.charAt(0) === '+') { pids.add(Number(record.slice(1))); }",
+            |        "    else if (record.charAt(0) === '-') { pids.delete(Number(record.slice(1))); }",
             |        "  }",
             |        "});",
             |        "function reap(why) {",
@@ -190,13 +217,13 @@ abstract class GenerateKarmaOrphanGuard : DefaultTask() {
             |            var pid = child.pid;
             |            spawned.add(pid);
             |            note('spawn intercepted pid=' + pid + ' argv0=' + arguments[0]);
-            |            tell('+' + pid + '\n');
+            |            tell('+' + pid + ';');
             |            child.once('exit', function () {
             |                spawned.delete(pid);
             |                // Un-record promptly, so a run that ends cleanly leaves the
             |                // watchdog holding nothing and PID reuse has no target.
             |                note('child exited pid=' + pid);
-            |                tell('-' + pid + '\n');
+            |                tell('-' + pid + ';');
             |            });
             |        }
             |        return child;
