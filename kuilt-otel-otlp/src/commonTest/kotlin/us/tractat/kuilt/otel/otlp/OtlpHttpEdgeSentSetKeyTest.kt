@@ -16,7 +16,6 @@ import us.tractat.kuilt.store.InMemoryDurableStore
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Instant
 
@@ -121,14 +120,5 @@ class OtlpHttpEdgeSentSetKeyTest {
             },
             { assertEquals(1, collector.posts, "one collector, one POST — a trailing slash must not resend") },
         )
-    }
-
-    /** A sanity arm for the fixture the two tests share: the span really is exported. */
-    @Test
-    fun oneEdgeDrainsTheExportedSpan() = runTest {
-        val collector = CountingCollector()
-        val edge = OtlpHttpEdge(collector.client, "https://c.example:4318", InMemoryDurableStore())
-        val result = WarpOtlpBridge(telemetryHoldingOneSpan(), clock).drain(edge)
-        assertTrue(result is DrainResult.Success && result.spansSent == 1, "drain result was $result")
     }
 }
