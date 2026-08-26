@@ -15,7 +15,7 @@
 - Test methods: no `test` prefix; `@Test` suffices. Multi-assert tests use `assertAll()`.
 - Coroutine tests inject a test dispatcher; never `advanceUntilIdle()` on timer-bearing systems — bounded `advanceTimeBy` only.
 - `kuilt-core` depends on nothing but coroutines + serialization. `DeliveryPolicy`/`Overflow` are public; `Mailbox` is internal.
-- Build: `source ~/.sdkman/bin/sdkman-init.sh && sdk use java 21.0.5-tem` first. Lint with `./gradlew :kuilt-core:detektAll` (never bare `detekt`).
+- Build: `source ~/.sdkman/bin/sdkman-init.sh && sdk use java 21.0.5-tem` first. There is no linter (#2540); the static-analysis gate is `./gradlew check`.
 - Commits: never the word "chore". End commit messages with the `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>` trailer.
 
 ---
@@ -397,10 +397,10 @@ internal suspend fun dispatch(
 Run: `./gradlew :kuilt-core:jvmTest --tests "*InMemoryLoomPolicyTest*" --tests "*InMemoryLoomTest*"`
 Expected: PASS — backpressure test passes AND existing `InMemoryLoomTest` (`sequence == 1,2,3`, etc.) stays green.
 
-- [ ] **Step 5: Run conformance + detekt**
+- [ ] **Step 5: Run conformance + the check-wired guards**
 
-Run: `./gradlew :kuilt-core:jvmTest :kuilt-core:detektAll`
-Expected: BUILD SUCCESSFUL — `InMemoryLoomConformanceTest` (SeamConformanceSuite) green, zero detekt issues.
+Run: `./gradlew :kuilt-core:jvmTest check`
+Expected: BUILD SUCCESSFUL — `InMemoryLoomConformanceTest` (SeamConformanceSuite) green, every guard green.
 
 - [ ] **Step 6: Commit**
 
@@ -457,7 +457,7 @@ is the input to planning Phases 2…N. No commit (experiment reverted).
 
 ## Deferred to later phases (not this plan)
 
-- **Detekt/scan guard** forbidding `Channel.UNLIMITED` for delivery — can only pass once **all**
+- **Source-scan guard** forbidding `Channel.UNLIMITED` for delivery — can only pass once **all**
   sites are migrated, so it lands in the epic's final phase, not here.
 - **Phases 2…N:** one PR per fabric/double (`MeshSeam`, `LinkSeam`, `SingleCollectionConnection`,
   `CompositeSeam` + `limitedParallelism(1)` retirement; then `FakeSeam`, `FakeRoom`,
@@ -469,9 +469,9 @@ is the input to planning Phases 2…N. No commit (experiment reverted).
 
 - **Spec coverage:** `DeliveryPolicy`/`Overflow`/presets → Task 1; `Mailbox` + all four overflow
   behaviours → Task 2; `InMemoryLoom` migration + deliver-outside-lock → Task 3; deadlock
-  empirical gate → Task 4; detekt guard + Phases 2…N + heap-pin relax → explicitly deferred.
+  empirical gate → Task 4; scan guard + Phases 2…N + heap-pin relax → explicitly deferred.
 - **Types consistent:** `DeliveryPolicy(capacity, overflow)`, `Overflow.{SUSPEND,DROP_OLDEST,DROP_LATEST,FAIL}`,
   `Mailbox(policy).deliver/incoming/close`, `FrameOverflow` — same names across Tasks 1–3.
 - **Placeholder scan:** clean — every code step shows the concrete code; the only "deferred"
-  items are explicitly out of this plan's scope (detekt guard, Phases 2…N, heap-pin relax) and
+  items are explicitly out of this plan's scope (scan guard, Phases 2…N, heap-pin relax) and
   named as such.

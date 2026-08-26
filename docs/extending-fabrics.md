@@ -405,14 +405,13 @@ Key points:
   `runTest` and `StandardTestDispatcher` are off the table. The suite runs over a
   real loopback socket with `runBlocking`. This matches `:kuilt-websocket`'s
   conformance harness.
-- **Two markers on the way in, and only two.** The repo bans production
+- **One marker on the way in, and only one.** The repo bans production
   dispatchers in test sources to catch accidental real-clock leaks, so a
-  deliberate real-network harness declares itself: `@file:Suppress("ForbiddenImport")`
-  silences detekt's import rule, and a line-tight
+  deliberate real-network harness declares itself with a line-tight
   `// ALLOW-realDispatcher: <reason>` on the `import kotlinx.coroutines.Dispatchers`
-  line clears the whole-tree guard (`forbidProductionDispatcherInTests`), which
-  requires the reason. `@Suppress("ForbiddenMethodCall")` is **not** a mechanism —
-  that rule is configured nowhere and never fires (#1329, #1934).
+  line, which clears the whole-tree guard (`forbidProductionDispatcherInTests`)
+  and requires the reason. An `@Suppress("…")` is **not** a mechanism — those
+  name detekt rules, and the repo has no detekt (#2540, #1329, #1934).
 - **`newLoomPair()` returns distinct host and joiner looms** wired to reach each
   other over the shared `serverSocket`. The suite drives `host()` and `join()`
   concurrently; the host's `accept()`-then-handshake suspends until the joiner

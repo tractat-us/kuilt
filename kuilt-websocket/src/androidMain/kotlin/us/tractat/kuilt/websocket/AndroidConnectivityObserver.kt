@@ -78,8 +78,8 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.websocket.AndroidCon
  * `capability` on a value no reading ever produced.
  *
  * **Unguarded by any test in this repo.** There is no device or emulator in CI, no unit test
- * reaches `registerNetworkCallback`, and `detektAll` lints no `androidMain` production source
- * (#2334). A fake-injected signal proves the seam's *reaction* — that is
+ * reaches `registerNetworkCallback`, and the repo has no linter to read this file statically
+ * (#2540). A fake-injected signal proves the seam's *reaction* — that is
  * `WebSocketSeamCapabilityTest`'s job — never this file's *emission*. This rests on the platform
  * contract above and on review.
  */
