@@ -1,11 +1,4 @@
 [versions]
-# Latest release in the OLD group. detekt 2.x moved to `dev.detekt` and is deliberately not adopted:
-# alpha, plus 2.0's KMP type-resolution run-time regression (detekt/detekt#8882).
-# Know what this pin costs (#2471): 1.23.8 runs a Kotlin 2.0.21 frontend whose metadata read ceiling
-# is [2,1,0], so against this repo's [2,4,0] binaries its type resolution sees only built-ins, Java,
-# and same-source declarations — NOT working type resolution. `!!` is covered by the lexical
-# `forbidNotNullAssertionInUnresolvedSource` instead. #2534 re-evaluates the trade.
-detekt = "1.23.8"
 kotlin = "2.4.10"
 atomicfu = "0.33.0"
 kotlinx-coroutines = "1.11.0"
@@ -115,7 +108,6 @@ chicory-runtime = { module = "com.dylibso.chicory:runtime", version.ref = "chico
 kotlin-gradlePlugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 kotlin-serialization-gradlePlugin = { module = "org.jetbrains.kotlin:kotlin-serialization", version.ref = "kotlin" }
 android-gradlePlugin = { module = "com.android.tools.build:gradle", version.ref = "agp" }
-detekt-gradlePlugin = { module = "io.gitlab.arturbosch.detekt:detekt-gradle-plugin", version.ref = "detekt" }
 # vanniktech maven-publish (base plugin) — POM, sources/javadoc jars, signing,
 # and Central Portal upload for the publish convention:
 vanniktech-mavenPublish-gradlePlugin = { module = "com.vanniktech:gradle-maven-publish-plugin", version.ref = "vanniktechMavenPublish" }
@@ -129,7 +121,6 @@ ksp-api = { module = "com.google.devtools.ksp:symbol-processing-api", version.re
 ksp-gradlePlugin = { module = "com.google.devtools.ksp:symbol-processing-gradle-plugin", version.ref = "ksp" }
 
 [plugins]
-detekt = { id = "io.gitlab.arturbosch.detekt", version.ref = "detekt" }
 kotlinJvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
 kotlinSerialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

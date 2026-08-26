@@ -87,9 +87,6 @@ tasks.withType<KotlinCompilationTask<*>>().configureEach {
 tasks.matching { it.name.startsWith("ksp") && it.name != generator }.configureEach {
     dependsOn(generator)
 }
-tasks.withType<io.gitlab.arturbosch.detekt.Detekt>().configureEach {
-    dependsOn(generator)
-}
 // The KMP metadata publication's sources jar is named plain `sourcesJar`, the per-target ones
 // `<target>SourcesJar`.
 tasks.matching { it.name == "sourcesJar" || it.name.endsWith("SourcesJar") }.configureEach {
