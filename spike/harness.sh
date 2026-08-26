@@ -14,7 +14,18 @@
 set -uo pipefail
 HOST_DEV="${1:?host device id}"; JOIN_DEV="${2:?join device id}"; APP="${3:?app path}"
 BID=us.tractat.spike.nw
-H=/tmp/suite-host.log; J=/tmp/suite-join.log
+# Per-run log paths, for the same reason teardown is keyed on our own PIDs: attribution by
+# something this run owns. A `devicectl … --console` orphan from an earlier run (one the EXIT trap
+# below could not reap — a SIGKILL, a panic) holds its log open in O_APPEND, so truncating a
+# reused path would NOT stop it appending; and an attached console keeps the stale app running and
+# streaming, so it can emit a whole ===REPORT-BEGIN===…===REPORT-END=== block that wait_for matches
+# and report() then prints as THIS run's result — a false PASS, which `--terminate-existing` cannot
+# prevent because it fires at launch, after any truncation. A path no orphan has ever heard of makes
+# that structurally impossible, and stops two concurrent runs colliding on one file besides.
+# Left behind on exit on purpose: they are the post-mortem when a suite does not complete.
+H=$(mktemp -t suite-host) || { echo "❌ cannot create host log"; exit 1; }
+J=$(mktemp -t suite-join) || { echo "❌ cannot create join log"; exit 1; }
+echo "logs: $H (host) · $J (join)"
 SUITE_TIMEOUT=200   # seconds — covers weave + election + teardown + ~120s soak + slack
 
 report() { # $1=logfile $2=label
@@ -23,7 +34,10 @@ report() { # $1=logfile $2=label
 }
 wait_for() { local f="$1" pat="$2" secs="$3" desc="$4"; for i in $(seq 1 "$secs"); do grep -q "$pat" "$f" 2>/dev/null && { echo "  ✓ $desc"; return 0; }; sleep 1; done; return 1; }
 
-# Teardown is scoped to the PIDs THIS script spawned, and reaches them on every exit path.
+# Teardown is scoped to the PIDs THIS script spawned. The EXIT trap covers normal completion, the
+# early `exit 1`s and Ctrl-C (on main, a Ctrl-C left both consoles and both apps running). It does
+# NOT cover a SIGKILL or a panic, and the TERM it sends is not waited on — hence the per-run log
+# paths above, which make the orphan that survives those cases harmless rather than merely rarer.
 #
 # Never reap by command-line pattern here (`pkill -f "devicectl device process launch"`, which is
 # what this script used to do): `-f` matches every process on the machine whose command line
@@ -47,10 +61,6 @@ trap cleanup EXIT
 echo "### install"
 xcrun devicectl device install app --device "$HOST_DEV" "$APP" >/dev/null 2>&1 || { echo "❌ install host"; exit 1; }
 xcrun devicectl device install app --device "$JOIN_DEV" "$APP" >/dev/null 2>&1 || { echo "❌ install join"; exit 1; }
-# Reset the logs so wait_for's grep can't match a previous run's output. The stale-app-on-device
-# case the old pkill here appeared to cover is `--terminate-existing`'s job, and it is already
-# passed at both launch sites below.
-: > "$H"; : > "$J"
 
 echo "### launch host (role=host)"
 xcrun devicectl device process launch --terminate-existing --console --device "$HOST_DEV" "$BID" host >> "$H" 2>&1 &
