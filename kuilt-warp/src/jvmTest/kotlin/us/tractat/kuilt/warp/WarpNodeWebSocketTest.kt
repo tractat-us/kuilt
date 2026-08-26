@@ -1,4 +1,3 @@
-@file:Suppress("ForbiddenImport") // deliberate: real-IO test over Netty/OkHttp — Dispatchers.Default is required; virtual-time dispatchers cannot drive real sockets
 // Real-IO exception: this test binds a real Netty server on a localhost port and
 // connects real OkHttp WebSocket clients. Virtual time cannot drive real socket I/O;
 // Dispatchers.Default is the appropriate dispatcher for WarpNode background coroutines.

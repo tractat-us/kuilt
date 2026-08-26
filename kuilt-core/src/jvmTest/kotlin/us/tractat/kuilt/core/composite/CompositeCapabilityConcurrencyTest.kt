@@ -1,5 +1,3 @@
-@file:Suppress("ForbiddenImport") // deliberate: this probe exists to run on real OS threads with real preemption — a virtual/single-threaded dispatcher serialises the pumps and the writer and hides the race entirely.
-
 package us.tractat.kuilt.core.composite
 
 import kotlinx.coroutines.CompletableDeferred

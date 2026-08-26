@@ -1029,7 +1029,7 @@ class NwSeamWedgeDiagnosticsTest {
             .filter { it.contains(event) && it.contains(scope) }
 
     private inline fun withCapture(block: (ListAppender<ILoggingEvent>) -> Unit) {
-        @Suppress("CastNullableToNonNullableType") // SLF4J returns non-null; Logback is the bound implementation
+        // SLF4J returns non-null; Logback is the bound implementation
         val logger = LoggerFactory.getLogger("us.tractat.kuilt.nw") as Logger
         val previousLevel = logger.level
         logger.level = Level.DEBUG // so a DEMOTED line would still be captured — and then fail the level assertion

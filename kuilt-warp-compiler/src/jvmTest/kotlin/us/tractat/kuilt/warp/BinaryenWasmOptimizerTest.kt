@@ -1,5 +1,3 @@
-@file:Suppress("ForbiddenImport") // deliberate real-subprocess test: wasm-opt is genuine wall-clock work (the sanctioned real-threading exception, like ChicoryWasmRuntime's real-IO path), so the optimizer is given Dispatchers.IO, not a virtual-time dispatcher — runTest has no delays to drive.
-
 package us.tractat.kuilt.warp
 
 import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-subprocess test: wasm-opt is genuine wall-clock work (the sanctioned real-threading exception), so the optimizer is given Dispatchers.IO — runTest has no delays to drive.
