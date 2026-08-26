@@ -40,6 +40,11 @@ import us.tractat.kuilt.core.Swatch
  * Unbounded delivery is structurally unrepresentable — pass a custom policy to
  * change capacity or overflow behaviour.
  *
+ * **`initialPeers` must contain [selfId]** — in every state, as [Seam.peers] requires from
+ * construction onward. `peers.value.size > 1` is the contract's sentinel for "at least one remote is
+ * connected", so a roster without [selfId] under-counts by one and a seam holding one remote reads as
+ * alone. Passing one throws [IllegalArgumentException].
+ *
  * **Constructing one already `Torn` is allowed, but only in the shape a real seam reaches**:
  * `initialPeers` must be `setOf(selfId)` (the default), because [Seam.peers] requires a torn seam's
  * roster to be exactly that. Anything else throws [IllegalArgumentException] — see the `init` block.
@@ -65,6 +70,20 @@ public class FakeSeam(
     private var sequenceCounter = 0L
 
     init {
+        // `Seam.peers` holds `selfId` from construction onward, in EVERY state — a strictly broader
+        // obligation than the `Torn` one below, and independent of it (#2536). `initialPeers` is its own
+        // parameter, so a caller could hand the fake a roster naming only a remote, or nobody at all, and
+        // both read backwards in the direction consumer tests turn on: `peers.value.size > 1` is the
+        // contract's sentinel for "a remote is connected", so a roster missing `selfId` under-counts by
+        // one and a seam with one live remote reads as alone. The fake would also disagree with itself
+        // about who `selfId` is — `sendTo` refuses a self-send before consulting the roster (#2428).
+        require(selfId in initialPeers) {
+            "A Seam's peers always contains selfId, from construction onward (Seam.peers, #2536) — " +
+                "`peers.value.size > 1` is the contract's sentinel for \"at least one remote is " +
+                "connected\", and a roster without selfId under-counts by one, so a seam holding one " +
+                "remote reads as alone. Pass initialPeers containing selfId (setOf(selfId) is the " +
+                "default). Got selfId=${selfId.value}, peers=${initialPeers.map { it.value }}"
+        }
         // The constructor is the OTHER entry into `Torn`, and fixing `tear()` left it open (#2432).
         // `initialState` and `initialPeers` are independent parameters, so a caller could *start* in
         // the state the transition can no longer reach: `Torn` alongside a roster naming a remote.
@@ -74,6 +93,11 @@ public class FakeSeam(
         //
         // Refused loudly rather than rewritten silently: deriving the roster from the state would
         // discard what the caller wrote and teach a reader the wrong model of the contract.
+        //
+        // This COMPOSES with the guard above rather than subsuming it or being subsumed by it: `Torn`
+        // demands the roster be exactly `{ selfId }` and says nothing about any other state; `#2536`
+        // demands `selfId ∈ peers` and says nothing about remotes. Folding either into the other loses
+        // a shape — `FakeSeamRosterAlwaysHoldsSelfIdTest.tornAndLiveGuardsStayDistinct` is the check.
         val torn = initialState as? SeamState.Torn
         require(torn == null || initialPeers == setOf(selfId)) {
             "A Torn seam's peers is exactly { selfId } (Seam.peers, #1816) — a torn fabric can reach " +
