@@ -643,7 +643,7 @@ which pre-1.0 permits) and everything downstream of it, which is `pick`, `front`
 every gate are untouched — they never read the seat.
 
 **Not consensus behaviour.** B changes no `ControlCommand` and no `decideAndApply` branch,
-so `:kuilt-heddle:build detektAll --rerun-tasks` is the gate; the full-`build` rule for
+so `:kuilt-heddle:build --rerun-tasks` is the gate; the full-`build` rule for
 consensus-*behaviour* changes does not bind. S3 touches the wire format, so it does need
 the full `./gradlew build` for the Android/Native variants and `:examples`.
 

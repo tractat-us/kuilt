@@ -27,8 +27,7 @@ import kotlin.test.fail
  * the *platform* emits such readings — that `ConnectivityManager.NetworkCallback` fires on
  * Android, that `online`/`offline` fire in a browser — is not provable from here: a fake-injected
  * signal demonstrates the consumer's reaction, never the transport's emission. Those halves are
- * device-only, and `AndroidConnectivityObserver` is additionally in `androidMain` production
- * source, which `detektAll` does not lint (#2334).
+ * device-only, and no static analysis reads either observer — the repo has no linter (#2540).
  *
  * ## Why the fake moves rather than sits
  * Every case here asserts the value **changes** across at least two readings. Asserting only

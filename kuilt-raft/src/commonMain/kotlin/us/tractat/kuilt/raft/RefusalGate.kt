@@ -42,7 +42,7 @@ package us.tractat.kuilt.raft
  *
  * Two alternatives were weighed and rejected. A sealed `Disposition` return on the eleven handlers
  * converts a silent skip into a *lying* `Processed` — visible in a diff, still unenforced, and a large
- * blast radius for that. A lexical detekt/Gradle scanner in the shape of
+ * blast radius for that. A lexical Gradle source scanner in the shape of
  * `forbidRunCatchingCancellableUnderNonCancellable` would key on the `debug { }` log text rather than
  * on control flow, so rewording a message evades it: a smell detector, not a proof.
  *

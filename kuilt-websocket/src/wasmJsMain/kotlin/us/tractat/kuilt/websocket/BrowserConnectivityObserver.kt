@@ -73,8 +73,9 @@ private external fun removeConnectivityListeners(registered: JsAny)
  * [addConnectivityListeners] registered — see that declaration for why re-wrapping would silently
  * remove nothing.
  *
- * **Unguarded by any test in this repo**, like its Android sibling: `detektAll` lints no wasmJs
- * source, and CI has no browser harness for this module. `WebSocketSeamCapabilityTest` proves the
+ * **Unguarded by any test in this repo**, like its Android sibling: the repo has no linter to read
+ * this file statically (#2540), and CI has no browser harness for this module.
+ * `WebSocketSeamCapabilityTest` proves the
  * seam's reaction to a reading; that the browser *emits* one is not provable from here.
  */
 public class BrowserConnectivityObserver internal constructor() : ConnectivityObserver {
