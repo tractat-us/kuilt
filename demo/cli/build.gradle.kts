@@ -10,8 +10,6 @@
 plugins {
     alias(libs.plugins.kotlinJvm)
     application
-    // Detekt is registered by `kuilt.kmp-library`, which this module doesn't apply (#2005).
-    id("kuilt.detekt-jvm")
 }
 
 application {
