@@ -65,7 +65,9 @@ jobs:
       - uses: actions/checkout@v7
 
       # aarch64 runner: JDK 21-23 miscompile hot integer code under C2 once it warms up (#1597).
-      # The x64 (ubuntu) jobs stay on 21 until detekt can run on 25 (#1708).
+      # The x64 (ubuntu) jobs are still on 21. The reason they were pinned there — detekt could
+      # not run on 25 — went away when detekt was dropped (#2540), so the bump is now unblocked
+      # and is just a bump; #1708 tracks taking it.
       - name: Set up JDK 25
         uses: actions/setup-java@v6
         with:
