@@ -259,8 +259,8 @@ class TimeoutShapedFailureReporter(private val resultsDir: Provider<String>) : T
 // class these stamps were made safe against — if you externalise one, declare it as an input too.
 //
 // TAKING A MUTATION RECEIPT ON A GUARD WHOSE INPUT IS THE MODULE SET (#2272). Several guards here
-// take the subproject set as an input — `verifyModuleTable` and `forbidUnlintedModule` among them —
-// and the obvious receipt is "add a module to `settings.gradle.kts`, watch it go red". It does go
+// take the subproject set as an input — `verifyModuleTable` and `forbidSourcelessKmpTarget` among
+// them — and the obvious receipt is "add a module to `settings.gradle.kts`, watch it go red". It does go
 // red. It reds on something else, and the red NAMES YOUR PROBE, which is what makes it so easy to
 // tick off. Two things pre-empt the guard, in this order: Gradle refuses to configure a project
 // whose directory does not exist, and then `kuilt-bom/build.gradle.kts`'s completeness check fails
@@ -275,9 +275,9 @@ class TimeoutShapedFailureReporter(private val resultsDir: Provider<String>) : T
 // can fail. Nothing tracked is edited, so there is nothing to revert — which also retires the
 // follow-on trap of the hand-edited version, where a `deliberatelyUnpublished` entry that outlives
 // the probe trips `staleExclusions` on the NEXT run, a second red about a second unrelated thing.
-// For a guard that needs the probe to CARRY something — `forbidUnlintedModule` wants Kotlin source
-// with no detekt task — write it into `build/guard-probe/src/`, which is gitignored for the same
-// reason the probe directory is.
+// For a guard that needs the probe to CARRY something — a source scan wants Kotlin files under
+// `src/` — write it into `build/guard-probe/src/`, which is gitignored for the same reason the
+// probe directory is.
 //
 // SCOPE THE INVOCATION to the guard under test. Task-level guards never pre-empt one another, but
 // they do all report: a probe module reds `verifyModuleTable` (it has no CLAUDE.md row) whatever
@@ -2283,8 +2283,8 @@ val verifySamplesAreRun by tasks.registering {
         }
 
         // ── Direction 2: the baseline must not rot. ─────────────────────────────────────────────
-        // Both stale shapes are failures, for the reason `forbidUnlintedModule` checks its own
-        // allowlist: an exemption nobody can see expiring is an exemption that never expires.
+        // Both stale shapes are failures, for the reason every allowlist here is checked from both
+        // sides: an exemption nobody can see expiring is an exemption that never expires.
         val declaredKeys = declared.map { key(it) }.toSet()
         val runNow = declared.filter { isRun(it) }.map { key(it) }.toSet()
         val vanished = baseline.keys.filterNot { it in declaredKeys }.sorted()
@@ -2521,19 +2521,19 @@ val forbidCancellationRethrowAroundBound by tasks.registering {
 // the codebase. The fix is `runCatchingCancellable` (`:kuilt-core`), which rethrows every
 // `CancellationException` and captures the rest.
 //
-// WHY A GRADLE GUARD AND NOT DETEKT. This is the whole point of #1329. The ban was supposed to be
+// WHY A GRADLE GUARD AND NOT A LINTER RULE. detekt was dropped in #2540, so today there is no
+// linter to reach for at all — but this guard predates that, and the reason it was written as a
+// source scan is the reason not to re-propose one. The ban was supposed to be
 // `ForbiddenMethodCall: kotlin.runCatching` in `detekt.yml`; #1086 specified it, the PR that closed
 // #1086 (#1133) shipped the conversions and dropped the gate, and when the gate was finally tried it
-// turned out not to work at all: `ForbiddenMethodCall` resolves NO kotlin-stdlib callee in this KMP
+// turned out not to work at all: `ForbiddenMethodCall` resolved NO kotlin-stdlib callee in that KMP
 // setup — reproduced with caches off on real `jvmMain`/`jvmTest` sources, where
-// `UnsafeCallOnNullableType` fires (so type resolution IS active) and `ForbiddenComment` fires (so
-// the style ruleset IS applied), yet `ForbiddenMethodCall` matches neither `kotlin.runCatching` nor
-// `kotlin.io.println`. It silently no-ops on stdlib callees. A detekt rule would also miss `:spike`,
-// which has no detekt task at all (#1796). So: a source scan, which covers the tree by construction.
-// Corollary — every `@Suppress("ForbiddenMethodCall")` in the tree is INERT. The rule is configured
-// in neither `config/detekt/detekt.yml` nor `config/detekt/detekt-test.yml` (the latter bans
-// dispatchers via `ForbiddenImport`, a different rule that does fire). Do not add one expecting it
-// to do anything.
+// `UnsafeCallOnNullableType` fired (so type resolution WAS active) and `ForbiddenComment` fired (so
+// the style ruleset WAS applied), yet `ForbiddenMethodCall` matched neither `kotlin.runCatching` nor
+// `kotlin.io.println`. It silently no-opped on stdlib callees. The rule would also have missed
+// `:spike`, which never had a detekt task at all (#1796). So: a source scan, which covers the tree
+// by construction, and which a linter's per-source-set task graph never did. Corollary — an
+// `@Suppress("ForbiddenMethodCall")` names nothing now and named nothing then. Do not write one.
 //
 // SCOPE IS BLANKET — production AND test, unlike the `*Main`-only NonCancellable guard above. The
 // real rule is narrower ("in any suspend or coroutine context"), but deciding lexically whether a
@@ -2628,8 +2628,9 @@ val forbidBareRunCatching by tasks.registering {
                     "cancellation really must be caught (a test asserting on it), keep it and say so in a " +
                     "marker on this line or the line above:\n" +
                     "      // ALLOW-runCatching: <why this is safe>\n" +
-                    "  `@Suppress(\"ForbiddenMethodCall\")` is NOT the escape hatch — that detekt rule is " +
-                    "configured nowhere and never fires, which is what #1329 exists to fix." +
+                    "  `@Suppress(\"ForbiddenMethodCall\")` is NOT the escape hatch — it names a detekt " +
+                    "rule, and this repo has no detekt (#2540); even when it did, that rule never " +
+                    "fired, which is what #1329 exists to fix." +
                     detail,
             )
         }
@@ -2655,9 +2656,11 @@ val forbidBareRunCatching by tasks.registering {
 // They had passed for their whole life by launcher grace, and the move to `commonTest` would have
 // made that live on precisely the platforms it added. Nothing had stopped it, so it accumulated.
 // Fixing the last three call sites was ten minutes; this task is the actual deliverable. Same
-// reason `forbidBareRunCatching` is a source scan and not a detekt rule: `ForbiddenMethodCall`
-// resolves no kotlin-stdlib callee in this KMP setup (see #1329's note above), so a detekt ban on
-// `kotlin.assert` would silently no-op — the exact failure shape this guard exists to end.
+// reason `forbidBareRunCatching` is a source scan and was never a detekt rule: `ForbiddenMethodCall`
+// resolved no kotlin-stdlib callee in this KMP setup (see #1329's note above), so a detekt ban on
+// `kotlin.assert` would have silently no-opped — the exact failure shape this guard exists to end.
+// detekt is gone entirely as of #2540; the argument survives it, because it is about what a
+// call-site rule can see, not about which tool ships it.
 //
 // SCOPE IS BLANKET — production AND test, which is the point rather than an over-reach: this
 // idiom's home is test sources, so a `*Main`-only scoping (the one
@@ -2755,20 +2758,28 @@ val forbidKotlinAssert by tasks.registering {
 // (FIFO at each virtual instant) — or `UnconfinedTestDispatcher(testScheduler)` where eager-inline
 // ordering cannot affect the outcome. See `docs/testing-coroutine-determinism.md`.
 //
-// WHY A GUARD AND NOT DETEKT — and this rule already HAD a detekt half, so the answer is specific.
-// `config/detekt/detekt-test.yml` configures `ForbiddenImport` on `kotlinx.coroutines.Dispatchers`
-// and `…GlobalScope`. That rule is real and does fire, but it is blind in two directions at once:
+// WHY A GUARD AND NOT A LINTER RULE — and this rule DID have a detekt half until #2540, so the
+// answer is specific and was measured rather than argued. `config/detekt/detekt-test.yml`
+// configured `ForbiddenImport` on `kotlinx.coroutines.Dispatchers` and `…GlobalScope`. That rule
+// was real and did fire, but it was blind in two directions at once:
 //
-//   * it sees only the `import` FORM, so a fully-qualified `kotlinx.coroutines.Dispatchers.Default`
-//     — which needs no import — is invisible to it by construction; and
-//   * it runs only where `kuilt.detekt-kmp` wires the test config, i.e. `detektJvmTest` +
-//     the two `androidUnitTest` tasks. detekt generates NO task for `commonTest` at all, and none
+//   * it saw only the `import` FORM, so a fully-qualified `kotlinx.coroutines.Dispatchers.Default`
+//     — which needs no import — was invisible to it by construction; and
+//   * it ran only where `kuilt.detekt-kmp` wired the test config, i.e. `detektJvmTest` +
+//     the two `androidUnitTest` tasks. detekt generated NO task for `commonTest` at all, and none
 //     for `appleTest`/`iosTest`/`macosArm64Test`/`wasmJsTest` or the plain-JVM `src/test` layout —
 //     so most of kuilt's tests were never scanned by it (#1960).
 //
+// Both directions were re-proved by experiment before the rule was removed, on four planted probes
+// (#2540): an `import …Dispatchers` and an `import …GlobalScope` in `jvmTest` — detekt RED, this
+// guard RED; the same import in `commonTest` — detekt BLIND, this guard RED; and a member import
+// `import kotlinx.coroutines.Dispatchers.Default` in `jvmTest`, which `ForbiddenImport`'s exact
+// path match does not cover — detekt BLIND, this guard RED. Strict superset, no gap, which is why
+// deleting the detekt half cost nothing.
+//
 // The config header used to name `@Suppress("ForbiddenMethodCall")` as the sanctioned escape hatch
 // for the deliberate harnesses, immediately above that live `ForbiddenImport` stanza, so the two
-// read as equivalent while only one did anything: `ForbiddenMethodCall` is configured in NEITHER
+// read as equivalent while only one did anything: `ForbiddenMethodCall` was configured in NEITHER
 // detekt config, and #1329 established it could not work here anyway (it resolves no kotlin-stdlib
 // callee in this KMP setup and silently no-ops). Twenty-one of those annotations had accumulated.
 // A source scan has neither blind spot — it reads files, so every test source set is covered by
@@ -2821,11 +2832,10 @@ val forbidKotlinAssert by tasks.registering {
 //   * An EXPLICITLY CONSTRUCTED real dispatcher evades this entirely — `newFixedThreadPoolContext`,
 //     `newSingleThreadContext`, `Executors.…asCoroutineDispatcher()`. That is not an oversight but
 //     it is not nothing either: five `:kuilt-otel*` / `:kuilt-otel-logging` harnesses get their real
-//     threads that way, and each carries a `@file:Suppress("ForbiddenImport")` that has never
-//     applied to anything, because they import no `Dispatchers`. The line drawn here is that those
-//     spellings are explicit, local and named at the site, where `Dispatchers.Default` is ambient —
-//     and the rule this guard enforces, in `CLAUDE.md` and in `detekt-test.yml`, names the four
-//     `Dispatchers` members and `GlobalScope`. Widening it is a separate decision, not a bug fix.
+//     threads that way. The line drawn here is that those spellings are explicit, local and named
+//     at the site, where `Dispatchers.Default` is ambient — and the rule this guard enforces, in
+//     `CLAUDE.md` and previously in `detekt-test.yml`, names the four `Dispatchers` members and
+//     `GlobalScope`. Widening it is a separate decision, not a bug fix.
 //   * `:spike` (a subproject only under `-PincludeSpike`), `build-logic/` (a separate included
 //     build) and `*.kts` are unscanned, as with every sibling guard.
 val forbidProductionDispatcherInTests by tasks.registering {
@@ -2902,14 +2912,14 @@ val forbidProductionDispatcherInTests by tasks.registering {
                     "Use `StandardTestDispatcher(testScheduler)`, or " +
                     "`UnconfinedTestDispatcher(testScheduler)` where eager-inline ordering cannot " +
                     "matter; prefer the published harnesses (`raftSimTest` / `warpSimTest`), which " +
-                    "wire one in. A `[fully-qualified]` hit needs no import, which is exactly why " +
-                    "detekt's `ForbiddenImport` cannot see it. If this really is a deliberate " +
+                    "wire one in. A `[fully-qualified]` hit needs no import, which is exactly why an " +
+                    "import-matching linter rule could never see it. If this really is a deliberate " +
                     "real-threading harness — a true-parallelism stress probe, a callback-thread " +
                     "regression test, a `runBlocking` benchmark, a real socket — keep it and say so " +
                     "in a marker on this line or the line above:\n" +
                     "      // ALLOW-realDispatcher: <why this harness needs real threads>\n" +
-                    "  `@Suppress(\"ForbiddenMethodCall\")` is NOT the escape hatch — that detekt " +
-                    "rule is configured nowhere and never fires, which is what #1934 exists to fix." +
+                    "  An `@Suppress(\"…\")` is NOT the escape hatch — those name detekt rules, and " +
+                    "this repo has no detekt (#2540); the marker above is the only mechanism." +
                     detail,
             )
         }
@@ -3137,9 +3147,11 @@ val forbidTightRunTestTimeout by tasks.registering {
 // body runs. Only an EAGER dispatcher — or a real device — reaches it.
 //
 // WHY THE RULE IS BLUNT AND NOT PRECISE. The precise question — does the launched body TRANSITIVELY
-// read a property declared after the launch? — needs a call graph. The tool that could compute one is
-// detekt with type resolution, and in this build it reaches neither `appleMain` nor `commonTest`
-// (see CLAUDE.md), which is most of the surface that matters: #2462 lived in `commonMain` but only
+// read a property declared after the launch? — needs a call graph. The tool that could have computed
+// one was detekt with type resolution, and in this build it reached neither `appleMain` nor
+// `commonTest` (detekt was dropped entirely in #2540; while it was here, its type-resolved tasks
+// covered `commonMain`+`jvmMain`+`androidMain` and the jvm/android test source sets, and nothing
+// else), which is most of the surface that matters: #2462 lived in `commonMain` but only
 // ever ran on Apple targets. A plain file scan reaches every source set on every platform at no build
 // cost. So this over-approximates deliberately, and flags a launch that happens to be the LAST
 // property in its class — which is safe today. That is the point rather than a shortcoming: that
@@ -3743,9 +3755,9 @@ object ConstructionLaunchControls {
 // different fixes, so a merged failure message could not say what to do.
 //
 // It also fails on a baselined path that is no longer scanned at all — deleted, renamed, or moved out
-// of a production source set — for the reason `verifyModuleTable` and `forbidUnlintedModule` check
-// their own stale direction: an entry naming a file nobody has is a grandfathering claim about
-// nothing, and no other check can catch it. A DECREASE within a still-present file is deliberately
+// of a production source set — for the reason `verifyModuleTable` checks its own stale direction: an
+// entry naming a file nobody has is a grandfathering claim about nothing, and no other check can
+// catch it. A DECREASE within a still-present file is deliberately
 // not failed, same as the sibling: it would red-light a branch that merely deletes one of the four.
 val forbidCoroutineLaunchDuringConstruction by tasks.registering {
     group = "verification"
@@ -3904,8 +3916,9 @@ val forbidCoroutineLaunchDuringConstruction by tasks.registering {
 // outside it" — and until #2480 nothing enforced it.
 //
 // WHY THE RULE IS BLUNT AND NOT PRECISE, per #2465's reasoning: the precise question — does this call
-// transitively suspend? — needs a call graph, and the tool that could compute one is detekt with type
-// resolution, which reaches neither `appleMain` nor `commonTest` (see CLAUDE.md). A file scan reaches
+// transitively suspend? — needs a call graph, and the tool that could have computed one was detekt
+// with type resolution, which reached neither `appleMain` nor `commonTest`, and is gone as of #2540.
+// A file scan reaches
 // every source set on every platform at no build cost. So the token list below over-approximates on
 // purpose, and the per-file count ratchet absorbs it.
 //
@@ -4377,9 +4390,9 @@ object LockBodyControls {
 // correct response to a red is to snapshot under the lock and act outside it, never to add an entry.
 //
 // It also fails on a baselined path that is no longer scanned at all — deleted, renamed, or moved out
-// of a production source set — for the reason `verifyModuleTable` and `forbidUnlintedModule` check
-// their own stale direction: an entry naming a file nobody has is a grandfathering claim about
-// nothing, and no other check can catch it.
+// of a production source set — for the reason `verifyModuleTable` checks its own stale direction: an
+// entry naming a file nobody has is a grandfathering claim about nothing, and no other check can
+// catch it.
 val forbidSuspendCallUnderLock by tasks.registering {
     group = "verification"
     description =
@@ -4606,9 +4619,9 @@ object FieldTrailScanner {
 //   1. every occurrence is at `info`, `warn` or `error` — the three levels a release device records;
 //   2. every occurrence sits inside a logging call, so the level is knowable at all;
 //   3. the event still EXISTS somewhere in production source. A rename or deletion fails, for the same
-//      reason `verifyModuleTable` and `forbidUnlintedModule` check their own stale direction: the trail
-//      is a claim about what a capture will contain, and an entry naming a line nobody emits is a lie
-//      that no other check can catch.
+//      reason `verifyModuleTable` checks its own stale direction: the trail is a claim about what a
+//      capture will contain, and an entry naming a line nobody emits is a lie that no other check
+//      can catch.
 // It deliberately does NOT check the CONTENT of a line — whether it carries identities rather than
 // sizes is a human assertion, exactly like `verifySeamHarnessCoverage`'s row-to-harness mapping.
 //
@@ -4628,8 +4641,9 @@ object FieldTrailScanner {
 // stated in the code that emits them, not enforced here.
 //
 // SCOPE: production `*Main/**/*.kt` across every module, the same source set as the sibling guards —
-// which notably INCLUDES `appleMain`, where `detektAll` reaches nothing at all (its tasks are
-// parse-only, #2039). `:spike`, `build-logic/` and `*.kts` are unscanned, as with every sibling.
+// which notably INCLUDES `appleMain`, which no static analysis in this repo ever reached (detekt's
+// apple tasks were parse-only, #2039; detekt itself is gone as of #2540). `:spike`, `build-logic/`
+// and `*.kts` are unscanned, as with every sibling.
 val forbidDemotedFieldTrail by tasks.registering {
     group = "verification"
     description = "Fails if a curated field-trail log line is emitted below INFO, or has gone missing (#2420)."
@@ -4798,258 +4812,6 @@ val forbidDemotedFieldTrail by tasks.registering {
     }
 }
 
-// Guard: forbid a module that contributes Kotlin source but no detekt task (#2005).
-//
-// Detekt is registered as a SIDE EFFECT of applying `kuilt.kmp-library`. Nothing else applies it,
-// and nothing notices when a module doesn't: the module compiles, `./gradlew build` is green, and
-// `detektAll` simply schedules no task for it — silent zero lint coverage, indistinguishable from
-// "clean". That has now been found three times independently, each time by someone tripping over it
-// while doing something else: `:spike` (#1863), `commonTest` across the whole repo (#1960), and
-// `:kuilt-scale` (#2005, found because its new measurement suites had to be held to the repo's
-// conventions BY HAND). Fixing instances leaves the fourth one to be found the same way. This makes
-// "compiled but unlinted" a build failure instead.
-//
-// The assertion, per subproject with at least one `**/*.kt` under `src/`:
-//   1. the detekt plugin is applied — the module is analysable at all, and
-//   2. a `detektAll` task exists — so `./gradlew detektAll`, which is what CI's lint job runs,
-//      actually reaches it. (1) without (2) is the shape that produced #2005's evidence: a module
-//      can carry detekt tasks that the repo's own entry point never schedules.
-//
-// Both checks are by NAME/plugin-id rather than by task type: `io.gitlab.arturbosch.detekt.Detekt`
-// is on `build-logic`'s classpath, not this script's, so a typed reference wouldn't compile here.
-//
-// WHAT THIS DOES NOT CATCH, stated rather than implied: it asserts the module is linted, not that
-// every source set is covered. `detektAll` deliberately wires only the type-resolved tasks, and
-// `commonTest` has no such task at all — that gap is #1960 and needs a different mechanism. Nor
-// does it see a module whose sources live outside `src/`; the definition matches the sibling
-// guards above, and widening it to "any Kotlin file anywhere" would drag in `build/` output.
-//
-// The allowlist is the known backlog, not an escape hatch — and since #2025 the citation rule on it
-// is enforced rather than requested (see the allowlist's own comment). No module needs to be there
-// on grounds of shape any more: `kuilt.detekt-jvm` covers a plain Kotlin/JVM module and
-// `kuilt.detekt-kmp` a plain KMP one, each in one line.
-val unlintedModuleProbes = mutableListOf<Triple<String, Boolean, FileTree>>()
-gradle.projectsEvaluated {
-    rootProject.subprojects.forEach { sub ->
-        val linted = sub.plugins.hasPlugin("io.gitlab.arturbosch.detekt") &&
-            sub.tasks.findByName("detektAll") != null
-        unlintedModuleProbes += Triple(sub.path, linted, kotlinSourcesIn(listOf(sub.projectDir.resolve("src"))))
-    }
-    tasks.named("forbidUnlintedModule") {
-        // Two independent things can flip the verdict, so both are declared. The per-module source
-        // trees (separately named, for the same reason as `forbidSourcelessKmpTarget`: the verdict
-        // depends on WHICH module a file sits in, so a pooled fingerprint would let a file move
-        // between modules invisibly) cover "this module gained its first Kotlin source". The
-        // registration map covers "this module gained or lost detekt", which is a change in a
-        // SUBPROJECT's build script — invisible to the root script's own action-implementation hash,
-        // so without this property a module could quietly drop detekt onto a cached green.
-        unlintedModuleProbes.forEach { (path, _, tree) ->
-            inputs.files(tree)
-                .withPropertyName("moduleSources_" + path.replace(Regex("[^A-Za-z0-9]+"), "_"))
-                .withPathSensitivity(PathSensitivity.RELATIVE)
-        }
-        inputs.property("detektRegistration", unlintedModuleProbes.associate { (path, linted, _) -> path to linted })
-    }
-}
-
-// Known-unlinted modules, each with the issue that tracks wiring it up. An entry MUST cite an
-// issue — a bare exclusion turns this guard back into the silence it exists to break. Shrinks to
-// empty; do NOT add a plain-JVM module here, apply `kuilt.detekt-jvm` instead, and do NOT add a
-// plain KMP module here either, apply `kuilt.detekt-kmp` (#2016).
-//
-// The citation rule is CHECKED, not asked for (#2025). It used to be this comment plus a line in
-// the failure message, with the value a free-form `String` — so `":foo" to ""` or `":foo" to
-// "TODO"` was accepted in silence, which is the same shape as the defect the guard exists to end.
-// A guard rots at its escape hatch, so both directions are mechanical:
-//   - every value must CONTAIN an issue reference (`#<n>`, n ≥ 1) — validated eagerly below, at
-//     root-script configuration time rather than inside the task, so no invocation can skip it; and
-//   - every entry for a module that IS in this build must still be genuinely unlinted (in `doLast`,
-//     where the probes are) — so wiring a module up and forgetting to delete its entry fails
-//     instead of leaving a permanent hole. `:spike` is `-PincludeSpike`-gated and simply absent
-//     from most builds, which is why that half is scoped to modules actually present.
-val unlintedModuleAllowlist = mapOf(
-    ":spike" to "#1863", // plain KMP, appleMain-only; -PincludeSpike-gated
-)
-unlintedModuleAllowlist.forEach { (path, citation) ->
-    if (!citation.contains(Regex("#[1-9]\\d*"))) {
-        error(
-            "forbidUnlintedModule's allowlist entry for $path cites \"$citation\", which contains no " +
-                "issue reference. Every entry MUST cite the issue that tracks wiring the module up " +
-                "(e.g. \"#1863\") — a bare exclusion turns this guard back into the silence it exists " +
-                "to break (#2025). Fix the entry in the root `build.gradle.kts`, or delete it and " +
-                "apply `kuilt.detekt-jvm` / `kuilt.detekt-kmp` to $path instead.",
-        )
-    }
-}
-
-val forbidUnlintedModule by tasks.registering {
-    group = "verification"
-    description = "Fails if a subproject has Kotlin source but no detekt task — compiled but unlinted (#2005)."
-    val probes = unlintedModuleProbes
-    // See "Guard plumbing" above: stamp ⇒ UP-TO-DATE (#1827). Inputs are registered in the
-    // `projectsEvaluated` block above, once every module's plugins and tasks exist.
-    val stamp = layout.buildDirectory.file("verification/forbid-unlinted-module.ok")
-    outputs.file(stamp)
-    outputs.cacheIf { true }
-    val allowlist = unlintedModuleAllowlist
-    inputs.property("allowlist", allowlist)
-    doLast {
-        val stale = probes
-            .filter { (path, linted, _) -> linted && path in allowlist }
-            .map { (path, _, _) -> "$path (allowlisted for ${allowlist.getValue(path)})" }
-        if (stale.isNotEmpty()) {
-            error(
-                "forbidUnlintedModule's allowlist names module(s) that ARE linted — a stale entry is a " +
-                    "standing hole in the guard, since it would also swallow a future regression " +
-                    "(#2025):\n  " + stale.joinToString("\n  ") +
-                    "\n  Delete the entry from `allowlist` in the root `build.gradle.kts`.",
-            )
-        }
-        val offenders = probes
-            .filter { (path, linted, tree) -> !linted && path !in allowlist && !tree.isEmpty }
-            .map { (path, _, tree) -> "$path (${tree.files.size} Kotlin file(s) under src/)" }
-        if (offenders.isNotEmpty()) {
-            error(
-                "Module(s) contribute Kotlin source but register no detekt task — they compile, " +
-                    "`./gradlew build` is green, and `detektAll` schedules NOTHING for them, which is " +
-                    "indistinguishable from being clean (#2005):\n  " + offenders.joinToString("\n  ") +
-                    "\n  THE FIX is one line in the module's `plugins { }` block — `id(\"kuilt.detekt-jvm\")` " +
-                    "for a plain Kotlin/JVM module, `id(\"kuilt.detekt-kmp\")` (declared LAST) for a plain " +
-                    "KMP one.\n" +
-                    "  A KMP library should apply `kuilt.kmp-library`, which registers detekt already.\n" +
-                    "  If none fits, add the module to this guard's `allowlist` in the root " +
-                    "`build.gradle.kts` WITH the issue number tracking it — an entry without one is " +
-                    "REJECTED, because a silent exclusion is the exact failure this guard ends.",
-            )
-        }
-        val out = stamp.get().asFile
-        out.parentFile.mkdirs()
-        out.writeText(
-            "ok — ${probes.count { (_, _, tree) -> !tree.isEmpty }} module(s) with Kotlin source checked, " +
-                "${allowlist.size} allowlisted\n",
-        )
-    }
-}
-
-// Guard: forbid Android PRODUCTION source that `detektAll` does not analyse (#2334).
-//
-// `forbidUnlintedModule` above asserts a module is linted; this asserts one SOURCE SET is, and it
-// exists because the module-level assertion was green throughout the whole life of the bug. Every
-// module with `src/androidMain` had detekt applied and a `detektAll` to schedule — and `detektAll`
-// analysed none of that directory. `detektJvmMain` folds in `commonMain` and any jvmAndAndroid
-// intermediate, then explicitly drops the `androidMain` leaf; the only other Android tasks wired in
-// were the two `androidUnitTest` ones. So Android TEST code was linted and Android PRODUCTION code
-// was not — the inversion nobody would choose, sitting under a green module-level guard. A
-// `BroadcastReceiver` registration defect shipped through it (#2395), caught by a human reviewer.
-//
-// The assertion is EMPIRICAL and per file, not a task-name checklist: every `**/*.kt` under an
-// Android production source root must appear in the `source` of some task `detektAll` actually
-// depends on. That shape is what makes it hard to fool. A name-based version would pass the moment
-// `detektAndroidRelease` was named anywhere, whether or not it reached the files — which is exactly
-// the "wired but unreachable" false green #2005 and #2039 are both about, and the one a reader of a
-// green `detektAll` cannot distinguish from clean. Reading `source` needs no detekt classes on this
-// script's classpath (they are `build-logic`'s, per `forbidUnlintedModule`'s note): every detekt
-// task is a plain Gradle `SourceTask`.
-//
-// It is also what PINS THE ONE CHOICE `kuilt.detekt-kmp` MAKES — release variant only, not both.
-// That choice rests on `androidMain` being the sole Android production source set, so debug and
-// release analyse identical files (measured: identical file counts, identical findings). Add
-// `src/androidDebug` and only the release task's source is in the union, so the new files are
-// uncovered and this reds — with a message naming the second task to wire. The premise is therefore
-// checked rather than described, which is the point: a comment saying "there is no debug-only
-// source today" is true until it isn't, and nothing tells you when.
-//
-// DELIBERATELY ANDROID-ONLY, and the restraint is the design. The general form — "fail on any
-// production source no detekt task covers" — would red the whole repo on gaps that are open on
-// purpose and already tracked: `appleMain` and every native/wasm source set have tasks, but
-// PARSE-ONLY ones in which none of the four type-resolution rules can fire (#2039), and `commonTest`
-// has no task at all (#1960). A guard that fails on known, filed, accepted debt gets an allowlist
-// covering most of the repo on day one, and an allowlist that large is indistinguishable from no
-// guard. Android is the case where the gap was neither known nor accepted.
-val androidCoverageProbes = mutableListOf<Triple<String, FileTree, FileCollection>>()
-gradle.projectsEvaluated {
-    // Android PRODUCTION roots only. `androidUnitTest`/`androidInstrumentedTest` are covered by the
-    // test tasks `kuilt.detekt-kmp` has always wired in, and holding them to this guard would
-    // re-import #1960's `commonTest` gap through the side door.
-    val androidProductionPatterns = listOf(
-        "androidMain/**/*.kt",
-        "androidDebug/**/*.kt",
-        "androidRelease/**/*.kt",
-    )
-    rootProject.subprojects.forEach { sub ->
-        val androidProduction = kotlinSourcesIn(listOf(sub.projectDir.resolve("src")), androidProductionPatterns)
-        val detektAll = sub.tasks.findByName("detektAll")
-        // The union of what `detektAll` actually schedules — resolved from the task graph, so a task
-        // that exists but is not a dependency contributes nothing, exactly as at build time.
-        val analysed = sub.files(
-            detektAll?.taskDependencies?.getDependencies(detektAll)
-                ?.filterIsInstance<SourceTask>()
-                ?.map { it.source }
-                .orEmpty(),
-        )
-        androidCoverageProbes += Triple(sub.path, androidProduction, analysed)
-    }
-    tasks.named("forbidUnlintedAndroidMain") {
-        androidCoverageProbes.forEach { (path, androidProduction, analysed) ->
-            val slug = path.replace(Regex("[^A-Za-z0-9]+"), "_")
-            // Per-module and separately named for the same reason as `forbidUnlintedModule`'s: the
-            // verdict depends on WHICH module a file sits in, so a pooled fingerprint would let a
-            // file move between modules invisibly.
-            inputs.files(androidProduction)
-                .withPropertyName("androidProductionSources_$slug")
-                .withPathSensitivity(PathSensitivity.RELATIVE)
-            // Only the Android-rooted slice of what `detektAll` analyses. The whole union would be
-            // every module's commonMain and jvmMain — an enormous fingerprint whose contents cannot
-            // change this verdict. The slice can: it empties out the moment `detektAll` stops
-            // depending on the Android task, which is the regression this guard exists to catch.
-            inputs.files(analysed.filter { file -> file.invariantSeparatorsPath.contains("/src/android") })
-                .withPropertyName("androidSourcesAnalysedByDetektAll_$slug")
-                .withPathSensitivity(PathSensitivity.RELATIVE)
-        }
-    }
-}
-
-val forbidUnlintedAndroidMain by tasks.registering {
-    group = "verification"
-    description = "Fails if a module has Android production Kotlin source that detektAll does not analyse (#2334)."
-    val probes = androidCoverageProbes
-    // See "Guard plumbing" above: stamp ⇒ UP-TO-DATE (#1827). Inputs are registered in the
-    // `projectsEvaluated` block above, once every module's detekt tasks exist and carry their source.
-    val stamp = layout.buildDirectory.file("verification/forbid-unlinted-android-main.ok")
-    outputs.file(stamp)
-    outputs.cacheIf { true }
-    val rootPath = rootDir
-    doLast {
-        var covered = 0
-        val offenders = probes.flatMap { (path, androidProduction, analysed) ->
-            val analysedFiles = analysed.files
-            val declared = androidProduction.files
-            covered += declared.count { it in analysedFiles }
-            (declared - analysedFiles).sorted().map { "$path — ${it.relativeTo(rootPath).invariantSeparatorsPath}" }
-        }
-        if (offenders.isNotEmpty()) {
-            error(
-                "Android production Kotlin source is not analysed by ANY task `detektAll` depends on. " +
-                    "It compiles, `./gradlew build` is green, and the lint job reports nothing about " +
-                    "it — indistinguishable from clean, which is how a BroadcastReceiver defect " +
-                    "reached review unlinted (#2334):\n  " + offenders.joinToString("\n  ") +
-                    "\n  THE FIX is in `build-logic/src/main/kotlin/kuilt.detekt-kmp.gradle.kts`: add " +
-                    "the detekt task that covers this source set to `detektAllTaskNames`. " +
-                    "`androidMain` is covered by `detektAndroidRelease`; a build-type-scoped source " +
-                    "set needs its own variant task (`src/androidDebug` ⇒ `detektAndroidDebug`), " +
-                    "which is the case that single-variant wiring deliberately does not cover.\n" +
-                    "  Do NOT fold Android source into `detektJvmMain` instead — it carries the JVM " +
-                    "compile classpath, where `android.*` does not resolve, and all four rules in " +
-                    "`config/detekt/detekt.yml` require type resolution. That is a false green, not " +
-                    "a fix.",
-            )
-        }
-        val out = stamp.get().asFile
-        out.parentFile.mkdirs()
-        out.writeText("ok — $covered Android production Kotlin file(s) confirmed analysed by detektAll\n")
-    }
-}
-
 // Locates the not-null assertion operator `!!` in Kotlin CODE, for
 // `forbidNotNullAssertionInUnresolvedSource` below (#2039). Same `object` rationale as the sibling
 // scanners: the caller invokes it from inside `doLast`, where a script-level function reference
@@ -5115,38 +4877,42 @@ object NotNullAssertionScanner {
     }
 }
 
-// Guard: forbid `!!` in source sets that NO type-resolved detekt task covers (#2039).
+// Guard: forbid `!!` anywhere under a module's `src/` (#2039, widened by #2471, sole mechanism
+// since #2540).
 //
-// THE FACT THIS EXISTS FOR. Every rule `config/detekt/detekt.yml` enables — `UnsafeCallOnNullableType`,
-// `UnnecessaryNotNullOperator`, `MapGetWithNotNullAssertionOperator`, `CastNullableToNonNullableType`
-// — requires TYPE RESOLUTION, and detekt resolves types only against a JVM classpath. A detekt task
-// for a wasm or native source set therefore parses the files and fires nothing at all. The receipt
-// is in #2039: an `internal fun probe(v: String?): Int = v!!.length` appended to
-// `demo/web/src/wasmJsMain` leaves `:demo-web:detektWasmJsMain --rerun-tasks` at
-// "0 number of total code smells, BUILD SUCCESSFUL", while the same line fails
-// `:demo-shared:detektJvmMain` immediately. `:spike` (#1863) has no detekt plugin at all.
+// THIS IS THE ONLY THING IN THE REPO THAT SEES A `!!`. detekt was dropped in #2540, so there is no
+// linter here at all — but do not read that as "the guard got promoted to fill a hole". It had
+// already been widened to the whole repo in #2471, on evidence that the thing it was deferring to
+// was not doing the work. Dropping detekt removed a bonus, not a floor. The history below is kept
+// deliberately, in the past tense, because the obvious reaction to "no linter" is to propose one,
+// and this is the measurement that says what such a proposal would actually have to beat.
 //
-// So `appleMain`, `iosMain`, `macosMain`, `wasmJsMain` and their test siblings are where all
-// non-JVM platform code sits, and a green there means "nobody looked", which a reader cannot tell
-// from "clean". This is the same false-green class as #2005 and #2334, one tier further out.
+// WHAT DETEKT COVERED, MEASURED (#2039, #2471). `config/detekt/detekt.yml` enabled four rules —
+// `UnsafeCallOnNullableType`, `UnnecessaryNotNullOperator`, `MapGetWithNotNullAssertionOperator`,
+// `CastNullableToNonNullableType` — every one of which needs TYPE RESOLUTION, and detekt resolved
+// types only against a JVM classpath. A task for a wasm or native source set therefore parsed the
+// files and fired nothing: an `internal fun probe(v: String?): Int = v!!.length` appended to
+// `demo/web/src/wasmJsMain` left `:demo-web:detektWasmJsMain --rerun-tasks` at "0 number of total
+// code smells, BUILD SUCCESSFUL", while the same line failed `:demo-shared:detektJvmMain`
+// immediately. `:spike` (#1863) never had the plugin at all. So `appleMain`, `iosMain`,
+// `macosMain`, `wasmJsMain` and their test siblings — all of the non-JVM platform code — were a
+// green that meant "nobody looked", which a reader cannot tell from "clean".
 //
-// #2471 WIDENED THIS GUARD TO THE WHOLE REPO, because the premise it used to rest on turned out to
-// be false. It used to SUBTRACT the source of every type-resolved detekt task, on the argument that
-// `!!` there is detekt's job and double-reporting would be noise. Measured, detekt's job there is
-// mostly not being done: detekt 1.23.8 pins `kotlin-compiler-embeddable:{strictly 2.0.21}` and
-// refuses to run against any other. That frontend's metadata READ CEILING is `[2,1,0]` — measured,
-// not inferred: reflecting on `kotlin-compiler-embeddable-2.0.21.jar`, `JvmMetadataVersion.INSTANCE`
-// is `[2,0,0]` and `INSTANCE_NEXT` is `[2,1,0]`, and non-strict binaries (this repo's are: the 0x8
-// bit of `xi` is clear) are checked against INSTANCE_NEXT. It accepts `[2,0,0]`/`[2,1,0]` and
-// rejects `[2,2,0]`/`[2,3,0]`/`[2,4,0]`. Every Kotlin binary on the analysis classpath is past the
+// AND ON THE JVM SIDE IT WAS MOSTLY NOT WORKING EITHER, which is the part worth keeping. detekt
+// 1.23.8 pinned `kotlin-compiler-embeddable:{strictly 2.0.21}` and refused to run against any
+// other. That frontend's metadata READ CEILING was `[2,1,0]` — measured, not inferred: reflecting
+// on `kotlin-compiler-embeddable-2.0.21.jar`, `JvmMetadataVersion.INSTANCE` is `[2,0,0]` and
+// `INSTANCE_NEXT` is `[2,1,0]`, and non-strict binaries (this repo's are: the 0x8 bit of `xi` is
+// clear) are checked against INSTANCE_NEXT. It accepted `[2,0,0]`/`[2,1,0]` and rejected
+// `[2,2,0]`/`[2,3,0]`/`[2,4,0]`. Every Kotlin binary on the analysis classpath was past the
 // ceiling — `[2,4,0]` for kotlin-stdlib-2.4.10, `kuilt-core-jvm.jar` and a module's own
 // `build/classes` output, `[2,2,0]` for kotlinx-coroutines-1.11.0, each tracking the compiler that
 // built it rather than this repo's. (Do not reach for `[1,9,0]` here: that is what a 2.0.21
 // compiler WRITES, which is a different axis from what it READS.)
-// Metadata a frontend cannot read is not an error, it is SILENCE — so type resolution sees only
+// Metadata a frontend cannot read is not an error, it is SILENCE — so type resolution saw only
 // compiler BUILT-INS, JAVA/JDK classes, and declarations in the source files being analysed.
-// kotlin-stdlib, kotlinx-coroutines and every sibling kuilt module are invisible, and a `!!` whose
-// base expression's type comes off the classpath gets an error type, is not `isNullable()`, and is
+// kotlin-stdlib, kotlinx-coroutines and every sibling kuilt module were invisible, and a `!!` whose
+// base expression's type came off the classpath got an error type, was not `isNullable()`, and was
 // skipped without a word. Two lines in `kuilt-gossip/src/commonMain`, same file, same task:
 //
 //     val m: MutableMap<Long, String> = mutableMapOf()   // type DECLARED -> a built-in
@@ -5158,22 +4924,20 @@ object NotNullAssertionScanner {
 // `state.pending.remove(lowest)!!` sat in shipped `commonMain` production code with
 // `UnsafeCallOnNullableType: active: true` and `detektAll` green.
 //
-// This is a TRADE, not an impossibility — say it that way, because the first draft of this comment
-// said "no config fixes it" and that was simply wrong. detekt 2.x EXISTS: it relocated to group
-// `dev.detekt` (which is why searching the old group returns nothing), and
-// `dev.detekt:detekt-cli:2.0.0-alpha.6` pins `kotlin-compiler {strictly 2.4.10}` — this repo's
-// exact Kotlin, ceiling `[2,5,0]`, type resolution fully restored. It is deliberately not adopted:
-// it is an alpha in a required lint gate, and 2.0's type resolution regressed KMP run times badly
+// WHAT #2540 ACTUALLY COST, stated rather than waved away. Not nothing, and not the four rules
+// either: it cost the BUILT-IN- AND JAVA-TYPED SUBSET of `UnnecessaryNotNullOperator` and
+// `CastNullableToNonNullableType`, the two rules with no lexical substitute. That subset was real —
+// four `@Suppress("CastNullableToNonNullableType")` annotations existed in the tree, every one of
+// them on an SLF4J receiver, i.e. a Java type, which is exactly the sliver the frontend could still
+// resolve. It was accepted deliberately (#2540) rather than replaced with a lexical approximation:
+// `MapGetWithNotNullAssertionOperator` is a strict subset of `!!` and so is still covered here, and
+// the two orphans fire on shapes a token scan cannot name without inventing false positives.
+// Re-adopting a linter to recover them is a live option, not a foreclosed one — detekt 2.x exists
+// under group `dev.detekt` and `2.0.0-alpha.6` pins `kotlin-compiler {strictly 2.4.10}`, this
+// repo's exact Kotlin, ceiling `[2,5,0]`, type resolution fully restored. What such a proposal has
+// to beat is everything above: an alpha in a required gate, and 2.0's KMP run-time regression
 // (detekt/detekt#8882 — an ~80k-LOC monorepo went ~1 min to ~24 min because it compiles every
-// Android variant). Weigh that honestly, though: the ~1 min baseline was a frontend that, on a
-// Kotlin 2.1+ codebase, resolves almost nothing off the classpath, so part of the "regression" is
-// the cost of doing the work at all. #2534 tracks re-measuring it.
-//
-// While that trade holds, the lexical ban is the FLOOR everywhere and detekt is a bonus on top of
-// it. Double reporting is now possible and is fine: both spellings of the verdict are a failed
-// build.
-// `forbidDetektFrontendSkew` below reds if the skew that forced this ever goes away, so this
-// paragraph cannot quietly become false in the other direction.
+// Android variant), against a recovered surface of two rules on built-in and Java types only.
 //
 // WHAT IT IS AND IS NOT. It is a LEXICAL guard on one operator, and the limits are inherent, not
 // oversights — say them out loud rather than let the next reader find them:
@@ -5182,14 +4946,13 @@ object NotNullAssertionScanner {
 //     `checkNotNull`-shaped code that is actually wrong. It buys the OBVIOUS case, not the class.
 //   * It is a TOKEN match, not a semantic one. It knows nothing about nullability, so it cannot
 //     distinguish a genuinely unsafe `!!` from one a human has proved safe — and it cannot fire on
-//     the other three rules at all (`UnnecessaryNotNullOperator`, `CastNullableToNonNullableType`
-//     and `MapGetWithNotNullAssertionOperator` all need types; the last is a strict subset of `!!`
-//     and so is covered incidentally).
+//     the two orphaned rules at all (`UnnecessaryNotNullOperator` and
+//     `CastNullableToNonNullableType` both need types; `MapGetWithNotNullAssertionOperator` is a
+//     strict subset of `!!` and so is covered incidentally).
 //   * A doubled unary negation (`if (!!flag)`) reads as an assertion here. No attempt is made to
 //     tell the two apart, and the shape is worth a second look anyway.
-// Its value is exactly this: in source sets that today get NOTHING, the one rule that matters most
-// now costs something to break. A rule set that does not need type resolution (option 1 in #2039)
-// would cover more; it also costs a second config file and a repo-wide sweep, and was not chosen.
+// Its value is exactly this: in source sets that get NOTHING else — which since #2540 is all of
+// them — the one rule that matters most costs something to break.
 //
 // HOW SCOPE IS DERIVED, and why it is not a list of source-set names. An include-list of
 // `appleMain`/`wasmJsMain`/… is exactly the blind spot it is trying to close: the source set that
@@ -5200,19 +4963,20 @@ object NotNullAssertionScanner {
 //
 // Before #2471 this subtracted the `source` of a named list of type-resolved detekt tasks, and that
 // list was the one thing here that could rot — a name that stopped resolving would silently widen
-// the guard. Deleting the subtraction deletes that failure mode with it: there is no longer any
-// task name, in this file or any other, that this guard's scope depends on.
+// the guard. Deleting the subtraction deleted that failure mode with it, two releases before #2540
+// deleted the tasks themselves: there is no longer any task name, in this file or any other, that
+// this guard's scope depends on.
 //
 // WHAT IS DELIBERATELY OUT OF SCOPE: `commonTest`, `commonSamples` and the `jvmAndAndroidTest`
 // intermediate, carved back out by name because they are #1960's gap. The reason is now purely one
 // of SIZE, and that is worth saying plainly since #2471 removed the reason it used to have. It used
 // to be that their fix — folding them into `detektJvmTest` — would buy all four real rules, so a
 // lexical ban would trade a fixable gap for a permanent approximation. #2471 measured what that
-// fold actually buys and the answer is "the built-in-typed subset", not the four rules. What still
-// holds is the arithmetic: by raw grep they are 424 lines across 83 files against this guard's
-// whole remaining population of 15 — a baseline that size is indistinguishable from no guard, which
-// is the objection `forbidUnlintedAndroidMain` records about allowlists. So they stay out until
-// somebody sweeps them, and #1960 is where that is tracked.
+// fold actually bought and the answer was "the built-in-typed subset", not the four rules; #2540
+// then removed the fold as an option entirely. What still holds is the arithmetic: by raw grep they
+// are 424 lines across 83 files against this guard's whole remaining population of 15 — a baseline
+// that size is indistinguishable from no guard. So they stay out until somebody sweeps them, and
+// #1960 is where that is tracked.
 // The carve-out checks its own stale direction: an entry matching nothing left in scope fails,
 // so closing #1960 red-lights the entry that has become a lie instead of leaving it as decoration.
 //
@@ -5253,7 +5017,7 @@ gradle.projectsEvaluated {
 
 val forbidNotNullAssertionInUnresolvedSource by tasks.registering {
     group = "verification"
-    description = "Fails on a `!!` anywhere under a module's `src/` except the #1960 carve-out — detekt's nullability rules are inert on apple/native/wasm and only partial everywhere else (#2039, #2471)."
+    description = "Fails on a `!!` anywhere under a module's `src/` except the #1960 carve-out — the repo's only check on the operator since detekt was dropped (#2039, #2471, #2540)."
     // See "Guard plumbing" above: the stamp is what makes UP-TO-DATE possible (#1827). The verdict
     // is a function of file PATHS (the baseline keys, and the carve-out's staleness check) and file
     // CONTENTS, both captured by a RELATIVE fingerprint. The declared set is the UNFILTERED one, so
@@ -5273,14 +5037,14 @@ val forbidNotNullAssertionInUnresolvedSource by tasks.registering {
     // class the stamps were made safe against. Entries are paths relative to the root, violation
     // counts as of the PR that added them. Regenerate after a sweep with this scanner, not by hand.
     //
-    // The first three are what remains of #2039's original population — apple/wasm/:spike, where
-    // detekt fires nothing at all. (Two more, `kuilt-store`'s `NSFileManagerDurableStoreTest` and
+    // The first three are what remains of #2039's original population — apple/wasm/:spike, which no
+    // static analysis in this repo ever reached. (Two more, `kuilt-store`'s `NSFileManagerDurableStoreTest` and
     // `IndexedDbDurableStoreTest`, were swept to zero by #2500 and are deleted here: both files are
     // still scanned, so the `dangling` check below could not see them, and a decrease is tolerated
     // — they were entries that had stopped grandfathering anything. Deleting them makes this map
     // reconcile with the stamp's file/site counts.)
     //
-    // The rest arrived with #2471, which widened the scope to source sets detekt was believed to
+    // The rest arrived with #2471, which widened the scope to the source sets detekt was believed to
     // cover and found 11 more sites it had never reported. Every one of them is a TRUE POSITIVE
     // `!!` on a genuinely nullable type, and all 11 are in test/example sources — the one
     // production site the widening caught (`GossipDedup.forceForwardPastGap`) was FIXED in the same
@@ -5329,9 +5093,9 @@ val forbidNotNullAssertionInUnresolvedSource by tasks.registering {
             if (hits.isNotEmpty()) found[path] = hits
         }
         // The baseline's own stale direction — a DANGLING key, i.e. a path that is no longer in
-        // scope at all (deleted, renamed, or moved into a source set detekt now type-resolves). That
-        // entry has stopped grandfathering anything and become a claim about a file that is not
-        // there, which is the shape `forbidUnlintedModule` and the carve-out above both refuse.
+        // scope at all (deleted, renamed, or moved into the carve-out). That entry has stopped
+        // grandfathering anything and become a claim about a file that is not there, which is the
+        // shape the carve-out's own staleness check refuses too.
         // A mere DECREASE is deliberately tolerated, for `forbidTightRunTestTimeout`'s reason: a
         // half-swept file would otherwise red-light the branch doing the sweeping.
         val dangling = baseline.keys.filterNot { key ->
@@ -5341,8 +5105,8 @@ val forbidNotNullAssertionInUnresolvedSource by tasks.registering {
             error(
                 "The baseline grandfathers file(s) this guard no longer scans:\n    " +
                     dangling.sorted().joinToString("\n    ") +
-                    "\n  Deleted, renamed, or moved into a source set a type-resolved detekt task now " +
-                    "covers — either way the entry is a claim about a file that is not there, and it " +
+                    "\n  Deleted, renamed, or moved into the #1960 carve-out — either way the entry is " +
+                    "a claim about a file that is not there, and it " +
                     "would silently grandfather a NEW file that later lands on the same path.\n" +
                     "  THE FIX is to delete the entry (or re-key it to the new path with the count this " +
                     "scanner reports).",
@@ -5356,13 +5120,14 @@ val forbidNotNullAssertionInUnresolvedSource by tasks.registering {
                 "  $path — $from, now ${hits.size}\n    line(s): ${hits.joinToString(", ")}"
             }
             error(
-                "A `!!` was written where detekt's nullability rules cannot be relied on (#2039, #2471).\n" +
-                    "On apple/native/wasm and `:spike` they fire NOTHING — detekt resolves types only " +
-                    "against a JVM classpath. Everywhere else they fire only on the built-in-typed " +
-                    "subset: detekt 1.23.8 runs a Kotlin 2.0.21 frontend, which cannot read this " +
-                    "repo's `mv=[2,4,0]` metadata, so anything typed from kotlin-stdlib, coroutines or " +
-                    "a sibling module is invisible to it. `./gradlew detektAll` is green either way, " +
-                    "which is indistinguishable from clean.\n" +
+                "A `!!` was written (#2039, #2471, #2540).\n" +
+                    "This guard is the ONLY thing in the repo that sees the operator: detekt was " +
+                    "dropped in #2540, and before that its four nullability rules fired NOTHING on " +
+                    "apple/native/wasm/`:spike` (it resolved types only against a JVM classpath) and " +
+                    "only on the built-in- and Java-typed subset everywhere else (its Kotlin 2.0.21 " +
+                    "frontend could not read this repo's `mv=[2,4,0]` metadata, so anything typed from " +
+                    "kotlin-stdlib, coroutines or a sibling module was invisible). Nothing else will " +
+                    "catch this.\n" +
                     "  THE FIX is to remove the assertion, not to suppress it — there is no hatch:\n" +
                     "      requireNotNull(x) { \"…\" } / checkNotNull(x) { \"…\" }   // fail fast, with a diagnostic\n" +
                     "      x ?: error(\"…\")                                       // same, at an expression\n" +
@@ -5379,208 +5144,6 @@ val forbidNotNullAssertionInUnresolvedSource by tasks.registering {
             "ok — ${scanned.files.size} Kotlin source(s) scanned for `!!` " +
                 "(${bySourceSet.entries.joinToString(", ") { "${it.key} ${it.value}" }}), " +
                 "${found.size} file(s) at or below baseline (${found.values.sumOf { it.size }} sites)\n",
-        )
-    }
-}
-
-// Guard: notice when detekt's frontend catches up with the project's Kotlin (#2471).
-//
-// This is the PIN under the guard above, and under the tier comment in `kuilt.detekt-kmp`. Both now
-// assert something that is only true while a version skew holds: detekt 1.23.8 runs a Kotlin
-// 2.0.21 frontend, whose metadata READ CEILING is `[2,1,0]`, while this repo ships `[2,4,0]` (own
-// output, kotlin-stdlib) and `[2,2,0]` (kotlinx-coroutines) — so detekt's four nullability rules
-// see built-ins, Java, and the source files in their own task, and nothing off the classpath. The
-// widening above, the eleven grandfathered sites, and several paragraphs of prose all rest on that.
-//
-// THE CEILING IS THE FRONTEND'S OWN VERSION PLUS ONE MINOR, and that `+1` is the whole reason this
-// guard is not a naive `<`. Measured by reflecting on the exact jar detekt 1.23.8 pins
-// (`kotlin-compiler-embeddable-2.0.21.jar`): `JvmMetadataVersion.INSTANCE` is `[2,0,0]` and
-// `INSTANCE_NEXT` is `[2,1,0]`, and `isCompatibleWithCurrentCompilerVersion()` compares against
-// INSTANCE_NEXT for non-strict binaries — which this repo's are (`xi` has the 0x8 strict bit
-// clear). Empirically, that frontend accepts `[2,0,0]` and `[2,1,0]` and rejects `[2,2,0]`,
-// `[2,3,0]`, `[2,4,0]`.
-//
-// So a frontend ONE MINOR BEHIND the project reads the project's binaries perfectly well. This is
-// not hypothetical: `dev.detekt:detekt-cli:2.0.0-alpha.3` ships a Kotlin 2.3.21 frontend, whose
-// ceiling is `[2,4,0]` — exactly this repo's metadata. Adopting it would restore type resolution in
-// full while a `frontendMinor < projectMinor` test still called it "lagging" and stayed GREEN,
-// stamping a file that says the rules remain partial. That is the stale-claim state this guard
-// exists to red, so the comparison below is `frontendMinor + 1 < projectMinor`. Do not "simplify"
-// the `+1` away; the mutation receipt for it is the one-minor-behind case, not the equal case.
-//
-// A skew is a TEMPORARY fact, and the direction it moves in is the one nobody watches: the failure
-// this guards is not detekt getting worse, it is detekt getting BETTER while the repo keeps acting
-// as though it had not. When detekt ships a frontend that matches (see #2534) somebody will bump
-// `libs.versions.toml`, CI will be green, and every claim above will be quietly false — the exact
-// "indistinguishable from clean" shape #2471 was filed about, inverted. So this fails on GOOD news,
-// deliberately, and says what to re-open. It is cheap: two version strings, no analysis.
-//
-// COORDINATES, not just the version, are what a detekt 2.x adoption changes: 2.0 moved to group
-// `dev.detekt` and renamed the frontend artifact from `kotlin-compiler-embeddable` to
-// `kotlin-compiler`. Both are handled — the group is derived from the catalog's own major, and the
-// jar pattern accepts either artifact — and the probe's coordinates are ASSERTED against the
-// catalog entry the build actually applies, so this cannot describe a detekt nobody runs. The case
-// that needs catching is a 2.x adopted under a NEW catalog alias while `libs.versions.detekt`
-// lingers at 1.23.8: the probe would resolve happily and report green about an absent frontend.
-//
-// The assertion reads `gradle/libs.versions.toml`, and that is deliberate after a false start. The
-// obvious check — compare against a subproject's `detekt` configuration's declared dependencies —
-// is VACUOUS: detekt registers `detekt-cli` through `defaultDependencies`, which does not
-// materialise until the configuration is resolved, so at configuration time that set is empty and
-// an `isNotEmpty() &&` guard silently never fires. It was written that way first and the stamp,
-// which prints what was compared, is what caught it ("cross-checked against applied []"). The
-// catalog is the real authority anyway: `build-logic` takes the plugin from
-// `libs.detekt.gradlePlugin`, so that entry's group and `version.ref` are what every module runs.
-//
-// The frontend graph itself is resolved through a configuration of the ROOT project, NOT by
-// reaching into a subproject's. Resolving another project's configuration from here is rejected
-// outright ("Resolution of the configuration ':demo-cli:detekt' was attempted without an exclusive
-// lock").
-val detektCatalogVersion = libs.versions.detekt.get()
-
-// detekt 2.0 relocated to `dev.detekt`; 1.x stays on the old group.
-val detektProbeGroup =
-    if ((detektCatalogVersion.substringBefore('.').toIntOrNull() ?: 1) >= 2) {
-        "dev.detekt"
-    } else {
-        "io.gitlab.arturbosch.detekt"
-    }
-val detektProbeCoordinates = "$detektProbeGroup:detekt-cli:$detektCatalogVersion"
-
-val detektFrontendProbe: Configuration by configurations.creating {
-    isCanBeConsumed = false
-    isCanBeResolved = true
-    isVisible = false
-}
-
-dependencies {
-    detektFrontendProbe(detektProbeCoordinates)
-}
-
-// The catalog entry `build-logic` actually applies, as `group` to `version`. Parsed rather than
-// read through the `libs` accessors because those expose the resolved coordinate but not which
-// alias supplied it, and the alias is precisely what drifts.
-//
-// An `object`, not a script-level `fun`, for the same reason `KotlinCodeScanner` is one (see "Guard
-// plumbing" above): a function reference from inside `doLast` captures the unserializable
-// `Build_gradle` instance, and the configuration cache rejects it — "cannot serialize Gradle script
-// object references". Written as a `fun` first; this is what that costs.
-//
-// It needs no `selfTestFailures()` fixture the way the `!!` scanner does, because its subject is a
-// single real file that every build parses: if the catalog's spelling changes, `pluginCoordinate`
-// returns null and the guard fails loudly on the next run. The fixture would be testing the same
-// string the production call already reads.
-object DetektCatalogScanner {
-    /** `group` to `version` for the detekt Gradle plugin the catalog declares, or null. */
-    fun pluginCoordinate(toml: String): Pair<String, String>? {
-        val entry = Regex(
-            """detekt-gradlePlugin\s*=\s*\{[^}]*module\s*=\s*"([^:"]+):detekt-gradle-plugin"[^}]*""" +
-                """version\.ref\s*=\s*"([^"]+)"""",
-        ).find(toml) ?: return null
-        val (group, versionRef) = entry.destructured
-        val version = Regex("""(?m)^\s*${Regex.escape(versionRef)}\s*=\s*"([^"]+)"""")
-            .find(toml)?.groupValues?.get(1) ?: return null
-        return group to version
-    }
-}
-
-val forbidDetektFrontendSkew by tasks.registering {
-    group = "verification"
-    description = "Fails when detekt's embedded Kotlin frontend catches up with the project's Kotlin, so the coverage claims that rest on the skew get revisited (#2471)."
-    // See "Guard plumbing" above. The verdict is a function of two version strings: the project's
-    // Kotlin (a task input property) and detekt's frontend (read from the jar NAME in the resolved
-    // `detekt` configuration, declared here as a file input so resolution stays lazy).
-    inputs.files(detektFrontendProbe).withPropertyName("detektRuntimeClasspath")
-        .withPathSensitivity(PathSensitivity.NAME_ONLY)
-    val projectKotlin = libs.versions.kotlin.get()
-    inputs.property("projectKotlinVersion", projectKotlin)
-    inputs.property("detektProbeCoordinates", detektProbeCoordinates)
-    val catalogFile = rootDir.resolve("gradle/libs.versions.toml")
-    inputs.file(catalogFile).withPropertyName("versionCatalog")
-        .withPathSensitivity(PathSensitivity.RELATIVE)
-    val stamp = layout.buildDirectory.file("verification/forbid-detekt-frontend-skew.ok")
-    outputs.file(stamp)
-    outputs.cacheIf { true }
-    val frontendJars = detektFrontendProbe.incoming.files
-    val probeCoordinates = detektProbeCoordinates
-    val probeGroup = detektProbeGroup
-    val probeVersion = detektCatalogVersion
-    doLast {
-        val applied = DetektCatalogScanner.pluginCoordinate(catalogFile.readText())
-            ?: error(
-                "Could not find a `detekt-gradlePlugin = { module = \"<group>:detekt-gradle-plugin\", " +
-                    "version.ref = \"…\" }` entry in `gradle/libs.versions.toml`, so this guard cannot " +
-                    "confirm it is probing the detekt the build actually applies — and an unconfirmed " +
-                    "probe must fail rather than pass.\n" +
-                    "  THE FIX is to re-sync the parser in `build.gradle.kts` with however that entry " +
-                    "is spelled now.",
-            )
-        if (applied != probeGroup to probeVersion) {
-            error(
-                "This guard probed `$probeCoordinates`, but `gradle/libs.versions.toml` applies " +
-                    "`${applied.first}:detekt-gradle-plugin:${applied.second}`. Its verdict would be " +
-                    "about a detekt that is not in the build.\n" +
-                    "  The usual cause is a detekt 2.x adoption under a NEW catalog alias while " +
-                    "`libs.versions.detekt` still names the old one — the probe resolves happily and " +
-                    "reports green about a frontend nobody runs.\n" +
-                    "  THE FIX is to point `detektCatalogVersion`/`detektProbeGroup` in " +
-                    "`build.gradle.kts` at whichever catalog entry the convention plugins apply.",
-            )
-        }
-        // `kotlin-compiler-embeddable` is 1.x's frontend artifact; 2.x renamed it `kotlin-compiler`.
-        val pattern = Regex("""^kotlin-compiler(?:-embeddable)?-(\d+)\.(\d+)\.(\d+)\.jar$""")
-        val match = frontendJars.files.firstNotNullOfOrNull { pattern.find(it.name) }
-            ?: error(
-                "Could not find `kotlin-compiler[-embeddable]-<version>.jar` on the resolved " +
-                    "`$probeCoordinates` graph, so this guard cannot tell whether detekt's frontend " +
-                    "still lags the project's Kotlin — and a guard that cannot see its subject must " +
-                    "fail rather than pass.\n" +
-                    "  Most likely detekt's packaging changed again, which is itself the event this " +
-                    "guard exists to catch — see #2534.\n" +
-                    "  Files on the configuration: " +
-                    (frontendJars.files.map { it.name }.sorted().takeIf { it.isNotEmpty() }
-                        ?.joinToString(", ") ?: "none"),
-            )
-        val frontendVersion = match.groupValues.drop(1).take(3).joinToString(".")
-        val (frontendMajor, frontendMinor) = match.groupValues.drop(1).take(2).map { it.toInt() }
-        val projectParts = projectKotlin.split('.').mapNotNull { it.toIntOrNull() }
-        val projectMajor = projectParts.getOrElse(0) { 0 }
-        val projectMinor = projectParts.getOrElse(1) { 0 }
-        // `+ 1` because the read ceiling is `JvmMetadataVersion.INSTANCE_NEXT` — the frontend's own
-        // metadata version plus one minor. See the header: a frontend one minor behind reads the
-        // project's binaries fine, so it is NOT lagging in the sense this guard means.
-        val frontendLags =
-            frontendMajor < projectMajor ||
-                (frontendMajor == projectMajor && frontendMinor + 1 < projectMinor)
-        if (!frontendLags) {
-            error(
-                "detekt's frontend (Kotlin $frontendVersion) can now read this repo's binary metadata " +
-                    "— its ceiling is `[$frontendMajor,${frontendMinor + 1},0]` and the project's " +
-                    "Kotlin is $projectKotlin — so the coverage claims written while it could not are " +
-                    "stale.\n" +
-                    "  THIS IS GOOD NEWS, and the failure is the point: nothing else would tell you. " +
-                    "Three things to re-open, in this order:\n" +
-                    "    1. Re-run #2471's probe — a `!!` on a type INFERRED from a stdlib call, e.g. " +
-                    "`val m = mutableMapOf<Long, String>(); m.remove(k)!!` in some `commonMain` — and " +
-                    "confirm `detektAll` now REPORTS it. Until it does, the skew is not really gone " +
-                    "and this guard should be pinned, not deleted.\n" +
-                    "    2. Re-read the tier comment in " +
-                    "`build-logic/src/main/kotlin/kuilt.detekt-kmp.gradle.kts` and the " +
-                    "`forbidNotNullAssertionInUnresolvedSource` rationale above. Both describe a " +
-                    "partial tier; both would now be wrong.\n" +
-                    "    3. Decide whether that guard should go back to SUBTRACTING the type-resolved " +
-                    "source sets (it stopped in #2471 precisely because they were not covered), and " +
-                    "whether the eleven sites it grandfathered are now detekt's job — #2530.",
-            )
-        }
-        val out = stamp.get().asFile
-        out.parentFile.mkdirs()
-        out.writeText(
-            "ok — detekt frontend Kotlin $frontendVersion (probed via $probeCoordinates, confirmed " +
-                "against catalog ${applied.first}:detekt-gradle-plugin:${applied.second}) reads " +
-                "metadata up to [$frontendMajor,${frontendMinor + 1},0], below project Kotlin " +
-                "$projectKotlin, so detekt's nullability rules remain partial and the lexical `!!` " +
-                "guard remains the floor\n",
         )
     }
 }
@@ -5691,9 +5254,9 @@ val forbidBoltRejoiningTheLattice by tasks.registering {
 // and a stated asymmetry with a live counterexample is worse than no statement, because it tells the
 // next reader not to look.
 //
-// The stale direction is checked too, for the same reason `forbidUnlintedModule` checks its own
-// allowlist: a row for a module that has since been renamed or deleted describes a repo that no
-// longer exists, and nothing else in the build would ever notice.
+// The stale direction is checked too, for the same reason every allowlist here is checked from both
+// sides: a row for a module that has since been renamed or deleted describes a repo that no longer
+// exists, and nothing else in the build would ever notice.
 val verifyModuleTable by tasks.registering {
     group = "verification"
     description = "Fails if a :kuilt-* module has no row in CLAUDE.md's module table (#2257)."
@@ -5701,9 +5264,9 @@ val verifyModuleTable by tasks.registering {
     inputs.file(claudeMd).withPropertyName("claudeMd")
         .withPathSensitivity(PathSensitivity.RELATIVE)
     // The other half of the verdict is the module SET, which lives in `settings.gradle.kts` and is
-    // not a file this task reads. Declared as a property for the same reason `forbidUnlintedModule`
-    // declares its `detektRegistration` map: without it, adding a module would land on a cached
-    // green (see "Guard plumbing" above — a stamp is only safe if the inputs are honest).
+    // not a file this task reads. Declared as a property because without it, adding a module would
+    // land on a cached green (see "Guard plumbing" above — a stamp is only safe if the inputs are
+    // honest).
     //
     // RECEIPT ORDERING, for whoever re-proves that: adding a module to `settings.gradle.kts` by hand
     // does NOT reach this task — it is pre-empted at configuration time and the red is about
@@ -6241,10 +5804,7 @@ allprojects {
     tasks.matching { it.name == "check" }.configureEach {
         dependsOn(rootProject.tasks.named("forbidUnboundedSwatchDelivery"))
         dependsOn(rootProject.tasks.named("forbidBoltRejoiningTheLattice"))
-        dependsOn(rootProject.tasks.named("forbidUnlintedModule"))
-        dependsOn(rootProject.tasks.named("forbidUnlintedAndroidMain"))
         dependsOn(rootProject.tasks.named("forbidNotNullAssertionInUnresolvedSource"))
-        dependsOn(rootProject.tasks.named("forbidDetektFrontendSkew"))
         dependsOn(rootProject.tasks.named("forbidSourcelessKmpTarget"))
         dependsOn(rootProject.tasks.named("forbidPortProbeRebind"))
         dependsOn(rootProject.tasks.named("verifyDocCitations"))

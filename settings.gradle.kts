@@ -155,8 +155,8 @@ if (providers.gradleProperty("includeSpike").isPresent) {
 // This block makes the valid shape a command-line flag with NO tracked-file edit: the directory is
 // created under `build/` (gitignored, so a probe can never be committed and there is nothing to
 // revert), and `kuilt-bom` accounts for the same property so configuration succeeds. A guard that
-// needs the probe to carry Kotlin source — `forbidUnlintedModule` — reads `build/guard-probe/src/`.
-// The full receipt shape is in the root build script's "Guard plumbing" section.
+// needs the probe to carry Kotlin source reads `build/guard-probe/src/`. The full receipt shape is
+// in the root build script's "Guard plumbing" section.
 //
 // THE PATH IS A RESERVED LITERAL, NOT A SHAPE THE CALLER CHOOSES, and both reasons were live
 // defects in the first version of this block, which took any new `:`-prefixed path:
@@ -164,7 +164,7 @@ if (providers.gradleProperty("includeSpike").isPresent) {
 //   - A validating check evaluated WHERE THIS BLOCK SITS cannot be order-independent.
 //     `rootProject.children` then holds only the includes ABOVE it, so a module declared further
 //     down passed the check and had its project directory silently repointed here — build script
-//     never applied, sources invisible to `forbidUnlintedModule`, itself exempted from
+//     never applied, sources invisible to every source-scanning guard, itself exempted from
 //     `kuilt-bom`'s completeness backstop. The exact outcome the check's own message claimed to
 //     prevent, decided by a file position nothing pins. A literal cannot collide in any order.
 //     (Deferring to `settingsEvaluated` is what makes the residual collision check below sound;
