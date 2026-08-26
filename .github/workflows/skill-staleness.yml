@@ -1,0 +1,209 @@
+name: skill-staleness
+
+# Producer-side freshness check for `.claude/skills/kuilt-primitives/SKILL.md`.
+#
+# WHY THIS EXISTS
+#   The skill is how a coding agent in a CONSUMER repo discovers what kuilt already
+#   ships. Consumers vendor a byte-identical copy and refresh it daily, so a route
+#   that is missing here is missing everywhere downstream.
+#
+#   The failure is silent and fails OPEN. Nothing errors when a primitive has no
+#   route — an agent simply hand-rolls a parallel one, and catching it needs a
+#   reviewer who knows kuilt well. That is the same shape as a guard test that
+#   quietly stops matching, so it needs a job rather than good intentions.
+#
+#   Two freshness obligations exist and they are DIFFERENT mechanisms; do not
+#   conflate them:
+#
+#     canonical vs library   "does the skill describe what we ship today?"
+#                            → CLAUDE.md's same-PR rule, plus THIS job
+#     vendored vs canonical  "is the consumer's copy current?"
+#                            → the consumer's own daily sync-PR workflow
+#
+#   Only the second can be fully automated. No job can tell that a newly-added
+#   class WAS a routable primitive, so this one measures the proxy it can measure:
+#   published source moved, and the skill did not follow within 7 days.
+#
+# WHY IT OPENS AN ISSUE RATHER THAN FAILING A BUILD
+#   A stale skill is not a reason to block someone else's merge. A required check
+#   that reddens whenever the library moves would push the cost onto whoever
+#   happens to open the next PR, and would be muted within a week. This is
+#   deliberately out of band — it is NOT part of `ci-required`.
+#
+# WHY THE MODULE LIST IS DERIVED, NOT LISTED
+#   Same marker the BOM uses (#1044): published ⟺ the module applies `kuilt.publish`,
+#   directly or via `kuilt.kmp-library`. A hand-maintained list drifted twice there
+#   before it was derived, and a hardcoded list here would rot the same way — a new
+#   module's primitives would be invisible to the very check meant to notice them.
+#   Grepping the marker needs no Gradle, so this job stays a few seconds long.
+#
+#   Scoped to `src/commonMain` of those modules: that is what consumers import.
+#   NOT `src/*Test`, NOT `src/commonSamples`, NOT `docs/`. A test-only or sample
+#   change is not a missing route, and a check that cries wolf gets ignored.
+
+on:
+  schedule:
+    # 06:30 UTC daily — ahead of consumers' own sync jobs, and off apple-nightly's 07:00.
+    - cron: '30 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  staleness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Full history: both timestamps come from `git log`, and a shallow clone
+      # would report the checkout's own commit for every path.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Compare skill mtime against published source
+        id: check
+        env:
+          SKILL: .claude/skills/kuilt-primitives/SKILL.md
+          MAX_DAYS: '7'
+        run: |
+          set -euo pipefail
+
+          test -f "$SKILL" || {
+            echo "::error::$SKILL is missing — the canonical skill has been deleted or moved."
+            exit 1
+          }
+
+          # Published ⟺ applies kuilt.publish (directly or via kuilt.kmp-library).
+          mapfile -t MODULES < <(
+            grep -l -E 'id\("kuilt\.(publish|kmp-library)"\)' ./*/build.gradle.kts \
+              | xargs -r -n1 dirname \
+              | sed 's|^\./||' \
+              | sort
+          )
+          if [ "${#MODULES[@]}" -eq 0 ]; then
+            echo "::error::derived zero published modules — the kuilt.publish marker or the module layout changed."
+            exit 1
+          fi
+
+          PATHS=()
+          for m in "${MODULES[@]}"; do
+            [ -d "$m/src/commonMain" ] && PATHS+=("$m/src/commonMain")
+          done
+          if [ "${#PATHS[@]}" -eq 0 ]; then
+            echo "::error::derived zero commonMain trees from ${#MODULES[@]} published modules."
+            exit 1
+          fi
+          echo "Watching ${#PATHS[@]} published commonMain trees across ${#MODULES[@]} modules."
+
+          SKILL_TS=$(git log -1 --format=%ct -- "$SKILL")
+          SRC_TS=$(git log -1 --format=%ct -- "${PATHS[@]}")
+          echo "skill=$SKILL_TS src=$SRC_TS"
+
+          STALE=no
+          DAYS=0
+          if [ "$SRC_TS" -gt "$SKILL_TS" ]; then
+            DAYS=$(( (SRC_TS - SKILL_TS) / 86400 ))
+            [ "$DAYS" -gt "$MAX_DAYS" ] && STALE=yes
+          fi
+
+          {
+            echo "stale=$STALE"
+            echo "days=$DAYS"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "$STALE" = yes ]; then
+            # Name the modules that moved since the skill did — that is the whole
+            # actionable content, and it is what turns "go re-read 45 modules" into
+            # "go look at these three".
+            MOVED=$(
+              git log --since="@$SKILL_TS" --name-only --format= -- "${PATHS[@]}" \
+                | grep -v '^$' | cut -d/ -f1 | sort -u | sed 's/^/- `:/;s/$/`/'
+            )
+            {
+              echo 'moved<<MOVEDEOF'
+              echo "$MOVED"
+              echo 'MOVEDEOF'
+            } >> "$GITHUB_OUTPUT"
+            echo "::warning::published source moved ${DAYS}d ahead of the skill"
+          else
+            echo "Skill is current (published source is ${DAYS}d ahead; budget is ${MAX_DAYS}d)."
+          fi
+
+      # Idempotent by exact title: an existing OPEN issue is commented on, never
+      # duplicated. Same shape as publish.yml / apple-nightly.yml's alerts.
+      - name: Open or refresh the tracking issue
+        if: steps.check.outputs.stale == 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DAYS: ${{ steps.check.outputs.days }}
+          MOVED: ${{ steps.check.outputs.moved }}
+        run: |
+          set -eu
+          TITLE="kuilt-primitives skill is behind the library"
+          LABEL="skill-stale"
+          BODY="Published \`src/commonMain\` last moved **${DAYS} days** after \`.claude/skills/kuilt-primitives/SKILL.md\` was last updated. The budget is 7 days (see CLAUDE.md, \"The \`kuilt-primitives\` skill is part of the public surface\").
+
+          Modules whose published source moved since the skill did:
+
+          ${MOVED}
+
+          **This is a proxy, not a verdict.** The job cannot tell a new *primitive* from an internal refactor, so the answer may legitimately be \"nothing to route\" — in which case a one-line touch of the skill is the honest way to record that someone looked.
+
+          What to check:
+          1. Did any of those modules gain a **public** primitive a consumer would otherwise hand-roll? If so it needs a STOP-list route, the \`description\` trigger phrases that reach it, and a \`docs/agent-cookbook.md\` entry.
+          2. Did any **routed** symbol get renamed, made \`internal\`, or removed? A route naming the wrong symbol is worse than no route — it is confident, and the agent trusts it over its own reading.
+          3. Does the frontmatter still parse? The \`description\` is one long unquoted YAML scalar, so a bare \`: \` inside it breaks the block and the skill stops loading (#2541).
+
+          Consumers vendor this file and refresh it on a daily sync, so whatever is here propagates outward unreviewed.
+
+          - Run: ${RUN_URL}"
+
+          # The body is written inside a YAML block scalar, so every continuation line
+          # carries this step's indentation. Four or more leading spaces is a markdown
+          # CODE BLOCK, which would render the whole issue as unstyled preformatted text.
+          BODY=$(printf '%s\n' "$BODY" | sed 's/^ \{1,10\}//')
+
+          # Best-effort label create (idempotent). The title-based search below does
+          # not depend on it, so a failure here is tolerated.
+          gh label create "$LABEL" --color FBCA04 \
+            --description "kuilt-primitives SKILL.md is behind the library" 2>/dev/null || true
+
+          EXISTING=$(gh issue list --state open --search "\"$TITLE\" in:title" \
+            --json number,title \
+            --jq "map(select(.title == \"$TITLE\")) | .[0].number // empty")
+
+          if [ -n "$EXISTING" ]; then
+            echo "Refreshing existing issue #$EXISTING"
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            echo "Opening new tracking issue"
+            gh issue create --title "$TITLE" --label "$LABEL" --body "$BODY" \
+              || gh issue create --title "$TITLE" --body "$BODY"
+          fi
+
+      # Close it when the skill catches up. Unlike publish.yml's alert — where a
+      # human fixes the break and closes by hand — the condition here is fully
+      # decided by two git timestamps, so leaving the issue open after it clears
+      # would be pure noise. Deterministic, so it cannot churn open/closed.
+      - name: Close the tracking issue once the skill has caught up
+        if: steps.check.outputs.stale == 'no'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -eu
+          TITLE="kuilt-primitives skill is behind the library"
+          EXISTING=$(gh issue list --state open --search "\"$TITLE\" in:title" \
+            --json number,title \
+            --jq "map(select(.title == \"$TITLE\")) | .[0].number // empty")
+          if [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" \
+              --comment "The skill has been updated since published \`src/commonMain\` last moved — closing. Reopened automatically if it falls behind again. Run: ${RUN_URL}"
+          fi
