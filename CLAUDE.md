@@ -514,16 +514,38 @@ So when a block stops being a literal quote — you dropped the source's own com
 
 **Relabel only when the block *cannot* be a literal quote — otherwise re-copy it, or mark the gaps.** `condensed from` is the cheapest way past a red gate and it is a **one-way door**: that block is never content-checked again. Reach for it when the snippet is genuinely illustrative or reworded; not when re-copying is a two-line edit, and **not merely because you left the middle out** — a block that splices non-adjacent chunks, or abridges a class down to the members being discussed, stays `verbatim` with a `// …` at each gap. And relabelling never hides a *rename* — a `condensed` citation whose symbol disappears still fails.
 
-- **Agent cookbook + skill stay in sync with the primitives.** When you add,
-  rename, or remove a public primitive a downstream consumer would reach for (a
-  fabric, a `Room`/reconnect entry point, a CRDT, a liveness detector, a
-  consensus/`GameSession` entry point, a dealing/gossip primitive): (1) add or
-  update its symptom→primitive entry in `docs/agent-cookbook.md`, quoting a
-  compiled snippet verbatim (`<!-- verbatim from … -->`); and (2) confirm
-  `.claude/skills/kuilt-primitives/SKILL.md` still routes to it and its
-  `description` still matches how a developer would phrase the need. A new
-  primitive with no cookbook entry is the exact failure this surface prevents —
-  treat a missing entry as a broken build even though nothing enforces it.
+### The `kuilt-primitives` skill is part of the public surface
+
+`.claude/skills/kuilt-primitives/SKILL.md` is how a coding agent working in a *consumer* repo
+discovers what this library already provides. It is **source of truth**: consumers vendor a
+byte-identical copy and refresh it on a daily sync job, so whatever is here propagates outward
+unreviewed. `docs/agent-cookbook.md` is its long form — the skill intercepts, the cookbook explains.
+
+kuilt is where this pattern started and two sibling libraries (`fgn`, `hanab-kt`) copy it, so treat
+the rules below as the reference version rather than a local convention.
+
+- **Adding a public primitive means updating the skill in the SAME PR** — a route in the STOP list,
+  the trigger phrases in `description` that should reach it, and a symptom→primitive entry in
+  `docs/agent-cookbook.md` quoting a compiled snippet (`<!-- verbatim from … -->`). A primitive
+  nobody is routed to gets reinvented downstream. Same obligation for a fabric, a `Room`/reconnect
+  entry point, a CRDT, a liveness detector, a consensus/`GameSession` entry point, a dealing/gossip
+  primitive — anything a consumer would otherwise hand-roll.
+- **It must never be more than 7 days behind the library.** `.github/workflows/skill-staleness.yml`
+  opens a tracking issue when published `commonMain` moves and the skill doesn't; it deliberately
+  does not fail a build, because a stale skill is not a reason to block someone else's merge.
+- **Renaming or removing a primitive means fixing the route, not leaving it dangling.** A route
+  naming the wrong symbol is worse than no route — it is confident, and the agent trusts it over
+  its own reading. Verify against the declaration in source, never against a doc page.
+- **Route to a symbol a consumer can actually reference.** `→ use the CRDT module` is prose and
+  changes no behaviour; naming `LWWRegister` does. And check the visibility: the rejoin route named
+  `SeamRoom` for a year, which is `internal`.
+- **The frontmatter is parsed as YAML — keep it parseable.** The `description` is one enormous
+  unquoted plain scalar, so a bare `: ` or ` #` inside it breaks the whole block and the skill stops
+  loading. Prefer an em-dash. `ruby -ryaml -e 'YAML.safe_load(File.read(ARGV[0]).split(/^---$/)[1])'`
+  settles it in a second.
+- **Never hand-edit a vendored copy in a consumer repo.** It is a cache; fix it here and let the
+  sync carry it down. The corollary is that this copy is the last line of defence — an auto-sync
+  propagates corruption just as faithfully as content (#2541).
 
 ## CI & merging
 

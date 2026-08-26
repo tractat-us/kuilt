@@ -11,7 +11,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 
 | You're about to write… | Use instead | Jump to |
 |---|---|---|
-| a rejoin / reconnect loop, a resume token, a "grace window / hold the slot open" | `ResumeToken` + `SeamRoom` resume | [Rejoin & reconnect](#rejoin--reconnect) |
+| a rejoin / reconnect loop, a resume token, a "grace window / hold the slot open" | `Room.resumeToken` + `Room.resume` | [Rejoin & reconnect](#rejoin--reconnect) |
 | a fixed-list or exponential retry/back-off loop | `ExponentialBackoff` | [Rejoin & reconnect](#rejoin--reconnect) |
 | a reconnect banner / "why did we drop" classifier — transient vs. unrecoverable buckets | `MembershipEvent.Partitioned.reason` + `HostLost.reason` (`ReconnectReason`/`FailureReason`), plus their `localFabric` tag | [Rejoin & reconnect](#rejoin--reconnect) |
 | a propose→authoritative/rejected turn/session facade, host election with a term | `GameSession` + `TurnSequencer` | [Consensus & turns](#consensus--turns) |
@@ -33,6 +33,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | saving bytes so they survive a restart — a write-temp-then-`fsync`-then-atomic-rename dance, a per-platform file helper, an IndexedDB wrapper, "did that write actually land before we crashed?" | `DurableStore` + `StoreKey` | [Durable storage](#durable-storage) |
 | a per-line flush loop in a log/telemetry exporter — or a fix for "capturing logs is slow", "the app stalls when it logs a lot" | `WarpLogRecordExporter.export(records)` + `installLogCapture` | [Telemetry & log capture](#telemetry--log-capture) |
 | deleting a telemetry store's files to reset it, or a "clear on next launch" flag so the delete lands before recovery | `WarpTelemetry.clear()` | [Telemetry & log capture](#telemetry--log-capture) |
+| your own flag or counter tracking whether telemetry is still being written — "has anything landed since launch?", "are we losing log lines?" | `WarpLogRecordExporter.health` + `LogCaptureInstallation.health` | [Telemetry & log capture](#telemetry--log-capture) |
 | a second, longer-retention copy of a replicated log — "keep a year on the server beside an hour on the phone", "gossiped records vanish when the peer forgets them", a hand-rolled tee of what a replica applied | `BoltDecorator` + `AppliedOpSink` | [Telemetry & log capture](#telemetry--log-capture) |
 | reading that archive back — "replay what the phone compacted away", "did I get the whole history or did it stop somewhere?", a resume cursor over an append-only log, a hand-rolled "is my archive intact" check | `Bolt.replay` + `ReplayScope` + the terminal verdict | [Telemetry & log capture](#telemetry--log-capture) |
 | merging several mDNS/Multipeer discovery feeds into one lobby roster | `discoveryRoster` | [Discovery](#discovery) |
@@ -129,7 +130,7 @@ public suspend fun callerSuppliedRoomIdSample(
 ```
 
 **Intent:** rejoin / reconnect after a dropped connection; "hold the slot open" for a grace window.
-**Primitive:** `ResumeToken` + the `SeamRoom` resume flow (`us.tractat.kuilt.session.partition`). Don't re-track the grace window yourself.
+**Primitive:** `ResumeToken` (`us.tractat.kuilt.session.partition`) presented to `Room.resume` — `Room.resumeToken` mints it, `Room` is the whole public surface. (`SeamRoom`, which this entry used to name, is `internal`; `SeamRoomFactory` builds it.) Don't re-track the grace window yourself.
 
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#resumeAfterDropSample -->
 ```kotlin
@@ -1349,6 +1350,13 @@ exporter.clear()
 val kept = bolt.replay(ReplayScope.All).frames().toList().flatMap { it.ops }
 check(kept.isNotEmpty()) { "a clear empties the replica, never the archive" }
 ```
+
+**Intent:** know whether telemetry is still being written at all — "has anything landed since launch?", "are we losing log lines?" — instead of keeping your own flag or counter beside the exporter.
+**Primitive:** `WarpLogRecordExporter.health` (`ExporterHealth`, `:kuilt-otel`) and `LogCaptureInstallation.health` (`CaptureHealth`, `:kuilt-otel-logging`). Both are `StateFlow`s, so read a point-in-time answer or collect and alarm on a stall.
+
+A failed durable write returns `ExportResult.Failure`, but on the logging path every caller discards it — the per-platform appender signatures return `void`. A device therefore stopped accepting telemetry and stayed that way for hours with nothing written and nothing logged (#1860); these counters are the out-of-band answer. `ExporterHealth.isDead` already derives "nothing accepted since process start" — there is deliberately no timestamp, because an exporter holds no `Clock` and a wall-clock read does not belong on the export path.
+
+Read the two together. `CaptureHealth.droppedEvents` climbing while the exporter is healthy is not a broken export path — it is a bounded queue shedding its oldest events because the app logs faster than the drain exports (#2124), which is what the queue is for.
 
 **Intent:** read that archive back — "replay what the phone compacted away", "give me everything this machine wrote last Tuesday", resuming where the last pass stopped. Don't hand-roll an "is my archive intact" check, and don't decide the history is complete because the replay finished.
 **Primitive:** `Bolt.replay(scope)` (`:kuilt-bolt`), returning a cold flow of `Archived` frames terminated by exactly one verdict — `CleanTail` or `Truncated`.
