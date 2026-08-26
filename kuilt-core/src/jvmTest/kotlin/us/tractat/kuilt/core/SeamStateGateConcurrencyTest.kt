@@ -1,5 +1,4 @@
 @file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-@file:Suppress("ForbiddenImport") // deliberate: the latch invariant (no update() may survive a tear()) only manifests under a real multi-threaded dispatcher — a virtual/single-threaded one serialises update()/tear() and hides the race the gate exists to close.
 
 package us.tractat.kuilt.core
 

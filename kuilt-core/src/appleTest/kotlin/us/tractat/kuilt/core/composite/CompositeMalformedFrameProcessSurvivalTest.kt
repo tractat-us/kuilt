@@ -1,5 +1,3 @@
-@file:Suppress("ForbiddenImport") // deliberate real-threading harness: see the class KDoc — a real dispatcher is the whole point, because a test dispatcher cannot observe a process abort.
-
 package us.tractat.kuilt.core.composite
 
 import kotlinx.coroutines.CompletableDeferred

@@ -1,4 +1,4 @@
-@file:Suppress("ForbiddenImport") // deliberate real-threading regression test: the concurrent-export re-mint + spans lost-update races are only observable on a genuine multi-threaded dispatcher, which virtual-time runTest cannot provide — the production-dispatcher-in-tests ban is exempted here per the module's coroutine-determinism policy.
+// deliberate real-threading regression test: the concurrent-export re-mint + spans lost-update races are only observable on a genuine multi-threaded dispatcher, which virtual-time runTest cannot provide — the production-dispatcher-in-tests ban is exempted here per the module's coroutine-determinism policy.
 
 package us.tractat.kuilt.otel
 

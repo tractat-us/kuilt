@@ -1,5 +1,4 @@
 @file:OptIn(ExperimentalForeignApi::class)
-@file:Suppress("ForbiddenImport") // real-network loopback platform probe — a real Network.framework socket needs a real IO dispatcher; there is no virtual-time option here
 
 package us.tractat.kuilt.nw
 

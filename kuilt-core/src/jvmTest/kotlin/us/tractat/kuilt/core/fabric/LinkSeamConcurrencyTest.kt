@@ -1,5 +1,4 @@
 @file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-@file:Suppress("ForbiddenImport") // deliberate: real OS-thread concurrency stress harness — LinkSeam's data race only manifests under genuine cross-thread access, so this probe needs a real dispatcher, not a virtual one.
 
 package us.tractat.kuilt.core.fabric
 

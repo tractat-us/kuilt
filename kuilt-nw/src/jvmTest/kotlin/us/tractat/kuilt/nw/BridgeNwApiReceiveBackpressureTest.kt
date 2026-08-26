@@ -2,7 +2,6 @@
 // property under test is precisely what happens when it outruns the JVM-side drain. A virtual-time
 // dispatcher cannot express that — under `runTest` the producer and the drain are the same thread, so
 // the callback can never actually outrun anything and the bug is unreachable.
-@file:Suppress("ForbiddenImport")
 
 package us.tractat.kuilt.nw
 

@@ -1,4 +1,4 @@
-@file:Suppress("ForbiddenImport") // deliberate real-threading regression test: the Apple identity guard is only observable across genuine OS threads (the slot is a Kotlin/Native `@ThreadLocal`), which virtual-time `runTest` cannot provide — the production-dispatcher-in-tests ban is exempted here per the module's coroutine-determinism policy.
+// deliberate real-threading regression test: the Apple identity guard is only observable across genuine OS threads (the slot is a Kotlin/Native `@ThreadLocal`), which virtual-time `runTest` cannot provide — the production-dispatcher-in-tests ban is exempted here per the module's coroutine-determinism policy.
 
 package us.tractat.kuilt.otel.logging
 

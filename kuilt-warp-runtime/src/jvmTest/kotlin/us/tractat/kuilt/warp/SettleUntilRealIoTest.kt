@@ -13,7 +13,6 @@
  * the deliberate real `Dispatchers.IO` op and `Thread.sleep` that model the real-IO guest.
  */
 @file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-@file:Suppress("ForbiddenImport") // deliberate real-IO op models the real Dispatchers.IO wasm guest
 
 package us.tractat.kuilt.warp
 

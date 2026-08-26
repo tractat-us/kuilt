@@ -1,5 +1,4 @@
 @file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-@file:Suppress("ForbiddenImport") // deliberate: the lost-terminal-Torn race only manifests under a real multi-threaded dispatcher — scope.cancel() is asynchronous, so a rollup collector resumed for an in-flight _plies emission can write a non-terminal state AFTER close()'s Torn only when the two run on genuinely parallel threads. A virtual/single-threaded dispatcher serialises them and hides the bug.
 
 package us.tractat.kuilt.core.composite
 

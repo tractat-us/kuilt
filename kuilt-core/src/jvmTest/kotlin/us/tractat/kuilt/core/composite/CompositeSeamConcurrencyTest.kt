@@ -1,5 +1,4 @@
 @file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-@file:Suppress("ForbiddenImport") // deliberate: real OS-thread concurrency stress harness — CompositeSeam's data races on `idMap`/`live`/`_plies`/the inbound gate only manifest under genuine cross-thread access, so this probe needs a real multi-threaded dispatcher, not a virtual one.
 
 package us.tractat.kuilt.core.composite
 

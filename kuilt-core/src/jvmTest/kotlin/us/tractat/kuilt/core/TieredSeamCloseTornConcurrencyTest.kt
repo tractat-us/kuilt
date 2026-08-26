@@ -1,5 +1,4 @@
 @file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-@file:Suppress("ForbiddenImport") // deliberate: TieredSeam's lost-terminal-Torn race (#1363) only manifests under a real multi-threaded dispatcher — the state-pump's `if (!latched) _state = …` and close()'s publish race only on genuinely parallel threads; a virtual/single-threaded dispatcher serialises them and hides the bug.
 
 package us.tractat.kuilt.core
 
