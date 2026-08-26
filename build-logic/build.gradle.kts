@@ -4,7 +4,6 @@ dependencies {
     implementation(libs.kotlin.gradlePlugin)
     implementation(libs.kotlin.serialization.gradlePlugin)
     implementation(libs.android.gradlePlugin)
-    implementation(libs.detekt.gradlePlugin)
     implementation(libs.vanniktech.mavenPublish.gradlePlugin)
     implementation(libs.kover.gradlePlugin)
     implementation(libs.dokka.gradlePlugin)

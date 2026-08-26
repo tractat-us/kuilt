@@ -1,5 +1,3 @@
-@file:Suppress("ForbiddenImport") // deliberate: real OS-thread construct/cancel race — the #1077 field-init-order NPE only manifests when the actor teardown runs on a different thread than the still-in-flight constructor, so this probe needs a real dispatcher, not a virtual one.
-
 package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.CoroutineExceptionHandler

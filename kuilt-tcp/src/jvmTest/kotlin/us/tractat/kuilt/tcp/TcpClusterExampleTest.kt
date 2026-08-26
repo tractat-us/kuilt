@@ -1,5 +1,3 @@
-@file:Suppress("ForbiddenImport") // real-network loopback cluster example — TCP sockets need a real IO dispatcher
-
 package us.tractat.kuilt.tcp
 
 import io.ktor.network.selector.SelectorManager

@@ -1,7 +1,4 @@
 @file:OptIn(ExperimentalForeignApi::class)
-@file:Suppress(
-    "ForbiddenImport",
-) // opt-in real-network multi-threaded stress probe — hundreds of real Network.framework loopback links need a real IO dispatcher; there is no virtual-time option here
 
 package us.tractat.kuilt.nw
 

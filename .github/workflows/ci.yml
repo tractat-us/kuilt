@@ -1,10 +1,9 @@
 name: ci
 
-# Aggregator pattern (detect → {build-jvm, build-native, detekt, dokka, …} → ci-required):
+# Aggregator pattern (detect → {build-jvm, build-native, dokka, …} → ci-required):
 #
 #   detect  →  build-jvm          ┐
 #           →  build-native       │
-#           →  detekt             │
 #           →  dokka              ├→  ci-required (the one required check)
 #           →  doc-citations      │
 #           →  spike-compile      │
@@ -32,7 +31,7 @@ name: ci
 # (proven by --dry-run set-diff), so no platform loses coverage.
 #
 # ci-required (if: !cancelled()) is the SOLE required status check that branch
-# protection looks for. It passes when detect + both build jobs + detekt all
+# protection looks for. It passes when detect + both build jobs all
 # succeed OR when the heavy jobs were legitimately skipped (docs-only), AND the
 # Dokka check passed whenever the change touched Dokka inputs, AND the spike
 # compile passed whenever the change touched `:spike` sources; it fails when any
@@ -500,42 +499,6 @@ jobs:
             **/build/karma-config.d/
             build/jstack-dumps/
 
-  # ── detekt ───────────────────────────────────────────────────────────────
-  # Static analysis: null-safety rules on main sources + production-dispatcher
-  # ban on test sources. Runs as its OWN job, parallel to the build jobs, so
-  # detekt's type-resolution analysis doesn't share a runner — and its memory —
-  # with the build's wasmJs-browser + test tasks. Skipped on docs-only.
-  detekt:
-    needs: detect
-    if: needs.detect.outputs.docs-only != 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      S3_BUILD_CACHE_ACCESS_KEY_ID: ${{ secrets.S3_BUILD_CACHE_ACCESS_KEY_ID }}
-      S3_BUILD_CACHE_SECRET_KEY: ${{ secrets.S3_BUILD_CACHE_SECRET_KEY }}
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v6
-        with:
-          java-version: '21'
-          distribution: 'temurin'
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v6
-        with:
-          gradle-version: wrapper
-          cache-read-only: false
-
-      # detekt's Android-library configuration needs the SDK; it analyzes only
-      # commonMain + jvmMain, so no Kotlin/Native toolchain is required.
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
-
-      - name: Run detekt (null-safety rules)
-        run: ./gradlew detektAll --max-workers=4
-
   # ── dokka ──────────────────────────────────────────────────────────────────
   # Fast per-module Dokka module-doc build. Runs whenever a change touches a Dokka
   # INPUT — any module.md, any *.kt (KDoc), or a commonSamples doc sample — EVEN on
@@ -951,8 +914,7 @@ jobs:
   #                          that lane already opens a tracking issue on failure.
   # The residual gap is deliberate: latency, not blindness.
   #
-  # Compile only — no tests (there are none), no link, no Xcode target, no detekt
-  # (:spike deliberately does not apply `kuilt.kmp-library`). All three targets share
+  # Compile only — no tests (there are none), no link, no Xcode target. All three targets share
   # one appleMain source set; compiling each proves the per-target cinterop + expect/
   # actual wiring as well as the source compatibility.
   spike-compile:
@@ -967,7 +929,9 @@ jobs:
       - uses: actions/checkout@v7
 
       # aarch64 runner: JDK 21-23 miscompile hot integer code under C2 once it warms up (#1597).
-      # The x64 (ubuntu) jobs stay on 21 until detekt can run on 25 (#1708).
+      # The x64 (ubuntu) jobs are still on 21. The reason they were pinned there — detekt could
+      # not run on 25 — went away when detekt was dropped (#2540), so the bump is now unblocked
+      # and is just a bump; #1708 tracks taking it.
       - name: Set up JDK 25
         uses: actions/setup-java@v6
         with:
@@ -1007,7 +971,7 @@ jobs:
 
   # ── ci-required ────────────────────────────────────────────────────────────
   # The SOLE required status check. Aggregates detect + build-jvm + build-native
-  # + detekt + dokka + doc-citations + spike-compile + capability-probes.
+  # + dokka + doc-citations + spike-compile + capability-probes.
   # (concurrency-probes runs but is deliberately NOT aggregated — see that job's
   # header and #1768. capability-probes is the deterministic half of that split
   # and IS aggregated, as of #1768's option 2.)
@@ -1033,17 +997,17 @@ jobs:
   # draft FAILURE on the same sha. The split is the load-bearing #1132 fix and
   # stays; only the green park is reverted.
   #
-  # detect/build-jvm/build-native/detekt/dokka/capability-probes still carry their own
+  # detect/build-jvm/build-native/dokka/capability-probes still carry their own
   # draft/docs-only/dokka-inputs guards (cheap jobs don't burn a runner on every draft
   # push). Only ci-required runs unconditionally, so the gate is always in a definite
   # pass/fail state.
   #
   # Invariant: ci-required succeeds if and only if ALL of these hold:
   #   Build gate —
-  #     (a) detect succeeded AND docs-only=true AND build-jvm + build-native +
-  #         detekt were skipped, OR
+  #     (a) detect succeeded AND docs-only=true AND build-jvm + build-native were
+  #         skipped, OR
   #     (b) detect succeeded AND docs-only=false AND build-jvm=success AND
-  #         build-native=success AND detekt=success.
+  #         build-native=success.
   #   Dokka gate (orthogonal) —
   #     (c) dokka-inputs=true  → dokka=success, OR
   #     (d) dokka-inputs=false → dokka was skipped (or success).
@@ -1075,7 +1039,7 @@ jobs:
   #   - capability-probes skipped/failed on a non-docs change → fails → closes the
   #     regressed-race-merges-green gap (#1768).
   ci-required:
-    needs: [detect, build-jvm, build-native, detekt, dokka, doc-citations, spike-compile, capability-probes]
+    needs: [detect, build-jvm, build-native, dokka, doc-citations, spike-compile, capability-probes]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1101,7 +1065,6 @@ jobs:
           DETECT="${{ needs.detect.result }}"
           BUILD_JVM="${{ needs.build-jvm.result }}"
           BUILD_NATIVE="${{ needs.build-native.result }}"
-          DETEKT="${{ needs.detekt.result }}"
           DOKKA="${{ needs.dokka.result }}"
           DOC_CITATIONS="${{ needs.doc-citations.result }}"
           SPIKE="${{ needs.spike-compile.result }}"
@@ -1112,7 +1075,6 @@ jobs:
           echo "detect:             $DETECT"
           echo "build-jvm:          $BUILD_JVM"
           echo "build-native:       $BUILD_NATIVE"
-          echo "detekt:             $DETEKT"
           echo "dokka:              $DOKKA"
           echo "doc-citations:      $DOC_CITATIONS"
           echo "spike-compile:      $SPIKE"
@@ -1174,7 +1136,7 @@ jobs:
           if [ "$DOCS_ONLY" = "true" ]; then
             # Docs-only path: the heavy jobs must have been skipped (not run).
             # If any somehow ran and failed, that's still a failure.
-            for pair in "build-jvm:$BUILD_JVM" "build-native:$BUILD_NATIVE" "detekt:$DETEKT" "capability-probes:$CAPABILITY_PROBES"; do
+            for pair in "build-jvm:$BUILD_JVM" "build-native:$BUILD_NATIVE" "capability-probes:$CAPABILITY_PROBES"; do
               name="${pair%%:*}"; result="${pair#*:}"
               if [ "$result" != "skipped" ] && [ "$result" != "success" ]; then
                 echo "::error::docs-only=true but $name had unexpected result: $result."; exit 1
@@ -1186,11 +1148,11 @@ jobs:
             # skipped here means a job was bypassed without a legitimate
             # docs-only classification — the exact race condition being closed.
             # Treat skipped the same as failure.
-            for pair in "build-jvm:$BUILD_JVM" "build-native:$BUILD_NATIVE" "detekt:$DETEKT" "capability-probes:$CAPABILITY_PROBES"; do
+            for pair in "build-jvm:$BUILD_JVM" "build-native:$BUILD_NATIVE" "capability-probes:$CAPABILITY_PROBES"; do
               name="${pair%%:*}"; result="${pair#*:}"
               if [ "$result" != "success" ]; then
                 echo "::error::Non-docs change requires a passing $name (result: $result). skipped is not accepted."; exit 1
               fi
             done
-            echo "build-jvm, build-native, detekt and capability-probes all succeeded. Gate green."
+            echo "build-jvm, build-native and capability-probes all succeeded. Gate green."
           fi

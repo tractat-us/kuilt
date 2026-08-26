@@ -1,5 +1,4 @@
 @file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-@file:Suppress("ForbiddenImport") // deliberate: real OS-thread concurrency stress harness — MeshSeam's data races on `links`/`closed`/`seq` only manifest under genuine cross-thread access, so this probe needs a real multi-threaded dispatcher, not a virtual one.
 
 package us.tractat.kuilt.core.fabric
 

@@ -1,5 +1,3 @@
-@file:Suppress("ForbiddenImport") // deliberate local-only wall-clock benchmark: it measures REAL elapsed time (System.nanoTime) of the interpreter, so it uses Dispatchers.IO and runBlocking, never a virtual-time dispatcher — there are no delays to drive, only genuine CPU work to time. Mirrors the ChicoryWasmRuntime real-IO exception and the D4-2 optimizer test.
-
 package us.tractat.kuilt.warp
 
 import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: local-only wall-clock benchmark: it measures REAL elapsed time (System.nanoTime) of the interpreter, so Dispatchers.IO + runBlocking, never a virtual-time dispatcher.

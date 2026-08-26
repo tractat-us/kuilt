@@ -17,10 +17,6 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 plugins {
     alias(libs.plugins.kotlinJvm)
     id("kuilt.publish")
-    // Was a hand-rolled detekt + `detektAll` block; the convention plugin is the
-    // same wiring, shared with every other plain-JVM module (#2005), and also
-    // applies detekt-test.yml to the test source set.
-    id("kuilt.detekt-jvm")
 }
 
 kotlin {

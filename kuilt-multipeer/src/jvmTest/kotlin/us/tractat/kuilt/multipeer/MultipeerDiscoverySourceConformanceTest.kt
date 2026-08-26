@@ -1,5 +1,3 @@
-@file:Suppress("ForbiddenImport") // deliberate: discoveries() carries its own .flowOn(Dispatchers.IO), so this harness is real-time
-
 package us.tractat.kuilt.multipeer
 
 import com.sun.jna.Pointer

@@ -1,4 +1,4 @@
-@file:Suppress("ForbiddenImport") // deliberate real-threading test: clear() is fenced against a concurrent mutation by writeMutex, and a stale encoded snapshot landing after the clear is only observable on a genuine multi-threaded dispatcher, which virtual-time runTest cannot provide.
+// deliberate real-threading test: clear() is fenced against a concurrent mutation by writeMutex, and a stale encoded snapshot landing after the clear is only observable on a genuine multi-threaded dispatcher, which virtual-time runTest cannot provide.
 
 package us.tractat.kuilt.otel
 

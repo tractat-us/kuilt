@@ -1,5 +1,3 @@
-@file:Suppress("ForbiddenImport") // real-network loopback test — a TCP socket needs real production dispatchers
-
 package us.tractat.kuilt.tcp
 
 import io.ktor.network.selector.SelectorManager

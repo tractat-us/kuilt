@@ -1,4 +1,4 @@
-@file:Suppress("ForbiddenImport") // deliberate real-threading test: clear() is fenced against a concurrent export by writeMutex, and an unfenced write landing after the clear is only observable on a genuine multi-threaded dispatcher, which virtual-time runTest cannot provide.
+// deliberate real-threading test: clear() is fenced against a concurrent export by writeMutex, and an unfenced write landing after the clear is only observable on a genuine multi-threaded dispatcher, which virtual-time runTest cannot provide.
 
 package us.tractat.kuilt.otel
 

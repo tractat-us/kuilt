@@ -99,7 +99,7 @@ reached — the call to build it is deferred, not made here.
 Two rules apply to *every* epic below, on top of its own sub-issues:
 
 - **Each epic ends with a polish-pass sub-issue** — a deliberate second pass over
-  the delivered code: `detektAll` clean, no leftover stubs or placeholders, the
+  the delivered code: `./gradlew check` clean, no leftover stubs or placeholders, the
   exception-discipline audit (`runCatchingCancellable`, never swallow cancellation),
   the module's `module.md` "walk" and KDoc/`@sample` updated to match what shipped,
   and a test-coverage / conformance review. The feature isn't done until its polish

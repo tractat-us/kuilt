@@ -1,5 +1,3 @@
-@file:Suppress("ForbiddenImport") // deliberate: end-to-end test over a REAL WebSocket relay — real sockets need a real dispatcher
-
 package us.tractat.kuilt.demo.cli
 
 import io.ktor.client.HttpClient

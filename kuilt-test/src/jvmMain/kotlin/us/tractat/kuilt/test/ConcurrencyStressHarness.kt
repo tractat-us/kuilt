@@ -1,5 +1,4 @@
 @file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-@file:Suppress("ForbiddenImport") // deliberate real-OS-thread harness — see the concurrency probes that use it.
 
 package us.tractat.kuilt.test
 
