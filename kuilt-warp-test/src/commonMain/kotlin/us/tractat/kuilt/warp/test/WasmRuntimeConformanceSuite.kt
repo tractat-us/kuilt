@@ -412,7 +412,8 @@ public abstract class WasmRuntimeConformanceSuite {
      * [WasmExecutionException]s), (ii) a trap, an interrupt or a dead worker carries different
      * message text, and (iii) any real recovery failure is **persistent**, so every attempt
      * overruns and the bounded retry still fails. See [retryingOnlyBudgetOverruns] for the
-     * ordered argument and the one class it deliberately absorbs (#1802).
+     * ordered argument, and for what an absorbed retry now reports (#1810). #1802's
+     * residual-drain skew is no longer among what it absorbs — it is fixed at the source.
      *
      * One runtime is reused across attempts deliberately: each extra attempt puts two more
      * timeouts in front of the well-behaved invoke, which strengthens the recovery assertion,
@@ -429,10 +430,14 @@ public abstract class WasmRuntimeConformanceSuite {
         retryingOnlyBudgetOverruns(
             what = "a well-behaved op on a runtime that has just recovered from a timeout",
             budget = budget,
-            referenceInvoke = {
-                newRuntime(WasmSandboxConfig(executionTimeout = REFERENCE_BUDGET))
+            prepareReference = {
+                // Construct + load OUTSIDE the returned lambda: parse and instantiate dominate a
+                // three-byte reverse, and the measurement this is compared against times the
+                // invoke alone (#1810).
+                val op = newRuntime(WasmSandboxConfig(executionTimeout = REFERENCE_BUDGET))
                     .load(WasmKernelFixtures.REVERSE)
-                    .invoke(byteArrayOf(1, 2, 3))
+                val invoke: suspend () -> Unit = { op.invoke(byteArrayOf(1, 2, 3)) }
+                invoke
             },
         ) {
             assertFailsWith<WasmExecutionException> { runaway.invoke(ByteArray(0)) }

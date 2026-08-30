@@ -59,7 +59,8 @@ class ChicoryWasmRuntimeTest {
      * downgraded to a weaker assertion — and **only** a budget overrun is retried, so a trap, a
      * poisoned worker, wrong bytes, or a runaway that escapes its bound all still fail on the first
      * attempt — see [retryingOnlyBudgetOverruns] for the ordered safety argument (type, then
-     * message, then persistence) and the one class it deliberately absorbs (#1802). The 60 s
+     * message, then persistence). #1802's residual-drain skew used to be absorbed here too; it is
+     * now fixed at the source in [GuestWorker], so only host contention is. The 60 s
      * `runTest` ceiling is a wedge backstop covering all attempts, not a timed assertion; the
      * reference invocation gets a *strictly smaller* 5 s budget so it can still report inside that
      * ceiling after the attempts have spent part of it.
@@ -71,10 +72,15 @@ class ChicoryWasmRuntimeTest {
         retryingOnlyBudgetOverruns(
             what = "an innocent op running concurrently with a runaway over one shared runtime",
             budget = budget,
-            referenceInvoke = {
-                ChicoryWasmRuntime(WasmSandboxConfig(executionTimeout = 5.seconds)).use {
-                    it.load(WasmKernelFixtures.REVERSE).invoke(byteArrayOf(1, 2, 3, 4))
-                }
+            prepareReference = {
+                // Construct + load OUTSIDE the returned lambda: parse and instantiate dominate a
+                // four-byte reverse, and the measurement this is compared against times the invoke
+                // alone (#1810). The runtime deliberately outlives the samples — closing it would
+                // close the worker the samples run on.
+                val op = ChicoryWasmRuntime(WasmSandboxConfig(executionTimeout = 5.seconds))
+                    .load(WasmKernelFixtures.REVERSE)
+                val invoke: suspend () -> Unit = { op.invoke(byteArrayOf(1, 2, 3, 4)) }
+                invoke
             },
         ) {
             ChicoryWasmRuntime(WasmSandboxConfig(executionTimeout = budget)).use { rt ->

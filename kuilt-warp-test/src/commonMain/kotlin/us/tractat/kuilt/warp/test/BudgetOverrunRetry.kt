@@ -34,6 +34,20 @@ private const val DEFAULT_ATTEMPTS: Int = 4
 private const val BUDGET_OVERRUN_MARKER: String = "WASM execution exceeded"
 
 /**
+ * How many times the reference invocation is sampled before the fastest is reported.
+ *
+ * Three, because the quantity being defended against is a *scheduling hiccup* — a rare draw, not a
+ * systematic cost — and the minimum of three independent draws is already far more robust to one
+ * than a single sample, while staying cheap enough to run on the failure path of a test that has
+ * just spent four attempts. More samples would sharpen a number nobody reads to two significant
+ * figures; the reader only has to place it on one side of the budget.
+ */
+private const val REFERENCE_SAMPLES: Int = 3
+
+/** Marks an emitted absorbed-overrun line, so it is greppable in a test report or CI log. */
+private const val EMIT_PREFIX: String = "[budget-overrun-retry]"
+
+/**
  * Runs [scenario], retrying up to [attempts] times — but **only** when it fails by overrunning a
  * runtime's wall-clock guest [budget], and never on any other failure.
  *
@@ -74,52 +88,81 @@ private const val BUDGET_OVERRUN_MARKER: String = "WASM execution exceeded"
  *    present as overruns. They are caught because they are **persistent**: the worker stays busy or
  *    the deadline stays armed, so *every* attempt overruns and [attempts] of them are not enough.
  *
- * The one defect class this deliberately absorbs is #1802's transient residual-drain skew — a
- * post-timeout op charged for the dying runaway's queue wait — whose deterministic guard ships with
- * #1802's fix. Absent that, only the transient overrun of a contended host is absorbed.
+ * What remains absorbed is therefore the transient overrun of a contended host, and nothing else.
+ * It used to also absorb #1802's residual-drain skew — a post-timeout op charged for the dying
+ * runaway's queue wait — but that is now fixed at the source: `ChicoryWasmRuntime`'s worker proves
+ * itself free, or is discarded, before the timed-out caller returns.
  *
  * ## The failure is self-describing
  *
- * On exhaustion this reports every attempt's wall-clock duration and then times [referenceInvoke] —
- * an equivalent well-behaved invocation on a fresh, generously-budgeted runtime — so the reader can
+ * On exhaustion this reports every attempt's duration and then prices [prepareReference] — an
+ * equivalent well-behaved invocation on a fresh, generously-budgeted runtime — so the reader can
  * separate contention from regression from the message alone, without re-running anything.
  *
- * Two known gaps in that diagnostic, tracked by #1810: an *absorbed* overrun is silent (so drift
- * from "no retry ever consumed" toward "three of four every run" is invisible until all four fail),
- * and the reference price is one sample that includes `load` as well as the invoke it is compared
- * against — both biases inflating it, i.e. nudging the reader toward the comfortable
- * "blame the host" branch.
+ * That price is deliberately **not** flattering to the host (#1810). It times the guest invocation
+ * *alone*, with construction and `load` hoisted out — parse and instantiate dominate a three-byte
+ * reverse, and the measurement it is compared against times an invoke on an already-loaded op — and
+ * it reports the **fastest** of [REFERENCE_SAMPLES] draws rather than one sample, since contention
+ * can only ever make a draw slower. Both corrections push the number *down*. That direction matters:
+ * an inflated reference reads as *"at or near the budget ⇒ blame the host"*, the comfortable branch,
+ * when the honest reading may be *"well under ⇒ REAL defect"*. Per the repo's debugging stance a
+ * contract-impossible value is a fork, and the measurement branch must not be the default.
+ *
+ * ## An absorbed retry is not silent
+ *
+ * Every overrun this absorbs is reported to [emit] **as it happens**, not accumulated for a report
+ * only the exhaustion path ever reads. Otherwise the drift from "no retry ever consumed" to "three
+ * of four consumed on every run" stays invisible until the day all four fail — at which point it
+ * reads as a fresh regression rather than as weeks of drift, which is exactly the failure #1739
+ * exists to stop, one level up. It also gives the one thing #1801 left unproven a way to be
+ * measured: that review showed *one* attempt suffices at 1-minute load 74, not that *four* are
+ * enough there. Emitting absorbed overruns is what would ever tell us the tail rate had moved.
  *
  * @param what What the scenario proves, for the failure message.
  * @param budget The [WasmSandboxConfig.executionTimeout] the scenario's runtime is configured with.
  * @param attempts Maximum attempts; must be at least 1.
- * @param referenceInvoke An equivalent well-behaved guest invocation on a fresh runtime with a
- *   generous budget. Timed **only** once every attempt has overrun, to price this host's latency.
+ * @param emit Where an *absorbed* overrun is reported, as it happens. Defaults to `println`, which
+ *   Gradle captures into the per-test report — so a retry that eventually succeeds becomes visible
+ *   in CI without failing anything. Override to capture it in a test.
+ * @param timeSource The clock every duration in the report is measured against. Injected rather
+ *   than read off the wall, so this function's own tests can pin *what* is timed without hoping a
+ *   build machine is busy.
+ * @param prepareReference Builds an equivalent well-behaved guest invocation on a fresh,
+ *   generously-budgeted runtime and returns **the invocation alone**. Construction and `load`
+ *   happen inside this call and are therefore untimed; only the returned lambda is measured, so
+ *   the reference prices the same thing the scenario's budget bounds.
  * @param scenario The assertions to run. Must be safe to repeat.
  */
 public suspend fun <T> retryingOnlyBudgetOverruns(
     what: String,
     budget: Duration,
     attempts: Int = DEFAULT_ATTEMPTS,
-    referenceInvoke: suspend () -> Unit,
+    emit: (String) -> Unit = { println(it) },
+    timeSource: TimeSource = TimeSource.Monotonic,
+    prepareReference: suspend () -> (suspend () -> Unit),
     scenario: suspend () -> T,
 ): T {
     require(attempts >= 1) { "attempts must be at least 1, was $attempts" }
     val overruns = StringBuilder()
     repeat(attempts) { index ->
-        val started = TimeSource.Monotonic.markNow()
+        val started = timeSource.markNow()
         try {
             return scenario()
         } catch (e: WasmExecutionException) {
             if (BUDGET_OVERRUN_MARKER !in (e.message ?: "")) throw e
-            overruns.appendLine("  attempt ${index + 1}/$attempts overran after ${started.elapsedNow()}: ${e.message}")
+            val overrun = "attempt ${index + 1}/$attempts overran after ${started.elapsedNow()}: ${e.message}"
+            overruns.appendLine("  $overrun")
+            // Report it NOW, not only on exhaustion: an overrun that is retried into a pass is the
+            // drift that precedes the failure, and a report nobody reads until the failure arrives
+            // is the failure #1739 exists to stop (#1810).
+            emit("$EMIT_PREFIX $what: $overrun")
         }
     }
     throw AssertionError(
         "$what overran its $budget guest budget on all $attempts attempts.\n" +
             overruns +
             "A well-behaved invocation on a fresh, generously-budgeted runtime " +
-            "${referenceCost(referenceInvoke)} on this host just now. Read that against $budget:\n" +
+            "${referenceCost(timeSource, prepareReference)} on this host just now. Read that against $budget:\n" +
             "  - well under $budget => this host is fast, so a persistent overrun is a REAL defect: the\n" +
             "    runtime is no longer freeing its guest worker after a timeout (an interrupt or deadline\n" +
             "    that no longer stops the guest), so every later op inherits the runaway.\n" +
@@ -130,18 +173,34 @@ public suspend fun <T> retryingOnlyBudgetOverruns(
 }
 
 /**
- * Prices one well-behaved guest invocation on this host, for [retryingOnlyBudgetOverruns]'s message.
+ * Prices one well-behaved guest invocation on this host, for [retryingOnlyBudgetOverruns]'s message —
+ * the guest invocation **alone**, sampled [REFERENCE_SAMPLES] times, reported at its fastest (#1810).
  *
  * Catches the whole sealed [WasmException] hierarchy, not just [WasmExecutionException]: this runs
  * *inside* the `throw AssertionError(...)` expression, so a [us.tractat.kuilt.warp.WasmLoadException]
  * escaping here would replace the four-attempt report — the actual deliverable — with an unrelated
  * stack trace, on precisely the path that produces the report.
  */
-private suspend fun referenceCost(referenceInvoke: suspend () -> Unit): String {
-    val started = TimeSource.Monotonic.markNow()
+private suspend fun referenceCost(
+    timeSource: TimeSource,
+    prepareReference: suspend () -> (suspend () -> Unit),
+): String {
+    val started = timeSource.markNow()
     return try {
-        referenceInvoke()
-        "took ${started.elapsedNow()}"
+        // Construct + load OUTSIDE the timed region. Parse and instantiate dominate a three-byte
+        // reverse, and the measurement this is compared against times an invoke on an
+        // already-loaded op — so timing them together priced the wrong thing, upward.
+        val invoke = prepareReference()
+        var best = Duration.INFINITE
+        repeat(REFERENCE_SAMPLES) {
+            val sample = timeSource.markNow()
+            invoke()
+            best = minOf(best, sample.elapsedNow())
+        }
+        // The fastest sample, not the mean: contention can only ever make a sample slower, so the
+        // minimum is the honest floor and a single scheduling hiccup cannot set the price.
+        "took $best at best of $REFERENCE_SAMPLES invocations — the guest invocation alone, its " +
+            "runtime built and loaded before the clock started"
     } catch (e: WasmException) {
         "also failed after ${started.elapsedNow()} (${e.message})"
     }
