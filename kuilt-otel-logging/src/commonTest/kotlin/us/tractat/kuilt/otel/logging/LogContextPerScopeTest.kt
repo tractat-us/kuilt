@@ -172,6 +172,45 @@ class LogContextPerScopeTest {
         }
     }
 
+    /**
+     * What this fix now rests on: that the scoped context is merged at the
+     * **synchronous edge** and never re-read from the drain coroutine.
+     *
+     * Reading the slot on the drain would be #1630's bug arriving through #1659's
+     * feature — and a worse version of it, because the slot is execution-local, so
+     * the drain would stamp records with whatever scope the *drain* happens to be
+     * running under rather than with a merely-stale value.
+     *
+     * The drain is therefore stepped from inside a **different** scope. The drain
+     * coroutine carries no binding of its own, so on every platform the value in
+     * force where it runs is the draining scope's — a drain-side merge stamps
+     * `draining-session` and this reds. The sibling assertion for the mapper is
+     * `AttributesResolveAtEdgeTest.attributesResolveAtLogEdgeNotAtDrain`.
+     */
+    @Test
+    fun theScopedContextResolvesAtTheEdgeNotOnTheDrain() = runTest {
+        val exporter = exporter()
+        val installation = installLogCapture(exporter, CaptureConfig(), fixedClock, Random(0), backgroundScope)
+        try {
+            withLogContext(mapOf(SESSION_ID to "emitting-session")) {
+                // Queued here, but deliberately not drained here.
+                KotlinLogging.logger("com.example.Session").info { "queued inside the emitting session" }
+            }
+            withLogContext(mapOf(SESSION_ID to "draining-session")) {
+                testScheduler.runCurrent()
+            }
+
+            val record = exporter.snapshot().toList().single()
+            assertEquals(
+                "emitting-session",
+                record.attributes[SESSION_ID],
+                "the scoped context must be merged at the log edge, not read from the drain",
+            )
+        } finally {
+            installation.close()
+        }
+    }
+
     private companion object {
         private const val SESSION_ID = "session.id"
         private const val DEVICE_ROLE = "device.role"
