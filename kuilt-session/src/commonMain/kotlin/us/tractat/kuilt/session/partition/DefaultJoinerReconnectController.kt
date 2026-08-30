@@ -106,7 +106,12 @@ public class DefaultJoinerReconnectController(
         mutex.withLock {
             windows[peerId] = WindowState(timerJob = timerJob)
         }
-        _events.emit(JoinerReconnectEvent.WindowOpened(peerId = peerId, expiresAt = expiresAt))
+        // `detectedAt` is the `at` this controller was handed, echoed unchanged — NOT `clock()`.
+        // The whole point is to name the episode this window belongs to, and a clock read here
+        // would name the moment the announcement was made, which is the ambiguous quantity (#1781).
+        _events.emit(
+            JoinerReconnectEvent.WindowOpened(peerId = peerId, expiresAt = expiresAt, detectedAt = at),
+        )
     }
 
     private suspend fun runTimer(

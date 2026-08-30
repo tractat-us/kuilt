@@ -491,7 +491,9 @@ class AdmitFanOutOrderingTest {
         override val events: SharedFlow<JoinerReconnectEvent> = _events.asSharedFlow()
 
         override fun onPeerUnresponsive(peerId: PeerId, at: Long) {
-            _events.tryEmit(JoinerReconnectEvent.WindowOpened(peerId, expiresAt = expiresAt))
+            _events.tryEmit(
+                JoinerReconnectEvent.WindowOpened(peerId, expiresAt = expiresAt, detectedAt = at),
+            )
         }
 
         override suspend fun tryResume(token: ResumeToken, at: Long): ResumeResult.HostVerdict =
