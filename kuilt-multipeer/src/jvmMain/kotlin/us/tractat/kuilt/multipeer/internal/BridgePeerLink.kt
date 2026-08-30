@@ -131,6 +131,24 @@ internal class BridgePeerLink(
     private val peerStateCallback: MultipeerNativeLib.PeerStateCallback =
         MultipeerNativeLib.PeerStateCallback { peerId, isConnected ->
             val peer = PeerId(peerId)
+            // Self-connection guard, ahead of the branch so it covers EVERY state rather than just
+            // `connected` — the placement `MCSessionLink`'s delegate argues for, and for the same
+            // reason. The end-of-session test below asks "are there no bound remotes?", which cannot
+            // by itself tell *before the first peer* from *after the last one*; a self `.notConnected`
+            // reaching it would unbind nothing, find an empty registry, and tear down a Weaving link
+            // that never had a peer.
+            //
+            // The RULE is still the registry's — [PeerIdentityRegistry.BindResult.REFUSED_SELF] below
+            // is the same refusal and this line cannot drift from it, because both spell self-identity
+            // as `selfId`. What is fabric-specific, and so lives here, is WHICH callback states the
+            // refusal has to cover.
+            if (peer == selfId) {
+                log.info {
+                    "mc.session.self-dial selfId=${selfId.value} peer=$peerId connected=$isConnected " +
+                        "→ dropped (connected to own advertisement)"
+                }
+                return@PeerStateCallback
+            }
             if (isConnected == 1) {
                 when (registry.bind(peer, peer)) {
                     PeerIdentityRegistry.BindResult.BOUND -> {
@@ -146,14 +164,12 @@ internal class BridgePeerLink(
                             "mc.session.collision selfId=${selfId.value} peer=$peerId — " +
                                 "refusing to merge two distinct devices onto one id"
                         }
-                    // The self-dial guard, now stated once in the registry rather than hand-rolled
-                    // here (#1821). It was `if (peer == selfId) return@PeerStateCallback` and it
-                    // covered exactly this branch; the registry covers the drop branch too, where
-                    // an unbind of an id nothing holds is already a no-op.
+                    // Unreachable from here — the guard above the branch already returned. Kept as
+                    // an arm rather than folded into an `else` so a future edit that removes that
+                    // guard still lands on a refusal instead of a silent bind (#1821).
                     PeerIdentityRegistry.BindResult.REFUSED_SELF ->
                         log.info {
-                            "mc.session.self-dial selfId=${selfId.value} peer=$peerId → dropped " +
-                                "(connected to own advertisement)"
+                            "mc.session.self-dial selfId=${selfId.value} peer=$peerId → refused by the registry"
                         }
                     // A blank id from native. Admitting one used to put an unaddressable entry in
                     // `peers` that the old `remaining == setOf(selfId)` teardown test could never

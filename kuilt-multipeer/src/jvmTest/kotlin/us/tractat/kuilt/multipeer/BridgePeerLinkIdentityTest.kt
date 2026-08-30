@@ -100,6 +100,37 @@ class BridgePeerLinkIdentityTest {
     }
 
     /**
+     * A self-dial that forms and drops **before any real peer has arrived** must leave the link
+     * Weaving, not tear it down.
+     *
+     * The end-of-session test — "are there no bound remotes?" — cannot by itself tell *before the
+     * first peer* from *after the last one*, and a self `.notConnected` reaching it unbinds nothing
+     * and finds an empty registry either way. So the refusal has to run ahead of BOTH branches of
+     * the callback, not just the `connected` one. `MCSessionLink`'s delegate says exactly this about
+     * its own guard; the JVM half needs it for the same reason.
+     */
+    @Test
+    fun aSelfDialOnANeverConnectedLinkDoesNotTearItDown() {
+        val lib = CapturingFakeMultipeerNativeLib()
+        val link = newLink(lib)
+
+        // The self-link's form-then-drop lifecycle, on a link that has met nobody.
+        lib.firePeerState(SELF.value, isConnected = 1)
+        lib.firePeerState(SELF.value, isConnected = 0)
+
+        assertIs<SeamState.Weaving>(
+            link.state.value,
+            "a self-dial is not a peer arriving and its drop is not the last peer leaving — the " +
+                "link is still waiting for its first real remote",
+        )
+        assertEquals(setOf(SELF), link.peers.value, "and the roster is untouched")
+
+        // And the link still works afterwards: a real peer can still arrive and be admitted.
+        lib.firePeerState(REMOTE.value, isConnected = 1)
+        assertIs<SeamState.Woven>(link.state.value, "a real peer still weaves the link")
+    }
+
+    /**
      * A duplicate `connected` for a peer already bound is the framework re-announcing, not a second
      * device: idempotent, and a single `disconnect` still ends the session. The complement of the
      * refusals — the registry must not turn a repeated callback into a second entry that then needs
