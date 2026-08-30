@@ -9,6 +9,7 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -127,5 +128,123 @@ class ConnectStateMachineTest {
                 outcome.exceptionOrNull() is TimeoutCancellationException,
                 "expected TimeoutCancellationException, got ${outcome.exceptionOrNull()}",
             )
+        }
+
+    // ── identity admission (#1821) ────────────────────────────────────────────
+    //
+    // The remote's [PeerId] arrives as the first BYTES payload off the radio — peer-supplied,
+    // unvalidated bytes. Every arm below drives the SAME happy-path handshake as
+    // [happyPathResolvesWithRemoteIdentity] and changes only those bytes, so what a failure names
+    // is the identity rule and nothing else.
+    //
+    // The rig is the fake's own [ControllableNearbyApi.payloads] flow, which can carry any byte
+    // sequence at all — including the ones a conforming peer never sends. That is what stops these
+    // from being vacuous: the fake CAN emit a blank id, an id equal to `selfId`, and invalid UTF-8,
+    // so "is it refused?" is a question with two possible answers. The two positive arms
+    // ([happyPathResolvesWithRemoteIdentity] above and [validNonAsciiRemoteIdentityIsAccepted]
+    // below) are what stops a guard that refused *everything* from passing.
+
+    private suspend fun ControllableNearbyApi.driveHandshake(identityBytes: ByteArray) {
+        connInit.emit(ConnectionInitiated("ep1", "host"))
+        connResult.emit(ConnectionResult("ep1", success = true))
+        payloads.emit(PayloadReceived("ep1", identityBytes))
+    }
+
+    private fun machineFor(api: ControllableNearbyApi) =
+        ConnectStateMachine(
+            PeerId("me"),
+            api,
+            endpointId = "ep1",
+            serviceId = "svc",
+            handshakeTimeout = NearbyLoom.DEFAULT_HANDSHAKE_TIMEOUT,
+        )
+
+    @Test
+    fun blankRemoteIdentityIsRefused() =
+        runTest(UnconfinedTestDispatcher()) {
+            val api = ControllableNearbyApi()
+            val outcome =
+                runCatchingCancellable {
+                    machineFor(api).run(backgroundScope) { api.driveHandshake(ByteArray(0)) }
+                }
+
+            assertTrue(
+                outcome.isFailure,
+                "an empty identity payload must fail the handshake, not resolve a link under the " +
+                    "blank PeerId(\"\") — a blank id is unaddressable and two blank remotes collapse " +
+                    "onto one roster entry. Resolved: ${outcome.getOrNull()}",
+            )
+        }
+
+    @Test
+    fun remoteIdentityEqualToSelfIsRefused() =
+        runTest(UnconfinedTestDispatcher()) {
+            val api = ControllableNearbyApi()
+            val outcome =
+                runCatchingCancellable {
+                    machineFor(api).run(backgroundScope) {
+                        api.driveHandshake(PeerId("me").value.encodeToByteArray())
+                    }
+                }
+
+            assertTrue(
+                outcome.isFailure,
+                "a remote announcing THIS peer's own id must fail the handshake — admitting it makes " +
+                    "the seam's own id a remote, and the eventual disconnect then evicts this peer " +
+                    "from its own roster (the #1466 signature). Resolved: ${outcome.getOrNull()}",
+            )
+        }
+
+    @Test
+    fun invalidUtf8RemoteIdentityIsRefused() =
+        runTest(UnconfinedTestDispatcher()) {
+            val api = ControllableNearbyApi()
+            // A lone 0xC3 opens a two-byte sequence that never completes; a lone 0x80 is a
+            // continuation byte with no lead. Lossy decoding maps BOTH to U+FFFD, so two distinct
+            // remotes would collapse onto one identical id.
+            val truncatedLead =
+                runCatchingCancellable {
+                    machineFor(api).run(backgroundScope) { api.driveHandshake(byteArrayOf(0xC3.toByte())) }
+                }
+            val other = ControllableNearbyApi()
+            val strayContinuation =
+                runCatchingCancellable {
+                    machineFor(other).run(backgroundScope) { other.driveHandshake(byteArrayOf(0x80.toByte())) }
+                }
+
+            assertAll(
+                {
+                    assertTrue(
+                        truncatedLead.isFailure,
+                        "an identity payload that is not valid UTF-8 must fail the handshake rather " +
+                            "than be decoded lossily. Resolved: ${truncatedLead.getOrNull()}",
+                    )
+                },
+                {
+                    assertTrue(
+                        strayContinuation.isFailure,
+                        "a second, DIFFERENT invalid sequence must also fail — lossy decoding maps " +
+                            "both to U+FFFD, silently merging two distinct devices onto one id. " +
+                            "Resolved: ${strayContinuation.getOrNull()}",
+                    )
+                },
+            )
+        }
+
+    /**
+     * The positive arm the refusals rest on: a valid, distinct, non-ASCII id is still admitted
+     * unchanged. Without this a guard that refused every identity payload would pass every test
+     * above.
+     */
+    @Test
+    fun validNonAsciiRemoteIdentityIsAccepted() =
+        runTest(UnconfinedTestDispatcher()) {
+            val api = ControllableNearbyApi()
+            val link =
+                machineFor(api).run(backgroundScope) {
+                    api.driveHandshake("pêer-Ω-🧵".encodeToByteArray())
+                }
+
+            assertEquals(PeerId("pêer-Ω-🧵"), link.remotePeerId, "a valid UTF-8 id round-trips unchanged")
         }
 }
