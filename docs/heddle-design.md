@@ -740,6 +740,16 @@ bound as derived metrics — a configured worst case, a state-dependent current
 value (from live outstanding holdings), and the observed deviation in
 simulation — and must not claim tighter than it proves.
 
+**The unit is an execution, not a task.** The bound is stated over what the
+ledger actually spends (§14.4), and an executor whose claim path is
+at-least-once can turn one logical task into more than one execution. That
+extra spend is *not* part of `error(p)`: it is capacity the pool genuinely
+consumed, charged to the lane that caused it. What it does mean is that a
+lane's charge can exceed the work it asked for, by the duplicate-execution
+rate — normally zero, rising only during churn. So an executor whose admission
+path can run one task twice must expose that rate alongside the three pieces
+above, per lane, so the extra cost is observable rather than inferred.
+
 This is the same arithmetic the `BoundedCounterEqualizerConfig` fair-share
 logic (`bound / liveN`) already does at depth zero. The bound is not a new
 idea in kuilt; it is the equalizer's idea with a tree over it.
@@ -1187,9 +1197,26 @@ owner of a task must `reserve` from the task's lane before running it —
 `HeddleNode.reserve(leaf, maximumCost)` returning `null` defers the task
 until entitlement flows in, throttling each lane to its share while the ring
 still decides placement. Producer-side admission (reserve at `shuttle` time,
-bounding `WorkQueue` growth itself) is the follow-on. Costing starts as
-1-unit-per-task and generalizes to caller-supplied `maximumCost` with
-renewable quanta for long tasks (§4.4).
+bounding `WorkQueue` growth itself) is the follow-on.
+
+**A lane is charged once per execution, not once per task.** Costing starts at
+one unit per execution and generalizes to caller-supplied `maximumCost` with
+renewable quanta for long tasks (§4.4). Every run of a task reserves and
+settles, so a task that is retried — or that two peers happen to run at the
+same time — costs its lane once per run.
+
+That is deliberate, not a rounding error. Entitlement apportions *capacity*.
+Warp's free claim path is at-least-once: under ring or roster churn two peers
+can independently claim and run the same `TaskId` before the results board
+converges, and when they do, two units of capacity really were consumed —
+both peers really did the work. Charging once would let a churning lane push
+its own waste onto every other lane, which is the opposite of what a
+fair-share scheduler is for.
+
+The gap between executions and tasks is the **duplicate-execution rate**: zero
+at stable membership, rising only during churn. It is the one place a lane
+pays more than the work it asked for, and it is why §8.2's bound is stated
+over executions.
 
 Wiring: `WarpNode` remains the seam's sole `incoming` collector; the heddle's
 `Quilter` and demand channels ride the existing mux fan-out, and the

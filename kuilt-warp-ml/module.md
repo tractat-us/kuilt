@@ -80,36 +80,34 @@ the training tasks run on warp's coordination-free path over an independent seam
 is proven is that consensus-layer churn never stalls the round and every device still
 converges to the same model — not that Raft orders the training.
 
-## The honest seam — lane costing is per execution, not per task
+## Lane costing is per execution, not per task
 
-If you gate this workload with `:kuilt-warp-heddle`'s `HeddleAdmissionControl`, be aware
-that **a lane is charged once per execution, not once per task.**
+If you gate this workload with `:kuilt-warp-heddle`'s `HeddleAdmissionControl`, know that
+**a lane is charged once per execution, not once per task.** A task that gets run twice
+costs its lane twice.
 
-The design doc asks for the other one. [`docs/heddle-design.md`](https://github.com/tractat-us/kuilt/blob/main/docs/heddle-design.md)
-§14.4 specifies costing that "starts as 1-unit-per-task", and §8.2's fairness-error bound
-is stated over entitlement that unreconciled peers can steer — it assumes the ledger's
-spend reflects the work admitted, once per unit of work.
+That is the specified behaviour, not a defect:
+[`docs/heddle-design.md`](https://github.com/tractat-us/kuilt/blob/main/docs/heddle-design.md)
+§14.4 states costing per execution, and §8.2 states the fairness-error bound over executions
+for the same reason. Entitlement apportions capacity, and a second run really did consume a
+second unit of it — charging once would let a churning lane push its waste onto every other
+lane.
 
-What actually happens: `WarpNode` consults `AdmissionControl.admit(descriptor)` at the
-single choke point immediately before it invokes a resolved op, and `HeddleAdmissionControl`
-reserves and settles there. Warp's free claim path is **at-least-once** — under ring or
-roster churn two peers can independently claim and run the same `TaskId` before the results
-board converges (this is the benign failover race `WarpNode`'s own churn tests measure).
-Every one of those executions reserves and settles, so one logical task can spend two or
-more units from its lane. The overshoot is bounded by the duplicate-execution rate, which
-is normally zero and rises only during churn, but it is real: a lane that churns is charged
-more than a lane that does not, for the same work.
+Where the second run comes from: `WarpNode` consults `AdmissionControl.admit(descriptor)` at
+the single choke point immediately before it invokes a resolved op, and
+`HeddleAdmissionControl` reserves and settles there. Warp's free claim path is
+**at-least-once** — under ring or roster churn two peers can independently claim and run the
+same `TaskId` before the results board converges (the benign failover race `WarpNode`'s own
+churn tests measure). Every one of those executions reserves and settles, so one logical task
+can spend two or more units from its lane. Two peers cannot share a charge even in principle:
+they spend from their own local holdings, and §4.4 makes reservations deliberately node-local
+("only the owning peer may complete or cancel its reservation").
 
-Why it was not simply fixed here. `AdmissionControl.admit` is handed only the
-`TaskDescriptor` — it never sees the `TaskId`, so it cannot recognise a repeat. Passing the
-id in would be a public API change in `:kuilt-warp` core, and it would not be sufficient:
-the duplicate executions happen on **different peers**, each spending from its own local
-holdings, and §4.4 makes reservations deliberately node-local ("only the owning peer may
-complete or cancel its reservation"). Charging a task exactly once across peers therefore
-needs replicated charge-identity — a per-`TaskId` spend record that merges — which is a
-design question about the ledger, not a costing constant. It is tracked separately, in
-[#1756](https://github.com/tractat-us/kuilt/issues/1756), rather than settled inside a
-polish pass.
+So a lane that churns is charged more than a quiet lane for the same work, by the
+duplicate-execution rate — normally zero, rising only during churn. `WarpNode.duplicates`
+counts those executions across *all* lanes together (`warp.tasks.duplicate` via
+`:kuilt-warp-otel`); the **per-lane** rate §8.2 asks for, reported alongside the bound's
+other pieces, is not exposed yet — [#1756](https://github.com/tractat-us/kuilt/issues/1756).
 
 Nothing in this module depends on heddle; `:kuilt-warp-ml` has no lane gating of its own.
-The seam is recorded here because the federated-learning demo is what surfaced it.
+It is recorded here because the federated-learning demo is what surfaced it.
