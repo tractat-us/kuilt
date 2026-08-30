@@ -41,12 +41,85 @@ class EntitlementLedgerConservationTest {
     private fun seeded(mint: Long): EntitlementLedger =
         topology().piece(EntitlementLedger.bootstrap(root, mapOf(replicas[0] to mint), nonce = "genesis"))
 
-    /** minted == Σ holdings + Σ leafSpent, over every group and replica. */
-    private fun assertConservation(ledger: EntitlementLedger, minted: Long) {
+    /** minted == Σ holdings + Σ leafSpent, over every group in [groups] and every replica. */
+    private fun assertConservation(ledger: EntitlementLedger, minted: Long, groups: List<GroupId> = allGroups) {
         var sumHoldings = 0L
-        for (g in allGroups) for (r in replicas) sumHoldings += ledger.holdings(g, r)
+        for (g in groups) for (r in replicas) sumHoldings += ledger.holdings(g, r)
         assertEquals(minted, sumHoldings + ledger.leafSpentTotal(), "conservation broke")
         assertEquals(minted, ledger.mintedTotal(), "minted total drifted")
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Two trees in one ledger (#1751) — the state this suite could not previously construct
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private val otherRoot = GroupId("otherRoot")
+    private val g4 = GroupId("g4") // otherRoot's only child, a leaf
+    private val e4 = AttachmentId("e4") // otherRoot → g4
+    private val bothTrees = allGroups + listOf(otherRoot, g4)
+
+    /**
+     * Two independently bootstrapped trees merged into one ledger, each with its own supply.
+     *
+     * Every other fixture here bootstraps at exactly **one** root over a fixed one-tree
+     * [allGroups], which makes the #1751 double count *unconstructible* in this suite — the file
+     * whose whole subject is the Σ-holdings identity was structurally unable to see the fault, and
+     * the guarantee rested instead on two bespoke assertions over in `EntitlementLedgerValidateTest`.
+     * This expresses it as the conservation **property**: unbind a [MintRecord] from its root, or
+     * bind it to the wrong one, and the sum moves away from `mintedTotal` right here.
+     */
+    private fun twoTrees(mintA: Long, mintB: Long): EntitlementLedger = topology()
+        .piece(EntitlementLedger.of(records = mapOf(e4 to setOf(AttachmentRecord(e4, otherRoot, g4, Weight.ONE)))))
+        .piece(EntitlementLedger.bootstrap(root, mapOf(replicas[0] to mintA), nonce = "genesis-a"))
+        .piece(EntitlementLedger.bootstrap(otherRoot, mapOf(replicas[1] to mintB), nonce = "genesis-b"))
+
+    @Test
+    fun conservationHoldsAcrossTwoMergedBootstrapsAndTheirMutatorSequences() {
+        val rnd = Random(0x1751)
+        val mintA = 600L
+        val mintB = 400L
+        var ledger = twoTrees(mintA, mintB)
+        assertConservation(ledger, mintA + mintB, bothTrees)
+        // Prime both trees down to their leaves. Only replicas[0] is funded at `root` and only
+        // replicas[1] at `otherRoot`, so a purely random walk lands few delegates and can finish
+        // without ever charging service — which is what the `leafSpentTotal > 0` rig caught on the
+        // first run of this test. Priming makes the spend arm reachable by construction rather than
+        // by seed luck, and every step is still conservation-checked.
+        for ((r, edge, amount) in listOf(
+            Triple(replicas[0], e1, 200L),
+            Triple(replicas[0], e2, 100L),
+            Triple(replicas[0], e3, 100L),
+            Triple(replicas[1], e4, 200L),
+        )) {
+            ledger = ledger.piece(requireNotNull(ledger.delegate(r, edge, amount)) { "priming delegate refused" })
+            assertConservation(ledger, mintA + mintB, bothTrees)
+        }
+        repeat(60) {
+            val r = replicas.random(rnd)
+            val patch = when (rnd.nextInt(4)) {
+                0 -> ledger.delegate(r, listOf(e1, e2, e3, e4).random(rnd), rnd.nextLong(1L, 40L))
+                1 -> ledger.release(r, listOf(e1, e2, e3, e4).random(rnd), rnd.nextLong(1L, 40L))
+                2 -> {
+                    val to = replicas.filter { it != r }.random(rnd)
+                    ledger.transfer(bothTrees.random(rnd), r, to, rnd.nextLong(1L, 40L))
+                }
+                else -> ledger.spend(r, listOf(g2, g3, g4).random(rnd), rnd.nextLong(1L, 40L))
+            }
+            if (patch != null) ledger = ledger.piece(patch)
+            assertConservation(ledger, mintA + mintB, bothTrees)
+        }
+        assertAll(
+            // ── the rig: this really is the two-tree state, and the sequence really did move units.
+            { assertEquals(listOf(otherRoot, root), ledger.mintedRoots(), "rig: two roots carry supply") },
+            { assertTrue(ledger.leafSpentTotal() > 0L, "rig: the sequence actually charged service") },
+            // ── and the diagnostic names it, without the accounting having gone wrong.
+            {
+                assertTrue(
+                    LedgerConflict.MultipleRoots(listOf(otherRoot, root)) in ledger.validate(),
+                    "the two-tree state must be reported: ${ledger.validate()}",
+                )
+            },
+        )
     }
 
     @Test
