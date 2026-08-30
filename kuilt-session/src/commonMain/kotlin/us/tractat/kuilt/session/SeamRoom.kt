@@ -416,9 +416,9 @@ private const val RELAY_FORWARD_CAPACITY = 64
  * **Thread safety**: all mutable membership state (`admittedById`, `closed`, `hostLost`,
  * `hostPeerId`, `incomingCollectJob`, `admissionFailed`, `admitDeadlineJob`, `detectorJobs`,
  * `channelViews`, `admitLanes`, `relayLanes`, `episodeDetectedAtMs`) is guarded by an atomicfu
- * [reentrantLock]. The
- * joiner-side resume state (`resumeToken`, `pendingResume`, `reconnecting`, `reconnectJob`) lives in
- * [JoinerResumeMachine], which **shares the same lock instance** (see [resumeMachine]).
+ * [reentrantLock]. The joiner-side resume state (`resumeToken`, `pendingResume`, `reconnecting`,
+ * `reconnectJob`) lives in [JoinerResumeMachine], which **shares the same lock instance**
+ * (see [resumeMachine]).
  * Critical sections perform only synchronous map/field operations; all suspend calls (sends,
  * broadcasts, re-weave, awaiting `Woven`, resume) are made outside the lock.
  *

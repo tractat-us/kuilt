@@ -54,7 +54,7 @@ import kotlin.time.Instant
  * detection, so with any window longer than the recovery→re-detection gap it still lands after the
  * new episode's [Liveness.Partitioned.since] and the guard waves it through. Both deadlines here are
  * deliberately far past every instant this test reaches ([EPISODE_ONE_DEADLINE] and friends are
- * ~17 minutes out against a ~1.5 s trajectory), which is the 60 s-window-vs-sub-second-gap shape
+ * ~17 minutes out against a ~2.4 s trajectory), which is the 60 s-window-vs-sub-second-gap shape
  * reduced to a fixture: the guard passes on both, so implementing it leaves this test red.
  *
  * **Severity.** Theoretical, not observed: the recovery→re-detection gap is at least one
@@ -312,7 +312,7 @@ class WindowEpisodeIdentityTest {
         private val RECOVERY_BUDGET = 800.milliseconds
 
         // Deadlines no window in this test could compute — the virtual clock starts at 0 and the
-        // trajectory is ~1.5 s — and every one of them lands FAR past the new episode's `since`.
+        // trajectory is ~2.4 s — and every one of them lands FAR past the new episode's `since`.
         // That is deliberate: it is what makes the rejected `expiresAt < since` guard pass here.
         const val EPISODE_ONE_DEADLINE = 1_000_000L
         const val EPISODE_TWO_DEADLINE = 2_000_000L
