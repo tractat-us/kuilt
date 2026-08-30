@@ -401,6 +401,13 @@ Key points:
   **rejects** the probe form, so a test written that way will not merge. For a Ktor
   `embeddedServer` the equivalent read-back is
   `server.engine.resolvedConnectors().first().port` after `start(wait = false)`.
+  If your fabric needs the port as an **input** — a discovery fabric advertises it, so
+  the object that carries it looks like it has to be built inside the `embeddedServer`
+  module lambda, which runs during `start()` and so before `resolvedConnectors()` can
+  answer — leave the lambda empty and construct that object on `server.application`
+  *after* `start()`. It is the same `Application` the lambda receives, and mounting a
+  route on a started one works: `:kuilt-mdns`'s `MDNSConformanceTest` drives the whole
+  `SeamConformanceSuite` over a route mounted that way (#1749).
 - **Real IO, real dispatchers.** A real-network fabric cannot use virtual time —
   `runTest` and `StandardTestDispatcher` are off the table. The suite runs over a
   real loopback socket with `runBlocking`. This matches `:kuilt-websocket`'s

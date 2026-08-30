@@ -17,7 +17,6 @@ import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.websocket.KtorClientLoom
 import us.tractat.kuilt.websocket.WebSocketAdvertisement
-import java.net.ServerSocket
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -51,21 +50,33 @@ class MDNSMultiAcceptHostTest {
     private val clients = mutableListOf<HttpClient>()
     private val openSeams = mutableListOf<Seam>()
 
+    /**
+     * Binds port 0 and reads the port back off the *live* connector, then mounts the host on the
+     * already-started [io.ktor.server.application.Application].
+     *
+     * Probing a free port with a throwaway `ServerSocket(0).use { it.localPort }` and re-binding the
+     * number is a TOCTOU: the probe socket is closed before Netty binds, so on a loaded box another
+     * process can take the port in that window and `@BeforeTest` dies with `BindException: Address
+     * already in use` on a PR that cannot have caused it (#1590, #1749). Binding 0 has no window.
+     *
+     * The port is an **input** to [MDNSMultiAcceptHost] (it goes in the advertised TXT record), so
+     * the host cannot be built inside the `embeddedServer` module lambda — that lambda runs during
+     * `start()`, strictly before `resolvedConnectors()` can answer.
+     */
     @BeforeTest
     fun setUp() {
-        port = ServerSocket(0).use { it.localPort }
         jmdns = CapturingJmDNS()
-        server = embeddedServer(Netty, port = port) {
-            host = MDNSMultiAcceptHost(
-                serviceType = MDNSServiceType("_kuilt-test._tcp"),
-                application = this,
-                jmdns = jmdns,
-                port = port,
-                pattern = Pattern("multi-accept-host"),
-                wsPath = wsPath,
-            )
-        }
+        server = embeddedServer(Netty, port = 0) { /* route mounted post-start, see KDoc */ }
         server.start(wait = false)
+        port = runBlocking { server.engine.resolvedConnectors().first().port }
+        host = MDNSMultiAcceptHost(
+            serviceType = MDNSServiceType("_kuilt-test._tcp"),
+            application = server.application,
+            jmdns = jmdns,
+            port = port,
+            pattern = Pattern("multi-accept-host"),
+            wsPath = wsPath,
+        )
     }
 
     @AfterTest
