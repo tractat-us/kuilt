@@ -56,9 +56,11 @@ lines of one phase and the first few of the next, which are usually the ones you
 are reading the log to understand.
 
 Two things follow. Keep the mapper cheap, because it runs on your logging path once
-per captured line (it is skipped for lines below `minLevel`, and for kuilt's own
-exporter loggers). And it should not throw — a mapper that throws loses that one
-record rather than surfacing an error inside your `log` call.
+per captured line — though only for lines you actually keep: it is skipped for
+anything that will not be recorded, whether that is a line below `minLevel`, one of
+kuilt's own exporter loggers, or a line the sampling gate throws away. And it should
+not throw — a mapper that throws loses that one record rather than surfacing an
+error inside your `log` call.
 
 ## When the line happened, and when we wrote it down
 
