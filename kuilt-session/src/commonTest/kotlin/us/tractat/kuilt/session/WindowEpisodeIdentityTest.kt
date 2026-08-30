@@ -65,11 +65,21 @@ import kotlin.time.Instant
  */
 class WindowEpisodeIdentityTest {
 
-    /** Sub-second detection, with a window far longer than anything this test advances. */
+    /**
+     * Sub-second detection, with a window far longer than anything this test advances.
+     *
+     * **[HeartbeatConfig.timeout] is five [HeartbeatConfig.interval]s, not two, and that is a
+     * correctness property of this fixture.** At `timeout == 2 * interval` the detector sits on a
+     * knife edge: a pong that only refreshes `lastSeen` every other poll makes `silenceMs` reach the
+     * threshold exactly, so a *healthy* link flaps unresponsive→recovered once per timeout. The first
+     * draft of this test ran that config and the host reported five drops for two outages — at which
+     * point "episode N" and "episode N+1" name nothing and the stale announcement under test is not
+     * stale. The `exactly two drops` assertion below is what caught it and is what keeps it caught.
+     */
     private val fastConfig = HeartbeatConfig(
         interval = 100.milliseconds,
-        timeout = 200.milliseconds,
-        reconnectWindow = 5.seconds,
+        timeout = 500.milliseconds,
+        reconnectWindow = 10.seconds,
     )
 
     /**
@@ -150,7 +160,12 @@ class WindowEpisodeIdentityTest {
             testScheduler.advanceTimeBy(DETECTION_BUDGET)
             testScheduler.runCurrent()
             val episodeOne = policy.detections.singleOrNull()
-            assertTrue(episodeOne != null, "the host must have reported exactly one drop by now")
+            assertTrue(
+                episodeOne != null,
+                "rig: the host must have reported exactly ONE drop by now — more than one means the " +
+                    "detector is flapping and there is no single episode N to be stale about. " +
+                    "Observed ${policy.detections}",
+            )
 
             deliver(policy, dropped, detectedAt = episodeOne, expiresAt = EPISODE_ONE_DEADLINE)
             val afterEpisodeOne = host.windowDeadlineMs(dropped)
@@ -166,7 +181,12 @@ class WindowEpisodeIdentityTest {
             testScheduler.advanceTimeBy(DETECTION_BUDGET)
             testScheduler.runCurrent()
             val episodeTwo = policy.detections.getOrNull(1)
-            assertTrue(episodeTwo != null, "the host must have reported a SECOND drop by now")
+            assertTrue(
+                episodeTwo != null && policy.detections.size == 2,
+                "rig: the host must have reported exactly TWO drops by now — one per outage. A third " +
+                    "means the detector flapped, and then the episode this test calls 'N' is not the " +
+                    "one the room is holding. Observed ${policy.detections}",
+            )
 
             deliver(policy, dropped, detectedAt = episodeTwo, expiresAt = EPISODE_TWO_DEADLINE)
             val afterEpisodeTwo = host.windowDeadlineMs(dropped)
@@ -215,7 +235,8 @@ class WindowEpisodeIdentityTest {
                     assertEquals(
                         EPISODE_TWO_DEADLINE,
                         afterEpisodeTwo,
-                        "sanity: the new episode's announcement must have taken effect",
+                        "sanity: the new episode's announcement must have taken effect — " +
+                            "detections=${policy.detections}",
                     )
                 },
                 {
@@ -278,8 +299,8 @@ class WindowEpisodeIdentityTest {
         ).windowExpiresAt.toEpochMilliseconds()
 
     private companion object {
-        /** Past detection ([HeartbeatConfig.timeout]) with margin, far short of the 5 s window. */
-        private val DETECTION_BUDGET = 500.milliseconds
+        /** Past detection ([HeartbeatConfig.timeout]) with margin, far short of the 10 s window. */
+        private val DETECTION_BUDGET = 800.milliseconds
 
         /**
          * Enough polls for the healed link to carry a frame and clear the partition. Recovery needs
