@@ -591,19 +591,28 @@ internal class HeddleControlPlane(
     private fun decideAndApply(envelope: ControlEnvelope, index: Long): ControlOutcome =
         when (val command = envelope.command) {
             is ControlCommand.Mint -> {
-                // One ledger, one tree (#1751). The incumbent root is read off the PROJECTION — a
+                // One ledger, one tree (#1751). The incumbent roots are read off the PROJECTION — a
                 // function of the log prefix — and the challenger off the COMMITTED command, so this
                 // gate decides identically on every peer, exactly as the `Depart` gate below does.
                 // A peer misconfigured with a second root is refused rather than seeding a second
-                // tree in its own projection, and the refusal names both roots so the
+                // tree in its own projection, and the refusal names every root involved so the
                 // misconfiguration is diagnosable instead of silent.
-                val incumbent = projection.mintedRoots().singleOrNull()
-                if (incumbent != null && incumbent != command.root) {
+                //
+                // **The comparison is over the whole set, never over a unique incumbent.** Keying it
+                // on `mintedRoots().singleOrNull()` fails OPEN in exactly the state
+                // [LedgerConflict.MultipleRoots] exists to report: `singleOrNull` is `null` for
+                // two-or-more as well as for zero, so once the invariant is already violated the gate
+                // reads "no incumbent, carry on" and admits any root at all. That state is reachable —
+                // [EntitlementLedger.piece] of two independently bootstrapped ledgers is the headline
+                // defect of #1751 — and it is the one state where the two guards must not disagree.
+                val roots = projection.mintedRoots()
+                if (roots.isNotEmpty() && roots != listOf(command.root)) {
                     ControlOutcome.Conflict(
                         index,
                         ControlConflict.Refused(
-                            "mint: supply is already committed at root ${incumbent.value}; " +
-                                "this act names ${command.root.value} — one ledger describes one tree",
+                            "mint: supply is already committed at " +
+                                roots.joinToString(", ") { it.value } +
+                                "; this act names ${command.root.value} — one ledger describes one tree",
                         ),
                     )
                 } else {

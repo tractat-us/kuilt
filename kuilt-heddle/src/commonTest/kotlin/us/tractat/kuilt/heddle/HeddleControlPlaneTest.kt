@@ -305,6 +305,62 @@ class HeddleControlPlaneTest {
             )
         }
 
+    /**
+     * The gate must not fail **open** on an already-two-rooted projection.
+     *
+     * Keying it on `mintedRoots().singleOrNull()` reads `null` for two-or-more exactly as it does
+     * for zero, so the moment the invariant is genuinely violated the gate would see "no incumbent"
+     * and admit *any* root — it would stop enforcing precisely where enforcement matters, and would
+     * disagree with its sibling [LedgerConflict.MultipleRoots], which calls that same state a fault.
+     *
+     * The state is reachable, and reachable the ordinary way: this projection is seeded with a
+     * `piece` of two independently bootstrapped ledgers — the construction
+     * `EntitlementLedgerValidateTest` uses, and the headline defect of #1751 itself. A peer meeting
+     * it (from a durable snapshot, or from a pre-fix peer) must refuse every mint — at **either**
+     * incumbent root, and at a third — until a human resolves it.
+     */
+    @Test
+    fun anAlreadyTwoRootedProjectionRefusesEveryMintRatherThanFailingOpen() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val otherRoot = GroupId("otherRoot")
+            val acme = ReplicaId("acme")
+            val twoRooted = EntitlementLedger.bootstrap(root, mapOf(acme to 100L), nonce = "left")
+                .piece(EntitlementLedger.bootstrap(otherRoot, mapOf(acme to 100L), nonce = "right"))
+            val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
+            val sink = RecordingSink()
+            val plane = HeddleControlPlane(
+                fake, ReplicaId("solo"), backgroundScope, sink, NO_REMONITOR, NO_BARRIER,
+                twoRooted, "boot-two-rooted",
+            )
+            // Neither incumbent is privileged, and neither is a third root. Submitted outside
+            // `assertAll` because its arms are not suspending.
+            val atFirst = plane.submit(ControlCommand.Mint(root, acme, 10L))
+            val atSecond = plane.submit(ControlCommand.Mint(otherRoot, acme, 10L))
+            val atThird = plane.submit(ControlCommand.Mint(GroupId("thirdRoot"), acme, 10L))
+            assertAll(
+                // ── the rig: the projection really is in the state the report exists for.
+                { assertEquals(listOf(otherRoot, root), twoRooted.mintedRoots(), "rig: two roots committed") },
+                {
+                    assertTrue(
+                        LedgerConflict.MultipleRoots(listOf(otherRoot, root)) in twoRooted.validate(),
+                        "rig: and validate() already calls it a fault",
+                    )
+                },
+                {
+                    val c = assertIs<ControlOutcome.Conflict>(atFirst, "a mint at the first incumbent is not admitted")
+                    val reason = assertIs<ControlConflict.Refused>(c.conflict)
+                    assertTrue(
+                        "otherRoot" in reason.reason && "root" in reason.reason,
+                        "the refusal must name every incumbent, not just one: $reason",
+                    )
+                },
+                { assertIs<ControlOutcome.Conflict>(atSecond, "nor a mint at the second incumbent") },
+                { assertIs<ControlOutcome.Conflict>(atThird, "and certainly not one at a third root") },
+                // ── nothing was minted: a refusal publishes no patch at all.
+                { assertEquals(0L, sink.snapshot().mintedTotal(), "no refused act may reach the data plane") },
+            )
+        }
+
     // ═══════════════════════════════════════════════════════════════════════════
     // BLOCKER 2 (ergonomics): a bounded submit surfaces a leader crash as a timeout
     // instead of hanging forever.
