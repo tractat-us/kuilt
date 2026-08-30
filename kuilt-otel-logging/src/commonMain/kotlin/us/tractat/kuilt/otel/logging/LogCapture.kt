@@ -125,7 +125,7 @@ public class LogCapture(
         val attributes = runCatchingCancellable { config.attributeMapper(event) }.getOrNull() ?: return null
         return event.copy(
             activeTrace = trace,
-            resolvedAttributes = attributes,
+            resolvedAttributes = withScopedContext(attributes),
             emittedEpochNanos = event.emittedEpochNanos ?: nowEpochNanos(),
         )
     }
@@ -230,8 +230,13 @@ public class LogCapture(
             body = event.message,
             // Resolved at the synchronous edge (#1630). The fallback covers a caller
             // that drives capture() straight from its log site — there this call IS
-            // the edge, so applying the mapper here is still emit time.
-            attributes = event.resolvedAttributes ?: config.attributeMapper(event),
+            // the edge, so applying the mapper AND merging the scoped log context
+            // here is still emit time. The merge is deliberately inside the fallback
+            // only: for an edge-resolved event the scoped context already rode in on
+            // resolvedAttributes, and re-reading the slot from the drain coroutine
+            // would stamp records with whatever scope the drain happens to be in —
+            // #1630's bug, reintroduced through #1659's feature.
+            attributes = event.resolvedAttributes ?: withScopedContext(config.attributeMapper(event)),
             // OTLP's timeUnixNano: when the event occurred. Read at the synchronous
             // edge (#1993). The fallback covers a caller that drives capture()
             // straight from its log site — there this call IS the edge, so the two
@@ -243,6 +248,24 @@ public class LogCapture(
             traceId = traceId,
             spanId = spanId,
         )
+    }
+
+    /**
+     * [attributes] with the log context bound to the **current scope** merged over
+     * it — the scope-bound half of #1659.
+     *
+     * Called only from a position that is genuinely the synchronous emit edge:
+     * [resolveAtEdge], and [recordFor]'s no-edge fallback. The slot it reads is
+     * execution-local, so reading it anywhere else — the drain coroutine above all —
+     * answers about the wrong scope.
+     *
+     * The scoped attributes win on a key collision: "narrower scope wins" is the one
+     * precedence rule, and a process-global [CaptureConfig.attributeMapper] is the
+     * widest scope there is. See [withLogContext].
+     */
+    private fun withScopedContext(attributes: Map<String, String>): Map<String, String> {
+        val scoped = currentLogContext()
+        return if (scoped.isEmpty()) attributes else attributes + scoped
     }
 
     /**
