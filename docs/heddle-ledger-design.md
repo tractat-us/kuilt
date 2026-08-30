@@ -245,9 +245,13 @@ rootless group is credited only the mints naming *it*. Merging two independently
 ledgers leaves two rootless groups each holding **its own** supply, with Σ holdings still equal
 to `mintedTotal`: the double count is **unrepresentable**, not a caller invariant. Doing it is
 still a mistake — one ledger, one tree — so `validate()` reports `MultipleRoots` on top; that
-is defence in depth over an already-structural guarantee. The `@Serializable` shape change this
-cost was affordable because `:kuilt-heddle` is not published (absent from `kuilt-bom`, outside
-`kuilt.publish` per #1602), so there were no external consumers to migrate.
+is defence in depth over an already-structural guarantee.
+
+Binding the root **breaks the `@Serializable` shape of `MintRecord`**, and `ControlCommand.Mint`
+with it. Do not read that as cheap: `:kuilt-heddle` *is* published to Maven Central (0.7.2, 0.7.3),
+it applies `kuilt.publish` by way of `kuilt.kmp-library`, and `kuilt-bom` constrains it — so a
+mixed-version pair of peers cannot exchange a mint, and a persisted log or snapshot written by an
+older version does not decode. The version handling that implies is a deliberate human call.
 
 `edge(id) = EdgeSummary(effIssued(id), returned(id).value, effLeafSpent(id)+effRollupSpent(id))`
 — a per-edge read, at effective values. `activeChildren(g)` = summaries of `childEdges(g)`.
