@@ -62,6 +62,40 @@ kuilt's own exporter loggers, or a line the sampling gate throws away. And it sh
 not throw — a mapper that throws loses that one record rather than surfacing an
 error inside your `log` call.
 
+## When your app is doing two things at once
+
+The mapper above is installed once, for the whole app. That is the right shape for
+facts that really are app-wide — the device, the build, the logger's name. It is the
+wrong shape the moment your app runs **two things at the same time**.
+
+Say a game is running against a server while a second, offline game runs over the
+local mesh. The mapper has only one answer to "which game is this?", so whichever
+game is *current* gets its id stamped on the other game's lines too. Later, reading
+the logs, there is no way to tell them apart — and a search for the server game's id
+hands back lines that never belonged to it.
+
+So bind the id to the work instead of to the app:
+
+```kotlin
+withLogContext("session.id" to session.id) {
+    runSession()
+}
+```
+
+Every line logged inside that block carries `session.id`, whatever else the app is
+doing alongside it. Nesting adds to the enclosing block rather than replacing it,
+and the innermost wins where they set the same key. The rule is the same one all the
+way up: **the narrower scope wins**, and the app-wide mapper is the widest scope
+there is — so entering a session's block corrects a stale app-wide stamp rather than
+losing to it. Outside any block, nothing changes.
+
+How far a block's context reaches depends on the platform, for the same reason a
+trace's does, and the note above applies here word for word: on JVM/Android it
+follows the work across thread hops and into child coroutines, so two sessions can
+interleave freely; on iOS, macOS and wasm it covers a line logged synchronously
+inside the block. Where it does not reach, a line is stamped with the enclosing
+block's attributes or with none — never with a *different* block's.
+
 ## When the line happened, and when we wrote it down
 
 Your `log.info { … }` call does not write the record — it hands the line off and a

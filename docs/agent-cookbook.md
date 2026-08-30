@@ -32,6 +32,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | a `seenIds` set to skip already-handled messages | `GSet` / kuilt dedup | [Dedup](#dedup) |
 | saving bytes so they survive a restart — a write-temp-then-`fsync`-then-atomic-rename dance, a per-platform file helper, an IndexedDB wrapper, "did that write actually land before we crashed?" | `DurableStore` + `StoreKey` | [Durable storage](#durable-storage) |
 | a per-line flush loop in a log/telemetry exporter — or a fix for "capturing logs is slow", "the app stalls when it logs a lot" | `WarpLogRecordExporter.export(records)` + `installLogCapture` | [Telemetry & log capture](#telemetry--log-capture) |
+| stamping the session/game/request a log line belongs to — an MDC equivalent, a global holding "the current session" for a log mapper to read, lines from one session tagged with another's id | `withLogContext` | [Telemetry & log capture](#telemetry--log-capture) |
 | deleting a telemetry store's files to reset it, or a "clear on next launch" flag so the delete lands before recovery | `WarpTelemetry.clear()` | [Telemetry & log capture](#telemetry--log-capture) |
 | your own flag or counter tracking whether telemetry is still being written — "has anything landed since launch?", "are we losing log lines?" | `WarpLogRecordExporter.health` + `LogCaptureInstallation.health` | [Telemetry & log capture](#telemetry--log-capture) |
 | a second, longer-retention copy of a replicated log — "keep a year on the server beside an hour on the phone", "gossiped records vanish when the peer forgets them", a hand-rolled tee of what a replica applied | `BoltDecorator` + `AppliedOpSink` | [Telemetry & log capture](#telemetry--log-capture) |
@@ -1373,6 +1374,40 @@ when (val result = exporter.export(pending)) {
         println("export failed: ${result.cause}")
     }
 }
+```
+
+**Intent:** stamp which session / game / request / screen a log line belongs to — an MDC equivalent, a "logger context". Don't keep a mutable global holding "the current session" for a `CaptureConfig.attributeMapper` to read.
+**Primitive:** `withLogContext(attributes) { … }` (`:kuilt-otel-logging`).
+
+`CaptureConfig.attributeMapper` is installed once on the whole **process's** capture edge, so it has one answer to "which session is this?". An app that runs two at a time — a server-mediated game alongside an offline mesh one — therefore stamps the second one's lines with the first one's id, and no downstream filter can tell: selecting on `session.id` hands back records that never belonged to it. Edge resolution does not help, and this is the distinction worth holding on to — resolving the mapper at the emit edge (#1630) fixes *when* it is asked, not *which* of the concurrent sessions it is able to see. Keep the mapper for facts that really are app-wide (device, build, logger name).
+
+Precedence is one rule at every level, **narrower scope wins**: mapper < outer `withLogContext` < inner. Nesting merges rather than replaces, so a key only an outer scope set is inherited, and leaving an inner scope restores the outer binding. The direction is what makes it a fix — entering the emitting session's scope must *correct* a stale app-wide stamp, not lose to it. The consequence to know: a scope attribute also beats that key in the mapper's output, including one the mapper derived from the log call's own payload.
+
+Reach is exactly `withActiveTrace`'s, and for the same reason — the capture edge is a non-`suspend` callback, so it reads an execution-local slot rather than the coroutine context. On JVM/Android a `ThreadContextElement` re-establishes that slot on every dispatch, so the binding survives thread hops, is inherited by child coroutines, and keeps two **interleaved** sessions apart. That primitive does not exist on Kotlin/Native or wasmJs, where the binding covers a line logged synchronously within the block. Where it does not reach, a line carries the enclosing block's attributes or none — never a *different* block's.
+
+<!-- verbatim from kuilt-otel-logging/src/commonSamples/kotlin/us/tractat/kuilt/otel/logging/Samples.kt#sampleWithLogContext -->
+```kotlin
+val log = KotlinLogging.logger("com.example.Session")
+
+// This process runs two sessions at once. A CaptureConfig.attributeMapper is
+// installed on the whole process, so it could only ever stamp whichever session
+// is "current" — and would stamp the other session's lines with it too. Binding
+// the id to the scope that emits makes it per-emitter instead.
+withLogContext("session.id" to "server-game-42") {
+    log.info { "dealt the opening hand" } // session.id = server-game-42
+}
+
+// Concurrently, on another scope, with its own binding. Neither borrows the
+// other's id, however they interleave.
+withLogContext("session.id" to "mesh-7") {
+    // Nesting merges, and the inner scope wins a collision — narrower scope wins.
+    withLogContext("turn" to "3") {
+        log.info { "peer joined" } // session.id = mesh-7, turn = 3
+    }
+}
+
+// Outside any scope, capture is exactly what it was before.
+log.info { "background heartbeat" }
 ```
 
 **Intent:** empty a telemetry store — "reset the logs", "clear my data", "start the next run clean". Don't delete the store's files per platform, and don't set a "clear on next launch" flag so the delete lands before recovery.

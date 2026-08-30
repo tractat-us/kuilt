@@ -51,11 +51,19 @@ import kotlin.time.Clock
  * Anything that depends on *when and where the line was logged* is resolved at the
  * **synchronous capture edge**, on the caller, and carried on the queued
  * [NormalizedLogEvent] — never re-derived on the drain coroutine. That covers the
- * ambient trace context (#1034), the [CaptureConfig.attributeMapper] (#1630) and
- * the instant the line was logged (#1993). A queueing edge calls [resolveAtEdge]
- * once; [capture] then reads the snapshot. Resolving any of them on the drain
- * stamps records with whatever the ambient state has become by then, which the
- * consumer cannot detect or repair.
+ * ambient trace context (#1034), the [CaptureConfig.attributeMapper] (#1630), the
+ * scope-bound log context ([withLogContext], #1659) and the instant the line was
+ * logged (#1993). A queueing edge calls [resolveAtEdge] once; [capture] then reads
+ * the snapshot. Resolving any of them on the drain stamps records with whatever the
+ * ambient state has become by then, which the consumer cannot detect or repair.
+ *
+ * The last two of those are the same defect at two scales, and the second is why
+ * edge resolution alone was not enough. [CaptureConfig.attributeMapper] is installed
+ * once per **process**, so a process holding several sessions at once has no mapper
+ * that can be right for all of them: resolving it at the edge fixes *when* it is
+ * asked, not *which session* it can see. [withLogContext] binds the attributes to a
+ * scope so the question becomes per-emitter, and [withScopedContext] merges them
+ * here, at the same edge (#1659).
  *
  * @param exporter the durable log buffer this capture writes into.
  * @param config which events to keep and how to shape their attributes.

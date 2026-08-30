@@ -48,6 +48,17 @@ public data class CaptureConfig(
      *   keeps.
      * - It should not throw. A mapper that throws drops that one record; the failure
      *   is swallowed rather than propagated into the application's logging call.
+     *
+     * **This is a process-wide hook — for anything session-scoped, reach for
+     * [withLogContext] instead.** One mapper is installed on the whole process's
+     * capture edge, so it can only ever fold in whichever session/game/request is
+     * *currently armed*. A process that holds two of them at once therefore stamps
+     * the second one's lines with the first one's id, and nothing downstream can tell
+     * (#1659). Edge resolution does not help: it fixes *when* the mapper is asked,
+     * not *which* of the concurrent sessions it is able to see. Use this mapper for
+     * facts that really are process-wide (the device id, the build, the logger name)
+     * and [withLogContext] for anything bound to a unit of work. Where both set a
+     * key, the scope wins.
      */
     public val attributeMapper: (NormalizedLogEvent) -> Map<String, String> = ::defaultAttributeMapper,
 )
