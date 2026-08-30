@@ -5,8 +5,8 @@ import us.tractat.kuilt.core.PlyId
 import us.tractat.kuilt.core.Seam
 
 /**
- * One ply's failure inside a live [CompositeLoom] session — attaching, detaching, or processing an
- * inbound frame — raised through `CompositeLoom(onPlyFailure = …)`.
+ * One ply's failure inside a live [CompositeLoom] session — attaching, detaching, processing an inbound
+ * frame, or running one of its pumps — raised through `CompositeLoom(onPlyFailure = …)`.
  *
  * A ply is built from a **consumer-authored** [Loom], so `Loom.capability()`, `Loom.weave()` and the
  * ply [Seam]'s own `close()` can all throw; and a ply's inbound frames are **peer-supplied bytes**, so
@@ -56,6 +56,30 @@ public class PlyReconcileException(
         INBOUND,
 
         /**
+         * One of the ply's mirror/announce pumps failed on a single delivery. **That pump survives** and
+         * keeps collecting; only this delivery's work was lost.
+         *
+         * Distinct from [PUMP_ENDED] because the two are not degrees of the same event: this one is a
+         * hiccup and that one is permanent, and a consumer folding them together reports a dead strand
+         * as a transient blip (#1803).
+         */
+        PUMP,
+
+        /**
+         * One of the ply's mirror/announce pumps is **over**: the ply `Seam`'s own `state`, `capability`
+         * or `peers` flow failed, which *ends* it, so that strand of this ply will never update again —
+         * the composite may go on folding a stale mirrored value into `capability`/`peers` while the ply
+         * stays `Woven`.
+         *
+         * The ply is neither torn nor detached, for the same reason a malformed frame does not tear it
+         * ([INBOUND]). Nothing re-subscribes: a `Seam`'s flows are collected once, at attach.
+         *
+         * No `onEach`-body guard can see this — it is the upstream half [us.tractat.kuilt.core.pumpIn]
+         * exists to close, and on Kotlin/Native it aborted the process before it was closed (#1788).
+         */
+        PUMP_ENDED,
+
+        /**
          * The ply was woven but could not be attached — the composite had already been closed — and
          * closing the freshly woven transport back down *also* threw, so it may be leaked.
          *
@@ -77,5 +101,7 @@ private fun clauseFor(phase: PlyReconcileException.Phase): String =
         PlyReconcileException.Phase.ATTACH -> "failed to attach"
         PlyReconcileException.Phase.DETACH -> "failed to detach"
         PlyReconcileException.Phase.INBOUND -> "failed to process an inbound frame"
+        PlyReconcileException.Phase.PUMP -> "failed on one pump delivery"
+        PlyReconcileException.Phase.PUMP_ENDED -> "lost a pump for the life of the ply"
         PlyReconcileException.Phase.SALVAGE -> "failed to salvage"
     }

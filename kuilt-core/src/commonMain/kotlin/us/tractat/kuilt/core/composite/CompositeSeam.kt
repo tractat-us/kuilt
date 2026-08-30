@@ -16,7 +16,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
@@ -29,6 +28,7 @@ import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.PlyId
+import us.tractat.kuilt.core.PumpFailure
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
@@ -37,6 +37,7 @@ import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.TransportRole
+import us.tractat.kuilt.core.pumpIn
 import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.coroutines.CoroutineContext
 
@@ -266,6 +267,12 @@ internal class CompositeSeam(
         // Aggregate state is derived from the per-ply map: any ply Woven => Woven, else Weaving
         // (empty or all-torn are both recoverable Weaving, #1367). A derived write via update():
         // no-ops once close() has latched the terminal Torn, so a late rollup can never clobber it.
+        //
+        // NOT a [pumpIn], and for the same reason [capabilityWriter] above is unguarded: both ends are
+        // ours. `_plies` is this class's own [MutableStateFlow], which cannot fail its collectors, and
+        // neither `rollup` nor `SeamStateGate.update` makes a foreign call. That is a constraint on this
+        // body, not an oversight — adding a guard here would absorb OUR bugs, which is a different and
+        // worse trade than absorbing a consumer's.
         _plies
             .onEach { stateGate.update(rollup(it.values.toList())) }
             .launchIn(scope)
@@ -277,9 +284,51 @@ internal class CompositeSeam(
 
         // Reconcile on every desired-set change. The first emission equals the
         // initial set, so it produces no attach/detach.
-        desired
-            .onEach { reconcile(it) }
-            .launchIn(scope)
+        //
+        // [desired] is handed to [CompositeLoom] by the CONSUMER, so it is a foreign flow like any ply's,
+        // and a throw from the flow itself ends this collector — the seam then never attaches or detaches
+        // another ply, and on Kotlin/Native the throw aborts the process (#1788). [reconcile]'s own body
+        // is already total per ply, so it is the upstream half that is uncovered here; the guard is the
+        // same one either way.
+        desired.pumpIn(scope, ::absorbDesiredFailure) { reconcile(it) }
+    }
+
+    /**
+     * The [desired] pump's failure sink: absorb, because there is no honest report to make and the
+     * resulting state is one the contract already allows.
+     *
+     * [onPlyFailure] is a **per-ply** signal by construction — [PlyReconcileException] carries a [PlyId] —
+     * and a failure of the desired-set flow belongs to no ply. Inventing one would be a false report on a
+     * consumer's own logger, which is the mistake [PlyReconcileException.Phase.SALVAGE] exists to avoid,
+     * and `:kuilt-core` is logger-free by contract so there is no other channel here.
+     *
+     * Absorbing is not merely the least-bad option. A dead [desired] pump leaves the composite running its
+     * current ply set forever, which is **behaviourally identical** to a `StateFlow` that simply stops
+     * emitting — an in-contract state a consumer is entitled to produce deliberately. Contrast a ply's
+     * pumps, where a dead pump leaves the composite folding a value it *believes* is live.
+     *
+     * A seam-level failure channel would let this be reported rather than inferred; that is #2558, and is
+     * a bigger decision than this fix.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    private fun absorbDesiredFailure(half: PumpFailure, failure: Throwable) {
+        // Deliberately empty — see the KDoc. Named rather than a `{ _, _ -> }` at the call site so the
+        // absorption has somewhere to be argued and cannot be read as an oversight.
+    }
+
+    /**
+     * The per-ply pump failure sink: report through [onPlyFailure] with [id], preserving which half died.
+     *
+     * [PumpFailure.UPSTREAM] maps to [PlyReconcileException.Phase.PUMP_ENDED] rather than folding into one
+     * phase, because "that strand of this ply will never update again" and "one delivery was lost" are not
+     * degrees of the same event, and only the reporter can still tell them apart.
+     */
+    private fun plyPumpFailure(id: PlyId): (PumpFailure, Throwable) -> Unit = { half, failure ->
+        val phase = when (half) {
+            PumpFailure.ITEM -> PlyReconcileException.Phase.PUMP
+            PumpFailure.UPSTREAM -> PlyReconcileException.Phase.PUMP_ENDED
+        }
+        raisePlyFailure(id, phase, failure)
     }
 
     /**
@@ -499,8 +548,15 @@ internal class CompositeSeam(
             )
         }
 
+        // Every pump below is launched through [pumpIn], never a bare `.onEach { }.launchIn(plyScope)`.
+        // All five collect a **consumer-authored** `StateFlow`, and a flow that throws is an *upstream*
+        // throw: it ends the flow, so no `onEach`-body guard can see it, and it reaches the global handler
+        // and aborts the process on Kotlin/Native by the identical route a malformed frame did (#1788).
+        // Five hand-rolled copies of the body guard had already accumulated in this file and not one of
+        // them covered that half — which is why the guard is now a property of how a pump is launched
+        // rather than a convention each site has to remember (#1803).
         seam.state
-            .onEach { s ->
+            .pumpIn(plyScope, plyPumpFailure(id)) { s ->
                 // Mirror what THIS pump observed onto the handle BEFORE requesting the fold, so the fold
                 // never reads state no trigger announced — see [publishCapability].
                 lock.withLock { live[id]?.woven = s is SeamState.Woven }
@@ -508,7 +564,6 @@ internal class CompositeSeam(
                 // A ply changing Woven state changes which Looms' roles union in — request a recompute.
                 recomputeCapability()
             }
-            .launchIn(plyScope)
 
         // A ply's own capability is a LIVE value (an nw ply follows its path monitor), so the rollup
         // must SUBSCRIBE, not merely sample at attach/detach/state-change. Without this pump a ply whose
@@ -520,23 +575,26 @@ internal class CompositeSeam(
         // wakeup for a fresh read of the seam — that distinction is the whole of [publishCapability]'s
         // correctness argument.
         seam.capability
-            .onEach { cap ->
+            .pumpIn(plyScope, plyPumpFailure(id)) { cap ->
                 lock.withLock { live[id]?.availability = cap.availability }
                 recomputeCapability()
             }
-            .launchIn(plyScope)
 
         // Re-announce on every Woven transition (cold start + recovery). Best-effort: the
         // ply may tear between this Woven emission and the send (the Seam contract throws
         // IllegalStateException on a Torn send), and the far side re-learns the mapping on
         // the next Woven/peers event regardless — so swallow a failed announce (#535).
+        // The `runCatchingCancellable` stays: #535's decision is that an ordinary failed announce is
+        // swallowed, and [pumpIn] would instead report it. What [pumpIn] adds is the one case that helper
+        // gets wrong — it rethrows a `CancellationException` a consumer's `broadcast` minted itself, which
+        // on a bare pump means the pump is *cancelled, not failed*, dead silently with nothing reported
+        // (#1803's sixth instance was exactly this shape) — plus the upstream half, which is the fatal one.
         seam.state
-            .onEach {
+            .pumpIn(plyScope, plyPumpFailure(id)) {
                 if (it is SeamState.Woven) {
                     runCatchingCancellable { seam.broadcast(PlyFrame.encode(PlyFrame.Announce(selfId))) }
                 }
             }
-            .launchIn(plyScope)
 
         // The inbound pump — GUARDED, because this is the one pump whose input is bytes from another
         // peer. "What if this throws" is therefore not a question about consumer code but about anything
@@ -552,36 +610,23 @@ internal class CompositeSeam(
         // So a malformed frame is a DROPPED frame: reported through [onPlyFailure], never fatal, and the
         // ply keeps delivering the frames after it. Dropping rather than tearing the ply is deliberate —
         // tearing would hand any peer a one-frame way to remove a ply from someone else's composite.
-        // `catch (Throwable)` + `ensureActive()` and NOT `runCatchingCancellable`, the same discriminator
-        // for the same reason as [reconcile]: that helper rethrows a `CancellationException` the callee
-        // minted itself (a consumer `Seam`'s own `withTimeout`), which on a long-lived pump means the pump
-        // is *cancelled, not failed* — dead silently, with [onPlyFailure] never invoked and not even a
-        // stack trace left behind.
         //
-        // **The `onEach` guard alone is not the whole pump.** `.onEach { … }.launchIn(scope)` desugars to
-        // `scope.launch { flow.onEach { … }.collect() }`, so the `try` below is INSIDE the collector and
-        // sees only what [onPlyFrame] throws. A throw raised by `seam.incoming` **itself** propagates out
-        // of `collect`, out of the `launch` body, and straight down the abort route above. `incoming` is
-        // the likeliest of a ply's five flows to do it, being the only one that is not a `StateFlow` but an
-        // arbitrary consumer-authored `Flow<Swatch>` (`MuxClientLoom` has the shape in tree:
-        // `flow { emitAll(current().incoming) }` over a `?: error(…)`). Hence the [catch] — an upstream
-        // throw legitimately ENDS the flow, which is what an upstream throw means, but it ends it with a
-        // diagnosis instead of a `SIGABRT`. [catch] needs no `ensureActive` of its own: `catchImpl`
-        // rethrows when the throwable is this coroutine's own cancellation cause and catches otherwise —
-        // the same discriminator, already built in.
-        seam.incoming
-            .onEach { swatch ->
-                try {
-                    onPlyFrame(id, swatch)
-                } catch (failure: Throwable) {
-                    // Genuinely our own cancellation (detach, or the seam closing) → rethrow so the pump
-                    // stops as structured concurrency intends; anything else is this frame's failure.
-                    currentCoroutineContext().ensureActive()
-                    raisePlyFailure(id, PlyReconcileException.Phase.INBOUND, failure)
-                }
-            }
-            .catch { failure -> raisePlyFailure(id, PlyReconcileException.Phase.INBOUND, failure) }
-            .launchIn(plyScope)
+        // Both halves are [pumpIn]'s, and this pump is the reason the helper exists in the shape it does:
+        // it was the FIFTH hand-rolled copy of the body guard in this file, and the first to also need the
+        // upstream half. `incoming` is the likeliest of a ply's five flows to raise one, being the only one
+        // that is not a `StateFlow` but an arbitrary consumer-authored `Flow<Swatch>` (`MuxClientLoom` has
+        // the shape in tree: `flow { emitAll(current().incoming) }` over a `?: error(…)`).
+        //
+        // Both halves report [PlyReconcileException.Phase.INBOUND] rather than the [Phase.PUMP] /
+        // [Phase.PUMP_ENDED] pair the mirror pumps use, because a consumer's diagnosis here is "a frame
+        // could not be processed" either way — and INBOUND's contract, that the ply keeps delivering, holds
+        // for a dropped frame and is simply vacuous once the flow has ended.
+        seam.incoming.pumpIn(
+            plyScope,
+            onFailure = { _, failure -> raisePlyFailure(id, PlyReconcileException.Phase.INBOUND, failure) },
+        ) { swatch ->
+            onPlyFrame(id, swatch)
+        }
 
         // Mirror this ply's peer set and request a fold — and NOTHING ELSE, least of all anything that
         // suspends. Its DELIVERED value is the peers fold's input (mirrored onto the handle BEFORE the
@@ -601,11 +646,10 @@ internal class CompositeSeam(
         // suspension point in it, and the send lives below — the same split `seam.state` already has between
         // its mirror pump and its Woven re-announce pump.
         seam.peers
-            .onEach { newPeers ->
+            .pumpIn(plyScope, plyPumpFailure(id)) { newPeers ->
                 lock.withLock { live[id]?.transportPeers = newPeers }
                 recomputePeers()
             }
-            .launchIn(plyScope)
 
         // Re-announce to newcomers, isolated exactly as the Woven re-announce above is, and for the same
         // reason: it makes a suspending consumer-authored call. Best-effort — swallow a torn-ply send (#535).
@@ -615,12 +659,11 @@ internal class CompositeSeam(
         // conflate independently, so this one may skip an intermediate peers value the mirror pump saw —
         // already within contract, since the far side re-learns the mapping on the next Woven/peers event.
         seam.peers
-            .onEach { newPeers ->
+            .pumpIn(plyScope, plyPumpFailure(id)) { newPeers ->
                 if (newPeers.size > 1 && seam.state.value is SeamState.Woven) {
                     runCatchingCancellable { seam.broadcast(PlyFrame.encode(PlyFrame.Announce(selfId))) }
                 }
             }
-            .launchIn(plyScope)
 
         // Request a fold of this ply's roles. Belt-and-braces: the two pumps above each fire on
         // subscription with the ply's current value and request one too, and the requests conflate.
