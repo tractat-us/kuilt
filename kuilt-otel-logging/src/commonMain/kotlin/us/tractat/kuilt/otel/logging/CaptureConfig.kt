@@ -41,9 +41,11 @@ public data class CaptureConfig(
      * Two consequences:
      * - Keep it **cheap and non-blocking**. It runs on the application's logging
      *   thread, once per captured event, not once per drain batch. It is skipped for
-     *   events that produce no record (below [minLevel], or one of the exporter's own
-     *   loggers), but it runs before the trace/sampling gate — so a mapper is paid
-     *   for even when a wired `TraceContextProvider` later drops the event.
+     *   every event that produces no record (#1745): below [minLevel], one of the
+     *   exporter's own loggers, or dropped by the trace/sampling gate — an unsampled
+     *   trace, or an untraced event under [UntracedPolicy.DROP]. So wiring a
+     *   `TraceContextProvider` with `DROP` costs a mapping only for the lines it
+     *   keeps.
      * - It should not throw. A mapper that throws drops that one record; the failure
      *   is swallowed rather than propagated into the application's logging call.
      */

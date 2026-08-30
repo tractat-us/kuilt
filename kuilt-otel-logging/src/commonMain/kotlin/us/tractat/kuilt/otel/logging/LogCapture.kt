@@ -66,9 +66,10 @@ import kotlin.time.Clock
  *   default).
  * @param traceContextProvider optional trace/sampling gate. When `null` (the M1
  *   default) capture is always-on and records carry no trace ids. When set, the
- *   trace is resolved at the synchronous capture edge via [resolveAtEdge] and
- *   carried on [NormalizedLogEvent.activeTrace]; [capture] then gates on that
- *   snapshot (see [resolveAtEdge] and [capture]).
+ *   trace is resolved at the synchronous capture edge via [resolveAtEdge], which
+ *   also applies the gate there (#1745) and carries the trace on
+ *   [NormalizedLogEvent.activeTrace] for [capture] to stamp from (see
+ *   [resolveAtEdge] and [capture]).
  */
 public class LogCapture(
     private val exporter: WarpLogRecordExporter,
@@ -98,18 +99,32 @@ public class LogCapture(
      *
      * Returns `null` when the event carries nothing to export — the edge should
      * then drop it rather than queue it. That is either because [capture] would
-     * drop it anyway (below [CaptureConfig.minLevel], or one of the exporter's own
-     * loggers — so the mapper is never paid for a line that produces no record), or
-     * because the configured [CaptureConfig.attributeMapper] threw. A throwing
-     * mapper drops just that record and never propagates into the application's
-     * logging call, exactly as it did when the mapper still ran on the drain behind
-     * the appender's best-effort guard.
+     * drop it anyway, or because the configured [CaptureConfig.attributeMapper]
+     * threw. A throwing mapper drops just that record and never propagates into the
+     * application's logging call, exactly as it did when the mapper still ran on the
+     * drain behind the appender's best-effort guard.
+     *
+     * **Every drop [capture] would make is decided here, before the mapper runs**
+     * (#1745): the cheap pre-record drops ([droppedBeforeRecord] — below
+     * [CaptureConfig.minLevel], or one of the exporter's own loggers) and the
+     * trace/sampling gate ([droppedByTraceGate] — an unsampled trace, or an untraced
+     * event under [UntracedPolicy.DROP]). Both gates read exactly what [recordFor]
+     * later reads, so an event that survives this call is one no gate can drop, and
+     * a mapper is never paid for a record that will not exist. That matters most for
+     * a consumer running `DROP`, who has by definition asked for most lines to be
+     * discarded — the configuration in which the wasted mapping was largest.
      */
     public fun resolveAtEdge(event: NormalizedLogEvent): NormalizedLogEvent? {
         if (droppedBeforeRecord(event)) return null
+        // Resolve the trace BEFORE the mapper: it is what decides whether this event
+        // produces a record at all, and the mapper runs on the application's logging
+        // thread. Both still resolve here, on the caller, so emit-time semantics are
+        // unchanged for either (#1034, #1630).
+        val trace = resolveTrace()
+        if (droppedByTraceGate(trace)) return null
         val attributes = runCatchingCancellable { config.attributeMapper(event) }.getOrNull() ?: return null
         return event.copy(
-            activeTrace = resolveTrace(),
+            activeTrace = trace,
             resolvedAttributes = attributes,
             emittedEpochNanos = event.emittedEpochNanos ?: nowEpochNanos(),
         )
@@ -148,7 +163,10 @@ public class LogCapture(
      *
      * The one exception is a caller that invokes this directly from its own log
      * site without going through an edge: `resolvedAttributes` is then `null` and
-     * the mapper is applied here, which for such a caller *is* emit time.
+     * the mapper is applied here, which for such a caller *is* emit time. That
+     * caller is also the only one for whom the gate here can still fire — an
+     * edge-resolved event has already been through the same [droppedByTraceGate] on
+     * the same trace, so for it this gate is a no-op that only stamps (#1745).
      *
      * See [captureAll] for the batched counterpart — same mapping, same gates, one
      * export for a whole run of events.
@@ -197,14 +215,11 @@ public class LogCapture(
         var traceId: ByteString? = null
         var spanId: ByteString? = null
         if (traceContextProvider != null) {
-            when (val trace = event.activeTrace) {
-                null -> if (config.untracedPolicy == UntracedPolicy.DROP) return null
-                else -> if (trace.sampled) {
-                    traceId = trace.traceId
-                    spanId = trace.spanId
-                } else {
-                    return null // active but unsampled → drop before export
-                }
+            val trace = event.activeTrace
+            if (droppedByTraceGate(trace)) return null
+            if (trace != null) {
+                traceId = trace.traceId
+                spanId = trace.spanId
             }
         }
         val observedEpochNanos = nowEpochNanos()
@@ -249,6 +264,26 @@ public class LogCapture(
     private fun droppedBeforeRecord(event: NormalizedLogEvent): Boolean =
         event.loggerName.startsWith(KUILT_INTERNAL_LOGGER_PREFIX) ||
             event.level.ordinal < config.minLevel.ordinal
+
+    /**
+     * Whether the trace/sampling gate drops an event whose active trace is [trace] —
+     * an active-but-unsampled trace, or an untraced event when
+     * [CaptureConfig.untracedPolicy] is [UntracedPolicy.DROP]. With no
+     * [traceContextProvider] wired this is M1 always-on capture and nothing is
+     * dropped, whatever the policy says.
+     *
+     * **The single spelling of the gate, and deliberately so.** It is asked twice —
+     * by [resolveAtEdge] on the resolved trace, so the [CaptureConfig.attributeMapper]
+     * is not paid for a record that will not exist (#1745), and by [recordFor] on the
+     * trace the event carries, which is the same value and is the live gate for a
+     * caller that drives [capture] straight from its log site with no edge in front
+     * of it. Two hand-written copies of a gate that must agree is a worse defect than
+     * one gate in the wrong place, so there is only ever one.
+     */
+    private fun droppedByTraceGate(trace: ActiveTrace?): Boolean {
+        if (traceContextProvider == null) return false
+        return if (trace == null) config.untracedPolicy == UntracedPolicy.DROP else !trace.sampled
+    }
 
     private companion object {
         private const val RECORD_ID_BYTES = 8
