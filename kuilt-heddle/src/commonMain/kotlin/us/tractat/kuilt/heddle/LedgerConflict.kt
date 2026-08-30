@@ -46,6 +46,14 @@ public sealed interface LedgerConflict : Comparable<LedgerConflict> {
             }
             is NegativeEffectiveSpend -> edge.compareTo((other as NegativeEffectiveSpend).edge)
             is OrphanedTransferPath -> path.compareTo((other as OrphanedTransferPath).path)
+            is MultipleRoots -> {
+                other as MultipleRoots
+                // Lexicographic over two already-sorted lists: `List` is not `Comparable`, and a
+                // report carries at most one of these, so this only has to be total and stable.
+                roots.zip(other.roots) { mine, theirs -> mine.compareTo(theirs) }
+                    .firstOrNull { it != 0 }
+                    ?: roots.size.compareTo(other.roots.size)
+            }
         }
     }
 
@@ -301,5 +309,44 @@ public sealed interface LedgerConflict : Comparable<LedgerConflict> {
      */
     public data class OrphanedTransferPath(public val path: PathKey) : LedgerConflict {
         override val order: Int get() = 8
+    }
+
+    /**
+     * Supply minted at more than one root — one ledger holding two trees (issue #1751).
+     *
+     * A ledger describes **one** tree, seeded by **one** [EntitlementLedger.bootstrap]. Merging two
+     * of them is a caller mistake, and this names it. It is defence in depth, not the safety
+     * argument: a [MintRecord] is bound to the root it was minted at, so each root is credited only
+     * its own supply and Σ holdings still equals `mintedTotal` — the double count this reports the
+     * *risk* of is already unrepresentable.
+     *
+     * ## The predicate reads `minted`, never the topology — and that is the whole point
+     *
+     * The obvious spelling, "more than one group has no inbound edge", cannot be used: **that is
+     * also the shape of an honest partially-delivered topology.** Records are grow-only and arrive
+     * in no particular order, so a peer holding a child edge whose parent edge has not landed yet
+     * sees a group with no inbound edge — legitimately, transiently, and on healthy traffic. A
+     * report keyed on that fires on every mid-delivery state with two undelivered parent edges.
+     *
+     * Keyed on the distinct roots named by [MintRecord] instead, the two cases separate cleanly:
+     *
+     *  - **"no inbound edge yet"** contributes nothing — a group is not a mint root merely because
+     *    its parent edge is late, so the mid-delivery state names exactly the one root it always did.
+     *  - **"a root-scoped mint credited here"** is what this counts, and a second one can only come
+     *    from a second bootstrap or a [EntitlementLedger.mint] at a second group.
+     *
+     * The `no inbound edge` conjunct is deliberately **dropped** rather than kept: keeping it would
+     * put the topology back into the predicate in the other direction, silencing the report on a
+     * two-bootstrap state carrying no records at all (the bare merge — where nothing else speaks
+     * either) and on one where a root has since acquired an inbound edge.
+     *
+     * Unlike every other report here it is **not a delivery transient in either direction**: `minted`
+     * is grow-only and a root is never removed from a record, so once two roots are on a state they
+     * stay, and no anti-entropy round dissolves this. It is a standing fault, not a window.
+     *
+     * @property roots the distinct roots supply was minted at, sorted; always two or more.
+     */
+    public data class MultipleRoots(public val roots: List<GroupId>) : LedgerConflict {
+        override val order: Int get() = 9
     }
 }

@@ -383,6 +383,96 @@ class EntitlementLedgerValidateTest {
         return left.piece(right)
     }
 
+    /**
+     * The #1751 diagnostic on top of the structural fix: two bootstraps in one state is still a
+     * caller mistake, and [LedgerConflict.MultipleRoots] names both roots.
+     */
+    @Test
+    fun mintsAtTwoRootsAreReportedAsMultipleRoots() {
+        val merged = twoBootstrapsMerged()
+        assertAll(
+            {
+                assertTrue(
+                    LedgerConflict.MultipleRoots(listOf(otherRoot, root)) in merged.validate(),
+                    "the two-tree state must be named: ${merged.validate()}",
+                )
+            },
+            // The report is a diagnostic ON TOP of the structural fix, not instead of it: the state
+            // it names is still correctly accounted. A fix that reported by *breaking* holdings reds here.
+            { assertEquals(20L, merged.mintedTotal()) },
+            { assertEquals(10L, merged.holdings(root, alice)) },
+        )
+    }
+
+    /**
+     * The negative arm, and the reason the predicate reads `minted` rather than the topology: a
+     * group with **no inbound edge yet** is the ordinary shape of a partially-delivered tree, and
+     * must stay silent.
+     *
+     * `gA` and `gC` here each hold a delivered child edge whose *parent* edge (root→gA, root→gC)
+     * has not arrived — two rootless groups on one honest state, exactly what a
+     * "more than one group has no inbound edge" rule would report. One root ever minted, so
+     * nothing is reported.
+     */
+    @Test
+    fun aPartiallyDeliveredTopologyWithTwoRootlessGroupsIsNotMultipleRoots() {
+        val partial = midDelivery(EntitlementLedger.bootstrap(root, mapOf(alice to 10L), nonce = "g"))
+        assertAll(
+            // ── the rig: both gA and gC really do read as roots on this state. Only a group whose
+            // lineage is empty is credited minted supply at all, so a mint bound to each in turn
+            // lands ⟺ that group has no inbound edge here.
+            {
+                assertEquals(
+                    10L,
+                    midDelivery(EntitlementLedger.bootstrap(gA, mapOf(alice to 10L), nonce = "g")).holdings(gA, alice),
+                    "rig: gA has no inbound edge on this state",
+                )
+            },
+            {
+                assertEquals(
+                    10L,
+                    midDelivery(EntitlementLedger.bootstrap(gC, mapOf(alice to 10L), nonce = "g")).holdings(gC, alice),
+                    "rig: …and neither does gC — two rootless groups, on honest traffic",
+                )
+            },
+            // ── and the state under test is entirely silent.
+            { assertTrue(partial.validate().isEmpty(), "mid-delivery must not be reported: ${partial.validate()}") },
+        )
+    }
+
+    /**
+     * The other negative arm: two independent mint **acts** at the **same** root union into one
+     * tree's supply and are not a fault. Keys the report on the distinct roots, never on the number
+     * of [MintRecord]s.
+     */
+    @Test
+    fun twoMintActsAtOneRootAreNotMultipleRoots() {
+        val twice = EntitlementLedger
+            .of(records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE))))
+            .piece(EntitlementLedger.bootstrap(root, mapOf(alice to 10L), nonce = "act-1"))
+            .piece(EntitlementLedger.bootstrap(root, mapOf(alice to 40L), nonce = "act-2"))
+        assertAll(
+            { assertEquals(50L, twice.mintedTotal(), "rig: two distinct acts really did union") },
+            { assertTrue(twice.validate().isEmpty(), "one root, two acts: ${twice.validate()}") },
+        )
+    }
+
+    private val gA = GroupId("gA")
+    private val gC = GroupId("gC")
+
+    /**
+     * Two subtrees delivered without their parent edges — `root→gA` and `root→gC` are still in
+     * flight, so `gA` and `gC` both read as rootless. [supply] is the mint state merged onto it.
+     */
+    private fun midDelivery(supply: EntitlementLedger): EntitlementLedger = EntitlementLedger
+        .of(
+            records = mapOf(
+                AttachmentId("eAB") to setOf(AttachmentRecord(AttachmentId("eAB"), gA, GroupId("gB"), Weight.ONE)),
+                AttachmentId("eCD") to setOf(AttachmentRecord(AttachmentId("eCD"), gC, GroupId("gD"), Weight.ONE)),
+            ),
+        )
+        .piece(supply)
+
     // ─────────────────────────────────────────────────────────────────────────
     // OrphanedTransferPath (#2366) — transfer rows the topology moved out from under
     // ─────────────────────────────────────────────────────────────────────────
