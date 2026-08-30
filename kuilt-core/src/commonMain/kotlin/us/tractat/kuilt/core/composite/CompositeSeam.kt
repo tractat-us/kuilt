@@ -245,6 +245,11 @@ internal class CompositeSeam(
     private val capabilityRecomputes = Channel<Unit>(Channel.CONFLATED)
 
     // (plyId, transport id) -> composite id; built as Announce frames arrive. Guarded by [lock].
+    //
+    // This map is ALSO the pin (#1815): an entry's presence is what makes a later Announce from the same
+    // slot naming a different id a REBIND. Deliberately not a second map beside it — a separate pin would
+    // have to be kept in lockstep with this one through every purge, and the one that already exists
+    // ([detachPly]) is exactly the lifetime the pin wants.
     private val idMap = mutableMapOf<Pair<PlyId, PeerId>, PeerId>()
 
     // Diagnostic only — see [RefusedAnnounce]. Keyed by slot so it is bounded by the live, fabric-verified
@@ -768,8 +773,14 @@ internal class CompositeSeam(
             // Remove from the per-ply map (now safe) so the aggregate rolls up
             // without this ply — empty => Weaving, never a transient terminal Torn.
             _plies.update { it - id }
-            // Purge this ply's learned mappings so a re-attach starts clean.
-            lock.withLock { idMap.keys.removeAll { it.first == id } }
+            // Purge this ply's learned mappings so a re-attach starts clean. That purge is also what
+            // releases the Announce PIN (#1815) — the pin IS the idMap entry, so it has exactly this
+            // lifetime, and a reconnecting peer arriving on a fresh transport gets a fresh slot. The
+            // refusal records go with them: they describe slots that no longer exist.
+            lock.withLock {
+                idMap.keys.removeAll { it.first == id }
+                refusedAnnounces.keys.removeAll { it.first == id }
+            }
             // Guarded so the two recomputes below are unconditional — see the KDoc. `catch (Throwable)`
             // rather than `runCatchingCancellable`: inside the shield this block's Job is parented to
             // [NonCancellable], so a `CancellationException` arriving here can only be one the consumer's
@@ -903,10 +914,16 @@ internal class CompositeSeam(
     private suspend fun onPlyFrame(plyId: PlyId, swatch: Swatch) {
         when (val frame = PlyFrame.decode(swatch.toByteArray())) {
             is PlyFrame.Announce -> {
-                // Announce keys idMap by (plyId, transport sender) → composite id.
+                // Announce keys idMap by (plyId, transport sender) → composite id. The sender is the
+                // fabric's, not the frame's, so a peer cannot displace another peer's slot; what it CAN do
+                // is claim an arbitrary identity for its own, which [learnAnnouncedIdLocked] screens.
                 val sender = swatch.sender ?: return
-                lock.withLock { idMap[plyId to sender] = frame.compositeId }
-                recomputePeers()
+                val learned = lock.withLock { learnAnnouncedIdLocked(plyId, sender, frame.compositeId) }
+                // Only on a learned announce. A refused one changed no fold input, so requesting a
+                // recompute would be work with no possible effect — and an accepted one requests it even
+                // when the mapping is unchanged, because a re-announce is a legitimate fold TRIGGER: it
+                // may be the event that publishes a peer whose ply mirror advanced first.
+                if (learned) recomputePeers()
             }
             is PlyFrame.Data -> {
                 // Data uses the in-frame originId — the transport sender may be a gateway.
@@ -920,6 +937,56 @@ internal class CompositeSeam(
                 }
             }
         }
+    }
+
+    /**
+     * Screen an `Announce`'s claimed composite identity and, if it survives, learn it. Call under [lock].
+     * Returns whether [idMap] now reflects the claim — `false` means the frame was dropped.
+     *
+     * ### What the sender does and does not get to choose
+     * The slot key's `transportId` half is the **fabric's** view of who sent the frame, so a peer cannot
+     * write into another peer's slot; that half was always right. The composite id is chosen entirely by
+     * the sender, and before #1815 nothing looked at it: not non-emptiness, not that it differed from
+     * [selfId], not any relationship to the identity that delivered it. [RefusedAnnounce.Reason] carries
+     * what each of the three refusals costs if it is not made.
+     *
+     * ### Pinning refuses one asymmetric case, and only that one
+     * *Many transport peers → one composite id* is **multipath bonding** — the entire point of keying
+     * [idMap] by a pair — and stays legal: each `(plyId, transportId)` is its own slot, and several slots
+     * converging on one composite id is exactly what [reachablePeersLocked] resolves. *One transport peer →
+     * different composite ids over time* is what is refused. A genuinely restarted peer arrives on a
+     * **fresh transport connection**, hence a fresh slot, so it is unaffected; the only thing that becomes
+     * impossible is a live connection mutating an identity it already claimed.
+     *
+     * An identical re-announce is **accepted**, not refused as a redundant one. `attachPly` re-announces on
+     * every `Woven` transition and again on peer-set growth, so it is a hot path, and its acceptance is
+     * what keeps it a fold trigger. A guard spelled `if (slot in idMap) refuse` would satisfy every
+     * rebind test and break that path invisibly, since the published `peers` set is unchanged either way —
+     * which is why `CompositeAnnounceIdentityTest` pins both directions.
+     *
+     * ### Dropped, never thrown
+     * Throwing here would be absorbed by the inbound pump's guard and surface as a
+     * [PlyReconcileException.Phase.INBOUND] — reporting a fault of *ours* on a peer's bad input, and
+     * burning the one signal a consumer has for a frame this composite genuinely could not process.
+     * `:kuilt-core` is logger-free, so the drop is recorded on [refusedAnnounces] instead of logged.
+     * Deliberately not silent: see [RefusedAnnounce].
+     */
+    private fun learnAnnouncedIdLocked(plyId: PlyId, transportId: PeerId, claimed: PeerId): Boolean {
+        val slot = plyId to transportId
+        val pinned = idMap[slot]
+        val reason = when {
+            claimed.value.isEmpty() -> RefusedAnnounce.Reason.EMPTY
+            claimed == selfId -> RefusedAnnounce.Reason.SELF
+            pinned != null && pinned != claimed -> RefusedAnnounce.Reason.REBIND
+            else -> null
+        }
+        if (reason != null) {
+            refusedAnnounceCount++
+            refusedAnnounces[slot] = RefusedAnnounce(plyId, transportId, claimed, reason)
+            return false
+        }
+        idMap[slot] = claimed
+        return true
     }
 
     /**
@@ -1077,6 +1144,12 @@ internal class CompositeSeam(
      *    `Announce` was never recorded, so the failure is upstream of the peers strand entirely. A *partial*
      *    `idMap` is genuinely reachable, not just the empty case: both announce sends are best-effort and
      *    swallowed ([attachPly]), so one ply can learn a mapping its sibling never did.
+     *  - …**but read [PeersStrand.refusedAnnounces] before concluding that** (#1815). Since a claimed
+     *    composite id is screened, a missing `idMap` entry has a second cause the reading above would
+     *    mis-attribute to the fabric: the frame *did* arrive and was **refused**. A record on the expected
+     *    slot names which rule refused it, and moves the diagnosis from "the announce was lost" to "the peer
+     *    claimed an identity it may not have". An empty [PeersStrand.refusedAnnounces] with a non-zero
+     *    [PeersStrand.refusedAnnounceCount] means the refusals were on slots since detached.
      *
      * Neither the mesh membership of the underlying plies nor either composite's [peers] can tell those
      * apart — the mesh reads as formed in both.
