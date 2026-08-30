@@ -66,9 +66,10 @@ import kotlin.time.Clock
  *   default).
  * @param traceContextProvider optional trace/sampling gate. When `null` (the M1
  *   default) capture is always-on and records carry no trace ids. When set, the
- *   trace is resolved at the synchronous capture edge via [resolveAtEdge] and
- *   carried on [NormalizedLogEvent.activeTrace]; [capture] then gates on that
- *   snapshot (see [resolveAtEdge] and [capture]).
+ *   trace is resolved at the synchronous capture edge via [resolveAtEdge], which
+ *   also applies the gate there (#1745) and carries the trace on
+ *   [NormalizedLogEvent.activeTrace] for [capture] to stamp from (see
+ *   [resolveAtEdge] and [capture]).
  */
 public class LogCapture(
     private val exporter: WarpLogRecordExporter,
