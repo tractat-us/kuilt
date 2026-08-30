@@ -429,10 +429,14 @@ public abstract class WasmRuntimeConformanceSuite {
         retryingOnlyBudgetOverruns(
             what = "a well-behaved op on a runtime that has just recovered from a timeout",
             budget = budget,
-            referenceInvoke = {
-                newRuntime(WasmSandboxConfig(executionTimeout = REFERENCE_BUDGET))
+            prepareReference = {
+                // Construct + load OUTSIDE the returned lambda: parse and instantiate dominate a
+                // three-byte reverse, and the measurement this is compared against times the
+                // invoke alone (#1810).
+                val op = newRuntime(WasmSandboxConfig(executionTimeout = REFERENCE_BUDGET))
                     .load(WasmKernelFixtures.REVERSE)
-                    .invoke(byteArrayOf(1, 2, 3))
+                val invoke: suspend () -> Unit = { op.invoke(byteArrayOf(1, 2, 3)) }
+                invoke
             },
         ) {
             assertFailsWith<WasmExecutionException> { runaway.invoke(ByteArray(0)) }

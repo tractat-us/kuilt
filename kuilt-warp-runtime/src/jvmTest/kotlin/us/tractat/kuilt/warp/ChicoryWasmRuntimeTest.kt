@@ -71,10 +71,15 @@ class ChicoryWasmRuntimeTest {
         retryingOnlyBudgetOverruns(
             what = "an innocent op running concurrently with a runaway over one shared runtime",
             budget = budget,
-            referenceInvoke = {
-                ChicoryWasmRuntime(WasmSandboxConfig(executionTimeout = 5.seconds)).use {
-                    it.load(WasmKernelFixtures.REVERSE).invoke(byteArrayOf(1, 2, 3, 4))
-                }
+            prepareReference = {
+                // Construct + load OUTSIDE the returned lambda: parse and instantiate dominate a
+                // four-byte reverse, and the measurement this is compared against times the invoke
+                // alone (#1810). The runtime deliberately outlives the samples — closing it would
+                // close the worker the samples run on.
+                val op = ChicoryWasmRuntime(WasmSandboxConfig(executionTimeout = 5.seconds))
+                    .load(WasmKernelFixtures.REVERSE)
+                val invoke: suspend () -> Unit = { op.invoke(byteArrayOf(1, 2, 3, 4)) }
+                invoke
             },
         ) {
             ChicoryWasmRuntime(WasmSandboxConfig(executionTimeout = budget)).use { rt ->

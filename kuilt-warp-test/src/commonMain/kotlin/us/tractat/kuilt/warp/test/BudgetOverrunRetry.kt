@@ -93,21 +93,31 @@ private const val BUDGET_OVERRUN_MARKER: String = "WASM execution exceeded"
  * @param what What the scenario proves, for the failure message.
  * @param budget The [WasmSandboxConfig.executionTimeout] the scenario's runtime is configured with.
  * @param attempts Maximum attempts; must be at least 1.
- * @param referenceInvoke An equivalent well-behaved guest invocation on a fresh runtime with a
- *   generous budget. Timed **only** once every attempt has overrun, to price this host's latency.
+ * @param emit Where an *absorbed* overrun is reported, as it happens. Defaults to `println`, which
+ *   Gradle captures into the per-test report — so a retry that eventually succeeds becomes visible
+ *   in CI without failing anything. Override to capture it in a test.
+ * @param timeSource The clock every duration in the report is measured against. Injected rather
+ *   than read off the wall, so this function's own tests can pin *what* is timed without hoping a
+ *   build machine is busy.
+ * @param prepareReference Builds an equivalent well-behaved guest invocation on a fresh,
+ *   generously-budgeted runtime and returns **the invocation alone**. Construction and `load`
+ *   happen inside this call and are therefore untimed; only the returned lambda is measured, so
+ *   the reference prices the same thing the scenario's budget bounds.
  * @param scenario The assertions to run. Must be safe to repeat.
  */
 public suspend fun <T> retryingOnlyBudgetOverruns(
     what: String,
     budget: Duration,
     attempts: Int = DEFAULT_ATTEMPTS,
-    referenceInvoke: suspend () -> Unit,
+    emit: (String) -> Unit = { println(it) },
+    timeSource: TimeSource = TimeSource.Monotonic,
+    prepareReference: suspend () -> (suspend () -> Unit),
     scenario: suspend () -> T,
 ): T {
     require(attempts >= 1) { "attempts must be at least 1, was $attempts" }
     val overruns = StringBuilder()
     repeat(attempts) { index ->
-        val started = TimeSource.Monotonic.markNow()
+        val started = timeSource.markNow()
         try {
             return scenario()
         } catch (e: WasmExecutionException) {
@@ -119,7 +129,7 @@ public suspend fun <T> retryingOnlyBudgetOverruns(
         "$what overran its $budget guest budget on all $attempts attempts.\n" +
             overruns +
             "A well-behaved invocation on a fresh, generously-budgeted runtime " +
-            "${referenceCost(referenceInvoke)} on this host just now. Read that against $budget:\n" +
+            "${referenceCost(timeSource, prepareReference)} on this host just now. Read that against $budget:\n" +
             "  - well under $budget => this host is fast, so a persistent overrun is a REAL defect: the\n" +
             "    runtime is no longer freeing its guest worker after a timeout (an interrupt or deadline\n" +
             "    that no longer stops the guest), so every later op inherits the runaway.\n" +
@@ -137,10 +147,13 @@ public suspend fun <T> retryingOnlyBudgetOverruns(
  * escaping here would replace the four-attempt report — the actual deliverable — with an unrelated
  * stack trace, on precisely the path that produces the report.
  */
-private suspend fun referenceCost(referenceInvoke: suspend () -> Unit): String {
-    val started = TimeSource.Monotonic.markNow()
+private suspend fun referenceCost(
+    timeSource: TimeSource,
+    prepareReference: suspend () -> (suspend () -> Unit),
+): String {
+    val started = timeSource.markNow()
     return try {
-        referenceInvoke()
+        prepareReference()()
         "took ${started.elapsedNow()}"
     } catch (e: WasmException) {
         "also failed after ${started.elapsedNow()} (${e.message})"
