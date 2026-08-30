@@ -70,6 +70,15 @@ public class InMemoryLoom(
     // cleared when the host seam is removed, so a sequential re-host is allowed.
     private var hostId: PeerId? = null
 
+    /**
+     * [FabricAvailability.Available] is a **fact** here, not the guess `Loom.capability()`'s floor
+     * exists to refuse (#1746): this fabric is the object itself. It opens no socket, acquires no
+     * OS resource, needs no permission and reaches no remote, so there is nothing left that could
+     * make a weave unattemptable. Roleless because no [TransportRole] describes an in-process mesh.
+     */
+    override fun capability(): TransportCapability =
+        TransportCapability(roles = emptySet(), availability = FabricAvailability.Available)
+
     override suspend fun weave(rendezvous: Rendezvous): Seam =
         when (rendezvous) {
             is Rendezvous.New -> mutex.withLock {

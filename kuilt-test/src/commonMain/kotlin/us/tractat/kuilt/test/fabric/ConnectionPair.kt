@@ -3,11 +3,13 @@ package us.tractat.kuilt.test.fabric
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import us.tractat.kuilt.core.DeliveryPolicy
+import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Spool
+import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.fabric.Connection
 import us.tractat.kuilt.core.fabric.handshaking
 import us.tractat.kuilt.core.fabric.identified
@@ -85,6 +87,10 @@ private class ConnectionLoom(
     private val remote: PeerId,
     private val conn: Connection,
 ) : Loom {
+    /** Established by construction — the [Connection] is already live (#1746). */
+    override fun capability(): TransportCapability =
+        TransportCapability(roles = emptySet(), availability = FabricAvailability.Available)
+
     override suspend fun weave(rendezvous: Rendezvous): Seam =
         identified(conn, self, remote, requireNotNull(currentCoroutineContext()[ContinuationInterceptor]) {
             "weave/handshake: no dispatcher (ContinuationInterceptor) in coroutine context"
@@ -107,6 +113,10 @@ public fun handshakingLoomPair(): Pair<Loom, Loom> {
 }
 
 private class HandshakeLoom(private val self: PeerId, private val conn: Connection) : Loom {
+    /** Established by construction — the [Connection] is already live (#1746). */
+    override fun capability(): TransportCapability =
+        TransportCapability(roles = emptySet(), availability = FabricAvailability.Available)
+
     override suspend fun weave(rendezvous: Rendezvous): Seam =
         handshaking(conn, self, requireNotNull(currentCoroutineContext()[ContinuationInterceptor]) {
             "weave/handshake: no dispatcher (ContinuationInterceptor) in coroutine context"

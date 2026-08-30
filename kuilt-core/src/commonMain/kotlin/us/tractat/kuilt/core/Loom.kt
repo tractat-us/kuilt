@@ -55,11 +55,38 @@ public interface Loom {
 
     /**
      * This fabric's role(s) and whether it can be attempted now. The single
-     * capability primitive — override this, not [availability]. Default: a
-     * roleless [FabricAvailability.Available].
+     * capability primitive — override this, not [availability].
+     *
+     * ## The default is a floor, not a verdict
+     *
+     * Default: a roleless [FabricAvailability.Unknown]. This is the **pre-connect** surface a
+     * consuming app turns into actionable guidance — "Bluetooth is off", "can't reach the server"
+     * (#1530) — so a loom that has probed nothing must say *"I cannot tell"* rather than assert a
+     * confident [FabricAvailability.Available] the caller will then act on. It mirrors the floor
+     * `Seam.capability` took in #1712: an authoritative false negative is strictly worse than
+     * silence, and the two halves of one contract must not default in opposite directions (#1746).
+     *
+     * **Override it whenever you can answer.** The question is "is this fabric *attemptable on this
+     * runtime*" — compiled in, permission granted, radio present — not "is the remote reachable",
+     * which is a live question a woven `Seam`'s own `capability` answers. So three shapes of
+     * override are all correct, and the default is none of them:
+     *
+     *  - [FabricAvailability.Available] where it is established **by construction** — an in-memory
+     *    loom, or an accept-side loom that acquires no OS resource and reaches no remote. Say in a
+     *    comment *why* it is a fact, so the next reader can tell it from a guess.
+     *  - [FabricAvailability.Unavailable] where the answer is known and negative — a stub whose
+     *    [weave] always throws on this target. (`FabricAvailability`'s "simply absent" case is a
+     *    fabric with no `Loom` at all on the target; a constructible stub is not that.)
+     *  - [FabricAvailability.Unknown] with a **specific** reason naming what was not established,
+     *    where a real probe exists but has not been run.
      */
     public fun capability(): TransportCapability =
-        TransportCapability(roles = emptySet(), availability = FabricAvailability.Available)
+        TransportCapability(
+            roles = emptySet(),
+            availability = FabricAvailability.Unknown(
+                "this loom does not check whether the fabric is attemptable on this runtime",
+            ),
+        )
 
     /**
      * Whether this fabric can be attempted now — the availability half of

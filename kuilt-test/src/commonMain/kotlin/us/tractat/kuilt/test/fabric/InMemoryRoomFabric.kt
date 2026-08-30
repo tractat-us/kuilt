@@ -1,6 +1,7 @@
 package us.tractat.kuilt.test.fabric
 
 import kotlinx.coroutines.CoroutineScope
+import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.MuxClientLoom
 import us.tractat.kuilt.core.MuxServerLoom
@@ -11,6 +12,7 @@ import us.tractat.kuilt.core.Principal
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.RoomAuthorizer
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.fabric.peerMesh
 import us.tractat.kuilt.core.withPrincipal
 import kotlin.coroutines.CoroutineContext
@@ -115,6 +117,12 @@ public class InMemoryRoomFabric(
      */
     public fun clientLoom(peerId: PeerId, random: Random, principal: Principal? = null): Loom {
         val base = object : Loom {
+            // Established by construction — clientSeam() wires an in-process connection into this
+            // fabric's server side and can never fail for a fabric reason (#1746). MuxClientLoom
+            // forwards this verdict, so the returned Loom answers with it.
+            override fun capability(): TransportCapability =
+                TransportCapability(roles = emptySet(), availability = FabricAvailability.Available)
+
             override suspend fun weave(rendezvous: Rendezvous): Seam = clientSeam(peerId, random, principal)
         }
         return MuxClientLoom(

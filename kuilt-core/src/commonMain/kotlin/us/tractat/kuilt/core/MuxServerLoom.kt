@@ -270,6 +270,18 @@ public class MuxServerLoom(
         }
     }
 
+    /**
+     * [FabricAvailability.Available] is a **fact** here, not the guess `Loom.capability()`'s floor
+     * exists to refuse (#1746). An accept-side loom reaches no remote and acquires no OS resource
+     * at weave time: [weave] hands back a room hub over the [ConnectionSource] the caller already
+     * built and passed in, so "is this fabric attemptable on this runtime" is settled by
+     * construction. (`KtorServerLoom` in `:kuilt-websocket` is the same shape.) Roleless because
+     * the transport's roles belong to whatever [ConnectionSource] was supplied, which this loom
+     * does not inspect.
+     */
+    override fun capability(): TransportCapability =
+        TransportCapability(roles = emptySet(), availability = FabricAvailability.Available)
+
     override suspend fun weave(rendezvous: Rendezvous): Seam = when (rendezvous) {
         is Rendezvous.New -> roomFor(rendezvous.pattern.sessionName)
         is Rendezvous.Existing -> throw UnsupportedOperationException(
