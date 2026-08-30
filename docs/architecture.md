@@ -211,7 +211,9 @@ interface Loom {
     suspend fun weave(rendezvous: Rendezvous): Seam           // the ONE abstract method
     suspend fun host(pattern: Pattern): Seam = weave(Rendezvous.New(pattern))
     suspend fun join(tag: Tag): Seam = weave(Rendezvous.Existing(tag))
-    fun availability(): FabricAvailability = FabricAvailability.Available
+    fun capability(): TransportCapability =                   // the capability primitive
+        TransportCapability(emptySet(), FabricAvailability.Unknown("…"))
+    fun availability(): FabricAvailability = capability().availability   // derived
 }
 
 interface Seam {
@@ -251,12 +253,21 @@ the type system won't catch:
   `toByteArray()` copy — the name makes the allocation visible at the call site.
 - **`sender` / `sequence` are stamped on receipt.** Senders leave them unset
   (null sender, zero sequence); the receiving `Seam` fills them in on dispatch.
-- **`availability()` means present-but-not-usable-now.** A fabric scoped out by
-  *target* (e.g. a Multipeer fabric on wasmJs, a WebRTC fabric on the JVM) is
-  simply **absent** — the artifact isn't on that platform's classpath — not
-  `Unavailable`. `Unavailable(reason)` is for a runtime capability that's missing
-  *now* (e.g. Play Services absent on an AOSP build). A host composes fabrics
-  with `looms.filter { it.availability() is Available }`.
+- **`availability()` means present-but-not-usable-now.** A fabric with no `Loom`
+  at all on a target (a WebRTC fabric on the JVM) is simply **absent** — the
+  artifact isn't on that platform's classpath — not `Unavailable`. But a fabric
+  that ships an `expect`/`actual` *stub* is not absent: `MultipeerPeerLinkFactory`
+  is constructible on Android and wasmJs, so a consumer really does hold a `Loom`
+  there, and it answers `Unavailable`. `Unavailable(reason)` is likewise for a
+  runtime capability that's missing *now* (Play Services absent on an AOSP build).
+- **`Unknown` is the `Loom` default, and a host must not filter it out.** A loom
+  that has established nothing reports `Unknown(reason)` rather than a confident
+  `Available` (#1746) — the same floor `Seam.capability` took in #1712, on the
+  surface a consuming app turns into pre-connect guidance. So compose with
+  `looms.filterNot { it.availability() is Unavailable }`, not
+  `filter { it is Available }`: the latter now silently drops every fabric that
+  is merely unproven. `CompositeLoom`'s own fold takes the same line — any ply
+  `Unknown` keeps the composite attemptable rather than collapsing it.
 
 ## Conformance: one suite, every fabric
 

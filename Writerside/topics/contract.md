@@ -53,19 +53,27 @@ fun capability(): TransportCapability   // roles + availability
     - `Available` — good to go.
     - `Unavailable(reason)` — a capability that exists in principle but is
       missing *right now* (for example, Play Services absent on an AOSP build).
-    - `Unknown(reason)` — the platform gives no ground truth up front, so the
-      only way to find out is to try (some peer-to-peer radios report this).
+    - `Unknown(reason)` — nobody has established the answer up front, so the
+      only way to find out is to try. This is what a fabric says by default,
+      and the `reason` tells you what was never checked (a permission that was
+      not asked for, a radio nobody read). A fabric only claims `Available`
+      once it can back the claim up.
 
-  A fabric that is *absent* on a platform (for example, Multipeer on wasmJs)
-  simply is not on the classpath.
+  A fabric that is genuinely *absent* on a platform — no class to construct at
+  all — simply is not on the classpath. That is different from a fabric that
+  ships a placeholder you *can* construct: Apple's Multipeer does exactly that
+  on Android and in the browser, so you really do hold one there, and it
+  answers `Unavailable` rather than pretending.
 
 `availability()` is a convenience shortcut for the availability half of
 `capability()`; fabric authors override `capability()`, never `availability()`.
 
-A host composing fabrics can pick the first available loom:
+A host composing fabrics should skip the ones that have ruled themselves out,
+rather than keep only the ones that have proved themselves — a fabric saying
+"I don't know" is usually still worth trying, and is often the honest answer:
 
 ```kotlin
-val activeLoom = looms.first { it.availability() is FabricAvailability.Available }
+val activeLoom = looms.first { it.availability() !is FabricAvailability.Unavailable }
 ```
 
 At runtime the same report is available live per session as `Seam.capability`,

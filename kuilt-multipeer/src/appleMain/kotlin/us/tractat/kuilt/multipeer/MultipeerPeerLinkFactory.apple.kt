@@ -120,6 +120,23 @@ public actual class MultipeerPeerLinkFactory actual constructor(
      */
     private val slot = ActiveSeamSlot("MultipeerPeerLinkFactory already has an active session")
 
+    /**
+     * The **roles** are a static fact — MultipeerConnectivity is compiled in on this target and it
+     * really does discover, carry data, and use Wi-Fi Direct and Bluetooth.
+     *
+     * The **availability** is not, and used to be a fabricated [FabricAvailability.Available]
+     * (#1746). This class reads neither the Local Network permission (which gates MC from iOS 14 on)
+     * nor any radio's state, and both are squarely inside the question `Loom.capability()` asks —
+     * "is this fabric attemptable on this runtime": compiled in, permission granted, radio present.
+     * Since this is the **pre-connect** surface a consuming app turns into guidance ("Bluetooth is
+     * off"), a confident verdict it has not established is an authoritative false negative — the
+     * same shape #1712 Track A removed one layer down on `Seam.capability`.
+     *
+     * [FabricAvailability.Unknown], not [FabricAvailability.Unavailable]: nothing here says the
+     * fabric is unusable, only that this loom has not established that it is usable. Replace it with
+     * a real verdict if a cheap synchronous permission/radio read is ever wired in — the reason
+     * string names exactly what such a probe would have to answer.
+     */
     public override fun capability(): TransportCapability =
         TransportCapability(
             roles = setOf(
@@ -128,7 +145,10 @@ public actual class MultipeerPeerLinkFactory actual constructor(
                 TransportRole.WifiDirect,
                 TransportRole.Bluetooth,
             ),
-            availability = FabricAvailability.Available,
+            availability = FabricAvailability.Unknown(
+                "MultipeerConnectivity is compiled in, but neither the Local Network permission " +
+                    "nor the Wi-Fi/Bluetooth radio state is probed",
+            ),
         )
 
     public actual override suspend fun weave(rendezvous: Rendezvous): Seam =

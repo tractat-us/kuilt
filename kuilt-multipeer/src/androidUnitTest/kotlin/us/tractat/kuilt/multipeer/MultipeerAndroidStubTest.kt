@@ -2,9 +2,11 @@ package us.tractat.kuilt.multipeer
 
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.core.FabricAvailability
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 
 /**
  * The androidMain [MultipeerServiceBrowser] stub's two halves, held apart.
@@ -46,6 +48,30 @@ class MultipeerAndroidStubTest {
             browser.departures().toList(),
             "an unavailability stub has no leave signal to discard, so its departures() must be over " +
                 "before anything could arrive on it",
+        )
+    }
+
+    /**
+     * The stub's *pre-connect* half, held to the same standard as its discovery half (#1746).
+     *
+     * `weave()` above throws unconditionally, so this loom can never carry a frame — yet it used to
+     * inherit `Loom.capability()`'s roleless [FabricAvailability.Available] default and tell a
+     * consuming app the fabric was ready. [FabricAvailability.Unavailable] is the right variant
+     * rather than [FabricAvailability.Unknown]: nothing here is unprobed, the answer is known
+     * exactly. (`FabricAvailability`'s KDoc reserves "simply absent" for a fabric scoped out by
+     * target; this class is *not* absent — `expect`/`actual` makes it constructible on Android, so
+     * a consumer really does hold a loom that must answer.)
+     */
+    @Test
+    fun availabilityIsUnavailableBecauseWeaveCanNeverSucceed() {
+        val factory = MultipeerPeerLinkFactory("stub-device", "kuilt-stub")
+        val unavailable = assertIs<FabricAvailability.Unavailable>(
+            factory.availability(),
+            "a loom whose weave() always throws must not report itself as ready to weave",
+        )
+        assertEquals(
+            "MultipeerConnectivity is an Apple-platform API; this androidMain stub cannot weave",
+            unavailable.reason,
         )
     }
 }

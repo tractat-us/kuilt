@@ -1,5 +1,6 @@
 package us.tractat.kuilt.test
 
+import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
@@ -7,6 +8,7 @@ import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.core.TransportCapability
 
 /**
  * A test double for [Loom] that returns [FakeSeam] instances.
@@ -21,6 +23,14 @@ import us.tractat.kuilt.core.Swatch
  * ```
  */
 public class FakeLoom : Loom {
+    /**
+     * [FabricAvailability.Available] is a **fact** here, not the guess `Loom.capability()`'s floor
+     * exists to refuse (#1746): [weave] constructs a [FakeSeam] in process and can never fail for
+     * a fabric reason — there is no socket, no permission and no radio to establish anything about.
+     */
+    override fun capability(): TransportCapability =
+        TransportCapability(roles = emptySet(), availability = FabricAvailability.Available)
+
     override suspend fun weave(rendezvous: Rendezvous): FakeSeam =
         when (rendezvous) {
             is Rendezvous.New -> seam(rendezvous.pattern.sessionName)
