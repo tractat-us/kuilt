@@ -433,7 +433,7 @@ class HeddleFenceTest {
             HeddleControlPlane(
                 sim.nodes.getValue(id), replica, backgroundScope, sinks.getValue(id), ControlMembershipSink { },
                 ControlBarrierSink { edge -> sinks.getValue(id).snapshot().baseFinalsOn(edge, replica) },
-                EntitlementLedger.ZERO, "inc-${id.value}",
+                EntitlementLedger.ZERO, root, "inc-${id.value}",
             )
         }
         sim.awaitLeader()
@@ -610,7 +610,7 @@ class HeddleFenceTest {
             raft = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader),
             self = self, scope = backgroundScope, sink = sink, membership = ControlMembershipSink { },
             barrier = ControlBarrierSink { edge -> sink.snapshot().baseFinalsOn(edge, self) },
-            initial = EntitlementLedger.bootstrap(root, emptyMap(), nonce = "cross-parent-genesis"),
+            initial = EntitlementLedger.bootstrap(root, emptyMap(), nonce = "cross-parent-genesis"), root = root,
             incarnation = "cross-parent",
         )
         fun rec(id: AttachmentId, parent: GroupId, child: GroupId) =
@@ -697,7 +697,7 @@ class HeddleFenceTest {
         fun peerPlane(replica: ReplicaId): HeddleControlPlane = HeddleControlPlane(
             raft = raft, self = replica, scope = scope, sink = ControlLedgerSink { },
             membership = ControlMembershipSink { }, barrier = ControlBarrierSink { SlotFinals.ZERO },
-            initial = initial, incarnation = "peer-${replica.value}",
+            initial = initial, root = root, incarnation = "peer-${replica.value}",
         )
 
         /** Mint 10 at the root and let the ordinary scheduler delegate it down `e1` into the leaf `g`. */
@@ -735,7 +735,7 @@ class HeddleFenceTest {
         val plane = HeddleControlPlane(
             raft = fake, self = self, scope = backgroundScope, sink = node.asControlSink(),
             membership = node.asMembershipSink(), barrier = node.asBarrierSink(),
-            initial = initial, incarnation = "fence-boot",
+            initial = initial, root = root, incarnation = "fence-boot",
         )
         return Fixture(self, node, plane, fake, initial, backgroundScope, root, g, e1, e3)
     }

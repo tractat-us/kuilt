@@ -47,8 +47,11 @@ class EntitlementLedgerLawsTest {
             records = edges.filter { rnd.nextBoolean() }.associateWith { id ->
                 List(rnd.nextInt(1, 3)) { randomRecord(id, rnd) }.toSet()
             },
+            // The root a mint is bound to (#1751) is drawn from the same pool as every other
+            // group, so the same id can carry records naming different roots on two replicas —
+            // the max-join over the third field has to be exercised, not held constant.
             minted = mintIds.filter { rnd.nextBoolean() }.associateWith {
-                MintRecord(replicas.random(rnd), rnd.nextLong(0L, 1_000L))
+                MintRecord(groups.random(rnd), replicas.random(rnd), rnd.nextLong(0L, 1_000L))
             },
             issued = randomEdgeCounters(rnd),
             returned = randomEdgeCounters(rnd),

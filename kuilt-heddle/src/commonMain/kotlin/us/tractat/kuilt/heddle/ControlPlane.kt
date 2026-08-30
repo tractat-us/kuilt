@@ -325,6 +325,10 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.heddle.HeddleControl
  *   Required, never defaulted: it gates a functional code path (the fence's whole safety argument),
  *   and a silent no-op default would have a peer answer a barrier it never actually applied.
  * @param initial the projection's initial state — the same ledger the data-plane node bootstraps from.
+ * @param root the one root of the tree this plane governs — the group every [ControlCommand.Mint] it
+ *   applies credits its supply at. Held here rather than carried per-command deliberately: a root per
+ *   command would let two committed mints seed two trees in one projection, which is precisely the
+ *   [LedgerConflict.MultipleRoots] state #1751 made unrepresentable in [EntitlementLedger.holdings].
  * @param nextIndex the first log index to replay from — `1` for a fresh node ([RaftNode.committedFrom]
  *   replays from the start with no gap; replay-0 `committed` would miss an act committed before subscription).
  */
@@ -337,6 +341,7 @@ internal class HeddleControlPlane(
     private val membership: ControlMembershipSink,
     private val barrier: ControlBarrierSink,
     initial: EntitlementLedger,
+    private val root: GroupId,
     private val incarnation: String,
     nextIndex: Long = 1L,
 ) {
@@ -578,7 +583,7 @@ internal class HeddleControlPlane(
             is ControlCommand.Mint -> {
                 // Mint identity is derived from the (unique, retry-stable, restart-safe) requestKey, so
                 // distinct acts never max-collide into one lost mint and a retry never double-mints.
-                apply(projection.mint(MintId("mint#${envelope.requestKey}"), command.holder, command.amount))
+                apply(projection.mint(MintId("mint#${envelope.requestKey}"), root, command.holder, command.amount))
                 ControlOutcome.Applied(index)
             }
 

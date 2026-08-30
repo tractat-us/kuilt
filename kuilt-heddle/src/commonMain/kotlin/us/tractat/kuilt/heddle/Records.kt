@@ -39,15 +39,25 @@ public data class AttachmentRecord(
 )
 
 /**
- * One act of introducing root supply: [holder] is credited [amount] units at the
- * root path. Keyed in the ledger by a unique [MintId] so independently-recorded
- * mints union rather than collide (design fix 4).
+ * One act of introducing root supply: [holder] is credited [amount] units at [root]'s
+ * path. Keyed in the ledger by a unique [MintId] so independently-recorded mints union
+ * rather than collide (design fix 4).
  *
+ * **[root] is what makes the supply countable once (#1751).** [EntitlementLedger.holdings]
+ * credits minted supply to a group with no inbound edge, and a record carrying only a holder
+ * and an amount is creditable at *every* such group — so merging two independently
+ * [EntitlementLedger.bootstrap]ped ledgers used to hand each rootless group the whole
+ * `mintedTotal`, double-counting every mint in the Σ-holdings conservation identity. Binding
+ * the record to the root it was minted at makes that state unrepresentable rather than merely
+ * detectable: a rootless group is credited only the mints naming *it*.
+ *
+ * @property root the group whose tree this supply belongs to; the only group it is creditable at.
  * @property holder the replica the minted supply is credited to.
  * @property amount the units minted; non-negative.
  */
 @Serializable
 public data class MintRecord(
+    public val root: GroupId,
     public val holder: ReplicaId,
     public val amount: Long,
 ) : Comparable<MintRecord> {
@@ -56,6 +66,7 @@ public data class MintRecord(
     }
 
     override fun compareTo(other: MintRecord): Int {
+        root.compareTo(other.root).let { if (it != 0) return it }
         holder.compareTo(other.holder).let { if (it != 0) return it }
         return amount.compareTo(other.amount)
     }

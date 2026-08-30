@@ -123,7 +123,7 @@ class EntitlementLedgerValidateTest {
     fun recordDivergenceIsReportedAndQuarantinesHoldings() {
         val left = EntitlementLedger.of(
             records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE))),
-            minted = mapOf(MintId("m") to MintRecord(alice, 10L)), // funded, so root is not itself negative
+            minted = mapOf(MintId("m") to MintRecord(root, alice, 10L)), // funded, so root is not itself negative
             issued = mapOf(e1 to GCounter.of(alice to 10L)),
         )
         val right = EntitlementLedger.of(
@@ -190,7 +190,7 @@ class EntitlementLedgerValidateTest {
                 e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE)),
                 e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.ONE)),
             ),
-            minted = mapOf(MintId("m") to MintRecord(alice, 50L)),
+            minted = mapOf(MintId("m") to MintRecord(root, alice, 50L)),
             issued = mapOf(e1 to GCounter.of(alice to 50L), e2 to GCounter.of(alice to 20L)),
         )
         assertEquals(30L, healthy.holdings(g1, alice)) // 50 credited − 20 delegated to g2
@@ -266,7 +266,7 @@ class EntitlementLedgerValidateTest {
     fun conservationViolationBackstopsServiceChargedBeyondMintedSupply() {
         val overcharged = EntitlementLedger.of(
             records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE))),
-            minted = mapOf(MintId("m") to MintRecord(alice, 10L)), // only 10 ever minted
+            minted = mapOf(MintId("m") to MintRecord(root, alice, 10L)), // only 10 ever minted
             issued = mapOf(e1 to GCounter.of(alice to 25L)),
             leafSpent = mapOf(e1 to GCounter.of(alice to 25L)), // yet 25 charged
         )
@@ -410,7 +410,7 @@ class EntitlementLedgerValidateTest {
             e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.ONE)),
             e3 to setOf(AttachmentRecord(e3, g1, g2, Weight.ONE)),
         ),
-        minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+        minted = mapOf(MintId("m") to MintRecord(root, alice, 100L)),
         issued = mapOf(e1 to GCounter.of(alice to 100L), e2 to GCounter.of(alice to 60L)),
         returned = mapOf(e2 to GCounter.of(alice to 60L)), // the move drained the strand…
         issuedRelocIn = mapOf(e3 to GCounter.of(alice to 60L)), // …and credited the successor
@@ -469,7 +469,7 @@ class EntitlementLedgerValidateTest {
                 e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE)),
                 e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.ONE)),
             ),
-            minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+            minted = mapOf(MintId("m") to MintRecord(root, alice, 100L)),
             issued = mapOf(e1 to GCounter.of(alice to 100L), e2 to GCounter.of(alice to 60L)),
             transfers = mapOf(PathKey.of(e2) to mapOf(alice to GCounter.of(bob to 40L))),
         )
@@ -620,7 +620,7 @@ class EntitlementLedgerValidateTest {
                 e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.ONE)),
                 e3 to setOf(AttachmentRecord(e3, g1, g2, Weight.ONE)),
             ),
-            minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+            minted = mapOf(MintId("m") to MintRecord(root, alice, 100L)),
             issued = mapOf(e1 to GCounter.of(alice to 100L), e2 to GCounter.of(alice to 60L)),
             returned = mapOf(e2 to GCounter.of(alice to 20L)), // alice released what she still held
             leafSpent = mapOf(e2 to GCounter.of(bob to 40L)), // bob spent what he was handed
@@ -672,7 +672,7 @@ class EntitlementLedgerValidateTest {
     fun aHandOffAtTheRootPathIsNeverOrphaned() {
         val atRoot = EntitlementLedger.of(
             records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE))),
-            minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+            minted = mapOf(MintId("m") to MintRecord(root, alice, 100L)),
             transfers = mapOf(PathKey.ROOT to mapOf(alice to GCounter.of(bob to 30L))),
         )
         assertAll(
@@ -691,7 +691,7 @@ class EntitlementLedgerValidateTest {
     fun rowsAtAKeyNamingNoKnownGenerationAreReported() {
         val dangling = EntitlementLedger.of(
             records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE))),
-            minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+            minted = mapOf(MintId("m") to MintRecord(root, alice, 100L)),
             transfers = mapOf(PathKey.of(AttachmentId("nowhere")) to mapOf(alice to GCounter.of(bob to 30L))),
         )
         assertEquals(
@@ -715,7 +715,7 @@ class EntitlementLedgerValidateTest {
     fun aDanglingKeyWhoseRowsCancelIsNotReported() {
         val cancelling = EntitlementLedger.of(
             records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE))),
-            minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+            minted = mapOf(MintId("m") to MintRecord(root, alice, 100L)),
             transfers = mapOf(
                 PathKey.of(AttachmentId("nowhere")) to mapOf(
                     alice to GCounter.of(bob to 30L),
@@ -754,7 +754,7 @@ class EntitlementLedgerValidateTest {
                 e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.ONE)),
                 e3 to setOf(AttachmentRecord(e3, g1, g2, Weight.ONE)),
             ),
-            minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+            minted = mapOf(MintId("m") to MintRecord(root, alice, 100L)),
             issued = mapOf(e1 to GCounter.of(alice to 100L), e2 to GCounter.of(alice to 60L)),
             returned = mapOf(e2 to GCounter.of(alice to 20L)),
             transfers = mapOf(PathKey.of(e2) to mapOf(alice to GCounter.of(bob to 40L))),
@@ -807,7 +807,7 @@ class EntitlementLedgerValidateTest {
                 e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.ONE)),
                 e3 to setOf(AttachmentRecord(e3, g1, g2, Weight.ONE)),
             ),
-            minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+            minted = mapOf(MintId("m") to MintRecord(root, alice, 100L)),
             issued = mapOf(e1 to GCounter.of(alice to 100L), e2 to GCounter.of(alice to 60L)),
             transfers = mapOf(
                 PathKey.of(e2) to mapOf(
@@ -849,7 +849,7 @@ class EntitlementLedgerValidateTest {
                 ),
                 e3 to setOf(AttachmentRecord(e3, g1, g2, Weight.ONE)),
             ),
-            minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+            minted = mapOf(MintId("m") to MintRecord(root, alice, 100L)),
             issued = mapOf(e1 to GCounter.of(alice to 100L), e2 to GCounter.of(alice to 60L)),
             transfers = mapOf(PathKey.of(e2) to mapOf(alice to GCounter.of(bob to 40L))),
             lifecycle = mapOf(e1 to Lifecycle.ACTIVE, e2 to Lifecycle.RETIRED, e3 to Lifecycle.ACTIVE),

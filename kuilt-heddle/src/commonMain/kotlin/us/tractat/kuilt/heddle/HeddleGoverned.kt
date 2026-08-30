@@ -109,6 +109,7 @@ public fun CoroutineScope.heddleGoverned(
         membership = node.asMembershipSink(),
         barrier = node.asBarrierSink(),
         initial = initialLedger,
+        root = root,
         incarnation = incarnation,
     )
     return GovernedHeddleNode(node, control)
