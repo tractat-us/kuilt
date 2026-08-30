@@ -45,6 +45,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | "only run this on a GPU / in-region peer", a placement predicate over peer capabilities, "can this peer run this task" | `Affinity` + `TaskDescriptor.where` + `CapSet` | [Fair share & placement](#fair-share--placement) |
 | a blob cache keyed by a content hash, a "have you got these bytes?" request/response, a manifest of what each peer holds | `Creel` + `BobbinExchange` | [Code mobility](#code-mobility) |
 | running code that arrived from another peer — a plugin loader, an `eval`, a bespoke sandbox or timeout-and-kill wrapper | `WasmRuntime` + `WasmSandboxConfig` + `WarpLazyFetch` | [Code mobility](#code-mobility) |
+| a `try`/`catch` inside an `onEach { … }.launchIn(scope)` so one bad item cannot kill a long-lived collector — or a fix for "the pump stopped and nothing said so", a `Seam`/`Room` that goes deaf after one throw, an iOS crash traced to an unhandled coroutine exception | `Flow.pumpIn(scope, onFailure) { … }` — it owns the upstream half your `try` structurally cannot see | [Long-lived pumps](#long-lived-pumps) |
 
 ## Discovery
 
@@ -1231,6 +1232,35 @@ while (start < blob.size) {
     room.sendTo(peer, blob.copyOfRange(start, end))
     start = end
 }
+```
+
+## Long-lived pumps
+
+**Intent:** collect a flow for the life of a session — a peer's state, a roster, an inbound frame stream — without one throw ending the *collector* rather than the item. Don't write `flow.onEach { try { … } catch (…) { … } }.launchIn(scope)`.
+**Primitive:** `Flow.pumpIn(scope, onFailure) { … }` (`:kuilt-core`).
+
+There are **two** ways such a collector dies and a hand-written `try` only covers one. `onEach { … }.launchIn(scope)` desugars to `scope.launch { flow.onEach { … }.collect() }`, so your `try` sits *inside* the collector: it sees what the body throws and never sees a throw raised by the **flow itself**, which ends the flow and escapes the `launch` entirely. On Kotlin/Native that escape is not a dead coroutine, it is a dead **process** — an unhandled coroutine exception reaches the runtime's default handler and aborts, and a `SupervisorJob` is the mechanism rather than the protection. `pumpIn` is one call owning both halves for exactly that reason, and `PumpFailure.ITEM` / `PumpFailure.UPSTREAM` tells your handler whether the pump survived.
+
+It also settles the cancellation question you would otherwise get wrong: `runCatchingCancellable` discriminates on *type*, which cannot tell your own cancellation from a `CancellationException` a callee minted (a consumer's `withTimeout` inside `sendTo`). Rethrown from a pump, that one **cancels it silently** — no report, no stack trace. `pumpIn` uses `currentCoroutineContext().ensureActive()`, which decides it at runtime; cancelling your scope still cancels the pump.
+
+<!-- verbatim from kuilt-core/src/commonSamples/kotlin/us/tractat/kuilt/core/PumpInSamples.kt#samplePumpIn -->
+```kotlin
+// A consumer-authored flow that hands over one item the body cannot apply, and then fails outright.
+val updates = flow {
+    emit("apply-me")
+    emit("i-will-not-apply")
+    error("…and then the flow itself gave up")
+}
+
+val pump = updates.pumpIn(
+    scope = backgroundScope,
+    // ITEM: that update was lost, the pump lives. UPSTREAM: the pump is over — say so, loudly.
+    onFailure = { half, _ -> reported += half },
+) { update ->
+    if (update == "i-will-not-apply") error("this update could not be applied")
+    applied += update
+}
+pump.join()
 ```
 
 ## Dedup
