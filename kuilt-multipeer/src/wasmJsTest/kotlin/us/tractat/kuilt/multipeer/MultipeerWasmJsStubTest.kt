@@ -2,9 +2,11 @@ package us.tractat.kuilt.multipeer
 
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.core.FabricAvailability
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 
 /**
  * The wasmJs [MultipeerServiceBrowser] stub's two halves, held apart — the same statement
@@ -35,6 +37,26 @@ class MultipeerWasmJsStubTest {
             browser.departures().toList(),
             "an unavailability stub has no leave signal to discard, so its departures() must be over " +
                 "before anything could arrive on it",
+        )
+    }
+
+    /**
+     * The stub's *pre-connect* half — the same statement `MultipeerAndroidStubTest` makes about the
+     * androidMain stub, for the same reason (#1746). `weave()` throws unconditionally, so the
+     * inherited roleless [FabricAvailability.Available] default was a claim this loom can never
+     * honour; [FabricAvailability.Unavailable] is known exactly, so it is not
+     * [FabricAvailability.Unknown] either.
+     */
+    @Test
+    fun availabilityIsUnavailableBecauseWeaveCanNeverSucceed() {
+        val factory = MultipeerPeerLinkFactory("stub-device", "kuilt-stub")
+        val unavailable = assertIs<FabricAvailability.Unavailable>(
+            factory.availability(),
+            "a loom whose weave() always throws must not report itself as ready to weave",
+        )
+        assertEquals(
+            "MultipeerConnectivity is an Apple-platform API; this wasmJsMain stub cannot weave",
+            unavailable.reason,
         )
     }
 }
