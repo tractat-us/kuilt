@@ -83,6 +83,13 @@ public class DefaultJoinerReconnectController(
         return result
     }
 
+    override fun onPeerRecovered(
+        peerId: PeerId,
+        at: Long,
+    ) {
+        scope.launch { cancelWindowTimer(peerId) }
+    }
+
     override fun expire(
         peerId: PeerId,
         at: Long,
@@ -104,7 +111,10 @@ public class DefaultJoinerReconnectController(
 
         val timerJob = scope.launch { runTimer(peerId, expiresAt) }
         mutex.withLock {
-            windows[peerId] = WindowState(timerJob = timerJob)
+            // `detectedAt` is stored, not re-read later: it is this episode's identity, and
+            // `forceExpire` has to echo the same value onto `WindowExpired` however it is reached
+            // (timer or explicit `expire`). See [JoinerReconnectEvent.WindowExpired.detectedAt].
+            windows[peerId] = WindowState(timerJob = timerJob, detectedAt = at)
         }
         // `detectedAt` is the `at` this controller was handed, echoed unchanged — NOT `clock()`.
         // The whole point is to name the episode this window belongs to, and a clock read here
@@ -112,6 +122,30 @@ public class DefaultJoinerReconnectController(
         _events.emit(
             JoinerReconnectEvent.WindowOpened(peerId = peerId, expiresAt = expiresAt, detectedAt = at),
         )
+    }
+
+    /**
+     * Disarms [peerId]'s expiry timer, leaving the window itself **open and resumable**.
+     *
+     * The disarming is the fix (#2556): a window whose peer came back on the heartbeat path has no
+     * business expiring, and its [JoinerReconnectEvent.WindowExpired] is what evicts a healthy
+     * member from every other roster.
+     *
+     * Leaving the state in [windows] rather than removing it is deliberate, and it is the
+     * *conservative* half. Removing it would make a [tryResume] that is already in flight — or one
+     * from a peer whose link healed enough for pings but which is completing its own reconnect —
+     * answer [ResumeResult.WindowNotYetOpen] where today it answers [ResumeResult.Success]: a
+     * retryable reject that no retry can ever satisfy, because the window it is waiting for is gone
+     * and only a *fresh* drop reopens one. That is a live regression of the #1572 distinction, paid
+     * to tidy a map entry the next [openWindow] overwrites anyway.
+     *
+     * Not [forceExpire]: that is an expiry, and it would leave `expiredAt` set, so the very next
+     * fast-reconnect race would answer [ResumeResult.WindowClosed] — terminal, "re-join fresh" —
+     * for a peer whose window merely stopped being needed.
+     */
+    private suspend fun cancelWindowTimer(peerId: PeerId) {
+        val timerJob = mutex.withLock { windows[peerId]?.takeIf { it.expiredAt == null }?.timerJob }
+        timerJob?.cancel()
     }
 
     private suspend fun runTimer(
@@ -127,19 +161,21 @@ public class DefaultJoinerReconnectController(
         peerId: PeerId,
         at: Long,
     ) {
-        val didExpire =
+        val detectedAt =
             mutex.withLock {
                 val state = windows[peerId]
                 if (state != null && !state.consumed && state.expiredAt == null) {
                     state.timerJob.cancel()
                     state.expiredAt = at
-                    true
+                    state.detectedAt
                 } else {
-                    false
+                    null
                 }
             }
-        if (didExpire) {
-            _events.emit(JoinerReconnectEvent.WindowExpired(peerId = peerId, at = at))
+        if (detectedAt != null) {
+            _events.emit(
+                JoinerReconnectEvent.WindowExpired(peerId = peerId, at = at, detectedAt = detectedAt),
+            )
         }
     }
 
@@ -151,6 +187,8 @@ public class DefaultJoinerReconnectController(
 
 private class WindowState(
     val timerJob: Job,
+    /** The `at` this window was opened from — the partition episode's identity (#1781, #2556). */
+    val detectedAt: Long,
 ) {
     var consumed: Boolean = false
     var expiredAt: Long? = null

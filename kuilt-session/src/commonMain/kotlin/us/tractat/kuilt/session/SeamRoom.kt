@@ -486,6 +486,45 @@ private sealed interface RefineVerdict {
     data class StaleEpisode(val held: Long?, val announced: Long) : RefineVerdict
 }
 
+/**
+ * What `SeamRoom.handleWindowExpired` decided about one [JoinerReconnectEvent.WindowExpired].
+ *
+ * The sibling of [RefineVerdict], and it exists for a stronger reason than that one does: the two
+ * things an expiry drives — an authoritative `Farewell` to every other member, and the local
+ * eviction — used to be two statements with one guard between them, so a recovery landing in the
+ * gap evicted a healthy member everywhere but the host (#2556). Reaching a single verdict under a
+ * single acquisition of the lock is what makes them one decision; acting on it outside the lock is
+ * what keeps the suspend-free critical section the file's thread-safety note promises.
+ */
+private sealed interface ExpiryVerdict {
+    /** The window really did run out for the episode this room holds. Fan out, and evict. */
+    data object Expired : ExpiryVerdict
+
+    /**
+     * The member is gone already — normally because the detector's [PartitionEvent.PeerLost] won
+     * the race to the same instant. Nothing to evict, but the `Farewell` still goes out: see
+     * `SeamRoom.handleWindowExpired` for why gating it on membership would make #1557 a coin toss.
+     */
+    data object AlreadyGone : ExpiryVerdict
+
+    /**
+     * The member is [Liveness.Connected] — it came back inside its window and the expiry is stale.
+     * The #2556 case: neither the fan-out nor the eviction may run.
+     */
+    data object Recovered : ExpiryVerdict
+
+    /**
+     * The expiry named partition episode [announced] while this room holds [held] (null when it
+     * holds none), so it belongs to an episode that is over and the member's *current* window has
+     * not run out.
+     *
+     * Both instants are carried, not a flag, for [RefineVerdict.StaleEpisode]'s reason: they are
+     * what tells a genuine late expiry apart from a hold policy that fails to echo the `at` it was
+     * handed.
+     */
+    data class StaleEpisode(val held: Long?, val announced: Long) : ExpiryVerdict
+}
+
 internal class SeamRoom(
     private val seam: Seam,
     role: SessionRole,
@@ -1143,11 +1182,12 @@ internal class SeamRoom(
      *   instant — discarded outright when this loop had not yet subscribed (#1618 Drop B) — and a
      *   joiner has no controller at all, so it never got a window (#1724).
      * - [JoinerReconnectEvent.Resumed] → [MembershipEvent.Resumed] (host events; liveness reset).
-     * - [JoinerReconnectEvent.WindowExpired] → no extra *local* event here; the
-     *   [HeartbeatPartitionDetector] drives [PartitionEvent.PeerLost] which produces
-     *   [MembershipEvent.Left] via [handlePeerLost]. It does, however, propagate an
-     *   authoritative [AdmitMessage.Farewell] (`expired = true`) to the remaining members —
-     *   see [propagateFarewell] (#1557).
+     * - [JoinerReconnectEvent.WindowExpired] → [handleWindowExpired], which decides *once* whether
+     *   this expiry is one to act on and then both propagates the authoritative
+     *   [AdmitMessage.Farewell] (#1557) and back-stops the local eviction (#1618 Track C). No extra
+     *   *local* event is emitted here: the [MembershipEvent.Left] comes out of [removeFromRoster],
+     *   whether this arm or the [HeartbeatPartitionDetector]'s [PartitionEvent.PeerLost] gets there
+     *   first.
      */
     private suspend fun runReconnectEventLoop(ctrl: JoinerReconnectController) {
         ctrl.events.collect { event ->
@@ -1160,19 +1200,8 @@ internal class SeamRoom(
                     )
                 is JoinerReconnectEvent.Resumed ->
                     handleReconnectResumed(event.peerId)
-                is JoinerReconnectEvent.WindowExpired -> {
-                    // Remotely, the expiry needs the same authoritative fan-out a clean leave gets,
-                    // or a peer with no heartbeat edge against the expired member (a star topology's
-                    // other joiners) never evicts it (#1557).
-                    propagateFarewell(event.peerId, expired = true)
-                    // Locally the detector's PeerLost is normally the evictor, and Left(PartitionExpired)
-                    // follows from it. But PeerLost is the SOLE evictor, and on a real transport the
-                    // detector can stall in Partitioned and never mature to PeerLost — the host then
-                    // sticks in Partitioned forever, never emitting Left (#1618 Track C). The reconnect
-                    // window is an independent timer; when it expires with the member STILL Partitioned,
-                    // back-stop the eviction here. Idempotent against a later PeerLost.
-                    evictOnExpiredWindowIfPartitioned(event.peerId)
-                }
+                is JoinerReconnectEvent.WindowExpired ->
+                    handleWindowExpired(event)
             }
         }
     }
@@ -2229,6 +2258,22 @@ internal class SeamRoom(
     /**
      * Restore [Liveness.Connected] for [peerId] and announce it. Idempotent counterpart of
      * [markPartitioned]: a member that was not paused emits nothing and announces nothing.
+     *
+     * **It also closes the reconnect window it opened** ([JoinerReconnectController.onPeerRecovered],
+     * #2556). This is the exact mirror of [markPartitioned]'s `onPeerUnresponsive` call, and its
+     * absence was the root of #2556: a blip is restored by the detector alone, so the peer never
+     * presents a [ResumeToken] and [JoinerReconnectController.tryResume] — the only other thing that
+     * closes a window — is never reached. The window stayed armed behind a member that was already
+     * back, and its [JoinerReconnectEvent.WindowExpired] was fanned out as an authoritative
+     * `Farewell`, evicting a healthy member from every roster but this one's.
+     *
+     * Called **outside** the lock, like `onPeerUnresponsive`: an injected hold policy (#1614) is
+     * consumer code and must never run under this room's lock.
+     *
+     * The room does not *rely* on the controller honouring it — [handleWindowExpired] gates every
+     * expiry on its own state regardless, which is what makes an injected policy that ignores this
+     * merely noisy rather than destructive. Removing the cause and refusing to act on it are
+     * separate obligations; this is the first.
      */
     private fun markRecovered(peerId: PeerId, at: Instant) {
         val (wasPartitioned, updated) = lock.withLock {
@@ -2239,6 +2284,7 @@ internal class SeamRoom(
         if (!wasPartitioned) return
         emitEvent(MembershipEvent.Recovered(updated.id, at))
         if (_role.value == SessionRole.Host) propagateUnpaused(peerId)
+        reconnectController?.onPeerRecovered(peerId, at.toEpochMilliseconds())
     }
 
     /**
@@ -3143,30 +3189,92 @@ internal class SeamRoom(
     }
 
     /**
-     * Host-eviction backstop for #1618 Track C. Evicts [peerId] iff it is **still**
-     * [Liveness.Partitioned] when its reconnect window expires.
+     * A reconnect window expired. Decide **once**, under one acquisition of [lock], whether this
+     * expiry is one to act on — and only then do the two things acting on it means: fan out the
+     * authoritative [AdmitMessage.Farewell] (#1557) and back-stop the local eviction (#1618
+     * Track C).
      *
-     * The per-peer [HeartbeatPartitionDetector]'s [PartitionEvent.PeerLost] is normally the sole
-     * evictor (and normally fires around the same virtual instant as [JoinerReconnectEvent.WindowExpired],
-     * with the same [heartbeatConfig]-derived window). On a real transport the detector can stall in
-     * `Partitioned` and never mature to `PeerLost`, so this covers that gap. Mirrors the non-host branch
-     * of [handlePeerLost]: stop the detector, then [removeFromRoster] with [LeaveReason.PartitionExpired].
+     * **Why one decision and not two (#2556).** These were two statements, and only the second was
+     * guarded — on *"is this peer partitioned right now?"*. The fan-out ran first and unguarded, so
+     * a window left armed behind a member that had already recovered evicted that member from every
+     * *other* roster while this one, correctly, declined: a permanent split, spreading, because
+     * [handleFarewell] stops the departed peer's detector and there is no re-admit path behind an
+     * admit fan-out. Two guards would have been the same bug one level down — the fan-out reading
+     * the level, then the eviction re-reading it, with the recovery free to land between them. The
+     * decision has to be atomic with respect to the state it is about, so it is taken here and the
+     * actions follow it outside the lock.
      *
-     * Idempotent — a member already evicted by `PeerLost` (absent from [admittedById]) or recovered
-     * ([Liveness.Connected]) is a no-op; and [removeFromRoster] itself guards a duplicate [MembershipEvent.Left],
-     * so a subsequent late `PeerLost` emits nothing. This loop runs on the host only ([reconnectController]
-     * is null for joiners), so it never pre-empts a joiner's terminal `HostLost` path.
+     * **Why liveness alone is not the guard.** [ExpiryVerdict.StaleEpisode] is the other half. The
+     * partition guard rejects an expiry for a member that is not partitioned *now*, which covers
+     * "recovered, and still recovered" but not "recovered, then partitioned again" — and an expiry
+     * naming the *first* episode, arriving while the second is open, would pass it and take a seat
+     * whose window has not run out. That is exactly the insufficiency #1781 established for
+     * [refineWindow], and it matters more here, not less: moving a deadline is reversible, evicting
+     * a seat is not. [JoinerReconnectEvent.WindowExpired.detectedAt] against [episodeDetectedAtMs]
+     * is the same identity test [refineWindow] applies, on the same map.
+     *
+     * **[ExpiryVerdict.AlreadyGone] still fans out, deliberately.** The member being absent from
+     * [admittedById] is the *ordinary* path, not an anomaly: the detector's
+     * [PartitionEvent.PeerLost] normally fires at the same virtual instant as this event, from the
+     * same [heartbeatConfig]-derived window, and which of the two arrives first is scheduling luck.
+     * [handlePeerLost] fans nothing out, so gating the `Farewell` on membership would make #1557's
+     * whole guarantee a race — a star topology's bystander would evict, or not, depending on
+     * coroutine order. There is nothing left to evict, so only the fan-out runs.
+     *
+     * Idempotent throughout: [removeFromRoster] guards a duplicate [MembershipEvent.Left], so a
+     * late `PeerLost` after this arm emits nothing. Host-only, since [reconnectController] is null
+     * on a joiner — it never pre-empts a joiner's terminal `HostLost` path.
      */
-    private fun evictOnExpiredWindowIfPartitioned(peerId: PeerId) {
-        val shouldEvict = lock.withLock {
-            val current = admittedById[peerId] ?: return
-            if (current.liveness !is Liveness.Partitioned) return
+    private fun handleWindowExpired(event: JoinerReconnectEvent.WindowExpired) {
+        val peerId = event.peerId
+        val verdict = lock.withLock {
+            val current = admittedById[peerId] ?: return@withLock ExpiryVerdict.AlreadyGone
+            if (current.liveness !is Liveness.Partitioned) return@withLock ExpiryVerdict.Recovered
+            val held = episodeDetectedAtMs[peerId]
+            // A null `held` is stale too, for [refineWindow]'s reason: an expiry naming an episode
+            // this room recorded no detection for is as unusable as one naming a superseded
+            // episode. Unreachable on a host today — `markPartitioned` is the only writer of
+            // `Liveness.Partitioned` here and it writes the map in the same critical section, and
+            // `removeFromRoster` reaps the two together — so the log line below is how a reader
+            // would find out that stopped being true.
+            if (held != event.detectedAt) return@withLock ExpiryVerdict.StaleEpisode(held, event.detectedAt)
             stopDetector(peerId)
-            true
+            ExpiryVerdict.Expired
         }
-        if (shouldEvict) {
-            logger.info { "windowExpired.evict peer=${peerId.value} reason=PartitionExpired backstop=PeerLost-absent" }
-            removeFromRoster(peerId, LeaveReason.PartitionExpired)
+        when (verdict) {
+            ExpiryVerdict.Expired -> {
+                logger.info {
+                    "windowExpired.evict peer=${peerId.value} reason=PartitionExpired episode=${event.detectedAt}"
+                }
+                propagateFarewell(peerId, expired = true)
+                removeFromRoster(peerId, LeaveReason.PartitionExpired)
+            }
+            ExpiryVerdict.AlreadyGone -> {
+                logger.info { "windowExpired.farewellOnly peer=${peerId.value} episode=${event.detectedAt}" }
+                propagateFarewell(peerId, expired = true)
+            }
+            ExpiryVerdict.Recovered ->
+                // `info`, unlike [refineWindow]'s sibling drop: this one suppressed an
+                // **irreversible** action against a healthy member, and with the shipped
+                // [DefaultJoinerReconnectController] it should now be unreachable — `markRecovered`
+                // disarms the timer through [JoinerReconnectController.onPeerRecovered]. Reaching
+                // it names a hold policy (#1614) that does not honour that call, which is a
+                // contract breach nothing can check at compile time and which this line is the
+                // only way to see.
+                logger.info {
+                    "windowExpired.suppressed peer=${peerId.value} reason=recovered " +
+                        "episode=${event.detectedAt} at=${event.at}"
+                }
+            is ExpiryVerdict.StaleEpisode ->
+                // `debug`, matching `room.window.stale-episode`: a genuine late expiry racing a
+                // re-detection is expected and rare, and dropping it is the gate working.
+                // IDENTITIES, not a count — `announced` against `held` separates "a late expiry for
+                // a superseded episode" (held is some other real instant) from "this controller
+                // echoes the wrong value" (announced matches no held, ever).
+                logger.debug {
+                    "windowExpired.stale-episode self=${selfId.value} peer=${peerId.value} " +
+                        "announced=${verdict.announced} held=${verdict.held} at=${event.at}"
+                }
         }
     }
 
