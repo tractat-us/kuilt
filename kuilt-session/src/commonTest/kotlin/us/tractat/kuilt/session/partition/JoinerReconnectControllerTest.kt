@@ -68,7 +68,7 @@ class JoinerReconnectControllerTest {
      * about*, reintroducing exactly the ambiguity the field exists to remove — reads 0 here.
      */
     @Test
-    fun `WindowOpened echoes the detection instant it was handed, not a clock read`() =
+    fun `WindowOpened echoes the detection instant it was handed rather than a clock read`() =
         runTest {
             val ctrl = controller(backgroundScope)
 
