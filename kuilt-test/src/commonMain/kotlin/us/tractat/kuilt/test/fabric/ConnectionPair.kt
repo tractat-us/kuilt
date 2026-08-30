@@ -75,8 +75,21 @@ private class ChannelConnection(
  * `identified` seam over one end, joiner over the other. For driving
  * `SeamConformanceSuite` against the LinkSeam primitive.
  */
-public fun identifiedLoomPair(): Pair<Loom, Loom> {
-    val (hostConnection, joinerConnection) = connectionPair()
+public fun identifiedLoomPair(): Pair<Loom, Loom> = identifiedLoomPair(connectionPair())
+
+/**
+ * [identifiedLoomPair] over a **caller-supplied** [link], so the caller keeps both ends.
+ *
+ * The reason to hold them is `SeamConformanceSuite.injectMidSessionDeath`: dropping the transport
+ * out from under a live session needs a handle on the transport, and the no-arg overload mints its
+ * [connectionPair] internally and throws both ends away. Closing a [Connection] here closes only
+ * that end's outbound spool, which is the *peer's* inbound — so a harness proving the symmetric
+ * both-ends-die contract must close **both**, as `PeerMeshConformanceTest` does.
+ *
+ * @param link `.first` becomes the host's end, `.second` the joiner's.
+ */
+public fun identifiedLoomPair(link: Pair<Connection, Connection>): Pair<Loom, Loom> {
+    val (hostConnection, joinerConnection) = link
     val host = ConnectionLoom(PeerId("host"), PeerId("joiner"), hostConnection)
     val joiner = ConnectionLoom(PeerId("joiner"), PeerId("host"), joinerConnection)
     return host to joiner
@@ -107,8 +120,16 @@ private class ConnectionLoom(
  * `async`, so both [handshaking] calls run in parallel and their preambles cross.
  * Serial weaving would deadlock (each side suspends waiting for the peer's Hello).
  */
-public fun handshakingLoomPair(): Pair<Loom, Loom> {
-    val (hostConnection, joinerConnection) = connectionPair()
+public fun handshakingLoomPair(): Pair<Loom, Loom> = handshakingLoomPair(connectionPair())
+
+/**
+ * [handshakingLoomPair] over a **caller-supplied** [link], so the caller keeps both ends — the
+ * handshaking twin of [identifiedLoomPair], and for the same reason (see its KDoc).
+ *
+ * @param link `.first` becomes the host's end, `.second` the joiner's.
+ */
+public fun handshakingLoomPair(link: Pair<Connection, Connection>): Pair<Loom, Loom> {
+    val (hostConnection, joinerConnection) = link
     return HandshakeLoom(PeerId("host"), hostConnection) to HandshakeLoom(PeerId("joiner"), joinerConnection)
 }
 
