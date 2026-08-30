@@ -92,6 +92,20 @@ public class ChicoryWasmRuntime(
      * thread at a time. A timed-out invocation interrupts the worker; the executor clears the stale
      * interrupt before the next task, so a timeout does not poison the next invoke.
      *
+     * **Why the drain grace is [WasmSandboxConfig.executionTimeout] and not a new knob.** After
+     * `Future.cancel(true)`, a *conforming* worker's remaining work is one stretch of straight-line
+     * guest code between two interrupt checks — the interpreter checks at every function-call entry
+     * and every backward branch (see the class KDoc) — plus however long it takes to be scheduled
+     * onto a CPU again. Both are strictly smaller than one whole guest invocation: a budget that
+     * did not cover many inter-check intervals *plus* scheduling could never retire a real call.
+     * So the guest budget is already a **strict upper bound** on a conforming drain, and it is
+     * already sized for this host by the same configuration that sizes the invocations — a
+     * consumer who widens the budget for a slow machine widens the grace with it, and a separate
+     * constant would immediately disagree with it. A worker that exceeds it is not honouring its
+     * interrupt by the runtime's own contract, which is exactly when discarding is correct. The
+     * worst case it admits is one extra budget of latency on the op that timed out — bounded, and
+     * the same order as the unbounded skew it removes.
+     *
      * Owned unconditionally, and shut down by [close], whether or not a test injected a
      * [timedRunner] over it.
      */
@@ -112,8 +126,20 @@ public class ChicoryWasmRuntime(
      * clock consumed by *queue wait* — a concurrent innocent task could be cancelled before it ever
      * ran, recording a spurious terminal failure. Holding this for the whole submit+get makes the
      * timeout measure actual execution, not queueing: a waiting op gets its full budget from the
-     * moment it starts. (Latency-serialized per runtime; guest calls are short by design. A future
-     * perf step could give each instance its own worker thread for true parallelism.)
+     * moment it starts.
+     *
+     * **That last sentence needs the drain to be true, and until #1802 it was not.** The mutex only
+     * guarantees a free worker if it is held until the previous task has actually left the worker.
+     * Across a *completing* predecessor it is: `Future.get` returns only once the task is done. But
+     * across a *timed-out* one it was not — `Future.cancel(true)` merely sets the interrupt flag and
+     * returns, so the mutex was released over a still-running runaway and the next op was charged
+     * for the wait behind it, relocating the very skew this mutex removed from the completion edge
+     * to the timeout edge. What makes the claim hold on both edges is [guestWorker]: on a timeout it
+     * proves the worker free with a bounded barrier, or discards it and spawns a fresh one, before
+     * returning — so `withLock` never spans a task the caller is no longer waiting for.
+     *
+     * (Latency-serialized per runtime; guest calls are short by design. A future perf step could
+     * give each instance its own worker thread for true parallelism — see [GuestWorker].)
      */
     private val invokeMutex = Mutex()
 
