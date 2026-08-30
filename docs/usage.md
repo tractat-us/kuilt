@@ -322,9 +322,15 @@ class MyFabricLoom : Loom {
         is Rendezvous.New -> TODO("host")
         is Rendezvous.Existing -> TODO("join")
     }
-    override fun availability(): FabricAvailability =
-        if (myCapabilityPresent()) FabricAvailability.Available
-        else FabricAvailability.Unavailable("my radio is off")
+    // Override capability(), never availability() — the latter is derived from it.
+    // The default is a roleless Unknown, so a fabric that has checked nothing says
+    // so rather than claiming Available on the surface an app turns into guidance.
+    override fun capability(): TransportCapability = TransportCapability(
+        roles = setOf(TransportRole.Data),
+        availability =
+            if (myRadioPresent()) FabricAvailability.Available
+            else FabricAvailability.Unavailable("my radio is off"),
+    )
 }
 
 // In commonTest — this is your contract test. If it's green, you conform.
