@@ -347,16 +347,31 @@ class EntitlementLedgerValidateTest {
     }
 
     /**
-     * Pins the **documented limitation** of the one-root-per-ledger invariant (#1642 item 2),
-     * not desired behaviour. A [MintRecord] carries a holder and an amount but is not bound to
-     * a root, and [EntitlementLedger.holdings] credits the full minted supply to *any* group
-     * with no inbound edge — so merging two independently bootstrapped ledgers double-counts
-     * every mint, silently. Binding the record to its root is a wire-format change and was
-     * deliberately not taken here; when it lands, this test should flip.
+     * A [MintRecord] is bound to the root it was minted at (#1751), so [EntitlementLedger.holdings]
+     * credits a rootless group **only** the supply minted at *that* group. Merging two
+     * independently bootstrapped ledgers therefore leaves each root holding its own mint and
+     * Σ holdings equal to `mintedTotal` **once** — the double count is unrepresentable, not
+     * merely undetected.
+     *
+     * Superseded `mergingTwoIndependentBootstrapsDoubleCountsMintAtEveryRoot`, which pinned the
+     * pre-#1751 double count as a documented limitation (#1642 item 2).
      */
     @Test
-    fun mergingTwoIndependentBootstrapsDoubleCountsMintAtEveryRoot() {
-        val otherRoot = GroupId("otherRoot")
+    fun mergingTwoIndependentBootstrapsCreditsEachMintOnlyAtItsOwnRoot() {
+        val merged = twoBootstrapsMerged()
+        val sumHoldings = merged.allGroups().sumOf { g -> merged.holdings(g, alice) }
+        assertAll(
+            { assertEquals(20L, merged.mintedTotal()) },
+            { assertEquals(10L, merged.holdings(root, alice), "root holds only what was minted at root") },
+            { assertEquals(10L, merged.holdings(otherRoot, alice), "…and otherRoot only its own") },
+            { assertEquals(merged.mintedTotal(), sumHoldings, "Σ holdings counts the supply once, not twice") },
+        )
+    }
+
+    private val otherRoot = GroupId("otherRoot")
+
+    /** Two independently bootstrapped one-edge trees, merged — the #1751 hazard state. */
+    private fun twoBootstrapsMerged(): EntitlementLedger {
         val g4 = GroupId("g4")
         val e4 = AttachmentId("e4") // otherRoot → g4
         val left = EntitlementLedger
@@ -365,13 +380,7 @@ class EntitlementLedgerValidateTest {
         val right = EntitlementLedger
             .of(records = mapOf(e4 to setOf(AttachmentRecord(e4, otherRoot, g4, Weight.ONE))))
             .piece(EntitlementLedger.bootstrap(otherRoot, mapOf(alice to 10L), nonce = "right"))
-        val merged = left.piece(right)
-        assertAll(
-            { assertEquals(20L, merged.mintedTotal()) },
-            { assertEquals(20L, merged.holdings(root, alice), "each root is credited the WHOLE supply") },
-            { assertEquals(20L, merged.holdings(otherRoot, alice), "…so Σ holdings is 40 against 20 minted") },
-            { assertTrue(merged.validate().isEmpty(), "and the double-count is silent — the hazard this pins") },
-        )
+        return left.piece(right)
     }
 
     // ─────────────────────────────────────────────────────────────────────────
