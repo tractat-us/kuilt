@@ -390,6 +390,29 @@ still compiles but self-skips at runtime, so `./gradlew build` doesn't run it.
   unshielded the two cancellations really are lexically ambiguous, and one helper hop defeats both
   guards. `ensureActive()` remains the only thing that decides it at runtime.
 
+- **A long-lived pump is launched through `Flow.pumpIn` (`:kuilt-core`, public), never a bare
+  `onEach { … }.launchIn(scope)`.** A pump has no restart and no backstop, so an escaping throw is
+  permanent — and on Kotlin/Native it is **fatal**, because an unhandled coroutine exception reaches
+  the runtime default and aborts the process (measured on #1788; a `SupervisorJob` is the mechanism,
+  not the protection, and kuilt installs no `setUnhandledExceptionHook` anywhere). **A pump dies two
+  ways and a hand-written `try` covers one of them.** `onEach { … }.launchIn(scope)` desugars to
+  `scope.launch { flow.onEach { … }.collect() }`, so the `try` is *inside* the collector: it sees what
+  the body throws and structurally cannot see a throw raised by the flow itself, which ends the flow
+  and escapes the `launch`. That is why `pumpIn` is **one call owning both halves** rather than a
+  guarded-launch helper plus a `.catch` — a helper doing only the first reads as "handled" at every
+  call site while leaving process death open, which is worse than no helper because it stops anyone
+  looking. `PumpFailure.ITEM`/`UPSTREAM` puts the second half in the signature.
+
+  Two things this costs, stated rather than discovered later. **It is public and in `:kuilt-core`
+  deliberately** — the sibling remedy `SeamStateGate` was correct and `internal`, and four fabrics
+  outside the module then hand-rolled it, three of them writing the exact race its KDoc bans (#1803):
+  an `internal` pump helper is a known-failed design. And **centralising the guard blinds the two
+  lexical root guards** (`forbidRunCatchingCancellableUnderNonCancellable`,
+  `forbidCancellationRethrowAroundBound`), both of which are already defeated by one helper hop — so
+  the discipline inside `pumpIn` is now reviewed once, in one file, instead of scanned for. What is
+  still missing is the rule that makes it unavoidable: *"no bare `launchIn` outside a pump helper"*,
+  sized in #1803 at 26 production sites and not yet written.
+
 - **Keep the throwable on a log line. Drop it only where the failure is *routine* and the
   exception's type and message are the whole diagnosis.** The qualifying cases are narrow — an
   unreachable telemetry collector on a best-effort drain, an entry that was never meant to decode —

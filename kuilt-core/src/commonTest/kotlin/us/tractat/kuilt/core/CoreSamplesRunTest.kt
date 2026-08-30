@@ -68,4 +68,7 @@ class CoreSamplesRunTest {
 
     @Test
     fun discoveryRosterHolds(): TestResult = sampleDiscoveryRoster()
+
+    @Test
+    fun pumpInHolds(): TestResult = samplePumpIn()
 }
