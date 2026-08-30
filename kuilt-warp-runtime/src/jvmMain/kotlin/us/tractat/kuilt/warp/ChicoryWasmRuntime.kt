@@ -14,10 +14,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.concurrent.Callable
-import java.util.concurrent.ExecutionException
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 
 /**
@@ -72,17 +68,18 @@ import java.util.concurrent.TimeoutException
  *   or the interrupt itself) surfaces as [WasmExecutionException], preserving the cause.
  *
  * **Deterministic testing via [TimedGuestRunner]:**
- * The [timedRunner] seam replaces the real `guestExecutor.submit + Future.get(timeout)` so tests
- * can drive timeout/success behaviour without real wall-clock waits. Production callers omit it
- * (or pass `null`) to get the real executor-backed runner; tests inject a fake. See
- * [ChicoryWasmRuntimeTimingTest] for the false-timeout regression proof.
+ * The [timedRunner] seam replaces the real [GuestWorker] so tests can drive timeout/success
+ * behaviour without real wall-clock waits. Production callers omit it (or pass `null`) to get the
+ * real worker-backed runner; tests inject a fake. See [ChicoryWasmRuntimeTimingTest] for the
+ * false-timeout regression proof. ([GuestWorker]'s own post-timeout drain is pinned deterministically
+ * by [GuestWorkerDrainTest], which fakes the worker one level lower.)
  *
  * Construct once and reuse across loads/invokes; call [close] to release the executor thread.
  *
  * @param config Sandbox configuration (memory cap, execution timeout). Must be valid per
  *   [WasmSandboxConfig] constraints.
  * @param timedRunner Override for the timed guest invocation strategy. Pass `null` (default) for
- *   the real wall-clock runner backed by [guestExecutor]. Inject a fake for deterministic tests.
+ *   the real wall-clock runner backed by [guestWorker]. Inject a fake for deterministic tests.
  */
 public class ChicoryWasmRuntime(
     public val config: WasmSandboxConfig = WasmSandboxConfig(),
@@ -90,40 +87,23 @@ public class ChicoryWasmRuntime(
 ) : WasmRuntime, AutoCloseable {
 
     /**
-     * Single-thread executor that runs every guest call. One worker per runtime, reused across
-     * invocations: the Chicory instance is single-threaded, so all guest access is confined to
-     * this one thread. A timed-out invocation interrupts the worker; the executor clears the
-     * stale interrupt before the next task, so a timeout does not poison the next invoke.
+     * The single-thread worker that runs every guest call. One worker per runtime, reused across
+     * invocations: the Chicory instance is single-threaded, so all guest access is confined to one
+     * thread at a time. A timed-out invocation interrupts the worker; the executor clears the stale
+     * interrupt before the next task, so a timeout does not poison the next invoke.
+     *
+     * Owned unconditionally, and shut down by [close], whether or not a test injected a
+     * [timedRunner] over it.
      */
-    private val guestExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "warp-wasm-guest").apply { isDaemon = true }
-    }
+    private val guestWorker = GuestWorker(drainGrace = config.executionTimeout)
 
     /**
-     * The strategy for running a task under a timeout. Defaults to the real wall-clock runner
-     * backed by [guestExecutor]; tests inject a fake for deterministic control.
+     * The strategy for running a task under a timeout. Defaults to [guestWorker], the real
+     * wall-clock runner; tests inject a fake for deterministic control.
      *
-     * The real default: submits the callable to [guestExecutor], calls `Future.get(timeout)`, and
-     * on [TimeoutException] interrupts the worker (so Chicory's interpreter terminates the runaway
-     * guest at the next function-call entry / backward branch). The [ExecutionException] wrapper
-     * from the executor is unwrapped before rethrowing so callers see the original exception type.
-     *
-     * Initialized after [guestExecutor] so the default lambda can safely capture it.
+     * Initialized after [guestWorker] so the default can reference it.
      */
-    private val timedRunner: TimedGuestRunner = timedRunner ?: TimedGuestRunner { timeout, task ->
-        val future = guestExecutor.submit(task)
-        try {
-            future.get(timeout.inWholeMilliseconds, TimeUnit.MILLISECONDS)
-        } catch (e: TimeoutException) {
-            // Interrupt the worker; Chicory's interpreter throws ChicoryInterruptedException at
-            // the next call entry / backward branch, terminating the runaway guest.
-            future.cancel(true)
-            throw e
-        } catch (e: ExecutionException) {
-            // Unwrap so invoke sees the original exception (ChicoryException, etc.), not a wrapper.
-            throw e.cause ?: e
-        }
-    }
+    private val timedRunner: TimedGuestRunner = timedRunner ?: guestWorker
 
     /**
      * Serializes the timed submit+get of every guest invocation. One worker serves all loaded
@@ -164,7 +144,7 @@ public class ChicoryWasmRuntime(
 
     /** Shuts down the dedicated guest-execution thread. The runtime is unusable afterwards. */
     override fun close() {
-        guestExecutor.shutdownNow()
+        guestWorker.close()
     }
 
     private fun parseModule(bytes: ByteArray): WasmModule =
@@ -269,7 +249,7 @@ public class ChicoryWasmRuntime(
      * [Dispatchers.IO], a real blocking context, NOT the caller's (possibly virtual-time)
      * scheduler. This is the sanctioned real-threading exception to the no-production-dispatcher
      * rule: the timeout is a wall-clock CPU bound and cannot be driven by virtual time.
-     * [Dispatchers.IO] only *waits*; the guest itself runs on [guestExecutor], whose interrupt
+     * [Dispatchers.IO] only *waits*; the guest itself runs on [guestWorker], whose interrupt
      * flag is what terminates a runaway kernel.
      *
      * Tests inject a [TimedGuestRunner] fake; [Dispatchers.IO] is still used, but the fake
@@ -313,7 +293,7 @@ public class ChicoryWasmRuntime(
     }
 
     /**
-     * The ABI marshalling, executed entirely on [guestExecutor] so all guest access is bounded.
+     * The ABI marshalling, executed entirely on [guestWorker]'s thread so all guest access is bounded.
      *
      * The `warp_alloc` return and the packed `warp_run` result are fully guest-controlled
      * `i32`/`i64` words, decoded exclusively through the common safe decoder ([requireInBounds] /
